@@ -1,9 +1,13 @@
 .env
+.env.*
+!.env.example
 .venv/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+htmlcov/
 .DS_Store
 logs/
 data/
@@ -15,4 +19,14 @@ mlruns/
 *.csv
 *.jsonl
 
-
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+.terraform.tfstate.lock.info
+*.tfplan.json
+crash.log
+crash.*.log

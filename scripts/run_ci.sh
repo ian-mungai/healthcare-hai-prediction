@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+bash -n scripts/run_ci.sh scripts/infrastructure/*.sh
+python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
+"$python_bin" -m ruff check scripts tests
+"$python_bin" -m mypy scripts/infrastructure
+"$python_bin" -m pytest --cov=scripts.infrastructure --cov-report=term-missing -q
+terraform fmt -check -recursive infra
+
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/hai_ci.XXXXXX")"
+trap 'rm -rf "$scratch"' EXIT
+export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-$scratch/provider_cache}"
+mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
+# Isolate tests from local credentials, deployment inputs and real Terraform state.
+unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
+unset AWS_WEB_IDENTITY_TOKEN_FILE AWS_ROLE_ARN AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
+unset AWS_CONTAINER_AUTHORIZATION_TOKEN AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE
+export AWS_CONFIG_FILE="$scratch/empty_aws_config"
+export AWS_SHARED_CREDENTIALS_FILE="$scratch/empty_aws_credentials"
+export AWS_EC2_METADATA_DISABLED=true TF_IN_AUTOMATION=1 TF_INPUT=0
+touch "$AWS_CONFIG_FILE" "$AWS_SHARED_CREDENTIALS_FILE"
+
+# Identity checks use the configured restriction without duplicating its value in fixtures.
+project_profile="$("$python_bin" -c 'from scripts.infrastructure.render_project_config import PROJECT_PROFILE; print(PROJECT_PROFILE)')"
+
+for stack in storage iam; do
+  source_dir="$repo_root/infra"
+  if [[ "$stack" == "iam" ]]; then
+    source_dir="$repo_root/infra/iam"
+  fi
+  test_dir="$scratch/$stack"
+  mkdir -p "$test_dir"
+  cp "$source_dir"/*.tf "$source_dir/.terraform.lock.hcl" "$test_dir/"
+  cp -R "$source_dir/tests" "$test_dir/tests"
+  if [[ "$stack" == "iam" ]]; then
+    cp -R "$source_dir/policies" "$test_dir/policies"
+  fi
+  printf '\nChecking %s Terraform configuration\n' "$stack"
+  terraform -chdir="$test_dir" init -backend=false -input=false -lockfile=readonly -no-color
+  terraform -chdir="$test_dir" validate -no-color
+  terraform -chdir="$test_dir" test -no-color "-var=project_profile=$project_profile"
+done
+
+printf '\nAll local CI checks passed without AWS credentials.\n'
