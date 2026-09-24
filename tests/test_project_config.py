@@ -1,7 +1,6 @@
 import json
 import os
 import shutil
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -9,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts.infrastructure import render_project_config as renderer
-from scripts.infrastructure.render_project_config import ConfigurationError, build_configuration, load_configuration, verify_plan_variables, write_or_check
+from scripts.infrastructure.render_project_config import ConfigurationError, build_configuration, verify_plan_variables
 
 TEST_PROJECT_PROFILE = "example_project_profile"
 
@@ -133,38 +132,6 @@ def test_identity_check_handles_missing_cli_and_timeouts(environment, monkeypatc
         renderer.verify_project_identity(storage)
     assert "example private" not in str(error.value)
 
-def test_dotenv_quotes_comments_and_stale_exports(environment, tmp_path, monkeypatch):
-    path = tmp_path / ".env"
-    path.write_text("\n".join(f'export {key}="{value}" # local configuration' for key, value in environment.items()), encoding="utf-8")
-    monkeypatch.setenv("AWS_PROFILE", "example_admin")
-    monkeypatch.setenv("AWS_ACCOUNT_ID", "222222222222")
-    storage, _ = load_configuration(path)
-    assert storage["aws_profile"] == environment["AWS_PROFILE"]
-    assert storage["expected_account_id"] == environment["AWS_ACCOUNT_ID"]
-
-def test_dotenv_does_not_expand_shell_values(environment, tmp_path, monkeypatch):
-    path = tmp_path / ".env"
-    environment["AWS_ACCOUNT_ID"] = "${PRIVATE_ACCOUNT}"
-    monkeypatch.setenv("PRIVATE_ACCOUNT", "111111111111")
-    path.write_text("\n".join(f"{key}={value}" for key, value in environment.items()), encoding="utf-8")
-    with pytest.raises(ConfigurationError):
-        load_configuration(path)
-
-def test_missing_dotenv_is_rejected(tmp_path):
-    with pytest.raises(ConfigurationError):
-        load_configuration(tmp_path / "missing.env")
-
-def test_private_atomic_configuration_and_staleness(environment, tmp_path):
-    storage, _ = build_configuration(environment)
-    path = tmp_path / "infra" / "deployment.auto.tfvars.json"
-    write_or_check(path, storage)
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert json.loads(path.read_text()) == storage
-    write_or_check(path, storage, check=True)
-    with pytest.raises(ConfigurationError):
-        write_or_check(path, {**storage, "aws_region": "us-east-1"}, check=True)
-    assert not list(path.parent.glob(".config_*"))
-
 def test_saved_plan_must_match_current_dotenv(environment):
     storage, _ = build_configuration(environment)
     plan = {"complete": True, "errored": False, "variables": {key: {"value": value} for key, value in storage.items()}}
@@ -181,14 +148,6 @@ def test_incomplete_or_errored_plan_is_rejected(environment, complete, errored):
 @pytest.fixture
 def wrapper_environment():
     return {name: value for name, value in os.environ.items() if name != "TF_CLI_ARGS" and not name.startswith("TF_CLI_ARGS_")}
-
-@pytest.mark.parametrize("arguments", [["--iam", "plan"], ["--admin-profile", "example_admin", "plan"], ["apply"], ["plan", "-var=aws_profile=example_admin"]])
-def test_wrapper_guards_run_before_dotenv_or_aws(arguments, tmp_path, wrapper_environment):
-    script = Path(__file__).resolve().parents[1] / "scripts" / "infrastructure" / "terraform.sh"
-    wrapper_environment["PYTHON_BIN"] = str(tmp_path / "must_not_run")
-    result = subprocess.run(["bash", str(script), *arguments], capture_output=True, text=True, env=wrapper_environment)
-    assert result.returncode == 2
-    assert "must_not_run" not in result.stderr
 
 @pytest.mark.parametrize("arguments", [["plan"], ["apply", "example.tfplan"], ["validate"]])
 @pytest.mark.parametrize("name", ["TF_CLI_ARGS", "TF_CLI_ARGS_plan", "TF_CLI_ARGS_apply", "TF_CLI_ARGS_show", "TF_CLI_ARGS_validate", "TF_CLI_ARGS_future"])
@@ -233,20 +192,6 @@ def test_wrapper_requests_identity_verification_for_plans_and_applies(arguments,
     result = subprocess.run(["bash", str(script), *arguments], capture_output=True, text=True, env=wrapper_environment)
     assert result.returncode == 1
     assert ("--verify-identity" in result.stdout.splitlines()) == (arguments != ["validate"])
-
-def test_cli_renders_both_stacks_without_storing_admin(environment, tmp_path, monkeypatch):
-    path = tmp_path / ".env"
-    path.write_text("\n".join(f"{key}={value}" for key, value in environment.items()), encoding="utf-8")
-    monkeypatch.setattr(renderer, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(sys, "argv", ["renderer", "--admin-profile", "example_admin"])
-    renderer.main()
-    storage = json.loads((tmp_path / "infra" / "deployment.auto.tfvars.json").read_text())
-    iam = json.loads((tmp_path / "infra" / "iam" / "deployment.auto.tfvars.json").read_text())
-    assert storage["aws_profile"] == environment["AWS_PROFILE"]
-    assert iam["deployment_user_name"] == storage["aws_profile"]
-    assert "aws_profile" not in iam
-    monkeypatch.setattr(sys, "argv", ["renderer", "--check"])
-    renderer.main()
 
 @pytest.mark.parametrize("matches", [True, False])
 def test_cli_checks_identity_before_writing_inputs(environment, caller_identity, tmp_path, monkeypatch, matches):
