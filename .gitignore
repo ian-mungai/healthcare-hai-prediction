@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 .venv/
+.tools/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
@@ -35,3 +36,5 @@ mlruns/
 *.tfplan.json
 crash.log
 crash.*.log
+
+.bruin.yml

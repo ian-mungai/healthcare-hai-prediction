@@ -1,0 +1,15 @@
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: Scan staged changes for secrets
+        entry: .venv/bin/python scripts/quality/scan_secrets.py --staged
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: local_ci
+        name: Run local CI
+        entry: bash scripts/run_ci.sh
+        language: system
+        pass_filenames: false
+        always_run: true

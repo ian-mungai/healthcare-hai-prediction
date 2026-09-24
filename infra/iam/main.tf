@@ -1,5 +1,5 @@
 provider "aws" {
-  profile             = var.aws_profile
+  profile             = var.admin_profile
   region              = var.aws_region
   allowed_account_ids = [var.expected_account_id]
 
@@ -43,6 +43,6 @@ resource "aws_iam_policy" "service" {
 
 resource "aws_iam_user_policy_attachment" "service" {
   for_each   = aws_iam_policy.service
-  user       = var.deployment_user_name
+  user       = var.aws_profile
   policy_arn = each.value.arn
 }

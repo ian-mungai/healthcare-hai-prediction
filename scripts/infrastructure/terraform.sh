@@ -67,6 +67,6 @@ if [[ "$action" == validate ]]; then
   exec terraform -chdir="$directory" validate "$@"
 fi
 if [[ "$stack" == iam && "$action" == plan ]]; then
-  exec terraform -chdir="$directory" plan -input=false "-var=aws_profile=$admin_profile" "$@"
+  exec terraform -chdir="$directory" plan -input=false "-var=admin_profile=$admin_profile" "$@"
 fi
 exec terraform -chdir="$directory" "$action" -input=false "$@"

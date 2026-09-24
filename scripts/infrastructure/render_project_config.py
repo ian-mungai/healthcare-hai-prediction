@@ -1,64 +1,84 @@
+"""Render private Terraform inputs and verify project identity and saved-plan inputs."""
+
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 from dotenv import dotenv_values
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PROJECT_PROFILE = "healthcare_hai_prediction_user"
+
 
 class ConfigurationError(ValueError):
-    pass
+    """Report an invalid configuration without echoing private input values."""
+
 
 def build_configuration(environment: dict[str, str | None], admin_profile: str | None = None) -> tuple[dict[str, str], dict[str, str]]:
+    """Validate the documented environment keys and return storage and IAM inputs."""
     rules = {
         "AWS_ACCOUNT_ID": r"[0-9]{12}",
         "AWS_REGION": r"[a-z]{2}-[a-z]+-[1-9]",
         "PROJECT_NAME": r"[a-z][a-z0-9_]{2,79}",
         "S3_BUCKET": r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]",
     }
+    if environment.keys() - (rules.keys() | {"AWS_PROFILE"}):
+        raise ConfigurationError("Unsupported .env settings; keep only the keys documented in .env.example.")
     for name, pattern in rules.items():
         value = environment.get(name)
         if not isinstance(value, str) or not re.fullmatch(pattern, value) or value.startswith("your-"):
             raise ConfigurationError(f"Set a valid {name} in .env.")
-    if environment.get("AWS_PROFILE") != PROJECT_PROFILE:
-        raise ConfigurationError(f"AWS_PROFILE must be {PROJECT_PROFILE}; administrator selection is separate.")
-    if "IAM_DEPLOYMENT_USER" in environment:
-        raise ConfigurationError("Remove IAM_DEPLOYMENT_USER from .env; the policy user is derived from AWS_PROFILE.")
+    profile = environment.get("AWS_PROFILE")
+    if not isinstance(profile, str) or profile != f"{environment['PROJECT_NAME']}_user" or len(profile) > 64:
+        raise ConfigurationError("Set a valid AWS_PROFILE matching PROJECT_NAME followed by _user; administrator selection is separate.")
     common = {
         "aws_region": str(environment["AWS_REGION"]),
         "expected_account_id": str(environment["AWS_ACCOUNT_ID"]),
         "data_bucket_name": str(environment["S3_BUCKET"]),
         "project_name": str(environment["PROJECT_NAME"]),
     }
-    storage = {**common, "aws_profile": PROJECT_PROFILE}
-    iam = {**common, "deployment_user_name": storage["aws_profile"]}
+    storage = {**common, "aws_profile": profile}
+    iam = dict(storage)
     if admin_profile is not None:
-        if not admin_profile.strip() or admin_profile == PROJECT_PROFILE:
+        if not admin_profile.strip() or admin_profile == profile:
             raise ConfigurationError("IAM permission updates require an explicitly selected administrator profile.")
-        iam["aws_profile"] = admin_profile
+        iam["admin_profile"] = admin_profile
     return storage, iam
 
+
 def load_configuration(path: Path, admin_profile: str | None = None) -> tuple[dict[str, str], dict[str, str]]:
+    """Read literal dotenv values without shell expansion and validate them."""
     if not path.is_file():
         raise ConfigurationError("The selected .env file does not exist.")
     return build_configuration(dict(dotenv_values(path, interpolate=False)), admin_profile)
 
+
 def verify_project_identity(storage: dict[str, str]) -> None:
+    """Reject identities outside the configured account and same-named project user."""
     environment = os.environ.copy()
     for name in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN"):
         environment.pop(name, None)
     command = [
-        "aws", "sts", "get-caller-identity", "--profile", storage["aws_profile"], "--region", storage["aws_region"], "--output", "json", "--no-cli-pager"
+        "aws",
+        "sts",
+        "get-caller-identity",
+        "--profile",
+        storage["aws_profile"],
+        "--region",
+        storage["aws_region"],
+        "--output",
+        "json",
+        "--no-cli-pager",
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=30)
+        result = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=30)  # noqa: S603 - validated config, fixed AWS CLI arguments, no shell.
     except (OSError, subprocess.TimeoutExpired):
         raise ConfigurationError("Could not verify the project AWS identity; check AWS CLI access and local profile credentials.") from None
     if result.returncode:
@@ -75,7 +95,9 @@ def verify_project_identity(storage: dict[str, str]) -> None:
     if identity.get("Account") != account or not matches_user:
         raise ConfigurationError("The project profile must authenticate as its same-named IAM user in the configured account. No plan or apply was run.")
 
+
 def write_or_check(path: Path, values: dict[str, str], check: bool = False) -> None:
+    """Atomically write owner-only inputs or reject stale generated bytes."""
     content = json.dumps(values, indent=2, sort_keys=True) + "\n"
     if check:
         if not path.is_file() or path.read_text(encoding="utf-8") != content:
@@ -94,14 +116,18 @@ def write_or_check(path: Path, values: dict[str, str], check: bool = False) -> N
         finally:
             temporary.unlink(missing_ok=True)
 
+
 def verify_plan_variables(plan: dict, expected: dict[str, str]) -> None:
+    """Reject incomplete saved plans or any variable mismatch before apply."""
     if plan.get("errored") or not plan.get("complete"):
         raise ConfigurationError("Only a complete, successful saved plan may be applied.")
     actual = {name: item.get("value") for name, item in plan.get("variables", {}).items()}
     if actual != expected:
         raise ConfigurationError("Saved plan inputs differ from .env or the selected profile; create and review a fresh plan.")
 
+
 def main() -> None:
+    """Render or check configuration without disclosing private values."""
     parser = argparse.ArgumentParser(description="Render ignored Terraform inputs from .env without printing values.")
     parser.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
     parser.add_argument("--stack", choices=("storage", "iam", "both"), default="both")
@@ -117,7 +143,11 @@ def main() -> None:
             if arguments.stack == "both":
                 raise ConfigurationError("Select one Terraform stack when checking a saved plan.")
             directory, values = selected[arguments.stack]
-            result = subprocess.run(["terraform", f"-chdir={directory}", "show", "-json", str(arguments.check_plan.resolve())], capture_output=True, text=True)
+            # Resolve the existing Terraform CLI through the project operator's PATH; never invoke a shell.
+            command = ["terraform", f"-chdir={directory}", "show", "-json", str(arguments.check_plan.resolve())]
+            result = subprocess.run(  # noqa: S603 - fixed executable and read-only arguments, user-selected local plan.
+                command, capture_output=True, text=True
+            )
             if result.returncode:
                 raise ConfigurationError("The saved plan could not be inspected; no apply was run.")
             verify_plan_variables(json.loads(result.stdout), values)
@@ -125,13 +155,22 @@ def main() -> None:
             verify_project_identity(storage)
         for name, (directory, values) in selected.items():
             if arguments.stack in (name, "both"):
-                stored_values = {key: value for key, value in values.items() if name != "iam" or key != "aws_profile"}
+                stored_values = {key: value for key, value in values.items() if key != "admin_profile"}
                 write_or_check(directory / "deployment.auto.tfvars.json", stored_values, arguments.check)
     except (ConfigurationError, OSError, ValueError) as error:
         parser.error(str(error))
-    if arguments.verify_identity:
-        print("Verified that the project profile authenticates as the derived policy user in the configured account.")
-    print("Verified .env-derived Terraform inputs." if arguments.check else "Rendered private Terraform inputs from .env.")
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("event=project_configuration %(message)s"))
+    logger.addHandler(handler)
+    try:
+        if arguments.verify_identity:
+            logger.info("Verified that the project profile authenticates as the derived policy user in the configured account.")
+        logger.info("Verified .env-derived Terraform inputs." if arguments.check else "Rendered private Terraform inputs from .env.")
+    finally:
+        logger.removeHandler(handler)
+
 
 if __name__ == "__main__":
     main()

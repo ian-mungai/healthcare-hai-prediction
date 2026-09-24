@@ -41,17 +41,21 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/python -m pip install -r requirements.txt
+          .venv/bin/python scripts/quality/install_tools.py
 
       - name: Run credential-free checks
         env:
           E2E_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/configuration
+          QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
         run: bash scripts/run_ci.sh
 
-      - name: Retain configuration E2E evidence
+      - name: Retain configuration and quality evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: configuration_e2e_${{ github.run_id }}_${{ github.run_attempt }}
-          path: data/e2e/configuration/
+          path: |
+            data/e2e/configuration/
+            data/e2e/quality/
           if-no-files-found: warn
           retention-days: 14

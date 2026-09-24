@@ -1,12 +1,11 @@
 variable "aws_profile" {
   description = "Only the project deployment profile may run this stack; IAM administration is a separate root."
   type        = string
-  default     = "healthcare_hai_prediction_user"
   nullable    = false
 
   validation {
-    condition     = var.aws_profile == "healthcare_hai_prediction_user"
-    error_message = "Use healthcare_hai_prediction_user for this stack; use the separate iam/ root for permission updates."
+    condition     = var.aws_profile == "${var.project_name}_user" && length(var.aws_profile) <= 64
+    error_message = "AWS_PROFILE must match PROJECT_NAME followed by _user and be a valid IAM username; use iam/ for permission updates."
   }
 }
 
@@ -33,7 +32,11 @@ variable "project_name" {
 variable "aws_region" {
   description = "User-selected AWS region; verify any existing bucket is in this region before planning."
   type        = string
-  default     = "us-west-2"
+
+  validation {
+    condition     = can(regex("^[a-z]{2}(-[a-z]+)+-[0-9]+$", var.aws_region))
+    error_message = "Supply an AWS region code such as eu-west-1, without surrounding whitespace."
+  }
 }
 
 variable "expected_account_id" {

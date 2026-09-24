@@ -1,8 +1,3 @@
-variable "project_profile" {
-  description = "Approved profile supplied by the credential-free CI runner."
-  type        = string
-}
-
 mock_provider "aws" {
   override_during = plan
 
@@ -15,8 +10,8 @@ mock_provider "aws" {
 }
 
 variables {
-  aws_profile         = var.project_profile
-  aws_region          = "us-west-2"
+  aws_profile         = "example_project_user"
+  aws_region          = "eu-west-1"
   expected_account_id = "111111111111"
   data_bucket_name    = "example-project-ci-bucket"
   project_name        = "example_project"
@@ -67,7 +62,23 @@ run "private_versioned_storage" {
 
   assert {
     condition     = toset(keys(output.acquisition_prefixes)) == toset(["raw", "reference", "manifests", "audit"])
-    error_message = "Acquisition, references, receipts and audit evidence must retain separate prefixes."
+    error_message = "Legacy evidence prefixes must remain available during the additive layout transition."
+  }
+
+  assert {
+    condition = tomap(output.dataset_prefixes) == tomap({
+      for category in ["data", "references", "manifests", "audit"] :
+      category => "s3://${var.data_bucket_name}/{dataset_id}/${category}/"
+    })
+    error_message = "Every dataset must have its own data, references, manifests and audit paths."
+  }
+
+  assert {
+    condition = tomap(output.collection_prefixes) == tomap({
+      for category in ["datasets", "references", "manifests", "audit"] :
+      category => "s3://${var.data_bucket_name}/{publisher}/{collection}/${category}/"
+    })
+    error_message = "All collections must share the publisher/collection layout without duplicating reference documents per table."
   }
 
   assert {
@@ -75,6 +86,43 @@ run "private_versioned_storage" {
       "arn:aws:s3:::${var.data_bucket_name}", "arn:aws:s3:::${var.data_bucket_name}/*"
     ])
     error_message = "The TLS-only policy must protect both the approved bucket and its objects."
+  }
+}
+
+# Preparation only: mocked plans cannot verify AWS scheduling, permissions or existing remote rules.
+# Guard missing/duplicate/disabled rules, wrong bucket/delay/filter and accidental object expiry or transition.
+run "incomplete_upload_cleanup_only" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_s3_bucket_lifecycle_configuration.data.bucket == aws_s3_bucket.data.id &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 1 &&
+      one(aws_s3_bucket_lifecycle_configuration.data.rule).status == "Enabled" &&
+      one(one(aws_s3_bucket_lifecycle_configuration.data.rule).abort_incomplete_multipart_upload).days_after_initiation == 7
+    )
+    error_message = "Exactly one enabled seven-day incomplete-upload cleanup rule must target the existing data bucket."
+  }
+
+  assert {
+    condition = alltrue([
+      for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+      length(rule.expiration) == 0 &&
+      length(rule.noncurrent_version_expiration) == 0 &&
+      length(rule.transition) == 0 &&
+      length(rule.noncurrent_version_transition) == 0
+    ])
+    error_message = "Cleanup must never expire or transition completed objects, historical versions or delete markers."
+  }
+
+  assert {
+    condition = alltrue([
+      for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+      length(rule.filter) == 1 &&
+      length(one(rule.filter).and) == 0 &&
+      length(one(rule.filter).tag) == 0
+    ])
+    error_message = "The rule must use a single filter without tag or compound restrictions."
   }
 }
 
@@ -106,4 +154,52 @@ run "reject_invalid_account" {
   }
 
   expect_failures = [var.expected_account_id]
+}
+
+run "accept_alternate_region" {
+  command = plan
+
+  variables {
+    aws_region = "ap-southeast-2"
+  }
+}
+
+run "reject_empty_region" {
+  command = plan
+
+  variables {
+    aws_region = ""
+  }
+
+  expect_failures = [var.aws_region]
+}
+
+run "reject_malformed_region" {
+  command = plan
+
+  variables {
+    aws_region = "ap_southeast_2"
+  }
+
+  expect_failures = [var.aws_region]
+}
+
+run "reject_padded_region" {
+  command = plan
+
+  variables {
+    aws_region = " eu-west-1 "
+  }
+
+  expect_failures = [var.aws_region]
+}
+
+run "reject_null_region" {
+  command = plan
+
+  variables {
+    aws_region = null
+  }
+
+  expect_failures = [var.aws_region]
 }

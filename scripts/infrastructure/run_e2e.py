@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import hashlib
 import json
+import logging
 import os
 import platform
 import shutil
@@ -19,69 +19,108 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PROFILE = "example_project_profile"
+PROFILE = "example_project_user"
 ADMIN = "example_administrator"
-SECRET = "example_e2e_secret_do_not_print"
+SECRET = "example_e2e_secret_do_not_print"  # noqa: S105 - public synthetic disclosure sentinel, not a credential.
 SOURCE_NAMES = ("render_project_config.py", "render_project_config.sh", "terraform.sh")
 OUTPUT_NAMES = ("infra/deployment.auto.tfvars.json", "infra/iam/deployment.auto.tfvars.json")
 FIXTURE = {
-    "AWS_ACCOUNT_ID": "111111111111", "AWS_PROFILE": PROFILE, "AWS_REGION": "us-west-2",
-    "PROJECT_NAME": "example_project", "S3_BUCKET": "example-project-e2e-bucket", "MODEL_API_KEY": SECRET,
+    "AWS_ACCOUNT_ID": "111111111111",
+    "AWS_PROFILE": PROFILE,
+    "AWS_REGION": "eu-west-1",
+    "PROJECT_NAME": "example_project",
+    "S3_BUCKET": "example-project-e2e-bucket",
 }
 
+
 def sha256(content: bytes) -> str:
+    """Hash immutable evidence bytes."""
     return hashlib.sha256(content).hexdigest()
 
+
 def write_json(path: Path, value: Any) -> None:
+    """Create owner-only JSON evidence without replacing earlier runs."""
     with path.open("x", encoding="utf-8") as handle:
         json.dump(value, handle, indent=2, sort_keys=True)
         handle.write("\n")
     path.chmod(0o600)
 
+
 class CheckFailed(RuntimeError):
-    pass
+    """Identify a failed synthetic configuration assertion."""
+
 
 class Evidence:
-    def __init__(self, output: Path, temporary: Path):
+    """Collect redacted process assertions and reproducible configuration evidence."""
+
+    def __init__(self, output: Path, temporary: Path) -> None:
         self.output = output
         self.temporary = temporary
         self.started = time.perf_counter()
         self.redactions = {
-            str(output): "<EVIDENCE>", str(temporary): "<TEMP>", str(REPO_ROOT): "<REPO>",
-            sys.executable: "<PYTHON>", str(Path.home()): "<HOME>", SECRET: "<REDACTED_SECRET>",
+            str(output): "<EVIDENCE>",
+            str(temporary): "<TEMP>",
+            str(REPO_ROOT): "<REPO>",
+            sys.executable: "<PYTHON>",
+            str(Path.home()): "<HOME>",
+            SECRET: "<REDACTED_SECRET>",
         }
         self.report: dict[str, Any] = {
-            "schema_version": 1, "scope": "local_configuration_lifecycle", "status": "running",
-            "live_aws_tested": False, "subprocess_responses_mocked": False,
+            "schema_version": 1,
+            "scope": "local_configuration_lifecycle",
+            "status": "running",
+            "live_aws_tested": False,
+            "subprocess_responses_mocked": False,
             "started_at_utc": datetime.now(UTC).isoformat(),
             "runtime": {"python": platform.python_version(), "system": platform.system(), "machine": platform.machine()},
             "repeat_command": [".venv/bin/python", "scripts/infrastructure/run_e2e.py", "--output-directory", "<NEW_EVIDENCE_DIRECTORY>"],
-            "source_hashes": {}, "steps": [],
+            "source_hashes": {},
+            "steps": [],
         }
         self.environment = {
-            "HOME": str(temporary / "home"), "TMPDIR": str(temporary), "PATH": str(temporary / "tools"),
-            "PYTHON_BIN": sys.executable, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1",
-            "PYTHONUTF8": "1", "LANG": "C", "LC_ALL": "C", "AWS_EC2_METADATA_DISABLED": "true",
-            "AWS_CONFIG_FILE": str(temporary / "absent_aws_config"), "AWS_SHARED_CREDENTIALS_FILE": str(temporary / "absent_aws_credentials"),
-            "AWS_PROFILE": "example_stale_profile", "AWS_ACCOUNT_ID": "222222222222", "AWS_REGION": "us-east-1",
+            "HOME": str(temporary / "home"),
+            "TMPDIR": str(temporary),
+            "PATH": str(temporary / "tools"),
+            "PYTHON_BIN": sys.executable,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONUTF8": "1",
+            "LANG": "C",
+            "LC_ALL": "C",
+            "AWS_EC2_METADATA_DISABLED": "true",
+            "AWS_CONFIG_FILE": str(temporary / "absent_aws_config"),
+            "AWS_SHARED_CREDENTIALS_FILE": str(temporary / "absent_aws_credentials"),
+            "AWS_PROFILE": "example_stale_profile",
+            "AWS_ACCOUNT_ID": "222222222222",
+            "AWS_REGION": "us-east-1",
         }
 
     def redact(self, value: str) -> str:
+        """Replace private paths and synthetic secret sentinels in evidence."""
         for raw, replacement in sorted(self.redactions.items(), key=lambda item: len(item[0]), reverse=True):
             value = value.replace(raw, replacement)
         return value
 
     def run(self, name: str, command: list[str], workspace: Path, extra_environment: dict[str, str] | None = None) -> tuple[dict, Any]:
+        """Execute a real local process with synthetic inputs and record assertions."""
         step: dict[str, Any] = {
-            "name": name, "command": [self.redact(item) for item in command], "cwd": self.redact(str(workspace)),
-            "started_at_utc": datetime.now(UTC).isoformat(), "assertions": [],
+            "name": name,
+            "command": [self.redact(item) for item in command],
+            "cwd": self.redact(str(workspace)),
+            "started_at_utc": datetime.now(UTC).isoformat(),
+            "assertions": [],
         }
         self.report["steps"].append(step)
         started = time.perf_counter()
         try:
-            result = subprocess.run(
-                command, cwd=workspace, env={**self.environment, **(extra_environment or {})},
-                capture_output=True, text=True, timeout=30, check=False,
+            result = subprocess.run(  # noqa: S603 - fixed E2E argument arrays inside an isolated synthetic workspace.
+                command,
+                cwd=workspace,
+                env={**self.environment, **(extra_environment or {})},
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
             )
             step.update(returncode=result.returncode, stdout=self.redact(result.stdout), stderr=self.redact(result.stderr))
             self.check(step, "diagnostics_do_not_disclose_secret", SECRET not in result.stdout + result.stderr)
@@ -94,16 +133,21 @@ class Evidence:
 
     @staticmethod
     def check(step: dict, name: str, condition: bool) -> None:
+        """Append an assertion and stop the suite when it fails."""
         step["assertions"].append({"name": name, "passed": condition})
         if not condition:
             raise CheckFailed(f"{step['name']}: {name}")
 
-    def capture_outputs(self, step: dict, workspace: Path, region: str) -> dict[str, str]:
+    def capture_outputs(self, step: dict, workspace: Path, region: str, project: str = "example_project") -> dict[str, str]:
+        """Verify exact synthetic outputs, private modes and stable hashes."""
         common = {
-            "expected_account_id": "111111111111", "aws_region": region,
-            "project_name": "example_project", "data_bucket_name": "example-project-e2e-bucket",
+            "expected_account_id": "111111111111",
+            "aws_region": region,
+            "project_name": project,
+            "data_bucket_name": "example-project-e2e-bucket",
+            "aws_profile": f"{project}_user",
         }
-        expected = ({**common, "aws_profile": PROFILE}, {**common, "deployment_user_name": PROFILE})
+        expected = (common, common)
         hashes = {}
         step["outputs"] = []
         for name, values in zip(OUTPUT_NAMES, expected, strict=True):
@@ -125,51 +169,46 @@ class Evidence:
         return hashes
 
     def finish(self) -> None:
+        """Persist the report and a checksum manifest for successful or failed runs."""
         self.report["finished_at_utc"] = datetime.now(UTC).isoformat()
         self.report["duration_seconds"] = round(time.perf_counter() - self.started, 6)
         self.report["process_count"] = len(self.report["steps"])
         self.report["assertion_count"] = sum(len(step["assertions"]) for step in self.report["steps"])
+        self.report["requirements_sha256"] = sha256((REPO_ROOT / "requirements.txt").read_bytes())
+        self.report["prerequisites"] = "Project Python 3.12 environment with pinned requirements; real bash and dirname. No cloud credentials needed."
+        self.report["limits"] = "Configuration processes and pre-deployment guards only. No Terraform deployment or live AWS identity verified."
+        self.report["cleanup"] = "Temporary synthetic workspace is removed when the runner exits; immutable evidence is retained."
         write_json(self.output / "report.json", self.report)
         hashes = {path.relative_to(self.output).as_posix(): sha256(path.read_bytes()) for path in sorted(self.output.rglob("*")) if path.is_file()}
         write_json(self.output / "evidence_manifest.json", {"algorithm": "sha256", "files": hashes})
 
+
 def as_text(value: str | bytes | None) -> str:
+    """Normalize captured process diagnostics before redaction."""
     return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
 
+
 def fixture_sources(evidence: Evidence) -> dict[str, bytes]:
+    """Copy actual implementation bytes and record their hashes without patching."""
     sources = {}
     for name in SOURCE_NAMES:
         original = (REPO_ROOT / "scripts" / "infrastructure" / name).read_bytes()
-        copied = original
-        if name == "render_project_config.py":
-            source = original.decode("utf-8")
-            tree = ast.parse(source)
-            assignments = [node for node in tree.body if isinstance(node, ast.Assign)
-                           and any(isinstance(target, ast.Name) and target.id == "PROJECT_PROFILE" for target in node.targets)]
-            if len(assignments) != 1 or not isinstance(assignments[0].value, ast.Constant):
-                raise CheckFailed("Expected one literal PROJECT_PROFILE assignment in the renderer")
-            value = assignments[0].value
-            if value.lineno != value.end_lineno or not isinstance(value.value, str):
-                raise CheckFailed("Expected a single-line string PROJECT_PROFILE")
-            lines = source.splitlines(keepends=True)
-            line = lines[value.lineno - 1]
-            lines[value.lineno - 1] = line[:value.col_offset] + repr(PROFILE) + line[value.end_col_offset:]
-            copied = "".join(lines).encode("utf-8")
-            value.value = PROFILE
-            if ast.dump(tree, include_attributes=False) != ast.dump(ast.parse(copied), include_attributes=False):
-                raise CheckFailed("Fixture injection changed executable logic beyond PROJECT_PROFILE")
-        sources[name] = copied
-        evidence.report["source_hashes"][name] = {"original_sha256": sha256(original), "fixture_sha256": sha256(copied)}
+        sources[name] = original
+        evidence.report["source_hashes"][name] = {"original_sha256": sha256(original), "fixture_sha256": sha256(original)}
     evidence.report["source_hashes"]["run_e2e.py"] = {"original_sha256": sha256(Path(__file__).read_bytes())}
-    evidence.report["fixture_injection"] = {"assignment": "PROJECT_PROFILE", "value": PROFILE, "only_literal_changed": True}
+    evidence.report["production_sources_unchanged"] = True
     return sources
 
+
 def write_environment(workspace: Path, values: dict[str, str]) -> None:
+    """Create a private dotenv file from generic synthetic fixture values."""
     path = workspace / ".env"
     path.write_text("".join(f'export {key}="{value}" # synthetic fixture\n' for key, value in values.items()), encoding="utf-8")
     path.chmod(0o600)
 
+
 def copied_workspace(temporary: Path, name: str, sources: dict[str, bytes], values: dict[str, str]) -> Path:
+    """Create a disposable workspace containing unmodified production entry points."""
     workspace = temporary / name
     scripts = workspace / "scripts" / "infrastructure"
     scripts.mkdir(parents=True)
@@ -178,7 +217,9 @@ def copied_workspace(temporary: Path, name: str, sources: dict[str, bytes], valu
     write_environment(workspace, values)
     return workspace
 
+
 def run_suite(evidence: Evidence) -> None:
+    """Verify configuration lifecycle and pre-deployment guards without AWS access."""
     sources = fixture_sources(evidence)
     (evidence.temporary / "home").mkdir()
     tools = evidence.temporary / "tools"
@@ -193,7 +234,7 @@ def run_suite(evidence: Evidence) -> None:
     shell_renderer = [bash, "scripts/infrastructure/render_project_config.sh", "--admin-profile", ADMIN]
     step, result = evidence.run("render_initial", shell_renderer, workspace)
     evidence.check(step, "render_succeeded", result.returncode == 0 and not result.stderr)
-    initial_hashes = evidence.capture_outputs(step, workspace, "us-west-2")
+    initial_hashes = evidence.capture_outputs(step, workspace, FIXTURE["AWS_REGION"])
     step, result = evidence.run("check_initial", [*renderer, "--check"], workspace)
     evidence.check(step, "matching_inputs_accepted", result.returncode == 0 and "Verified .env-derived" in result.stdout)
     write_environment(workspace, {**FIXTURE, "AWS_REGION": "us-east-2"})
@@ -207,9 +248,38 @@ def run_suite(evidence: Evidence) -> None:
     step, result = evidence.run("check_refreshed", [*renderer, "--check"], workspace)
     evidence.check(step, "refreshed_inputs_accepted", result.returncode == 0 and "Verified .env-derived" in result.stdout)
 
+    alternate = copied_workspace(
+        evidence.temporary,
+        "alternate_project",
+        sources,
+        {
+            **FIXTURE,
+            "PROJECT_NAME": "sample_project",
+            "AWS_PROFILE": "sample_project_user",
+            "AWS_REGION": "ap-southeast-2",
+        },
+    )
+    step, result = evidence.run("render_alternate_project", shell_renderer, alternate)
+    evidence.check(step, "alternate_project_accepted_without_source_patching", result.returncode == 0 and not result.stderr)
+    evidence.capture_outputs(step, alternate, "ap-southeast-2", "sample_project")
+
+    isolated = copied_workspace(evidence.temporary, "unsupported_setting", sources, {**FIXTURE, "EXAMPLE_UNUSED_SETTING": SECRET})
+    step, result = evidence.run("reject_unsupported_setting", renderer, isolated)
+    evidence.check(step, "unsupported_setting_rejected", result.returncode == 2 and "Unsupported .env settings" in result.stderr)
+    evidence.check(step, "no_output", not result.stdout and not (isolated / "infra").exists())
+
+    for admin in ("", " ", PROFILE):
+        isolated = copied_workspace(evidence.temporary, f"invalid_admin_{len(admin)}", sources, FIXTURE)
+        step, result = evidence.run(f"reject_admin_{len(admin)}", [*renderer, "--admin-profile", admin], isolated)
+        evidence.check(step, "invalid_admin_rejected", result.returncode == 2 and "explicitly selected administrator" in result.stderr)
+        evidence.check(step, "no_output", not result.stdout and not (isolated / "infra").exists())
+
     invalid_values = {
-        "AWS_ACCOUNT_ID": "invalid_private_account", "AWS_REGION": "invalid_private_region",
-        "PROJECT_NAME": "invalid-private-project", "S3_BUCKET": "invalid_private_bucket*",
+        "AWS_ACCOUNT_ID": "invalid_private_account",
+        "AWS_REGION": "invalid_private_region",
+        "PROJECT_NAME": "invalid-private-project",
+        "S3_BUCKET": "invalid_private_bucket*",
+        "AWS_PROFILE": "example_unrelated_user",
     }
     for key, value in invalid_values.items():
         evidence.redactions[value] = "<REDACTED_INVALID_VALUE>"
@@ -237,13 +307,19 @@ def run_suite(evidence: Evidence) -> None:
         (["plan", "-chdir=example_other"], {}, "Set project inputs only in .env."),
     ]
     for name, arguments in (
-        ("TF_CLI_ARGS", ["plan"]), ("TF_CLI_ARGS_plan", ["plan"]), ("TF_CLI_ARGS_apply", ["apply", "example.tfplan"]),
-        ("TF_CLI_ARGS_show", ["apply", "example.tfplan"]), ("TF_CLI_ARGS_validate", ["validate"]), ("TF_CLI_ARGS_future", ["validate"]),
+        ("TF_CLI_ARGS", ["plan"]),
+        ("TF_CLI_ARGS_plan", ["plan"]),
+        ("TF_CLI_ARGS_apply", ["apply", "example.tfplan"]),
+        ("TF_CLI_ARGS_show", ["apply", "example.tfplan"]),
+        ("TF_CLI_ARGS_validate", ["validate"]),
+        ("TF_CLI_ARGS_future", ["validate"]),
     ):
         guards.append((arguments, {name: "-var=project_name=example_unapproved"}, f"Unset {name};"))
     for index, (arguments, exports, message) in enumerate(guards, start=1):
         step, result = evidence.run(
-            f"wrapper_guard_{index:02d}", [bash, "scripts/infrastructure/terraform.sh", *arguments], isolated,
+            f"wrapper_guard_{index:02d}",
+            [bash, "scripts/infrastructure/terraform.sh", *arguments],
+            isolated,
             {**exports, "PYTHON_BIN": str(isolated / "must_not_run")},
         )
         step["synthetic_environment_overrides"] = {key: evidence.redact(value) for key, value in exports.items()}
@@ -253,13 +329,17 @@ def run_suite(evidence: Evidence) -> None:
 
     before = {path.relative_to(evidence.output).as_posix(): sha256(path.read_bytes()) for path in evidence.output.rglob("*") if path.is_file()}
     step, result = evidence.run(
-        "refuse_existing_evidence", [sys.executable, str(Path(__file__).resolve()), "--output-directory", str(evidence.output)], workspace,
+        "refuse_existing_evidence",
+        [sys.executable, str(Path(__file__).resolve()), "--output-directory", str(evidence.output)],
+        workspace,
     )
     evidence.check(step, "existing_directory_rejected", result.returncode == 2 and "Output directory already exists" in result.stderr)
     after = {path.relative_to(evidence.output).as_posix(): sha256(path.read_bytes()) for path in evidence.output.rglob("*") if path.is_file()}
     evidence.check(step, "existing_evidence_unchanged", before == after)
 
+
 def main() -> None:
+    """Run synthetic E2E checks and retain redacted evidence at a fresh path."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-directory", type=Path, required=True, help="New directory for redacted evidence; existing paths are refused.")
     arguments = parser.parse_args()
@@ -279,9 +359,11 @@ def main() -> None:
             evidence.report.update(status="failed", failure=evidence.redact(str(error)))
         finally:
             evidence.finish()
-    print(f"Configuration E2E {evidence.report['status']}: {evidence.report['process_count']} real processes; evidence written to requested directory.")
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    logging.getLogger(__name__).info("event=configuration_e2e status=%s processes=%s", evidence.report["status"], evidence.report["process_count"])
     if evidence.report["status"] != "passed":
         raise SystemExit(1)
+
 
 if __name__ == "__main__":
     main()

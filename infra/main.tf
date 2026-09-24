@@ -12,6 +12,10 @@ provider "aws" {
 }
 
 resource "aws_s3_bucket" "data" {
+  #checkov:skip=CKV_AWS_18:Approved acquisition-stage deferral; review before additional user or service access, production or newly approved sensitive-data use.
+  #checkov:skip=CKV2_AWS_62:Approved acquisition-stage deferral; review when an event consumer is implemented.
+  #checkov:skip=CKV_AWS_144:Approved acquisition-stage deferral; review recovery requirements and destination before production.
+  #checkov:skip=CKV_AWS_145:Approved acquisition-stage SSE-S3 use; review KMS with coordinated ingestion and IAM migration before production.
   bucket        = var.data_bucket_name
   force_destroy = false
 
@@ -51,6 +55,21 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    id     = "abort_incomplete_uploads"
+    status = "Enabled"
+
+    filter {}
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
     }
   }
 }

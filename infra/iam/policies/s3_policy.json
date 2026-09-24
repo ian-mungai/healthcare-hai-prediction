@@ -43,6 +43,7 @@
       "Effect": "Allow",
       "Action": [
         "s3:PutBucketVersioning",
+        "s3:PutLifecycleConfiguration",
         "s3:PutEncryptionConfiguration",
         "s3:PutBucketPublicAccessBlock",
         "s3:PutBucketOwnershipControls",
@@ -79,7 +80,12 @@
         "arn:aws:s3:::${DATA_BUCKET_NAME}/raw/*",
         "arn:aws:s3:::${DATA_BUCKET_NAME}/reference/*",
         "arn:aws:s3:::${DATA_BUCKET_NAME}/manifests/*",
-        "arn:aws:s3:::${DATA_BUCKET_NAME}/audit/*"
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/audit/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/*/data/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/*/references/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/*/manifests/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/*/audit/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/*/*/datasets/*"
       ]
     }
   ]
