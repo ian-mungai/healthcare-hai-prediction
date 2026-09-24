@@ -19,6 +19,11 @@ mlruns/
 *.csv
 *.jsonl
 
+# Local acquisition configuration, implementation and tests
+/config/acquisition/
+/scripts/acquisition/
+/tests/test_source_registry.py
+
 # Terraform
 .terraform/
 *.tfstate
