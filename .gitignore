@@ -18,6 +18,7 @@ htmlcov/
 
 # Agent and workspace files. Also in the global Git ignore; repeated here so fresh clones and CI stay safe.
 .agent_handoff/
+/.documentation_review.json
 .enjoy/
 .enjoy-logs/
 

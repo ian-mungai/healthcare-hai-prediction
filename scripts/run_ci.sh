@@ -16,7 +16,11 @@ git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m
 git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks data-files
 git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks suppressions
 git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks subprocess-imports
-"$python_bin" -m scripts.quality.documentation_review check
+if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+  "$python_bin" -m scripts.quality.documentation_review check-untracked
+else
+  "$python_bin" -m scripts.quality.documentation_review check
+fi
 "$python_bin" -m scripts.quality.run_checks_e2e
 "$python_bin" -m scripts.quality.run_documentation_review_e2e
 e2e_output="${E2E_ARTIFACT_DIR:-$repo_root/data/e2e/configuration/$(date -u +%Y%m%dT%H%M%SZ)_$$}"

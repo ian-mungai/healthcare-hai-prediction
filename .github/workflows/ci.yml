@@ -49,7 +49,14 @@ jobs:
         env:
           RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
           RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: .venv/bin/python -m scripts.quality.repo_checks commit-range "$RANGE_START" "$RANGE_END"
+        run: |
+          if ! git cat-file -e "$RANGE_START^{commit}" 2>/dev/null; then
+            # A history rewrite removes the previous tip: validate the complete new history.
+            RANGE_START="$(git rev-list --max-parents=0 "$RANGE_END")"
+            git show -s --format=%B "$RANGE_START" > "$RUNNER_TEMP/root_commit_message"
+            .venv/bin/python -m scripts.quality.repo_checks commit-msg "$RUNNER_TEMP/root_commit_message"
+          fi
+          .venv/bin/python -m scripts.quality.repo_checks commit-range "$RANGE_START" "$RANGE_END"
 
       - name: Run credential-free checks
         env:

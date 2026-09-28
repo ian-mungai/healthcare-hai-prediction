@@ -1,7 +1,7 @@
 """Real-hook E2E for the documentation review: good evidence passes and every declared failure is rejected.
 
 Run from the repository root: ``.venv/bin/python -m scripts.quality.run_documentation_review_e2e``. Each scenario
-builds a synthetic Git repository with this repository's hook configuration and checker, stages evidence and runs the
+builds a synthetic Git repository with this repository's hook configuration and checker, keeps evidence local and runs the
 ``documentation-review`` hook through ``pre-commit``. The failure analysis was written before the checker; the CI log is
 the run's artifact.
 """
@@ -45,7 +45,7 @@ SCENARIOS = (
     "document_added",
     "document_removed",
     "untracked_document",
-    "unstaged_good_record",
+    "tracked_record",
     "unstaged_document_edit",
     "symlink_document",
     "extra_format",
@@ -76,7 +76,7 @@ def fixture(repo: Path) -> None:
         (repo / relative).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / relative, repo / relative)
     (repo / ".venv").symlink_to(ROOT / ".venv")
-    (repo / ".git" / "info" / "exclude").write_text(".venv\n__pycache__/\n")
+    (repo / ".git" / "info" / "exclude").write_text(".venv\n__pycache__/\n.documentation_review.json\n")
     shutil.copy(ROOT / ".pre-commit-config.yaml", repo / ".pre-commit-config.yaml")
     (repo / "README.md").write_text("# Example\n\nThe command returns one.\n")
     (repo / "app.py").write_text("VALUE = 1\n")
@@ -189,9 +189,9 @@ def run_case(scenario: str) -> tuple[bool, str]:
             (repo / RECORD).write_text(content)
             if scenario == "invalid_encoding":
                 (repo / RECORD).write_bytes(b"\xff\xfeinvalid")
-            git(repo, "add", RECORD)
-        if scenario == "unstaged_good_record":
-            git(repo, "rm", "-q", "--cached", RECORD)
+
+        if scenario == "tracked_record":
+            git(repo, "add", "-f", RECORD)
         if scenario == "unstaged_document_edit":
             (repo / "README.md").write_text("Unstaged text is not the committed document.\n")
         if scenario == "prepare_retry":
@@ -224,7 +224,7 @@ def run_case(scenario: str) -> tuple[bool, str]:
                 return False, "refresh must bind the new staged source snapshot"
             if any(item["outcome"] != "pending" or item["notes"] for item in draft["documents"]):
                 return False, "prepare must draft pending outcomes, never attest a completed review"
-            git(repo, "add", RECORD)
+
         if scenario == "unmerged_index":
             base = git(repo, "write-tree").strip()
             (repo / "app.py").write_text("VALUE = 2\n")

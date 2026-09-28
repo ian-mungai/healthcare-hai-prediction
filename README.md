@@ -111,7 +111,7 @@ The E2E runners can also run on their own; each needs a new output directory:
 ```
 
 Before every commit, stage the intended files by name, then draft, complete and
-stage the documentation review record (see [Quality Checks](#quality-checks)).
+retain the ignored local documentation review record (see [Quality Checks](#quality-checks)).
 
 ## Architecture
 
@@ -189,10 +189,13 @@ enforce these repository rules at the pinned versions:
   extended. Review pull request text separately; a Git hook cannot read it.
 - **Docs match the code:** every environment variable the code reads is listed
   in `.env.example`; a removed script, flag or variable no longer appears in the
-  docs; and every commit carries `.documentation_review.json`, a per-document
+  docs; and local commits require an ignored `.documentation_review.json`, a per-document
   review outcome bound to the staged snapshot. Draft it with
   `.venv/bin/python -m scripts.quality.documentation_review prepare --reviewer <name> --reviewed-at <UTC>`
-  after staging, review every document, fill each outcome and note, then stage it.
+  after staging, review every document and fill each outcome and note locally. Never stage
+  this record. The local hook validates its freshness against the index and rejects
+  tracked evidence. GitHub Actions checks that the record is untracked and runs
+  synthetic hook tests; it cannot verify the private local review itself.
 - **Lint settings:** Ruff keeps rule sets `E`, `F`, `I`, `B`, `UP`, `S`, `SIM`
   and `T20` at line length 160 with no ignore or exclude settings; MyPy keeps
   `--check-untyped-defs` and `--disallow-untyped-defs`. The only allowed

@@ -1,7 +1,7 @@
 """Validate human/agent documentation-review evidence against the staged Git snapshot.
 
 Run ``.venv/bin/python -m scripts.quality.documentation_review prepare --reviewer NAME --reviewed-at UTC`` to draft
-pending entries after staging the changes. Read the documents, fill their outcomes and notes, then stage the record and
+pending entries after staging the changes. Read the documents, fill their outcomes and notes, keep the record local and
 run ``.venv/bin/python -m scripts.quality.documentation_review check``. This checks evidence, not the truth of its
 assertions.
 """
@@ -185,7 +185,7 @@ def prepare(files: dict[str, tuple[str, str]], reviewer: str, reviewed_at: str, 
     if target.exists():
         old = parse_record(target.read_text())
         if old.get("snapshot_sha256") == current_snapshot and old.get("extra_documents") == extra:
-            sys.stdout.write("Existing evidence for this snapshot preserved; complete any pending outcomes and stage the record.\n")
+            sys.stdout.write("Existing evidence for this snapshot preserved; complete any pending outcomes in the local record.\n")
             return
         if not refresh:
             raise ReviewError("existing evidence is stale; preserve needed history, then use prepare --refresh to draft pending outcomes")
@@ -209,6 +209,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check")
+    commands.add_parser("check-untracked", help="verify local review evidence is absent from the Git index")
     draft = commands.add_parser("prepare")
     draft.add_argument("--reviewer", required=True)
     draft.add_argument("--reviewed-at", required=True)
@@ -219,20 +220,23 @@ def main() -> int:
         if Path.cwd().resolve() != Path(git("rev-parse", "--show-toplevel").strip()).resolve():
             raise ReviewError("run from the repository root")
         files = inventory()
-        if args.command == "prepare":
+        if git("ls-files", "--", RECORD).strip():
+            raise ReviewError("review evidence must stay local; remove it from the index with git rm --cached -- .documentation_review.json")
+        if args.command == "check-untracked":
+            sys.stdout.write("documentation review: local-only storage verified; substantive review is checked locally, not in hosted CI\n")
+        elif args.command == "prepare":
             prepare(files, args.reviewer, args.reviewed_at, args.extra_document, args.refresh)
         else:
-            result = run_command("git", ["show", f":{RECORD}"])
-            if result.returncode:
-                raise ReviewError("no staged review record; prepare, complete and stage the evidence")
-            count = validate(parse_record(result.stdout), files)
+            if not Path(RECORD).is_file():
+                raise ReviewError("no local review record; prepare and complete the ignored evidence")
+            count = validate(parse_record(Path(RECORD).read_text()), files)
             sys.stdout.write(f"documentation review: PASS ({count} documents; staged snapshot matches)\n")
     except (ReviewError, OSError, UnicodeError, TimeoutExpired) as error:
         message = str(error) if isinstance(error, ReviewError) else "a required file or program is inaccessible; check local setup"
         sys.stderr.write(
             f"{RECORD}:1: documentation review: BLOCK: {message}\n"
             f"  Rule: {POLICY}\n"
-            "  Fix: stage the intended files, prepare the review, inspect every document, complete outcomes/notes and stage the record.\n"
+            "  Fix: stage the intended files, prepare the review, inspect every document, complete outcomes/notes in the ignored local record.\n"
             "  If this blocks a valid change, fix the check or ask the repository owner; do not bypass it.\n"
         )
         return 1
