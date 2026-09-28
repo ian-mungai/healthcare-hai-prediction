@@ -76,7 +76,7 @@ repos:
         pass_filenames: false
         always_run: true
       - id: commit-msg
-        name: Conventional Commits
+        name: Conventional Commits and no AI attribution
         entry: .venv/bin/python -m scripts.quality.repo_checks commit-msg
         language: system
         stages: [commit-msg]

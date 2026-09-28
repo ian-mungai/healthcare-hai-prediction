@@ -140,12 +140,14 @@ remains unresolved. FileVault was verified on Sep 24 2026 (UTC); that host check
 does not establish compliance or resolve retention requirements.
 
 The data bucket carries its own `DataClassification` tag of Confidential
-(project decision, Sep 27 2026). It holds a redacted but not formally
-anonymized derivative and public releases that name individuals: hospital
-chief executives in HCAI annual financial files and state officials' work
-contacts in a CMS contacts table. Those releases are treated as Confidential:
-originals stay local and only redacted copies belong in S3. Replacing the
-copies already stored is pending a separately approved change.
+(project decision, Sep 27 2026). Redacted derivatives are not formally
+anonymized. Hospital chief executives in HCAI annual financial files and state
+officials' work contacts in a CMS contacts table are treated as Confidential:
+originals stay local and only redacted copies belong in S3. The initial 218
+Excel/contact versions were removed on Sep 28 2026. Redacted replacements for
+75 further versions are stored; their originals remain pending deletion and
+retirement-record reconciliation. Operational evidence stays in ignored local
+folders; this status does not clear privacy or modeling holds.
 
 Tests use generic synthetic data. Real personal values must never appear in
 fixtures, logs, tutorials, published artifacts or commits. Acquisition inputs,
@@ -175,8 +177,12 @@ enforce these repository rules at the pinned versions:
   `.ndjson`, `.avro`, `.db` and `.sqlite` files are allowed only in
   `tests/fixtures/`, for synthetic samples. Any file over 5 MB is blocked
   unless Git LFS stores it. Acquired data stays in S3 and ignored local folders.
-- **Commit messages:** Conventional Commits, checked by the `commit-msg` hook
-  and, in GitHub Actions, for every pushed commit.
+- **Commit messages:** Conventional Commits and no AI attribution, checked in
+  the full message by the `commit-msg` hook and, in GitHub Actions, for every
+  pushed commit. AI credit and agent-session lines are rejected; human
+  co-authors and factual tool mentions are allowed. Detection uses an explicit
+  agent/vendor list, so new forms need a failing sample before the check is
+  extended. Review pull request text separately; a Git hook cannot read it.
 - **Docs match the code:** every environment variable the code reads is listed
   in `.env.example`; a removed script, flag or variable no longer appears in the
   docs; and every commit carries `.documentation_review.json`, a per-document

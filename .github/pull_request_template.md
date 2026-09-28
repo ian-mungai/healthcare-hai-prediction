@@ -14,3 +14,8 @@ Confirm outgoing files contain no personal data, credentials or private deployme
 ## Follow-up cleanup
 
 List unresolved holds and obsolete references, or state none.
+
+## Message review
+
+Use a Conventional Commit title. Remove AI credit and agent-session lines from
+the title and body; human co-authors and factual tool mentions are allowed.

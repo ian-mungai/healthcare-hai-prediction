@@ -50,6 +50,12 @@ FLAG = re.compile(r"""add_argument\(\s*["'](--[\w-]+)["']""")
 COMMIT_TYPES = ("feat", "fix", "docs", "chore", "refactor", "test", "build", "ci", "perf", "style", "revert")
 CONVENTIONAL_SUBJECT = re.compile(rf"(?:{'|'.join(COMMIT_TYPES)})(?:\([a-z0-9._/-]+\))?!?: \S.*")
 
+AI_AGENTS = ("claude", "codex", "grok", "antigravity", "chatgpt", "copilot", "gemini", "cursor", "devin", "aider", "windsurf")
+AI_NAMES = re.compile(rf"\b(?:{'|'.join((*AI_AGENTS, 'anthropic', 'openai', 'xai'))})\b", re.IGNORECASE)
+AI_CREDIT = re.compile(r"^\s*(?:co-authored-by|co-developed-by|assisted-by|generated-by)\s*:\s*(.*)$", re.IGNORECASE)
+AI_GENERATED = re.compile(r"^\s*(?:[🤖✨]\s*)?(?:generated (?:with|by)|written by)\b(.*)$", re.IGNORECASE)
+AI_SESSION = re.compile(rf"^\s*(?:{'|'.join(AI_AGENTS)})-session\s*:", re.IGNORECASE)
+
 
 @dataclass
 class Finding:
@@ -216,19 +222,55 @@ def commit_subjects(subjects: list[tuple[str, str]]) -> list[Finding]:
     ]
 
 
+def attribution_findings(location: str, message: str) -> list[Finding]:
+    """Check the whole commit message for AI credit, preserving human co-author trailers and ordinary mentions."""
+    findings = []
+    for number, line in enumerate(message.splitlines(), 1):
+        credit = AI_CREDIT.match(line) or AI_GENERATED.match(line)
+        if AI_SESSION.match(line) or (credit and AI_NAMES.search(credit.group(1))):
+            findings.append(
+                Finding(
+                    f"{location}:{number}",
+                    "AI attribution in commit message",
+                    f"{POLICY}: commit messages",
+                    "remove the AI credit or session line; keep human co-authors and factual descriptions of the change",
+                )
+            )
+    return findings
+
+
+def message_findings(location: str, message: str, *, comments: bool = False) -> list[Finding]:
+    """Apply the subject and attribution policies without printing message bodies into check logs."""
+    subject = next((line for line in message.splitlines() if not (comments and line.startswith("#"))), "")
+    return commit_subjects([(location, subject)]) + attribution_findings(location, message)
+
+
 def commit_message(path: str) -> list[Finding]:
-    """Commit-msg stage: the subject is the first line that is not a Git comment."""
-    subject = next((line for line in Path(path).read_text().splitlines() if not line.startswith("#")), "")
-    return commit_subjects([("commit message", subject)])
+    """Check the proposed message, excluding Git's edited verbose patch but preserving non-edited message bodies."""
+    message = Path(path).read_text()
+    if os.environ.get("GIT_EDITOR") != ":":
+        comment = run_command("git", ["config", "--get", "core.commentString"])
+        if comment.returncode == 1:
+            comment = run_command("git", ["config", "--get", "core.commentChar"])
+        if comment.returncode not in (0, 1):
+            raise RuntimeError("cannot read Git's comment configuration")
+        prefix = comment.stdout.strip() or "#"
+        prefixes = list("#;@!$%^&|:") if prefix == "auto" else [prefix]
+        for marker in (f"{item} ------------------------ >8 ------------------------" for item in prefixes):
+            before, separator, after = message.partition(f"\n{marker}\n")
+            if separator and any(line.startswith("diff --git ") for line in after.splitlines()):
+                message = before
+                break
+    return message_findings(path, message, comments=True)
 
 
 def commit_range(start: str, end: str) -> list[Finding]:
-    """CI: check every commit subject in ``start..end``."""
-    pairs: list[tuple[str, str]] = []
-    for line in git("log", "--format=%h%x00%s", f"{start}..{end}").splitlines():
-        short, _, subject = line.partition("\0")
-        pairs.append((f"commit {short}", subject))
-    return commit_subjects(pairs)
+    """CI: check every complete commit message in ``start..end``; unreadable revisions fail closed."""
+    findings = []
+    for commit in git("rev-list", f"{start}..{end}").splitlines():
+        message = git("show", "-s", "--format=%B", commit)
+        findings.extend(message_findings(f"commit {commit}", message))
+    return findings
 
 
 def main() -> int:
