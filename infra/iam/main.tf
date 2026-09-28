@@ -16,16 +16,6 @@ locals {
   service_templates = { for filename in fileset("${path.module}/policies", "*_policy.json") : trimsuffix(filename, "_policy.json") => filename }
 }
 
-moved {
-  from = aws_iam_policy.project["healthcare_hai_prediction_s3_policy"]
-  to   = aws_iam_policy.service["s3"]
-}
-
-moved {
-  from = aws_iam_user_policy_attachment.project["healthcare_hai_prediction_s3_policy"]
-  to   = aws_iam_user_policy_attachment.service["s3"]
-}
-
 resource "aws_iam_policy" "service" {
   for_each    = local.service_templates
   name        = "${var.project_name}_${each.key}_policy"
