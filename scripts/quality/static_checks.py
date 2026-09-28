@@ -1,4 +1,4 @@
-"""Run credential-free Terraform scanners on source-only copies and retain safe evidence."""
+"""Run credential-free Terraform scanners (TFLint, Checkov, trivy config) on source-only copies and retain safe evidence."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import importlib.metadata
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 from datetime import UTC, datetime
@@ -18,6 +19,29 @@ from scripts.process import TimeoutExpired, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 LOGGER = logging.getLogger(__name__)
+TRIVY_IGNORE = re.compile(r"^\s*#trivy:ignore:(?P<check>[A-Z]+-[0-9]+)\s*$")
+RESOURCE = re.compile(r'^resource\s+"(?P<type>[\w-]+)"\s+"(?P<name>[\w-]+)"\s*\{')
+
+
+def trivy_exceptions(source: Path) -> list[dict[str, str]]:
+    """List every trivy ignore with the resource it precedes and the reason in the comments above it."""
+    exceptions = []
+    for path in sorted(source.glob("*.tf")):
+        comments: list[str] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                comments.append(stripped)
+                continue
+            match = RESOURCE.match(stripped)
+            if match:
+                reason = " ".join(c.lstrip("# ").strip() for c in comments if not TRIVY_IGNORE.match(c))
+                for comment in comments:
+                    ignore = TRIVY_IGNORE.match(comment)
+                    if ignore:
+                        exceptions.append({"check_id": ignore["check"], "resource": f"{match['type']}.{match['name']}", "reason": reason})
+            comments = []
+    return exceptions
 
 
 def scan(directory: Path, output: Path) -> bool:
@@ -55,7 +79,25 @@ def scan(directory: Path, output: Path) -> bool:
                 AWS_CONFIG_FILE=str(scratch / "absent"),
                 AWS_SHARED_CREDENTIALS_FILE=str(scratch / "absent"),
             )
+            trivy_receipt = ROOT / ".tools/receipts/trivy.json"
+            report["trivy_version"] = json.loads(trivy_receipt.read_text(encoding="utf-8"))["version"] if trivy_receipt.is_file() else None
             commands = {
+                # Embedded checks only: no check-bundle download, version notice or telemetry, so results are reproducible offline.
+                "trivy": [
+                    str(ROOT / ".tools/bin/trivy"),
+                    "config",
+                    "--quiet",
+                    "--skip-check-update",
+                    "--skip-version-check",
+                    "--disable-telemetry",
+                    "--cache-dir",
+                    str(scratch / "trivy_cache"),
+                    "--format",
+                    "json",
+                    "--exit-code",
+                    "1",
+                    str(source),
+                ],
                 "tflint": [str(ROOT / ".tools/bin/tflint"), f"--chdir={source}", f"--config={scratch / 'tflint.hcl'}", "--format=json"],
                 "checkov": [
                     sys.executable,
@@ -80,7 +122,24 @@ def scan(directory: Path, output: Path) -> bool:
                 parsed = json.loads(result.stdout)
                 if not isinstance(parsed, dict):
                     raise ValueError("Unexpected scanner report")
-                if name == "tflint":
+                details: dict[str, Any]
+                if name == "trivy":
+                    misconfigurations = [item for result in parsed.get("Results") or [] for item in result.get("Misconfigurations") or []]
+                    details = {
+                        "findings": [
+                            {
+                                "check_id": item["ID"],
+                                "severity": item["Severity"],
+                                "title": item["Title"],
+                                "resource": (item.get("CauseMetadata") or {}).get("Resource", ""),
+                            }
+                            for item in misconfigurations
+                            if item.get("Status") == "FAIL"
+                        ],
+                        "exceptions": trivy_exceptions(source),
+                    }
+                    details["failed_checks"] = len(details["findings"])
+                elif name == "tflint":
                     details = {
                         "issues": [{"rule": item["rule"]["name"], "severity": item["rule"]["severity"]} for item in parsed.get("issues", [])],
                         "errors": len(parsed.get("errors", [])),
@@ -117,10 +176,18 @@ def scan(directory: Path, output: Path) -> bool:
         report["checkov_version"] = importlib.metadata.version("checkov")
         report["implementation_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         report["limits"] = (
-            "Static source analysis only; no state, tfvars or cloud calls. Resource-scoped source exceptions are reported, "
-            "not treated as implemented controls. Temporary copies removed."
+            "Static source analysis only; no state, tfvars or cloud calls. trivy uses its embedded checks offline. "
+            "Resource-scoped source exceptions are reported, not treated as implemented controls. Temporary copies removed."
         )
-        report["reproduce"] = [".venv/bin/python", "scripts/quality/static_checks.py", "--directory", "<source_root>", "--output-directory", "<new_directory>"]
+        report["reproduce"] = [
+            ".venv/bin/python",
+            "-m",
+            "scripts.quality.static_checks",
+            "--directory",
+            "<source_root>",
+            "--output-directory",
+            "<new_directory>",
+        ]
         (output / "report.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     LOGGER.info("event=terraform_static status=%s", report["status"])
     return report["status"] == "passed"

@@ -74,7 +74,7 @@ def installation_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
     archives.mkdir()
     selected_platform = f"{platform.system().lower()}_{'amd64' if platform.machine() in {'x86_64', 'AMD64'} else platform.machine()}"
     tools: dict[str, Any] = {}
-    for name, kind in [("gitleaks", "tar.gz"), ("tflint", "zip")]:
+    for name, kind in [("gitleaks", "tar.gz"), ("tflint", "zip"), ("trivy", "tar.gz")]:
         path = archives / f"{name}.{kind}"
         content = b"synthetic executable fixture; never executed\n"
         if kind == "zip":
@@ -187,14 +187,19 @@ def terraform_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
     report = json.loads((workspace / "static_evidence/report.json").read_text(encoding="utf-8"))
     check(report["checkov"]["failed_checks"] > 0, "Checkov did not identify missing S3 protections")
     check(report["tflint"]["returncode"] != 0, "TFLint did not identify missing provider/version declarations")
+    check(report["trivy"]["failed_checks"] > 0 and report["trivy"]["returncode"] != 0, "trivy did not identify missing S3 protections")
 
     # Failure modes: hidden exceptions, global suppression or suppression of an unapproved control.
     scoped = workspace / "scoped_terraform"
     scoped.mkdir()
     deferred = {"CKV2_AWS_62", "CKV_AWS_144", "CKV_AWS_145", "CKV_AWS_18"}
     comments = "\n".join(f"  #checkov:skip={identifier}:Synthetic staged-development exception; review before production." for identifier in sorted(deferred))
+    trivy_deferred = {"AWS-0089", "AWS-0132"}
+    trivy_comments = "# Synthetic staged-development exception; review before production.\n" + "".join(
+        f"#trivy:ignore:{item}\n" for item in sorted(trivy_deferred)
+    )
     (scoped / "main.tf").write_text(
-        'resource "aws_s3_bucket" "scoped" {\n' + comments + '\n  bucket = "example-scoped-bucket"\n}\n'
+        trivy_comments + 'resource "aws_s3_bucket" "scoped" {\n' + comments + '\n  bucket = "example-scoped-bucket"\n}\n'
         'resource "aws_s3_bucket" "unscoped" {\n  bucket = "example-unscoped-bucket"\n}\n',
         encoding="utf-8",
     )
@@ -209,6 +214,14 @@ def terraform_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
     findings = {(item["resource"], item["check_id"]) for item in scoped_report["findings"]}
     check(all(("aws_s3_bucket.unscoped", identifier) in findings for identifier in deferred), "An exception suppressed another resource")
     check(("aws_s3_bucket.scoped", "CKV_AWS_21") in findings, "Unapproved versioning control was suppressed")
+    trivy_report = json.loads((evidence / "report.json").read_text(encoding="utf-8"))["trivy"]
+    trivy_exceptions = trivy_report["exceptions"]
+    check({item["check_id"] for item in trivy_exceptions} == trivy_deferred, "Approved trivy exception identifiers were not retained")
+    check(all(item["resource"] == "aws_s3_bucket.scoped" and item["reason"] for item in trivy_exceptions), "trivy exception scope or reason was lost")
+    trivy_findings = {(item["resource"], item["check_id"]) for item in trivy_report["findings"]}
+    check(all(("aws_s3_bucket.unscoped", identifier) in trivy_findings for identifier in trivy_deferred), "A trivy exception suppressed another resource")
+    check(not any(("aws_s3_bucket.scoped", identifier) in trivy_findings for identifier in trivy_deferred), "A scoped trivy exception was not applied")
+    check(("aws_s3_bucket.scoped", "AWS-0090") in trivy_findings, "Unapproved trivy versioning control was suppressed")
     cases.append({"name": "resource_scoped_exceptions_remain_visible_and_fail_closed", **outcome})
 
 
@@ -253,7 +266,9 @@ def main() -> None:
         report["source_sha256"] = {p.name: digest(p) for p in [*sorted(Path(__file__).parent.glob("*.py")), ROOT / "scripts/process.py"]}
         report["requirements_sha256"] = digest(ROOT / "requirements.txt")
         report["configuration_sha256"] = {name: digest(ROOT / name) for name in ("config/quality_tools.json", ".pre-commit-config.yaml")}
-        report["native_tool_sha256"] = {name: digest(ROOT / ".tools/bin" / name) for name in ("gitleaks", "tflint") if (ROOT / ".tools/bin" / name).is_file()}
+        report["native_tool_sha256"] = {
+            name: digest(ROOT / ".tools/bin" / name) for name in ("gitleaks", "tflint", "trivy") if (ROOT / ".tools/bin" / name).is_file()
+        }
         (output / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         (output / "evidence_manifest.json").write_text(json.dumps({"report.json": digest(output / "report.json")}) + "\n", encoding="utf-8")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")

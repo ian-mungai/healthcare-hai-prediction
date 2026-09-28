@@ -12,6 +12,9 @@ provider "aws" {
   }
 }
 
+# Approved acquisition-stage deferral of server access logging (checkov CKV_AWS_18); review before additional user or service
+# access, production or newly approved sensitive-data use.
+#trivy:ignore:AWS-0089
 resource "aws_s3_bucket" "data" {
   #checkov:skip=CKV_AWS_18:Approved acquisition-stage deferral; review before additional user or service access, production or newly approved sensitive-data use.
   #checkov:skip=CKV2_AWS_62:Approved acquisition-stage deferral; review when an event consumer is implemented.
@@ -56,6 +59,9 @@ resource "aws_s3_bucket_versioning" "data" {
   }
 }
 
+# Approved acquisition-stage SSE-S3 use (checkov CKV_AWS_145); review KMS with coordinated ingestion and IAM migration before
+# production.
+#trivy:ignore:AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
   bucket = aws_s3_bucket.data.id
 

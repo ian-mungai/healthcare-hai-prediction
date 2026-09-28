@@ -55,7 +55,7 @@ from it with headless Chrome. Dashed components are planned, not built.
 
 Run from this repository's root with its existing Python 3.12 `.venv`.
 Dependencies are shared across development and production in `requirements.txt`.
-Gitleaks and TFLint are installed only in ignored `.tools/`; versions and
+Gitleaks, TFLint and trivy are installed only in ignored `.tools/`; versions and
 publisher SHA-256 values are pinned in `config/quality_tools.json`.
 
 ```sh
@@ -75,7 +75,8 @@ the shared system tools to satisfy this project.
 
 CI checks Ruff formatting and security rules, MyPy, outgoing-source secret
 scanning, repository checks, configuration and quality E2E, retained regression
-safeguards, Terraform mock tests, TFLint and Checkov. Pre-commit scans the
+safeguards, Terraform mock tests, TFLint, Checkov and `trivy config` (its
+embedded checks only, run offline). Pre-commit scans the
 actual staged index, including changes hidden by a clean working copy, before
 local CI.
 
@@ -149,14 +150,14 @@ verification evidence remain untracked under
 Apply bundle requirements when development reaches the relevant stage. Future
 requirements guide later work; deferral does not mean a control is implemented.
 The following acquisition-stage deferrals are approved for `aws_s3_bucket.data`
-only. Checkov evidence retains each skipped check, resource and reason.
+only. Checkov and trivy evidence retain each exception, resource and reason.
 
 | Deferred control | Reason | Review trigger |
 | --- | --- | --- |
 | Event notifications (`CKV2_AWS_62`) | No event consumer exists yet. | Implementing an event consumer. |
 | Cross-region replication (`CKV_AWS_144`) | Recovery objectives and a destination are not established. | Recovery design, before production. |
-| KMS (`CKV_AWS_145`) | Acquisition currently uses SSE-S3/AES256. | Coordinated ingestion and IAM migration, before production. |
-| Access logging (`CKV_AWS_18`) | Approved acquisition-stage deferral of a separate logging destination; request-audit gap accepted for this stage. | Before additional user or service access, production or newly approved sensitive-data use. |
+| KMS (`CKV_AWS_145`, trivy `AWS-0132`) | Acquisition currently uses SSE-S3/AES256. | Coordinated ingestion and IAM migration, before production. |
+| Access logging (`CKV_AWS_18`, trivy `AWS-0089`) | Approved acquisition-stage deferral of a separate logging destination; request-audit gap accepted for this stage. | Before additional user or service access, production or newly approved sensitive-data use. |
 
 Access logging was explicitly deferred on Sep 24 2026 (UTC). Acquisition
 receipts establish pipeline provenance, not an independent record of every

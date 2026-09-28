@@ -30,6 +30,21 @@
           "format": "zip"
         }
       }
+    },
+    "trivy": {
+      "version": "0.74.0",
+      "releases": {
+        "darwin_arm64": {
+          "url": "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_macOS-ARM64.tar.gz",
+          "sha256": "1caada5e0e2091909357c7525d3aa76f4b660b13821bc143b190c7483e31cc11",
+          "format": "tar.gz"
+        },
+        "linux_amd64": {
+          "url": "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz",
+          "sha256": "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a",
+          "format": "tar.gz"
+        }
+      }
     }
   }
 }

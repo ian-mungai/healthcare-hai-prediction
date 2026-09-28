@@ -22,7 +22,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 MAX_ARCHIVE = 64 * 1024 * 1024
-MAX_BINARY = 128 * 1024 * 1024
+MAX_BINARY = 192 * 1024 * 1024  # trivy 0.74.0 is about 161 MB.
 LOGGER = logging.getLogger(__name__)
 
 
@@ -114,7 +114,7 @@ def publish(path: Path, content: bytes, mode: int) -> None:
 def install(manifest: Path, destination: Path, archives: Path | None) -> None:
     """Validate every asset before publishing binaries and deterministic receipts."""
     config = json.loads(manifest.read_text(encoding="utf-8"))
-    if config["schema_version"] != 1 or set(config["tools"]) != {"gitleaks", "tflint"}:
+    if config["schema_version"] != 1 or set(config["tools"]) != {"gitleaks", "tflint", "trivy"}:
         raise ValueError("Unsupported tool manifest")
     architecture = {"x86_64": "amd64", "AMD64": "amd64"}.get(platform.machine(), platform.machine())
     selected = f"{platform.system().lower()}_{architecture}"
