@@ -10,7 +10,6 @@ import os
 import platform
 import shutil
 import stat
-import subprocess
 import sys
 import tempfile
 import time
@@ -18,11 +17,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from scripts.process import TimeoutExpired, run_command
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROFILE = "example_project_dev"
 ADMIN = "example_administrator"
-SECRET = "example_e2e_secret_do_not_print"  # noqa: S105 - public synthetic disclosure sentinel, not a credential.
-SOURCE_NAMES = ("render_project_config.py", "render_project_config.sh", "terraform.sh")
+# Public synthetic value that must never appear in diagnostics or generated files.
+DISCLOSURE_SENTINEL = "example_e2e_value_do_not_print"
+# Production entry points copied unmodified into each synthetic workspace, including the process launcher they import.
+SOURCE_PATHS = (
+    "scripts/process.py",
+    "scripts/infrastructure/render_project_config.py",
+    "scripts/infrastructure/render_project_config.sh",
+    "scripts/infrastructure/terraform.sh",
+)
 OUTPUT_NAMES = ("infra/deployment.auto.tfvars.json", "infra/iam/deployment.auto.tfvars.json")
 FIXTURE = {
     "AWS_ACCOUNT_ID": "111111111111",
@@ -64,7 +72,7 @@ class Evidence:
             str(REPO_ROOT): "<REPO>",
             sys.executable: "<PYTHON>",
             str(Path.home()): "<HOME>",
-            SECRET: "<REDACTED_SECRET>",
+            DISCLOSURE_SENTINEL: "<REDACTED_SENTINEL>",
         }
         self.report: dict[str, Any] = {
             "schema_version": 1,
@@ -74,7 +82,7 @@ class Evidence:
             "subprocess_responses_mocked": False,
             "started_at_utc": datetime.now(UTC).isoformat(),
             "runtime": {"python": platform.python_version(), "system": platform.system(), "machine": platform.machine()},
-            "repeat_command": [".venv/bin/python", "scripts/infrastructure/run_e2e.py", "--output-directory", "<NEW_EVIDENCE_DIRECTORY>"],
+            "repeat_command": [".venv/bin/python", "-m", "scripts.infrastructure.run_e2e", "--output-directory", "<NEW_EVIDENCE_DIRECTORY>"],
             "source_hashes": {},
             "steps": [],
         }
@@ -114,19 +122,11 @@ class Evidence:
         self.report["steps"].append(step)
         started = time.perf_counter()
         try:
-            result = subprocess.run(  # noqa: S603 - fixed E2E argument arrays inside an isolated synthetic workspace.
-                command,
-                cwd=workspace,
-                env={**self.environment, **(extra_environment or {})},
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
+            result = run_command(command[0], command[1:], cwd=workspace, env={**self.environment, **(extra_environment or {})}, timeout=30)
             step.update(returncode=result.returncode, stdout=self.redact(result.stdout), stderr=self.redact(result.stderr))
-            self.check(step, "diagnostics_do_not_disclose_secret", SECRET not in result.stdout + result.stderr)
+            self.check(step, "diagnostics_do_not_disclose_sentinel", DISCLOSURE_SENTINEL not in result.stdout + result.stderr)
             return step, result
-        except subprocess.TimeoutExpired as error:
+        except TimeoutExpired as error:
             step.update(returncode=None, stdout=self.redact(as_text(error.stdout)), stderr=self.redact(as_text(error.stderr)), timed_out=True)
             raise CheckFailed(f"{name}: child process exceeded 30 seconds") from None
         finally:
@@ -159,7 +159,7 @@ class Evidence:
             mode = stat.S_IMODE(path.stat().st_mode)
             self.check(step, f"{name}: owner_only_permissions", mode == 0o600)
             self.check(step, f"{name}: exact_json", json.loads(content) == values)
-            self.check(step, f"{name}: no_secret_or_administrator", SECRET.encode() not in content and ADMIN.encode() not in content)
+            self.check(step, f"{name}: no_secret_or_administrator", DISCLOSURE_SENTINEL.encode() not in content and ADMIN.encode() not in content)
             artifact = self.output / step["name"] / name
             artifact.parent.mkdir(parents=True, exist_ok=True)
             with artifact.open("xb") as handle:
@@ -193,8 +193,8 @@ def as_text(value: str | bytes | None) -> str:
 def fixture_sources(evidence: Evidence) -> dict[str, bytes]:
     """Copy actual implementation bytes and record their hashes without patching."""
     sources = {}
-    for name in SOURCE_NAMES:
-        original = (REPO_ROOT / "scripts" / "infrastructure" / name).read_bytes()
+    for name in SOURCE_PATHS:
+        original = (REPO_ROOT / name).read_bytes()
         sources[name] = original
         evidence.report["source_hashes"][name] = {"original_sha256": sha256(original), "fixture_sha256": sha256(original)}
     evidence.report["source_hashes"]["run_e2e.py"] = {"original_sha256": sha256(Path(__file__).read_bytes())}
@@ -212,10 +212,9 @@ def write_environment(workspace: Path, values: dict[str, str]) -> None:
 def copied_workspace(temporary: Path, name: str, sources: dict[str, bytes], values: dict[str, str]) -> Path:
     """Create a disposable workspace containing unmodified production entry points."""
     workspace = temporary / name
-    scripts = workspace / "scripts" / "infrastructure"
-    scripts.mkdir(parents=True)
-    for filename, content in sources.items():
-        (scripts / filename).write_bytes(content)
+    for relative, content in sources.items():
+        (workspace / relative).parent.mkdir(parents=True, exist_ok=True)
+        (workspace / relative).write_bytes(content)
     write_environment(workspace, values)
     return workspace
 
@@ -232,7 +231,7 @@ def run_suite(evidence: Evidence) -> None:
         raise CheckFailed("This check requires the real bash and dirname utilities")
     (tools / "dirname").symlink_to(dirname)
     workspace = copied_workspace(evidence.temporary, "lifecycle", sources, FIXTURE)
-    renderer = [sys.executable, "scripts/infrastructure/render_project_config.py"]
+    renderer = [sys.executable, "-m", "scripts.infrastructure.render_project_config"]
     shell_renderer = [bash, "scripts/infrastructure/render_project_config.sh", "--admin-profile", ADMIN]
     step, result = evidence.run("render_initial", shell_renderer, workspace)
     evidence.check(step, "render_succeeded", result.returncode == 0 and not result.stderr)
@@ -265,7 +264,7 @@ def run_suite(evidence: Evidence) -> None:
     evidence.check(step, "alternate_project_accepted_without_source_patching", result.returncode == 0 and not result.stderr)
     evidence.capture_outputs(step, alternate, "ap-southeast-2", "sample_project")
 
-    isolated = copied_workspace(evidence.temporary, "unsupported_setting", sources, {**FIXTURE, "EXAMPLE_UNUSED_SETTING": SECRET})
+    isolated = copied_workspace(evidence.temporary, "unsupported_setting", sources, {**FIXTURE, "EXAMPLE_UNUSED_SETTING": DISCLOSURE_SENTINEL})
     step, result = evidence.run("reject_unsupported_setting", renderer, isolated)
     evidence.check(step, "unsupported_setting_rejected", result.returncode == 2 and "Unsupported .env settings" in result.stderr)
     evidence.check(step, "no_output", not result.stdout and not (isolated / "infra").exists())
@@ -333,8 +332,8 @@ def run_suite(evidence: Evidence) -> None:
     before = {path.relative_to(evidence.output).as_posix(): sha256(path.read_bytes()) for path in evidence.output.rglob("*") if path.is_file()}
     step, result = evidence.run(
         "refuse_existing_evidence",
-        [sys.executable, str(Path(__file__).resolve()), "--output-directory", str(evidence.output)],
-        workspace,
+        [sys.executable, "-m", "scripts.infrastructure.run_e2e", "--output-directory", str(evidence.output)],
+        REPO_ROOT,
     )
     evidence.check(step, "existing_directory_rejected", result.returncode == 2 and "Output directory already exists" in result.stderr)
     after = {path.relative_to(evidence.output).as_posix(): sha256(path.read_bytes()) for path in evidence.output.rglob("*") if path.is_file()}

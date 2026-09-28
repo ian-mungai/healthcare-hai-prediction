@@ -7,17 +7,18 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
+
+from scripts.process import CompletedProcess, TimeoutExpired, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 LOGGER = logging.getLogger(__name__)
 
 
-def execute(command: list[str], cwd: Path, environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def execute(command: list[str], cwd: Path, environment: dict[str, str]) -> CompletedProcess[str]:
     """Execute fixed argument arrays without echoing scanner output or source values."""
-    return subprocess.run(command, cwd=cwd, env=environment, capture_output=True, text=True, timeout=180, check=False)  # noqa: S603 - fixed local CLI, no shell.
+    return run_command(command[0], command[1:], cwd=cwd, env=environment, timeout=180)
 
 
 def scan(repository: Path, staged: bool) -> int:
@@ -83,7 +84,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
         status = scan(args.repository.resolve(), args.staged)
-    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+    except (OSError, ValueError, TimeoutExpired) as error:
         LOGGER.error("event=secret_scan status=blocked error_type=%s", type(error).__name__)
         raise SystemExit(2) from None
     raise SystemExit(status)

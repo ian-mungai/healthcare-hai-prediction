@@ -2,7 +2,6 @@
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -11,6 +10,8 @@ import pytest
 
 from scripts.infrastructure import render_project_config as renderer
 from scripts.infrastructure.render_project_config import ConfigurationError, build_configuration, verify_plan_variables
+from scripts.process import CompletedProcess, TimeoutExpired, run_command
+from tests.support import check
 
 TEST_PROJECT_NAME = "example_project"
 TEST_ENVIRONMENT = "dev"
@@ -37,21 +38,33 @@ def caller_identity(environment: dict[str, Any]) -> dict[str, Any]:
 
 def test_configuration_has_one_source_and_no_credentials(environment: dict[str, Any]) -> None:
     storage, iam = build_configuration(environment)
-    assert storage["expected_account_id"] == iam["expected_account_id"] == environment["AWS_ACCOUNT_ID"]
-    assert storage["data_bucket_name"] == iam["data_bucket_name"] == environment["S3_BUCKET"]
-    assert storage["project_name"] == iam["project_name"] == environment["PROJECT_NAME"]
-    assert storage == iam
-    assert storage["aws_profile"] == environment["AWS_PROFILE"]
-    assert storage["environment"] == iam["environment"] == TEST_ENVIRONMENT
-    assert set(storage) == {"expected_account_id", "data_bucket_name", "project_name", "aws_profile", "aws_region", "environment"}
+    check(
+        storage["expected_account_id"] == iam["expected_account_id"] == environment["AWS_ACCOUNT_ID"],
+        'storage["expected_account_id"] == iam["expected_account_id"] == environment["AWS_ACCOUNT_ID"]',
+    )
+    check(
+        storage["data_bucket_name"] == iam["data_bucket_name"] == environment["S3_BUCKET"],
+        'storage["data_bucket_name"] == iam["data_bucket_name"] == environment["S3_BUCKET"]',
+    )
+    check(
+        storage["project_name"] == iam["project_name"] == environment["PROJECT_NAME"],
+        'storage["project_name"] == iam["project_name"] == environment["PROJECT_NAME"]',
+    )
+    check(storage == iam, "storage == iam")
+    check(storage["aws_profile"] == environment["AWS_PROFILE"], 'storage["aws_profile"] == environment["AWS_PROFILE"]')
+    check(storage["environment"] == iam["environment"] == TEST_ENVIRONMENT, 'storage["environment"] == iam["environment"] == TEST_ENVIRONMENT')
+    check(
+        set(storage) == {"expected_account_id", "data_bucket_name", "project_name", "aws_profile", "aws_region", "environment"},
+        'set(storage) == {"expected_account_id", "data_bucket_name", "project_name", "aws_profile", "aws_region", "environment"}',
+    )
 
 
 def test_admin_selection_does_not_change_project_profile(environment: dict[str, Any]) -> None:
     storage, iam = build_configuration(environment, "example_admin")
-    assert storage["aws_profile"] == TEST_PROJECT_PROFILE
-    assert iam["admin_profile"] == "example_admin"
-    assert iam["aws_profile"] == TEST_PROJECT_PROFILE
-    assert environment["AWS_PROFILE"] == TEST_PROJECT_PROFILE
+    check(storage["aws_profile"] == TEST_PROJECT_PROFILE, 'storage["aws_profile"] == TEST_PROJECT_PROFILE')
+    check(iam["admin_profile"] == "example_admin", 'iam["admin_profile"] == "example_admin"')
+    check(iam["aws_profile"] == TEST_PROJECT_PROFILE, 'iam["aws_profile"] == TEST_PROJECT_PROFILE')
+    check(environment["AWS_PROFILE"] == TEST_PROJECT_PROFILE, 'environment["AWS_PROFILE"] == TEST_PROJECT_PROFILE')
 
 
 @pytest.mark.parametrize("name", ["AWS_ACCOUNT_ID", "AWS_REGION", "PROJECT_NAME", "S3_BUCKET", "AWS_PROFILE", "ENVIRONMENT"])
@@ -76,7 +89,7 @@ def test_invalid_values_are_rejected_without_echoing_values(environment: dict[st
     environment[name] = value
     with pytest.raises(ConfigurationError) as error:
         build_configuration(environment)
-    assert value not in str(error.value)
+    check(value not in str(error.value), "value not in str(error.value)")
 
 
 @pytest.mark.parametrize("value", [TEST_PROJECT_PROFILE, "example_different_user", ""])
@@ -92,7 +105,10 @@ def test_profile_follows_project_and_environment(environment: dict[str, Any]) ->
         build_configuration(environment)
     environment["AWS_PROFILE"] = f"{TEST_PROJECT_NAME}_prod"
     storage, _ = build_configuration(environment)
-    assert storage["aws_profile"] == f"{TEST_PROJECT_NAME}_prod" and storage["environment"] == "prod"
+    check(
+        storage["aws_profile"] == f"{TEST_PROJECT_NAME}_prod" and storage["environment"] == "prod",
+        'storage["aws_profile"] == f"{TEST_PROJECT_NAME}_prod" and storage["environment"] == "prod"',
+    )
 
 
 @pytest.mark.parametrize("profile", ["", " ", TEST_PROJECT_PROFILE])
@@ -112,18 +128,21 @@ def test_identity_check_uses_explicit_profile_and_ignores_ambient_credentials(
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "example-not-a-real-secret")
     calls = []
 
-    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        calls.append((command, kwargs))
-        return subprocess.CompletedProcess(command, 0, json.dumps(caller_identity), "")
+    def run(program: str, args: list[str], **kwargs: Any) -> CompletedProcess[str]:
+        calls.append(([program, *args], kwargs))
+        return CompletedProcess([program, *args], 0, json.dumps(caller_identity), "")
 
-    monkeypatch.setattr(renderer.subprocess, "run", run)
+    monkeypatch.setattr(renderer, "run_command", run)
     renderer.verify_project_identity(storage)
     command, options = calls[0]
-    assert len(calls) == 1 and command[:3] == ["aws", "sts", "get-caller-identity"]
-    assert command[command.index("--profile") + 1] == environment["AWS_PROFILE"]
-    assert command[command.index("--region") + 1] == environment["AWS_REGION"]
-    assert options["capture_output"] and options["timeout"] == 30
-    assert not {"AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}.intersection(options["env"])
+    check(len(calls) == 1 and command[:3] == ["aws", "sts", "get-caller-identity"], 'len(calls) == 1 and command[:3] == ["aws", "sts", "get-caller-identity"]')
+    check(command[command.index("--profile") + 1] == environment["AWS_PROFILE"], 'command[command.index("--profile") + 1] == environment["AWS_PROFILE"]')
+    check(command[command.index("--region") + 1] == environment["AWS_REGION"], 'command[command.index("--region") + 1] == environment["AWS_REGION"]')
+    check(options["timeout"] == 30, 'options["timeout"] == 30')
+    check(
+        not {"AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}.intersection(options["env"]),
+        'not {"AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}.intersection(options["env"])',
+    )
 
 
 @pytest.mark.parametrize("change", ["account", "arn_account", "user", "role", "assumed_role", "root", "missing_arn"])
@@ -141,39 +160,39 @@ def test_wrong_aws_identity_is_rejected(environment: dict[str, Any], caller_iden
         "missing_arn": {"Arn": None},
     }
     caller_identity.update(replacements[change])
-    monkeypatch.setattr(renderer.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, json.dumps(caller_identity), ""))
+    monkeypatch.setattr(renderer, "run_command", lambda program, args, **kwargs: CompletedProcess([program, *args], 0, json.dumps(caller_identity), ""))
     with pytest.raises(ConfigurationError, match="same-named IAM user") as error:
         renderer.verify_project_identity(storage)
-    assert account not in str(error.value) and profile not in str(error.value)
+    check(account not in str(error.value) and profile not in str(error.value), "account not in str(error.value) and profile not in str(error.value)")
 
 
 @pytest.mark.parametrize("response", ["not-json", "[]", "null"])
 def test_malformed_identity_responses_are_rejected(environment: dict[str, Any], monkeypatch: pytest.MonkeyPatch, response: str) -> None:
     storage, _ = build_configuration(environment)
-    monkeypatch.setattr(renderer.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, response, ""))
+    monkeypatch.setattr(renderer, "run_command", lambda program, args, **kwargs: CompletedProcess([program, *args], 0, response, ""))
     with pytest.raises(ConfigurationError, match="invalid response"):
         renderer.verify_project_identity(storage)
 
 
 def test_failed_identity_request_does_not_echo_diagnostics(environment: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     storage, _ = build_configuration(environment)
-    monkeypatch.setattr(renderer.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, "", "example private diagnostic"))
+    monkeypatch.setattr(renderer, "run_command", lambda program, args, **kwargs: CompletedProcess([program, *args], 1, "", "example private diagnostic"))
     with pytest.raises(ConfigurationError, match="No plan or apply") as error:
         renderer.verify_project_identity(storage)
-    assert "example private diagnostic" not in str(error.value)
+    check("example private diagnostic" not in str(error.value), '"example private diagnostic" not in str(error.value)')
 
 
-@pytest.mark.parametrize("failure", [FileNotFoundError("example private path"), subprocess.TimeoutExpired("example private command", 30)])
+@pytest.mark.parametrize("failure", [FileNotFoundError("example private path"), TimeoutExpired("example private command", 30)])
 def test_identity_check_handles_missing_cli_and_timeouts(environment: dict[str, Any], monkeypatch: pytest.MonkeyPatch, failure: Exception) -> None:
     storage, _ = build_configuration(environment)
 
     def run(*args: Any, **kwargs: Any) -> None:
         raise failure
 
-    monkeypatch.setattr(renderer.subprocess, "run", run)
+    monkeypatch.setattr(renderer, "run_command", run)
     with pytest.raises(ConfigurationError, match="Could not verify") as error:
         renderer.verify_project_identity(storage)
-    assert "example private" not in str(error.value)
+    check("example private" not in str(error.value), '"example private" not in str(error.value)')
 
 
 def test_saved_plan_must_match_current_dotenv(environment: dict[str, Any]) -> None:
@@ -204,11 +223,11 @@ def test_wrapper_rejects_inherited_arguments_before_configuration_checks(
     script = Path(__file__).resolve().parents[1] / "scripts" / "infrastructure" / "terraform.sh"
     value = "-var-file=example_private.tfvars" if name == "TF_CLI_ARGS" else "-var=project_name=unexpected_project"
     wrapper_environment.update({"PYTHON_BIN": str(tmp_path / "must_not_run"), name: value})
-    result = subprocess.run(["/bin/bash", str(script), *arguments], capture_output=True, text=True, env=wrapper_environment)  # noqa: S603 - fixed wrapper, synthetic arguments.
-    assert result.returncode == 2
-    assert f"Unset {name};" in result.stderr
-    assert value not in result.stderr and "must_not_run" not in result.stderr
-    assert not result.stdout
+    result = run_command("/bin/bash", [str(script), *arguments], env=wrapper_environment, timeout=60)
+    check(result.returncode == 2, "result.returncode == 2")
+    check(f"Unset {name};" in result.stderr, 'f"Unset {name};" in result.stderr')
+    check(value not in result.stderr and "must_not_run" not in result.stderr, 'value not in result.stderr and "must_not_run" not in result.stderr')
+    check(not result.stdout, "not result.stdout")
 
 
 @pytest.mark.parametrize("empty_exports", [False, True])
@@ -233,8 +252,8 @@ def test_wrapper_preserves_explicit_options_without_inherited_arguments(
     wrapper_environment.update({"PYTHON_BIN": str(tmp_path / "example_python"), "PATH": f"{tmp_path}{os.pathsep}{wrapper_environment['PATH']}"})
     if empty_exports:
         wrapper_environment.update({"TF_CLI_ARGS": "", "TF_CLI_ARGS_plan": "", "TF_CLI_ARGS_show": ""})
-    result = subprocess.run(["/bin/bash", str(script), *arguments], capture_output=True, text=True, env=wrapper_environment)  # noqa: S603 - fixed wrapper, synthetic arguments.
-    assert result.returncode == 0, result.stderr
+    result = run_command("/bin/bash", [str(script), *arguments], env=wrapper_environment, timeout=60)
+    check(result.returncode == 0, result.stderr)
     output = result.stdout.splitlines()
     terraform_arguments = output[output.index("terraform") + 1 :]
     iam = arguments[0] == "--iam"
@@ -243,10 +262,10 @@ def test_wrapper_preserves_explicit_options_without_inherited_arguments(
     if iam and action == "plan":
         expected.append("-var=admin_profile=example_admin")
     expected.extend(options)
-    assert terraform_arguments[1:] == expected
-    assert terraform_arguments[0].startswith("-chdir=")
+    check(terraform_arguments[1:] == expected, "terraform_arguments[1:] == expected")
+    check(terraform_arguments[0].startswith("-chdir="), 'terraform_arguments[0].startswith("-chdir=")')
     if action == "apply":
-        assert "--check-plan" in output[: output.index("terraform")]
+        check("--check-plan" in output[: output.index("terraform")], '"--check-plan" in output[: output.index("terraform")]')
 
 
 @pytest.mark.parametrize("arguments", [["plan"], ["apply", "example.tfplan"], ["--iam", "--admin-profile", "example_admin", "plan"], ["validate"]])
@@ -256,9 +275,12 @@ def test_wrapper_requests_identity_verification_for_plans_and_applies(arguments:
     stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\nexit 1\n', encoding="utf-8")
     stub.chmod(0o700)
     wrapper_environment["PYTHON_BIN"] = str(stub)
-    result = subprocess.run(["/bin/bash", str(script), *arguments], capture_output=True, text=True, env=wrapper_environment)  # noqa: S603 - fixed wrapper, synthetic arguments.
-    assert result.returncode == 1
-    assert ("--verify-identity" in result.stdout.splitlines()) == (arguments != ["validate"])
+    result = run_command("/bin/bash", [str(script), *arguments], env=wrapper_environment, timeout=60)
+    check(result.returncode == 1, "result.returncode == 1")
+    check(
+        ("--verify-identity" in result.stdout.splitlines()) == (arguments != ["validate"]),
+        '("--verify-identity" in result.stdout.splitlines()) == (arguments != ["validate"])',
+    )
 
 
 @pytest.mark.parametrize("matches", [True, False])
@@ -271,14 +293,14 @@ def test_cli_checks_identity_before_writing_inputs(
     monkeypatch.setattr(sys, "argv", ["renderer", "--verify-identity"])
     if not matches:
         caller_identity["Account"] = "222222222222"
-    monkeypatch.setattr(renderer.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, json.dumps(caller_identity), ""))
+    monkeypatch.setattr(renderer, "run_command", lambda program, args, **kwargs: CompletedProcess([program, *args], 0, json.dumps(caller_identity), ""))
     if matches:
         renderer.main()
-        assert (tmp_path / "infra" / "deployment.auto.tfvars.json").is_file()
+        check((tmp_path / "infra" / "deployment.auto.tfvars.json").is_file(), '(tmp_path / "infra" / "deployment.auto.tfvars.json").is_file()')
     else:
         with pytest.raises(SystemExit):
             renderer.main()
-        assert not (tmp_path / "infra").exists()
+        check(not (tmp_path / "infra").exists(), 'not (tmp_path / "infra").exists()')
 
 
 @pytest.mark.parametrize("stack", ["storage", "iam"])
@@ -293,11 +315,11 @@ def test_cli_checks_selected_saved_plan(environment: dict[str, Any], tmp_path: P
         plan["variables"][change] = {"value": "example_unapproved"}
     monkeypatch.setattr(renderer, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(sys, "argv", ["renderer", "--stack", stack, "--admin-profile", "example_admin", "--check-plan", str(tmp_path / "reviewed.tfplan")])
-    monkeypatch.setattr(renderer.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, json.dumps(plan), ""))
+    monkeypatch.setattr(renderer, "run_command", lambda program, args, **kwargs: CompletedProcess([program, *args], 0, json.dumps(plan), ""))
     if change:
         with pytest.raises(SystemExit):
             renderer.main()
-        assert not (tmp_path / "infra").exists()
+        check(not (tmp_path / "infra").exists(), 'not (tmp_path / "infra").exists()')
     else:
         renderer.main()
 
@@ -310,7 +332,7 @@ def test_cli_rejects_invalid_requests(environment: dict[str, Any], tmp_path: Pat
     monkeypatch.setattr(sys, "argv", ["renderer", *arguments])
     with pytest.raises(SystemExit) as error:
         renderer.main()
-    assert error.value.code == 2
+    check(error.value.code == 2, "error.value.code == 2")
 
 
 def test_cli_rejects_unreadable_plan_without_echoing_output(
@@ -320,7 +342,7 @@ def test_cli_rejects_unreadable_plan_without_echoing_output(
     path.write_text("\n".join(f"{key}={value}" for key, value in environment.items()), encoding="utf-8")
     monkeypatch.setattr(renderer, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(sys, "argv", ["renderer", "--stack", "storage", "--check-plan", str(tmp_path / "broken.tfplan")])
-    monkeypatch.setattr(renderer.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, "", "example private diagnostic"))
+    monkeypatch.setattr(renderer, "run_command", lambda program, args, **kwargs: CompletedProcess([program, *args], 1, "", "example private diagnostic"))
     with pytest.raises(SystemExit):
         renderer.main()
-    assert "example private diagnostic" not in capsys.readouterr().err
+    check("example private diagnostic" not in capsys.readouterr().err, '"example private diagnostic" not in capsys.readouterr().err')

@@ -3,7 +3,7 @@ repos:
     hooks:
       - id: gitleaks
         name: Scan staged changes for secrets
-        entry: .venv/bin/python scripts/quality/scan_secrets.py --staged
+        entry: .venv/bin/python -m scripts.quality.scan_secrets --staged
         language: system
         pass_filenames: false
         always_run: true

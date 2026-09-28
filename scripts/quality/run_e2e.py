@@ -12,7 +12,6 @@ import logging
 import os
 import platform
 import shutil
-import subprocess
 import sys
 import tarfile
 import tempfile
@@ -20,6 +19,8 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from scripts.process import TimeoutExpired, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 LOGGER = logging.getLogger(__name__)
@@ -47,8 +48,11 @@ def check(condition: bool, message: str) -> None:
 def run(command: list[str], cwd: Path, *, expected: int = 0, forbidden: str | None = None) -> dict[str, Any]:
     """Run an actual local process and retain only sanitized assertion metadata."""
     environment = {key: value for key, value in os.environ.items() if not key.startswith(("AWS_", "BC_", "GITLEAKS_"))}
-    environment.update(AWS_EC2_METADATA_DISABLED="true", PYTHONDONTWRITEBYTECODE="1", PRE_COMMIT_HOME=str(ROOT / ".tools" / "pre_commit_cache"))
-    result = subprocess.run(command, cwd=cwd, env=environment, capture_output=True, text=True, timeout=120, check=False)  # noqa: S603 - fixed local E2E commands, never a shell.
+    # PYTHONPATH lets module entry points (python -m scripts.quality...) resolve from any working directory, including hook runs.
+    environment.update(
+        AWS_EC2_METADATA_DISABLED="true", PYTHONDONTWRITEBYTECODE="1", PRE_COMMIT_HOME=str(ROOT / ".tools" / "pre_commit_cache"), PYTHONPATH=str(ROOT)
+    )
+    result = run_command(command[0], command[1:], cwd=cwd, env=environment, timeout=120)
     evidence = {
         "expected_exit": expected,
         "observed_exit": result.returncode,
@@ -146,7 +150,7 @@ def secret_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
     source = repository / "example.txt"
     source.write_text("Generic non-secret fixture\n", encoding="utf-8")
     run([str(git), "add", "example.txt"], repository)
-    scanner = [sys.executable, str(ROOT / "scripts/quality/scan_secrets.py"), "--repository", str(repository), "--staged"]
+    scanner = [sys.executable, "-m", "scripts.quality.scan_secrets", "--repository", str(repository), "--staged"]
     cases.append({"name": "clean_staged_file", **run(scanner, ROOT)})
     sentinel = hashlib.sha256(b"public synthetic scanner fixture, not an issued credential").hexdigest()
     source.write_text(f'api_key = "{sentinel}"\n', encoding="utf-8")
@@ -155,7 +159,7 @@ def secret_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
     cases.append({"name": "staged_secret_cannot_hide_behind_clean_worktree", **run(scanner, ROOT, expected=1, forbidden=sentinel)})
     # Keep the actual hook definition; only relocate its executable paths into this disposable repository.
     hook_config = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
-    hook_config = hook_config.replace(".venv/bin/python scripts/quality/scan_secrets.py", f"{sys.executable} {ROOT / 'scripts/quality/scan_secrets.py'}")
+    hook_config = hook_config.replace(".venv/bin/python -m scripts.quality.scan_secrets", f"{sys.executable} -m scripts.quality.scan_secrets")
     fixture_config = repository / ".pre-commit-config.yaml"
     fixture_config.write_text(hook_config, encoding="utf-8")
     hook = [sys.executable, "-m", "pre_commit", "run", "gitleaks", "--all-files", "--config", str(fixture_config)]
@@ -172,7 +176,8 @@ def terraform_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
     (fixture / "main.tf").write_text('resource "aws_s3_bucket" "example" {\n  bucket = "example-synthetic-bucket"\n}\n', encoding="utf-8")
     command = [
         sys.executable,
-        str(ROOT / "scripts/quality/static_checks.py"),
+        "-m",
+        "scripts.quality.static_checks",
         "--directory",
         str(fixture),
         "--output-directory",
@@ -194,7 +199,7 @@ def terraform_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
         encoding="utf-8",
     )
     evidence = workspace / "scoped_evidence"
-    scoped_command = [sys.executable, str(ROOT / "scripts/quality/static_checks.py"), "--directory", str(scoped), "--output-directory", str(evidence)]
+    scoped_command = [sys.executable, "-m", "scripts.quality.static_checks", "--directory", str(scoped), "--output-directory", str(evidence)]
     outcome = run(scoped_command, ROOT, expected=1)
     scoped_report = json.loads((evidence / "report.json").read_text(encoding="utf-8"))["checkov"]
     exceptions = scoped_report.get("exceptions", [])
@@ -224,7 +229,7 @@ def main() -> None:
         "aws_calls": 0,
         "tested_boundary": "Real installer, scanner and pre-commit subprocesses; offline synthetic archives",
         "untested": ["Publisher or AWS ingestion", "Network interruption during binary download"],
-        "reproduce": [".venv/bin/python", "scripts/quality/run_e2e.py", "--output-directory", "<new_directory>"],
+        "reproduce": [".venv/bin/python", "-m", "scripts.quality.run_e2e", "--output-directory", "<new_directory>"],
         "prerequisites": "Install pinned requirements and project-local quality tools before running.",
         "runtime": {"python": platform.python_version(), "platform": sys.platform},
         "dependencies": {name: importlib.metadata.version(name) for name in ("pre-commit", "checkov", "ruff", "mypy")},
@@ -236,7 +241,7 @@ def main() -> None:
             secret_cases(workspace, cases)
             terraform_cases(workspace, cases)
         report["status"] = "passed"
-    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+    except (OSError, ValueError, TimeoutExpired) as error:
         if isinstance(error, ProcessCheckFailed):
             cases.append({"name": "failed_process", **error.evidence})
         report.update(
@@ -245,7 +250,7 @@ def main() -> None:
     finally:
         report["finished_at_utc"] = datetime.now(UTC).isoformat()
         report["cleanup"] = "Temporary synthetic workspace removed; local evidence retained. No cloud resources created."
-        report["source_sha256"] = {p.name: digest(p) for p in sorted(Path(__file__).parent.glob("*.py"))}
+        report["source_sha256"] = {p.name: digest(p) for p in [*sorted(Path(__file__).parent.glob("*.py")), ROOT / "scripts/process.py"]}
         report["requirements_sha256"] = digest(ROOT / "requirements.txt")
         report["configuration_sha256"] = {name: digest(ROOT / name) for name in ("config/quality_tools.json", ".pre-commit-config.yaml")}
         report["native_tool_sha256"] = {name: digest(ROOT / ".tools/bin" / name) for name in ("gitleaks", "tflint") if (ROOT / ".tools/bin" / name).is_file()}

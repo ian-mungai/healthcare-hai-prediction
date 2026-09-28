@@ -7,12 +7,12 @@ bash -n scripts/run_ci.sh scripts/infrastructure/*.sh
 python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 "$python_bin" -m ruff format --check scripts tests
 "$python_bin" -m ruff check scripts tests
-"$python_bin" -m mypy --check-untyped-defs --disallow-untyped-defs scripts/infrastructure scripts/quality tests/test_project_config.py
-"$python_bin" scripts/quality/scan_secrets.py
+"$python_bin" -m mypy --check-untyped-defs --disallow-untyped-defs scripts/process.py scripts/infrastructure scripts/quality tests/test_project_config.py tests/support.py
+"$python_bin" -m scripts.quality.scan_secrets
 e2e_output="${E2E_ARTIFACT_DIR:-$repo_root/data/e2e/configuration/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
-"$python_bin" scripts/infrastructure/run_e2e.py --output-directory "$e2e_output"
+"$python_bin" -m scripts.infrastructure.run_e2e --output-directory "$e2e_output"
 quality_output="${QUALITY_ARTIFACT_DIR:-$repo_root/data/e2e/quality/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
-"$python_bin" scripts/quality/run_e2e.py --output-directory "$quality_output/e2e"
+"$python_bin" -m scripts.quality.run_e2e --output-directory "$quality_output/e2e"
 "$python_bin" -m pytest --cov=scripts.infrastructure --cov-report=term-missing -q
 terraform fmt -check -recursive infra
 
@@ -54,7 +54,7 @@ for stack in storage iam; do
   if [[ "$stack" == "iam" ]]; then
     source_dir="$repo_root/infra/iam"
   fi
-  if ! "$python_bin" scripts/quality/static_checks.py --directory "$source_dir" --output-directory "$quality_output/$stack"; then
+  if ! "$python_bin" -m scripts.quality.static_checks --directory "$source_dir" --output-directory "$quality_output/$stack"; then
     static_failed=1
   fi
 done

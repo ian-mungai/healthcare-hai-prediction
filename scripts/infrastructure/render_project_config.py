@@ -7,12 +7,13 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 from dotenv import dotenv_values
+
+from scripts.process import TimeoutExpired, run_command
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -81,8 +82,8 @@ def verify_project_identity(storage: dict[str, str]) -> None:
         "--no-cli-pager",
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=30)  # noqa: S603 - validated config, fixed AWS CLI arguments, no shell.
-    except (OSError, subprocess.TimeoutExpired):
+        result = run_command(command[0], command[1:], env=environment, timeout=30)
+    except (OSError, TimeoutExpired):
         raise ConfigurationError("Could not verify the project AWS identity; check AWS CLI access and local profile credentials.") from None
     if result.returncode:
         raise ConfigurationError("Could not verify the project AWS identity; check local profile credentials. No plan or apply was run.")
@@ -148,9 +149,10 @@ def main() -> None:
             directory, values = selected[arguments.stack]
             # Resolve the existing Terraform CLI through the project operator's PATH; never invoke a shell.
             command = ["terraform", f"-chdir={directory}", "show", "-json", str(arguments.check_plan.resolve())]
-            result = subprocess.run(  # noqa: S603 - fixed executable and read-only arguments, user-selected local plan.
-                command, capture_output=True, text=True
-            )
+            try:
+                result = run_command(command[0], command[1:], timeout=120)
+            except TimeoutExpired:
+                raise ConfigurationError("The saved plan could not be inspected in time; no apply was run.") from None
             if result.returncode:
                 raise ConfigurationError("The saved plan could not be inspected; no apply was run.")
             verify_plan_variables(json.loads(result.stdout), values)

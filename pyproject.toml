@@ -3,11 +3,7 @@ line-length = 160
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "S", "SIM"]
-
-[tool.ruff.lint.per-file-ignores]
-# Assertions are the intended failure mechanism in retained pytest safeguards.
-"tests/*.py" = ["S101"]
+select = ["E", "F", "I", "B", "UP", "S", "SIM", "T20"]
 
 [tool.ruff.lint.isort]
 split-on-trailing-comma = false

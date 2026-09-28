@@ -8,12 +8,13 @@ import importlib.metadata
 import json
 import logging
 import os
-import subprocess
 import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from scripts.process import TimeoutExpired, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 LOGGER = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ def scan(directory: Path, output: Path) -> bool:
                 ],
             }
             for name, command in commands.items():
-                result = subprocess.run(command, cwd=scratch, env=environment, capture_output=True, text=True, timeout=180, check=False)  # noqa: S603 - fixed scanner argument arrays.
+                result = run_command(command[0], command[1:], cwd=scratch, env=environment, timeout=180)
                 parsed = json.loads(result.stdout)
                 if not isinstance(parsed, dict):
                     raise ValueError("Unexpected scanner report")
@@ -109,7 +110,7 @@ def scan(directory: Path, output: Path) -> bool:
             report["status"] = "passed" if all(report[name]["returncode"] == 0 for name in commands) else "failed"
             if report["tflint"]["errors"] or report["checkov"]["parsing_errors"]:
                 report["status"] = "blocked"
-    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
+    except (OSError, ValueError, KeyError, TypeError, TimeoutExpired) as error:
         report.update(status="blocked", error_type=type(error).__name__)
     finally:
         report["finished_at_utc"] = datetime.now(UTC).isoformat()

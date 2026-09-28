@@ -62,7 +62,7 @@ if [[ "$action" != validate ]]; then
   render_args+=(--verify-identity)
 fi
 unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
-"$python_bin" scripts/infrastructure/render_project_config.py "${render_args[@]}"
+"$python_bin" -m scripts.infrastructure.render_project_config "${render_args[@]}"
 if [[ "$action" == validate ]]; then
   exec terraform -chdir="$directory" validate "$@"
 fi
