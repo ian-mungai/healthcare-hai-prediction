@@ -1,15 +1,30 @@
+# Secrets and local settings (.env.example documents the variables)
 .env
 .env.*
 !.env.example
+.bruin.yml
+
+# Python environment, caches and coverage
 .venv/
-.tools/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-.coverage
+.coverage*
 htmlcov/
+
+# Pinned quality-tool binaries installed by scripts/quality/install_tools.py
+.tools/
+
+# Agent and workspace files. Also in the global Git ignore; repeated here so fresh clones and CI stay safe.
+.agent_handoff/
+.enjoy/
+.enjoy-logs/
+
+# macOS
 .DS_Store
+
+# Data, run output and model artifacts: data lives in S3, never in Git
 logs/
 data/
 artifacts/
@@ -20,21 +35,20 @@ mlruns/
 *.csv
 *.jsonl
 
-# Local acquisition configuration, implementation and tests
+# Data collection code, configuration and tests. Committed with full process documentation
+# at the end of the data collection stage (user decision, Sep 26 2026).
 /config/acquisition/
 /scripts/acquisition/
 /tests/test_source_registry.py
 
-# Terraform
+# Terraform: state and plans stay local; the .terraform.lock.hcl files are committed
 .terraform/
 *.tfstate
 *.tfstate.*
 *.tfplan
+*.tfplan.json
 *.tfvars
 *.tfvars.json
 .terraform.tfstate.lock.info
-*.tfplan.json
 crash.log
 crash.*.log
-
-.bruin.yml

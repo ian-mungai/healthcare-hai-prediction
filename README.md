@@ -36,11 +36,20 @@ operational evidence and the detailed exception record remain untracked.
 The explicitly approved live S3 verification tool is the sole opt-in exception
 to synthetic-only verification. Normal CI does not run it or contact AWS.
 Deployment configuration is Internal; credentials are Restricted and never
-belong in tracked files. Classification stays in metadata and this README.
-Per the project decision on Sep 24 2026 (UTC), do not add an AWS
-`DataClassification` tag. This existing project exception remains unchanged;
-bundle v1.2 resource-level classification guidance requires a separate review
-before changing tags.
+belong in tracked files. The data bucket carries its own `DataClassification`
+tag of Confidential (project decision, Sep 27 2026). It holds a redacted but not
+formally anonymized derivative and public releases that name individuals:
+hospital chief executives in HCAI annual financial files and state officials'
+work contacts in a CMS contacts table. Those releases are treated as
+Confidential: originals stay local and only redacted copies belong in S3.
+Replacing the copies already stored is pending a separately approved change.
+
+## Architecture
+
+![Architecture diagram](docs/architecture/architecture.png)
+
+The diagram source is `docs/architecture/architecture.html`; the PNG is rendered
+from it with headless Chrome. Dashed components are planned, not built.
 
 ## Quality checks
 
@@ -126,7 +135,8 @@ do not suppress other resources or the versioning control. Passing static
 checks with these exceptions does not establish that deferred controls exist.
 No AWS changes implementing these four deferred controls have been applied.
 
-Environment naming and dev/prod separation require a decision before changing
-tags or resource layout. Remote state protection remains deferred until the
+Both stacks tag resources with `Environment = dev`. A `prod` environment and
+an `infra/modules/` layout are deferred until the next infrastructure component
+is added (project decision, Sep 27 2026). Remote state protection remains deferred until the
 end of the project as requested. Raw personal-data retention remains a separate
 unresolved control. No tutorial files are added to this repository.

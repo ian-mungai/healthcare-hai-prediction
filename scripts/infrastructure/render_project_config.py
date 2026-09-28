@@ -26,6 +26,7 @@ def build_configuration(environment: dict[str, str | None], admin_profile: str |
     rules = {
         "AWS_ACCOUNT_ID": r"[0-9]{12}",
         "AWS_REGION": r"[a-z]{2}-[a-z]+-[1-9]",
+        "ENVIRONMENT": r"dev|prod",
         "PROJECT_NAME": r"[a-z][a-z0-9_]{2,79}",
         "S3_BUCKET": r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]",
     }
@@ -36,13 +37,15 @@ def build_configuration(environment: dict[str, str | None], admin_profile: str |
         if not isinstance(value, str) or not re.fullmatch(pattern, value) or value.startswith("your-"):
             raise ConfigurationError(f"Set a valid {name} in .env.")
     profile = environment.get("AWS_PROFILE")
-    if not isinstance(profile, str) or profile != f"{environment['PROJECT_NAME']}_user" or len(profile) > 64:
-        raise ConfigurationError("Set a valid AWS_PROFILE matching PROJECT_NAME followed by _user; administrator selection is separate.")
+    # The project profile and its same-named IAM user are <project>_<environment>, for example example_project_dev.
+    if not isinstance(profile, str) or profile != f"{environment['PROJECT_NAME']}_{environment['ENVIRONMENT']}" or len(profile) > 64:
+        raise ConfigurationError("Set a valid AWS_PROFILE matching PROJECT_NAME, an underscore and ENVIRONMENT; administrator selection is separate.")
     common = {
         "aws_region": str(environment["AWS_REGION"]),
         "expected_account_id": str(environment["AWS_ACCOUNT_ID"]),
         "data_bucket_name": str(environment["S3_BUCKET"]),
         "project_name": str(environment["PROJECT_NAME"]),
+        "environment": str(environment["ENVIRONMENT"]),
     }
     storage = {**common, "aws_profile": profile}
     iam = dict(storage)

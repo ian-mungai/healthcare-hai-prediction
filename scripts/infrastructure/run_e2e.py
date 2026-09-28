@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PROFILE = "example_project_user"
+PROFILE = "example_project_dev"
 ADMIN = "example_administrator"
 SECRET = "example_e2e_secret_do_not_print"  # noqa: S105 - public synthetic disclosure sentinel, not a credential.
 SOURCE_NAMES = ("render_project_config.py", "render_project_config.sh", "terraform.sh")
@@ -28,6 +28,7 @@ FIXTURE = {
     "AWS_ACCOUNT_ID": "111111111111",
     "AWS_PROFILE": PROFILE,
     "AWS_REGION": "eu-west-1",
+    "ENVIRONMENT": "dev",
     "PROJECT_NAME": "example_project",
     "S3_BUCKET": "example-project-e2e-bucket",
 }
@@ -145,7 +146,8 @@ class Evidence:
             "aws_region": region,
             "project_name": project,
             "data_bucket_name": "example-project-e2e-bucket",
-            "aws_profile": f"{project}_user",
+            "aws_profile": f"{project}_dev",
+            "environment": "dev",
         }
         expected = (common, common)
         hashes = {}
@@ -255,7 +257,7 @@ def run_suite(evidence: Evidence) -> None:
         {
             **FIXTURE,
             "PROJECT_NAME": "sample_project",
-            "AWS_PROFILE": "sample_project_user",
+            "AWS_PROFILE": "sample_project_dev",
             "AWS_REGION": "ap-southeast-2",
         },
     )
@@ -280,6 +282,7 @@ def run_suite(evidence: Evidence) -> None:
         "PROJECT_NAME": "invalid-private-project",
         "S3_BUCKET": "invalid_private_bucket*",
         "AWS_PROFILE": "example_unrelated_user",
+        "ENVIRONMENT": "invalid_private_environment",
     }
     for key, value in invalid_values.items():
         evidence.redactions[value] = "<REDACTED_INVALID_VALUE>"

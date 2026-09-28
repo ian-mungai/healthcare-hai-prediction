@@ -55,7 +55,18 @@ variable "aws_profile" {
   nullable    = false
 
   validation {
-    condition     = var.aws_profile == "${var.project_name}_user" && length(var.aws_profile) <= 64
-    error_message = "AWS_PROFILE must match PROJECT_NAME followed by _user and be a valid IAM username."
+    condition     = var.aws_profile == "${var.project_name}_${var.environment}" && length(var.aws_profile) <= 64
+    error_message = "AWS_PROFILE must be PROJECT_NAME, an underscore and ENVIRONMENT, and a valid IAM username."
+  }
+}
+
+variable "environment" {
+  description = "Deployment environment; also the suffix of the project profile and its IAM user."
+  type        = string
+  nullable    = false
+
+  validation {
+    condition     = contains(["dev", "prod"], var.environment)
+    error_message = "ENVIRONMENT must be dev or prod."
   }
 }

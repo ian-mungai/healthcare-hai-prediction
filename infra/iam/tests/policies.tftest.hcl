@@ -1,7 +1,8 @@
 mock_provider "aws" {}
 
 variables {
-  aws_profile         = "example_project_user"
+  aws_profile         = "example_project_dev"
+  environment         = "dev"
   admin_profile       = "example_admin"
   aws_region          = "eu-west-1"
   expected_account_id = "111111111111"
@@ -13,8 +14,8 @@ run "scoped_project_permissions" {
   command = plan
 
   assert {
-    condition     = length(aws_iam_policy.service) == 1 && length(aws_iam_user_policy_attachment.service) == 1
-    error_message = "Only the consolidated service policy may be attached."
+    condition     = toset(keys(aws_iam_policy.service)) == toset(["s3", "secrets"]) && length(aws_iam_user_policy_attachment.service) == 2
+    error_message = "Only the consolidated S3 policy and the shared-secret read policy may be attached."
   }
 
   assert {
@@ -24,10 +25,8 @@ run "scoped_project_permissions" {
 
   assert {
     condition = alltrue(flatten([
-      for policy in aws_iam_policy.service : [
-        for statement in jsondecode(policy.policy).Statement : [
-          for action in flatten([statement.Action]) : startswith(action, "s3:") && !strcontains(action, "*") && !startswith(action, "s3:Delete")
-        ]
+      for statement in jsondecode(aws_iam_policy.service["s3"].policy).Statement : [
+        for action in flatten([statement.Action]) : startswith(action, "s3:") && !strcontains(action, "*") && !startswith(action, "s3:Delete")
       ]
     ]))
     error_message = "Project policies must not retain temporary cleanup permissions or grant IAM administration, wildcard actions or data deletion."
@@ -67,6 +66,30 @@ run "scoped_project_permissions" {
     error_message = "Rendered policy names must use the project_name_service_name_policy convention."
   }
 
+  # Shared API keys are created and filled manually; the project may only read these two by name.
+  assert {
+    condition = alltrue(flatten([
+      for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : [
+        for action in flatten([statement.Action]) : contains(["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"], action)
+      ]
+    ]))
+    error_message = "The secrets policy may only read secret values and metadata."
+  }
+
+  assert {
+    condition = toset(flatten([
+      for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : flatten([statement.Resource])
+      ])) == toset([
+      for name in ["bls_api_key", "census_api_key"] : "arn:aws:secretsmanager:${var.aws_region}:${var.expected_account_id}:secret:${name}-??????"
+    ])
+    error_message = "Secret read access must be limited to the named shared API keys in the approved account and region."
+  }
+
+  assert {
+    condition     = aws_iam_policy.service["secrets"].name == "${var.project_name}_secrets_policy"
+    error_message = "Rendered policy names must use the project_name_service_name_policy convention."
+  }
+
   # Guard absent lifecycle access, wildcard scope and accidental object-level permission.
   assert {
     condition = one([
@@ -91,7 +114,7 @@ run "reject_invalid_user" {
   command = plan
 
   variables {
-    aws_profile = "arn:aws:iam::111111111111:user/example_project_user"
+    aws_profile = "arn:aws:iam::111111111111:user/example_project_dev"
   }
 
   expect_failures = [var.aws_profile]
@@ -101,7 +124,7 @@ run "reject_project_profile_for_iam" {
   command = plan
 
   variables {
-    admin_profile = "example_project_user"
+    admin_profile = "example_project_dev"
   }
 
   expect_failures = [var.admin_profile]
@@ -153,4 +176,24 @@ run "reject_null_region" {
   }
 
   expect_failures = [var.aws_region]
+}
+
+run "reject_unsupported_environment" {
+  command = plan
+
+  variables {
+    environment = "development"
+  }
+
+  expect_failures = [var.environment]
+}
+
+run "reject_legacy_user_profile" {
+  command = plan
+
+  variables {
+    aws_profile = "example_project_user"
+  }
+
+  expect_failures = [var.aws_profile]
 }

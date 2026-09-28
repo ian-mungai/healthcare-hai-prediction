@@ -5,8 +5,9 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project   = var.project_name
-      ManagedBy = "Terraform"
+      Project     = var.project_name
+      Environment = var.environment
+      ManagedBy   = "Terraform"
     }
   }
 }
@@ -18,6 +19,12 @@ resource "aws_s3_bucket" "data" {
   #checkov:skip=CKV_AWS_145:Approved acquisition-stage SSE-S3 use; review KMS with coordinated ingestion and IAM migration before production.
   bucket        = var.data_bucket_name
   force_destroy = false
+
+  # Classification belongs to the data, so it is set here rather than in default_tags. Confidential because the bucket
+  # holds a redacted but not formally anonymized derivative and, until remediation, public releases naming individuals.
+  tags = {
+    DataClassification = "Confidential"
+  }
 
   lifecycle {
     prevent_destroy = true

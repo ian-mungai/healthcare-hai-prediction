@@ -13,7 +13,9 @@ from scripts.infrastructure import render_project_config as renderer
 from scripts.infrastructure.render_project_config import ConfigurationError, build_configuration, verify_plan_variables
 
 TEST_PROJECT_NAME = "example_project"
-TEST_PROJECT_PROFILE = f"{TEST_PROJECT_NAME}_user"
+TEST_ENVIRONMENT = "dev"
+# The project profile and its IAM user are named <project>_<environment>.
+TEST_PROJECT_PROFILE = f"{TEST_PROJECT_NAME}_{TEST_ENVIRONMENT}"
 
 
 @pytest.fixture
@@ -22,6 +24,7 @@ def environment() -> dict[str, Any]:
         "AWS_ACCOUNT_ID": "111111111111",
         "AWS_PROFILE": TEST_PROJECT_PROFILE,
         "AWS_REGION": "eu-west-1",
+        "ENVIRONMENT": TEST_ENVIRONMENT,
         "PROJECT_NAME": TEST_PROJECT_NAME,
         "S3_BUCKET": "example-project-ci-bucket",
     }
@@ -39,7 +42,8 @@ def test_configuration_has_one_source_and_no_credentials(environment: dict[str, 
     assert storage["project_name"] == iam["project_name"] == environment["PROJECT_NAME"]
     assert storage == iam
     assert storage["aws_profile"] == environment["AWS_PROFILE"]
-    assert set(storage) == {"expected_account_id", "data_bucket_name", "project_name", "aws_profile", "aws_region"}
+    assert storage["environment"] == iam["environment"] == TEST_ENVIRONMENT
+    assert set(storage) == {"expected_account_id", "data_bucket_name", "project_name", "aws_profile", "aws_region", "environment"}
 
 
 def test_admin_selection_does_not_change_project_profile(environment: dict[str, Any]) -> None:
@@ -50,14 +54,24 @@ def test_admin_selection_does_not_change_project_profile(environment: dict[str, 
     assert environment["AWS_PROFILE"] == TEST_PROJECT_PROFILE
 
 
-@pytest.mark.parametrize("name", ["AWS_ACCOUNT_ID", "AWS_REGION", "PROJECT_NAME", "S3_BUCKET", "AWS_PROFILE"])
+@pytest.mark.parametrize("name", ["AWS_ACCOUNT_ID", "AWS_REGION", "PROJECT_NAME", "S3_BUCKET", "AWS_PROFILE", "ENVIRONMENT"])
 def test_missing_values_are_rejected(environment: dict[str, Any], name: str) -> None:
     del environment[name]
     with pytest.raises(ConfigurationError):
         build_configuration(environment)
 
 
-@pytest.mark.parametrize("name,value", [("AWS_ACCOUNT_ID", "bad"), ("PROJECT_NAME", "wrong-name"), ("S3_BUCKET", "*"), ("AWS_PROFILE", "example_admin")])
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("AWS_ACCOUNT_ID", "bad"),
+        ("PROJECT_NAME", "wrong-name"),
+        ("S3_BUCKET", "*"),
+        ("AWS_PROFILE", "example_admin"),
+        ("AWS_PROFILE", "example_project_user"),
+        ("ENVIRONMENT", "development"),
+    ],
+)
 def test_invalid_values_are_rejected_without_echoing_values(environment: dict[str, Any], name: str, value: str) -> None:
     environment[name] = value
     with pytest.raises(ConfigurationError) as error:
@@ -70,6 +84,15 @@ def test_unsupported_configuration_is_rejected(environment: dict[str, Any], valu
     environment["EXAMPLE_UNUSED_SETTING"] = value
     with pytest.raises(ConfigurationError, match="Unsupported .env settings"):
         build_configuration(environment)
+
+
+def test_profile_follows_project_and_environment(environment: dict[str, Any]) -> None:
+    environment["ENVIRONMENT"] = "prod"
+    with pytest.raises(ConfigurationError):
+        build_configuration(environment)
+    environment["AWS_PROFILE"] = f"{TEST_PROJECT_NAME}_prod"
+    storage, _ = build_configuration(environment)
+    assert storage["aws_profile"] == f"{TEST_PROJECT_NAME}_prod" and storage["environment"] == "prod"
 
 
 @pytest.mark.parametrize("profile", ["", " ", TEST_PROJECT_PROFILE])

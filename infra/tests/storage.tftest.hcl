@@ -10,7 +10,8 @@ mock_provider "aws" {
 }
 
 variables {
-  aws_profile         = "example_project_user"
+  aws_profile         = "example_project_dev"
+  environment         = "dev"
   aws_region          = "eu-west-1"
   expected_account_id = "111111111111"
   data_bucket_name    = "example-project-ci-bucket"
@@ -23,6 +24,11 @@ run "private_versioned_storage" {
   assert {
     condition     = aws_s3_bucket.data.bucket == var.data_bucket_name && !aws_s3_bucket.data.force_destroy
     error_message = "The approved bucket must not allow forced data destruction."
+  }
+
+  assert {
+    condition     = aws_s3_bucket.data.tags["DataClassification"] == "Confidential"
+    error_message = "The data bucket must carry its own DataClassification tag of Confidential, set on the resource rather than in default_tags."
   }
 
   assert {
@@ -202,4 +208,24 @@ run "reject_null_region" {
   }
 
   expect_failures = [var.aws_region]
+}
+
+run "reject_unsupported_environment" {
+  command = plan
+
+  variables {
+    environment = "development"
+  }
+
+  expect_failures = [var.environment]
+}
+
+run "reject_legacy_user_profile" {
+  command = plan
+
+  variables {
+    aws_profile = "example_project_user"
+  }
+
+  expect_failures = [var.aws_profile]
 }
