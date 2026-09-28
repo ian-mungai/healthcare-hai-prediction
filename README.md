@@ -77,8 +77,10 @@ Named manual steps. These are the only setup steps no script performs:
    store each in AWS Secrets Manager, in the configured region, as a secret named
    `census_api_key` or `bls_api_key` holding JSON with one field, `api_key`.
    The keys are shared by several projects, so they are created by hand outside
-   Terraform. Terraform only grants the project user read access to those two
-   names and never reads a value.
+   Terraform. Store the HUD USPS crosswalk token separately as `hud_api_key`,
+   with the token alone as its plaintext value (no `Bearer ` prefix). The IAM
+   configuration grants read access to these three names and never reads a
+   value; each permission update requires a reviewed saved plan before apply.
 2. **Administrator profile.** Configure an AWS CLI profile with IAM permissions
    for the IAM stack. It is passed on the command line, never stored in `.env`.
 
@@ -145,8 +147,10 @@ anonymized. Hospital chief executives in HCAI annual financial files and state
 officials' work contacts in a CMS contacts table are treated as Confidential:
 originals stay local and only redacted copies belong in S3. The initial 218
 Excel/contact versions were removed on Sep 28 2026. Redacted replacements for
-75 further versions are stored; their originals remain pending deletion and
-retirement-record reconciliation. Operational evidence stays in ignored local
+75 further versions are stored; those originals were deleted and verified on
+Sep 28 2026. Retirement records cover all 293 removed versions, storage
+reconciliation passed, and the temporary deletion grant was removed.
+Operational evidence stays in ignored local
 folders; this status does not clear privacy or modeling holds.
 
 Tests use generic synthetic data. Real personal values must never appear in

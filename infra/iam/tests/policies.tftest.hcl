@@ -66,7 +66,7 @@ run "scoped_project_permissions" {
     error_message = "Rendered policy names must use the project_name_service_name_policy convention."
   }
 
-  # Shared API keys are created and filled manually; the project may only read these two by name.
+  # Shared API keys are created and filled manually; the project may only read these three by name.
   assert {
     condition = alltrue(flatten([
       for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : [
@@ -80,7 +80,7 @@ run "scoped_project_permissions" {
     condition = toset(flatten([
       for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : flatten([statement.Resource])
       ])) == toset([
-      for name in ["bls_api_key", "census_api_key"] : "arn:aws:secretsmanager:${var.aws_region}:${var.expected_account_id}:secret:${name}-??????"
+      for name in ["bls_api_key", "census_api_key", "hud_api_key"] : "arn:aws:secretsmanager:${var.aws_region}:${var.expected_account_id}:secret:${name}-??????"
     ])
     error_message = "Secret read access must be limited to the named shared API keys in the approved account and region."
   }
