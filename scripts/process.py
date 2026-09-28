@@ -15,9 +15,22 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 
-__all__ = ["CompletedProcess", "TimeoutExpired", "find_program", "run_command"]
+__all__ = ["CompletedProcess", "TimeoutExpired", "clear_git_environment", "find_program", "run_command"]
 
 DEFAULT_TIMEOUT_SECONDS = 300
+
+
+def clear_git_environment() -> None:
+    """Detach a synthetic test runner from an invoking Git hook before it operates on scratch repositories.
+
+    Only test entry points call this; production checks keep the hook's staged-index context. It changes this process
+    and its future children only, never the parent process or machine configuration.
+    """
+    variables = run_command("git", ["rev-parse", "--local-env-vars"], check=True).stdout.splitlines()
+    variables.extend(f"GIT_{role}_{field}" for role in ("AUTHOR", "COMMITTER") for field in ("NAME", "EMAIL", "DATE"))
+    variables.extend(("PRE_COMMIT_FROM_REF", "PRE_COMMIT_TO_REF"))
+    for variable in variables:
+        os.environ.pop(variable, None)
 
 
 def find_program(program: str, env: Mapping[str, str] | None = None) -> str | None:

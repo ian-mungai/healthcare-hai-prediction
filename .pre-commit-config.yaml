@@ -1,3 +1,11 @@
+# Pre-commit checks for this repository; README.md, Quality Checks, lists what each one enforces.
+# Every hook is local and pinned: pre-commit, Ruff and MyPy come from requirements.txt in .venv, gitleaks and TFLint
+# from scripts/quality/install_tools.py in .tools. scripts/run_ci.sh runs the same checks in CI.
+# There are no bypasses: do not use SKIP= or git commit --no-verify.
+default_install_hook_types: [pre-commit, commit-msg]
+default_stages: [pre-commit]
+fail_fast: false
+
 repos:
   - repo: local
     hooks:
@@ -7,9 +15,68 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: credential-files
+        name: Credential, state and saved-plan files
+        entry: .venv/bin/python -m scripts.quality.repo_checks credential-files
+        language: system
+      - id: data-files
+        name: Data files and files over 5 MB
+        entry: .venv/bin/python -m scripts.quality.repo_checks data-files
+        language: system
+      - id: env-example
+        name: Environment variables listed in .env.example
+        entry: .venv/bin/python -m scripts.quality.repo_checks env-example
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: removed-names
+        name: Removed scripts, flags and variables gone from the docs
+        entry: .venv/bin/python -m scripts.quality.repo_checks removed-names
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: documentation-review
+        name: All documentation reviewed for the staged revision
+        entry: .venv/bin/python -m scripts.quality.documentation_review check
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: lint-settings
+        name: Lint and type settings never loosened
+        entry: .venv/bin/python -m scripts.quality.repo_checks lint-settings
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: suppressions
+        name: Suppressions only from the approved list
+        entry: .venv/bin/python -m scripts.quality.repo_checks suppressions
+        language: system
+        types: [python]
+      - id: subprocess-imports
+        name: Programs start only through the launcher
+        entry: .venv/bin/python -m scripts.quality.repo_checks subprocess-imports
+        language: system
+        types: [python]
+      - id: test-checks
+        name: Each check blocks its bad sample and passes its good one
+        entry: .venv/bin/python -m scripts.quality.run_checks_e2e
+        language: system
+        pass_filenames: false
+        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|scan_secrets))\.py|\.pre-commit-config\.yaml)$
+      - id: test-documentation-review
+        name: Documentation review accepts good evidence and rejects bad evidence
+        entry: .venv/bin/python -m scripts.quality.run_documentation_review_e2e
+        language: system
+        pass_filenames: false
+        files: ^(scripts/(process|quality/(documentation_review|run_documentation_review_e2e|run_checks_e2e))\.py|\.pre-commit-config\.yaml)$
       - id: local_ci
         name: Run local CI
         entry: bash scripts/run_ci.sh
         language: system
         pass_filenames: false
         always_run: true
+      - id: commit-msg
+        name: Conventional Commits
+        entry: .venv/bin/python -m scripts.quality.repo_checks commit-msg
+        language: system
+        stages: [commit-msg]

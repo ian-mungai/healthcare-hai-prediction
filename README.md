@@ -74,9 +74,44 @@ offline installation from the exact pinned release filenames. Do not replace
 the shared system tools to satisfy this project.
 
 CI checks Ruff formatting and security rules, MyPy, outgoing-source secret
-scanning, configuration and quality E2E, retained regression safeguards,
-Terraform mock tests, TFLint and Checkov. Pre-commit scans the actual staged
-index, including changes hidden by a clean working copy, before local CI.
+scanning, repository checks, configuration and quality E2E, retained regression
+safeguards, Terraform mock tests, TFLint and Checkov. Pre-commit scans the
+actual staged index, including changes hidden by a clean working copy, before
+local CI.
+
+Pre-commit (`pre-commit` and `commit-msg` stages) and `scripts/run_ci.sh`
+enforce these repository rules at the pinned versions:
+
+- **Secrets and credential files:** gitleaks scans the staged index; `.env`
+  (but not `.env.example`), Terraform state and saved plans, keys and cloud
+  credential files are blocked.
+- **Data files:** `.csv`, `.tsv`, `.parquet`, `.xlsx`, `.xls`, `.jsonl`,
+  `.ndjson`, `.avro`, `.db` and `.sqlite` files are allowed only in
+  `tests/fixtures/`, for synthetic samples. Any file over 5 MB is blocked
+  unless Git LFS stores it. Acquired data stays in S3 and ignored local folders.
+- **Commit messages:** Conventional Commits, checked by the `commit-msg` hook
+  and, in GitHub Actions, for every pushed commit.
+- **Docs match the code:** every environment variable the code reads is listed
+  in `.env.example`; a removed script, flag or variable no longer appears in the
+  docs; and every commit carries `.documentation_review.json`, a per-document
+  review outcome bound to the staged snapshot. Draft it with
+  `.venv/bin/python -m scripts.quality.documentation_review prepare --reviewer <name> --reviewed-at <UTC>`
+  after staging, review every document, fill each outcome and note, then stage it.
+- **Lint settings:** Ruff keeps rule sets `E`, `F`, `I`, `B`, `UP`, `S`, `SIM`
+  and `T20` at line length 160 with no ignore or exclude settings; MyPy keeps
+  `--check-untyped-defs` and `--disallow-untyped-defs`. The only allowed
+  suppression is Ruff `S603` in `scripts/process.py`, the one process launcher;
+  other scripts start programs through it and run as modules
+  (`.venv/bin/python -m scripts.quality.scan_secrets`). Tests use
+  `tests/support.py` `check()` instead of `assert`.
+
+Each check has a bad and a good sample run through the real `pre-commit` entry
+point (`scripts/quality/run_checks_e2e.py` and
+`scripts/quality/run_documentation_review_e2e.py`); both run in local CI.
+Every detection check was run on the whole repository before it was enabled,
+with no false positives, so they block from the start. There are no bypasses:
+never use `SKIP=` or `git commit --no-verify`. If a check blocks a valid change,
+fix the check or ask the repository owner.
 The source scan excludes ignored acquisition data; neither scan sends files to
 an external service. Secret values and matching source fragments are omitted
 from scanner diagnostics.

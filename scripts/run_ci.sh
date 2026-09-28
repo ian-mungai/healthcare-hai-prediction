@@ -9,6 +9,16 @@ python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 "$python_bin" -m ruff check scripts tests
 "$python_bin" -m mypy --check-untyped-defs --disallow-untyped-defs scripts/process.py scripts/infrastructure scripts/quality tests/test_project_config.py tests/support.py
 "$python_bin" -m scripts.quality.scan_secrets
+# Repository checks over every file Git tracks or would track; the same checks run as pre-commit hooks.
+"$python_bin" -m scripts.quality.repo_checks lint-settings
+"$python_bin" -m scripts.quality.repo_checks env-example
+git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks credential-files
+git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks data-files
+git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks suppressions
+git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks subprocess-imports
+"$python_bin" -m scripts.quality.documentation_review check
+"$python_bin" -m scripts.quality.run_checks_e2e
+"$python_bin" -m scripts.quality.run_documentation_review_e2e
 e2e_output="${E2E_ARTIFACT_DIR:-$repo_root/data/e2e/configuration/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 "$python_bin" -m scripts.infrastructure.run_e2e --output-directory "$e2e_output"
 quality_output="${QUALITY_ARTIFACT_DIR:-$repo_root/data/e2e/quality/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
