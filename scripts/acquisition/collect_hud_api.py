@@ -1,0 +1,296 @@
+"""Collect the locked HUD USPS ZIP-to-county crosswalk with immutable raw JSON and verified S3 storage."""
+
+import argparse
+import csv
+import io
+import json
+import logging
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from scripts.acquisition import hud_api_contract as contract
+from scripts.acquisition.capture import base_receipt, receipt_validator, validate_receipt
+from scripts.acquisition.collect_census_acs_api import aws_runner
+from scripts.acquisition.collect_mmd_api import artifact
+from scripts.acquisition.collection_layout import load_routes, object_prefix
+from scripts.acquisition.dataset_layout import source_folder
+from scripts.acquisition.hud_api_transport import collection_lock, fetch
+from scripts.acquisition.process import run_command
+from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
+from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
+from scripts.infrastructure.render_project_config import load_configuration
+
+LOGGER = logging.getLogger(__name__)
+TERMS_URL = "https://www.huduser.gov/portal/dataset/api-terms-of-service.html"
+
+
+def make_receipt(plan: dict, batch: dict, envelope: dict, root: Path) -> Path:
+    """Write deterministic source artifacts and receipt; carry HUD restrictions and every hold."""
+    registry, validator = load_registry(expected_sha256=plan["registry_sha256"]), receipt_validator()
+    require(plan["registry_sha256"] == canonical_hash(registry), "HUD base registry changed")
+    source = next(s for s in registry["sources"] if s["source_id"] == "HUD")
+    terms = next(d for d in read_json(REPO_ROOT / plan["terms"]["path"])["datasets"] if d["source_id"] == "HUD")
+    raw = bytes.fromhex(envelope["body_hex"])
+    derived, statistics = contract.validate_response(raw, batch, plan)
+    snapshot = root / "batches" / batch["id"] / "capture"
+    headers = derived.decode().split("\n", 1)[0].split(",")
+    absent = sorted(set(plan["result_fields"]) - set(headers))
+    geoid_at = headers.index("geoid")
+    territory_rows = sum(len(row[geoid_at]) == 2 for row in list(csv.reader(io.StringIO(derived.decode())))[1:])
+    public_proof = {k: v for k, v in envelope.items() if k != "body_hex"} | {"statistics": statistics}
+    files = (
+        ("raw/response.json", raw, "api_page", True),
+        ("derived/crosswalk.csv", derived, "data", False),
+        ("evidence/request_response.json", encoded_json(public_proof), "export_receipt", False),
+        ("references/scope.json", encoded_json(plan), "layout", False),
+    )
+    for name, body, _, _ in files:
+        write_once(snapshot / name, body)
+    timestamp = datetime.fromisoformat(envelope["retrieved_at_utc"]).strftime("%Y%m%dT%H%M%SZ")
+    quarter = f"{batch['year']}Q{batch['quarter']}"
+    start, end = contract.quarter_period(batch)
+    geography = contract.county_geography(batch)
+    metadata = {
+        "publisher": "U.S. Department of Housing and Urban Development, Office of Policy Development and Research",
+        "release": {
+            "advertised_history": "Quarterly HUD USPS ZIP crosswalks; nationwide API queries from 2021 Q1",
+            "dataset_version": None,
+            "observed_history": f"{quarter} ZIP-to-county nationwide request; linkage-only and geography holds preserved",
+            "publisher_release_label": quarter,
+            "publisher_updated_at": None,
+            "release_date": None,
+            "revision_status": "unknown",
+        },
+        "measurement_periods": [
+            {
+                "label": f"USPS address quarter {quarter}",
+                "start_date": start,
+                "end_date": end,
+                "period_type": "unknown",
+                "source_basis": "publisher_stated",
+                "target_alignment": "unknown",
+            }
+        ],
+        "governance": {
+            "access_class": "registration_required",
+            "contains_phi": False,
+            "contains_pii": False,
+            "credential_reference": plan["credential_reference"],
+            "credentials_required": True,
+            "license_or_terms_url": TERMS_URL,
+            "use_restrictions": [contract.ATTRIBUTION, *terms["restrictions"]],
+        },
+    }
+    receipt = base_receipt(source | {"preferred_route": "api_fallback"}, metadata, f"HUD_API__{timestamp}__{batch['id'][:32]}", validator)
+    receipt["acquisition"].update(
+        transport_mode="api_response",
+        requested_url=plan["endpoint"],
+        resolved_url=plan["endpoint"],
+        retrieved_at_utc=envelope["retrieved_at_utc"],
+        http_status=200,
+        request_method="GET",
+        request_parameters=contract.request_for(batch),
+        tool_name="hud_api_collector",
+        tool_version="1.0.0",
+        pagination={
+            "required": False,
+            "strategy": "Single nationwide query; exact envelope, field set and every state and DC checked",
+            "page_count": 1,
+            "termination_verified": True,
+            "deduplication_keys": ["zip", "geoid"],
+        },
+    )
+    receipt["artifacts"] = [artifact(snapshot / name, snapshot, role, i, original) for i, (name, _, role, original) in enumerate(files, 1)]
+    receipt["schema_profile"].update(
+        encoding="utf-8",
+        delimiter=",",
+        native_headers=headers,
+        schema_fingerprint_sha256=canonical_hash(headers),
+        row_count=statistics["rows"],
+        parsed_row_count=statistics["rows"],
+        native_identifier_fields=["zip", "geoid"],
+        native_date_fields=[],
+        native_missing_tokens=[],
+        native_footnote_fields=[],
+    )
+    residential = statistics["ratio_sums"]["res_ratio"]
+    receipt["quality_profile"].update(
+        parse_status="passed_with_warnings",
+        duplicate_candidate_key_rows=0,
+        blank_identifier_rows=0,
+        pagination_complete=True,
+        suppressed_or_footnoted_rows=None,
+        checks_passed=["echoed_quarter_and_scope", "approved_result_layout", "unique_zip_county_rows", "all_states_and_dc_present", "reproducible_csv"],
+        warnings=[
+            "Acquisition checks only. Linkage-only review, ZIP universe completeness, geography vintage and model eligibility remain unreviewed.",
+            "Ratios are ZIP-to-county; never invert them for county-to-ZIP weighting.",
+            *([f"Publisher omitted {', '.join(absent)} for this quarter; values are absent, not filled in."] if absent else []),
+            *([f"{territory_rows} rows use a two-digit territory-level area code (no county); kept as published, never padded."] if territory_rows else []),
+            f"County identifiers follow {geography.replace('_', ' ')} geography per the HUD release note; do not mix eras without a crosswalk.",
+            f"Residential ratio sums: {residential['zips_with_zero_weight']} ZIPs with zero weight, {residential['zips_outside_tolerance']} outside tolerance.",
+            "Registry access_hold released by the dated user terms acceptance and verified token access; the base registry text is unchanged.",
+        ],
+    )
+    receipt["lineage"]["extraction_or_query"] = json.dumps(
+        {
+            "mode": "hud_api",
+            "route_id": f"HUD:usps_api:{quarter}:20260928",
+            "scope": f"HUD USPS ZIP-to-county crosswalk, {quarter}, nationwide",
+            "county_geography": geography,
+            "batch_id": batch["id"],
+            "plan_sha256": canonical_hash(plan),
+            "registry_sha256": canonical_hash(registry),
+            "schema_sha256": canonical_hash(validator.schema),
+            "terms_sha256": plan["terms"]["sha256"],
+            "expected_sha256": contract.digest(raw),
+            "code_sha256": contract.require_code(),
+            "model_eligible": False,
+            "fallback_reason": "User accepted HUD API terms on 2026-09-28; no permitted token-free file route is recorded",
+        }
+    )
+    path = snapshot / "receipt.json"
+    if path.exists():
+        receipt = read_json(path)
+    validate_receipt(receipt, validator, snapshot)
+    contract.verify_capture(receipt, source, json.loads(receipt["lineage"]["extraction_or_query"]), snapshot, False)
+    write_once(path, encoded_json(receipt))
+    return path
+
+
+def verify_local(path: Path) -> dict:
+    """Verify original bytes and the reconstructed crosswalk without network or mutation."""
+    receipt = read_json(path)
+    validate_receipt(receipt, receipt_validator(), path.parent)
+    source = next(s for s in load_registry()["sources"] if s["source_id"] == "HUD")
+    contract.verify_capture(receipt, source, json.loads(receipt["lineage"]["extraction_or_query"]), path.parent, False)
+    return receipt
+
+
+def verify_storage(path: Path, receipt: dict, settings: dict) -> None:
+    """Check exact local artifacts, S3 destination, manifest and immutable version evidence."""
+    root = path.parent
+    reconciliation = read_json(root / "s3_collections_reconciliation.json")
+    registry = load_registry()
+    registry_sha256 = json.loads(receipt["lineage"]["extraction_or_query"])["registry_sha256"]
+    if canonical_hash(registry) != registry_sha256:
+        registry = load_registry(expected_sha256=registry_sha256)
+    route = load_routes(registry)["HUD"]
+    require(reconciliation["snapshot_id"] == receipt["snapshot_id"], "HUD storage snapshot differs")
+    require(all(reconciliation[k] == v for k, v in route.items()), "HUD storage route differs")
+    entries = reconciliation["objects"]
+    roles = {a["storage_path"]: a["role"] for a in receipt["artifacts"]} | {"receipt.json": "capture_receipt"}
+    require(len(entries) == len(roles) and {e["storage_path"] for e in entries} == set(roles), "HUD storage artifact set differs")
+
+    def check_object(record: dict, local: Path, role: str) -> None:
+        sha, size = fingerprint(local)
+        prefix = object_prefix(route, source_folder("HUD"), role, receipt["release"]["release_date"] or receipt["snapshot_id"], receipt["snapshot_id"], False)
+        require(record["key"] == f"{prefix}/{sha}/{local.name}", "HUD storage key differs")
+        require(record["bucket"] == settings["data_bucket_name"], "HUD storage destination differs")
+        require(record["sha256"] == sha and record["byte_count"] == size, "HUD stored bytes differ")
+        require(isinstance(record["version_id"], str) and record["version_id"] not in {"", "null"}, "HUD storage version missing")
+        require(record["verification"] == "version_get_sha256_and_length_match", "HUD storage readback missing")
+
+    for entry in entries:
+        check_object(entry["object"], root / entry["storage_path"], roles[entry["storage_path"]])
+    manifests = reconciliation["manifests"]
+    require(len(manifests) == 1 and manifests[0]["dataset_id"] == source_folder("HUD"), "HUD storage manifest set differs")
+    manifest_path = root / "s3_collections" / source_folder("HUD") / "manifest.json"
+    manifest = read_json(manifest_path)
+    require(manifest["objects"] == entries and manifest["source_id"] == "HUD", "HUD manifest objects differ")
+    require(manifest["model_eligible"] is False and manifest["snapshot_status"] == "acquired_unvalidated", "HUD manifest hold differs")
+    require(manifest["snapshot_id"] == receipt["snapshot_id"], "HUD manifest snapshot differs")
+    check_object(manifests[0]["object"], manifest_path, "capture_receipt")
+
+
+def execute(plan: dict, batch: dict, root: Path, allow_network: bool, upload: bool, client: AwsCli | None, outputs: dict, request: Any = None) -> dict:
+    """Run the integrated capture/storage path; a valid completion performs no writes."""
+    locked = {canonical_hash(p) for p in contract.load_plans()}
+    require(canonical_hash(plan) in locked and batch in plan["batches"], "HUD selected plan or batch differs")
+    branch = root / "batches" / batch["id"]
+    receipt_path = branch / "capture/receipt.json"
+    if not receipt_path.exists():
+        contract.require_code()
+        envelope = fetch(plan, batch, root, allow_network, client, request=request)
+        receipt_path = make_receipt(plan, batch, envelope, root)
+    receipt = verify_local(receipt_path)
+    lineage = json.loads(receipt["lineage"]["extraction_or_query"])
+    require(
+        lineage["batch_id"] == batch["id"] and receipt["acquisition"]["request_parameters"] == contract.request_for(batch),
+        "HUD selected batch differs from receipt",
+    )
+    done_path = branch / "completed.json"
+    if done_path.exists():
+        done = read_json(done_path)
+        require(done["receipt_sha256"] == fingerprint(receipt_path)[0] and done["batch_id"] == batch["id"], "HUD completion receipt differs")
+        reconciliation = receipt_path.parent / "s3_collections_reconciliation.json"
+        require(done["reconciliation_sha256"] == fingerprint(reconciliation)[0], "HUD completion storage evidence differs")
+        require(done["model_eligible"] is False and done["status"] == "stored" and done["plan_sha256"] == canonical_hash(plan), "HUD completion hold differs")
+        require(done["rows"] == receipt["schema_profile"]["row_count"], "HUD completion row count differs")
+        settings = client.configuration if client is not None else load_configuration(REPO_ROOT / ".env")[0]
+        verify_storage(receipt_path, receipt, settings)
+        return done
+    result = {
+        "batch_id": batch["id"],
+        "rows": receipt["schema_profile"]["row_count"],
+        "status": "capture_ready",
+        "model_eligible": False,
+        "receipt_path": str(receipt_path),
+        "receipt_sha256": fingerprint(receipt_path)[0],
+        "plan_sha256": canonical_hash(plan),
+    }
+    if upload:
+        contract.require_code()
+        if client is None:
+            raise ValueError("HUD storage client missing")
+        stored = upload_snapshot(receipt_path, [], client, outputs, load_registry(expected_sha256=plan["registry_sha256"]), receipt_validator())
+        verify_storage(receipt_path, receipt, client.configuration)
+        result.update(
+            status="stored", reconciliation_path=stored["reconciliation_path"], reconciliation_sha256=fingerprint(Path(stored["reconciliation_path"]))[0]
+        )
+        write_once(done_path, encoded_json(result))
+    return result
+
+
+def runtime() -> tuple[AwsCli, dict]:
+    """Load the project profile and read-only local Terraform outputs, without credentials in output."""
+    settings, _ = load_configuration(REPO_ROOT / ".env")
+    result = run_command("terraform", ["-chdir=infra", "output", "-json"], cwd=REPO_ROOT, timeout=30)
+    require(result.returncode == 0, "Local Terraform outputs unavailable")
+    return AwsCli(settings, runner=aws_runner), json.loads(result.stdout)
+
+
+def main() -> None:
+    """Validate offline by default; opt into HUD requests and S3 writes independently."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--fetch", action="store_true")
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--validate-receipt", type=Path)
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    try:
+        if args.validate_receipt:
+            receipt = verify_local(args.validate_receipt)
+            sys.stdout.write(json.dumps({"status": "valid", "rows": receipt["schema_profile"]["row_count"], "model_eligible": False}) + "\n")
+            return
+        client: AwsCli | None = None
+        outputs: dict = {}
+        # Quarters run in order; the first failure stops the run so no later quarter is skipped past.
+        for plan in contract.load_plans():
+            root = REPO_ROOT / "data/historical_acquisition/hud_usps_crosswalk" / plan["vintage"]
+            with collection_lock(root):
+                for batch in plan["batches"]:
+                    already = (root / "batches" / batch["id"] / "completed.json").exists()
+                    if not already and client is None and (args.fetch or args.execute):
+                        client, outputs = runtime()
+                    LOGGER.info(json.dumps(execute(plan, batch, root, args.fetch, args.execute, client, outputs), sort_keys=True))
+    except (ValueError, OSError, KeyError, TypeError, StopIteration) as error:
+        # Only require() messages are fixed public text; other exceptions may come from credential-bearing boundaries.
+        details = str(error) if isinstance(error, ValueError) and str(error).startswith("HUD") else "Collector stopped; inspect public evidence offline"
+        LOGGER.error(json.dumps({"status": "blocked", "error_type": type(error).__name__, "details": details}))
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

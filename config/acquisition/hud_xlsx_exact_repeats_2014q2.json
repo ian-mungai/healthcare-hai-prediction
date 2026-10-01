@@ -1,0 +1,15 @@
+{
+  "decision": "User decision 2026-09-28: keep the original workbook unchanged; drop exact repeated rows from the derived CSV only and record the count",
+  "plan_sha256": "0be6a6a9947420f2bf10e9669a1dd74cbbe2e589850ce85991fdf7c3ba4317b6",
+  "quarters": [
+    {
+      "batch_id": "3f4c19435b6824a869860955961fe82ab7b3bffb6515d46ad1808e4b9086ba33",
+      "exact_repeat_rows": 49140,
+      "quarter": 2,
+      "sha256": "7b797c72dfea34ea5e4ae153d5d6d7edb2ec346110a7a055908bcb20955f717c",
+      "year": 2014
+    }
+  ],
+  "source_id": "HUD",
+  "version": 1
+}

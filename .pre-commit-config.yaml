@@ -1,9 +1,11 @@
 # Pre-commit checks for this repository; README.md, Quality Checks, lists what each one enforces.
 # Every hook is local and pinned: pre-commit, Ruff and MyPy come from requirements.txt in .venv, gitleaks and TFLint
-# from scripts/quality/install_tools.py in .tools. scripts/run_ci.sh runs the same checks in CI.
+# from scripts/quality/install_tools.py in .tools. Hooks run on every commit (pre-commit stage); the full set
+# (manual stage) runs before a release or push with `pre-commit run --all-files --hook-stage manual`, and GitHub CI
+# runs that same command on every push and pull request.
 # There are no bypasses: do not use SKIP= or git commit --no-verify.
 default_install_hook_types: [pre-commit, commit-msg]
-default_stages: [pre-commit]
+default_stages: [pre-commit, manual]
 fail_fast: false
 
 repos:
@@ -15,6 +17,15 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+        stages: [pre-commit]
+      - id: gitleaks-outgoing
+        # The full set has nothing staged, so it scans every outgoing source file instead.
+        name: Scan all outgoing source files for secrets
+        entry: .venv/bin/python -m scripts.quality.scan_secrets
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
       - id: credential-files
         name: Credential, state and saved-plan files
         entry: .venv/bin/python -m scripts.quality.repo_checks credential-files
@@ -35,12 +46,33 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: privacy-scan
+        name: No personal data or environment-specific values in project files
+        entry: .venv/bin/python -m scripts.quality.repo_checks privacy-scan
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: writing-check
+        name: Prose follows the writing preferences
+        entry: .venv/bin/python -m scripts.quality.repo_checks writing-check
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: documentation-review
         name: All documentation reviewed for the staged revision
         entry: .venv/bin/python -m scripts.quality.documentation_review check
         language: system
         pass_filenames: false
         always_run: true
+        # The review record is local, so the full set runs documentation-review-untracked instead (a stage split, not a bypass).
+        stages: [pre-commit]
+      - id: documentation-review-untracked
+        name: Documentation review record stays local and untracked
+        entry: .venv/bin/python -m scripts.quality.documentation_review check-untracked
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
       - id: lint-settings
         name: Lint and type settings never loosened
         entry: .venv/bin/python -m scripts.quality.repo_checks lint-settings
@@ -62,13 +94,23 @@ repos:
         entry: .venv/bin/python -m scripts.quality.run_checks_e2e
         language: system
         pass_filenames: false
-        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|scan_secrets))\.py|\.pre-commit-config\.yaml)$
+        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|scan_secrets))\.py|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist)$
       - id: test-documentation-review
         name: Documentation review accepts good evidence and rejects bad evidence
         entry: .venv/bin/python -m scripts.quality.run_documentation_review_e2e
         language: system
         pass_filenames: false
         files: ^(scripts/(process|quality/(documentation_review|run_documentation_review_e2e|run_checks_e2e))\.py|\.pre-commit-config\.yaml)$
+      - id: acquisition-checks
+        # 12-14 minutes, so it runs only when acquisition code, configuration or their dependencies change
+        # (user decision, Sep 29 2026); GitHub CI runs it on every push in its own job, so it stays out of the
+        # full set (user decision, Oct 1 2026). Run it directly before a release: bash scripts/acquisition/run_checks.sh
+        name: Acquisition lint, types, registry and offline E2E suites with the 90% coverage gate
+        entry: bash scripts/acquisition/run_checks.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+        files: ^(scripts/acquisition/|config/acquisition/|tests/test_source_registry\.py$|scripts/process\.py$|scripts/infrastructure/render_project_config\.py$|requirements\.txt$)
       - id: local_ci
         name: Run local CI
         entry: bash scripts/run_ci.sh

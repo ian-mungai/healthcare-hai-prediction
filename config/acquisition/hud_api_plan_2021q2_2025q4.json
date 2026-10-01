@@ -1,0 +1,240 @@
+{
+  "batches": [
+    {
+      "county_geography": "2010_census",
+      "id": "9bc4c8788be0ac241c79f50a1db8e83eb7e5488280c5f064bb06e081af4f6910",
+      "quarter": 2,
+      "query": "All",
+      "type": 2,
+      "year": 2021
+    },
+    {
+      "county_geography": "2010_census",
+      "id": "03593aa2cde6787921e9d47140000de26e354ba9f10c74fa1860cab854b391f2",
+      "quarter": 3,
+      "query": "All",
+      "type": 2,
+      "year": 2021
+    },
+    {
+      "county_geography": "2010_census",
+      "id": "c578302bc7b60515265e060593573c164a81a3bc5c720c2c60e4840cc31a5404",
+      "quarter": 4,
+      "query": "All",
+      "type": 2,
+      "year": 2021
+    },
+    {
+      "county_geography": "2010_census",
+      "id": "1f5c427f3cbe20fe8805f556fe224ff299979f7cc833520546d6011ed4a03230",
+      "quarter": 1,
+      "query": "All",
+      "type": 2,
+      "year": 2022
+    },
+    {
+      "county_geography": "2010_census",
+      "id": "339aff2febcefb9e83d2c89be3574a3ed5ce4ec320c75d7a38b32a23a63d07ff",
+      "quarter": 2,
+      "query": "All",
+      "type": 2,
+      "year": 2022
+    },
+    {
+      "county_geography": "2010_census",
+      "id": "39235dd2cfe5ea53eb06f29de11793dd7c56a1d9a2c190f8f3d0459a404af2d8",
+      "quarter": 3,
+      "query": "All",
+      "type": 2,
+      "year": 2022
+    },
+    {
+      "county_geography": "2010_census",
+      "id": "09d5507d2e655b03b67f84a84eb0a3eb37d832a2dd20b02a32c2ce24aa3a175b",
+      "quarter": 4,
+      "query": "All",
+      "type": 2,
+      "year": 2022
+    },
+    {
+      "county_geography": "2020_census",
+      "id": "49042cdeb3a68be4db9c6de019ba5ed62ae1581c900f303070dcbe64005b77db",
+      "quarter": 1,
+      "query": "All",
+      "type": 2,
+      "year": 2023
+    },
+    {
+      "county_geography": "2020_census",
+      "id": "afecfa97e612db7623046a34517bb3b560f8f201ad028510af522a409c486cce",
+      "quarter": 2,
+      "query": "All",
+      "type": 2,
+      "year": 2023
+    },
+    {
+      "county_geography": "2020_census",
+      "id": "55a3e6e2a6fdc72e2de297549f4a921180437671eda6c9b502fe357d02eab012",
+      "quarter": 3,
+      "query": "All",
+      "type": 2,
+      "year": 2023
+    },
+    {
+      "county_geography": "2020_census",
+      "id": "5ed0225e13224fd50a382ca1a458818a87f5c783663234b21c7b779eca7858e6",
+      "quarter": 4,
+      "query": "All",
+      "type": 2,
+      "year": 2023
+    },
+    {
+      "county_geography": "2020_census",
+      "id": "9815d284cb497de6b750e7d4a63971b1a17b781813afe649a6c001c770436c4f",
+      "quarter": 1,
+      "query": "All",
+      "type": 2,
+      "year": 2024
+    },
+    {
+      "county_geography": "2020_census",
+      "id": "2e7a2322aaac3f8851ec345f5ddb4f9ca865c5fe83c5e747efd0228a1bd4d560",
+      "quarter": 2,
+      "query": "All",
+      "type": 2,
+      "year": 2024
+    },
+    {
+      "county_geography": "2020_census",
+      "id": "f2720e6030528938c62ca1a0df8b39ae89a42d228b89e95203b12ab684b5fe01",
+      "quarter": 3,
+      "query": "All",
+      "type": 2,
+      "year": 2024
+    },
+    {
+      "county_geography": "2020_census",
+      "id": "574876390da4a2a591b7d1b17c023991f79c947c5ea1ca63625bb07134f47c2b",
+      "quarter": 4,
+      "query": "All",
+      "type": 2,
+      "year": 2024
+    },
+    {
+      "county_geography": "2020_census",
+      "id": "e186fa1a3c7bf43f525fb701740df3ff361362ea1455a42123098d1684a3a8c7",
+      "quarter": 1,
+      "query": "All",
+      "type": 2,
+      "year": 2025
+    },
+    {
+      "county_geography": "2020_census",
+      "id": "b87b4c08e15ccc659694a617a0401b9107ad29a5818cc943e6154dfe4a09ff4e",
+      "quarter": 2,
+      "query": "All",
+      "type": 2,
+      "year": 2025
+    },
+    {
+      "county_geography": "2020_census",
+      "id": "08f5d49806009f947a2c117fbd0ed151af04a1bfa6a97b4db234677116114e0b",
+      "quarter": 3,
+      "query": "All",
+      "type": 2,
+      "year": 2025
+    },
+    {
+      "county_geography": "2020_census",
+      "id": "e7805a82cc36c4a8f1e2cba314c4b40b08bb9ce886c9779353cc3af732d36129",
+      "quarter": 4,
+      "query": "All",
+      "type": 2,
+      "year": 2025
+    }
+  ],
+  "credential_reference": "hud_api_key",
+  "endpoint": "https://www.huduser.gov/hudapi/public/usps",
+  "envelope_fields": [
+    "crosswalk_type",
+    "input",
+    "quarter",
+    "results",
+    "year"
+  ],
+  "model_eligible": false,
+  "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
+  "request_spacing_seconds": 2,
+  "required_state_fips": [
+    "01",
+    "02",
+    "04",
+    "05",
+    "06",
+    "08",
+    "09",
+    "10",
+    "11",
+    "12",
+    "13",
+    "15",
+    "16",
+    "17",
+    "18",
+    "19",
+    "20",
+    "21",
+    "22",
+    "23",
+    "24",
+    "25",
+    "26",
+    "27",
+    "28",
+    "29",
+    "30",
+    "31",
+    "32",
+    "33",
+    "34",
+    "35",
+    "36",
+    "37",
+    "38",
+    "39",
+    "40",
+    "41",
+    "42",
+    "44",
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "51",
+    "53",
+    "54",
+    "55",
+    "56"
+  ],
+  "result_fields": [
+    "bus_ratio",
+    "city",
+    "geoid",
+    "oth_ratio",
+    "res_ratio",
+    "state",
+    "tot_ratio",
+    "zip"
+  ],
+  "scope": "User decision 2026-09-28: ZIP-to-county, 2021 Q2 through 2025 Q4, nationwide, 19 requests",
+  "source_id": "HUD",
+  "supplements_plan_sha256": "153522f0e59bcaa0d42eb9fd75dc7599878b26fdbd4b03001e73d0711e1c5e54",
+  "terms": {
+    "path": "config/acquisition/terms_acceptance_20260928.json",
+    "sha256": "96435f8cb6d23a1809040b6251f3bd835fa7bcacdfd67f77b255fc55f6b7f5cf"
+  },
+  "version": 2,
+  "vintage": "2021Q2_2025Q4"
+}

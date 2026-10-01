@@ -1,0 +1,30 @@
+{
+  "catalog_version": 1,
+  "current_registry_sha256": "dbd6fa964a6001861f9701f6d2c785eccabb3ba314e586f860a462ab651bcad3",
+  "legacy_versions": [
+    {
+      "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
+      "registry_path": "data/acquisition_planning/registry_legacy_20260929/source_registry.json",
+      "lock_path": "data/acquisition_planning/registry_legacy_20260929/source_registry_lock.json",
+      "files": {
+        "registry": {
+          "path": "data/acquisition_planning/registry_legacy_20260929/source_registry.json",
+          "sha256": "51558c3bafc12f50de471e70be152f99b685eb6d5a939e6c4d3238b7c53df7fc"
+        },
+        "lock": {
+          "path": "data/acquisition_planning/registry_legacy_20260929/source_registry_lock.json",
+          "sha256": "aebefec50ef7dfb133a038dcba3662abb59eef8a513cece414662d7bc77a93cc"
+        },
+        "additions": {
+          "path": "data/acquisition_planning/registry_legacy_20260929/registry_additions.json",
+          "sha256": "b62976df10a5a77643086a11594c7c0a3ad62667b9a9affbdfcc9019c863d5c2"
+        },
+        "additions_lock": {
+          "path": "data/acquisition_planning/registry_legacy_20260929/registry_additions_lock.json",
+          "sha256": "878a8022255494cfd988370bce16945db8938c8bac6ea2dd8d05c6e9970c2686"
+        }
+      }
+    }
+  ],
+  "archive_policy": "Exact historic metadata is local-only, ignored, owner-readable; required for historic replay. Never publish private archive."
+}

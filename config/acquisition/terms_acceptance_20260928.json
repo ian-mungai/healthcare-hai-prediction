@@ -1,0 +1,93 @@
+{
+  "record_type": "source_terms_acceptance_and_downstream_restrictions",
+  "record_version": 1,
+  "decision_date": "2026-09-28",
+  "authority": "direct_user_instruction_in_current_conversation",
+  "user_instruction": "accept all 3 terms. note down the restricions for each dataset to be used downstream.",
+  "terms_review_date": "2026-09-28",
+  "acceptance_status": "accepted_by_user",
+  "publisher_submission_status": "No account registration, click-through submission or data query was performed to record this decision.",
+  "scope": "HUD USPS crosswalk API terms, CDC WONDER data-use restrictions, and AHRQ CLH DUA including the embedded AHRF license reviewed on this date.",
+  "supersedes": "Only the pending user terms-acceptance decisions for HUD, WONDER and S26_CLH in older access ledgers; immutable source records and their hashes remain unchanged.",
+  "enforcement_status": "documented_policy; not yet integrated into collector or publication validators",
+  "model_eligible": false,
+  "downstream_requirements": [
+    "Carry source ID, release, original source lineage and this restriction record through raw storage, transformations, joins, features, training, evaluation, reports, APIs and exported artifacts.",
+    "Terms acceptance does not clear credential, route, privacy, coverage, geography, definition, quality, leakage or model-eligibility holds.",
+    "For mixed-source outputs retain every applicable source restriction; transformations do not remove obligations.",
+    "Review intended recipients and content before sharing data, trained artifacts, dashboards, named-hospital outputs or public repository files; do not assume a derived artifact is unrestricted.",
+    "If publisher terms change, review the new version before further use; this record is not advance acceptance of unknown terms."
+  ],
+  "datasets": [
+    {
+      "source_id": "HUD",
+      "dataset": "HUD USPS ZIP Code Crosswalk",
+      "terms_accepted": true,
+      "sources": [
+        "https://www.huduser.gov/portal/dataset/api-terms-of-service.html",
+        "https://www.huduser.gov/portal/dataset/uspszip-api.html"
+      ],
+      "restrictions": [
+        "API access/use constitutes acceptance; comply with the linked HUD privacy policy and applicable law and third-party intellectual-property rights.",
+        "Display prominently in applications using the API: This product uses the HUD User Data API but is not endorsed or certified by HUD User.",
+        "Do not imply HUD endorsement or certification; do not modify or falsely represent API content while claiming it is HUD content. Clearly distinguish project-derived results from publisher originals.",
+        "Maximum 60 API queries per minute; do not circumvent access or usage limits.",
+        "Terms include indemnification, warranty and liability limitations; HUD may limit or terminate access and revise terms."
+      ],
+      "operational_requirements": [
+        "Register an account and the USPS dataset, confirm the account, and create a bearer token; store the token in the approved secret store, never logs or chat.",
+        "Use explicit year, quarter and crosswalk direction; preserve string geography identifiers and address-ratio meanings.",
+        "Nationwide All/state API queries are documented from 2021 Q1; verify a permitted route for earlier required releases."
+      ],
+      "remaining_holds": ["account_and_token_unverified", "exact_historical_route_and_coverage_unverified", "downstream_definition_and_join_review", "model_eligibility"]
+    },
+    {
+      "source_id": "WONDER",
+      "dataset": "CDC WONDER county mortality",
+      "terms_accepted": true,
+      "sources": [
+        "https://wonder.cdc.gov/datause.html",
+        "https://wonder.cdc.gov/wonder/help/wonder-api.html"
+      ],
+      "restrictions": [
+        "Use only for statistical reporting and analysis.",
+        "Do not attempt identification of persons or establishments, including through linkage; do not disclose or otherwise use inadvertently discovered identities. Report inadvertent identification to the officials named in the applicable CDC/NCHS policy.",
+        "Do not present or publish statistics representing nine or fewer births or deaths, including rates based on those counts, in any medium.",
+        "Preserve database-specific suppression constraints, caveats and footnotes when reassembling data; do not reconstruct suppressed cells.",
+        "All subsequent reuse remains subject to the data-use restrictions."
+      ],
+      "operational_requirements": [
+        "The reviewed restrictions may be acknowledged in the permitted request interface under this acceptance; capture the applicable database/version and agreement evidence during acquisition.",
+        "The documented NVSS mortality API permits national data only; it is not an authorized substitute for a county export.",
+        "Prepare an exact county-by-year export scope using a permitted route; preserve age-adjustment methods, population denominators, suppression and unreliable-rate flags."
+      ],
+      "remaining_holds": ["county_export_route_and_scope_unverified", "historical_coverage", "downstream_measurement_and_join_review", "model_eligibility"]
+    },
+    {
+      "source_id": "S26_CLH",
+      "dataset": "AHRQ Community-Level Health Database, version 2",
+      "terms_accepted": true,
+      "sources": [
+        "https://www.ahrq.gov/data/innovations/clh-data.html",
+        "https://www.ahrq.gov/sites/default/files/wysiwyg/data/clh/CLH-Data-Sources-Documentation-2025.pdf"
+      ],
+      "terms_location": "Printed pages xvii-xix: CLH Data Use Agreement and AHRF Data Use License Agreement",
+      "restrictions": [
+        "Use signifies agreement. Use/disclosure is limited to research, analysis and aggregate statistical reporting as permitted by the DUA.",
+        "Do not release information directly or indirectly identifying persons, including identification through vulnerability analysis or penetration testing.",
+        "Do not publish or report data that identify individual establishments directly or by inference; do not attempt to discover establishment identities absent from the data.",
+        "Acknowledge AHRQ Community-Level Health (CLH) Database in reports. Interpretations are the analyst's and not US Government, HHS or AHRQ findings, policies or recommendations.",
+        "The user is personally responsible for compliance. Report violations or apparent violations to AHRQ without unreasonable delay and within 30 calendar days of awareness.",
+        "The DUA includes indemnification/defense/hold-harmless provisions to the extent permitted by federal and state law.",
+        "Embedded AHRF terms prohibit distributing copies or making the data available to third parties, subject to limited minimal-amount scholarly, educational, scientific or professional-use exceptions; no sale. Credited figures, tables and brief excerpts are permitted within the stated conditions.",
+        "AHRF reproduction/redistribution remains subject to copyright-owner consent; use the AHRF citation in the documentation. Retain the embedded license and any underlying-source restrictions with affected variables."
+      ],
+      "operational_requirements": [
+        "Retain version-specific codebooks, source provenance and variable-specific availability and measurement periods; do not combine prior SDOH versions with updated CLH as if consistent.",
+        "Before hospital-identifiable publication or third-party access, establish compatibility with establishment-reporting and embedded redistribution restrictions. Acceptance alone does not resolve that compatibility.",
+        "Private storage is not a blanket permission for sharing: evaluate actual users, service access and outputs against the agreement. No claim of explicit cloud-storage permission is made here."
+      ],
+      "remaining_holds": ["intended_output_and_access_compatibility", "underlying_source_redistribution", "exact_acquisition_scope", "downstream_definition_and_join_review", "model_eligibility"]
+    }
+  ]
+}

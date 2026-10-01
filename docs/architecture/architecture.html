@@ -241,7 +241,7 @@
         <text x="32" y="160" fill="#94a3b8" font-size="8">• CMS: MMD API, Provider</text>
         <text x="40" y="172" fill="#94a3b8" font-size="8">Data, HCRIS, IPPS</text>
         <text x="32" y="190" fill="#94a3b8" font-size="8">• Census ACS API</text>
-        <text x="32" y="208" fill="#94a3b8" font-size="8">• BLS LAUS API</text>
+        <text x="32" y="208" fill="#94a3b8" font-size="8">• BLS LAUS and HUD USPS APIs</text>
         <text x="32" y="226" fill="#94a3b8" font-size="8">• HRSA, AHRQ, CDC, USDA</text>
         <text x="32" y="244" fill="#94a3b8" font-size="8">• State agencies: CA HCAI,</text>
         <text x="40" y="256" fill="#94a3b8" font-size="8">NY, IL, TX, VT, MD</text>
@@ -305,7 +305,7 @@
         <rect x="515" y="365" width="185" height="75" rx="6" fill="#0f172a"/>
         <rect x="515" y="365" width="185" height="75" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
         <text x="607" y="385" fill="white" font-size="11" font-weight="600" text-anchor="middle">Secrets Manager</text>
-        <text x="607" y="401" fill="#94a3b8" font-size="9" text-anchor="middle">shared Census and BLS keys</text>
+        <text x="607" y="401" fill="#94a3b8" font-size="9" text-anchor="middle">shared Census, BLS and HUD keys</text>
         <text x="607" y="415" fill="#94a3b8" font-size="8" text-anchor="middle">values entered by hand;</text>
         <text x="607" y="427" fill="#94a3b8" font-size="8" text-anchor="middle">never read by Terraform</text>
 
@@ -335,13 +335,13 @@
         <rect x="220" y="585" width="540" height="110" rx="6" fill="#0f172a"/>
         <rect x="220" y="585" width="540" height="110" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
         <text x="490" y="607" fill="white" font-size="11" font-weight="600" text-anchor="middle">Private GitHub repository and CI</text>
-        <text x="490" y="623" fill="#94a3b8" font-size="9" text-anchor="middle">pre-commit hooks and GitHub Actions run the same local CI script without AWS credentials</text>
+        <text x="490" y="623" fill="#94a3b8" font-size="9" text-anchor="middle">GitHub Actions runs the same pre-commit hooks as each commit, without AWS credentials</text>
         <text x="236" y="645" fill="#94a3b8" font-size="8">• Ruff, MyPy, secret scan, repository checks</text>
         <text x="236" y="660" fill="#94a3b8" font-size="8">• configuration and quality E2E with artifacts</text>
         <text x="236" y="675" fill="#94a3b8" font-size="8">• pytest regression safeguards</text>
         <text x="500" y="645" fill="#94a3b8" font-size="8">• terraform fmt, validate, mock-provider tests</text>
         <text x="500" y="660" fill="#94a3b8" font-size="8">• tflint, checkov, trivy config</text>
-        <text x="500" y="675" fill="#94a3b8" font-size="8">• Conventional Commits check</text>
+        <text x="500" y="675" fill="#94a3b8" font-size="8">• commit messages; acquisition checks job</text>
 
         <!-- Legend (outside all boundaries) -->
         <text x="20" y="598" fill="white" font-size="10" font-weight="600">Legend</text>
@@ -392,7 +392,7 @@
           <h3>Verification</h3>
         </div>
         <ul>
-          <li>• Local CI and GitHub Actions run the same script</li>
+          <li>• Commits and GitHub Actions run the same pre-commit hooks</li>
           <li>• E2E runs leave repeatable artifacts under data/e2e</li>
           <li>• Terraform plans are tested with a mock provider</li>
           <li>• Infrastructure changes apply only from reviewed saved plans</li>
@@ -402,7 +402,7 @@
 
     <!-- Footer -->
     <p class="footer">
-      healthcare-hai-prediction • checked against a1b758a and the working tree on Sep 27 2026 • dashed components are planned
+      healthcare-hai-prediction • checked against f9ef312 and the working tree on Oct 1 2026 • dashed components are planned
     </p>
   </div>
 

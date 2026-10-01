@@ -2,7 +2,7 @@
 
 Predicting hospital healthcare-associated infection rates from public CMS, Census, BLS and state data, built as a reproducible data engineering project on AWS.
 
-Hospital-acquired infection prediction research for a Data Engineer. This fresh
+Hospital-acquired infection prediction research for a data engineer. This fresh
 repository builds on the capstone concept, not its implementation. Same-period
 prediction is primary; forecasting is a later extension. Acquisition and S3
 storage precede comprehensive schema review and tutorial drafting. Availability
@@ -35,8 +35,9 @@ secret or personal value in this repository to the repository owner privately.
 ## Background
 
 The project asks whether a hospital's infection score can be predicted from
-same-period public measures, and why a simpler earlier model explained little
-of the variation. It is in the acquisition stage: public sources are collected
+same-period public measures and why a simpler earlier model explained little
+of the variation. Approved collection is complete; acquisition closeout is pending
+final verification, confirmed disposal of personal originals and an approved Git checkpoint. Public sources are collected
 through publisher APIs first, then download URLs, into private versioned S3
 storage with a receipt, hash and version readback for every object. Schema
 review, modeling and serving come later. The [Architecture](#architecture)
@@ -78,7 +79,8 @@ Named manual steps. These are the only setup steps no script performs:
    `census_api_key` or `bls_api_key` holding JSON with one field, `api_key`.
    The keys are shared by several projects, so they are created by hand outside
    Terraform. Store the HUD USPS crosswalk token separately as `hud_api_key`,
-   with the token alone as its plaintext value (no `Bearer ` prefix). The IAM
+   in the same JSON shape with the token alone in `api_key` (no `Bearer `
+   prefix; the collector adds the header). The IAM
    configuration grants read access to these three names and never reads a
    value; each permission update requires a reviewed saved plan before apply.
 2. **Administrator profile.** Configure an AWS CLI profile with IAM permissions
@@ -86,7 +88,7 @@ Named manual steps. These are the only setup steps no script performs:
 
 ## Usage
 
-Run the local CI, the same script GitHub Actions runs, without AWS credentials:
+Run the local CI, which the pre-commit hooks and GitHub Actions also run, without AWS credentials:
 
 ```sh
 env PYTHON_BIN="$PWD/.venv/bin/python" \
@@ -149,9 +151,12 @@ originals stay local and only redacted copies belong in S3. The initial 218
 Excel/contact versions were removed on Sep 28 2026. Redacted replacements for
 75 further versions are stored; those originals were deleted and verified on
 Sep 28 2026. Retirement records cover all 293 removed versions, storage
-reconciliation passed, and the temporary deletion grant was removed.
+reconciliation passed and the temporary deletion grant was removed.
 Operational evidence stays in ignored local
-folders; this status does not clear privacy or modeling holds.
+folders; this status does not clear privacy or modeling holds. The project no
+longer uses the HRSA Area Health Resources Files: their license limits sharing
+the data with third parties, so the five measures built on them were dropped and
+all 399 stored versions were deleted and verified on Sep 28 2026.
 
 Tests use generic synthetic data. Real personal values must never appear in
 fixtures, logs, tutorials, published artifacts or commits. Acquisition inputs,
@@ -159,6 +164,14 @@ operational evidence and the detailed exception record remain untracked.
 
 The explicitly approved live S3 verification tool is the sole opt-in exception
 to synthetic-only verification. Normal CI does not run it or contact AWS.
+
+[docs/data_collection.md](docs/data_collection.md) explains how every source was
+collected and how to recheck it, including the named manual data steps: terms
+acceptance, API accounts and the browser downloads (CMS Mapping Medicare
+Disparities exports, Census table exports, CDC WONDER county mortality exports
+and the 2010–2020 HUD ZIP-to-county workbooks). Its commands need the acquisition code in `scripts/acquisition/`
+and `config/acquisition/`, which is no longer Git-ignored and is committed at the end of the collection stage. Registry revision 2 preserves exact legacy fingerprints for historic replay;
+its private legacy archive stays outside Git. The bounded publisher redownload remains the final verification.
 
 ## Quality Checks
 
@@ -172,7 +185,13 @@ service. Secret values and matching source fragments are omitted from scanner
 diagnostics.
 
 Pre-commit (`pre-commit` and `commit-msg` stages) and `scripts/run_ci.sh`
-enforce these repository rules at the pinned versions:
+enforce these repository rules at the pinned versions. The full set
+(`.venv/bin/pre-commit run --all-files --hook-stage manual`) runs before a
+release or push. GitHub CI runs that same command on every push and pull
+request. In the full set gitleaks scans every outgoing source file instead of
+the staged index. The acquisition checks run in their own CI job and through
+their hook when acquisition files change; run them directly before a release
+with `bash scripts/acquisition/run_checks.sh`.
 
 - **Secrets and credential files:** gitleaks scans the staged index; `.env`
   (but not `.env.example`), Terraform state and saved plans, keys and cloud
@@ -181,6 +200,32 @@ enforce these repository rules at the pinned versions:
   `.ndjson`, `.avro`, `.db` and `.sqlite` files are allowed only in
   `tests/fixtures/`, for synthetic samples. Any file over 5 MB is blocked
   unless Git LFS stores it. Acquired data stays in S3 and ignored local folders.
+  Git LFS stores two acquisition config files over the limit,
+  `config/acquisition/source_registry.json` and
+  `config/acquisition/planning_v1/acquisition_plans_v1.json` (listed in
+  `.gitattributes`); a clone needs `git lfs install` to fetch them.
+- **Privacy scan:** every tracked or untracked non-ignored file, not only the
+  diff, is scanned for home-directory and machine temporary paths, email
+  addresses outside reserved domains (`example.invalid`, `.test`), phone
+  numbers, AWS account IDs (including those in ARNs) and values of identifying keys in `.env`.
+  Findings give file, line and type, never the value. Files that cannot be read
+  as text are listed as unreviewed; inspect them before publishing. Intentional
+  values go in `.privacy_allowlist` as `<type> <path glob> -- <reason>`,
+  matched by type and path only; an entry without a reason is itself a finding.
+  The synthetic account IDs in the Terraform, infrastructure and configuration
+  tests are listed there. Before publishing, also scan ignored and hidden files
+  with `.venv/bin/python -m scripts.quality.repo_checks privacy-scan --all`
+  (`--warn` reports without failing).
+- **Writing check:** the prose of every tracked or untracked non-ignored
+  Markdown file (front matter, code spans and blocks, URLs and `tests/fixtures/`
+  excluded) is checked for a comma before a final "and", "or" or "nor" and for
+  ISO dates in prose, which are written as Sep 30 2026. Files declared with
+  `--articles <glob>` are also checked for em dashes. Exceptions go in
+  `.writing_allowlist` as `<type> <path glob> -- <reason>`; an entry without a
+  reason is itself a finding. It blocks: the existing prose was corrected before
+  it was enabled (Oct 1 2026). Run it with
+  `.venv/bin/python -m scripts.quality.repo_checks writing-check` (`--warn`
+  reports without failing).
 - **Commit messages:** Conventional Commits and no AI attribution, checked in
   the full message by the `commit-msg` hook and, in GitHub Actions, for every
   pushed commit. AI credit and agent-session lines are rejected; human
@@ -204,11 +249,24 @@ enforce these repository rules at the pinned versions:
   (`.venv/bin/python -m scripts.quality.scan_secrets`). Tests use
   `tests/support.py` `check()` instead of `assert`.
 
+**Acquisition checks** (`bash scripts/acquisition/run_checks.sh`) run Ruff, MyPy,
+registry validation, the acquisition regression tests and every offline E2E
+suite twice, with a 90% coverage gate that also counts collector command lines
+run as child processes. They take 12–14 minutes, so GitHub Actions runs them in a
+separate "Acquisition Checks" job (30-minute limit, LFS checkout, pinned Terraform) and the
+`acquisition-checks` pre-commit hook runs them only when acquisition code,
+configuration or their dependencies change. They need no AWS credentials and no
+collected `data/`. Off macOS, the HUD workbook and WONDER suites substitute only the
+macOS browser-download metadata (the "downloaded from" attribute and file creation
+time); on a Mac the real reads run. When the private archive is absent (as in CI), the
+registry-additions suite skips its single legacy-archive check and records the skip.
+
 Each check has a bad and a good sample run through the real `pre-commit` entry
 point (`scripts/quality/run_checks_e2e.py` and
 `scripts/quality/run_documentation_review_e2e.py`); both run in local CI.
 Every detection check was run on the whole repository before it was enabled,
-with no false positives, so they block from the start. There are no bypasses:
+with no false positives, so they block from the start; the writing check blocked
+only after the existing prose was corrected. There are no bypasses:
 never use `SKIP=` or `git commit --no-verify`. If a check blocks a valid change,
 fix the check or ask the repository owner.
 
@@ -246,7 +304,7 @@ S3 on Sep 24 2026 (UTC). It aborts incomplete multipart uploads seven days after
 initiation, with no expiration or transition of completed objects, historical
 versions or delete markers. Local mock-plan tests, source-shape checks and live
 configuration readback pass. The seven-day scheduler itself has not been
-observed in a timed test, and no deliberately incomplete upload was created for
+observed in a timed test and no deliberately incomplete upload was created for
 verification.
 
 Pre-deployment inspection confirmed no existing lifecycle configuration. The
@@ -290,20 +348,25 @@ No AWS changes implementing these four deferred controls have been applied.
 - `scripts/process.py`: the one process launcher every script uses to start programs.
 - `scripts/infrastructure/`: dotenv rendering, identity guards and configuration E2E.
 - `scripts/quality/`: pinned tool installation, secret scanning, repository checks, documentation review and Terraform analysis.
-- `scripts/run_ci.sh`: the shared local and GitHub CI entry point.
+- `scripts/run_ci.sh`: the local CI script; the `local_ci` hook runs it on every commit and in GitHub CI.
 - `tests/`: retained pytest regression safeguards and their `check()` helper.
 - `config/quality_tools.json`: pinned native tool versions and publisher hashes.
 - `docs/architecture/`: the architecture diagram source and its rendered PNG.
+- `docs/data_collection.md`: how the source data was collected and how to recheck it.
+- `docs/issue_register.md`: the path reserved for the project's single issue register, kept local-only (Git-ignored);
+  not created yet.
+- `docs/project_guide.md`: the project's target design with each section's build status, kept local-only (Git-ignored).
 - `.github/`: the CI workflow and the pull request template.
-- Local acquisition code, configuration, data and audit evidence remain ignored by request.
-  They are committed, with full documentation of the collection process, at the
-  end of the data collection stage. No tutorial files are added to this repository.
+- `scripts/acquisition/`, `config/acquisition/`: collectors, storage checks, E2E suites and their locked plans and
+  registry. No longer Git-ignored (Sep 29 2026) and committed with full documentation of the collection process
+  at the end of the data collection stage; collected data and audit evidence stay in the ignored `data/` folder.
+  No tutorial files are added to this repository.
 
 ## Limitations
 
-These checks are not deployment or clinical validation. The ignored acquisition
-implementation requires its separate synthetic verification before local use;
-a clean GitHub checkout cannot exercise files intentionally excluded from Git.
+These checks are not deployment or clinical validation. The acquisition checks
+run on synthetic inputs; a clean checkout cannot replay stored captures, which need
+the ignored local originals and the private legacy registry archive.
 Nothing in S3 is approved for modeling yet: definitions, geography and modeling
 reviews remain open. Raw personal-data retention remains a separate unresolved
 control. The deferred controls above are not implemented.

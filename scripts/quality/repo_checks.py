@@ -56,6 +56,42 @@ AI_CREDIT = re.compile(r"^\s*(?:co-authored-by|co-developed-by|assisted-by|gener
 AI_GENERATED = re.compile(r"^\s*(?:[🤖✨]\s*)?(?:generated (?:with|by)|written by)\b(.*)$", re.IGNORECASE)
 AI_SESSION = re.compile(rf"^\s*(?:{'|'.join(AI_AGENTS)})-session\s*:", re.IGNORECASE)
 
+PRIVACY_RULE = f"{POLICY}: privacy scan"
+PRIVACY_FIX = (
+    "replace the value with a placeholder (~, $TMPDIR, <name>, example.invalid) or read it from configuration;"
+    " if it is meant to be public, add a reasoned entry to .privacy_allowlist"
+)
+ALLOWLIST = ".privacy_allowlist"
+PRIVACY_PATTERNS = {
+    "home-path": ("home-directory path with a user name", re.compile(r"/(?:" + "Us" + r"ers|home)/(?![<$])(?!Shared/)[A-Za-z0-9._-]+")),
+    "temp-path": ("machine temporary path", re.compile(r"/var/" + r"folders/[A-Za-z0-9_+-]+/[A-Za-z0-9_+-]+")),
+    "email": ("email address", re.compile(r"\b[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})\b")),
+    "phone": (
+        "phone number",
+        re.compile(
+            r"(?<![\w.])(?:\+\d{1,3}[ .-]?)?(?:\(\d{3}\)[ .-]?|\d{3}[ .-])\d{3}[ .-]\d{4}(?![\w.])"
+            r"|(?<![\w.])\+\d{1,3}[ -]\d{2,4}[ -]\d{3}[ -]\d{3,4}(?![\w.])"
+        ),
+    ),
+    "aws-account": ("AWS account ID", re.compile(r"arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:\d{12}:|(?i:account[_ -]?id)\W{1,4}\d{12}\b")),
+}
+RESERVED_DOMAINS = (".invalid", ".test", ".localhost", ".example", "example.com", "example.org", "example.net")
+ENV_VALUE_KEYS = re.compile(r"PROFILE|BUCKET|ACCOUNT|ARN|ENDPOINT|HOST|EMAIL|USER")
+WRITING_RULE = f"{POLICY}: writing check (Oxford comma, date format; em dashes in declared article files)"
+WRITING_ALLOWLIST = ".writing_allowlist"
+# Checked in prose only: code spans, fenced blocks, front matter, URLs and link targets are masked first.
+WRITING_PATTERNS = {
+    "comma-and": (
+        "comma before a final 'and', 'or' or 'nor'",
+        re.compile(r",\s+(?:and|or|nor)\b"),
+        "drop the comma, or split the sentence in two",
+    ),
+    "iso-date": ("ISO date in prose", re.compile(r"\b\d{4}-\d{2}-\d{2}\b"), "write the date as Sep 30 2026, or put a machine value in `code`"),
+    "em-dash": ("em dash in article text", re.compile("\u2014"), "use a colon, comma, parentheses or a new sentence"),
+}
+ARTICLE_ONLY = {"em-dash"}
+SKIPPED_DIRS = {".git", ".venv", ".tools", "node_modules", "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache", ".terraform"}
+
 
 @dataclass
 class Finding:
@@ -273,13 +309,185 @@ def commit_range(start: str, end: str) -> list[Finding]:
     return findings
 
 
+def privacy_files(everything: bool) -> list[str]:
+    """Tracked and untracked non-ignored files; with ``everything``, ignored and hidden files too (not tool folders)."""
+    if not everything:
+        return sorted(set(git("ls-files", "--cached", "--others", "--exclude-standard").splitlines()))
+    found = []
+    for folder, subfolders, names in os.walk("."):
+        subfolders[:] = sorted(name for name in subfolders if name not in SKIPPED_DIRS and not os.path.islink(os.path.join(folder, name)))
+        found += [os.path.normpath(os.path.join(folder, name)) for name in names if name not in SKIPPED_DIRS]  # A worktree's .git is a file.
+    return sorted(found)
+
+
+def read_allowlist(name: str, kinds: list[str], rule: str, reason: str) -> tuple[list[tuple[str, str]], list[Finding]]:
+    """Read ``type glob -- reason`` entries; an entry without a reason or with an unknown type is itself a finding."""
+    entries: list[tuple[str, str]] = []
+    findings: list[Finding] = []
+    if not Path(name).exists():
+        return entries, findings
+    for number, line in enumerate(Path(name).read_text().splitlines(), 1):
+        text = "" if line.lstrip().startswith("#") else line.strip()
+        if not text:
+            continue
+        match = re.fullmatch(r"(\S+)\s+(\S+)(?:\s+--\s*(.*))?", text)
+        location = f"{name}:{number}"
+        if not match or match.group(1) not in kinds:
+            findings.append(Finding(location, "allowlist entry with an unknown type", rule, f"use one of: {', '.join(kinds)}"))
+        elif not (match.group(3) or "").strip():
+            findings.append(Finding(location, "allowlist entry without a reason", rule, f"add ' -- <{reason}>'"))
+        else:
+            entries.append((match.group(1), match.group(2)))
+    return entries, findings
+
+
+def privacy_allowlist() -> tuple[list[tuple[str, str]], list[Finding]]:
+    """Privacy allowlist entries by finding type and path glob."""
+    return read_allowlist(ALLOWLIST, [*PRIVACY_PATTERNS, "env-value"], PRIVACY_RULE, "why this value is intentionally public")
+
+
+def project_name_prefixes(lines: list[str]) -> set[str]:
+    """The lower-case name prefixes of .env's PROJECT_NAME, dashes and underscores treated alike.
+
+    A project whose AWS profile follows its naming standard names that profile after the project prefix, so the value
+    is a public name, not an environment-specific secret. Longer values, such as a bucket named after the project,
+    stay checked.
+    """
+    segments: list[str] = []
+    for line in lines:
+        key, _, value = line.partition("=")
+        if key.strip().upper() == "PROJECT_NAME" and not line.lstrip().startswith("#"):
+            segments = value.strip().strip("\"'").lower().replace("_", "-").split("-")
+    return {"-".join(segments[:count]) for count in range(1, len(segments) + 1)}
+
+
+def env_values() -> list[str]:
+    """Values of identifying keys in the project's .env (profile, bucket, account, host), never printed."""
+    if not Path(".env").is_file():
+        return []
+    lines = Path(".env").read_text().splitlines()
+    public = project_name_prefixes(lines)
+    values = []
+    for line in lines:
+        key, _, value = line.partition("=")
+        value = value.strip().strip("\"'")
+        named = value.lower().replace("_", "-")
+        if ENV_VALUE_KEYS.search(key.strip().upper()) and len(value) >= 4 and not line.lstrip().startswith("#") and named not in public:
+            values.append(value)
+    return values
+
+
+def line_privacy(line: str, values: list[str]) -> list[str]:
+    """Return the privacy finding types on one line."""
+    kinds = []
+    for kind, (_, pattern) in PRIVACY_PATTERNS.items():
+        for match in pattern.finditer(line):
+            if kind == "email" and match.group(1).lower().endswith(RESERVED_DOMAINS):
+                continue
+            kinds.append(kind)
+            break
+    if any(value in line for value in values):
+        kinds.append("env-value")
+    return kinds
+
+
+def privacy_scan(everything: bool) -> tuple[list[Finding], list[str]]:
+    """Scan whole files, not the diff, for personal data and environment-specific values; never report the value."""
+    allowed, findings = privacy_allowlist()
+    values = env_values()
+    unreviewed = []
+    descriptions = {kind: description for kind, (description, _) in PRIVACY_PATTERNS.items()} | {"env-value": "value declared in .env"}
+    for path in privacy_files(everything):
+        if path == ".env" or os.path.islink(path) or not os.path.isfile(path):
+            continue
+        data = Path(path).read_bytes()
+        try:
+            if b"\0" in data[:8192]:
+                raise UnicodeDecodeError("utf-8", data[:1], 0, 1, "binary")
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            unreviewed.append(f"{path}: unreviewed: cannot be read as text; inspect it before publishing")
+            continue
+        for number, line in enumerate(text.splitlines(), 1):
+            for kind in line_privacy(line, values):
+                if not any(kind == entry_kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
+                    findings.append(Finding(f"{path}:{number}", descriptions[kind], PRIVACY_RULE, PRIVACY_FIX))
+    return findings, unreviewed
+
+
+def mask_prose(line: str) -> str:
+    """Replace code spans, link targets and URLs with a neutral word, so only prose is checked.
+
+    A neutral word, not blanks: blanking would turn "`a`, `b` and `c`" into a comma followed by spaces and "and".
+    """
+    line = re.sub(r"`[^`\n]*`", "code", line)
+    line = re.sub(r"\]\([^)\s]*\)", "]", line)
+    return re.sub(r"https?://\S+", "url", line)
+
+
+def prose_lines(text: str) -> list[tuple[int, str]]:
+    """Masked prose lines of a Markdown file, outside front matter and fenced code blocks."""
+    lines: list[tuple[int, str]] = []
+    fenced = front = False
+    for number, line in enumerate(text.splitlines(), 1):
+        if number == 1 and line.strip() == "---":
+            front = True
+            continue
+        if front:
+            front = line.strip() != "---"
+            continue
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        if not fenced:
+            lines.append((number, mask_prose(line)))
+    return lines
+
+
+def writing_check(articles: list[str]) -> list[Finding]:
+    """Prose in Markdown follows the writing preferences; em dashes are checked in declared article files only.
+
+    The declared data folders hold synthetic fixtures and are skipped; ignored files (data/, local evidence) never reach it.
+    """
+    allowed, findings = read_allowlist(WRITING_ALLOWLIST, list(WRITING_PATTERNS), WRITING_RULE, "why this text is kept as is")
+    for path in sorted(set(git("ls-files", "--cached", "--others", "--exclude-standard").splitlines())):
+        article = any(fnmatch.fnmatch(path, glob) for glob in articles)
+        if not (path.endswith(".md") or article) or path.startswith(DATA_FOLDERS) or not os.path.isfile(path):
+            continue
+        for number, line in prose_lines(Path(path).read_text(errors="replace")):
+            for kind, (description, pattern, fix) in WRITING_PATTERNS.items():
+                if kind in ARTICLE_ONLY and not article:
+                    continue
+                if pattern.search(line) and not any(kind == entry_kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
+                    findings.append(Finding(f"{path}:{number}", description, WRITING_RULE, fix))
+    return findings
+
+
+def warn(findings: list[Finding]) -> int:
+    """Report findings without failing: the warn period before a check blocks."""
+    for finding in findings:
+        sys.stderr.write(f"WARN {finding.location}: {finding.problem}\n  rule: {finding.rule}\n  fix: {finding.fix}\n")
+    return 0
+
+
 def main() -> int:
     """Run the named check and report its findings."""
     checks = ["credential-files", "data-files", "suppressions", "subprocess-imports", "lint-settings", "env-example", "removed-names"]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("check", choices=[*checks, "commit-msg", "commit-range"])
+    parser.add_argument("check", choices=[*checks, "commit-msg", "commit-range", "privacy-scan", "writing-check"])
     parser.add_argument("paths", nargs="*")
+    parser.add_argument("--all", action="store_true", help="privacy-scan: include ignored and hidden files (before publishing)")
+    parser.add_argument("--warn", action="store_true", help="privacy-scan, writing-check: report findings without failing")
+    parser.add_argument("--articles", action="append", default=[], metavar="GLOB", help="writing-check: files that hold article text (em dashes)")
     args = parser.parse_args()
+    if args.check == "writing-check":
+        findings = writing_check(args.articles)
+        return warn(findings) if args.warn else report(findings)
+    if args.check == "privacy-scan":
+        findings, unreviewed = privacy_scan(args.all)
+        for line in unreviewed:
+            sys.stderr.write(f"{line}\n")
+        return warn(findings) if args.warn else report(findings)
     runners: dict[str, Callable[[], list[Finding]]] = {
         "credential-files": lambda: credential_files(args.paths),
         "data-files": lambda: data_files(args.paths),

@@ -1,0 +1,8 @@
+{
+  "python_version": "3.12",
+  "packages": {"jsonschema[format]": "4.26.0"},
+  "install_command": ".venv/bin/python -m pip install 'jsonschema[format]==4.26.0'",
+  "scope": "Git-ignored local acquisition tooling only; not a second dev/prod requirements file.",
+  "snapshot_contract_version": "1.0.0",
+  "snapshot_contract_file_sha256": "24ecc5c4fb70bede2b99e7603ffb7fce4b759b038875843d07598a8bf80d34fc"
+}

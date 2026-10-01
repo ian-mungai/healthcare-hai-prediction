@@ -1,0 +1,30 @@
+{
+  "url": "https://healthit.gov/wp-content/uploads/data/datasets/MU_REPORT.csv",
+  "sha256": "772f8c0140d606e880dbf8a8a64964826d0489560a809d2d5bc4ac225069a831",
+  "bytes": 476153197,
+  "header": [
+    "NPI",
+    "CCN",
+    "Provider_Type",
+    "Business_State_Territory",
+    "ZIP",
+    "Specialty",
+    "Hospital_Type",
+    "Program_Type",
+    "Program_Year",
+    "Provider_Stage_Number",
+    "Payment_Year",
+    "Attestation_Month",
+    "Attestation_Year",
+    "MU_Definition_Year",
+    "Stage_2_Scheduled_2014",
+    "EHR_Certification_Number",
+    "EHR_Product_CHP_Id",
+    "Vendor_Name",
+    "EHR_Product_Name",
+    "EHR_Product_Version",
+    "Product_Classification",
+    "Product_Setting",
+    "Product_Certification_Edition_Yr"
+  ]
+}

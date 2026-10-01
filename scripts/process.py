@@ -13,9 +13,9 @@ import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from subprocess import CompletedProcess, TimeoutExpired
+from subprocess import CompletedProcess, SubprocessError, TimeoutExpired
 
-__all__ = ["CompletedProcess", "TimeoutExpired", "clear_git_environment", "find_program", "run_command"]
+__all__ = ["CompletedProcess", "SubprocessError", "TimeoutExpired", "clear_git_environment", "find_program", "run_command"]
 
 DEFAULT_TIMEOUT_SECONDS = 300
 

@@ -1,0 +1,202 @@
+{
+  "record_version": 1,
+  "status": "approved_collection_complete_closeout_pending_final_verification",
+  "inventory_sha256": "7e97031448c9baf763d5b68f34a9a19c6c060a537e3bfea16f58dd46e89ba54a",
+  "capture_candidates": 2990,
+  "source_ids": 47,
+  "counts_are": "Retained capture candidates, including superseded and audit records; not independent publisher requests or model-eligible observations.",
+  "sources": {
+    "ACS": {
+      "capture_candidates": 439,
+      "unique_snapshot_ids": 439
+    },
+    "ADJ": {
+      "capture_candidates": 5,
+      "unique_snapshot_ids": 5
+    },
+    "BLS": {
+      "capture_candidates": 520,
+      "unique_snapshot_ids": 520
+    },
+    "CA": {
+      "capture_candidates": 181,
+      "unique_snapshot_ids": 181
+    },
+    "CCW-ALGORITHMS": {
+      "capture_candidates": 1,
+      "unique_snapshot_ids": 1
+    },
+    "CHIA": {
+      "capture_candidates": 5,
+      "unique_snapshot_ids": 5
+    },
+    "CMS-MUP-DICTIONARIES": {
+      "capture_candidates": 3,
+      "unique_snapshot_ids": 3
+    },
+    "CMS-MUP-DRG": {
+      "capture_candidates": 12,
+      "unique_snapshot_ids": 12
+    },
+    "CMS_CHOW": {
+      "capture_candidates": 20,
+      "unique_snapshot_ids": 20
+    },
+    "CMS_GV": {
+      "capture_candidates": 3,
+      "unique_snapshot_ids": 3
+    },
+    "CMS_HCRIS_PUF": {
+      "capture_candidates": 14,
+      "unique_snapshot_ids": 14
+    },
+    "CMS_IPPS": {
+      "capture_candidates": 62,
+      "unique_snapshot_ids": 62
+    },
+    "CMS_MEDICARE_PROVIDER": {
+      "capture_candidates": 12,
+      "unique_snapshot_ids": 12
+    },
+    "CMS_OCCMIX": {
+      "capture_candidates": 23,
+      "unique_snapshot_ids": 23
+    },
+    "CMS_OWNERS": {
+      "capture_candidates": 47,
+      "unique_snapshot_ids": 47
+    },
+    "CMS_POS": {
+      "capture_candidates": 39,
+      "unique_snapshot_ids": 39
+    },
+    "ENROLL": {
+      "capture_candidates": 45,
+      "unique_snapshot_ids": 45
+    },
+    "HCAI_FINANCE": {
+      "capture_candidates": 25,
+      "unique_snapshot_ids": 25
+    },
+    "HCAI_UTIL": {
+      "capture_candidates": 8,
+      "unique_snapshot_ids": 8
+    },
+    "HHS": {
+      "capture_candidates": 1,
+      "unique_snapshot_ids": 1
+    },
+    "HPSA": {
+      "capture_candidates": 5,
+      "unique_snapshot_ids": 5
+    },
+    "HRSA": {
+      "capture_candidates": 1,
+      "unique_snapshot_ids": 1
+    },
+    "HSA": {
+      "capture_candidates": 12,
+      "unique_snapshot_ids": 12
+    },
+    "HUD": {
+      "capture_candidates": 64,
+      "unique_snapshot_ids": 64
+    },
+    "IL": {
+      "capture_candidates": 262,
+      "unique_snapshot_ids": 262
+    },
+    "IROQ": {
+      "capture_candidates": 4,
+      "unique_snapshot_ids": 4
+    },
+    "MA": {
+      "capture_candidates": 1,
+      "unique_snapshot_ids": 1
+    },
+    "MARY": {
+      "capture_candidates": 8,
+      "unique_snapshot_ids": 8
+    },
+    "MISS": {
+      "capture_candidates": 2,
+      "unique_snapshot_ids": 2
+    },
+    "MMD": {
+      "capture_candidates": 845,
+      "unique_snapshot_ids": 845
+    },
+    "MUA": {
+      "capture_candidates": 2,
+      "unique_snapshot_ids": 2
+    },
+    "NSI": {
+      "capture_candidates": 1,
+      "unique_snapshot_ids": 1
+    },
+    "NY": {
+      "capture_candidates": 1,
+      "unique_snapshot_ids": 1
+    },
+    "ONC_PI": {
+      "capture_candidates": 2,
+      "unique_snapshot_ids": 2
+    },
+    "PLACES": {
+      "capture_candidates": 6,
+      "unique_snapshot_ids": 6
+    },
+    "PSI13": {
+      "capture_candidates": 1,
+      "unique_snapshot_ids": 1
+    },
+    "PSI90": {
+      "capture_candidates": 1,
+      "unique_snapshot_ids": 1
+    },
+    "RUCA": {
+      "capture_candidates": 11,
+      "unique_snapshot_ids": 11
+    },
+    "RUCC": {
+      "capture_candidates": 9,
+      "unique_snapshot_ids": 9
+    },
+    "SAHIE": {
+      "capture_candidates": 21,
+      "unique_snapshot_ids": 21
+    },
+    "SAIPE": {
+      "capture_candidates": 32,
+      "unique_snapshot_ids": 32
+    },
+    "SVI": {
+      "capture_candidates": 7,
+      "unique_snapshot_ids": 7
+    },
+    "TX": {
+      "capture_candidates": 55,
+      "unique_snapshot_ids": 55
+    },
+    "VT": {
+      "capture_candidates": 77,
+      "unique_snapshot_ids": 77
+    },
+    "WONDER": {
+      "capture_candidates": 6,
+      "unique_snapshot_ids": 6
+    },
+    "main-cmi-ipps": {
+      "capture_candidates": 56,
+      "unique_snapshot_ids": 56
+    },
+    "main-hai-pdc": {
+      "capture_candidates": 33,
+      "unique_snapshot_ids": 33
+    }
+  },
+  "model_eligible": false,
+  "final_redownload_execution_approved": false,
+  "originals_deleted": false,
+  "commit_created": false
+}

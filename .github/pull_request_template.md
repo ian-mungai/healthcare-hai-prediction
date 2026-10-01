@@ -1,4 +1,4 @@
-## What changed
+## What Changed
 
 ## Why
 
@@ -7,15 +7,15 @@
 Include the exact local CI command, result and repeatable E2E artifact link.
 Distinguish synthetic checks, static analysis and live verification.
 
-## Sensitive-data impact
+## Sensitive-Data Impact
 
 Confirm outgoing files contain no personal data, credentials or private deployment identifiers.
 
-## Follow-up cleanup
+## Follow-Up Cleanup
 
-List unresolved holds and obsolete references, or state none.
+List unresolved holds and obsolete references. If there are none, say so.
 
-## Message review
+## Message Review
 
 Use a Conventional Commit title. Remove AI credit and agent-session lines from
 the title and body; human co-authors and factual tool mentions are allowed.

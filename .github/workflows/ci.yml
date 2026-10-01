@@ -24,6 +24,8 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+          # The two acquisition config files over 5 MB are stored with Git LFS (.gitattributes).
+          lfs: true
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
@@ -58,11 +60,13 @@ jobs:
           fi
           .venv/bin/python -m scripts.quality.repo_checks commit-range "$RANGE_START" "$RANGE_END"
 
-      - name: Run credential-free checks
+      # The same hooks as a local commit, at the same pinned versions, with the full manual stage; its local_ci
+      # hook runs scripts/run_ci.sh. Acquisition checks run in their own job below.
+      - name: Run credential-free checks through the pre-commit hooks
         env:
           E2E_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/configuration
           QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
-        run: bash scripts/run_ci.sh
+        run: .venv/bin/pre-commit run --all-files --hook-stage manual --show-diff-on-failure
 
       - name: Retain configuration and quality evidence
         if: ${{ always() }}
@@ -72,5 +76,48 @@ jobs:
           path: |
             data/e2e/configuration/
             data/e2e/quality/
+          if-no-files-found: warn
+          retention-days: 14
+
+  acquisition:
+    name: Acquisition Checks
+    runs-on: ubuntu-latest
+    # Every offline E2E suite runs twice; locally this takes 12-14 minutes.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          lfs: true
+
+      # Collectors resolve the Terraform binary to read bucket outputs; the checks never run it against state.
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: "1.16.1"
+          terraform_wrapper: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install shared dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements.txt
+
+      - name: Run acquisition checks without AWS credentials or collected data
+        run: bash scripts/acquisition/run_checks.sh
+
+      - name: Retain acquisition E2E evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: acquisition_e2e_${{ github.run_id }}_${{ github.run_attempt }}
+          path: data/e2e/acquisition_checks/
           if-no-files-found: warn
           retention-days: 14

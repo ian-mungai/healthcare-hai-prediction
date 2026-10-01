@@ -1,0 +1,6 @@
+# Exceptions to the privacy scan (scripts/quality/repo_checks.py privacy-scan; README.md, Quality Checks).
+# One entry per line: <type> <path glob> -- <why this value is intentionally public>. Entries match by type and path only.
+aws-account infra/iam/tests/policies.tftest.hcl -- synthetic all-ones account IDs in Terraform tests; not the project's account
+aws-account infra/tests/storage.tftest.hcl -- synthetic all-ones account ID in a Terraform test; not the project's account
+aws-account scripts/infrastructure/run_e2e.py -- synthetic all-ones and all-twos account IDs in the infrastructure E2E; not the project's account
+aws-account tests/test_project_config.py -- synthetic all-ones and all-twos account IDs in configuration tests; not the project's account

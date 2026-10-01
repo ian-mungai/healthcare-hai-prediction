@@ -1,0 +1,495 @@
+{
+  "catalogue": "data/acquisition_planning/cms_owners_20260929/cms_catalogue_entries_20260929.json",
+  "dropped_columns": [
+    "FIRST NAME - OWNER",
+    "MIDDLE NAME - OWNER",
+    "LAST NAME - OWNER",
+    "TITLE - OWNER",
+    "ADDRESS LINE 1 - OWNER",
+    "ADDRESS LINE 2 - OWNER",
+    "CITY - OWNER",
+    "ZIP CODE - OWNER"
+  ],
+  "headers": {
+    "v1": [
+      "ENROLLMENT ID",
+      "ASSOCIATE ID",
+      "ORGANIZATION NAME",
+      "ASSOCIATE ID - OWNER",
+      "TYPE - OWNER",
+      "ROLE CODE - OWNER",
+      "ROLE TEXT - OWNER",
+      "ASSOCIATION DATE - OWNER",
+      "FIRST NAME - OWNER",
+      "MIDDLE NAME - OWNER",
+      "LAST NAME - OWNER",
+      "TITLE - OWNER",
+      "ORGANIZATION NAME - OWNER",
+      "DOING BUSINESS AS NAME - OWNER",
+      "ADDRESS LINE 1 - OWNER",
+      "ADDRESS LINE 2 - OWNER",
+      "CITY - OWNER",
+      "STATE - OWNER",
+      "ZIP CODE - OWNER",
+      "PERCENTAGE OWNERSHIP",
+      "CREATED FOR ACQUISITION - OWNER",
+      "CORPORATION - OWNER",
+      "LLC - OWNER",
+      "MEDICAL PROVIDER SUPPLIER - OWNER",
+      "MANAGEMENT SERVICES COMPANY - OWNER",
+      "MEDICAL STAFFING COMPANY - OWNER",
+      "HOLDING COMPANY - OWNER",
+      "INVESTMENT FIRM - OWNER",
+      "FINANCIAL INSTITUTION - OWNER",
+      "CONSULTING FIRM - OWNER",
+      "FOR PROFIT - OWNER",
+      "NON PROFIT - OWNER",
+      "OTHER TYPE - OWNER",
+      "OTHER TYPE TEXT - OWNER"
+    ],
+    "v2": [
+      "ENROLLMENT ID",
+      "ASSOCIATE ID",
+      "ORGANIZATION NAME",
+      "ASSOCIATE ID - OWNER",
+      "TYPE - OWNER",
+      "ROLE CODE - OWNER",
+      "ROLE TEXT - OWNER",
+      "ASSOCIATION DATE - OWNER",
+      "FIRST NAME - OWNER",
+      "MIDDLE NAME - OWNER",
+      "LAST NAME - OWNER",
+      "TITLE - OWNER",
+      "ORGANIZATION NAME - OWNER",
+      "DOING BUSINESS AS NAME - OWNER",
+      "ADDRESS LINE 1 - OWNER",
+      "ADDRESS LINE 2 - OWNER",
+      "CITY - OWNER",
+      "STATE - OWNER",
+      "ZIP CODE - OWNER",
+      "PERCENTAGE OWNERSHIP",
+      "CREATED FOR ACQUISITION - OWNER",
+      "CORPORATION - OWNER",
+      "LLC - OWNER",
+      "MEDICAL PROVIDER SUPPLIER - OWNER",
+      "MANAGEMENT SERVICES COMPANY - OWNER",
+      "MEDICAL STAFFING COMPANY - OWNER",
+      "HOLDING COMPANY - OWNER",
+      "INVESTMENT FIRM - OWNER",
+      "FINANCIAL INSTITUTION - OWNER",
+      "CONSULTING FIRM - OWNER",
+      "FOR PROFIT - OWNER",
+      "NON PROFIT - OWNER",
+      "PRIVATE EQUITY COMPANY - OWNER",
+      "REIT - OWNER",
+      "CHAIN HOME OFFICE - OWNER",
+      "OTHER TYPE - OWNER",
+      "OTHER TYPE TEXT - OWNER",
+      "OWNED BY ANOTHER ORG OR IND - OWNER"
+    ]
+  },
+  "model_eligible": false,
+  "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
+  "releases": [
+    {
+      "id": "36e80182ea31ec3a66af4a62d92eca46509a4a880ef3517040be4affa9814a2b",
+      "layout": "v1",
+      "period_end": "2022-11-30",
+      "period_start": "2022-11-01",
+      "route_id": "CMS_OWNERS:file:044",
+      "title": "Hospital All Owners : 2022-11-14",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/dd3dd911-2895-4622-9220-ab0454df8eb7/Hospital_All_Owners_2022.11.28.csv"
+    },
+    {
+      "id": "e6ba97605c17f0c9a47412be6fbb5c3c502419c4729af5dbe6b3afa1d5b01efe",
+      "layout": "v1",
+      "period_end": "2023-01-31",
+      "period_start": "2023-01-01",
+      "route_id": "CMS_OWNERS:file:043",
+      "title": "Hospital All Owners : 2023-01-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/0692ea5b-6fc1-4aed-8b25-48f5e67b9951/Hospital_All_Owners_2022.12.30.csv"
+    },
+    {
+      "id": "f77da635897b42cf193e302e69350ef454bbbf19dab3dbdb9b061a7d2c903e65",
+      "layout": "v1",
+      "period_end": "2023-02-28",
+      "period_start": "2023-02-01",
+      "route_id": "CMS_OWNERS:file:042",
+      "title": "Hospital All Owners : 2023-02-16",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/5b3d1105-541b-4524-84c6-2a5c77b6bf83/Hospital_All_Owners_2023.02.01.csv"
+    },
+    {
+      "id": "38358e07135c69de7d28e48f749733b12bdc6be32d14cfcd612bd3188b4f725b",
+      "layout": "v1",
+      "period_end": "2023-03-31",
+      "period_start": "2023-03-01",
+      "route_id": "CMS_OWNERS:file:041",
+      "title": "Hospital All Owners : 2023-03-16",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/9c3b32b0-f3eb-4905-8b2b-bd3c32149d60/Hospital_All_Owners_2023.03.10.csv"
+    },
+    {
+      "id": "f40358ff614b9335a11f4734f512e6e1a101002f23f9d7b831960f259255d36a",
+      "layout": "v1",
+      "period_end": "2023-04-30",
+      "period_start": "2023-04-01",
+      "route_id": "CMS_OWNERS:file:040",
+      "title": "Hospital All Owners : 2023-04-15",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/36ab8414-ad9f-4ca4-a5f1-34b5738a20ce/Hospital_All_Owners_2023.03.31.csv"
+    },
+    {
+      "id": "8f69139627d6bd8349da3482f18b08fef23f483c0b4f0f84dbddaa43a4c0efbe",
+      "layout": "v1",
+      "period_end": "2023-05-31",
+      "period_start": "2023-05-01",
+      "route_id": "CMS_OWNERS:file:039",
+      "title": "Hospital All Owners : 2023-05-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/c988f519-bf19-4c6b-96e3-35e5e6666131/Hospital_All_Owners_2023.05.01.csv"
+    },
+    {
+      "id": "d72fcebfd95256f00fae7c0fbb7e18d493e01d48d8d8ff919a02b78a29b5a3ff",
+      "layout": "v1",
+      "period_end": "2023-06-30",
+      "period_start": "2023-06-01",
+      "route_id": "CMS_OWNERS:file:038",
+      "title": "Hospital All Owners : 2023-06-16",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/5fe91c37-8f9f-48eb-bd00-93c76e34e354/Hospital_All_Owners_2023.06.01.csv"
+    },
+    {
+      "id": "72b8c1a78ec27b261be97600972341d53921619879a685fb3cd1d3c6476dab60",
+      "layout": "v1",
+      "period_end": "2023-07-31",
+      "period_start": "2023-07-01",
+      "route_id": "CMS_OWNERS:file:037",
+      "title": "Hospital All Owners : 2023-07-18",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/af9b985f-f4a6-48f3-9f42-3a6ffc650d2d/Hospital_All_Owners_2023.07.06.csv"
+    },
+    {
+      "id": "0b548c5f17b1f80093ee0aaab2eb7759d0a8b0235a20985184524bf54f480251",
+      "layout": "v1",
+      "period_end": "2023-08-31",
+      "period_start": "2023-08-01",
+      "route_id": "CMS_OWNERS:file:036",
+      "title": "Hospital All Owners : 2023-08-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/41999a42-2a9b-4ad0-8a99-8f02950138db/Hospital_All_Owners_2023.08.01.csv"
+    },
+    {
+      "id": "ac716e106bb87de2cb005f25b2e733c9e336eca7bfffe6b8174fffcf1a722510",
+      "layout": "v1",
+      "period_end": "2023-09-30",
+      "period_start": "2023-09-01",
+      "route_id": "CMS_OWNERS:file:035",
+      "title": "Hospital All Owners : 2023-09-16",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/e82ca66d-24bb-4a76-874d-e74262ddb19c/Hospital_All_Owners_2023.09.01.csv"
+    },
+    {
+      "id": "1025b226af52581291f7cceec679a79868ca7d8f3aa5d6d0ca41dbed65bf5afb",
+      "layout": "v1",
+      "period_end": "2023-10-31",
+      "period_start": "2023-10-01",
+      "route_id": "CMS_OWNERS:file:034",
+      "title": "Hospital All Owners : 2023-10-03",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/23276924-dd3e-466a-b594-922929ace424/Hospital_All_Owners_2023.10.02.csv"
+    },
+    {
+      "id": "9092782a71514bb72250b30d2d7490b7273163d518a30131d7d2a2f9e011eb0e",
+      "layout": "v1",
+      "period_end": "2023-11-30",
+      "period_start": "2023-11-01",
+      "route_id": "CMS_OWNERS:file:033",
+      "title": "Hospital All Owners : 2023-11-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/11fd6822-e262-4302-99fe-1a129764ab5c/Hospital_All_Owners_2023.11.01.csv"
+    },
+    {
+      "id": "de31b46fbe9fbffc0355149c022c380ad11968147df58e51572391d55a335b0c",
+      "layout": "v1",
+      "period_end": "2023-12-31",
+      "period_start": "2023-12-01",
+      "route_id": "CMS_OWNERS:file:032",
+      "title": "Hospital All Owners : 2023-12-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/7ab4dda4-f2b9-49ad-9a85-a93c5716b4ab/Hospital_All_Owners_2023.12.01.csv"
+    },
+    {
+      "id": "89f015b156b253616165257c59b87edd5b6df839bbc2ccb3b4ecfb17d24d9b82",
+      "layout": "v1",
+      "period_end": "2024-01-31",
+      "period_start": "2024-01-01",
+      "route_id": "CMS_OWNERS:file:031",
+      "title": "Hospital All Owners : 2024-01-06",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/50e09ee8-eda5-425d-a4e2-fc0cf40d5e0e/Hospital_All_Owners_2024.01.05.csv"
+    },
+    {
+      "id": "cbff605f1ce23f79cc708cdeeec9bed931bf00a592fb95839d97637ddf774c57",
+      "layout": "v1",
+      "period_end": "2024-02-29",
+      "period_start": "2024-02-01",
+      "route_id": "CMS_OWNERS:file:030",
+      "title": "Hospital All Owners : 2024-02-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/c7c18868-5ed1-4fc0-b285-6d9a829c01c5/Hospital_All_Owners_2024.02.01.csv"
+    },
+    {
+      "id": "45b18d32ca48423b06f56525aab7e38cfc06855622975b24ff224a111b7529f2",
+      "layout": "v1",
+      "period_end": "2024-03-31",
+      "period_start": "2024-03-01",
+      "route_id": "CMS_OWNERS:file:029",
+      "title": "Hospital All Owners : 2024-03-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/a09a2f8e-49fd-4523-885f-d07ad86b7faf/Hospital_All_Owners_2024.03.01.csv"
+    },
+    {
+      "id": "aa7d8cdf4a9d2c9c07a1ebaea3d1f23faeb254adbd36ef1238d73b41a707f91c",
+      "layout": "v1",
+      "period_end": "2024-04-30",
+      "period_start": "2024-04-01",
+      "route_id": "CMS_OWNERS:file:028",
+      "title": "Hospital All Owners : 2024-04-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/20ab67ad-9ce4-4f65-9f37-7537d670f641/Hospital_All_Owners_2024.04.01.csv"
+    },
+    {
+      "id": "419cc6f753fdb5c95967552cc8ac2ecc53aca0620fd0b27a8d039926a823abcf",
+      "layout": "v1",
+      "period_end": "2024-05-31",
+      "period_start": "2024-05-01",
+      "route_id": "CMS_OWNERS:file:027",
+      "title": "Hospital All Owners : 2024-05-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/c8196116-d24c-411b-90ba-9518449e6ee7/Hospital_All_Owners_2024.05.01.csv"
+    },
+    {
+      "id": "7fbb30ce77bba0581d1f78b76b700d237838e6851b51d59c878121e126c4e007",
+      "layout": "v1",
+      "period_end": "2024-06-30",
+      "period_start": "2024-06-01",
+      "route_id": "CMS_OWNERS:file:026",
+      "title": "Hospital All Owners : 2024-06-04",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/73e5845e-2076-475a-98d5-464a02921be5/Hospital_All_Owners_2024.06.03.csv"
+    },
+    {
+      "id": "c53be892aa96f07f06dd7d5d991b93eb7479ebff0247d4f5600feee9a695dd19",
+      "layout": "v1",
+      "period_end": "2024-07-31",
+      "period_start": "2024-07-01",
+      "route_id": "CMS_OWNERS:file:025",
+      "title": "Hospital All Owners : 2024-07-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/d687f90b-a628-4869-a9b8-bc4e64562ff8/Hospital_All_Owners_2024.07.01.csv"
+    },
+    {
+      "id": "c03a133b6e4ca64b74b824c62f8814731ae4505e576b2879efbcbfe16711effc",
+      "layout": "v1",
+      "period_end": "2024-08-31",
+      "period_start": "2024-08-01",
+      "route_id": "CMS_OWNERS:file:024",
+      "title": "Hospital All Owners : 2024-08-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/4b9f38f7-c1a8-4f4d-b72a-7a49529afb30/Hospital_All_Owners_2024.08.01.csv"
+    },
+    {
+      "id": "239d33925309f6c44d8ce232c39104703332144b4700136f8cc2ee60fa9b69f9",
+      "layout": "v1",
+      "period_end": "2024-09-30",
+      "period_start": "2024-09-01",
+      "route_id": "CMS_OWNERS:file:023",
+      "title": "Hospital All Owners : 2024-09-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/2ffd7cf3-291f-46e9-8333-deecbc9efe04/Hospital_All_Owners_2024.09.02.csv"
+    },
+    {
+      "id": "812da9d4c2a41059897fb3abf919da206e51f8afde1110c75cff50844e652923",
+      "layout": "v1",
+      "period_end": "2024-10-31",
+      "period_start": "2024-10-01",
+      "route_id": "CMS_OWNERS:file:022",
+      "title": "Hospital All Owners : 2024-10-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/306cbbc2-68e8-4a2c-9a09-7da016240222/Hospital_All_Owners_2024.10.07.csv"
+    },
+    {
+      "id": "ac9bc9657c076e6e445433b9e554bcdd38747996a628a10137e8e811f03eccc3",
+      "layout": "v1",
+      "period_end": "2024-11-30",
+      "period_start": "2024-11-01",
+      "route_id": "CMS_OWNERS:file:021",
+      "title": "Hospital All Owners : 2024-11-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/f9da2ddf-7633-4832-a840-1cce72414daa/Hospital_All_Owners_2024.11.01.csv"
+    },
+    {
+      "id": "20dfe765f6ac580563348a9bf369cf9255bb59d69cced2fa244523253f2f07ad",
+      "layout": "v1",
+      "period_end": "2024-12-31",
+      "period_start": "2024-12-01",
+      "route_id": "CMS_OWNERS:file:020",
+      "title": "Hospital All Owners : 2024-12-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/622827fd-dc44-4f91-b447-9d66325580dd/Hospital_All_Owners_2024.12.05.csv"
+    },
+    {
+      "id": "744c10d0128f72912c6c39169dd9c11d80edbf93b658279337ed22f78b1cc9d7",
+      "layout": "v1",
+      "period_end": "2025-01-31",
+      "period_start": "2025-01-01",
+      "route_id": "CMS_OWNERS:file:019",
+      "title": "Hospital All Owners : 2025-01-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/f12912ed-0e27-4061-ab20-8fd5d8058b29/Hospital_All_Owners_2025.01.02.csv"
+    },
+    {
+      "id": "bd905c5c6b2f8f6a426cb57680253a8257ca930e8d7d3aa9ea3190e0b2318e96",
+      "layout": "v1",
+      "period_end": "2025-02-28",
+      "period_start": "2025-02-01",
+      "route_id": "CMS_OWNERS:file:018",
+      "title": "Hospital All Owners : 2025-02-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/c9fc6765-110b-4ec7-98ab-212c42f5d334/Hospital_All_Owners_2025.02.04.csv"
+    },
+    {
+      "id": "169891906730c7222714390ce9ebd3ba16f0c05065dd0f57a6409027466adf43",
+      "layout": "v1",
+      "period_end": "2025-03-31",
+      "period_start": "2025-03-01",
+      "route_id": "CMS_OWNERS:file:017",
+      "title": "Hospital All Owners : 2025-03-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/3454fb64-6b1e-48ce-ab1e-8a02b737821e/Hospital_All_Owners_2025.02.28.csv"
+    },
+    {
+      "id": "a5083adbf1d44200104ac8b8784ac32b95104f030359da199cd4fd93f16f580c",
+      "layout": "v2",
+      "period_end": "2025-04-30",
+      "period_start": "2025-04-01",
+      "route_id": "CMS_OWNERS:file:016",
+      "title": "Hospital All Owners : 2025-04-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/7ec6bb64-6555-4749-9a5a-fc0268b910dd/Hospital_All_Owners_2025.04.01.csv"
+    },
+    {
+      "id": "1e061298cc5c581ee41938979b7c5a099d4b371b2096c833dcbcdb59aeb8f252",
+      "layout": "v2",
+      "period_end": "2025-05-31",
+      "period_start": "2025-05-01",
+      "route_id": "CMS_OWNERS:file:015",
+      "title": "Hospital All Owners : 2025-05-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/39fe1b6d-9cef-4e07-8ca0-67abd27232e8/Hospital_All_Owners_2025.05.01.csv"
+    },
+    {
+      "id": "25f2dc36ef1d5a8cf97d79f94b60ab6922027c7794e78223de9da82b504d0e29",
+      "layout": "v2",
+      "period_end": "2025-06-30",
+      "period_start": "2025-06-01",
+      "route_id": "CMS_OWNERS:file:014",
+      "title": "Hospital All Owners : 2025-06-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/c4d10279-566e-43cc-8d9b-838507be7f20/Hospital_All_Owners_2025.06.02.csv"
+    },
+    {
+      "id": "fece6d00af9b8d56e272d661694a7b8adf86a961bf5e81d668235355a45e571d",
+      "layout": "v2",
+      "period_end": "2025-07-31",
+      "period_start": "2025-07-01",
+      "route_id": "CMS_OWNERS:file:013",
+      "title": "Hospital All Owners : 2025-07-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/9d8ab79b-5942-4bbe-ac0d-978b1f468109/Hospital_All_Owners_2025.07.01.csv"
+    },
+    {
+      "id": "5c422231e37571d25577285744dd1b5e53cf90eb6f4e79e6b2e53296291f70b5",
+      "layout": "v2",
+      "period_end": "2025-08-31",
+      "period_start": "2025-08-01",
+      "route_id": "CMS_OWNERS:file:012",
+      "title": "Hospital All Owners : 2025-08-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/ad5319e8-f675-467f-af83-b342590a2cd5/Hospital_All_Owners_2025.08.01.csv"
+    },
+    {
+      "id": "d289d244aa6689f67624b21cc916f3b1c7f1e7fe10880441d5e8420500f3844e",
+      "layout": "v2",
+      "period_end": "2025-09-30",
+      "period_start": "2025-09-01",
+      "route_id": "CMS_OWNERS:file:011",
+      "title": "Hospital All Owners : 2025-09-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/4e44758a-8532-457f-a683-40d373a8e78d/Hospital_All_Owners_2025.09.01.csv"
+    },
+    {
+      "id": "5550dcbace4544c4eee4626a319e7b29288e1d54f0e64219f610a284f4284db1",
+      "layout": "v2",
+      "period_end": "2025-10-31",
+      "period_start": "2025-10-01",
+      "route_id": "CMS_OWNERS:file:010",
+      "title": "Hospital All Owners : 2025-10-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/84feec1f-91ed-4ccf-8bef-1f949c021919/Hospital_All_Owners_2025.10.01.csv"
+    },
+    {
+      "id": "c57f2e306ef86dcda288e24659314d5a235911795d9a1b943788f0e6e750de44",
+      "layout": "v2",
+      "period_end": "2025-11-30",
+      "period_start": "2025-11-01",
+      "route_id": "CMS_OWNERS:file:009",
+      "title": "Hospital All Owners : 2025-11-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/82165aa8-3d1f-43c9-921d-574a88199681/Hospital_All_Owners_2025.11.06.csv"
+    },
+    {
+      "id": "a0272aab9b7470cee2b6fb0e8320de5ae8dae411a202d6cb5726869c09441ae9",
+      "layout": "v2",
+      "period_end": "2025-12-31",
+      "period_start": "2025-12-01",
+      "route_id": "CMS_OWNERS:file:008",
+      "title": "Hospital All Owners : 2025-12-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/1105b0d1-ac16-48dc-921d-8f35cfa3334a/Hospital_All_Owners_2025.12.02.csv"
+    },
+    {
+      "id": "fd55458d16c6e1b43b99b0c07a62b5675bf33cc23aa4348b650a69b29ce2bcdd",
+      "layout": "v2",
+      "period_end": "2026-01-31",
+      "period_start": "2026-01-01",
+      "route_id": "CMS_OWNERS:file:007",
+      "title": "Hospital All Owners : 2026-01-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/508521ae-0446-4c26-9c31-bc312f03af9d/Hospital_All_Owners_2026.01.02.csv"
+    },
+    {
+      "id": "46d733906897db1f2b6ec3466c4ddafd85d776913c02c8a75615b52507bbbebd",
+      "layout": "v2",
+      "period_end": "2026-02-28",
+      "period_start": "2026-02-01",
+      "route_id": "CMS_OWNERS:file:006",
+      "title": "Hospital All Owners : 2026-02-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/a25dc95f-df44-45e8-a105-d617c26fd36a/Hospital_All_Owners_2026.02.02.csv"
+    },
+    {
+      "id": "61cda5361bab5d54814b0ae7665067c17df9a9c7e021894bcd2ae62eb8d1ad23",
+      "layout": "v2",
+      "period_end": "2026-03-31",
+      "period_start": "2026-03-01",
+      "route_id": "CMS_OWNERS:file:005",
+      "title": "Hospital All Owners : 2026-03-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/501d5b09-e9c1-4874-8279-f2b0f1da4fe7/Hospital_All_Owners_2026.03.02.csv"
+    },
+    {
+      "id": "15423d3e55761a037046c9cd804d8b681332a90bb918d8c7c8b1be5b2767068e",
+      "layout": "v2",
+      "period_end": "2026-04-30",
+      "period_start": "2026-04-01",
+      "route_id": "CMS_OWNERS:file:004",
+      "title": "Hospital All Owners : 2026-04-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/98732b60-a59f-4d04-a4e3-14c32f64a2e1/Hospital_All_Owners_2026.04.01.csv"
+    },
+    {
+      "id": "9e691ff63dfb592186ec0ecaac8d05461f2545aa8c5d3df7e68f6fe11775b498",
+      "layout": "v2",
+      "period_end": "2026-05-31",
+      "period_start": "2026-05-01",
+      "route_id": "CMS_OWNERS:file:003",
+      "title": "Hospital All Owners : 2026-05-02",
+      "url": "https://data.cms.gov/sites/default/files/2026-06/ee0d12b8-db65-45d1-a6b6-eaff99d5d73d/Hospital_All_Owners_2026.05.01.csv"
+    },
+    {
+      "id": "89e4478ab19a1ef23386f6c2c70b15239d7266ad7e291010758b59fcbe203977",
+      "layout": "v2",
+      "period_end": "2026-07-31",
+      "period_start": "2026-07-01",
+      "route_id": "CMS_OWNERS:file:002",
+      "title": "Hospital All Owners : 2026-07-01",
+      "url": "https://data.cms.gov/sites/default/files/2026-07/b35ffb60-ebc4-4220-ad72-ce783d56d1a4/Hospital_All_Owners_2026.07.17.csv"
+    },
+    {
+      "id": "ebefb491b773ebc2790fbed39ccabf4b56ca4590bc3ae782eb6c48507f6158ef",
+      "layout": "v2",
+      "period_end": "2026-08-31",
+      "period_start": "2026-08-01",
+      "route_id": "CMS_OWNERS:file:001",
+      "title": "Hospital All Owners : 2026-08-01",
+      "url": "https://data.cms.gov/sites/default/files/2026-08/c07d8f27-bd6c-409b-b0f5-958c71923ce9/Hospital_All_Owners_2026.07.31.csv"
+    }
+  ],
+  "replacement": "[REDACTED]",
+  "scope": "User decisions 2026-09-29: all 44 releases; organisation owner rows only to S3; each original stays on this Mac only.",
+  "source_id": "CMS_OWNERS",
+  "version": 1
+}

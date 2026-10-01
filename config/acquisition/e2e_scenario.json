@@ -1,0 +1,8 @@
+{
+  "batch_plan": "config/acquisition/planning_v1/bounded_batch_v1.json",
+  "csv_job_id": "CMS_HCRIS_PUF_file_001",
+  "csv_baseline_receipt": "data/acquisition_batches/090f97e9566a9b787380e73fab651a4f10eaacbf6f9e407360874bdc4eb64598/jobs/CMS_HCRIS_PUF_file_001/captures/CMS_HCRIS_PUF/CMS_HCRIS_PUF__20260924T040326Z__4f7f76919ef24d92b4ec7493bdee121f/receipt.json",
+  "archive_plan": "config/acquisition/first_hai_capture.json",
+  "archive_references": "config/acquisition/first_hai_references.json",
+  "archive_baseline_receipt": "data/snapshots/main-hai-pdc/main-hai-pdc__20260924T014728Z__5163f5b17a2d48758489f3c78c19dd55/receipt.json"
+}

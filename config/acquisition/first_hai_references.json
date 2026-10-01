@@ -1,0 +1,25 @@
+{
+  "references": [
+    {
+      "artifact_id": "artifact_0001",
+      "member": "hospitals_2026-08-13/HOSPITAL_Data_Dictionary.pdf",
+      "file_name": "HOSPITAL_Data_Dictionary.pdf",
+      "role": "dictionary",
+      "format": "pdf"
+    },
+    {
+      "artifact_id": "artifact_0001",
+      "member": "hospitals_2026-08-13/y9us-9xdf_2025-09-18_Footnote_Crosswalk.csv",
+      "file_name": "y9us-9xdf_2025-09-18_Footnote_Crosswalk.csv",
+      "role": "layout",
+      "format": "csv"
+    },
+    {
+      "artifact_id": "artifact_0001",
+      "member": "hospitals_2026-08-13/manifest.json",
+      "file_name": "publisher_manifest.json",
+      "role": "manifest",
+      "format": "json"
+    }
+  ]
+}

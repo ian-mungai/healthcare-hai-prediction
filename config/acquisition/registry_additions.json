@@ -1,0 +1,89 @@
+{
+  "additions_version": 1,
+  "base_registry_sha256": "dbd6fa964a6001861f9701f6d2c785eccabb3ba314e586f860a462ab651bcad3",
+  "measure_controls": [
+    {
+      "approval": {
+        "decided_by": "user",
+        "decided_on": "2026-09-25",
+        "decision": "Add Alcohol Use Disorders and Drug Use Disorders to the registry and the MMD work list.",
+        "recorded_in": ".agent_handoff/current.md, Decisions"
+      },
+      "collection": "user_additions",
+      "gate_status": "not_run",
+      "id": "C258.80",
+      "mandatory_resolution": "Resolve the complete canonical record and earlier_review_links before closing its gates; any explicit exclusion/hold overrides generic source eligibility.",
+      "parent_id": "C258",
+      "preserved_controls": {
+        "current_exact_field": "MMD condition=136 (Alcohol Use Disorders), measure=v (Prevalence), population f (Medicare Fee For Service), domain d5 (Behavioral health conditions). Numeric output field, denominator bands, suppression and release-specific algorithm unverified.",
+        "current_remaining_checks": [
+          "Menu label observed only: 2023 FFS Prevalence, domain Behavioral health conditions, on 2026-09-25. No numeric row, algorithm or history reviewed.",
+          "Resolve condition=136 against the applicable CCW algorithm version: diagnosis/procedure codes, required claim counts, lookback and continuous-enrollment rules are not established by the menu label.",
+          "Preserve numerator as distinct eligible beneficiaries meeting this particular definition; denominator, crude/standardized status, suppression and public output field must be verified for each selected year. Predictive usefulness: Untested.",
+          "Record which years the menu offers this condition before treating any missing year as a gap."
+        ],
+        "current_review_decision": "hold_definition",
+        "evidence_urls": [
+          "https://data.cms.gov/mmd-population/map.html",
+          "https://www.cms.gov/about-cms/agency-information/omh/downloads/mapping-technical-documentation.pdf"
+        ],
+        "menu_observation": {
+          "condition_code": "136",
+          "domain": "Behavioral health conditions",
+          "geography": "County",
+          "label": "Alcohol Use Disorders",
+          "measure": "Prevalence",
+          "observed_on": "2026-09-25",
+          "population": "Medicare Fee For Service",
+          "url": "https://data.cms.gov/mmd-population/map.html",
+          "year": "2023"
+        }
+      },
+      "source_ids": [
+        "MMD"
+      ]
+    },
+    {
+      "approval": {
+        "decided_by": "user",
+        "decided_on": "2026-09-25",
+        "decision": "Add Alcohol Use Disorders and Drug Use Disorders to the registry and the MMD work list.",
+        "recorded_in": ".agent_handoff/current.md, Decisions"
+      },
+      "collection": "user_additions",
+      "gate_status": "not_run",
+      "id": "C258.81",
+      "mandatory_resolution": "Resolve the complete canonical record and earlier_review_links before closing its gates; any explicit exclusion/hold overrides generic source eligibility.",
+      "parent_id": "C258",
+      "preserved_controls": {
+        "current_exact_field": "MMD condition=137 (Drug Use Disorders), measure=v (Prevalence), population f (Medicare Fee For Service), domain d5 (Behavioral health conditions). Numeric output field, denominator bands, suppression and release-specific algorithm unverified.",
+        "current_remaining_checks": [
+          "Menu label observed only: 2023 FFS Prevalence, domain Behavioral health conditions, on 2026-09-25. No numeric row, algorithm or history reviewed.",
+          "Resolve condition=137 against the applicable CCW algorithm version: diagnosis/procedure codes, required claim counts, lookback and continuous-enrollment rules are not established by the menu label.",
+          "Preserve numerator as distinct eligible beneficiaries meeting this particular definition; denominator, crude/standardized status, suppression and public output field must be verified for each selected year. Predictive usefulness: Untested.",
+          "Record which years the menu offers this condition before treating any missing year as a gap."
+        ],
+        "current_review_decision": "hold_definition",
+        "evidence_urls": [
+          "https://data.cms.gov/mmd-population/map.html",
+          "https://www.cms.gov/about-cms/agency-information/omh/downloads/mapping-technical-documentation.pdf"
+        ],
+        "menu_observation": {
+          "condition_code": "137",
+          "domain": "Behavioral health conditions",
+          "geography": "County",
+          "label": "Drug Use Disorders",
+          "measure": "Prevalence",
+          "observed_on": "2026-09-25",
+          "population": "Medicare Fee For Service",
+          "url": "https://data.cms.gov/mmd-population/map.html",
+          "year": "2023"
+        }
+      },
+      "source_ids": [
+        "MMD"
+      ]
+    }
+  ],
+  "policy": "Append-only, dated, user-approved measure additions. The base registry stays byte-identical so recorded plan and receipt lineage remains valid. Additions never clear gates or holds and never approve a measure for modeling."
+}

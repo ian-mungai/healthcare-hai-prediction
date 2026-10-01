@@ -1,0 +1,43 @@
+{
+  "source_id": "main-hai-pdc",
+  "mode": "file",
+  "route_id": "main-hai-pdc:file:002",
+  "expected_format": "zip",
+  "file_name": "hospitals_2026-08-13.zip",
+  "role": "data",
+  "publisher": "Centers for Medicare & Medicaid Services",
+  "scope": "Complete published hospital archive, retained unchanged. Selected HAI scope: hospitals_2026-08-13/77hc-ibv8_2026-07-22_Healthcare_Associated_Infections-Hospital.csv. Measurement dates below apply only to that member, not every table in the shared archive. Bundled dictionary, footnote crosswalk and publisher manifest are reference evidence, not predictors. Other tables remain unreviewed for reuse.",
+  "expected_sha256": "0a4a8507cab940dbc49b248892f24391a822c7f0c4776cf4e37dddcc48862d77",
+  "release": {
+    "publisher_release_label": "CMS hospitals archive 2026-08-13",
+    "release_date": "2026-08-13",
+    "dataset_version": null,
+    "publisher_updated_at": null,
+    "revision_status": "unknown",
+    "advertised_history": null,
+    "observed_history": "Prior bounded review observed HAI start/end fields 2024-10-01 through 2025-09-30. Fresh byte hash must match the reviewed archive; comprehensive metadata review remains pending."
+  },
+  "measurement_periods": [
+    {
+      "label": "Selected hospital HAI member only: 2024-10-01 through 2025-09-30",
+      "start_date": "2024-10-01",
+      "end_date": "2025-09-30",
+      "period_type": "rolling_window",
+      "source_basis": "field_observed",
+      "target_alignment": "unknown"
+    }
+  ],
+  "governance": {
+    "access_class": "public",
+    "license_or_terms_url": null,
+    "use_restrictions": [
+      "Official publicly downloadable hospital-level aggregate release; no patient records or personal identifiers are intended. Facility addresses and telephone numbers are organizational contact fields.",
+      "No clinical eligibility or reuse approval is granted to other archive tables. Preserve source attribution, suppression, footnotes and every pending registry check.",
+      "Transport and byte integrity only; comprehensive schema, metadata, privacy-field and measure review remains pending."
+    ],
+    "credentials_required": false,
+    "credential_reference": null,
+    "contains_phi": false,
+    "contains_pii": false
+  }
+}

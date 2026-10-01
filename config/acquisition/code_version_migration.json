@@ -1,0 +1,51 @@
+{
+  "record_version": 1,
+  "before_source": "retained clean verification snapshot captured before typed conversion",
+  "files": [
+    {
+      "file": "bls_api_code_versions.json",
+      "versions": 15,
+      "original_normalized_sha256": "7b9849f1fe1609db02e3490af18b3370a279ed8f16dc4c4ba7efbaa4614bf834"
+    },
+    {
+      "file": "census_acs_api_code_versions.json",
+      "versions": 13,
+      "original_normalized_sha256": "e4a64344adccb66e457b9ecffe361f6b86840b121095091884d9fe37ea5c11d7"
+    },
+    {
+      "file": "census_acs_detailed_code_versions.json",
+      "versions": 1,
+      "original_normalized_sha256": "3d564e276bb7062c0941c4b162aa92e53341fe39e0dd0e94f6043e5ab1764e79"
+    },
+    {
+      "file": "cms_owners_code_versions.json",
+      "versions": 4,
+      "original_normalized_sha256": "7177f83044fe6947db02ef97ed156f779e02b9ca9395844a010dfd1c6b7cf7f0"
+    },
+    {
+      "file": "hcai_util_code_versions.json",
+      "versions": 3,
+      "original_normalized_sha256": "95d87c2b13943dc029a7f3837b70c058e0144b3b59440e4d8fb720474bc52d6a"
+    },
+    {
+      "file": "hud_api_code_versions.json",
+      "versions": 13,
+      "original_normalized_sha256": "44685dc913011eb6d05d7dc867c8288215c081a526e0e1120dcf24258d031c32"
+    },
+    {
+      "file": "mmd_api_code_versions.json",
+      "versions": 13,
+      "original_normalized_sha256": "ecbbe2d9411edd62b67a13d674e80ca814aa0f8eee360e4262546a524f3a747f"
+    },
+    {
+      "file": "onc_mu_code_versions.json",
+      "versions": 2,
+      "original_normalized_sha256": "04a002a5620c24947cb7ab0fb8425cffe2f92af75ff931d48f27274d0961183a"
+    },
+    {
+      "file": "wonder_export_code_versions.json",
+      "versions": 5,
+      "original_normalized_sha256": "d270a5ec6e3bad8763e720b80674bc8e8e4e78304438c17710472bf5697c998a"
+    }
+  ]
+}

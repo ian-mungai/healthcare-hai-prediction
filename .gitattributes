@@ -1,0 +1,2 @@
+config/acquisition/planning_v1/acquisition_plans_v1.json filter=lfs diff=lfs merge=lfs -text
+config/acquisition/source_registry.json filter=lfs diff=lfs merge=lfs -text

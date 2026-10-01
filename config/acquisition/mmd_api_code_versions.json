@@ -1,0 +1,545 @@
+{
+  "decision": "User chose on 2026-09-25 to keep finished MMD API captures valid through a list of reviewed collector code versions. List a version only after its E2E passes.",
+  "versions": [
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "3693d8d85e7558d3ad5f9ee80ad9e91e356892a390cf9455473ec70565d8055a"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "4335631b11b9ec02a3b37383ccc0cf6a37473314be0f4fea17e51fd247adbeaf"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "e17ab9c9d6158500c55b8e0ffb749d3453b968c641df8248fa1672148ccbd2d6"
+        }
+      ],
+      "evidence": [
+        "data/e2e/mmd_api_collection/20260925/offline_reviewed.json",
+        "data/e2e/mmd_api_collection/20260925/pilot_live_replay.json"
+      ],
+      "reason": "Approved pilot collector; independent review, offline E2E and live pilot replay passed. Produced C258.07 2019-2023.",
+      "reviewed_on": "2026-09-25",
+      "version": 1
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "7bdb9aded1307bcb16b9169706da9fb77779084e0d03bdaf99b5d44c378573fe"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "ef9de436c2011e75ce3f68d1150a8a8f17640e2e7f08bf20844703f9cf284f64"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "e17ab9c9d6158500c55b8e0ffb749d3453b968c641df8248fa1672148ccbd2d6"
+        }
+      ],
+      "evidence": [
+        "data/e2e/mmd_api_collection/20260925/failure_modes_fips_code_versions.md",
+        "data/e2e/mmd_api_collection/20260925/e2e_fips_versions_before_rule_2.json",
+        "data/e2e/mmd_api_collection/20260925/e2e_fips_versions_run1.json",
+        "data/e2e/mmd_api_collection/20260925/e2e_fips_versions_run2.json"
+      ],
+      "reason": "County FIPS accepted with 4 or 5 digits as published (CMS drops the leading zero for state codes 01-09 in 2012-2018); duplicates checked after zero-padding; reviewed-version reuse check. User approved applying the proposed rule.",
+      "reviewed_on": "2026-09-25",
+      "version": 2
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "7bdb9aded1307bcb16b9169706da9fb77779084e0d03bdaf99b5d44c378573fe"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "34f4334c2f05c0f9e3e70ce4eaeb46df826025a66347a7b882427b272b4a9fab"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "e17ab9c9d6158500c55b8e0ffb749d3453b968c641df8248fa1672148ccbd2d6"
+        }
+      ],
+      "evidence": [
+        "data/e2e/mmd_api_collection/20260926/failure_modes_unknown_county_990.md",
+        "data/e2e/mmd_api_collection/20260926/e2e_unknown_county_run1.json",
+        "data/e2e/mmd_api_collection/20260926/e2e_unknown_county_run2.json"
+      ],
+      "reason": "Accept county codes ending in 990 (state code + 990, county unknown) with a blank county name when the state is known; other unnamed codes still stop. User approved accepting all 990 codes.",
+      "reviewed_on": "2026-09-26",
+      "version": 3
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "5f36e30088804f0eec33e79c5fc041bc2736b51d956d13bc1ad09d63db159383"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "4d5b600907a831f647637247313cb01be0e77e6ef0d0a184a9d666dc72e0348b"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "e17ab9c9d6158500c55b8e0ffb749d3453b968c641df8248fa1672148ccbd2d6"
+        }
+      ],
+      "evidence": [
+        "data/e2e/mmd_api_collection/20260926/failure_modes_additions_plan.md",
+        "data/e2e/mmd_api_collection/20260926/e2e_additions_run1.json",
+        "data/e2e/mmd_api_collection/20260926/e2e_additions_run2.json"
+      ],
+      "reason": "Second hash-locked plan for user-added C258.80/C258.81 (2021-2023), bound to the registry additions lock; captures record their authorizing plan hash. User instruction Sep 26 2026.",
+      "reviewed_on": "2026-09-26",
+      "version": 4
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "b0ad463eb6d7471dfcad7d77d3fdd3cf0aa519693b4886f57942b402eec32c58"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "4d5b600907a831f647637247313cb01be0e77e6ef0d0a184a9d666dc72e0348b"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "e17ab9c9d6158500c55b8e0ffb749d3453b968c641df8248fa1672148ccbd2d6"
+        }
+      ],
+      "evidence": [
+        "data/e2e/mmd_api_collection/20260926/failure_modes_finished_years_and_retries.md",
+        "data/e2e/mmd_api_collection/20260926/e2e_v5_run1.json",
+        "data/e2e/mmd_api_collection/20260926/e2e_v5_run2.json"
+      ],
+      "reason": "Finished years are re-verified and returned without new files, requests or uploads; reviewed-code gate also guards uploads. Queue runner (not hashed) retries transient network failures up to 3 attempts. User instruction Sep 26 2026.",
+      "reviewed_on": "2026-09-26",
+      "version": 5
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "b0ad463eb6d7471dfcad7d77d3fdd3cf0aa519693b4886f57942b402eec32c58"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "4d5b600907a831f647637247313cb01be0e77e6ef0d0a184a9d666dc72e0348b"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "9ab134053db7b632db1f0a5a4d50f8c0fb7e4a50eef891987a785e0298123b84"
+        }
+      ],
+      "evidence": [
+        "data/e2e/bls_api_collection/2026_09_26/mmd_regression_run1.json",
+        "data/e2e/bls_api_collection/2026_09_26/mmd_regression_run2.json"
+      ],
+      "reason": "Add separately validated BLS v2 storage dispatch; MMD capture and contract unchanged. Existing versions retained.",
+      "reviewed_on": "2026-09-26",
+      "version": 6
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "b0ad463eb6d7471dfcad7d77d3fdd3cf0aa519693b4886f57942b402eec32c58"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "4d5b600907a831f647637247313cb01be0e77e6ef0d0a184a9d666dc72e0348b"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "01772979ab1767a322559d488709622bc6fa557e36c92044177ba36e031e8ae9"
+        }
+      ],
+      "evidence": [
+        "data/e2e/census_acs_api/20260926/review_fix_run1.json",
+        "data/e2e/census_acs_api/20260926/review_fix_run2.json",
+        "data/e2e/census_acs_api/20260926/bls_review_fix_run1.json",
+        "data/e2e/census_acs_api/20260926/bls_review_fix_run2.json",
+        "data/e2e/census_acs_api/20260926/mmd_regression_run1.json",
+        "data/e2e/census_acs_api/20260926/mmd_regression_run2.json"
+      ],
+      "reason": "Add independently reviewed Census storage dispatch; MMD capture/contract unchanged; existing versions retained.",
+      "review": "data/e2e/census_acs_api/20260926/independent_review.json",
+      "reviewed_on": "2026-09-26",
+      "version": 7
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "b0ad463eb6d7471dfcad7d77d3fdd3cf0aa519693b4886f57942b402eec32c58"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "4d5b600907a831f647637247313cb01be0e77e6ef0d0a184a9d666dc72e0348b"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "ca6e757b4d5751ad408c09e490fd60b1f828154f8745c03b816d2bbb12ad7d42"
+        }
+      ],
+      "evidence": [
+        "data/e2e/hud_api/20260928/gate_run3.json",
+        "data/e2e/hud_api/20260928/gate_run4.json",
+        "data/e2e/hud_api/20260928/bls_regression_run1.json",
+        "data/e2e/hud_api/20260928/bls_regression_run2.json",
+        "data/e2e/hud_api/20260928/census_regression_run1.json",
+        "data/e2e/hud_api/20260928/census_regression_run2.json",
+        "data/e2e/hud_api/20260928/mmd_regression_run1.json",
+        "data/e2e/hud_api/20260928/mmd_regression_run2.json"
+      ],
+      "reason": "storage_controls gains hud_api dispatch; MMD capture/contract unchanged, existing versions retained. Offline regressions passed twice.",
+      "review": "data/e2e/hud_api/20260928/gate_self_review.json",
+      "reviewed_on": "2026-09-28",
+      "version": 8
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "b0ad463eb6d7471dfcad7d77d3fdd3cf0aa519693b4886f57942b402eec32c58"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "4d5b600907a831f647637247313cb01be0e77e6ef0d0a184a9d666dc72e0348b"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "ccb97626479352a0d8e76a21497b27e0279207234cbfc5bdf849fccf7228c0ef"
+        }
+      ],
+      "evidence": [
+        "data/e2e/hud_xlsx/20260928/hud_xlsx_run1.json",
+        "data/e2e/hud_xlsx/20260928/hud_xlsx_run2.json",
+        "data/e2e/hud_xlsx/20260928/hud_api_regression_run1.json",
+        "data/e2e/hud_xlsx/20260928/hud_api_regression_run2.json",
+        "data/e2e/hud_xlsx/20260928/bls_api_regression_run1.json",
+        "data/e2e/hud_xlsx/20260928/bls_api_regression_run2.json",
+        "data/e2e/hud_xlsx/20260928/census_acs_api_regression_run1.json",
+        "data/e2e/hud_xlsx/20260928/census_acs_api_regression_run2.json",
+        "data/e2e/hud_xlsx/20260928/mmd_api_regression_run1.json",
+        "data/e2e/hud_xlsx/20260928/mmd_api_regression_run2.json"
+      ],
+      "reason": "storage_controls gains hud_xlsx dispatch; MMD capture/contract unchanged, existing versions retained. Offline regressions passed twice.",
+      "review": "data/e2e/hud_xlsx/20260928/self_review.json",
+      "reviewed_on": "2026-09-28",
+      "version": 9
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "b0ad463eb6d7471dfcad7d77d3fdd3cf0aa519693b4886f57942b402eec32c58"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "4d5b600907a831f647637247313cb01be0e77e6ef0d0a184a9d666dc72e0348b"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "1919f3de6e24652dda79e61af82987751766635871bb24daf531ea845b3ecfbc"
+        }
+      ],
+      "evidence": [
+        "data/e2e/wonder_export/20260928/wonder_export_run1.json",
+        "data/e2e/wonder_export/20260928/wonder_export_run2.json",
+        "data/e2e/wonder_export/20260928/hud_xlsx_regression_run1.json",
+        "data/e2e/wonder_export/20260928/hud_xlsx_regression_run2.json",
+        "data/e2e/wonder_export/20260928/hud_api_regression_run1.json",
+        "data/e2e/wonder_export/20260928/hud_api_regression_run2.json",
+        "data/e2e/wonder_export/20260928/bls_api_regression_run1.json",
+        "data/e2e/wonder_export/20260928/bls_api_regression_run2.json",
+        "data/e2e/wonder_export/20260928/census_acs_api_regression_run1.json",
+        "data/e2e/wonder_export/20260928/census_acs_api_regression_run2.json",
+        "data/e2e/wonder_export/20260928/mmd_api_regression_run1.json",
+        "data/e2e/wonder_export/20260928/mmd_api_regression_run2.json"
+      ],
+      "reason": "storage_controls gains wonder_export dispatch; MMD capture/contract unchanged, existing versions retained.",
+      "review": "data/e2e/wonder_export/20260928/self_review.json",
+      "reviewed_on": "2026-09-28",
+      "version": 10
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "b0ad463eb6d7471dfcad7d77d3fdd3cf0aa519693b4886f57942b402eec32c58"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "4d5b600907a831f647637247313cb01be0e77e6ef0d0a184a9d666dc72e0348b"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "ea62c6939f223f74c5be104ce968e2947c0072b289dd66df48bf798cf4fd785e"
+        }
+      ],
+      "evidence": [
+        "data/e2e/cms_owners/20260929/cms_owners_run1.json",
+        "data/e2e/cms_owners/20260929/cms_owners_run2.json",
+        "data/e2e/cms_owners/20260929/hud_xlsx_regression_run1.json",
+        "data/e2e/cms_owners/20260929/hud_xlsx_regression_run2.json",
+        "data/e2e/cms_owners/20260929/hud_api_regression_run1.json",
+        "data/e2e/cms_owners/20260929/hud_api_regression_run2.json",
+        "data/e2e/cms_owners/20260929/bls_api_regression_run1.json",
+        "data/e2e/cms_owners/20260929/bls_api_regression_run2.json",
+        "data/e2e/cms_owners/20260929/census_acs_api_regression_run1.json",
+        "data/e2e/cms_owners/20260929/census_acs_api_regression_run2.json",
+        "data/e2e/cms_owners/20260929/mmd_api_regression_run1.json",
+        "data/e2e/cms_owners/20260929/mmd_api_regression_run2.json",
+        "data/e2e/cms_owners/20260929/wonder_export_regression_run1.json",
+        "data/e2e/cms_owners/20260929/wonder_export_regression_run2.json"
+      ],
+      "reason": "storage_controls gains cms_owners_org dispatch; MMD capture/contract unchanged, existing versions retained.",
+      "review": "data/e2e/cms_owners/20260929/self_review.json",
+      "reviewed_on": "2026-09-29",
+      "version": 11
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "b0ad463eb6d7471dfcad7d77d3fdd3cf0aa519693b4886f57942b402eec32c58"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "4d5b600907a831f647637247313cb01be0e77e6ef0d0a184a9d666dc72e0348b"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "c59d3bdc6fbbf163d0167ebe48914505d509adad144b50aaba13c9710ef7276e"
+        }
+      ],
+      "evidence": [
+        "data/e2e/hcai_util/20260929/hcai_util_run1.json",
+        "data/e2e/hcai_util/20260929/hcai_util_run2.json",
+        "data/e2e/hcai_util/20260929/cms_owners_regression_run1.json",
+        "data/e2e/hcai_util/20260929/cms_owners_regression_run2.json",
+        "data/e2e/hcai_util/20260929/hud_xlsx_regression_run1.json",
+        "data/e2e/hcai_util/20260929/hud_xlsx_regression_run2.json",
+        "data/e2e/hcai_util/20260929/hud_api_regression_run1.json",
+        "data/e2e/hcai_util/20260929/hud_api_regression_run2.json",
+        "data/e2e/hcai_util/20260929/bls_api_regression_run1.json",
+        "data/e2e/hcai_util/20260929/bls_api_regression_run2.json",
+        "data/e2e/hcai_util/20260929/census_acs_api_regression_run1.json",
+        "data/e2e/hcai_util/20260929/census_acs_api_regression_run2.json",
+        "data/e2e/hcai_util/20260929/mmd_api_regression_run1.json",
+        "data/e2e/hcai_util/20260929/mmd_api_regression_run2.json",
+        "data/e2e/hcai_util/20260929/wonder_export_regression_run1.json",
+        "data/e2e/hcai_util/20260929/wonder_export_regression_run2.json"
+      ],
+      "reason": "storage_controls gains hcai_util_workbook dispatch; MMD capture/contract unchanged, existing versions retained.",
+      "review": "data/e2e/hcai_util/20260929/self_review.json",
+      "reviewed_on": "2026-09-29",
+      "version": 12
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "b0ad463eb6d7471dfcad7d77d3fdd3cf0aa519693b4886f57942b402eec32c58"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "4d5b600907a831f647637247313cb01be0e77e6ef0d0a184a9d666dc72e0348b"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "036d3ac0e58488a96034d2cc8cebfb773875965054434f33703a2ab669d47570"
+        }
+      ],
+      "evidence": [
+        "data/e2e/onc_mu/20260929/onc_mu_run1.json",
+        "data/e2e/onc_mu/20260929/onc_mu_run2.json",
+        "data/e2e/onc_mu/20260929/census_acs_detailed_regression_run1.json",
+        "data/e2e/onc_mu/20260929/census_acs_detailed_regression_run2.json",
+        "data/e2e/onc_mu/20260929/cms_owners_regression_run1.json",
+        "data/e2e/onc_mu/20260929/cms_owners_regression_run2.json",
+        "data/e2e/onc_mu/20260929/hcai_util_regression_run1.json",
+        "data/e2e/onc_mu/20260929/hcai_util_regression_run2.json",
+        "data/e2e/onc_mu/20260929/hud_xlsx_regression_run1.json",
+        "data/e2e/onc_mu/20260929/hud_xlsx_regression_run2.json",
+        "data/e2e/onc_mu/20260929/hud_api_regression_run1.json",
+        "data/e2e/onc_mu/20260929/hud_api_regression_run2.json",
+        "data/e2e/onc_mu/20260929/bls_api_regression_run1.json",
+        "data/e2e/onc_mu/20260929/bls_api_regression_run2.json",
+        "data/e2e/onc_mu/20260929/census_acs_api_regression_run1.json",
+        "data/e2e/onc_mu/20260929/census_acs_api_regression_run2.json",
+        "data/e2e/onc_mu/20260929/mmd_api_regression_run1.json",
+        "data/e2e/onc_mu/20260929/mmd_api_regression_run2.json",
+        "data/e2e/onc_mu/20260929/wonder_export_regression_run1.json",
+        "data/e2e/onc_mu/20260929/wonder_export_regression_run2.json"
+      ],
+      "reason": "storage_controls gains onc_mu_hospital and census_acs_detailed dispatch; MMD capture/contract unchanged, existing versions retained.",
+      "review": "data/e2e/onc_mu/20260929/self_review.json",
+      "reviewed_on": "2026-09-29",
+      "version": 13
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/code_versions.py",
+          "sha256": "56faf9600a418868f5fcaf2ff7b9cc9396b626323825f7eb47d60fadc9fad687"
+        },
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "09fa5795e944d2761e72469e4039a0248c68091b457c51bfaa81d2329a2aee5d"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "7fa69b5a9f1913e6d9d3c2126d310752b754c6a8b0bd8ef5226fbcca4a0d47db"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "036d3ac0e58488a96034d2cc8cebfb773875965054434f33703a2ab669d47570"
+        }
+      ],
+      "evidence": [
+        ".enjoy-logs/acquisition-checks-closeout-4-20260929.log",
+        "data/e2e/acquisition_checks/20260929T221053Z_34716",
+        "data/acquisition_planning/privacy_cleanup_20260929/security_review.json",
+        "data/acquisition_planning/closeout_20260929/cleanup_result.json"
+      ],
+      "reason": "Collection closeout cleanup changed hashed acquisition modules; behaviour for stored captures preserved, prior versions retained.",
+      "review": "data/e2e/closeout_20260929/code_version_review.json",
+      "reviewed_on": "2026-09-29",
+      "version": 14
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/code_versions.py",
+          "sha256": "56faf9600a418868f5fcaf2ff7b9cc9396b626323825f7eb47d60fadc9fad687"
+        },
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "64645704ce7ac5ee2c34652547b6b9e059fb7faed52e28bbc31c3cf283f1dfa6"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "7fa69b5a9f1913e6d9d3c2126d310752b754c6a8b0bd8ef5226fbcca4a0d47db"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "036d3ac0e58488a96034d2cc8cebfb773875965054434f33703a2ab669d47570"
+        }
+      ],
+      "evidence": [
+        "data/acquisition_planning/full_redownload_20260929/fixes_mmd_run1.json",
+        "data/acquisition_planning/full_redownload_20260929/fixes_mmd_run2.json",
+        ".enjoy-logs/redownload-fixes-acquisition-gate-mmd-20260930.log"
+      ],
+      "reason": "Independent review passed for bounded offline redownload corrections; prior capture versions retained. No live run or model-use approval.",
+      "review": "data/acquisition_planning/full_redownload_20260929/independent_review.json",
+      "review_sha256": "c5fc689c623a25442c315892089bcf2939dd8e0d7bf7253a6606c4eb7796d98b",
+      "reviewed_controls_sha256": "06c29492ba976ee58dbd8abca46c8afb1a8b09ea187ecb731fc6b6ff2ed61fc4",
+      "reviewed_on": "2026-09-30",
+      "version": 15
+    },
+    {
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/code_versions.py",
+          "sha256": "56faf9600a418868f5fcaf2ff7b9cc9396b626323825f7eb47d60fadc9fad687"
+        },
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "64645704ce7ac5ee2c34652547b6b9e059fb7faed52e28bbc31c3cf283f1dfa6"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "ec470eb5d61eb3b3a3b0d8548c58c70b01caa2e85824bf27dee9e56d5d280b09"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "036d3ac0e58488a96034d2cc8cebfb773875965054434f33703a2ab669d47570"
+        }
+      ],
+      "evidence": [
+        "data/e2e/transport_fixed_codes_20261001/harness_final_run1.json",
+        "data/e2e/transport_fixed_codes_20261001/harness_final_run2.json",
+        ".enjoy-logs/transport-fixed-codes-gate-20261001.log",
+        "data/e2e/code_versions_20261001/mmd_e2e_before_listing_run1.json",
+        "data/e2e/code_versions_20261001/mmd_e2e_before_listing_run2.json"
+      ],
+      "reason": "Independent delta reviews of the MMD code-binding fix, fixed-value diagnostics and fixed transport failure codes passed (rereview 4, zero open findings); prior capture versions retained. No live run, run-2 execution or model-use approval.",
+      "review": "data/acquisition_planning/full_redownload_20260929/independent_review_mmd_fix_rereview4.json",
+      "review_sha256": "f872bbc4080d4706061ab02d7def5175df9e074020daa968bb017fcad39ab90f",
+      "reviewed_on": "2026-10-01",
+      "version": 16
+    }
+  ]
+}

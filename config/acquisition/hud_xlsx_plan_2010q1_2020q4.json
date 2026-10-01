@@ -1,0 +1,474 @@
+{
+  "batches": [
+    {
+      "bytes": 1373224,
+      "county_geography": "2000_census",
+      "file_name": "ZIP-COUNTY_032010.xlsx",
+      "id": "5c452632d2cb94d5ae6fb997a81d242963d403018e64a63ae69d4cc5c930c556",
+      "quarter": 1,
+      "sha256": "8117464845e3c6621abaccf6f3b3706242a2282e173f962fc3b4f27889583945",
+      "year": 2010
+    },
+    {
+      "bytes": 1374492,
+      "county_geography": "2000_census",
+      "file_name": "ZIP-COUNTY_062010.xlsx",
+      "id": "d61e4af567121f0503691bc22295cf22f831060aeb15e43b39685dca50555f4a",
+      "quarter": 2,
+      "sha256": "81eb3c61f1cf9d55c7d7558ecf753490d2d8cb8fde9aa375a4ff63128f83bdb3",
+      "year": 2010
+    },
+    {
+      "bytes": 1372162,
+      "county_geography": "2000_census",
+      "file_name": "ZIP-COUNTY_092010.xlsx",
+      "id": "f00337180bcc58f76ad664afdce876fc8adacccf7841b5c689ff5653fdeb7301",
+      "quarter": 3,
+      "sha256": "a35e6a351ffa63a5469963aecc628f1a9e7bfe709a87be83eeb20cee77d2856f",
+      "year": 2010
+    },
+    {
+      "bytes": 1377176,
+      "county_geography": "2000_census",
+      "file_name": "ZIP-COUNTY_122010.xlsx",
+      "id": "4744e4ad1e26c1f631048ff59ae771218ad0a22423f6b32b9fb40b8e22add411",
+      "quarter": 4,
+      "sha256": "2329178ebe65606b005ba8b6d7758957d71eac916b9543208bad9f2dd4388e02",
+      "year": 2010
+    },
+    {
+      "bytes": 1377427,
+      "county_geography": "2000_census",
+      "file_name": "ZIP-COUNTY_032011.xlsx",
+      "id": "89c6effe05950b686fa234cef0f14f20eca35130a8434e78ec729637188542b1",
+      "quarter": 1,
+      "sha256": "fa39b4a50bff865dc9e10be21ef8d2adfe33b68aedfeffd4a7e0f258a88f8882",
+      "year": 2011
+    },
+    {
+      "bytes": 1377485,
+      "county_geography": "2000_census",
+      "file_name": "ZIP-COUNTY_062011.xlsx",
+      "id": "8676a359e3fe2340d48e22bf651f6e05bd63b4cab226febf80446e85f48623f9",
+      "quarter": 2,
+      "sha256": "a64daeaf962f383de4c172cdb1b6130f07182b12a56688bf37b8ee4dc05463e4",
+      "year": 2011
+    },
+    {
+      "bytes": 1377585,
+      "county_geography": "2000_census",
+      "file_name": "ZIP-COUNTY_092011.xlsx",
+      "id": "e8b5dd28f7393238b318aa581f0942db4d3d0e3557a66c52929ea351244e7c90",
+      "quarter": 3,
+      "sha256": "c58a4b600ae1ea8757816b49815294c75367435ce2de4f195c8e9c29546c004d",
+      "year": 2011
+    },
+    {
+      "bytes": 1440622,
+      "county_geography": "2000_census",
+      "file_name": "ZIP-COUNTY_122011.xlsx",
+      "id": "b76251664d48a5c60c22d6e46249ed50d7eb7cf822aabdf46fb312d6d68c0b37",
+      "quarter": 4,
+      "sha256": "c2958d2172400c0f35397bf4595d43f701b59398e137f84216359f7e98d33295",
+      "year": 2011
+    },
+    {
+      "bytes": 1680155,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_032012.xlsx",
+      "id": "018a44840f9cbdd6f243a6b8c199ef2b1b892bc8981441f8a4f678bf19f8a996",
+      "quarter": 1,
+      "sha256": "396c91b69f245e28038dfc64b70a903206172dec670ce4515b8147f2d57ecf82",
+      "year": 2012
+    },
+    {
+      "bytes": 1683939,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_062012.xlsx",
+      "id": "e091d738b1029c54d71b9b2a4f07c9ab92d0ef5ded608df415561fc6f26d11d2",
+      "quarter": 2,
+      "sha256": "ee8a3a74b429214b85282d512ed9f46eaa2974dcf5df567ece2c4a172d0c3a51",
+      "year": 2012
+    },
+    {
+      "bytes": 1684090,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_092012.xlsx",
+      "id": "9aeb026771d066c8726c44e2291437c6b301246bea337342cbaf2170702ffe9a",
+      "quarter": 3,
+      "sha256": "6b63d421b04284add6b32830bff390b01854d0556f0dbe12e26fb506b00a361e",
+      "year": 2012
+    },
+    {
+      "bytes": 1685212,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_122012.xlsx",
+      "id": "5b07f2b7fd9afe00e1a36bee264e1aa7b374c853ee309a95941f690a3ec38c18",
+      "quarter": 4,
+      "sha256": "42d8f610078aa1bb5aaf97afb9c76f75b8dcf84d3a2e34159d53a3bcdd9c2b7e",
+      "year": 2012
+    },
+    {
+      "bytes": 1685580,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_032013.xlsx",
+      "id": "cff61967891899180a4282c442872926a44a9ad27ca8d79fb9952d34de24692c",
+      "quarter": 1,
+      "sha256": "c46b7db14a6adc5de283580c9b929e021dc62db96753b5f6f2400e5c97b44c48",
+      "year": 2013
+    },
+    {
+      "bytes": 1688481,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_062013.xlsx",
+      "id": "563c87cd5476ee5598e18445b3f1f23c2bb99a6d807a2c998ab9f576d3462c5e",
+      "quarter": 2,
+      "sha256": "a9a37dfc6d291a1677580fc617af6e81961251c8b4036f4381e1c0eff2e5d392",
+      "year": 2013
+    },
+    {
+      "bytes": 1728395,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_092013.xlsx",
+      "id": "93107650cf571cec7ffe00f2910d97f409fef51394932f3c3bc96f9aa6cfaf09",
+      "quarter": 3,
+      "sha256": "b33097bbf6734af1a2863ee3d4d3999c29ca4ee117df92cea3c2356c0fc6e9e8",
+      "year": 2013
+    },
+    {
+      "bytes": 1601838,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_122013.xlsx",
+      "id": "6eb775f7cd152ebf5b581a96f17c601a99980682e88f7554001a545658cf4413",
+      "quarter": 4,
+      "sha256": "558692f821d4b7472fb2a2194fa1f8f77ede83811f97d656c175740c0c8c97e3",
+      "year": 2013
+    },
+    {
+      "bytes": 1603278,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_032014.xlsx",
+      "id": "873937b098e59dec58a0dca23add9a8d1740afad65a8e2c08b008a8ce2029c74",
+      "quarter": 1,
+      "sha256": "57d00dd08fc220e4e4e1e0a4350b44a4e68fee088043c8d3bfd676fecab18a3e",
+      "year": 2014
+    },
+    {
+      "bytes": 2804395,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_062014.xlsx",
+      "id": "3f4c19435b6824a869860955961fe82ab7b3bffb6515d46ad1808e4b9086ba33",
+      "quarter": 2,
+      "sha256": "7b797c72dfea34ea5e4ae153d5d6d7edb2ec346110a7a055908bcb20955f717c",
+      "year": 2014
+    },
+    {
+      "bytes": 1689541,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_092014.xlsx",
+      "id": "cb7777aed2095eb78075ba3196c01e2661e507801090ba177358b3db5d71d7c3",
+      "quarter": 3,
+      "sha256": "700ae05e85d8372cf2778756b1b52dfcdc9349b9971e3888d933140f56e33be2",
+      "year": 2014
+    },
+    {
+      "bytes": 1745352,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_122014.xlsx",
+      "id": "13acdea8b05d3be8e74397e193cbd24b7de66c177ef15f89dd2dfcfd3420046b",
+      "quarter": 4,
+      "sha256": "f52af475f5df2e8b0b5762703ce346377d111261f442f01c76cecd3c4e73bfa5",
+      "year": 2014
+    },
+    {
+      "bytes": 1762663,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_032015.xlsx",
+      "id": "6697dc875f59f46f99e66cf87a9afc44292895b4407d804e290ca9a0b8f58e8c",
+      "quarter": 1,
+      "sha256": "52026ec31da4d05a53770172aa672c91616e4356761b1d87e326723088f75b93",
+      "year": 2015
+    },
+    {
+      "bytes": 1765590,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_062015.xlsx",
+      "id": "2b3627c52016f45e6c48d32b638c49ce353581b114c0234ef0cfed5ef8206493",
+      "quarter": 2,
+      "sha256": "44a1655327ecdcdfc7850b85de022ca2b32976849adbbfb87098903a5d104bad",
+      "year": 2015
+    },
+    {
+      "bytes": 1766977,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_092015.xlsx",
+      "id": "39f87705ff1cb7480afe11a5418f942344b6db612775c62b31dd0a092bf5db4a",
+      "quarter": 3,
+      "sha256": "6308d454c37346c6a8d69ea7ce9d1e87104ed39d3b5c487813434cddd57b1d15",
+      "year": 2015
+    },
+    {
+      "bytes": 1767223,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_122015.xlsx",
+      "id": "457caabe6f082af6130b8d4d79218ffcf91778084f5e1878378940251dd635e0",
+      "quarter": 4,
+      "sha256": "9c8b63a0b31c85efc7f9a428d22a58ae993fc36310d01f03efa833625395e005",
+      "year": 2015
+    },
+    {
+      "bytes": 1801065,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_032016.xlsx",
+      "id": "3291354dc5212539c13dd1dac989b030561d32c37a8fe075d2231c851f7e7168",
+      "quarter": 1,
+      "sha256": "1efb8839003bed30678e133f81bdf7a04752d4855c5b7350047eafb50a68d6fb",
+      "year": 2016
+    },
+    {
+      "bytes": 1802249,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_062016.xlsx",
+      "id": "2c84e82b42df7871cfce8689760442faeb2f56f0565ba5b294d86e8d35e7068a",
+      "quarter": 2,
+      "sha256": "e60899c2e77016c9078c55198e1a54a79ad803775d49fac2b18d222074f017de",
+      "year": 2016
+    },
+    {
+      "bytes": 1803233,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_092016.xlsx",
+      "id": "2384e861f2b52593798db99cd66bb22552d1eaa5dedb56d81318db21faff4327",
+      "quarter": 3,
+      "sha256": "4eec7bae5f5222be89b2a3c55e03ce3d27865cc1550a70c9f0b7f3dccbdf865c",
+      "year": 2016
+    },
+    {
+      "bytes": 1804080,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_122016.xlsx",
+      "id": "fb10aba38af5f54e1a126e1368b87b9282a97b47488bbf7c1918402efa38b8e4",
+      "quarter": 4,
+      "sha256": "429b92b809a1a3762637fffcf678cf444d0e35747e2d35704be02a4ea0aff10f",
+      "year": 2016
+    },
+    {
+      "bytes": 1834225,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_032017.xlsx",
+      "id": "8013ebd63e0b15e8b6f73f6570b77ec8b5eef2d9d18faf59144975cfc113f3a6",
+      "quarter": 1,
+      "sha256": "51dcd7a0c1f2b309fe3f4b57c4578100198d30d97cac8d0671bbdd1aeadedc54",
+      "year": 2017
+    },
+    {
+      "bytes": 1835239,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_062017.xlsx",
+      "id": "db201ed3aeea4e64e84d114c0a524840710351fd64e5d7489048bce8a7f1ac58",
+      "quarter": 2,
+      "sha256": "7db50aa7d762f8ce1bcfa542945a85a8e7a26e5f39cff4dc72570b3ac8d7c12f",
+      "year": 2017
+    },
+    {
+      "bytes": 1835144,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_092017.xlsx",
+      "id": "b7253ec3b144a8832b311aa5cdb55cf70725c117cc7aa3494c88c7e85ea00de4",
+      "quarter": 3,
+      "sha256": "45de538a5fae447ef8e464d874a4090d1019b279c66a4ea8d4bb13c7c8deb57c",
+      "year": 2017
+    },
+    {
+      "bytes": 1835600,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_122017.xlsx",
+      "id": "35b18cbd939062781e59a65bf2f4f568c2b649dba64c50ebf816a444bb3aec49",
+      "quarter": 4,
+      "sha256": "0ad6b9407ab0255bfe7eb09ff625686b483b56cb419c93d7023b41149d553e9d",
+      "year": 2017
+    },
+    {
+      "bytes": 1891427,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_032018.xlsx",
+      "id": "06148523bb89b1191910daf7123b072edd9ea5bb30c0f4fb50195c6ee9d00c27",
+      "quarter": 1,
+      "sha256": "60aacaa5adb040819e6e05d5dcd052d6a551fdaaba122d7cae444f8f60494af9",
+      "year": 2018
+    },
+    {
+      "bytes": 1893613,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_062018.xlsx",
+      "id": "e9650c319ba89604a78228403b944473798c044e2e89db86b27c21191b49655a",
+      "quarter": 2,
+      "sha256": "85cc582b563e47d02f5be83507a39873a4e9c1b60e665d1e133c952c5b297dcc",
+      "year": 2018
+    },
+    {
+      "bytes": 1893532,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_092018.xlsx",
+      "id": "0e037e0026306c51e041d982ed0e87219ff1979d9c83c70908378cdd8aac79cb",
+      "quarter": 3,
+      "sha256": "b098e2d83fd3beaa87e5b3111ea486a3b57e01793ef68ccf8e2fd83006b1cd60",
+      "year": 2018
+    },
+    {
+      "bytes": 1895057,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_122018.xlsx",
+      "id": "1a43f55a126594cc5ce6c7f3cf06e518e1b1650e4e32e2272c057d4f1a0dac49",
+      "quarter": 4,
+      "sha256": "f62e5a4bfc36a652b97c8391b5e83db06997d4c3e50ac6c213d0466dc1e7218c",
+      "year": 2018
+    },
+    {
+      "bytes": 1886074,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_032019.xlsx",
+      "id": "6cfd6d7fd3708f1db2bc773b3f7e70f0f5872634dbf5c78903135a5e8c403087",
+      "quarter": 1,
+      "sha256": "f99fd0299c9f0e0630d7deb81b0e1ee0877a031ba0e973cbc18fce3825a6b414",
+      "year": 2019
+    },
+    {
+      "bytes": 1886598,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_062019.xlsx",
+      "id": "ac0797c972d850ca4a7937e580c92b7d1d00b438dca8e7d8d6f4357c96bc530b",
+      "quarter": 2,
+      "sha256": "ab37b0363a7f8b345897d1fcec3039a753316bdbd4a118bcfd23f5e8e6da0312",
+      "year": 2019
+    },
+    {
+      "bytes": 1886710,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_092019.xlsx",
+      "id": "2ae53ea2ca9d81d3fd1cb4c989ecf535de79d070c92bff6f8a930564343442fc",
+      "quarter": 3,
+      "sha256": "0d76bae690ef485a8272f1c4efcff5d35b6a93c78e40177e3dbfa69da9cc0453",
+      "year": 2019
+    },
+    {
+      "bytes": 1887702,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_122019.xlsx",
+      "id": "3a8f4333328d688b8546d4ac78da4b6c46eabec4c60f54b5b23c7c6b3bd02863",
+      "quarter": 4,
+      "sha256": "4253ec8d57f82ae12293e33eee6d12e7d9aff39d1146c5ac93a8f39952fdf06d",
+      "year": 2019
+    },
+    {
+      "bytes": 1907240,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_032020.xlsx",
+      "id": "528c502cb9d71a4e53c10152c13644ce84cb112768b12ae1b84fb08c0e9fa210",
+      "quarter": 1,
+      "sha256": "bc1dab0973633db5d32a3d9b84cd0d56a8b98ad81c156a52c1345ef2d87920fb",
+      "year": 2020
+    },
+    {
+      "bytes": 1909430,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_062020.xlsx",
+      "id": "3a0b3d7ec59704d76e0ea876b069a324f19bd53fcb0578ed64b93f85cba49313",
+      "quarter": 2,
+      "sha256": "0592661c5cb861b3fe6671cda4d42c5812e1ab8daba263de053c6b55e0dc0c3c",
+      "year": 2020
+    },
+    {
+      "bytes": 1908380,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_092020.xlsx",
+      "id": "cb6f918d28906d1c6250f980822969ac44317dad84c02e9d7c01e0de2b00d497",
+      "quarter": 3,
+      "sha256": "26d26b37f8ee7edfdd8cfc00985632fd1ebc01c86c706ca8b02bf69836edd9c4",
+      "year": 2020
+    },
+    {
+      "bytes": 1694762,
+      "county_geography": "2010_census",
+      "file_name": "ZIP-COUNTY_122020.xlsx",
+      "id": "38a206e8b45d7349fb796cdcbe787794be17bb0537fb3fa312b007980e12ee04",
+      "quarter": 4,
+      "sha256": "075547b97d23b3f967a8090dc9c91df6fa6d661cfdb05a2ca4ce88500e5a21ca",
+      "year": 2020
+    }
+  ],
+  "download_manifest": "data/acquisition_planning/hud_zip_county_2010_2020_downloads.json",
+  "header": [
+    "zip",
+    "geoid",
+    "res_ratio",
+    "bus_ratio",
+    "oth_ratio",
+    "tot_ratio"
+  ],
+  "model_eligible": false,
+  "origin": "https://www.huduser.gov/",
+  "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
+  "required_state_fips": [
+    "01",
+    "02",
+    "04",
+    "05",
+    "06",
+    "08",
+    "09",
+    "10",
+    "11",
+    "12",
+    "13",
+    "15",
+    "16",
+    "17",
+    "18",
+    "19",
+    "20",
+    "21",
+    "22",
+    "23",
+    "24",
+    "25",
+    "26",
+    "27",
+    "28",
+    "29",
+    "30",
+    "31",
+    "32",
+    "33",
+    "34",
+    "35",
+    "36",
+    "37",
+    "38",
+    "39",
+    "40",
+    "41",
+    "42",
+    "44",
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "51",
+    "53",
+    "54",
+    "55",
+    "56"
+  ],
+  "route_url": "https://www.huduser.gov/apps/public/uspscrosswalk/home",
+  "scope": "User decision 2026-09-28: ZIP-COUNTY workbooks, 2010 Q1 through 2020 Q4, downloaded by hand from the HUD crosswalk files site",
+  "source_id": "HUD",
+  "terms": {
+    "path": "config/acquisition/terms_acceptance_20260928.json",
+    "sha256": "96435f8cb6d23a1809040b6251f3bd835fa7bcacdfd67f77b255fc55f6b7f5cf"
+  },
+  "version": 3,
+  "vintage": "2010Q1_2020Q4_xlsx"
+}

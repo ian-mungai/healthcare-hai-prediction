@@ -12,6 +12,8 @@ python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 # Repository checks over every file Git tracks or would track; the same checks run as pre-commit hooks.
 "$python_bin" -m scripts.quality.repo_checks lint-settings
 "$python_bin" -m scripts.quality.repo_checks env-example
+"$python_bin" -m scripts.quality.repo_checks privacy-scan
+"$python_bin" -m scripts.quality.repo_checks writing-check
 git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks credential-files
 git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks data-files
 git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks suppressions
