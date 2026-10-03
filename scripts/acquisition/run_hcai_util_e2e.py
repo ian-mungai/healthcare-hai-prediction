@@ -481,7 +481,7 @@ def storage_scenarios(scenario: Any, plan: dict, first: dict, last: dict, root: 
     def unreleased() -> None:
         empty = root / "no_release.json"
         empty.write_bytes(encoded_json({"releases": []}))
-        with patch.object(s3_store, "ACCESS_RELEASE_PATH", empty):
+        with patch.object(s3_store, "ACCESS_RELEASE_PATHS", (empty,)):
             execute(plan, first, root / "unreleased", True, True, FakeS3(), OUTPUTS, web, LIMITS)
 
     scenario("storage_refused_without_access_release", unreleased, "access hold")

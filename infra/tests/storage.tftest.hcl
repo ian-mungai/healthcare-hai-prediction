@@ -97,38 +97,55 @@ run "private_versioned_storage" {
 
 # Preparation only: mocked plans cannot verify AWS scheduling, permissions or existing remote rules.
 # Guard missing/duplicate/disabled rules, wrong bucket/delay/filter and accidental object expiry or transition.
-run "incomplete_upload_cleanup_only" {
+# Owner decision, Oct 2 2026: replaced Iceberg file versions under lakehouse/ expire after 30 days; nothing else ever does.
+# The provider computes the bucket-wide filter prefix and the expiration days and date only at apply, so a mocked plan
+# cannot read them; the saved real plan is checked for them before any apply.
+run "lifecycle_cleanup_rules" {
   command = plan
 
   assert {
     condition = (
       aws_s3_bucket_lifecycle_configuration.data.bucket == aws_s3_bucket.data.id &&
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 1 &&
-      one(aws_s3_bucket_lifecycle_configuration.data.rule).status == "Enabled" &&
-      one(one(aws_s3_bucket_lifecycle_configuration.data.rule).abort_incomplete_multipart_upload).days_after_initiation == 7
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 2 &&
+      alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions"])
     )
-    error_message = "Exactly one enabled seven-day incomplete-upload cleanup rule must target the existing data bucket."
+    error_message = "Exactly two enabled rules must target the existing data bucket: incomplete-upload cleanup and replaced lakehouse versions."
   }
 
   assert {
     condition = alltrue([
       for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+      one(rule.abort_incomplete_multipart_upload).days_after_initiation == 7 &&
       length(rule.expiration) == 0 &&
-      length(rule.noncurrent_version_expiration) == 0 &&
-      length(rule.transition) == 0 &&
-      length(rule.noncurrent_version_transition) == 0
+      length(rule.noncurrent_version_expiration) == 0
+      if rule.id == "abort_incomplete_uploads"
     ])
-    error_message = "Cleanup must never expire or transition completed objects, historical versions or delete markers."
+    error_message = "The bucket-wide rule may only abort incomplete uploads after seven days; it never expires objects, versions or delete markers."
   }
 
   assert {
     condition = alltrue([
       for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+      one(rule.filter).prefix == "lakehouse/" &&
+      one(rule.noncurrent_version_expiration).noncurrent_days == 30 &&
+      one(rule.expiration).expired_object_delete_marker == true &&
+      length(rule.abort_incomplete_multipart_upload) == 0
+      if rule.id == "expire_replaced_lakehouse_versions"
+    ])
+    error_message = "Only replaced versions under lakehouse/ may expire, after 30 days; current lakehouse files never expire and orphaned delete markers are removed."
+  }
+
+  assert {
+    condition = alltrue([
+      for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+      length(rule.transition) == 0 &&
+      length(rule.noncurrent_version_transition) == 0 &&
       length(rule.filter) == 1 &&
       length(one(rule.filter).and) == 0 &&
       length(one(rule.filter).tag) == 0
     ])
-    error_message = "The rule must use a single filter without tag or compound restrictions."
+    error_message = "Rules must never transition objects and must use a single filter without tag or compound restrictions."
   }
 }
 

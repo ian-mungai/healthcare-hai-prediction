@@ -1,0 +1,15 @@
+// Markdownlint settings for Conventional Docs (standards/documents.md §8.11).
+// Project copy of the bundle template templates/conventional_docs_markdownlint_cli2.jsonc; keep the rules in step with it.
+{
+  "config": {
+    "default": true,
+    "MD013": false,                              // §8.8: no fixed line-length limit
+    "MD024": { "siblings_only": true },          // Repeated subheadings under different parents, as in Keep a Changelog releases
+    "MD025": { "front_matter_title": "" },        // Allow YAML title plus H1; equality needs a separate check
+    "MD003": { "style": "atx" },
+    "MD004": { "style": "dash" },                // §8.3
+    "MD029": { "style": "ordered" },             // §8.3: sequential numbers, citable by item
+    "MD040": true,                               // §8.5: fence language is specified
+    "MD045": true                                // §8.10: alt text exists; quality needs review
+  }
+}

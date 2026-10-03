@@ -21,7 +21,15 @@ from scripts.process import clear_git_environment, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 PRE_COMMIT = ROOT / ".venv" / "bin" / "pre-commit"
-COPIED = [".pre-commit-config.yaml", "pyproject.toml", ".env.example", ".privacy_allowlist", ".writing_allowlist", "scripts/run_ci.sh"]
+COPIED = [
+    ".pre-commit-config.yaml",
+    "pyproject.toml",
+    ".env.example",
+    ".privacy_allowlist",
+    ".writing_allowlist",
+    ".markdownlint-cli2.jsonc",
+    "scripts/run_ci.sh",
+]
 NOQA = "no" + "qa"
 TYPE_IGNORE = "type" + ": ignore"
 FAKE_PAT = "gh" + "p_" + "Zx7Qm2Lp9Rt4Wv8Ks3Nd6Hy1Bc5Fj0Ga2TeQ"
@@ -182,6 +190,59 @@ CASES = [
     Case("unreadable file listed", "privacy-scan", True, {"docs/diagram.png": b"\x89PNG\r\n\x1a\n\x00\x00"}),
     Case("clean writing through the hook", "writing-check", True, {"notes.md": CLEAN_WRITING}),
     Case("writing finding blocked by the hook", "writing-check", False, {"notes.md": SERIAL_COMMA}),
+    Case("time-bound word blocked by the hook", "writing-check", False, {"notes.md": "The loader currently reads S3.\n"}),
+    Case("procedural soon passes the hook", "writing-check", True, {"notes.md": "Run it as soon as the load ends.\n"}),
+    Case(
+        "valid front matter passes",
+        "front-matter",
+        True,
+        {
+            "docs/guide.md": "---\ntitle: Guide\ndescription: What the guide covers.\nlast_updated: 2026-10-02\n---\n\n# Guide\n",
+            "README.md": "# Project\n",
+            ".github/pull_request_template.md": "# Pull Request\n",
+        },
+    ),
+    Case("missing front matter blocked", "front-matter", False, {"docs/guide.md": "# Guide\n"}),
+    Case(
+        "title different from the H1 blocked",
+        "front-matter",
+        False,
+        {"docs/guide.md": "---\ntitle: Guide\ndescription: What the guide covers.\nlast_updated: 2026-10-02\n---\n\n# Guide\n".replace("# Guide", "# Other")},
+    ),
+    Case(
+        "description over 120 characters blocked",
+        "front-matter",
+        False,
+        {
+            "docs/guide.md": "---\ntitle: Guide\ndescription: What the guide covers.\nlast_updated: 2026-10-02\n---\n\n# Guide\n".replace(
+                "What the guide covers.", "x" * 121
+            )
+        },
+    ),
+    Case(
+        "invalid YAML front matter blocked",
+        "front-matter",
+        False,
+        {
+            "docs/guide.md": "---\ntitle: Guide\ndescription: What the guide covers.\nlast_updated: 2026-10-02\n---\n\n# Guide\n".replace(
+                "title: Guide", "title: Guide: part one"
+            )
+        },
+    ),
+    Case(
+        "non-ISO last_updated blocked",
+        "front-matter",
+        False,
+        {
+            "docs/guide.md": "---\ntitle: Guide\ndescription: What the guide covers.\nlast_updated: 2026-10-02\n---\n\n# Guide\n".replace(
+                "2026-10-02", "Oct 2 2026"
+            )
+        },
+    ),
+    Case("clean Markdown through markdownlint", "markdownlint", True, {"notes.md": "# Notes\n\n- One item\n\n```bash\nls\n```\n"}),
+    Case("star bullet blocked by markdownlint", "markdownlint", False, {"notes.md": "# Notes\n\n* One item\n"}),
+    Case("fence without a language blocked by markdownlint", "markdownlint", False, {"notes.md": "# Notes\n\n```\nls\n```\n"}),
+    Case("E2E records skipped by markdownlint", "markdownlint", True, {"data/e2e/run/report.md": "* raw record\n"}),
     Case("typed subject with scope", "commit-msg", True, message="feat(infra): tag the data bucket\n\nBody.\n"),
     Case("typed subject without scope", "commit-msg", True, message="fix: handle an empty file\n"),
     Case("breaking change marker", "commit-msg", True, message="feat(infra)!: drop a stack\n"),
@@ -223,6 +284,14 @@ BLOCK_REASONS = {
     "allowlist entry without reason": ".privacy_allowlist:{line}: allowlist entry without a reason",
     "allowlist entry with unknown type": ".privacy_allowlist:{line}: allowlist entry with an unknown type",
     "writing finding blocked by the hook": "notes.md:1: comma before a final 'and', 'or' or 'nor'",
+    "time-bound word blocked by the hook": "notes.md:1: time-bound word in prose",
+    "star bullet blocked by markdownlint": "MD004",
+    "missing front matter blocked": "docs/guide.md:1: no front matter",
+    "title different from the H1 blocked": "title does not match the H1",
+    "description over 120 characters blocked": "description over 120 characters",
+    "invalid YAML front matter blocked": "front matter is not valid YAML",
+    "non-ISO last_updated blocked": "last_updated is not a YYYY-MM-DD date",
+    "fence without a language blocked by markdownlint": "MD040",
 }
 # Good cases that must also print a marker, so a skipped check cannot pass silently.
 PASS_MARKERS = {
@@ -293,7 +362,7 @@ def run_case(case: Case) -> tuple[bool, str]:
             reason = BLOCK_REASONS.get(case.name, "").format(line=added)
             marker = PASS_MARKERS.get(case.name, "")
             correct = correct and reason in output and marker in output and not any(value in output for value in PRIVACY_VALUES)
-        if case.hook == "writing-check":
+        if case.hook in ("writing-check", "markdownlint", "front-matter"):
             correct = correct and BLOCK_REASONS.get(case.name, "") in output
         return correct, output
 

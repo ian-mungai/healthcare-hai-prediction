@@ -1,0 +1,7 @@
+# DuckDB engine and CLI for the analytics image, pinned with hashes (pip --require-hashes) for Apple silicon and x86 Linux.
+duckdb==1.5.6 \
+    --hash=sha256:ce89a1025a5317ebe9c520876c48032b5247ac574865486648b1a004f6009875 \
+    --hash=sha256:bc9619ed7d4ffa117b5155d84b44794366bb6635178d78ed5e13a6024845c757
+duckdb-cli==1.5.6 \
+    --hash=sha256:9b03301a14310a4ef7f86386e87b36954fe099ed762c8a81f94f7bd0ba073542 \
+    --hash=sha256:9797555bd39095d730eb0d0b3bf29e95e148c96a4cdce1e363f01c7bf7003a44

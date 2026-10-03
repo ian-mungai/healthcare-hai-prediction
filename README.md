@@ -39,24 +39,34 @@ same-period public measures and why a simpler earlier model explained little
 of the variation. Approved collection is complete; acquisition closeout is pending
 final verification, confirmed disposal of personal originals and an approved Git checkpoint. Public sources are collected
 through publisher APIs first, then download URLs, into private versioned S3
-storage with a receipt, hash and version readback for every object. Schema
-review, modeling and serving come later. The [Architecture](#architecture)
-diagram shows what is built and what is planned.
+storage with a receipt, hash and version readback for every object. The bronze
+layer of a local Apache Iceberg lakehouse then holds every stored data file as
+published, with each row traced to its S3 object version and checksum; 328 of
+the 329 mapped tables are loaded and checked. Staging, modeling and serving come
+later. The [Architecture](#architecture) diagram shows what is built and what is
+planned.
 
 ## Install
 
 Prerequisites: macOS on Apple silicon or Linux AMD64, Python 3.12, Git,
 Terraform 1.16.1 and AWS CLI v2. Google Chrome renders the architecture diagram.
+The lakehouse needs Docker Desktop with at least 24 GB of memory: the bronze,
+dictionary and checksum jobs give Spark a 12 GB heap (`JOB_MEMORY` in
+`scripts/lakehouse/session.py`).
 
 Run from this repository's root with its existing Python 3.12 `.venv`.
 Dependencies are shared across development and production in `requirements.txt`.
 Gitleaks, TFLint and trivy are installed only in ignored `.tools/`; versions and
-publisher SHA-256 values are pinned in `config/quality_tools.json`.
+publisher SHA-256 values are pinned in `config/quality_tools.json`. The markdownlint
+hook's `markdownlint-cli2` is installed into `.tools/markdownlint-cli2` with `npm ci`
+from the lockfile in `scripts/quality/markdownlint/`, which pins each package's
+integrity hash; it needs Node.js 22 or later.
 
 ```sh
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python scripts/quality/install_tools.py
+.venv/bin/python -m scripts.quality.install_markdownlint
 PRE_COMMIT_HOME="$PWD/.tools/pre_commit_cache" .venv/bin/python -m pre_commit install
 cp .env.example .env
 ```
@@ -65,6 +75,21 @@ Fill every value in `.env`; the file stays out of Git. `AWS_PROFILE` is the
 project profile, named `<PROJECT_NAME>_<ENVIRONMENT>` after its same-named IAM
 user. IAM changes use a separate administrator profile that is never stored in
 `.env`.
+
+The lakehouse runs in Docker Compose (`docker-compose.yaml`):
+
+- PostgreSQL and Apache Polaris 1.8.0 use digest-pinned images.
+- The Spark 4.1.2 (Iceberg 1.11.0) and DuckDB 1.5.6 images are built from `services/`, with their Python packages hash-pinned.
+
+The first catalog command pulls and builds them:
+
+```sh
+.venv/bin/python -m scripts.lakehouse.catalog up
+```
+
+`up` is idempotent. On first use it generates the catalog credentials into the ignored, owner-only
+`data/lakehouse/secrets/` and never prints them. It creates the `hai_lakehouse` catalog, limited to `lakehouse/` in the
+project bucket. `down` stops the containers and keeps the catalog database.
 
 The native installer supports macOS ARM64 and Linux AMD64. Repeating a verified
 installation preserves bytes and modification times; an unexpected existing
@@ -79,7 +104,7 @@ Named manual steps. These are the only setup steps no script performs:
    `census_api_key` or `bls_api_key` holding JSON with one field, `api_key`.
    The keys are shared by several projects, so they are created by hand outside
    Terraform. Store the HUD USPS crosswalk token separately as `hud_api_key`,
-   in the same JSON shape with the token alone in `api_key` (no `Bearer `
+   in the same JSON shape with the token alone in `api_key` (no `Bearer`
    prefix; the collector adds the header). The IAM
    configuration grants read access to these three names and never reads a
    value; each permission update requires a reviewed saved plan before apply.
@@ -112,6 +137,24 @@ The E2E runners can also run on their own; each needs a new output directory:
 .venv/bin/python -m scripts.quality.run_documentation_review_e2e
 ```
 
+The lakehouse jobs run in the Spark container. The bronze E2E uses a throwaway local catalog and synthetic files, never
+S3. Each load reads only the S3 manifests and the committed table map (`config/lakehouse/bronze_tables.json`), replaces
+each object in its own commit, prunes objects a table no longer selects, rebuilds the table's data dictionary and writes
+a counts-only report:
+
+```sh
+.venv/bin/python -m scripts.lakehouse.catalog job bronze_e2e        # report: data/e2e/bronze/
+.venv/bin/python -m scripts.lakehouse.catalog job bronze -- --group hai           # or --tables a,b; report: data/e2e/bronze_load/
+.venv/bin/python -m scripts.lakehouse.catalog job dictionary -- --tables a,b      # rebuild bronze_dictionary tables
+.venv/bin/python -m scripts.lakehouse.care_compare_tables           # regenerate the care_compare group (read-only S3)
+.venv/bin/python -m scripts.lakehouse.retired_objects --collection <publisher/collection>   # rebuild the retired list
+scripts/lakehouse/query.sh                                          # DuckDB shell, bronze attached read-only
+scripts/lakehouse/ui.sh                                             # DuckDB UI at http://localhost:4213
+```
+
+Load large groups in batches of about 20 to 40 tables: each job stops after 1 hour (`COMPOSE_TIMEOUT` in
+`scripts/lakehouse/catalog.py`). A rerun of the same tables ends in the same state.
+
 Before every commit, stage the intended files by name, then draft, complete and
 retain the ignored local documentation review record (see [Quality Checks](#quality-checks)).
 
@@ -124,7 +167,7 @@ from it with headless Chrome. Dashed components are planned, not built.
 
 ```sh
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars \
-  --window-size=1200,1330 --virtual-time-budget=5000 \
+  --window-size=1200,1640 --virtual-time-budget=5000 \
   --screenshot=docs/architecture/architecture.png "file://$PWD/docs/architecture/architecture.html"
 ```
 
@@ -140,23 +183,23 @@ owner-only access. Only the privacy-filtered derivative and non-personal
 references or provenance may enter the project's private S3 storage. The
 derivative remains under privacy and modeling review; redaction does not
 establish formal anonymization or clinical validity. Raw retention duration
-remains unresolved. FileVault was verified on Sep 24 2026 (UTC); that host check
+remains unresolved. FileVault was verified at commit `a1b758a`; that host check
 does not establish compliance or resolve retention requirements.
 
 The data bucket carries its own `DataClassification` tag of Confidential
-(project decision, Sep 27 2026). Redacted derivatives are not formally
+(project decision, commit `c143cbc`). Redacted derivatives are not formally
 anonymized. Hospital chief executives in HCAI annual financial files and state
 officials' work contacts in a CMS contacts table are treated as Confidential:
 originals stay local and only redacted copies belong in S3. The initial 218
-Excel/contact versions were removed on Sep 28 2026. Redacted replacements for
-75 further versions are stored; those originals were deleted and verified on
-Sep 28 2026. Retirement records cover all 293 removed versions, storage
+Excel/contact versions were removed before commit `f9ef312`. Redacted replacements for
+75 further versions are stored; those originals were deleted and verified before
+that commit. Retirement records cover all 293 removed versions, storage
 reconciliation passed and the temporary deletion grant was removed.
 Operational evidence stays in ignored local
 folders; this status does not clear privacy or modeling holds. The project no
 longer uses the HRSA Area Health Resources Files: their license limits sharing
 the data with third parties, so the five measures built on them were dropped and
-all 399 stored versions were deleted and verified on Sep 28 2026.
+all 399 stored versions were deleted and verified before commit `f9ef312`.
 
 Tests use generic synthetic data. Real personal values must never appear in
 fixtures, logs, tutorials, published artifacts or commits. Acquisition inputs,
@@ -164,6 +207,24 @@ operational evidence and the detailed exception record remain untracked.
 
 The explicitly approved live S3 verification tool is the sole opt-in exception
 to synthetic-only verification. Normal CI does not run it or contact AWS.
+
+**Bronze lakehouse.** Bronze keeps every stored data file as published, every value as text:
+
+- CSV files keep their columns.
+- Text files keep one row per line.
+- Excel files keep one row per sheet row.
+- PDFs and Word documents keep their table rows and text.
+
+Every row carries its source, snapshot, S3 key, version and SHA-256. Each table's `bronze_dictionary` entry lists its
+columns with counts and the publisher's description or published type where a stored dictionary gives one. CMS Care
+Compare dictionaries give types only. Bronze does not load:
+
+- objects the privacy deletion removed from S3, which the manifests still list (`config/lakehouse/retired_objects.json`,
+  keys, versions and checksums only);
+- a Care Compare contacts file that names state staff;
+- audit copies, receipts and Office package parts.
+
+Open gaps are tracked in the local issue register.
 
 [docs/data_collection.md](docs/data_collection.md) explains how every source was
 collected and how to recheck it, including the named manual data steps: terms
@@ -219,13 +280,25 @@ with `bash scripts/acquisition/run_checks.sh`.
 - **Writing check:** the prose of every tracked or untracked non-ignored
   Markdown file (front matter, code spans and blocks, URLs and `tests/fixtures/`
   excluded) is checked for a comma before a final "and", "or" or "nor" and for
-  ISO dates in prose, which are written as Sep 30 2026. Files declared with
+  ISO dates in prose, which are written as `Sep 30 2026`. It also blocks the time-bound
+  words `currently`, `recently`, `soon`, `eventually`, `as of this writing`,
+  `at present`, `in the future` and `for now`. Files declared with
   `--articles <glob>` are also checked for em dashes. Exceptions go in
   `.writing_allowlist` as `<type> <path glob> -- <reason>`; an entry without a
   reason is itself a finding. It blocks: the existing prose was corrected before
-  it was enabled (Oct 1 2026). Run it with
+  each rule was enabled. Run it with
   `.venv/bin/python -m scripts.quality.repo_checks writing-check` (`--warn`
   reports without failing).
+- **Markdown syntax:** `markdownlint-cli2` checks every staged Markdown file
+  outside `data/` against the Conventional Docs baseline in
+  `.markdownlint-cli2.jsonc` (dash bullets, ATX headings, sequential numbered
+  lists, a language on every code fence). It blocks: a whole-project run was
+  clean when it was added.
+- **Front matter:** every Markdown document outside `data/`, except READMEs,
+  well-known files and `.github/` templates, starts with YAML front matter that
+  parses and holds `title` (equal to the H1), a `description` of at most 120
+  characters and `last_updated` as `YYYY-MM-DD`. It uses PyYAML, pinned in
+  `requirements.txt`. It blocks: a whole-project run was clean when it was added.
 - **Commit messages:** Conventional Commits and no AI attribution, checked in
   the full message by the `commit-msg` hook and, in GitHub Actions, for every
   pushed commit. AI credit and agent-session lines are rejected; human
@@ -289,20 +362,23 @@ requested.
 
 **Teardown.** The data bucket is the project's persistent store of immutable
 source data, not a demo stack, so it has no destructive teardown switch
-(project exception, Sep 27 2026). `force_destroy` is false and
+(project exception, commit `c143cbc`). `force_destroy` is false and
 `prevent_destroy` is set; removing the bucket would need a separately reviewed
 change that lifts both protections first. The bucket keeps its established name
 rather than the `<project>-<component>-<environment>` pattern, because renaming
-it would mean moving all stored data (project exception, Sep 27 2026).
+it would mean moving all stored data (project exception, commit `c143cbc`).
 
 **Environments.** Both stacks tag resources with `Environment = dev`. A `prod`
 environment and an `infra/modules/` layout are deferred until the next
-infrastructure component is added (project decision, Sep 27 2026).
+infrastructure component is added (project decision, commit `c143cbc`).
 
-**Lifecycle rule.** The approved lifecycle rule was applied and read back from
-S3 on Sep 24 2026 (UTC). It aborts incomplete multipart uploads seven days after
+**Lifecycle rules.** The bucket-wide rule, applied and read back from S3 at
+commit `a1b758a`, aborts incomplete multipart uploads seven days after
 initiation, with no expiration or transition of completed objects, historical
-versions or delete markers. Local mock-plan tests, source-shape checks and live
+versions or delete markers. One exception covers only `lakehouse/`, where
+Iceberg replaces and deletes its own table files: replaced versions there expire
+30 days after they are replaced and orphaned delete markers are removed; current
+lakehouse files and everything outside `lakehouse/` never expire (owner decision). Local mock-plan tests, source-shape checks and live
 configuration readback pass. The seven-day scheduler itself has not been
 observed in a timed test and no deliberately incomplete upload was created for
 verification.
@@ -325,12 +401,12 @@ and trivy evidence retain each exception, resource and reason.
 
 | Deferred control | Reason | Review trigger |
 | --- | --- | --- |
-| Event notifications (`CKV2_AWS_62`) | No event consumer exists yet. | Implementing an event consumer. |
+| Event notifications (`CKV2_AWS_62`) | No event consumer exists. | Implementing an event consumer. |
 | Cross-region replication (`CKV_AWS_144`) | Recovery objectives and a destination are not established. | Recovery design, before production. |
-| KMS (`CKV_AWS_145`, trivy `AWS-0132`) | Acquisition currently uses SSE-S3/AES256. | Coordinated ingestion and IAM migration, before production. |
+| KMS (`CKV_AWS_145`, trivy `AWS-0132`) | Acquisition uses SSE-S3/AES256. | Coordinated ingestion and IAM migration, before production. |
 | Access logging (`CKV_AWS_18`, trivy `AWS-0089`) | Approved acquisition-stage deferral of a separate logging destination; request-audit gap accepted for this stage. | Before additional user or service access, production or newly approved sensitive-data use. |
 
-Access logging was explicitly deferred on Sep 24 2026 (UTC). Acquisition
+Access logging was explicitly deferred at commit `a1b758a`. Acquisition
 receipts establish pipeline provenance, not an independent record of every
 bucket request. Review CloudTrail data events alongside server access logging
 when a review trigger is reached. Server access logs are best-effort, not a
@@ -353,12 +429,14 @@ No AWS changes implementing these four deferred controls have been applied.
 - `config/quality_tools.json`: pinned native tool versions and publisher hashes.
 - `docs/architecture/`: the architecture diagram source and its rendered PNG.
 - `docs/data_collection.md`: how the source data was collected and how to recheck it.
-- `docs/issue_register.md`: the path reserved for the project's single issue register, kept local-only (Git-ignored);
-  not created yet.
+- `docs/issue_register.md`: the project's single issue register, kept local-only (Git-ignored).
 - `docs/project_guide.md`: the project's target design with each section's build status, kept local-only (Git-ignored).
 - `.github/`: the CI workflow and the pull request template.
+- `scripts/lakehouse/`, `config/lakehouse/`: the catalog script, the bronze loader, file readers, dictionary and
+  checksum jobs, the Care Compare and retired-object generators and the bronze E2E; the table map and the retired list.
+- `services/`, `docker-compose.yaml`: the Polaris catalog, Spark job and DuckDB analytics containers.
 - `scripts/acquisition/`, `config/acquisition/`: collectors, storage checks, E2E suites and their locked plans and
-  registry. No longer Git-ignored (Sep 29 2026) and committed with full documentation of the collection process
+  registry. Committed at commit `3af1abb` with full documentation of the collection process
   at the end of the data collection stage; collected data and audit evidence stay in the ignored `data/` folder.
   No tutorial files are added to this repository.
 
@@ -367,9 +445,13 @@ No AWS changes implementing these four deferred controls have been applied.
 These checks are not deployment or clinical validation. The acquisition checks
 run on synthetic inputs; a clean checkout cannot replay stored captures, which need
 the ignored local originals and the private legacy registry archive.
-Nothing in S3 is approved for modeling yet: definitions, geography and modeling
+Nothing in S3 is approved for modeling: definitions, geography and modeling
 reviews remain open. Raw personal-data retention remains a separate unresolved
 control. The deferred controls above are not implemented.
+
+The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only. It
+keeps every stored copy, including files stored more than once. No staging, typing or deduplication exists yet. The
+bronze E2E runs on synthetic files in Docker and is not part of the local CI script.
 
 ## Contributing
 

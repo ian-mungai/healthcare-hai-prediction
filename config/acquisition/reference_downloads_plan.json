@@ -1,0 +1,69 @@
+{
+  "files": [
+    {
+      "bytes": 18263,
+      "file_name": "la.txt",
+      "id": "482ac767f4dfeef1d08d6fa10da3d9a7ce3685dc552b17f244e02bf26db17d5b",
+      "media_type": "text/plain",
+      "origin_url": "https://download.bls.gov/pub/time.series/la/la.txt",
+      "publisher": "U.S. Bureau of Labor Statistics",
+      "role": "dictionary",
+      "sha256": "8edf04c0c21ef474f3729d9f67ebe06679017c6789f6ca95415a4d5186095beb",
+      "source_id": "BLS",
+      "title": "LAUS series, area and measure definitions (la.txt)"
+    },
+    {
+      "bytes": 394653,
+      "file_name": "wonder_help_ucd.html",
+      "id": "d49be113e476d1d7208cd7da070853562c76b399debf68bf36a032c9852ec236",
+      "media_type": "text/html",
+      "origin_url": "https://wonder.cdc.gov/wonder/help/ucd.html",
+      "publisher": "Centers for Disease Control and Prevention, National Center for Health Statistics",
+      "role": "dictionary",
+      "sha256": "a7b439b1fe7c4b69f65dc679e560d080f0059576940221dc0d93653c0438248c",
+      "source_id": "WONDER",
+      "title": "CDC WONDER help: Underlying Cause of Death 1999-2020"
+    },
+    {
+      "bytes": 394569,
+      "file_name": "wonder_help_ucd-expanded.html",
+      "id": "758620ebcfa1a157981d536e8532b7dedb5f845852d56abede7567ac70d3fc60",
+      "media_type": "text/html",
+      "origin_url": "https://wonder.cdc.gov/wonder/help/ucd-expanded.html",
+      "publisher": "Centers for Disease Control and Prevention, National Center for Health Statistics",
+      "role": "dictionary",
+      "sha256": "508ea8db22f6c970e99d983bd5333880d14e5b99fa53aefbbb69bba10eef2e39",
+      "source_id": "WONDER",
+      "title": "CDC WONDER help: Underlying Cause of Death 2018-2024, Single Race"
+    },
+    {
+      "bytes": 116840,
+      "file_name": "hud_usps_crosswalk.html",
+      "id": "764db46bb2ee0ad7fdf961b17bf0a901d98b920b4cd64aee4ae9408b8f0a3967",
+      "media_type": "text/html",
+      "origin_url": "https://www.huduser.gov/portal/datasets/usps_crosswalk.html",
+      "publisher": "U.S. Department of Housing and Urban Development",
+      "release_binding": "terms",
+      "role": "dictionary",
+      "sha256": "3ad33ef5c73db9e428e5a395bf057c48b29ad4ba105936229ed7a0cd1309cdff",
+      "source_id": "HUD",
+      "title": "HUD USPS ZIP Code Crosswalk Files page: file descriptions, field definitions and FAQ"
+    },
+    {
+      "bytes": 470662,
+      "file_name": "hud_cityscape_20_2_ch16.pdf",
+      "id": "5ad8ab8ffd5e57d4bf61708afb8895854ed5729c03a9bb71e848f6e48cf56a45",
+      "media_type": "application/pdf",
+      "origin_url": "https://www.huduser.gov/portal/periodicals/cityscpe/vol20num2/ch16.pdf",
+      "publisher": "U.S. Department of Housing and Urban Development",
+      "release_binding": "terms",
+      "role": "methodology",
+      "sha256": "951163169533b057416179c743af721a334984106402dd20fddb28dfaf7f39db",
+      "source_id": "HUD",
+      "title": "Understanding and Enhancing HUD's ZIP Code Crosswalk Files, Cityscape 20(2), 277-294"
+    }
+  ],
+  "model_eligible": false,
+  "registry_sha256": "dbd6fa964a6001861f9701f6d2c785eccabb3ba314e586f860a462ab651bcad3",
+  "version": 1
+}

@@ -14,12 +14,16 @@ provider "aws" {
 
 locals {
   service_templates = { for filename in fileset("${path.module}/policies", "*_policy.json") : trimsuffix(filename, "_policy.json") => filename }
+  # A description change replaces the policy, which prevent_destroy blocks, so existing policies keep the shared text.
+  service_descriptions = {
+    lakehouse = "Project-scoped Iceberg table files; write and delete current objects only under lakehouse/."
+  }
 }
 
 resource "aws_iam_policy" "service" {
   for_each    = local.service_templates
   name        = "${var.project_name}_${each.key}_policy"
-  description = "Project-scoped HAI storage permissions; no IAM administration or data deletion."
+  description = lookup(local.service_descriptions, each.key, "Project-scoped HAI storage permissions; no IAM administration or data deletion.")
   policy = templatefile("${path.module}/policies/${each.value}", {
     DATA_BUCKET_NAME = var.data_bucket_name
     AWS_REGION       = var.aws_region

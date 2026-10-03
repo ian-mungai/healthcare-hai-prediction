@@ -184,13 +184,19 @@ def prepare_capture(plan: dict, sources: dict, validator: Draft202012Validator) 
         "start_year",
         "end_year",
         "expected_periods",
+        "lineage_bindings",
     }
     if set(plan) - fields or not isinstance(plan.get("scope"), str) or not plan["scope"].strip():
         raise CaptureError("Capture plans require an explicit scope and cannot contain unrecognized options.")
     candidates = {source["source_id"]: source for source in sources["sources"]}
     source = candidates.get(plan.get("source_id"))
-    if source is None or source["preferred_route"] == "access_hold":
+    # A held source may supply a reference document only with a release binding; storage rechecks the binding.
+    held_reference = bool(plan.get("lineage_bindings")) and plan.get("mode", "file") == "file" and plan.get("role", "data") not in {"data", "api_page"}
+    if source is None or (source["preferred_route"] == "access_hold" and not held_reference):
         raise CaptureError("Source is unknown or remains on access hold.")
+    if source["preferred_route"] == "access_hold":
+        # The receipt records what was collected: documentation only; the registry hold itself is unchanged.
+        source = source | {"preferred_route": "documentation_only"}
     governance = plan["governance"]
     if governance.get("access_class") != "public" or governance.get("credentials_required") is not False:
         raise CaptureError("This downloader supports reviewed public unauthenticated routes only.")
@@ -340,6 +346,7 @@ def capture(plan: dict, output_root: Path, sources: dict, validator: Draft202012
             "fallback_reason": plan.get("fallback_reason"),
             "registry_sha256": canonical_hash(sources),
             "schema_sha256": canonical_hash(validator.schema),
+            **plan.get("lineage_bindings", {}),
         }
     )
     if not failure:

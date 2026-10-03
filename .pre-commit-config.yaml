@@ -58,6 +58,20 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: front-matter
+        name: Documents carry valid front matter (title, description, last_updated)
+        entry: .venv/bin/python -m scripts.quality.repo_checks front-matter
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: markdownlint
+        # Pinned markdownlint-cli2 from scripts/quality/install_markdownlint.py with the Conventional Docs baseline in
+        # .markdownlint-cli2.jsonc; E2E records under data/ are skipped. Blocking from the start: the whole project was clean.
+        name: Markdown syntax follows the Conventional Docs baseline (markdownlint)
+        entry: .tools/markdownlint-cli2/node_modules/.bin/markdownlint-cli2 --config .markdownlint-cli2.jsonc
+        language: system
+        types: [markdown]
+        exclude: ^data/
       - id: documentation-review
         name: All documentation reviewed for the staged revision
         entry: .venv/bin/python -m scripts.quality.documentation_review check
@@ -94,7 +108,7 @@ repos:
         entry: .venv/bin/python -m scripts.quality.run_checks_e2e
         language: system
         pass_filenames: false
-        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|scan_secrets))\.py|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist)$
+        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|scan_secrets|install_markdownlint))\.py|scripts/quality/markdownlint/.*|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist|\.markdownlint-cli2\.jsonc)$
       - id: test-documentation-review
         name: Documentation review accepts good evidence and rejects bad evidence
         entry: .venv/bin/python -m scripts.quality.run_documentation_review_e2e

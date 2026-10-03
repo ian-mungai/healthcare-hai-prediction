@@ -1,0 +1,52 @@
+{
+ "note": "Reviewed request list for store_reference_download --build-plan (owner decisions, Oct 2 2026). Each file was saved by the owner in a browser; the plan binds its origin, SHA-256 and size.",
+ "files": [
+  {
+   "source_id": "BLS",
+   "role": "dictionary",
+   "title": "LAUS series, area and measure definitions (la.txt)",
+   "publisher": "U.S. Bureau of Labor Statistics",
+   "origin_url": "https://download.bls.gov/pub/time.series/la/la.txt",
+   "file_name": "la.txt",
+   "media_type": "text/plain"
+  },
+  {
+   "source_id": "WONDER",
+   "role": "dictionary",
+   "title": "CDC WONDER help: Underlying Cause of Death 1999-2020",
+   "publisher": "Centers for Disease Control and Prevention, National Center for Health Statistics",
+   "origin_url": "https://wonder.cdc.gov/wonder/help/ucd.html",
+   "file_name": "wonder_help_ucd.html",
+   "media_type": "text/html"
+  },
+  {
+   "source_id": "WONDER",
+   "role": "dictionary",
+   "title": "CDC WONDER help: Underlying Cause of Death 2018-2024, Single Race",
+   "publisher": "Centers for Disease Control and Prevention, National Center for Health Statistics",
+   "origin_url": "https://wonder.cdc.gov/wonder/help/ucd-expanded.html",
+   "file_name": "wonder_help_ucd-expanded.html",
+   "media_type": "text/html"
+  },
+  {
+   "source_id": "HUD",
+   "role": "dictionary",
+   "title": "HUD USPS ZIP Code Crosswalk Files page: file descriptions, field definitions and FAQ",
+   "publisher": "U.S. Department of Housing and Urban Development",
+   "origin_url": "https://www.huduser.gov/portal/datasets/usps_crosswalk.html",
+   "file_name": "hud_usps_crosswalk.html",
+   "media_type": "text/html",
+   "release_binding": "terms"
+  },
+  {
+   "source_id": "HUD",
+   "role": "methodology",
+   "title": "Understanding and Enhancing HUD's ZIP Code Crosswalk Files, Cityscape 20(2), 277-294",
+   "publisher": "U.S. Department of Housing and Urban Development",
+   "origin_url": "https://www.huduser.gov/portal/periodicals/cityscpe/vol20num2/ch16.pdf",
+   "file_name": "hud_cityscape_20_2_ch16.pdf",
+   "media_type": "application/pdf",
+   "release_binding": "terms"
+  }
+ ]
+}

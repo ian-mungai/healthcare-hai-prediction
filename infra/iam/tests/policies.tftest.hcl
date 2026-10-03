@@ -14,8 +14,45 @@ run "scoped_project_permissions" {
   command = plan
 
   assert {
-    condition     = toset(keys(aws_iam_policy.service)) == toset(["s3", "secrets"]) && length(aws_iam_user_policy_attachment.service) == 2
-    error_message = "Only the consolidated S3 policy and the shared-secret read policy may be attached."
+    condition     = toset(keys(aws_iam_policy.service)) == toset(["s3", "secrets", "lakehouse"]) && length(aws_iam_user_policy_attachment.service) == 3
+    error_message = "Only the consolidated S3 policy, the shared-secret read policy and the lakehouse table policy may be attached."
+  }
+
+  # Changing a policy description forces replacement, which prevent_destroy blocks; existing descriptions stay fixed.
+  assert {
+    condition = alltrue([
+      for name in ["s3", "secrets"] : aws_iam_policy.service[name].description == "Project-scoped HAI storage permissions; no IAM administration or data deletion."
+    ])
+    error_message = "Existing policy descriptions must not change, or the policies would be replaced."
+  }
+
+  # Iceberg tables need write and delete rights, but only inside lakehouse/; originals elsewhere stay write-once.
+  assert {
+    condition = toset(flatten([
+      for statement in jsondecode(aws_iam_policy.service["lakehouse"].policy).Statement : flatten([statement.Action])
+      ])) == toset([
+      "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"
+    ])
+    error_message = "The lakehouse policy may only read, write and delete current objects; no version deletion or wildcard actions."
+  }
+
+  assert {
+    condition = toset(flatten([
+      for statement in jsondecode(aws_iam_policy.service["lakehouse"].policy).Statement : flatten([statement.Resource])
+    ])) == toset(["arn:aws:s3:::${var.data_bucket_name}/lakehouse/*"])
+    error_message = "Lakehouse permissions must be limited to the lakehouse/ folder of the approved bucket."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_policy.service["lakehouse"].policy).Statement : statement.Effect == "Allow" && !can(statement.Condition)
+    ])
+    error_message = "The lakehouse policy holds only unconditional allow statements for its single folder."
+  }
+
+  assert {
+    condition     = aws_iam_policy.service["lakehouse"].name == "${var.project_name}_lakehouse_policy" && strcontains(aws_iam_policy.service["lakehouse"].description, "lakehouse/")
+    error_message = "The lakehouse policy must follow the naming convention and describe its folder-limited deletion."
   }
 
   assert {

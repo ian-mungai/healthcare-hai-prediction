@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import copy
 import fcntl
+import hashlib
 import json
 import re
 import sys
@@ -19,7 +20,7 @@ from scripts.acquisition.collection_layout import load_routes
 from scripts.acquisition.dataset_layout import cms_members, source_folder
 from scripts.acquisition.mapped_archives import expand_tree
 from scripts.acquisition.plan_remaining import capture_plan
-from scripts.acquisition.s3_store import AwsCli, encoded_json, preflight, upload_snapshot, write_once
+from scripts.acquisition.s3_store import ACCESS_RELEASE_PATH, TERMS_ACCEPTANCE_PATH, AwsCli, encoded_json, preflight, upload_snapshot, write_once
 from scripts.acquisition.source_registry import LOCK_PATH, canonical_hash, load_registry, read_json, validate_registry
 from scripts.acquisition.transport import CaptureError, Limits
 from scripts.infrastructure.render_project_config import REPO_ROOT, load_configuration
@@ -40,6 +41,22 @@ def bounded_jobs(jobs: list[dict], budget: int) -> tuple:
     return selected, deferred, reserved
 
 
+# A held source's reference document names the dated record that releases its hold; storage rechecks the bound bytes.
+RELEASE_BINDINGS = {"terms": ("terms_sha256", TERMS_ACCEPTANCE_PATH), "access_release": ("access_release_sha256", ACCESS_RELEASE_PATH)}
+
+
+def lineage_bindings(source: dict, candidate: dict) -> dict:
+    """Return the receipt lineage binding for a held source's reference document, or none for other sources."""
+    binding = candidate.get("release_binding")
+    held = source["preferred_route"] == "access_hold"
+    if binding is None:
+        return {}
+    if binding not in RELEASE_BINDINGS or not held:
+        raise CaptureError("A release binding must be terms or access_release and applies only to a held source.")
+    key, path = RELEASE_BINDINGS[binding]
+    return {key: hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
 def extend_registry(original: dict, lock: dict, candidates: list[dict], rules: dict) -> tuple:
     """Return an additive registry, lock and jobs while retaining the original source restrictions."""
     validate_registry(original, lock)
@@ -53,8 +70,10 @@ def extend_registry(original: dict, lock: dict, candidates: list[dict], rules: d
         require_collection_scope(candidate["source_id"])
         source = by_source[candidate["source_id"]]
         data = candidate["role"] == "data"
+        bindings = lineage_bindings(source, candidate)
         if (
             source["preferred_route"] == "access_hold"
+            and (data or not bindings)
             or data
             and source["source_id"] in set(rules["privacy_review_sources"] + rules["large_file_review_sources"])
         ):
@@ -83,6 +102,8 @@ def extend_registry(original: dict, lock: dict, candidates: list[dict], rules: d
         plan["release"]["release_date"] = candidate.get("release_date")
         if candidate.get("expected_sha256"):
             plan["expected_sha256"] = candidate["expected_sha256"]
+        if bindings:
+            plan["lineage_bindings"] = bindings
         jobs.append({"job_id": identifier.replace(":", "_"), "plan": plan, "candidate": candidate})
     urls = defaultdict(set)
     for source in registry["sources"]:

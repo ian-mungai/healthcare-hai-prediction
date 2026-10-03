@@ -1,0 +1,1475 @@
+{
+  "version": 1,
+  "basis": "Objects removed from S3 by the Sep 28 2026 privacy deletion that storage manifests still list (BRZ-012).",
+  "collections": [
+    "california_hcai/hospital_finance",
+    "cms/hospitals"
+  ],
+  "objects": [
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T060513Z__c0680e3e6635492a8757aed6c0c4fc70/6a40535cf1633e251239857384c17a703dcf90da80ca120018641514c0d2cbf2/CA_file_003.csv",
+      "version_id": "IBlr685TNxKY8td9vJIssh.J3HovgCNu",
+      "sha256": "6a40535cf1633e251239857384c17a703dcf90da80ca120018641514c0d2cbf2"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T060522Z__e3a765c973e744bebd607403447a5adb/8d730755860ed7bb700e3480da41f547a4a7254625065a7c219a8cfa8c561a02/CA_file_004.csv",
+      "version_id": "xODHkoytTWdjD0ylX7e08VDrpZ4Ef10q",
+      "sha256": "8d730755860ed7bb700e3480da41f547a4a7254625065a7c219a8cfa8c561a02"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T172858Z__6da83588aa51470cb86f3de5831af5e5/f8704cffac84359d844e1f1e67f7c724611dde51f001427827056031c90e673d/CA_history_e73f694b1329c788.csv",
+      "version_id": "54HrBooj07VETOsedJm4A9cz5p3o46KD",
+      "sha256": "f8704cffac84359d844e1f1e67f7c724611dde51f001427827056031c90e673d"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T172858Z__dc69e25504a6499d94101f7f6792aff8/83cebaa62b06ee8843ef0db6246505ace6415fde3b46227c48701b965faf7cc0/CA_history_d9fc6336987cabcc.csv",
+      "version_id": "cHA2seiXX3NvPSX5Z88VasS0uScUCNde",
+      "sha256": "83cebaa62b06ee8843ef0db6246505ace6415fde3b46227c48701b965faf7cc0"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T172916Z__697046cfce4345c3bf87633741afaa60/bdb90079372567408a588d149eac3d6a1970ded7f2774bfa7908ac03b7a0b370/CA_history_62a6be2d0a4efb89.csv",
+      "version_id": "rVGj.2mTg8Swt7OU_XtYuH1Jgm26xoHs",
+      "sha256": "bdb90079372567408a588d149eac3d6a1970ded7f2774bfa7908ac03b7a0b370"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T172930Z__fafced653a814f9881590beb54e984eb/13ef2ede34df9c6a0438b867c8670cf8d21491129cb4af9eac1c6fc270e91d2b/CA_history_cc684fe8e52aa26a.csv",
+      "version_id": "YQZmClB2cErpLbq1pFPApFyMuBgd35I_",
+      "sha256": "13ef2ede34df9c6a0438b867c8670cf8d21491129cb4af9eac1c6fc270e91d2b"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T172950Z__c02e90d16ece4d28b9ccad40cc241fb9/2b459ba3c70cf6a8331d8dd550e9afe0a21917b55d9b034f3f571a34b6572215/CA_history_554553b7e8154f2d.csv",
+      "version_id": "qfB6vM79fCDNc81GjbIGJ3xHqvprbe7.",
+      "sha256": "2b459ba3c70cf6a8331d8dd550e9afe0a21917b55d9b034f3f571a34b6572215"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T172950Z__e21b9a0a2bf749e59554ba042e01661a/7419e0c012793735d2260f469e1d36b126e551d9cb68102b67549891de3766ac/CA_history_3110bb1806e5d2c3.csv",
+      "version_id": "h1wRkaCM1rmC4joIYRiVF_zxMyCkU2vd",
+      "sha256": "7419e0c012793735d2260f469e1d36b126e551d9cb68102b67549891de3766ac"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173016Z__2de24afb5ad94ce6b15bd3faa1d67b56/67421ef56a575cee4df3a8845747e66f4e5225efe8f0ce38044d68007c50aeb4/CA_history_3731cd89c95e39f0.csv",
+      "version_id": "OuPes3jFbXpCY4t1gnK_DfbH_I46bHx_",
+      "sha256": "67421ef56a575cee4df3a8845747e66f4e5225efe8f0ce38044d68007c50aeb4"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173030Z__36c59e6225d146acaa1e97fc15a1f1d7/83358094bf537cdd32f3619bff3aef013c6e1c339f1e3c9caec356399a313ae5/CA_history_3ed6d5f5a9d931c8.csv",
+      "version_id": "W8vcgaFteuwbQEnkJBj3FkPPiok9l0la",
+      "sha256": "83358094bf537cdd32f3619bff3aef013c6e1c339f1e3c9caec356399a313ae5"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173051Z__89905e44247c47168c0d8d03023c05b0/680e59d3cd03a958b610368b3523dfc64ace0e79d1b20fd2600b7ef79dffe158/CA_history_b234194ae7209047.csv",
+      "version_id": "Stjbw4VRMG9nhKGFtuWfq3_J2QRJh2sC",
+      "sha256": "680e59d3cd03a958b610368b3523dfc64ace0e79d1b20fd2600b7ef79dffe158"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173053Z__e432383490054f57a8c41461f89bd5dd/650ea9d66e42b8b68b82fae43c008594ecbcee3a4e32f37d42fd8636f63c9470/CA_history_34da9ebf0f066ed3.csv",
+      "version_id": "59tKOEeMV3XsSTcZC.Ydom8SI4wg8msh",
+      "sha256": "650ea9d66e42b8b68b82fae43c008594ecbcee3a4e32f37d42fd8636f63c9470"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173349Z__2f2d1928e14a497db487ae747136f917/e2d26e438836a881b0574d3a10ae89485515b97578f0f038cec44b4b6e267d7c/CA_history_7b9c5961a4e1c4d6.csv",
+      "version_id": "WUgSNQY0VcJ3RORV8wcaLvJl.ulo7HJe",
+      "sha256": "e2d26e438836a881b0574d3a10ae89485515b97578f0f038cec44b4b6e267d7c"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173349Z__88b64568ca8f4a6b8650863805226515/db86c9e30a432c59d30b28196999ca243d0e2d7620405366e48a123fc885a852/CA_history_67f0fed8a9d05b90.csv",
+      "version_id": "Iwwi9Ki7AGyTuXusgWU.mCZ3zQ6Q69ab",
+      "sha256": "db86c9e30a432c59d30b28196999ca243d0e2d7620405366e48a123fc885a852"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173408Z__06699f57a709420dbe0bc153358f5b49/0741b1728bb4ea56a1cd2ce536150e2daee234ea5f9aa4a96255fa989be31828/CA_history_bc55f45b7f8f6b93.csv",
+      "version_id": "6aWqvXp5QDdDLspj_20NL66XYL6qVGTS",
+      "sha256": "0741b1728bb4ea56a1cd2ce536150e2daee234ea5f9aa4a96255fa989be31828"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173425Z__a85a9fda51744d0aaee436a3ca7870aa/09c47d9af08aa727009f7f5390c137c81793ee10c98fbe7f6c14bfa0c300ce59/CA_history_b1d4246b0e1e3ede.csv",
+      "version_id": "hmPqEw70rgDIzElUcQQy7pPhw7ZXAv.H",
+      "sha256": "09c47d9af08aa727009f7f5390c137c81793ee10c98fbe7f6c14bfa0c300ce59"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173444Z__4ff2825afa7d4e78a22b10ecc8c6e0e6/b5d836edcb3044fa9eb2e474e5be2408c126a0b8c39d2e047cc033cc5da4e11b/CA_history_27c8f40639ac17cb.csv",
+      "version_id": "KvPWOKjSWO4hk7OLg0eBkQJIIAwTOs_i",
+      "sha256": "b5d836edcb3044fa9eb2e474e5be2408c126a0b8c39d2e047cc033cc5da4e11b"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173445Z__9c05008b5dfc4c288da3eaa88deecf2a/7a9c95bb421ae54d95f6ecce7376ab8ac15fcc90cab04799b9ca06fb31547ee8/CA_history_1b4df104d9fcc8a8.csv",
+      "version_id": "mu3PuxCV42yky1uNIa67zh6JhauJq0Nk",
+      "sha256": "7a9c95bb421ae54d95f6ecce7376ab8ac15fcc90cab04799b9ca06fb31547ee8"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173500Z__7f33cf93bc964578b3821698adf67451/0d44d44bdc25caf79d15acb3be13f93abb582196422592943a6852d41ece174c/CA_history_6439263427b7ddb7.csv",
+      "version_id": "JP2R3mi5tQa0huFl.cDukXbCSoyXu_cs",
+      "sha256": "0d44d44bdc25caf79d15acb3be13f93abb582196422592943a6852d41ece174c"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173500Z__b70f096a938644f59773b2a376cf7f2f/2fd552660191060d35d93e06929397c3eeb00fa72e7a01fef3028cdd46c22500/CA_history_7508eaf4dcf67cb8.csv",
+      "version_id": "ArocYpQLfIl_5DFWEPwi4mVHdKF3YZlT",
+      "sha256": "2fd552660191060d35d93e06929397c3eeb00fa72e7a01fef3028cdd46c22500"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173506Z__41bfc051db9b421cb9d438d9010dc44c/bf1883e722d52dea6ac95e2ce5bc6ccba63d398325b44b2f7d0f06960030c025/CA_history_7b348678f3128cb2.csv",
+      "version_id": "mR2NufR9YeeLy5ae4FR8cQyYvw87EdjO",
+      "sha256": "bf1883e722d52dea6ac95e2ce5bc6ccba63d398325b44b2f7d0f06960030c025"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173516Z__69685b301fc34635a2c896879a818363/7a8db65a73f46d25ef54622eba8ecd4235f6bd0a9110db20e16579ae34e26689/CA_history_344eb5462cf55826.csv",
+      "version_id": "HKUjSRflNpTOmDcVBK_fXSgDWdI9wJY7",
+      "sha256": "7a8db65a73f46d25ef54622eba8ecd4235f6bd0a9110db20e16579ae34e26689"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173516Z__c76048c1962c4e788ec40574443a2f0d/40867720ea4ddc79356035677dbdbd3e54c1dacbe531570435fd196b594d290d/CA_history_ec3ad6c44470aba7.csv",
+      "version_id": "x7kyF_yPk3nPo.wQwGGBb_8eh1wVFX8z",
+      "sha256": "40867720ea4ddc79356035677dbdbd3e54c1dacbe531570435fd196b594d290d"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173521Z__99a1778e3e2b49e6b159f46eaf35e2e4/bf7486bd84d3326f4615e07ccd98cd17322cc9f07a7330f83a1ab068535a10a1/CA_history_5a46a50d193d8031.csv",
+      "version_id": "adX5fdEAXkjPtjRaD.Liz9McFK3mcl9u",
+      "sha256": "bf7486bd84d3326f4615e07ccd98cd17322cc9f07a7330f83a1ab068535a10a1"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173534Z__070169116b31421983dd6ec82e332766/8c41ec9b120b6d6c0f247e6b5b98b8a1338a98d4eac349fca04f2ddb599b5435/CA_history_26879f85587bc1ec.csv",
+      "version_id": "1MiZdfe.PImzyolxNKq.R3jXW_kIvn1W",
+      "sha256": "8c41ec9b120b6d6c0f247e6b5b98b8a1338a98d4eac349fca04f2ddb599b5435"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173534Z__a6d3f3c05ec649ccb425ac4c1669721e/87a4995403484495419d2834ccf543169977d0cb1644ea55f46c1e7eea3d28df/CA_history_a17c9fa8f6907e82.csv",
+      "version_id": "LrlqRRHh7SnjtGr75noOOJfJtY6Xq0uR",
+      "sha256": "87a4995403484495419d2834ccf543169977d0cb1644ea55f46c1e7eea3d28df"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173539Z__41f7cfb155934fbfb09478098e874d70/4dbb213af9660483faf5773f41f17b9dbe74a086f4a36dcfba8ee0f75a0913e4/CA_history_d0618f9b3fdecbad.csv",
+      "version_id": "yRboh4AOgL4B4cfoDGuwwK70ZCHRijLY",
+      "sha256": "4dbb213af9660483faf5773f41f17b9dbe74a086f4a36dcfba8ee0f75a0913e4"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173617Z__9c27c61801514d52b337cea108b3d74c/42400e17c2ddedc74b26009d965bacf656d8fa8b536c106380e5d32f5c9fa360/CA_history_c4f62c8e7dd53694.csv",
+      "version_id": "zN3CrS_Q3h_CKHkcNneNR_NCYT.ihhjT",
+      "sha256": "42400e17c2ddedc74b26009d965bacf656d8fa8b536c106380e5d32f5c9fa360"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173631Z__5f3b08438fa341af9eef25b5aeb368c3/c6beb15b002371b7f85c0c90b08f0a521b2ffcb59c8e9e4cc69e840c1ccf35a7/CA_history_554903d84dcfb4f4.csv",
+      "version_id": "byqDvPbwkPbvXJQdK9vFtOMEqrziYpfB",
+      "sha256": "c6beb15b002371b7f85c0c90b08f0a521b2ffcb59c8e9e4cc69e840c1ccf35a7"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173651Z__5d312b9067c34a788c5252eb14298ac8/611f81e65815e158ad8c86f8a6bd5d74af3a317c4d4fe7ac83ff47bb4a3252b6/CA_history_32f501c69b61ba96.csv",
+      "version_id": "WlaABfaB4Jf6DlRB3WGX4akxcTjVAY5o",
+      "sha256": "611f81e65815e158ad8c86f8a6bd5d74af3a317c4d4fe7ac83ff47bb4a3252b6"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173652Z__8a145bd718b841cc9dad5b5518efe639/227b1fbbc909c9b413b2cdd18a30498b432b78d6675485a231973aeb1a4b4ce9/CA_history_df3a642a2183c74e.csv",
+      "version_id": "Jv.LShjGL6cTnAg8MXWLGJcAgG1GNqVF",
+      "sha256": "227b1fbbc909c9b413b2cdd18a30498b432b78d6675485a231973aeb1a4b4ce9"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173711Z__5d346891fd9a41a5b4f726693ea92d46/bebdf5e475c7ec5462a46f9cd07d1914c52292640168022bcbd6d15ff60ff75f/CA_history_854f71ac2966f014.csv",
+      "version_id": "k1DW6__3x5y6BhGxy29eKwLtH6hedm0u",
+      "sha256": "bebdf5e475c7ec5462a46f9cd07d1914c52292640168022bcbd6d15ff60ff75f"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173727Z__24c1b596d261411e809ee1071e251506/ecf815bce237d8a2b70b50786ec42c1b843df6bedc57ab146a689c68a660524f/CA_history_a90ab912d2f95415.csv",
+      "version_id": "uHnOUvziYCIt0awidlvCFwc8dJedFkJo",
+      "sha256": "ecf815bce237d8a2b70b50786ec42c1b843df6bedc57ab146a689c68a660524f"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173743Z__a48e6787e8604674afb9654aac470ef6/040e67995937b5ce2cabc7888d94f02ec8ec1713cc95d9f3a185d39507512048/CA_history_939427b947112d89.csv",
+      "version_id": "xHbrLMSOgFxuGW9gYceOaKtWpFQpUEFv",
+      "sha256": "040e67995937b5ce2cabc7888d94f02ec8ec1713cc95d9f3a185d39507512048"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173746Z__75d241697b8b4b55ad10085371e43474/86dbcdf22846d21da8c09eab6adc9b54f81a18b08d348d07dec1122b9794e6ed/CA_history_38b7c78a96d09a09.csv",
+      "version_id": "gzlIRljjeRcU6axvg8eOYcUHdIf2.1XT",
+      "sha256": "86dbcdf22846d21da8c09eab6adc9b54f81a18b08d348d07dec1122b9794e6ed"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173809Z__131900f3b5be4e2ca82b58cbd8ad329c/01a2394ffcfeb0e4e5d88949f1d115c6988e6c076988dff556085b04964605db/CA_history_92f4ccfadcb63264.csv",
+      "version_id": "0xxO54UMnN0DFkkHauXH5xMu1q05I0GC",
+      "sha256": "01a2394ffcfeb0e4e5d88949f1d115c6988e6c076988dff556085b04964605db"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173811Z__44ee42d26fb14e5eb7cde1393c80118b/77e116e72baad2dc37f8e6b9e7b7d815607f41bbe77d2786e146950b597bbe05/CA_history_fc08ca4fa52da1f1.csv",
+      "version_id": "7QSh863f5VzCpXUleli1A.6jl6a9VQEo",
+      "sha256": "77e116e72baad2dc37f8e6b9e7b7d815607f41bbe77d2786e146950b597bbe05"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173838Z__c26546e69af34a188033f457a5625b20/c3e0e74c1f66f7b99e9d7862593162594fc63940589a5dc3bed51200645461a1/CA_history_ea41311bf5c33679.csv",
+      "version_id": "ZRHwMzn5aDAi6OJhOTO_TdLx5pBnbHV5",
+      "sha256": "c3e0e74c1f66f7b99e9d7862593162594fc63940589a5dc3bed51200645461a1"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173849Z__47a155ea1bc243aa9846874c3bb6e274/8764c0e5721273bd03f8d769202fefae83bab3f8b25b5f143e83a5b2aecda0a6/CA_history_7860eea4266ffb57.csv",
+      "version_id": "kezxuWb2algElkdCItudQgjZNstUM01R",
+      "sha256": "8764c0e5721273bd03f8d769202fefae83bab3f8b25b5f143e83a5b2aecda0a6"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173906Z__9b491e9b19ce46a1914cfd33cfbf8315/5f45a9a4947ae0f340466f7dca41b82ee4ff7ecd0323367afb51002eb8c8b476/CA_history_062b6befb003c3cf.csv",
+      "version_id": "fDFZCG7RkV6GGJav4CsyxYTKXbAIoqOL",
+      "sha256": "5f45a9a4947ae0f340466f7dca41b82ee4ff7ecd0323367afb51002eb8c8b476"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173914Z__2206c7b31431445c8ae59317c6ea3339/e148094054af2b4b2f1b6fdb920039ca3304637fb1387c083a3ccfa46579cb0e/CA_history_80b18c843d350374.csv",
+      "version_id": "8B3jSnhrw9PSL7tzb2I8Y0eIe.xA8bT0",
+      "sha256": "e148094054af2b4b2f1b6fdb920039ca3304637fb1387c083a3ccfa46579cb0e"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T173931Z__ea6caf737d19445f9bc032efa03eb997/5f14d1331a874664b8f8d516ae73c03a6dc27b81c2a135e666fbf50c129b9b20/CA_history_3fa09676a1f1be70.csv",
+      "version_id": "RmxIfIan0ByItv.JXT65YVmYMyQR0vHf",
+      "sha256": "5f14d1331a874664b8f8d516ae73c03a6dc27b81c2a135e666fbf50c129b9b20"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174511Z__9cf2798d570e4a1a9ac20ab959a56228/dff0feed70002c7b70b27d3bd6e58885c26717359f15be14f5568882329dcf31/fy-selected-file-hafd0607-revised-908.xls",
+      "version_id": "t5.RWIYiFCEld5q88yojDTwWicp0I129",
+      "sha256": "dff0feed70002c7b70b27d3bd6e58885c26717359f15be14f5568882329dcf31"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174611Z__c8a14bb6a3e34c3d830bbf3792870003/72c3151204abf55781324886ac0d18400b127c434db03388c985cd51a79e5127/cy-selected-file-hafd12-31-05revised9-07.xls",
+      "version_id": "HAliVYQgMOBlLMkEMSu0pVk9jZtD65.y",
+      "sha256": "72c3151204abf55781324886ac0d18400b127c434db03388c985cd51a79e5127"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174616Z__e6fd724811374dbebd47c923389bde9f/eb53101ec81f568219bfcc7050e54357d8261a59cc50c7c077f802c3e8e5ec1f/fy-selected-file-hafd0506-revised-907.xls",
+      "version_id": "EBw5yhYU_i5uPklDYM5LM9JYRVYz3sXM",
+      "sha256": "eb53101ec81f568219bfcc7050e54357d8261a59cc50c7c077f802c3e8e5ec1f"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174623Z__3f5a0ef66fbe4167b1630cdb0ac01863/20d342ea366fd5f8d07dab2270d1c2da837926bd8c1b1634dea2cc6a20ccd900/hafd2005pivot.xls",
+      "version_id": "SMAeqvDf2rKH7j6Q2oNmd7QLBw_GiNee",
+      "sha256": "20d342ea366fd5f8d07dab2270d1c2da837926bd8c1b1634dea2cc6a20ccd900"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174628Z__4f676b8828114bb7b68ed7f454f3fc8e/df2296b26987dda0afcb583dfe5ee380441cc6aad43c295241025dbb6daea860/cy-selected-file-hafd2004revised906.xls",
+      "version_id": "HkLrfAy23F75bEqNA4ZxrPDzpFjTkgNq",
+      "sha256": "df2296b26987dda0afcb583dfe5ee380441cc6aad43c295241025dbb6daea860"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174629Z__297ed754cbe64601ba568f33f6f446aa/69c4cb04f0f6da0dc0d9acd878f53156164beffc8fb78a3dcfc41597ed500420/fy-selected-file-hafd0405-revised-906.xls",
+      "version_id": "IYNMByeY.PBz1m_99.rpFlYKBtiEx5Xi",
+      "sha256": "69c4cb04f0f6da0dc0d9acd878f53156164beffc8fb78a3dcfc41597ed500420"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174637Z__a56dbc98819045b88adf26af36b1d09e/c7b80d5acd59ea756a8c1f290b019200f2567219b9d9b83b72b6c624c8f451a6/hafd2004pivot.xls",
+      "version_id": "CmgC5g5WuG14ohYsgW05Pf8aJ4OAYHxA",
+      "sha256": "c7b80d5acd59ea756a8c1f290b019200f2567219b9d9b83b72b6c624c8f451a6"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174643Z__4415d1d39911481caa0d32d606bd6a54/eabcfa15ae44823fc9b3b03225d5caf042003385dac19e1f29526bb97e1e8259/cy-selected-file-hafd123103revised-905.xls",
+      "version_id": "dWsckSlcnNOziyh9HC8Vn4X4O3S8Iwhe",
+      "sha256": "eabcfa15ae44823fc9b3b03225d5caf042003385dac19e1f29526bb97e1e8259"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174643Z__50b488fc4b3043849f9b15e9673c140f/68b38f6887ef752cf260ea5227fad7840cd88e46681c1488dfa2ad50b776530e/hafd2003pivot.xls",
+      "version_id": "8ORLPX7hwQXJB_cwEV_O6IYyUMyG5DDJ",
+      "sha256": "68b38f6887ef752cf260ea5227fad7840cd88e46681c1488dfa2ad50b776530e"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174649Z__e6f1fb4c9df74bce943d68aae42f5cd8/451b3eceaa9d2a7462fe3d7e662975842192b46110a3a455a50748ff04b9f3bf/cy-selected-file-hafd123102rev1004.xls",
+      "version_id": "f6UBc9XrV1KmnVUiBKRhd_oyjjP0IuFp",
+      "sha256": "451b3eceaa9d2a7462fe3d7e662975842192b46110a3a455a50748ff04b9f3bf"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174653Z__3d7e9f7a378e47409de366659ddaf6b8/5992b191714c9b5ccecf39a43e0a869bbe44e15e5a6256f1724acf004763c1ab/fy-selected-file-hafd0203-revised-1004.xls",
+      "version_id": "Yg0Vr_aTD6To68QQxelS0yHO3hPDnPRX",
+      "sha256": "5992b191714c9b5ccecf39a43e0a869bbe44e15e5a6256f1724acf004763c1ab"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174654Z__de95e35a41e04a32b816590629682b23/7a302c17fb5db32d10dacc4b25d2af57fa72004e94f41f158587248fa765a4d6/hafd2002pivot.xls",
+      "version_id": ".3LnRBTMNc.G2aXMKr3PBS_HYeZrrYGN",
+      "sha256": "7a302c17fb5db32d10dacc4b25d2af57fa72004e94f41f158587248fa765a4d6"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174658Z__96a6a8e3c36d4ad09f6a9da48958bf36/8928cf792004f035b0c1759547adf81f3c55b01e9f8cb853a474605e5c2fb033/cy-selected-file-hafd2001revised-904.xls",
+      "version_id": "LLg3ATIYHDghNjV.83lCc6XF_MixcXOZ",
+      "sha256": "8928cf792004f035b0c1759547adf81f3c55b01e9f8cb853a474605e5c2fb033"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174705Z__887f42e4998d4423964cf6b8acc743e4/8e22b8ba847de91ca24d6b55e5c7186e044971db4fb00d842ce7e60bc7f17ffb/fy-selected-file-hafd0102.xls",
+      "version_id": "d3zBviEihVH2KCyIW00Pvt_jM4qN0N4C",
+      "sha256": "8e22b8ba847de91ca24d6b55e5c7186e044971db4fb00d842ce7e60bc7f17ffb"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174709Z__5cd2c77b25804da2be30b2d855469608/d5cc62c99e4bc5ef544284bbd1c05f32690e06b461fa412b44d806b2d012d05d/hafd2001pivot.xls",
+      "version_id": "RT4LJ3w7eBkNFRTN6invT8sNRULOG3qN",
+      "sha256": "d5cc62c99e4bc5ef544284bbd1c05f32690e06b461fa412b44d806b2d012d05d"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174711Z__53e79814ff1f4677946cd894e23a5cc0/28a7823864cce9eaea4133b2e5431670c44238955a0b641d7bac4bd08b559659/cy-selected-file-hafd-7199-062900-partial-year.txt",
+      "version_id": "dUWGiW8TSIz2nn2zXm4KBrWRLtlXem1X",
+      "sha256": "28a7823864cce9eaea4133b2e5431670c44238955a0b641d7bac4bd08b559659"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174717Z__7b1b03e20ebe49fa8ebf3125c85a2d42/acc992a401831459d404bdf5600e3dd4da604fc5d70746cacd35d3d1139093dd/cy-selected-file-hafd-630-12312000-partial-year.txt",
+      "version_id": "XnnYImnNMB1kGfGHBxuUXzBNg8Y6G3_E",
+      "sha256": "acc992a401831459d404bdf5600e3dd4da604fc5d70746cacd35d3d1139093dd"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174720Z__a009296e994a4f5f9b79f20d089ddccd/959c42203276c5ebe02442212e5d99926cef521a0aa512458613ba8fddb6e95d/hafd2000pivot.xls",
+      "version_id": "WuW3phhMSOa549RERyAKdlYmnisjs_Eq",
+      "sha256": "959c42203276c5ebe02442212e5d99926cef521a0aa512458613ba8fddb6e95d"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174722Z__b85f1de61ffc4198944147b537734fad/8b89cccb0216d58d116b1f79ccefc0543f30a3cacb7803845a9e2370c98af834/cy-selected-file-hafd9599.txt",
+      "version_id": "1b7Y5NoDO9G2TM6Od.jzRXhDumxy4UG6",
+      "sha256": "8b89cccb0216d58d116b1f79ccefc0543f30a3cacb7803845a9e2370c98af834"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174727Z__324213fefb26490dadb8bb4fce6b9f32/e7e904fa099c086a2559cc73f94bc195aea475778f69ed0052ff2ef72425a052/cy-selected-file-hafd1299.txt",
+      "version_id": "eDnBeHtxdfTziohwYQuzezGMKNwEpxHH",
+      "sha256": "e7e904fa099c086a2559cc73f94bc195aea475778f69ed0052ff2ef72425a052"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174735Z__df37565ec8fe4425bc50e10037710a01/4b56b0364c737a88f651d42dc3e4b012f2222e9e375a055d75630fff7b3433ae/cy-selected-file-hafd1998.txt",
+      "version_id": "PnXSb2pwbKdYChpWohTDY8ia3MqxJ2it",
+      "sha256": "4b56b0364c737a88f651d42dc3e4b012f2222e9e375a055d75630fff7b3433ae"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174744Z__0ffd1ab7b47a4f88829f40ae763c09fb/47b04f173838a37726f82d2817d6b92e310fbbe92a7af87f266573350bd57a1b/cy-selected-file-hafd1997.txt",
+      "version_id": "wEmza3U_8HJCZEVz0jNUIT7NboybXLPK",
+      "sha256": "47b04f173838a37726f82d2817d6b92e310fbbe92a7af87f266573350bd57a1b"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174750Z__c247d2b052e3457d8c9813d5a713b2cb/7cacd0bb153250fa0239120e4efdd4fbe11e50a0a1a604e7ddc53c1d89a2d013/cy-selected-file-hafd1996.txt",
+      "version_id": "CibCWz47Qr8TubQsI10Nm9tu9KYbVzKV",
+      "sha256": "7cacd0bb153250fa0239120e4efdd4fbe11e50a0a1a604e7ddc53c1d89a2d013"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174757Z__4d24b2a2638046e696f63bd02903d78b/e533ade1658ab310c503d0a5f98e1d45dd1990df7557cbd69aefac1e54762a72/cy-selected-file-hafd1995.txt",
+      "version_id": "I.q36SnanGn8OfaMXNuAJMm9p4ooyl_L",
+      "sha256": "e533ade1658ab310c503d0a5f98e1d45dd1990df7557cbd69aefac1e54762a72"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/00e55ec6d934c05f5bcd85a02d5d3a5a6130bd9eb3455b34c63c55c9e2f2be02/2011-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": "0wX6lfZUXBVLs5qzs1kgkLqtRkp2DOLh",
+      "sha256": "00e55ec6d934c05f5bcd85a02d5d3a5a6130bd9eb3455b34c63c55c9e2f2be02"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/199a5bf292bfac790603952e80bf98d7b9f36521d08a893abc7196aa6722b1d1/2011-2012-fy-hospital-annual-selected-file-october-2013-extract.xlsx",
+      "version_id": "UuT_sFpa0OeYvGeD.S7eDitfPdf5M9TO",
+      "sha256": "199a5bf292bfac790603952e80bf98d7b9f36521d08a893abc7196aa6722b1d1"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/1c891ac3fd9a5ade5f03a2ce4dff70759a97622709da236ed80bc72456dd5bb2/2010-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": "1zMC6XC3nkaCGznODObs5wRNOKvwbL58",
+      "sha256": "1c891ac3fd9a5ade5f03a2ce4dff70759a97622709da236ed80bc72456dd5bb2"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/20d342ea366fd5f8d07dab2270d1c2da837926bd8c1b1634dea2cc6a20ccd900/2005-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": ".pjE8eAO5J.NjrFRQ9M8pVu6oJONWYtJ",
+      "sha256": "20d342ea366fd5f8d07dab2270d1c2da837926bd8c1b1634dea2cc6a20ccd900"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/20e9333fb65abb733643eb9365c322467f6de79ffc406b239751a46283a7ec9a/2007-cy-hospital-annual-selected-file-september-2009-extract.xls",
+      "version_id": "XAM3Ox2a_fLuaA_p5X3zlaqK9ZEUxQSL",
+      "sha256": "20e9333fb65abb733643eb9365c322467f6de79ffc406b239751a46283a7ec9a"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/28a7823864cce9eaea4133b2e5431670c44238955a0b641d7bac4bd08b559659/2000-cy-partial-7-1-99-6-29-00-hospital-annual-selected-file.txt",
+      "version_id": "VVU9umG6FB16jAyXfNseq9RrBInaHAXE",
+      "sha256": "28a7823864cce9eaea4133b2e5431670c44238955a0b641d7bac4bd08b559659"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/3bb17742a0b04743ac50b7fb1d6008822eec2ff09b99f82b8280090160309243/2010-cy-hospital-annual-selected-file-september-2012-extract.xls",
+      "version_id": "0P2K7gY.iLsWurBMR.DpEyr0zvJpjSuH",
+      "sha256": "3bb17742a0b04743ac50b7fb1d6008822eec2ff09b99f82b8280090160309243"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/451b3eceaa9d2a7462fe3d7e662975842192b46110a3a455a50748ff04b9f3bf/2002-cy-hospital-annual-selected-file-october-2004-extract.xls",
+      "version_id": "pjVoQ9Z3DMxRW1.yULjcy5bDOrj1.IEr",
+      "sha256": "451b3eceaa9d2a7462fe3d7e662975842192b46110a3a455a50748ff04b9f3bf"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/47b04f173838a37726f82d2817d6b92e310fbbe92a7af87f266573350bd57a1b/1997-cy-hospital-annual-selected-file.txt",
+      "version_id": "3R00_VP8tQLXoPQkLgsHTediKpZP4QYy",
+      "sha256": "47b04f173838a37726f82d2817d6b92e310fbbe92a7af87f266573350bd57a1b"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/4b56b0364c737a88f651d42dc3e4b012f2222e9e375a055d75630fff7b3433ae/1998-cy-hospital-annual-selected-file.txt",
+      "version_id": "MH4dvd7o_q8WK90NOkW0_du4UGrWY8cx",
+      "sha256": "4b56b0364c737a88f651d42dc3e4b012f2222e9e375a055d75630fff7b3433ae"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/4e55c7361850c988f16bb5c442bbea5fc3d32d70d4a1dbaff4ed2f28a21a85ae/2008-cy-hospital-annual-selected-file-september-2010-extract.xls",
+      "version_id": "KAbKZPUo0VFPi_nHGgqtn6wD0OnE9_xV",
+      "sha256": "4e55c7361850c988f16bb5c442bbea5fc3d32d70d4a1dbaff4ed2f28a21a85ae"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/55fddcffd3b19c493809205d11d803ae14f92feba416e8be2b96c3db3438e57c/2009-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": "Zd13WwtGJjVOGbYHAqLU8XUlAMzrT2Se",
+      "sha256": "55fddcffd3b19c493809205d11d803ae14f92feba416e8be2b96c3db3438e57c"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/5741b021b6a36ce02f77b3fa4d0260c59fed1c64e4862828f85d0d53cc60639d/2009-cy-hospital-annual-selected-file-september-2011-extract.xlsx",
+      "version_id": "zX178bRaUHo2lcNeU1ZVjMk.UQmNDD6J",
+      "sha256": "5741b021b6a36ce02f77b3fa4d0260c59fed1c64e4862828f85d0d53cc60639d"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/5992b191714c9b5ccecf39a43e0a869bbe44e15e5a6256f1724acf004763c1ab/2002-2003-fy-hospital-annual-selected-file-october-2004-extract.xls",
+      "version_id": ".LoqpFsqqy7A5YbXWcoLVYrfHV4AjX82",
+      "sha256": "5992b191714c9b5ccecf39a43e0a869bbe44e15e5a6256f1724acf004763c1ab"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/68b38f6887ef752cf260ea5227fad7840cd88e46681c1488dfa2ad50b776530e/2003-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": "jQwhgiFaSTy.rpEvhXcyjmz0O1ruJqpg",
+      "sha256": "68b38f6887ef752cf260ea5227fad7840cd88e46681c1488dfa2ad50b776530e"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/69c4cb04f0f6da0dc0d9acd878f53156164beffc8fb78a3dcfc41597ed500420/2004-2005-fy-hospital-annual-selected-file-september-2006-extract.xls",
+      "version_id": "3QngLT9fcABSVgM.tpaCXsDtBESqXvqj",
+      "sha256": "69c4cb04f0f6da0dc0d9acd878f53156164beffc8fb78a3dcfc41597ed500420"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/707a8655499f2c2f19d9100daed0aef55d29f6333c383c31ac92bd34cc03fb32/2007-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": "I3qoCSnW7evxz1NWKNoa3BQoJI9lXciA",
+      "sha256": "707a8655499f2c2f19d9100daed0aef55d29f6333c383c31ac92bd34cc03fb32"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/72c3151204abf55781324886ac0d18400b127c434db03388c985cd51a79e5127/2005-cy-hospital-annual-selected-file-september-2007-extract.xls",
+      "version_id": "epsvRTrETlmPt3LT8cX_CUwJq34rXAqm",
+      "sha256": "72c3151204abf55781324886ac0d18400b127c434db03388c985cd51a79e5127"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/7a302c17fb5db32d10dacc4b25d2af57fa72004e94f41f158587248fa765a4d6/2002-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": "qZzRsVMEld3UGloqBxRqEBQXKVRp_FRn",
+      "sha256": "7a302c17fb5db32d10dacc4b25d2af57fa72004e94f41f158587248fa765a4d6"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/7cacd0bb153250fa0239120e4efdd4fbe11e50a0a1a604e7ddc53c1d89a2d013/1996-cy-hospital-annual-selected-file.txt",
+      "version_id": "7PioKwZY81OOExzbV.4hNffwvPokRSym",
+      "sha256": "7cacd0bb153250fa0239120e4efdd4fbe11e50a0a1a604e7ddc53c1d89a2d013"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/8928cf792004f035b0c1759547adf81f3c55b01e9f8cb853a474605e5c2fb033/2001-cy-hospital-annual-selected-file-september-2004-extract.xls",
+      "version_id": "dTdgz1sEaWa.H9b9Y9DAPUCdzb2OU1OA",
+      "sha256": "8928cf792004f035b0c1759547adf81f3c55b01e9f8cb853a474605e5c2fb033"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/8b89cccb0216d58d116b1f79ccefc0543f30a3cacb7803845a9e2370c98af834/1995-1999-combined-cy-hospital-annual-selected-file.txt",
+      "version_id": "BLHb.GqtvbctuArH2dsQX4U_uuZNOP5n",
+      "sha256": "8b89cccb0216d58d116b1f79ccefc0543f30a3cacb7803845a9e2370c98af834"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/8e22b8ba847de91ca24d6b55e5c7186e044971db4fb00d842ce7e60bc7f17ffb/2001-2002-fy-hospital-annual-selected-file.xls",
+      "version_id": "CzfPbrb58ZreRRIlIs54dkJ19roFDXe_",
+      "sha256": "8e22b8ba847de91ca24d6b55e5c7186e044971db4fb00d842ce7e60bc7f17ffb"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/959c42203276c5ebe02442212e5d99926cef521a0aa512458613ba8fddb6e95d/2000-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": "Dig7S0EDq3Wr8wrlyU75O0l6FkcohIXU",
+      "sha256": "959c42203276c5ebe02442212e5d99926cef521a0aa512458613ba8fddb6e95d"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/acc992a401831459d404bdf5600e3dd4da604fc5d70746cacd35d3d1139093dd/2000-cy-partial-6-30-00-12-31-00-hospital-annual-selected-file.txt",
+      "version_id": "mqigd.bxKnZQPY1jvVYPSxm53J3CAcSD",
+      "sha256": "acc992a401831459d404bdf5600e3dd4da604fc5d70746cacd35d3d1139093dd"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/b7a2c365c73a9eba57a459f961b42d69fd2ee6c5db1c317ba059efae273913db/2009-2010-fy-hospital-annual-selected-file-september-2011-extract.xlsx",
+      "version_id": "4ld.1TXfUS9ihYxhtKdoUv3O7Pg3qP3P",
+      "sha256": "b7a2c365c73a9eba57a459f961b42d69fd2ee6c5db1c317ba059efae273913db"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/c15ccb45c9b61e07f94ab976c255db2e4a7555b0f3e516151ea3dd1e24881249/2006-cy-hospital-annual-selected-file-september-2008-extract.xls",
+      "version_id": "PREGCJxsKpeUE9b4dzVirOqEB6thK6Ou",
+      "sha256": "c15ccb45c9b61e07f94ab976c255db2e4a7555b0f3e516151ea3dd1e24881249"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/c7b80d5acd59ea756a8c1f290b019200f2567219b9d9b83b72b6c624c8f451a6/2004-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": "PppEbisKAu2dRHYFbAg7iPhaET.syHkY",
+      "sha256": "c7b80d5acd59ea756a8c1f290b019200f2567219b9d9b83b72b6c624c8f451a6"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/d5cc62c99e4bc5ef544284bbd1c05f32690e06b461fa412b44d806b2d012d05d/2001-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": "hwPsFKyuS1T_Lp8Atx.LYFzMY6VhHRgH",
+      "sha256": "d5cc62c99e4bc5ef544284bbd1c05f32690e06b461fa412b44d806b2d012d05d"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/d69c270ba56e044617fbe880d13d98849649649521c87cfe520008b27e7d89d8/2010-2011-fy-hospital-annual-selected-file-september-2012-extract.xlsx",
+      "version_id": "Kz_21aObhn_lVvDtmuyIIdQ5_jqogW_f",
+      "sha256": "d69c270ba56e044617fbe880d13d98849649649521c87cfe520008b27e7d89d8"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/d7ff2c1caf9d8f00ba78c844b4656dfb82d2d203ee494581f40a2e35816fd9cb/2007-2008-fy-hospital-annual-selected-file-september-2009-extract.xls",
+      "version_id": "s5SwdSCqFkbuyLbCeAsjzoJbSfxeCTKj",
+      "sha256": "d7ff2c1caf9d8f00ba78c844b4656dfb82d2d203ee494581f40a2e35816fd9cb"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/df2296b26987dda0afcb583dfe5ee380441cc6aad43c295241025dbb6daea860/2004-cy-hospital-annual-selected-file-september-2006-extract.xls",
+      "version_id": "SAMWaT..19y7dJSRzr7iaBt7a9X6LvW.",
+      "sha256": "df2296b26987dda0afcb583dfe5ee380441cc6aad43c295241025dbb6daea860"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/dfe6b7d81698d187aeaf571e17b9ec3a56e7c45e7e0996367f9b33b0118b354c/2011-cy-hospital-annual-selected-file-october-2013-extract.xlsx",
+      "version_id": "WzHIEetEcBiIaRIBcZyxv5peYdwfL.i8",
+      "sha256": "dfe6b7d81698d187aeaf571e17b9ec3a56e7c45e7e0996367f9b33b0118b354c"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/dff0feed70002c7b70b27d3bd6e58885c26717359f15be14f5568882329dcf31/2006-2007-fy-hospital-annual-selected-file-september-2008-extract.xls",
+      "version_id": "iVcwVHV2_KC39qW9XlH53.n3.FD7X9zI",
+      "sha256": "dff0feed70002c7b70b27d3bd6e58885c26717359f15be14f5568882329dcf31"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/e533ade1658ab310c503d0a5f98e1d45dd1990df7557cbd69aefac1e54762a72/1995-cy-hospital-annual-selected-file.txt",
+      "version_id": "PXUx2HgOusg2.Y9.EgIE2fpYtNLg2KZC",
+      "sha256": "e533ade1658ab310c503d0a5f98e1d45dd1990df7557cbd69aefac1e54762a72"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/e71a2275550aea4760dae22316aa7a3262081285d4b6fdfe53bb2fd6e3030187/2006-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": "EjKKxtkW3zJC.5gUCIRasnJ.rXtbHbA_",
+      "sha256": "e71a2275550aea4760dae22316aa7a3262081285d4b6fdfe53bb2fd6e3030187"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/e7e904fa099c086a2559cc73f94bc195aea475778f69ed0052ff2ef72425a052/1999-cy-hospital-annual-selected-file.txt",
+      "version_id": "RxgRQOYdXw.eiCaMjx9idHATtcLvlou4",
+      "sha256": "e7e904fa099c086a2559cc73f94bc195aea475778f69ed0052ff2ef72425a052"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/eabcfa15ae44823fc9b3b03225d5caf042003385dac19e1f29526bb97e1e8259/2003-cy-hospital-annual-selected-file-september-2005-extract.xls",
+      "version_id": "x0CE0e2RHPMk3VY12P8ZKAuTLYYtzcn8",
+      "sha256": "eabcfa15ae44823fc9b3b03225d5caf042003385dac19e1f29526bb97e1e8259"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/eb53101ec81f568219bfcc7050e54357d8261a59cc50c7c077f802c3e8e5ec1f/2005-2006-fy-hospital-annual-selected-file-september-2007-extract.xls",
+      "version_id": "N1PfFl9yzYdkZCUHlvc_JyW5W39Om4Uv",
+      "sha256": "eb53101ec81f568219bfcc7050e54357d8261a59cc50c7c077f802c3e8e5ec1f"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/f00551f9feaab830f67c5ddd2043ab3643f1718bfd7e150ae4eb83807b772a5a/2008-2009-fy-hospital-annual-selected-file-september-2010-extract.xls",
+      "version_id": "w5NU4p.jHi4rer2qQ8jNzQXm_fAQtW94",
+      "sha256": "f00551f9feaab830f67c5ddd2043ab3643f1718bfd7e150ae4eb83807b772a5a"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174807Z__ceaa8d797a934c75bb7b5319a988ebff/fa4b286171f5f3e1af130fae899afffd0d8348aceeae95cf3bd5754c76ba5107/2008-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": "tsGrd.dWpud8FmDZW2lKQ_fUJCoNicYV",
+      "sha256": "fa4b286171f5f3e1af130fae899afffd0d8348aceeae95cf3bd5754c76ba5107"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174820Z__f3ad6bc79bf24705b8e26e6775f2f787/0fcc4c3c52f335adc63699cf65d5ecbe28b94bb2d20433508cfe799e82541e26/hadr-2024.xlsx",
+      "version_id": "PE3gyqIcdfQWMABQNbj59b4LC0LoZYti",
+      "sha256": "0fcc4c3c52f335adc63699cf65d5ecbe28b94bb2d20433508cfe799e82541e26"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174844Z__6f227ed9eafc4ea1876777e3131ae9e6/bf3ee85138e3bfca139ad3ed18c4f0ec03dd14022a6831d0d960d5b924d03620/hadr-2023-2024.xlsx",
+      "version_id": "eb6I43LVoIuBJd7FI8UVvycd2a5T2Taj",
+      "sha256": "bf3ee85138e3bfca139ad3ed18c4f0ec03dd14022a6831d0d960d5b924d03620"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174856Z__ec693b33c8ee47cfb567e4226cada5a8/a1e6def0758349901fb6024632ec808664a9e0d2c9465780dbf4b9159c792d19/hadr-2023.xlsx",
+      "version_id": "YdSoizGSu0VYpgtTGO44b9sFXYZwUpC9",
+      "sha256": "a1e6def0758349901fb6024632ec808664a9e0d2c9465780dbf4b9159c792d19"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174906Z__738a5641d6be4484912b7fdd2e9b17d4/95ffdde93b0e10812436da20239e698a7eb516b31898fad3c3dc9c95cfc22978/hadr-2022-2023.xlsx",
+      "version_id": "kgI6n9V_HWsoTGpThjfzQmFdKk7XONlh",
+      "sha256": "95ffdde93b0e10812436da20239e698a7eb516b31898fad3c3dc9c95cfc22978"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174907Z__7bda511bad7749b6a78880c81a9094bf/c401ad8434633231387c4728e4082ac144035f192d8e3eb4486d0cbecaf21b29/hadr-2022.xlsx",
+      "version_id": "CIL_XU4DuG2w4XerT4O4oAQZSbuOaTLM",
+      "sha256": "c401ad8434633231387c4728e4082ac144035f192d8e3eb4486d0cbecaf21b29"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174921Z__36460aa965864d90b06d3d970da1075f/7daec137327f5ab818ee57c04a8c49c29d124f2ede9df1bb0a71ba93914649d1/hafd2022pivot.xls",
+      "version_id": "o826UCrwjYJZxeUJ9VBjxpwsmcAw0X64",
+      "sha256": "7daec137327f5ab818ee57c04a8c49c29d124f2ede9df1bb0a71ba93914649d1"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174922Z__885cb4a0fbf44350bf84db17df255af3/b300187a2a97cec727e5f6be15bff04147bc56bbe67e8598a82d0222e2f3a1d2/hadr-2021-2022.xlsx",
+      "version_id": "blN.kef0gs74BBin6PtkloVRbP3SD2xZ",
+      "sha256": "b300187a2a97cec727e5f6be15bff04147bc56bbe67e8598a82d0222e2f3a1d2"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174933Z__dd1efa60a1134f6a8f83c17cba59b655/913a9babde071622c84cd2896bfb7203a02d22bb7806ca6ac80e300334dadc76/hadr-21.xlsx",
+      "version_id": "oLg9r_txnBy55VCvWis2RUWD1ID31Bk0",
+      "sha256": "913a9babde071622c84cd2896bfb7203a02d22bb7806ca6ac80e300334dadc76"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174939Z__e7458fc7acb340eda5cb1808ece21e74/b92f9150d7b7c005eb17a4ac4a0901c8bd1f61e1bbe53946800dfa3b06a4fcd6/hafd2021-pivot.xls",
+      "version_id": "Xi_nS2J8bfn9ykSDY3Az1qSa3L1M771A",
+      "sha256": "b92f9150d7b7c005eb17a4ac4a0901c8bd1f61e1bbe53946800dfa3b06a4fcd6"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T174943Z__6c5c8246c0c64d68ab5cf88458a9e98d/66f3456e9f74e0da3b3b7fae1d89103cab5eafdf188420f8b34727c49b247e99/hafd2021-pivot_april-2023-extract.xls",
+      "version_id": "iSxg83SUzq5kZuiFgLEDA1gyLppAxU85",
+      "sha256": "66f3456e9f74e0da3b3b7fae1d89103cab5eafdf188420f8b34727c49b247e99"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175001Z__3a4b632a5eb94a29b30b7147cb2a492b/ed8164adb528717eeb105ff381f0dcf0d95fe75102ea17103a9581f1f86d6590/hadr-20-21.xlsx",
+      "version_id": "egJl2TzrBfuEC6VMcOhQzmS0yWyOwy_X",
+      "sha256": "ed8164adb528717eeb105ff381f0dcf0d95fe75102ea17103a9581f1f86d6590"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175002Z__282a24d43f794af7b80207f296f32d75/dc6e0fdf667ecabc83f9c275dd7b692f31982d24a5012c8c91aea76b04606e34/hadr-20.xlsx",
+      "version_id": "K1uoEYO1ztKfHTyLHxpy80RxszadxcjI",
+      "sha256": "dc6e0fdf667ecabc83f9c275dd7b692f31982d24a5012c8c91aea76b04606e34"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175011Z__a87299df369c4d59840e95204bbd0988/604119a19b66ed3b92346c939409cb4d5da1d58abe01cef754cdc85281894f20/hafd2020-pivot.xls",
+      "version_id": "URJzPYwDhWAdt8mYqaRpeMXSQHEXTf_o",
+      "sha256": "604119a19b66ed3b92346c939409cb4d5da1d58abe01cef754cdc85281894f20"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175013Z__f48e10a681e44d888dee071474fafc0b/61c9ff615ab9712c5a4818b560d9e44b4c242d9b48a943b511b0988de8ffa1a7/hadr-19-20.xlsx",
+      "version_id": "zsQwFVHMSIaKhPHjv.eZJ3nTUVZZ6L8G",
+      "sha256": "61c9ff615ab9712c5a4818b560d9e44b4c242d9b48a943b511b0988de8ffa1a7"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175029Z__914e258ff41b49e6a6b7c4946470cec6/22ea77cead38fa7a7fbcbff3b5f6c0a7269a0b651997df02a53ff39855014329/hadr-19.xlsx",
+      "version_id": "6sG2RX2PWIMCY8u8QO0.0HpDqoIG.iLN",
+      "sha256": "22ea77cead38fa7a7fbcbff3b5f6c0a7269a0b651997df02a53ff39855014329"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175031Z__78362c2e1a6345728d9005d30640c8dd/34a2a167952edd9e14417308f2183abf9dd6db727ba613f9fb33dfbf575ccd47/hafd2019pivot.xls",
+      "version_id": "159ulsWxBL49m26sF4wQ3VcF.JQit4aT",
+      "sha256": "34a2a167952edd9e14417308f2183abf9dd6db727ba613f9fb33dfbf575ccd47"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175032Z__21ddb914ad494059bc8fac64a5048bf2/cb870c2897ddc553d1908dd44c298e894cf0b3ca7bdf79623006127290f7e0fb/hadr-18-19.xlsx",
+      "version_id": ".hfSwRx7.IfkgWW1.rwTBYQrdBPFR7b7",
+      "sha256": "cb870c2897ddc553d1908dd44c298e894cf0b3ca7bdf79623006127290f7e0fb"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175047Z__be47141da6ff48779f757648a4e7f8e6/2e11413533812c12529fa6e680cd19c3a90d924d9dd22fb5ea69a59477f3cbd8/hadr-18.xlsx",
+      "version_id": "OM.tj3mDvUSDfYCMT0bMn5OVccfZLNOf",
+      "sha256": "2e11413533812c12529fa6e680cd19c3a90d924d9dd22fb5ea69a59477f3cbd8"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175056Z__776bb18baf4c4182b7f453cb832b79df/3b2be0c829b09153a3a491598d673c3e04537ce88acf488fea6f9eca27686d26/hafd2018pivot.xls",
+      "version_id": "lAmUN77p6u6M39_I03zbjs69HPQeS0Mg",
+      "sha256": "3b2be0c829b09153a3a491598d673c3e04537ce88acf488fea6f9eca27686d26"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175102Z__fd2e719af12b4da7806e8768804107aa/aa24f58a15aa75e3976ad3673498f600eff8248311df85a5256b3639fe17160c/hadr-17-18.xlsx",
+      "version_id": "GKqX3KbFvLUu.tRQpTe7i9.EMoGjIWA9",
+      "sha256": "aa24f58a15aa75e3976ad3673498f600eff8248311df85a5256b3639fe17160c"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175112Z__4bd7d0e74e1d4463a28806b6fcf99ff0/4c3f75e1caa3500a1393ad15fa9b6e3e3c3c890ca0489e3a7eefc572dcf1da62/hadr-17.xlsx",
+      "version_id": "WGRO9ur3QEJl6KavQFEZ_Ik2LBYilbMK",
+      "sha256": "4c3f75e1caa3500a1393ad15fa9b6e3e3c3c890ca0489e3a7eefc572dcf1da62"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175113Z__c4c4f9e66eb74e03bd53f336af8a3dc7/6fab2666f60237d83d7dfc6c053fe82cf71bec1aae480a413df97b1649fb6940/hafd2017pivot.xls",
+      "version_id": "xUikO9nf6RPBjfnVYZ__KrAgo_bNQ1yn",
+      "sha256": "6fab2666f60237d83d7dfc6c053fe82cf71bec1aae480a413df97b1649fb6940"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175130Z__1ff52cc55ea8441aa6c9f747f6299ebd/20b2efe8fa1ca285f24ab226d2c35abfb71dce438bb4332a4aa4d0a9b5e26933/hadr-2016-2017.xls",
+      "version_id": "oEaLec77rk_tEUSOO5pyqO9T1KZrwpQu",
+      "sha256": "20b2efe8fa1ca285f24ab226d2c35abfb71dce438bb4332a4aa4d0a9b5e26933"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175135Z__7df0bb5f8b424a66bac8ab4088583a2e/ab3c8e429c74635f056eeafb819b6e354f4aeef9519b61850e54c07f318fbb32/hafd15-32018-extract.xlsx",
+      "version_id": "2MzOJYP_Dmm1n.JHHJ5pwhVW6MCeby3l",
+      "sha256": "ab3c8e429c74635f056eeafb819b6e354f4aeef9519b61850e54c07f318fbb32"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175145Z__f1dc8f86904246a3bb6155e39744cc23/28a747ebd95e2ac5a1ac94a24b7c536ef660428fc2af57094f6997d3fe109e13/hafd1516_092018.xlsx",
+      "version_id": "4rDaMUWd42KXYaL.IzkfxsHLf9rlD.qc",
+      "sha256": "28a747ebd95e2ac5a1ac94a24b7c536ef660428fc2af57094f6997d3fe109e13"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175146Z__cfef4e3a411f4ea68b7cb3f06c74323f/e78b02b1f276724db84a3526e1035d22a6bf17a3b42888c060b398a0588d226b/hafd14-42017-extract.xlsx",
+      "version_id": "elgvEzTmzwV_QhLArF8TQDy2TQy3k_P5",
+      "sha256": "e78b02b1f276724db84a3526e1035d22a6bf17a3b42888c060b398a0588d226b"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175153Z__80567909c3844c55ba91b8e843b2e32b/ed8f824828e5e15b636d70de0a8e479866e4ddeeb10327ff605b19da4a58d470/hafd1415-042017-extract.xlsx",
+      "version_id": "sVpuan5RgFCWTuaD.8nJ6XVGpv.c5PeA",
+      "sha256": "ed8f824828e5e15b636d70de0a8e479866e4ddeeb10327ff605b19da4a58d470"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__2c9320b19a7d4c3badccdc4f9ce559af/611d367d5a6c284c73a90db05c264dcd08cb746cb7a059c5f23ab45cff4f8f74/hafd2012pivot.xls",
+      "version_id": "9BlI3mHdTcdXV.M5Id9wG3EqJ9oUiMwR",
+      "sha256": "611d367d5a6c284c73a90db05c264dcd08cb746cb7a059c5f23ab45cff4f8f74"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/0325bca518c17678a4e7bc85325e89fe3a8bc7c8bfcc1e0653caafbeae0a7a91/2012-2017-cy-hospital-annual-selected-file-machine-readable-format.csv",
+      "version_id": "GPV5CsKX6qk6clubA8_cv3RKQDYD.SxX",
+      "sha256": "0325bca518c17678a4e7bc85325e89fe3a8bc7c8bfcc1e0653caafbeae0a7a91"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/051cd21bb23fe9a8f82703c510d8658262b081b48bdbeb47e4a7647d6f117ed4/2012-cy-hospital-annual-selected-file-october-2014-extract.xlsx",
+      "version_id": "PAj6G6DYaT20RFihL0E7U7bEq9OtXt52",
+      "sha256": "051cd21bb23fe9a8f82703c510d8658262b081b48bdbeb47e4a7647d6f117ed4"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/08222c2c82f4be35e4cfee1a0d357fe2d841476b8074bf975bc5fb6f0256f3cb/2016-pivot-table-hospital-annual-selected-file-september-2018-extract.xlsx",
+      "version_id": "ux9X4y_6Q9GmN9f_hdjNV8TxR45p.vKi",
+      "sha256": "08222c2c82f4be35e4cfee1a0d357fe2d841476b8074bf975bc5fb6f0256f3cb"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/0fcc4c3c52f335adc63699cf65d5ecbe28b94bb2d20433508cfe799e82541e26/2024-cy-hospital-annual-selected-file-april-2026-extract.xlsx",
+      "version_id": "zGNLU358BIUfZqQ_2nJJjrNNaUyMItpc",
+      "sha256": "0fcc4c3c52f335adc63699cf65d5ecbe28b94bb2d20433508cfe799e82541e26"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/161e6ba3f84f7f92a232fcf30081e3f0f5383b56dac99be6587c3ade9fd5f461/2024-pivot-table-hospital-annual-selected-file-april-2026-extract.xlsx",
+      "version_id": "VavJTv0GzVhvPfObyeaOvqRb0gd9BWor",
+      "sha256": "161e6ba3f84f7f92a232fcf30081e3f0f5383b56dac99be6587c3ade9fd5f461"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/188ff252a8e898147dc7084f023f5b4efe05fb28a2ccf44072c6669987686e0f/2013-2017-hospital-trends-pivot-october-2019-extract.xls",
+      "version_id": "CE5dZTr04AfBK2Wc2j9EJ985.5iLjpca",
+      "sha256": "188ff252a8e898147dc7084f023f5b4efe05fb28a2ccf44072c6669987686e0f"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/20b2efe8fa1ca285f24ab226d2c35abfb71dce438bb4332a4aa4d0a9b5e26933/2016-2017-fy-hospital-annual-selected-file-april-2019-extract.xls",
+      "version_id": "uK655onYOwXbMoIT5uD4FFyeLHW.o2vv",
+      "sha256": "20b2efe8fa1ca285f24ab226d2c35abfb71dce438bb4332a4aa4d0a9b5e26933"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/22ea77cead38fa7a7fbcbff3b5f6c0a7269a0b651997df02a53ff39855014329/2019-cy-hospital-annual-selected-file-april-2022-extract.xlsx",
+      "version_id": "DuGP0EgqBBklIFiCH_PrW43FfcDC6YJX",
+      "sha256": "22ea77cead38fa7a7fbcbff3b5f6c0a7269a0b651997df02a53ff39855014329"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/28a747ebd95e2ac5a1ac94a24b7c536ef660428fc2af57094f6997d3fe109e13/2015-2016-fy-hospital-annual-selected-file-september-2018-extract.xlsx",
+      "version_id": "rPcx0hne9Wz5Dr56QfSyiKDtYEIDhCeH",
+      "sha256": "28a747ebd95e2ac5a1ac94a24b7c536ef660428fc2af57094f6997d3fe109e13"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/2e11413533812c12529fa6e680cd19c3a90d924d9dd22fb5ea69a59477f3cbd8/2018-cy-hospital-annual-selected-file-november-2020-extract.xlsx",
+      "version_id": "E74JuPedL42Mw6TLWp7WFeyl7jBTqXhC",
+      "sha256": "2e11413533812c12529fa6e680cd19c3a90d924d9dd22fb5ea69a59477f3cbd8"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/34a2a167952edd9e14417308f2183abf9dd6db727ba613f9fb33dfbf575ccd47/2019-pivot-table-hospital-annual-selected-file-april-2022-extract.xls",
+      "version_id": "Cvo8Ln7IWlAjL8W0qijoCm3Sldxz3BO0",
+      "sha256": "34a2a167952edd9e14417308f2183abf9dd6db727ba613f9fb33dfbf575ccd47"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/3b2be0c829b09153a3a491598d673c3e04537ce88acf488fea6f9eca27686d26/2018-pivot-table-hospital-annual-selected-file-november-2020-extract.xls",
+      "version_id": "65WTyeJ9TaydeM2cLf3ri.EGHr2QwHMb",
+      "sha256": "3b2be0c829b09153a3a491598d673c3e04537ce88acf488fea6f9eca27686d26"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/4c3f75e1caa3500a1393ad15fa9b6e3e3c3c890ca0489e3a7eefc572dcf1da62/2017-cy-hospital-annual-selected-file-october-2019-extract.xlsx",
+      "version_id": "Ip21kxodTrftL1Qv8lSG9YsKZPNBXMIw",
+      "sha256": "4c3f75e1caa3500a1393ad15fa9b6e3e3c3c890ca0489e3a7eefc572dcf1da62"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/53156fb7cfdf15d819ede62d8e94ac757c46a7a9d137621a7d2ce6f088d55ab4/2014-2018-hospital-trends-pivot-may-2021-extract.xls",
+      "version_id": "tbvQoWq1pZePx2hBhhOEnBNc1YCS1B1P",
+      "sha256": "53156fb7cfdf15d819ede62d8e94ac757c46a7a9d137621a7d2ce6f088d55ab4"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/604119a19b66ed3b92346c939409cb4d5da1d58abe01cef754cdc85281894f20/2020-pivot-table-hospital-annual-selected-file-october-2022-extract.xls",
+      "version_id": "DZPbsDHGHRoWiy4Pjh209sqezSBkaiOJ",
+      "sha256": "604119a19b66ed3b92346c939409cb4d5da1d58abe01cef754cdc85281894f20"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/611d367d5a6c284c73a90db05c264dcd08cb746cb7a059c5f23ab45cff4f8f74/2012-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": "MuIE23AvceXMSaCrtH.SzbImrCL6i5BJ",
+      "sha256": "611d367d5a6c284c73a90db05c264dcd08cb746cb7a059c5f23ab45cff4f8f74"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/61858f659b914c7c59f30a00cd6da0b8941694a2742c9f8694e74b876c8f4e02/2016-cy-hospital-annual-selected-file-september-2018-extract.xlsx",
+      "version_id": "cqNpl9zw9MSAvCJyG7fBHYp4Cy4k8cry",
+      "sha256": "61858f659b914c7c59f30a00cd6da0b8941694a2742c9f8694e74b876c8f4e02"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/61c9ff615ab9712c5a4818b560d9e44b4c242d9b48a943b511b0988de8ffa1a7/2019-2020-fy-hospital-annual-selected-file-april-2022-extract.xlsx",
+      "version_id": "tvQ8p3AKkLJnUzUddltypmfPx44VAgsH",
+      "sha256": "61c9ff615ab9712c5a4818b560d9e44b4c242d9b48a943b511b0988de8ffa1a7"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/66f3456e9f74e0da3b3b7fae1d89103cab5eafdf188420f8b34727c49b247e99/2021-pivot-table-hospital-annual-selected-file-april-2023-extract.xls",
+      "version_id": "G2N7dWKap08uLLmvFC7ShQcuICfYoqVh",
+      "sha256": "66f3456e9f74e0da3b3b7fae1d89103cab5eafdf188420f8b34727c49b247e99"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/6fab2666f60237d83d7dfc6c053fe82cf71bec1aae480a413df97b1649fb6940/2017-pivot-table-hospital-annual-selected-file-october-2019-extract.xls",
+      "version_id": "J0Mj5QGJZYAIqTFoU.bEDpIbI935dF9R",
+      "sha256": "6fab2666f60237d83d7dfc6c053fe82cf71bec1aae480a413df97b1649fb6940"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/7daec137327f5ab818ee57c04a8c49c29d124f2ede9df1bb0a71ba93914649d1/2022-pivot-table-hospital-annual-selected-file-october-2024-extract.xls",
+      "version_id": "gLUbtYW8X8OLHefMhF7NTTWZJFkMwkAl",
+      "sha256": "7daec137327f5ab818ee57c04a8c49c29d124f2ede9df1bb0a71ba93914649d1"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/816322dbd79e44cce675672462d39ffc493171e2f5cb9ea26d8682ae4f3fa95b/sharedStrings.xml",
+      "version_id": "RnPq4U_09pU3f2CFUbvCPzc9DMj87tq3",
+      "sha256": "816322dbd79e44cce675672462d39ffc493171e2f5cb9ea26d8682ae4f3fa95b"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/867881fb43cc5c004c325f55735f881b4c882d32e1b09d14067f95bf46575788/2012-2016-hospital-trends-pivot.xls",
+      "version_id": "coXrKykq2T.kWJvetTuYUACkNWJWT5E3",
+      "sha256": "867881fb43cc5c004c325f55735f881b4c882d32e1b09d14067f95bf46575788"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/8905c802d912c64afdaa57fa7cc095cfd41db82649d0156d33e2bd38b4b5b19f/2012-2013-fy-hospital-annual-selected-file-june-2014-extract.xlsx",
+      "version_id": "3uHJgXPN2_RoyxDwNE4ncpBiGCYOx6Ch",
+      "sha256": "8905c802d912c64afdaa57fa7cc095cfd41db82649d0156d33e2bd38b4b5b19f"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/8b887eae31e07879585b038a4cda26a6d37273ebef76053ad8d4e67f11b08e32/2015-pivot-table-hospital-annual-selected-file.xlsx",
+      "version_id": "t9XX4QZDgH5iu31GY1hGwAxumtYYzVXb",
+      "sha256": "8b887eae31e07879585b038a4cda26a6d37273ebef76053ad8d4e67f11b08e32"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/8fbf25146e7296bae31dd38b406d8cc4a3b8ab65d755a13c45ed531eb21a7654/2013-2014-fy-hospital-annual-selected-file-september-2015-extract.xlsx",
+      "version_id": "Mi9.YxvuXMMbnMP0Eb8boMYDXVawgL91",
+      "sha256": "8fbf25146e7296bae31dd38b406d8cc4a3b8ab65d755a13c45ed531eb21a7654"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/913a9babde071622c84cd2896bfb7203a02d22bb7806ca6ac80e300334dadc76/2021-cy-hospital-annual-selected-file-october-2023-extract.xlsx",
+      "version_id": "DObt_kNwCBEafQSBJzGLlXwOYOJv5vUj",
+      "sha256": "913a9babde071622c84cd2896bfb7203a02d22bb7806ca6ac80e300334dadc76"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/95ffdde93b0e10812436da20239e698a7eb516b31898fad3c3dc9c95cfc22978/2022-2023-fy-hospital-annual-selected-file-october-2025-extract.xlsx",
+      "version_id": "bD5NcqOB8J1Is2wcbYPrG8QXRZfhWWjD",
+      "sha256": "95ffdde93b0e10812436da20239e698a7eb516b31898fad3c3dc9c95cfc22978"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/a1e6def0758349901fb6024632ec808664a9e0d2c9465780dbf4b9159c792d19/2023-cy-hospital-annual-selected-file-october-2025-extract.xlsx",
+      "version_id": "zisDDpv1lDZc2rK9aejlq9QqIecxDzvh",
+      "sha256": "a1e6def0758349901fb6024632ec808664a9e0d2c9465780dbf4b9159c792d19"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/aa24f58a15aa75e3976ad3673498f600eff8248311df85a5256b3639fe17160c/2017-2018-fy-hospital-annual-selected-file-april-2020-extract.xlsx",
+      "version_id": "caqg2Nml19rTomj3FwNdLRMc_tAuK9rW",
+      "sha256": "aa24f58a15aa75e3976ad3673498f600eff8248311df85a5256b3639fe17160c"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/ab3c8e429c74635f056eeafb819b6e354f4aeef9519b61850e54c07f318fbb32/2015-cy-hospital-annual-selected-file-march-2018-extract.xlsx",
+      "version_id": "Prkt.TPe.jqhk70.0NEsyQWnAl6Zcr_t",
+      "sha256": "ab3c8e429c74635f056eeafb819b6e354f4aeef9519b61850e54c07f318fbb32"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/b177c6f9f2d3d9087906d6898048a60b484930f4068b07ed02ded5c4e6924483/2013-cy-hospital-annual-selected-file-september-2014-extract.xlsx",
+      "version_id": ".8kPPrlIh935x5xXnSdz.4vD.W8HC7Jk",
+      "sha256": "b177c6f9f2d3d9087906d6898048a60b484930f4068b07ed02ded5c4e6924483"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/b2b284805346644606642837b12a089edb0dc11e66ac89cae6419a91ddc13976/2014-pivot-table-hospital-annual-selected-file.xlsx",
+      "version_id": "J87NDvlPV7NmKSHvcwk5fWmO1yHQongc",
+      "sha256": "b2b284805346644606642837b12a089edb0dc11e66ac89cae6419a91ddc13976"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/b300187a2a97cec727e5f6be15bff04147bc56bbe67e8598a82d0222e2f3a1d2/2021-2022-fy-hospital-annual-selected-file-october-2024-extract.xlsx",
+      "version_id": "OCg0GtzCYAtW234R_7LY2zQh8tUeXd_i",
+      "sha256": "b300187a2a97cec727e5f6be15bff04147bc56bbe67e8598a82d0222e2f3a1d2"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/b92f9150d7b7c005eb17a4ac4a0901c8bd1f61e1bbe53946800dfa3b06a4fcd6/2021-pivot-table-hospital-annual-selected-file-october-2023-extract.xls",
+      "version_id": "89bGoGO5_rsx3B5P66Km84Wz5KNBuGzW",
+      "sha256": "b92f9150d7b7c005eb17a4ac4a0901c8bd1f61e1bbe53946800dfa3b06a4fcd6"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/b9b548b8a14a0e8b56b2d505a18180c5b68f243257f539b2eb2bef2fe93625e1/pivotCacheRecords1.xml",
+      "version_id": "rk0G.JybFiARrtXv6nrqgOuxyAA1wgPC",
+      "sha256": "b9b548b8a14a0e8b56b2d505a18180c5b68f243257f539b2eb2bef2fe93625e1"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/bf3ee85138e3bfca139ad3ed18c4f0ec03dd14022a6831d0d960d5b924d03620/2023-2024-fy-hospital-annual-selected-file-april-2026-extract.xlsx",
+      "version_id": "i1HYy31hO9Ih2UB61rmpAm7bu9LxGiNl",
+      "sha256": "bf3ee85138e3bfca139ad3ed18c4f0ec03dd14022a6831d0d960d5b924d03620"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/c401ad8434633231387c4728e4082ac144035f192d8e3eb4486d0cbecaf21b29/2022-cy-hospital-annual-selected-file-october-2024-extract.xlsx",
+      "version_id": "8KwQl23pi1LyPnJnN7X2g6oV2UXdL8OW",
+      "sha256": "c401ad8434633231387c4728e4082ac144035f192d8e3eb4486d0cbecaf21b29"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/cb870c2897ddc553d1908dd44c298e894cf0b3ca7bdf79623006127290f7e0fb/2018-2019-fy-hospital-annual-selected-file-may-2021-extract.xlsx",
+      "version_id": "0NmLf2yc1QzgpfPq8CG80T5GjCHFOMxB",
+      "sha256": "cb870c2897ddc553d1908dd44c298e894cf0b3ca7bdf79623006127290f7e0fb"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/d28dc3960a8df88e2a79095654a4d128736f1bd986e3cb7f1470a00cb32ec4a9/2024-2025-fy-hospital-annual-selected-file-april-2026-extract.xlsx",
+      "version_id": "ghjhhFkD0Sqlj.hmvaksiZseklUkaG1r",
+      "sha256": "d28dc3960a8df88e2a79095654a4d128736f1bd986e3cb7f1470a00cb32ec4a9"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/dc6e0fdf667ecabc83f9c275dd7b692f31982d24a5012c8c91aea76b04606e34/2020-cy-hospital-annual-selected-file-october-2022-extract.xlsx",
+      "version_id": "6gYWGetB4L5rRlFSKil9Ri87ljF1dUF8",
+      "sha256": "dc6e0fdf667ecabc83f9c275dd7b692f31982d24a5012c8c91aea76b04606e34"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/e78b02b1f276724db84a3526e1035d22a6bf17a3b42888c060b398a0588d226b/2014-cy-hospital-annual-selected-file-april-2017-extract.xlsx",
+      "version_id": "uZJHH7rHc5hmJ7EjAJ6.FuDu8tJ8Gl.K",
+      "sha256": "e78b02b1f276724db84a3526e1035d22a6bf17a3b42888c060b398a0588d226b"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/ed8164adb528717eeb105ff381f0dcf0d95fe75102ea17103a9581f1f86d6590/2020-2021-fy-hospital-annual-selected-file-october-2022-extract.xlsx",
+      "version_id": "6D8DrT6VZdXirgpsuavOZtUx52q_DAqg",
+      "sha256": "ed8164adb528717eeb105ff381f0dcf0d95fe75102ea17103a9581f1f86d6590"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/ed8f824828e5e15b636d70de0a8e479866e4ddeeb10327ff605b19da4a58d470/2014-2015-fy-hospital-annual-selected-file-april-2017-extract.xlsx",
+      "version_id": "r135vhrlLdda5GVyCzedBdkHkh1_HrkF",
+      "sha256": "ed8f824828e5e15b636d70de0a8e479866e4ddeeb10327ff605b19da4a58d470"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/eda1177cc57963af4cd6dda4039c11e579a9a66f1559c4d23b68058a07a5ebed/2015-2019-hospital-trends-pivot-april-2022-extract.xls",
+      "version_id": "60w9C4NXVU7uQ5GOjozPOOj5Y5bkCkeF",
+      "sha256": "eda1177cc57963af4cd6dda4039c11e579a9a66f1559c4d23b68058a07a5ebed"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T175206Z__5a465569d207491eb29758bb61992df4/f012b1750384e78dc145fca83da33334faa32038198ef8fcd284e099429567bd/2013-pivot-table-hospital-annual-selected-file.xlsx",
+      "version_id": "1fUTi5ggRfn4NdHHz9N.i004ZlZKqi_k",
+      "sha256": "f012b1750384e78dc145fca83da33334faa32038198ef8fcd284e099429567bd"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180054Z__fb06a8ac22d8482a8b0208bb50daca90/dfe6b7d81698d187aeaf571e17b9ec3a56e7c45e7e0996367f9b33b0118b354c/cy-selected-file-hafd11revised1013.xlsx",
+      "version_id": "F9bBJL5RSJnY7yXfG2vrrSvlL2caYqO9",
+      "sha256": "dfe6b7d81698d187aeaf571e17b9ec3a56e7c45e7e0996367f9b33b0118b354c"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180055Z__26407ad2fb3247aab239978534f059fa/199a5bf292bfac790603952e80bf98d7b9f36521d08a893abc7196aa6722b1d1/fy-selected-file-hafd1112-revised-1013.xlsx",
+      "version_id": "Sv2q7cSlWRIBxCx_VZ6qd55pmODq4rpJ",
+      "sha256": "199a5bf292bfac790603952e80bf98d7b9f36521d08a893abc7196aa6722b1d1"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180100Z__ee695c4ebe854ebca8df373a77eb865f/00e55ec6d934c05f5bcd85a02d5d3a5a6130bd9eb3455b34c63c55c9e2f2be02/hafd2011pivot.xls",
+      "version_id": "sKRNrICgCSXitA9.V07w_7kYHpZHAj7I",
+      "sha256": "00e55ec6d934c05f5bcd85a02d5d3a5a6130bd9eb3455b34c63c55c9e2f2be02"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180109Z__644f45187cb24d4ebc03e8a03151e58d/d69c270ba56e044617fbe880d13d98849649649521c87cfe520008b27e7d89d8/fy-selected-file-hafd1011-revised-912.xlsx",
+      "version_id": "NM99HAgjCFh5IvQ.cfe4_7O2PBoCqerU",
+      "sha256": "d69c270ba56e044617fbe880d13d98849649649521c87cfe520008b27e7d89d8"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180109Z__7ae0d01685f64a81b03baeb790822a5b/3bb17742a0b04743ac50b7fb1d6008822eec2ff09b99f82b8280090160309243/cy-selected-file-hafd10revised912.xls",
+      "version_id": "6B9OQEHULuRmIx7XCO7wIxunkTFFW9IF",
+      "sha256": "3bb17742a0b04743ac50b7fb1d6008822eec2ff09b99f82b8280090160309243"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180115Z__890e9f15ae06419ea384cc5b7b8d120d/2aa9ca8f2dfb2ee15f546a091351a55de60f27c53659b07967924ff831d65e18/CA_history_7f806971598230f3.csv",
+      "version_id": "oCCLXjhYuBz8KzAbnZeXQGEUC.EwH7WK",
+      "sha256": "2aa9ca8f2dfb2ee15f546a091351a55de60f27c53659b07967924ff831d65e18"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180118Z__b12a9e71cfb044068070a62b3eabd4fc/1c891ac3fd9a5ade5f03a2ce4dff70759a97622709da236ed80bc72456dd5bb2/hafd2010pivot.xls",
+      "version_id": "wJSsL.boW3STBPd8n3UYDIJoeLKxm63c",
+      "sha256": "1c891ac3fd9a5ade5f03a2ce4dff70759a97622709da236ed80bc72456dd5bb2"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180126Z__8e5a8eaaa6b64f488e0ff3b12c249e22/b7a2c365c73a9eba57a459f961b42d69fd2ee6c5db1c317ba059efae273913db/fy-selected-file-hafd0910-revised-911.xlsx",
+      "version_id": "mTuL9__4pN3kgvJI2I3fw9Phd3xvQ7Oc",
+      "sha256": "b7a2c365c73a9eba57a459f961b42d69fd2ee6c5db1c317ba059efae273913db"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180126Z__a251bf0b59e54030968e1f2c7e0a3d4d/5741b021b6a36ce02f77b3fa4d0260c59fed1c64e4862828f85d0d53cc60639d/cy-selected-file-hafd09-revised911.xlsx",
+      "version_id": "2asymbggE0g1Z2kjD_E9JZU7hjV0.T6B",
+      "sha256": "5741b021b6a36ce02f77b3fa4d0260c59fed1c64e4862828f85d0d53cc60639d"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180145Z__913cb1dbee564b4ab7579d4274b80207/55fddcffd3b19c493809205d11d803ae14f92feba416e8be2b96c3db3438e57c/hafd2009pivot.xls",
+      "version_id": "gIAWYSUqWi.swA9JhGnaKy.9cu.uk6Qk",
+      "sha256": "55fddcffd3b19c493809205d11d803ae14f92feba416e8be2b96c3db3438e57c"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180152Z__7f81f6d0220a4fdb9ea88c4ab25d3d5a/4e55c7361850c988f16bb5c442bbea5fc3d32d70d4a1dbaff4ed2f28a21a85ae/cy-selected-file-hafd123108revised9-10.xls",
+      "version_id": "EBD0S4Dld.h4ltEbcPRF9Qn5IoyDtjD3",
+      "sha256": "4e55c7361850c988f16bb5c442bbea5fc3d32d70d4a1dbaff4ed2f28a21a85ae"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180153Z__f10535cb3a264087a3395e07419461c7/ea9e8d6aeb1272032e798769c8c3e8fc74784c2305012ae0b8bfeeca64590c41/CA_history_6ac8f99700e17c46.csv",
+      "version_id": "jRsNBaFcCnCB8DiTjutxWJW0ZWYcMoTu",
+      "sha256": "ea9e8d6aeb1272032e798769c8c3e8fc74784c2305012ae0b8bfeeca64590c41"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180155Z__f3885f407db743079402e6f6d9f17f48/f00551f9feaab830f67c5ddd2043ab3643f1718bfd7e150ae4eb83807b772a5a/fy-selected-file-hafd0809-revised-910.xls",
+      "version_id": "9XBUwGeuaLMEWrttWd_mBLho94sfo0Yy",
+      "sha256": "f00551f9feaab830f67c5ddd2043ab3643f1718bfd7e150ae4eb83807b772a5a"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180204Z__78bb93ae88c54f92851cfe7b1851ee80/635d1b8d82fa739584d8df41e4a2467c544442ff6d053aa645df1df34c616fd3/CA_history_5d4ae2bb7e705f74.csv",
+      "version_id": "Jo1YIlolrCHRImnjya5JBqi1YqUuMJvX",
+      "sha256": "635d1b8d82fa739584d8df41e4a2467c544442ff6d053aa645df1df34c616fd3"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180208Z__1699d53105574d1aa7999bc6d102cde8/fa4b286171f5f3e1af130fae899afffd0d8348aceeae95cf3bd5754c76ba5107/hafd2008pivot.xls",
+      "version_id": "DkanhBLHMxVddW7p2W4CMA7eL5WviCt3",
+      "sha256": "fa4b286171f5f3e1af130fae899afffd0d8348aceeae95cf3bd5754c76ba5107"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180209Z__8c23f333c51d48b5939c12b300c6d885/20e9333fb65abb733643eb9365c322467f6de79ffc406b239751a46283a7ec9a/cy-selected-file-hafd123107revised909.xls",
+      "version_id": "abmbH4V.eVo_afAFceF5dGoL7hFXTNi5",
+      "sha256": "20e9333fb65abb733643eb9365c322467f6de79ffc406b239751a46283a7ec9a"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180211Z__8b84f7f4ce00434bb291175f83f80ec1/d7ff2c1caf9d8f00ba78c844b4656dfb82d2d203ee494581f40a2e35816fd9cb/fy-selected-file-hafd0708-revised-909.xls",
+      "version_id": "aowOEQSKVYbp1Gpf9UkcAGvuT3fvrqf6",
+      "sha256": "d7ff2c1caf9d8f00ba78c844b4656dfb82d2d203ee494581f40a2e35816fd9cb"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180215Z__2d86754655c849b79d9508a3bfcede9e/50d82c38870e53d04852fe65b2146707bdc51564d61a1bc5aab8c3dc8c40f866/CA_history_41a59e2f806417a5.csv",
+      "version_id": "IR9ednqVbTDKRLrOTv7VwDEpbAnij031",
+      "sha256": "50d82c38870e53d04852fe65b2146707bdc51564d61a1bc5aab8c3dc8c40f866"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180219Z__ae2998218c124c5484924f92af8c6ac4/c57b1c1fd7cafa47a4be9803610c9c5cded14759e9e599d7a3f5caf45c2e6046/CA_history_d0fd76900059b3f3.csv",
+      "version_id": "fPLWF4Si.gv88DCsNF3IcExSV9bDSChC",
+      "sha256": "c57b1c1fd7cafa47a4be9803610c9c5cded14759e9e599d7a3f5caf45c2e6046"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180227Z__4979bfdf0dc446a3b53b45b0d82ddcf6/707a8655499f2c2f19d9100daed0aef55d29f6333c383c31ac92bd34cc03fb32/hafd2007pivot.xls",
+      "version_id": "UzHYkow52CvVV3d3uveeCdr3FyxNpwGd",
+      "sha256": "707a8655499f2c2f19d9100daed0aef55d29f6333c383c31ac92bd34cc03fb32"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180228Z__8a4d8d3f5aae4a22a836beb62486df08/c15ccb45c9b61e07f94ab976c255db2e4a7555b0f3e516151ea3dd1e24881249/cy-selected-file-hafd-12-31-06revised-9-08.xls",
+      "version_id": "FWmYjG30J0ZiJOjjRUTnMxT8i_7Ko_pD",
+      "sha256": "c15ccb45c9b61e07f94ab976c255db2e4a7555b0f3e516151ea3dd1e24881249"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180229Z__64c19db1862c4bae82dfeddbad870b87/e71a2275550aea4760dae22316aa7a3262081285d4b6fdfe53bb2fd6e3030187/hafd2006pivot.xls",
+      "version_id": "xY0CIH6_ZaHu8cJy29lXLn1Tomc7TnLN",
+      "sha256": "e71a2275550aea4760dae22316aa7a3262081285d4b6fdfe53bb2fd6e3030187"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180233Z__ed58e463f71e426f8847fa8651499c11/02292c5401f0d5741f484b247c1cc836dd782946ac0159344d118e147a930187/CA_history_bc58fde1a440cba2.csv",
+      "version_id": "O5tLc.Ff09QnnTcLSJqkgkB7BLtXNsxQ",
+      "sha256": "02292c5401f0d5741f484b247c1cc836dd782946ac0159344d118e147a930187"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180236Z__d31f1a87645f4a43b051d1b14255567f/7f0589024ea2124306a4d18c39f717fd89d020473819e89495ff0229fec579f3/CA_history_955eba492edf719b.csv",
+      "version_id": "4IgpGo9aZulvwGHuxhK9f.9Lvu0D0Asa",
+      "sha256": "7f0589024ea2124306a4d18c39f717fd89d020473819e89495ff0229fec579f3"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180243Z__586158c8f4e34433a3694e51357745c9/161e6ba3f84f7f92a232fcf30081e3f0f5383b56dac99be6587c3ade9fd5f461/hafd2024pivot.xlsm",
+      "version_id": "d3azriqEf5kV.qeQnliYfZVjJpYLZp1S",
+      "sha256": "161e6ba3f84f7f92a232fcf30081e3f0f5383b56dac99be6587c3ade9fd5f461"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180243Z__b4189b4123de43629eb234bcae88fd69/0325bca518c17678a4e7bc85325e89fe3a8bc7c8bfcc1e0653caafbeae0a7a91/selected-file_2012_2017_machinereadable.csv",
+      "version_id": "0nwJL_hWNHx93oxZ9fWDwONHDTz7v.CD",
+      "sha256": "0325bca518c17678a4e7bc85325e89fe3a8bc7c8bfcc1e0653caafbeae0a7a91"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180244Z__fc0c0935b7a547b2b6b394929cb7d7d4/30cb57ef7a6c7c7aa11a5c7cc4637665107288f1549b214219b112ab5353cbd4/hafd2023pivot.xlsm",
+      "version_id": "Th22sP5uFViDTpqDythGSVQsiuNSURF7",
+      "sha256": "30cb57ef7a6c7c7aa11a5c7cc4637665107288f1549b214219b112ab5353cbd4"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180245Z__77a17bc2703946438475c2a067fb9a82/f4a9645e8a95f822f2ca610ad25ca33f61677fb11a78f1d4f0b010869cf7b546/CA_history_cc04f95c67dcc9a0.csv",
+      "version_id": "7AirVeuGKf13C7mv0gd7MWcCaU6iMdT6",
+      "sha256": "f4a9645e8a95f822f2ca610ad25ca33f61677fb11a78f1d4f0b010869cf7b546"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180247Z__463d9d0cb1724a8988881a3d6e9d3aa2/4a780fc6c758fb9d58e50024b87f3ddf18997fb7ba6f1c3a420cbaf7a251f617/CA_history_0ea7f0c42643d62a.csv",
+      "version_id": "B_z8ARnFl2ygbMX5iboXjnbeDM2kUCed",
+      "sha256": "4a780fc6c758fb9d58e50024b87f3ddf18997fb7ba6f1c3a420cbaf7a251f617"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180250Z__feea6e853b03433caf56d07bc194b494/9d58a8121397d8b1ff24c49ca59419961c62f544f3d2bd54bd01296b9d06d689/CA_history_17fc79614fd965c9.csv",
+      "version_id": "cmYAEtQAJboVW1rL0ZAnbQwH_CfEFIaN",
+      "sha256": "9d58a8121397d8b1ff24c49ca59419961c62f544f3d2bd54bd01296b9d06d689"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180258Z__c734c6e2fe854248913024f62ec83654/eda1177cc57963af4cd6dda4039c11e579a9a66f1559c4d23b68058a07a5ebed/2015-2019-hospital-trends-pivot.xls",
+      "version_id": "Hht0MfNtF2lPaqlONfm2aAvTel2OKzNL",
+      "sha256": "eda1177cc57963af4cd6dda4039c11e579a9a66f1559c4d23b68058a07a5ebed"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180258Z__c8df8cb78867453da9602b935f4669cb/53156fb7cfdf15d819ede62d8e94ac757c46a7a9d137621a7d2ce6f088d55ab4/2014-2018-hospital-trends-pivot.xls",
+      "version_id": "vPBo.j_INDoMiPiFbtrW3s_MQ2F0KF5z",
+      "sha256": "53156fb7cfdf15d819ede62d8e94ac757c46a7a9d137621a7d2ce6f088d55ab4"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180326Z__4fd66f639f0e4978bea8e7ff0691c8ff/188ff252a8e898147dc7084f023f5b4efe05fb28a2ccf44072c6669987686e0f/2013-2017-hospital-trends-pivot.xls",
+      "version_id": "C1JZ8KBipudPUJSfy213uXmHl.Cho27r",
+      "sha256": "188ff252a8e898147dc7084f023f5b4efe05fb28a2ccf44072c6669987686e0f"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180335Z__0e984481eb024ebba3d03c8aea68eb32/867881fb43cc5c004c325f55735f881b4c882d32e1b09d14067f95bf46575788/2012-2016-hospital-trends-pivot.xls",
+      "version_id": "aARKPMR5gcl5szifchluvZao2faWGHMF",
+      "sha256": "867881fb43cc5c004c325f55735f881b4c882d32e1b09d14067f95bf46575788"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180402Z__0e146ec8b1b143ea954a8d6aec7080ae/08222c2c82f4be35e4cfee1a0d357fe2d841476b8074bf975bc5fb6f0256f3cb/hafd2016pivot.xls",
+      "version_id": "lLiOfE4HY6nJqOucs.sUg5OXGeXHvui6",
+      "sha256": "08222c2c82f4be35e4cfee1a0d357fe2d841476b8074bf975bc5fb6f0256f3cb"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180406Z__8706e190f79c407d9f457de6eafa0cb6/b2b284805346644606642837b12a089edb0dc11e66ac89cae6419a91ddc13976/hafd2014pivot.xls",
+      "version_id": "HisMILTszCWdIoGfNy_HWdA_FXoNa06H",
+      "sha256": "b2b284805346644606642837b12a089edb0dc11e66ac89cae6419a91ddc13976"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180406Z__f5bc4405bf054e4490be50c5d4581075/8b887eae31e07879585b038a4cda26a6d37273ebef76053ad8d4e67f11b08e32/hafd2015pivot.xls",
+      "version_id": "zjxkoeJ1SGa7j_Iq4.JQjiweXbG1fAxH",
+      "sha256": "8b887eae31e07879585b038a4cda26a6d37273ebef76053ad8d4e67f11b08e32"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180416Z__520c8956db75478fbe56021884542941/b177c6f9f2d3d9087906d6898048a60b484930f4068b07ed02ded5c4e6924483/hafd13-92015-extract.xls",
+      "version_id": "jj8uAOcmbyoZrjLvKpt0fNdDGJYh7RMj",
+      "sha256": "b177c6f9f2d3d9087906d6898048a60b484930f4068b07ed02ded5c4e6924483"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180418Z__854c6bd44a014ffc8ab355092e1533d9/f012b1750384e78dc145fca83da33334faa32038198ef8fcd284e099429567bd/hafd2013pivot.xls",
+      "version_id": "sjp_5ASJ9KlMrM45_3g2flC934UPqbnz",
+      "sha256": "f012b1750384e78dc145fca83da33334faa32038198ef8fcd284e099429567bd"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180422Z__8ddb53bc60204fe7ba9225be153c15c1/8fbf25146e7296bae31dd38b406d8cc4a3b8ab65d755a13c45ed531eb21a7654/hafd1314-092015-extract.xls",
+      "version_id": "WPXdJqPYhLCBokHTbX6wCZ7BVWik_81e",
+      "sha256": "8fbf25146e7296bae31dd38b406d8cc4a3b8ab65d755a13c45ed531eb21a7654"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180428Z__8bb72307101e40f2aadcb8386f5db190/051cd21bb23fe9a8f82703c510d8658262b081b48bdbeb47e4a7647d6f117ed4/hafd12-10-2014-extract.xls",
+      "version_id": "Bpg87nxtzpRQ97meVQdeC7FWd4grbDT7",
+      "sha256": "051cd21bb23fe9a8f82703c510d8658262b081b48bdbeb47e4a7647d6f117ed4"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180432Z__4688dd27cb53423597bbc0f6f71e5019/8905c802d912c64afdaa57fa7cc095cfd41db82649d0156d33e2bd38b4b5b19f/hafd1213-062014-extract.xls",
+      "version_id": "EqXa.kirLxONuBhOhA_psSE4ilynyNHG",
+      "sha256": "8905c802d912c64afdaa57fa7cc095cfd41db82649d0156d33e2bd38b4b5b19f"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/0325bca518c17678a4e7bc85325e89fe3a8bc7c8bfcc1e0653caafbeae0a7a91/2012-2017-cy-hospital-annual-selected-file-machine-readable-format.csv",
+      "version_id": "SQzCw6Cmlcq6sV5nnbrHA_2m0VhxwSh2",
+      "sha256": "0325bca518c17678a4e7bc85325e89fe3a8bc7c8bfcc1e0653caafbeae0a7a91"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/051cd21bb23fe9a8f82703c510d8658262b081b48bdbeb47e4a7647d6f117ed4/2012-cy-hospital-annual-selected-file-october-2014-extract.xlsx",
+      "version_id": "m0eSiaWegVJV__rG5CwogLqtn8RAtFLW",
+      "sha256": "051cd21bb23fe9a8f82703c510d8658262b081b48bdbeb47e4a7647d6f117ed4"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/08222c2c82f4be35e4cfee1a0d357fe2d841476b8074bf975bc5fb6f0256f3cb/2016-pivot-table-hospital-annual-selected-file-september-2018-extract.xlsx",
+      "version_id": "m7pnj7IjjDZ0qJ9VPvu1Ojsg0i.dnd.M",
+      "sha256": "08222c2c82f4be35e4cfee1a0d357fe2d841476b8074bf975bc5fb6f0256f3cb"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/0fcc4c3c52f335adc63699cf65d5ecbe28b94bb2d20433508cfe799e82541e26/2024-cy-hospital-annual-selected-file-april-2026-extract.xlsx",
+      "version_id": "vx78vamiPkxgDISe4b8XeMlRvVdf.9x8",
+      "sha256": "0fcc4c3c52f335adc63699cf65d5ecbe28b94bb2d20433508cfe799e82541e26"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/161e6ba3f84f7f92a232fcf30081e3f0f5383b56dac99be6587c3ade9fd5f461/2024-pivot-table-hospital-annual-selected-file-april-2026-extract.xlsx",
+      "version_id": "EcLBTaH8ii7G_L2RCKEyny3Ydida66zM",
+      "sha256": "161e6ba3f84f7f92a232fcf30081e3f0f5383b56dac99be6587c3ade9fd5f461"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/188ff252a8e898147dc7084f023f5b4efe05fb28a2ccf44072c6669987686e0f/2013-2017-hospital-trends-pivot-october-2019-extract.xls",
+      "version_id": "5.OTi7aYLaX1dcFssqsEqQ2psz2q9IJl",
+      "sha256": "188ff252a8e898147dc7084f023f5b4efe05fb28a2ccf44072c6669987686e0f"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/20b2efe8fa1ca285f24ab226d2c35abfb71dce438bb4332a4aa4d0a9b5e26933/2016-2017-fy-hospital-annual-selected-file-april-2019-extract.xls",
+      "version_id": "eugBnK029.UQw2IPex7CXCWBoHwb8MLe",
+      "sha256": "20b2efe8fa1ca285f24ab226d2c35abfb71dce438bb4332a4aa4d0a9b5e26933"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/22ea77cead38fa7a7fbcbff3b5f6c0a7269a0b651997df02a53ff39855014329/2019-cy-hospital-annual-selected-file-april-2022-extract.xlsx",
+      "version_id": "us0vAy.DqNLcG1kp___t7Yjncr9akf89",
+      "sha256": "22ea77cead38fa7a7fbcbff3b5f6c0a7269a0b651997df02a53ff39855014329"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/28a747ebd95e2ac5a1ac94a24b7c536ef660428fc2af57094f6997d3fe109e13/2015-2016-fy-hospital-annual-selected-file-september-2018-extract.xlsx",
+      "version_id": "soIkZgh1X_IjCXVFJJyVVNuiAQMu1LVZ",
+      "sha256": "28a747ebd95e2ac5a1ac94a24b7c536ef660428fc2af57094f6997d3fe109e13"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/2e11413533812c12529fa6e680cd19c3a90d924d9dd22fb5ea69a59477f3cbd8/2018-cy-hospital-annual-selected-file-november-2020-extract.xlsx",
+      "version_id": "zO_PcIpn56t_ydb48DSuqMkzlLzMfZDM",
+      "sha256": "2e11413533812c12529fa6e680cd19c3a90d924d9dd22fb5ea69a59477f3cbd8"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/30cb57ef7a6c7c7aa11a5c7cc4637665107288f1549b214219b112ab5353cbd4/2023-pivot-table-hospital-annual-selected-file-october-2025-extract.xlsm",
+      "version_id": "cXxac9BGK1UIBX1wGJQLnS6WOczM21E8",
+      "sha256": "30cb57ef7a6c7c7aa11a5c7cc4637665107288f1549b214219b112ab5353cbd4"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/34a2a167952edd9e14417308f2183abf9dd6db727ba613f9fb33dfbf575ccd47/2019-pivot-table-hospital-annual-selected-file-april-2022-extract.xls",
+      "version_id": "7QaGoAzk_.t9o5OIsxtFdHpWSsEUJ4Zn",
+      "sha256": "34a2a167952edd9e14417308f2183abf9dd6db727ba613f9fb33dfbf575ccd47"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/3b2be0c829b09153a3a491598d673c3e04537ce88acf488fea6f9eca27686d26/2018-pivot-table-hospital-annual-selected-file-november-2020-extract.xls",
+      "version_id": "bS.QJKObP2bn6vok_CMWGRaQPfMWaUqw",
+      "sha256": "3b2be0c829b09153a3a491598d673c3e04537ce88acf488fea6f9eca27686d26"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/4c3f75e1caa3500a1393ad15fa9b6e3e3c3c890ca0489e3a7eefc572dcf1da62/2017-cy-hospital-annual-selected-file-october-2019-extract.xlsx",
+      "version_id": "pP8D6WUjIrf.b.4U.a.a_VOY4pSc.wyp",
+      "sha256": "4c3f75e1caa3500a1393ad15fa9b6e3e3c3c890ca0489e3a7eefc572dcf1da62"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/53156fb7cfdf15d819ede62d8e94ac757c46a7a9d137621a7d2ce6f088d55ab4/2014-2018-hospital-trends-pivot-may-2021-extract.xls",
+      "version_id": "rFtLpxU8uR9fkBIYmYwhHpzKawudwekb",
+      "sha256": "53156fb7cfdf15d819ede62d8e94ac757c46a7a9d137621a7d2ce6f088d55ab4"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/604119a19b66ed3b92346c939409cb4d5da1d58abe01cef754cdc85281894f20/2020-pivot-table-hospital-annual-selected-file-october-2022-extract.xls",
+      "version_id": "0qJUEDh9j0QkVQCHzB15_q_Dfigso7Kx",
+      "sha256": "604119a19b66ed3b92346c939409cb4d5da1d58abe01cef754cdc85281894f20"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/611d367d5a6c284c73a90db05c264dcd08cb746cb7a059c5f23ab45cff4f8f74/2012-pivot-table-hospital-annual-selected-file.xls",
+      "version_id": "SKqVtLCJVJIrgcy09Wp1nukNV1UraQFc",
+      "sha256": "611d367d5a6c284c73a90db05c264dcd08cb746cb7a059c5f23ab45cff4f8f74"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/61858f659b914c7c59f30a00cd6da0b8941694a2742c9f8694e74b876c8f4e02/2016-cy-hospital-annual-selected-file-september-2018-extract.xlsx",
+      "version_id": "VDHtFAPFgsS4dfFBE4rQ_UU8VTEhy95R",
+      "sha256": "61858f659b914c7c59f30a00cd6da0b8941694a2742c9f8694e74b876c8f4e02"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/61c9ff615ab9712c5a4818b560d9e44b4c242d9b48a943b511b0988de8ffa1a7/2019-2020-fy-hospital-annual-selected-file-april-2022-extract.xlsx",
+      "version_id": "b8StAdypUPxbwDzktDAYanPQcGbIKuwm",
+      "sha256": "61c9ff615ab9712c5a4818b560d9e44b4c242d9b48a943b511b0988de8ffa1a7"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/66f3456e9f74e0da3b3b7fae1d89103cab5eafdf188420f8b34727c49b247e99/2021-pivot-table-hospital-annual-selected-file-april-2023-extract.xls",
+      "version_id": "7zPygQ9l1CqpdDldsPtXYNE5umrjoaal",
+      "sha256": "66f3456e9f74e0da3b3b7fae1d89103cab5eafdf188420f8b34727c49b247e99"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/6fab2666f60237d83d7dfc6c053fe82cf71bec1aae480a413df97b1649fb6940/2017-pivot-table-hospital-annual-selected-file-october-2019-extract.xls",
+      "version_id": "7rSflLBjQ_swDFda_AHwK1qqfJeYpTIk",
+      "sha256": "6fab2666f60237d83d7dfc6c053fe82cf71bec1aae480a413df97b1649fb6940"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/7daec137327f5ab818ee57c04a8c49c29d124f2ede9df1bb0a71ba93914649d1/2022-pivot-table-hospital-annual-selected-file-october-2024-extract.xls",
+      "version_id": "WBkqkoDYrElbLCDIW.wzuK3Ks.lVw4rt",
+      "sha256": "7daec137327f5ab818ee57c04a8c49c29d124f2ede9df1bb0a71ba93914649d1"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/867881fb43cc5c004c325f55735f881b4c882d32e1b09d14067f95bf46575788/2012-2016-hospital-trends-pivot.xls",
+      "version_id": "U9hcdH2ZnFJ4j3l8pUnBp5y5O0GYhaPE",
+      "sha256": "867881fb43cc5c004c325f55735f881b4c882d32e1b09d14067f95bf46575788"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/8905c802d912c64afdaa57fa7cc095cfd41db82649d0156d33e2bd38b4b5b19f/2012-2013-fy-hospital-annual-selected-file-june-2014-extract.xlsx",
+      "version_id": "3smYCwKIM.kppnAk_dpFuBHreugeJ.De",
+      "sha256": "8905c802d912c64afdaa57fa7cc095cfd41db82649d0156d33e2bd38b4b5b19f"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/8b887eae31e07879585b038a4cda26a6d37273ebef76053ad8d4e67f11b08e32/2015-pivot-table-hospital-annual-selected-file.xlsx",
+      "version_id": "xnIQ3JLMbnezLe5XuFfDM1o7QQVgQib1",
+      "sha256": "8b887eae31e07879585b038a4cda26a6d37273ebef76053ad8d4e67f11b08e32"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/8fbf25146e7296bae31dd38b406d8cc4a3b8ab65d755a13c45ed531eb21a7654/2013-2014-fy-hospital-annual-selected-file-september-2015-extract.xlsx",
+      "version_id": "X4BO2rziI15A3OROesbUb5okCENdgY0v",
+      "sha256": "8fbf25146e7296bae31dd38b406d8cc4a3b8ab65d755a13c45ed531eb21a7654"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/913a9babde071622c84cd2896bfb7203a02d22bb7806ca6ac80e300334dadc76/2021-cy-hospital-annual-selected-file-october-2023-extract.xlsx",
+      "version_id": "N.Z0nT0a_hsKB1SujWY4A1217Xpubj3X",
+      "sha256": "913a9babde071622c84cd2896bfb7203a02d22bb7806ca6ac80e300334dadc76"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/95ffdde93b0e10812436da20239e698a7eb516b31898fad3c3dc9c95cfc22978/2022-2023-fy-hospital-annual-selected-file-october-2025-extract.xlsx",
+      "version_id": "4bRf08bnojV8UpSwvOWyqtU5gW5Q0a6N",
+      "sha256": "95ffdde93b0e10812436da20239e698a7eb516b31898fad3c3dc9c95cfc22978"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/a1e6def0758349901fb6024632ec808664a9e0d2c9465780dbf4b9159c792d19/2023-cy-hospital-annual-selected-file-october-2025-extract.xlsx",
+      "version_id": "Ws3USoZKfQAcPNAw._gttgNrvTV3Mw_Q",
+      "sha256": "a1e6def0758349901fb6024632ec808664a9e0d2c9465780dbf4b9159c792d19"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/aa24f58a15aa75e3976ad3673498f600eff8248311df85a5256b3639fe17160c/2017-2018-fy-hospital-annual-selected-file-april-2020-extract.xlsx",
+      "version_id": "rZeWrNwdawdf1cocRCkhnHiFsCfFcSOW",
+      "sha256": "aa24f58a15aa75e3976ad3673498f600eff8248311df85a5256b3639fe17160c"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/ab3c8e429c74635f056eeafb819b6e354f4aeef9519b61850e54c07f318fbb32/2015-cy-hospital-annual-selected-file-march-2018-extract.xlsx",
+      "version_id": "7xoqLzHBJj31L_4SqBbQiLY0.dVwaD1L",
+      "sha256": "ab3c8e429c74635f056eeafb819b6e354f4aeef9519b61850e54c07f318fbb32"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/b177c6f9f2d3d9087906d6898048a60b484930f4068b07ed02ded5c4e6924483/2013-cy-hospital-annual-selected-file-september-2014-extract.xlsx",
+      "version_id": "ad8WVTd.JpGLuFPhgmvMU5.cnVS5DvJt",
+      "sha256": "b177c6f9f2d3d9087906d6898048a60b484930f4068b07ed02ded5c4e6924483"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/b2b284805346644606642837b12a089edb0dc11e66ac89cae6419a91ddc13976/2014-pivot-table-hospital-annual-selected-file.xlsx",
+      "version_id": "6XPPt18nR8XLFyc3H9pQG8.45W9PQkIN",
+      "sha256": "b2b284805346644606642837b12a089edb0dc11e66ac89cae6419a91ddc13976"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/b300187a2a97cec727e5f6be15bff04147bc56bbe67e8598a82d0222e2f3a1d2/2021-2022-fy-hospital-annual-selected-file-october-2024-extract.xlsx",
+      "version_id": "WFLzFh3E6TGM9nuqGOleK1lcfhMRei0l",
+      "sha256": "b300187a2a97cec727e5f6be15bff04147bc56bbe67e8598a82d0222e2f3a1d2"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/b92f9150d7b7c005eb17a4ac4a0901c8bd1f61e1bbe53946800dfa3b06a4fcd6/2021-pivot-table-hospital-annual-selected-file-october-2023-extract.xls",
+      "version_id": "EcPOLoDhIJtc4gtgif7dj6XwhKN4cX_8",
+      "sha256": "b92f9150d7b7c005eb17a4ac4a0901c8bd1f61e1bbe53946800dfa3b06a4fcd6"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/bf3ee85138e3bfca139ad3ed18c4f0ec03dd14022a6831d0d960d5b924d03620/2023-2024-fy-hospital-annual-selected-file-april-2026-extract.xlsx",
+      "version_id": "pQPagYeeVSlPvqH5DDtCioJc6s7Q59N4",
+      "sha256": "bf3ee85138e3bfca139ad3ed18c4f0ec03dd14022a6831d0d960d5b924d03620"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/c401ad8434633231387c4728e4082ac144035f192d8e3eb4486d0cbecaf21b29/2022-cy-hospital-annual-selected-file-october-2024-extract.xlsx",
+      "version_id": "tQS5_34PK1KwivXxuZCmT6acY7k6Kw1b",
+      "sha256": "c401ad8434633231387c4728e4082ac144035f192d8e3eb4486d0cbecaf21b29"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/cb870c2897ddc553d1908dd44c298e894cf0b3ca7bdf79623006127290f7e0fb/2018-2019-fy-hospital-annual-selected-file-may-2021-extract.xlsx",
+      "version_id": "fis3Lz3GAWXdP3rgLu0VWCiWftrq8KJM",
+      "sha256": "cb870c2897ddc553d1908dd44c298e894cf0b3ca7bdf79623006127290f7e0fb"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/d28dc3960a8df88e2a79095654a4d128736f1bd986e3cb7f1470a00cb32ec4a9/2024-2025-fy-hospital-annual-selected-file-april-2026-extract.xlsx",
+      "version_id": "HQuEepiHNfNw.Ol6Mj6ol4PM0gQw54qO",
+      "sha256": "d28dc3960a8df88e2a79095654a4d128736f1bd986e3cb7f1470a00cb32ec4a9"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/dc6e0fdf667ecabc83f9c275dd7b692f31982d24a5012c8c91aea76b04606e34/2020-cy-hospital-annual-selected-file-october-2022-extract.xlsx",
+      "version_id": "EdOtw2WyGSDyCDiWABvD43kkcd5OfCFu",
+      "sha256": "dc6e0fdf667ecabc83f9c275dd7b692f31982d24a5012c8c91aea76b04606e34"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/e78b02b1f276724db84a3526e1035d22a6bf17a3b42888c060b398a0588d226b/2014-cy-hospital-annual-selected-file-april-2017-extract.xlsx",
+      "version_id": "1ptl7hwnrD2vhuM4ODgL0gdBz7jVLH8T",
+      "sha256": "e78b02b1f276724db84a3526e1035d22a6bf17a3b42888c060b398a0588d226b"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/ed8164adb528717eeb105ff381f0dcf0d95fe75102ea17103a9581f1f86d6590/2020-2021-fy-hospital-annual-selected-file-october-2022-extract.xlsx",
+      "version_id": "vjXDJ.aXseH.z9zpU0A6nbSvaPhQgnTl",
+      "sha256": "ed8164adb528717eeb105ff381f0dcf0d95fe75102ea17103a9581f1f86d6590"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/ed8f824828e5e15b636d70de0a8e479866e4ddeeb10327ff605b19da4a58d470/2014-2015-fy-hospital-annual-selected-file-april-2017-extract.xlsx",
+      "version_id": "Xgv_kxMkuPNv_uMS6rPgWRBaXiAjKReG",
+      "sha256": "ed8f824828e5e15b636d70de0a8e479866e4ddeeb10327ff605b19da4a58d470"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/eda1177cc57963af4cd6dda4039c11e579a9a66f1559c4d23b68058a07a5ebed/2015-2019-hospital-trends-pivot-april-2022-extract.xls",
+      "version_id": "xVJD4ERFA7s7z2ZZpK1I7KzzNeX5fqNf",
+      "sha256": "eda1177cc57963af4cd6dda4039c11e579a9a66f1559c4d23b68058a07a5ebed"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/ca/capture_id=CA__20260924T180433Z__dc23b7dec1cb4ed09303fd1e0f4fc41c/f012b1750384e78dc145fca83da33334faa32038198ef8fcd284e099429567bd/2013-pivot-table-hospital-annual-selected-file.xlsx",
+      "version_id": "4clJ5i_rik_2AUGReqOhWbgKQFMDRLrb",
+      "sha256": "f012b1750384e78dc145fca83da33334faa32038198ef8fcd284e099429567bd"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T055902Z__e611e1cf40b54d8ca335bc278c7d277c/587fc1242c276cff352669cc68cd6e810673d6040a4f0be7d2ddf6c1361a315a/HCAI_FINANCE_file_006.csv",
+      "version_id": "DVSntiUblhOw5fmbam9wASyIZEmdxWVi",
+      "sha256": "587fc1242c276cff352669cc68cd6e810673d6040a4f0be7d2ddf6c1361a315a"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T153829Z__b30803ac3f3c4dc39de58ba76a7c630c/211fa03cbc6f0bab8c97f9f1fecbff69375d74fb94846d51499b6a02e9f51704/49hospitaldata.xlsx",
+      "version_id": "bMq7UHC3J3vWUkF4DQiPpDzRRKXBHkfG",
+      "sha256": "211fa03cbc6f0bab8c97f9f1fecbff69375d74fb94846d51499b6a02e9f51704"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T173815Z__207e0faf28a94b7fa6a2e2cb8ab84387/57e72f7efdf249267f880984851b247c3319062d6b48f4436572fdd3dd4302c1/46hospitaldata.xlsx",
+      "version_id": "46uPOTCI9b3T0bQ8aLxUIJDxkZCMNduX",
+      "sha256": "57e72f7efdf249267f880984851b247c3319062d6b48f4436572fdd3dd4302c1"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T173815Z__59611d0302dc42efac37e9985e4ac3a2/7cdad42147aea82d6df18e9bf3dc62f8267be7f15a3d51ef4ae3ec2598213b50/47hospitaldata.xlsx",
+      "version_id": "4qRJcWpaGWqi8DPNRdzdC3YI45.gcFYq",
+      "sha256": "7cdad42147aea82d6df18e9bf3dc62f8267be7f15a3d51ef4ae3ec2598213b50"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T173815Z__a9820b865ea64c238a423b6c24303f4a/167db78e37322f57b7d6413e24683e445c391db2d5496e73dafc2730f0be51b8/48hospitaldata.xlsx",
+      "version_id": "dA68tGYi95GDSEeKrTapePM3ortVkf.I",
+      "sha256": "167db78e37322f57b7d6413e24683e445c391db2d5496e73dafc2730f0be51b8"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T173849Z__c0c71182b6434eb9806394d8c3ab9956/0c2203449ff504060b513dbb9d9587a70a6bc0cb240162ab53c53676c3c31cb7/45hospitaldata.xlsx",
+      "version_id": "5WbZJszDvJpBnjXk4WPgvNkkNmoHw.sZ",
+      "sha256": "0c2203449ff504060b513dbb9d9587a70a6bc0cb240162ab53c53676c3c31cb7"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T173851Z__b5c9fb5c514e48778ae5c65f48951c59/8cb9fd6fdd4008b8aa3f18bb7d3e09b55b1179b71ce1b5bc96153fa09ef41668/43hospitaldata.xlsx",
+      "version_id": "rkd_BQjL2k441BTeOLyz1_6YkVEW2G7S",
+      "sha256": "8cb9fd6fdd4008b8aa3f18bb7d3e09b55b1179b71ce1b5bc96153fa09ef41668"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T173851Z__e6cb489fc51e4419a9b74d76352e9e4b/355ca6bccab8ba3bc756f816f1376b63ad76961fbf5cdd6b7f2b3d7853ee3c29/44hospitaldata.xlsx",
+      "version_id": "aoic2aXkuXXMFODotHoBl1TZzzLdCmnN",
+      "sha256": "355ca6bccab8ba3bc756f816f1376b63ad76961fbf5cdd6b7f2b3d7853ee3c29"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T180009Z__1464a06876b4464fadab9f32dcf5c721/520bdd699073edeac4e19497c39f2c8a456bebda59792900f84c11763bb8c25d/42hospitaldata.xlsx",
+      "version_id": "FH_dsMpQmFidA8qZYYUz3fsKUhAqd6jY",
+      "sha256": "520bdd699073edeac4e19497c39f2c8a456bebda59792900f84c11763bb8c25d"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T180009Z__4c86008ca2d74931ba21dbbdb11733b0/d98d6eefeef340b4f6449fc0b4530ddc77833666c6287ed6d6b0be75fbc4c3fb/41hospitaldata.xlsx",
+      "version_id": "nsAXroKoBYJsfZvd5eziBpWir8zJGSje",
+      "sha256": "d98d6eefeef340b4f6449fc0b4530ddc77833666c6287ed6d6b0be75fbc4c3fb"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T180027Z__e3c599719de84ba29bc753b3a92a64e2/5a19ea87dac3da57965663436f711cba7ad2db140464b56d8b6106d3b4c58db6/40hospitaldata.xlsx",
+      "version_id": "R2GCINGPXxbgstLaOBBzUiEtnprNqTkI",
+      "sha256": "5a19ea87dac3da57965663436f711cba7ad2db140464b56d8b6106d3b4c58db6"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T180028Z__5136f5f1c1bc4aa4ae898739351c3be3/07627f1fe2cc2a0b60f95440683c82ffbf8dac43970ad056be5c2055bb25397b/39hospitaldata.xlsx",
+      "version_id": "7ASB_7HHIjWLqLzHjDgSfc34KBIMj2GS",
+      "sha256": "07627f1fe2cc2a0b60f95440683c82ffbf8dac43970ad056be5c2055bb25397b"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T180034Z__c742f19c6ef945ad8a4f0db7e7ef4a3c/5d43543005e1cb2016c3f3173c84422e7c14dec11b5a26726142aa4c295c81c5/38hospitaldata.xlsx",
+      "version_id": "_gzC2hdyRmLKuEeeKkvX_sUbZlnXE4nS",
+      "sha256": "5d43543005e1cb2016c3f3173c84422e7c14dec11b5a26726142aa4c295c81c5"
+    },
+    {
+      "key": "california_hcai/hospital_finance/datasets/hcai_finance/capture_id=HCAI_FINANCE__20260924T180956Z__8c93016a38484dffbbbd4a248274305d/68cd907063cda717e79e072c5e55bcacf6b018ce6b5d3320f26eca7076a3381e/mr20151641hospitaldatafinutil.csv",
+      "version_id": "vMF0ItkYw6sa2qiDgLyMbDK8yJEp_RNg",
+      "sha256": "68cd907063cda717e79e072c5e55bcacf6b018ce6b5d3320f26eca7076a3381e"
+    },
+    {
+      "key": "california_hcai/hospital_finance/references/capture_id=HCAI_FINANCE__20260924T175632Z__b211c73d370f4e6fb883ac4099539fbf/31c847c7a2bb5718b319afe100b3f2553d8515fdaada700388eb84f0b72a2150/hadrfull-db-pcl-labels-2014-2015.xlsx",
+      "version_id": "iukcHexiqY97Ep13Zh0JzqEVc2LLs5pV",
+      "sha256": "31c847c7a2bb5718b319afe100b3f2553d8515fdaada700388eb84f0b72a2150"
+    },
+    {
+      "key": "california_hcai/hospital_finance/references/capture_id=HCAI_FINANCE__20260924T175637Z__9cabfb919ddc47e2a128c4568d0b94c0/ddce24b9e8ff4bfc78dde87f3eb366dc62d1e2e16db4a87c8e918fd8e0a587da/hadrfull-db-pcl-labels-2013-20xx.xlsx",
+      "version_id": "uxfqXuHeMuJzJMi5lsKbDX4vcxtVQw5V",
+      "sha256": "ddce24b9e8ff4bfc78dde87f3eb366dc62d1e2e16db4a87c8e918fd8e0a587da"
+    },
+    {
+      "key": "california_hcai/hospital_finance/references/capture_id=HCAI_FINANCE__20260924T175703Z__918a9bcd47a449b58afb2f3359276ba7/aaee32d6468470d8256f8be6f6374b03c9149f9bd10ffb8d927fbd22c12afb63/hadrexcel-full-db-pcl-labels-2004-2010.xlsx",
+      "version_id": "lwtTsZ92b00ZtHlruimDHq9_7hW3YDK.",
+      "sha256": "aaee32d6468470d8256f8be6f6374b03c9149f9bd10ffb8d927fbd22c12afb63"
+    },
+    {
+      "key": "california_hcai/hospital_finance/references/capture_id=HCAI_FINANCE__20260924T180105Z__c8f0605dc2964b11b2110ff367796a71/be1757af13f984e6cfdf2a14c319bf85a4f0eb2518cb521652684561e2c97e17/hadrfull-db-pcl-labels-2015-20xx.xlsx",
+      "version_id": "cItfoi4VCKmAywezcdVttSpR0xJTtu57",
+      "sha256": "be1757af13f984e6cfdf2a14c319bf85a4f0eb2518cb521652684561e2c97e17"
+    },
+    {
+      "key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_su86_ag6b/release_date=2020-07-04/56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852/pdc_s3_hos_data_su86_ag6b.csv",
+      "version_id": "k1sZPH18EBE4bxkentL5QdtjFWDmjvOb",
+      "sha256": "56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852"
+    },
+    {
+      "key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_su86_ag6b/release_date=2020-10-16/56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852/pdc_s3_hos_data_su86_ag6b.csv",
+      "version_id": "ESA_lvZtRC_inUAg2mtUeTwdXWFZ0.SM",
+      "sha256": "56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852"
+    },
+    {
+      "key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_su86_ag6b/release_date=2021-01-27/56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852/pdc_s3_hos_data_su86_ag6b.csv",
+      "version_id": "DYNSD6r7cu_W3kto6_0p_NKcBShrC7l0",
+      "sha256": "56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852"
+    },
+    {
+      "key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_su86_ag6b/release_date=2021-03-31/56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852/pdc_s3_hos_data_su86_ag6b.csv",
+      "version_id": "d5eu1_BqE3RoYTQEed46_fE5Im04Nyt_",
+      "sha256": "56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852"
+    },
+    {
+      "key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_su86_ag6b/release_date=2021-04-28/56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852/pdc_s3_hos_data_su86_ag6b.csv",
+      "version_id": "ByaaTkEKt9ez7XKrHk_TpLnKLyk.UBiA",
+      "sha256": "56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852"
+    },
+    {
+      "key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_su86_ag6b/release_date=2021-07-21/56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852/pdc_s3_hos_data_su86_ag6b.csv",
+      "version_id": "b2XGrRtLrmmDnLBvOBvNqxsI2y_8_b8K",
+      "sha256": "56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852"
+    },
+    {
+      "key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_su86_ag6b/release_date=2021-10-27/56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852/pdc_s3_hos_data_su86_ag6b.csv",
+      "version_id": "OI4ZvyI50Ag7dViDSPKTd5zQPkr0AWjQ",
+      "sha256": "56612aea4b6fd1449d255d94f74d326c2354a6dcfbbb6e6d3e132ab2de4da852"
+    }
+  ]
+}

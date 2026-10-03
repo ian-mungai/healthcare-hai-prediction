@@ -1,0 +1,23 @@
+{
+ "note": "Dated user decisions that release a registry access_hold which is not about publisher terms. Receipts bind this file by SHA-256; the base registry is updated at collection closeout. Earlier records stay unchanged so receipts that bind them still verify; new receipts bind the newest record.",
+ "recorded_at_utc": "2026-10-02T20:45:28.028560+00:00",
+ "previous_record": "config/acquisition/access_releases_20260929.json",
+ "releases": [
+  {
+   "decision_records": [
+    "data/acquisition_planning/measure_decisions_20260929_amendment4.json",
+    "data/acquisition_planning/hcai_util_2018_2025_plan.md",
+    "data/acquisition_planning/reference_documents_failure_modes.md"
+   ],
+   "decisions": [
+    "2026-09-24: public-business-data exception for resource 78622c04-a158-4c95-8ea3-7660725e9526 (2012-2017); abstracted file only in S3",
+    "2026-09-29: exception extended to the 2018-2025 annual workbooks; collection approved with column checks on capture",
+    "2026-10-02: release extended to HCAI's publisher documentation (data dictionaries and report forms), stored as reference documents only"
+   ],
+   "hold": "privacy: administrator, report-preparer and contact details in the published files",
+   "released": true,
+   "scope": "Abstracted sheet CSVs only in S3, as in the 2026-09-29 record; publisher documentation stored unchanged as reference documents, never as data; originals of data files on this Mac only, owner-only, deleted at collection closeout after user confirmation; not model-eligible; nothing published",
+   "source_id": "HCAI_UTIL"
+  }
+ ]
+}

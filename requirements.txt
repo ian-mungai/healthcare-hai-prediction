@@ -6,3 +6,4 @@ mypy==2.3.1
 pre-commit==4.6.2
 checkov==3.3.19
 types-jsonschema==4.26.0.20260518
+pyyaml==6.0.3  # The front-matter check imports it; pre-commit installs the same version.

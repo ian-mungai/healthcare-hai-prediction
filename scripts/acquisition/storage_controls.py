@@ -33,6 +33,11 @@ def verify_route(receipt: dict, source: dict, lineage: dict, root: Path, evidenc
 
         verify_wonder_capture(receipt, source, lineage, root, evidence_only)
         return
+    if mode == "reference_download":
+        from scripts.acquisition.reference_download_contract import verify_capture as verify_reference_capture
+
+        verify_reference_capture(receipt, source, lineage, root, evidence_only)
+        return
     if mode in {"census_acs_detailed", "acs_derived"}:
         from scripts.acquisition.census_acs_detailed_contract import verify_capture as verify_census_detailed_capture
 

@@ -4,3 +4,6 @@ aws-account infra/iam/tests/policies.tftest.hcl -- synthetic all-ones account ID
 aws-account infra/tests/storage.tftest.hcl -- synthetic all-ones account ID in a Terraform test; not the project's account
 aws-account scripts/infrastructure/run_e2e.py -- synthetic all-ones and all-twos account IDs in the infrastructure E2E; not the project's account
 aws-account tests/test_project_config.py -- synthetic all-ones and all-twos account IDs in configuration tests; not the project's account
+home-path docker-compose.yaml -- the analytics container service user home directory, not a person
+home-path services/analytics/Dockerfile -- the analytics container service user home directory, not a person
+home-path scripts/lakehouse/run_duckdb_view_e2e.py -- the analytics container service user home directory, not a person

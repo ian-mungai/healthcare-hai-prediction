@@ -2,6 +2,7 @@
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import sys
@@ -16,7 +17,7 @@ from typing import Any
 from unittest.mock import patch
 
 from scripts.acquisition import bls_api_contract as bls_contract
-from scripts.acquisition import history_redirects, history_routes, transport
+from scripts.acquisition import history_redirects, history_routes, s3_store, transport
 from scripts.acquisition.capture import capture
 from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.source_registry import LOCK_PATH, REPO_ROOT, load_registry, read_json, require
@@ -286,6 +287,85 @@ def route_scenarios(scenario: Any, root: Path) -> None:
         require(url not in transport.SIGNED_REDIRECT_ROUTES, "Unreviewed redirect installed")
 
     scenario("redirect_outside_reviewed_bucket_fails_job", wrong_bucket)
+    held_reference_scenarios(scenario, root, extend, boundaries)
+
+
+def held_reference_scenarios(scenario: Any, root: Path, extend: Any, boundaries: Any) -> None:
+    """A held source's reference document is planned and stored only with a binding its hold record releases (failure modes 1 to 5)."""
+    terms_sha256 = hashlib.sha256(s3_store.TERMS_ACCEPTANCE_PATH.read_bytes()).hexdigest()
+    hud = candidate("e2e-hud-reference", source_id="HUD", source_ids=["HUD"], release_binding="terms")
+
+    def planned() -> None:
+        bindings = extend([hud])[0]["plan"].get("lineage_bindings")
+        require(bindings == {"terms_sha256": terms_sha256}, f"Binding not carried into the plan: {bindings}")
+
+    scenario("held_reference_with_terms_binding_planned", planned)
+    scenario(
+        "held_data_with_binding_rejected",
+        lambda: extend([candidate("e2e-hud-data", source_id="HUD", source_ids=["HUD"], role="data", release_binding="terms")]),
+        "access, privacy or large-file hold",
+    )
+    scenario(
+        "unknown_release_binding_rejected",
+        lambda: extend([candidate("e2e-hud-other", source_id="HUD", source_ids=["HUD"], release_binding="other")]),
+        "release binding",
+    )
+    scenario("binding_on_unheld_source_rejected", lambda: extend([candidate("e2e-ca-binding", release_binding="terms")]), "release binding")
+
+    def execute(name: str, item: dict) -> list[dict]:
+        path = root / f"{name}_candidates.json"
+        write_once(path, encoded_json({"candidates": [item]}))
+        with boundaries():
+            return run_main(history_routes, ["--candidates", str(path), "--state-root", str(root / f"{name}_state"), "--execute", "--workers", "1"])[1:]
+
+    def stored() -> None:
+        events = execute("held", hud)
+        require([event["status"] for event in events] == ["stored_unvalidated"], f"Events: {events}")
+        lineage = json.loads(read_json(Path(events[0]["receipt_path"]))["lineage"]["extraction_or_query"])
+        require(lineage.get("terms_sha256") == terms_sha256, "Receipt lineage lacks the terms binding")
+
+    scenario("held_reference_stored_with_terms_binding", stored)
+
+    def unreleased() -> None:
+        wrong = candidate("e2e-hud-wrong", source_id="HUD", source_ids=["HUD"], release_binding="access_release")
+        events = execute("wrong_binding", wrong)
+        require([event["status"] for event in events] == ["pending_failure"] and "access hold" in events[0]["reason"], f"Events: {events}")
+
+    scenario("binding_that_does_not_release_source_refused_at_storage", unreleased)
+    release_scenarios(scenario, extend, execute)
+
+
+def release_scenarios(scenario: Any, extend: Any, execute: Any) -> None:
+    """New receipts bind the newest release record; receipts that bind an earlier record still verify (failure modes 15 to 18)."""
+    paths = s3_store.ACCESS_RELEASE_PATHS
+    newest, earliest = (hashlib.sha256(path.read_bytes()).hexdigest() for path in (paths[-1], paths[0]))
+    hcai = candidate("e2e-hcai-reference", source_id="HCAI_UTIL", source_ids=["HCAI_UTIL"], release_binding="access_release")
+    source = {"source_id": "HCAI_UTIL"}
+
+    def planned() -> None:
+        bindings = extend([hcai])[0]["plan"].get("lineage_bindings")
+        require(len(paths) == 2 and bindings == {"access_release_sha256": newest}, f"Binding is not the newest record: {bindings}")
+
+    scenario("documentation_release_bound_to_newest_record", planned)
+
+    def stored() -> None:
+        events = execute("hcai", hcai)
+        require([event["status"] for event in events] == ["stored_unvalidated"], f"Events: {events}")
+
+    scenario("held_documentation_stored_with_access_release", stored)
+    scenario(
+        "earlier_release_record_still_verifies",
+        lambda: require(s3_store.released_by_record(source, {"access_release_sha256": earliest}), "Earlier record no longer releases its receipts"),
+    )
+    scenario(
+        "unlisted_release_record_refused",
+        lambda: require(not s3_store.released_by_record(source, {"access_release_sha256": "0" * 64}), "Unlisted record accepted"),
+    )
+    scenario(
+        "documentation_release_does_not_admit_data",
+        lambda: extend([hcai | {"url": hcai["url"] + "?data", "role": "data"}]),
+        "access, privacy or large-file hold",
+    )
 
 
 def main() -> None:

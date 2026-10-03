@@ -196,12 +196,12 @@
           <button class="toolbar-toggle" onclick="this.parentElement.classList.toggle('expanded')" title="Export options" aria-label="Export options">⋯</button>
         </div>
       </div>
-      <p class="subtitle">Acquisition stage: public health data collected through APIs and download URLs into private S3 storage; modeling platform planned</p>
+      <p class="subtitle">Public health data collected through APIs and download URLs into private S3 storage, then loaded as published into the bronze layer of a local Iceberg lakehouse; staging and modeling planned</p>
     </div>
 
     <!-- Main Diagram -->
     <div class="diagram-container">
-      <svg viewBox="0 0 1000 760" role="img" aria-label="healthcare-hai-prediction architecture">
+      <svg viewBox="0 0 1000 815" role="img" aria-label="healthcare-hai-prediction architecture">
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
             <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
@@ -229,8 +229,10 @@
         <text x="642" y="258" fill="#fb7185" font-size="8">least privilege</text>
         <line x1="730" y1="150" x2="798" y2="150" stroke="#64748b" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arrowhead)"/>
         <text x="764" y="142" fill="#64748b" font-size="8" text-anchor="middle">planned</text>
-        <line x1="340" y1="585" x2="340" y2="462" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
-        <text x="352" y="530" fill="#94a3b8" font-size="8">checks every commit</text>
+        <line x1="340" y1="640" x2="340" y2="597" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
+        <text x="352" y="622" fill="#94a3b8" font-size="8">checks every commit</text>
+        <path d="M 745 535 L 745 175 L 733 175" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="757" y="360" fill="#94a3b8" font-size="8" text-anchor="middle" transform="rotate(-90 757 360)">reads manifests and objects; writes lakehouse/</text>
 
         <!-- Public publishers -->
         <rect x="20" y="80" width="170" height="290" rx="6" fill="#0f172a"/>
@@ -262,7 +264,7 @@
         <text x="262" y="164" fill="#94a3b8" font-size="8">• bounded retries, request budget</text>
         <text x="262" y="178" fill="#94a3b8" font-size="8">• raw JSON kept, CSV derived</text>
         <text x="262" y="192" fill="#94a3b8" font-size="8">• replay verifies without effects</text>
-        <text x="340" y="208" fill="#34d399" font-size="7" text-anchor="middle">in Git when collection ends</text>
+        <text x="340" y="208" fill="#34d399" font-size="7" text-anchor="middle">committed to Git</text>
 
         <rect x="250" y="255" width="180" height="85" rx="6" fill="#0f172a"/>
         <rect x="250" y="255" width="180" height="85" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
@@ -299,8 +301,9 @@
         <rect x="515" y="285" width="185" height="70" rx="6" fill="#0f172a"/>
         <rect x="515" y="285" width="185" height="70" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
         <text x="607" y="305" fill="white" font-size="11" font-weight="600" text-anchor="middle">IAM</text>
-        <text x="607" y="321" fill="#94a3b8" font-size="9" text-anchor="middle">project user (dev): S3 policy</text>
-        <text x="607" y="335" fill="#94a3b8" font-size="9" text-anchor="middle">and shared-key read only</text>
+        <text x="607" y="321" fill="#94a3b8" font-size="8" text-anchor="middle">project user (dev): write-once raw</text>
+        <text x="607" y="334" fill="#94a3b8" font-size="8" text-anchor="middle">data, lakehouse/ read-write,</text>
+        <text x="607" y="347" fill="#94a3b8" font-size="8" text-anchor="middle">shared-key read only</text>
 
         <rect x="515" y="365" width="185" height="75" rx="6" fill="#0f172a"/>
         <rect x="515" y="365" width="185" height="75" rx="6" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
@@ -311,6 +314,29 @@
 
         </g>
 
+        <!-- Local lakehouse (built) -->
+        <rect x="220" y="490" width="540" height="105" rx="12" fill="rgba(148, 163, 184, 0.03)" stroke="#94a3b8" stroke-width="1" stroke-dasharray="8,4"/>
+        <text x="232" y="507" fill="#94a3b8" font-size="10" font-weight="600">Local lakehouse (Docker Compose on the Mac)</text>
+        <rect x="235" y="515" width="160" height="70" rx="6" fill="#0f172a"/>
+        <rect x="235" y="515" width="160" height="70" rx="6" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="315" y="533" fill="white" font-size="11" font-weight="600" text-anchor="middle">Polaris catalog</text>
+        <text x="315" y="548" fill="#94a3b8" font-size="8" text-anchor="middle">Iceberg REST, PostgreSQL</text>
+        <text x="315" y="561" fill="#94a3b8" font-size="8" text-anchor="middle">owner-only local credentials</text>
+        <text x="315" y="576" fill="#a78bfa" font-size="7" text-anchor="middle">catalog in ignored data/</text>
+        <rect x="410" y="515" width="175" height="70" rx="6" fill="#0f172a"/>
+        <rect x="410" y="515" width="175" height="70" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="497" y="533" fill="white" font-size="11" font-weight="600" text-anchor="middle">Spark jobs</text>
+        <text x="497" y="548" fill="#94a3b8" font-size="8" text-anchor="middle">bronze load, dictionary, checksums</text>
+        <text x="497" y="561" fill="#94a3b8" font-size="8" text-anchor="middle">every file as published, as text</text>
+        <text x="497" y="576" fill="#34d399" font-size="7" text-anchor="middle">manifest-driven, committed table map</text>
+        <rect x="600" y="515" width="135" height="70" rx="6" fill="#0f172a"/>
+        <rect x="600" y="515" width="135" height="70" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="667" y="533" fill="white" font-size="11" font-weight="600" text-anchor="middle">DuckDB</text>
+        <text x="667" y="548" fill="#94a3b8" font-size="8" text-anchor="middle">query shell and UI</text>
+        <text x="667" y="561" fill="#94a3b8" font-size="8" text-anchor="middle">read-only principal</text>
+        <text x="667" y="576" fill="#22d3ee" font-size="7" text-anchor="middle">loopback only</text>
+        <line x1="395" y1="550" x2="408" y2="550" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
         <!-- Planned platform -->
         <rect x="790" y="60" width="200" height="410" rx="12" fill="transparent" stroke="#64748b" stroke-width="1" stroke-dasharray="6,6"/>
         <text x="802" y="78" fill="#64748b" font-size="10" font-weight="600">Planned (not built)</text>
@@ -318,8 +344,8 @@
         <text x="890" y="118" fill="#cbd5e1" font-size="10" font-weight="600" text-anchor="middle">Orchestration</text>
         <text x="890" y="134" fill="#64748b" font-size="8" text-anchor="middle">scheduled DAGs</text>
         <rect x="800" y="170" width="180" height="70" rx="6" fill="rgba(30, 41, 59, 0.3)" stroke="#64748b" stroke-width="1" stroke-dasharray="4,3"/>
-        <text x="890" y="193" fill="#cbd5e1" font-size="10" font-weight="600" text-anchor="middle">Lakehouse</text>
-        <text x="890" y="209" fill="#64748b" font-size="8" text-anchor="middle">Iceberg bronze, silver, gold</text>
+        <text x="890" y="193" fill="#cbd5e1" font-size="10" font-weight="600" text-anchor="middle">Staging and marts</text>
+        <text x="890" y="209" fill="#64748b" font-size="8" text-anchor="middle">Iceberg silver and gold</text>
         <text x="890" y="222" fill="#64748b" font-size="8" text-anchor="middle">dbt stg_, int_, dim_, fact_</text>
         <rect x="800" y="255" width="180" height="60" rx="6" fill="rgba(30, 41, 59, 0.3)" stroke="#64748b" stroke-width="1" stroke-dasharray="4,3"/>
         <text x="890" y="278" fill="#cbd5e1" font-size="10" font-weight="600" text-anchor="middle">Feature store</text>
@@ -332,31 +358,31 @@
         <text x="890" y="441" fill="#64748b" font-size="8" text-anchor="middle">HAC Reduction Program</text>
 
         <!-- Repository and CI -->
-        <rect x="220" y="585" width="540" height="110" rx="6" fill="#0f172a"/>
-        <rect x="220" y="585" width="540" height="110" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
-        <text x="490" y="607" fill="white" font-size="11" font-weight="600" text-anchor="middle">Private GitHub repository and CI</text>
-        <text x="490" y="623" fill="#94a3b8" font-size="9" text-anchor="middle">GitHub Actions runs the same pre-commit hooks as each commit, without AWS credentials</text>
-        <text x="236" y="645" fill="#94a3b8" font-size="8">• Ruff, MyPy, secret scan, repository checks</text>
-        <text x="236" y="660" fill="#94a3b8" font-size="8">• configuration and quality E2E with artifacts</text>
-        <text x="236" y="675" fill="#94a3b8" font-size="8">• pytest regression safeguards</text>
-        <text x="500" y="645" fill="#94a3b8" font-size="8">• terraform fmt, validate, mock-provider tests</text>
-        <text x="500" y="660" fill="#94a3b8" font-size="8">• tflint, checkov, trivy config</text>
-        <text x="500" y="675" fill="#94a3b8" font-size="8">• commit messages; acquisition checks job</text>
+        <rect x="220" y="640" width="540" height="110" rx="6" fill="#0f172a"/>
+        <rect x="220" y="640" width="540" height="110" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="490" y="662" fill="white" font-size="11" font-weight="600" text-anchor="middle">Private GitHub repository and CI</text>
+        <text x="490" y="678" fill="#94a3b8" font-size="9" text-anchor="middle">GitHub Actions runs the same pre-commit hooks as each commit, without AWS credentials</text>
+        <text x="236" y="700" fill="#94a3b8" font-size="8">• Ruff, MyPy, secret scan, repository checks</text>
+        <text x="236" y="715" fill="#94a3b8" font-size="8">• configuration and quality E2E with artifacts</text>
+        <text x="236" y="730" fill="#94a3b8" font-size="8">• pytest regression safeguards</text>
+        <text x="500" y="700" fill="#94a3b8" font-size="8">• terraform fmt, validate, mock-provider tests</text>
+        <text x="500" y="715" fill="#94a3b8" font-size="8">• tflint, checkov, trivy config</text>
+        <text x="500" y="730" fill="#94a3b8" font-size="8">• commit messages; acquisition checks job</text>
 
         <!-- Legend (outside all boundaries) -->
-        <text x="20" y="598" fill="white" font-size="10" font-weight="600">Legend</text>
-        <rect x="20" y="610" width="16" height="10" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1"/>
-        <text x="42" y="618" fill="#94a3b8" font-size="8">Code</text>
-        <rect x="20" y="626" width="16" height="10" rx="2" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1"/>
-        <text x="42" y="634" fill="#94a3b8" font-size="8">Local data</text>
-        <rect x="20" y="642" width="16" height="10" rx="2" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1"/>
-        <text x="42" y="650" fill="#94a3b8" font-size="8">AWS service</text>
-        <rect x="20" y="658" width="16" height="10" rx="2" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1"/>
-        <text x="42" y="666" fill="#94a3b8" font-size="8">Security</text>
-        <rect x="20" y="674" width="16" height="10" rx="2" fill="transparent" stroke="#64748b" stroke-width="1" stroke-dasharray="3,3"/>
-        <text x="42" y="682" fill="#94a3b8" font-size="8">Planned</text>
-        <line x1="110" y1="615" x2="126" y2="615" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
-        <text x="132" y="618" fill="#94a3b8" font-size="8">Access</text>
+        <text x="20" y="653" fill="white" font-size="10" font-weight="600">Legend</text>
+        <rect x="20" y="665" width="16" height="10" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1"/>
+        <text x="42" y="673" fill="#94a3b8" font-size="8">Code</text>
+        <rect x="20" y="681" width="16" height="10" rx="2" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1"/>
+        <text x="42" y="689" fill="#94a3b8" font-size="8">Local data</text>
+        <rect x="20" y="697" width="16" height="10" rx="2" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1"/>
+        <text x="42" y="705" fill="#94a3b8" font-size="8">AWS service</text>
+        <rect x="20" y="713" width="16" height="10" rx="2" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1"/>
+        <text x="42" y="721" fill="#94a3b8" font-size="8">Security</text>
+        <rect x="20" y="729" width="16" height="10" rx="2" fill="transparent" stroke="#64748b" stroke-width="1" stroke-dasharray="3,3"/>
+        <text x="42" y="737" fill="#94a3b8" font-size="8">Planned</text>
+        <line x1="110" y1="670" x2="126" y2="670" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
+        <text x="132" y="673" fill="#94a3b8" font-size="8">Access</text>
       </svg>
     </div>
 
@@ -388,6 +414,18 @@
       </div>
       <div class="card">
         <div class="card-header">
+          <div class="card-dot cyan"></div>
+          <h3>Lakehouse</h3>
+        </div>
+        <ul>
+          <li>• Bronze tables read only the S3 manifests and the committed table map</li>
+          <li>• Each row traces to its S3 key, version and SHA-256</li>
+          <li>• Privacy-retired objects are skipped by exact key, version and checksum</li>
+          <li>• Bronze E2E runs in Docker on synthetic files, never S3</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-header">
           <div class="card-dot violet"></div>
           <h3>Verification</h3>
         </div>
@@ -402,7 +440,7 @@
 
     <!-- Footer -->
     <p class="footer">
-      healthcare-hai-prediction • checked against f9ef312 and the working tree on Oct 1 2026 • dashed components are planned
+      healthcare-hai-prediction • checked against commit 3af1abb plus the uncommitted lakehouse work • dashed components are planned
     </p>
   </div>
 

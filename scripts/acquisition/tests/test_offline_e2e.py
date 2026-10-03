@@ -22,6 +22,7 @@ SUITES = [
     "census_acs_detailed",
     "hud_api",
     "wonder_export",
+    "reference_download",
     "cms_owners",
     "hcai_util",
     "onc_mu",

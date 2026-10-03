@@ -9,7 +9,9 @@ assembled from fragments, so this file does not flag itself. The rules are liste
 from __future__ import annotations
 
 import argparse
+import datetime
 import fnmatch
+import importlib
 import os
 import re
 import sys
@@ -77,7 +79,7 @@ PRIVACY_PATTERNS = {
 }
 RESERVED_DOMAINS = (".invalid", ".test", ".localhost", ".example", "example.com", "example.org", "example.net")
 ENV_VALUE_KEYS = re.compile(r"PROFILE|BUCKET|ACCOUNT|ARN|ENDPOINT|HOST|EMAIL|USER")
-WRITING_RULE = f"{POLICY}: writing check (Oxford comma, date format; em dashes in declared article files)"
+WRITING_RULE = f"{POLICY}: writing check (Oxford comma, date format, time-bound words; em dashes in declared article files)"
 WRITING_ALLOWLIST = ".writing_allowlist"
 # Checked in prose only: code spans, fenced blocks, front matter, URLs and link targets are masked first.
 WRITING_PATTERNS = {
@@ -87,6 +89,13 @@ WRITING_PATTERNS = {
         "drop the comma, or split the sentence in two",
     ),
     "iso-date": ("ISO date in prose", re.compile(r"\b\d{4}-\d{2}-\d{2}\b"), "write the date as Sep 30 2026, or put a machine value in `code`"),
+    # Only the always time-bound words of documents.md 6.10; "now", "new", "latest", "yet" and "old" have timeless
+    # procedural uses and are judged in the documentation review.
+    "time-word": (
+        "time-bound word in prose",
+        re.compile(r"(?i)\b(?:currently|recently|eventually|(?<!as )soon(?! as)|as of this writing|at present|in the future|for now)\b"),
+        "state the fact without the time word, or tie it to a version, commit or issue",
+    ),
     "em-dash": ("em dash in article text", re.compile("\u2014"), "use a colon, comma, parentheses or a new sentence"),
 }
 ARTICLE_ONLY = {"em-dash"}
@@ -463,6 +472,84 @@ def writing_check(articles: list[str]) -> list[Finding]:
     return findings
 
 
+FRONT_RULE = "bundle standards/documents.md#3-metadata (sections 3.1, 3.2): document front matter"
+# Well-known files and .github templates need no front matter; READMEs and E2E records are out of scope.
+WELL_KNOWN = {"AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "CHANGELOG.md", "SECURITY.md", "CODE_OF_CONDUCT.md", "SUPPORT.md", "LICENSE.md"}
+DESCRIPTION_LIMIT = 120
+ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def load_yaml(text: str) -> object:
+    """Parse YAML with PyYAML's safe loader; PyYAML ships no type hints, so it is imported by name."""
+    yaml = importlib.import_module("yaml")
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        raise ValueError(str(error).splitlines()[0]) from error
+
+
+def exempt_from_front_matter(path: str) -> bool:
+    """Return whether a Markdown file needs no front matter: a README, a well-known file or a .github template."""
+    name = os.path.basename(path)
+    return name in WELL_KNOWN or name.startswith("README") or path.startswith(".github/")
+
+
+def first_h1(text: str) -> str | None:
+    """The first level-one heading outside fenced code blocks."""
+    fenced = False
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+        elif not fenced and line.startswith("# "):
+            return line[2:].strip()
+    return None
+
+
+def front_matter_problems(text: str) -> list[str]:
+    """Problems with one document's front matter: valid YAML with title (equal to the H1), description and last_updated."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return ["no front matter: start the file with --- title, description and last_updated ---"]
+    if "---" not in (line.strip() for line in lines[1:]):
+        return ["front matter is not closed with a --- line"]
+    end = next(number for number, line in enumerate(lines[1:], 1) if line.strip() == "---")
+    try:
+        data = load_yaml("\n".join(lines[1:end]))
+    except ValueError as error:
+        return [f"front matter is not valid YAML ({error}); quote values that contain ': '"]
+    if not isinstance(data, dict):
+        return ["front matter is not valid YAML: expected key: value lines"]
+    problems = []
+    title, description, updated = data.get("title"), data.get("description"), data.get("last_updated")
+    if not isinstance(title, str) or title != first_h1(text):
+        problems.append("title does not match the H1")
+    if not isinstance(description, str) or not description.strip():
+        problems.append("description is missing")
+    elif len(description) > DESCRIPTION_LIMIT:
+        problems.append(f"description over {DESCRIPTION_LIMIT} characters ({len(description)})")
+    if not (isinstance(updated, datetime.date) or (isinstance(updated, str) and ISO_DAY.fullmatch(updated))):
+        problems.append("last_updated is not a YYYY-MM-DD date")
+    return problems
+
+
+def front_matter() -> list[Finding]:
+    """Every in-scope Markdown document has valid front matter with title, description and last_updated."""
+    findings = []
+    for path in sorted(git("ls-files", "--cached", "--others", "--exclude-standard").splitlines()):
+        if not path.endswith(".md") or path.startswith(DATA_FOLDERS) or exempt_from_front_matter(path) or not os.path.isfile(path):
+            continue
+        for problem in front_matter_problems(Path(path).read_text(errors="replace")):
+            findings.append(
+                Finding(
+                    f"{path}:1",
+                    problem,
+                    FRONT_RULE,
+                    "add or fix the front matter: title equal to the H1, description of at most 120 characters, last_updated YYYY-MM-DD",
+                )
+            )
+    return findings
+
+
 def warn(findings: list[Finding]) -> int:
     """Report findings without failing: the warn period before a check blocks."""
     for finding in findings:
@@ -474,7 +561,7 @@ def main() -> int:
     """Run the named check and report its findings."""
     checks = ["credential-files", "data-files", "suppressions", "subprocess-imports", "lint-settings", "env-example", "removed-names"]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("check", choices=[*checks, "commit-msg", "commit-range", "privacy-scan", "writing-check"])
+    parser.add_argument("check", choices=[*checks, "commit-msg", "commit-range", "privacy-scan", "writing-check", "front-matter"])
     parser.add_argument("paths", nargs="*")
     parser.add_argument("--all", action="store_true", help="privacy-scan: include ignored and hidden files (before publishing)")
     parser.add_argument("--warn", action="store_true", help="privacy-scan, writing-check: report findings without failing")
@@ -496,6 +583,7 @@ def main() -> int:
         "lint-settings": lint_settings,
         "env-example": env_example,
         "removed-names": removed_names,
+        "front-matter": front_matter,
         "commit-msg": lambda: commit_message(args.paths[0]),
         "commit-range": lambda: commit_range(args.paths[0], args.paths[1]),
     }

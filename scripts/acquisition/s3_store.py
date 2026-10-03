@@ -278,7 +278,13 @@ def extract_references(root: Path, receipt: dict, selections: list[dict]) -> lis
 
 
 TERMS_ACCEPTANCE_PATH = REPO_ROOT / "config/acquisition/terms_acceptance_20260928.json"
-ACCESS_RELEASE_PATH = REPO_ROOT / "config/acquisition/access_releases_20260929.json"
+# Release records are append-only: a receipt binds one record by SHA-256, so an earlier record is never edited.
+ACCESS_RELEASE_PATHS = (
+    REPO_ROOT / "config/acquisition/access_releases_20260929.json",
+    REPO_ROOT / "config/acquisition/access_releases_20261002.json",
+)
+# New receipts bind the newest record.
+ACCESS_RELEASE_PATH = ACCESS_RELEASE_PATHS[-1]
 
 
 def access_released(source: dict, lineage: dict) -> bool:
@@ -300,15 +306,19 @@ def released_by_record(source: dict, lineage: dict) -> bool:
     """Return True only when the receipt binds the exact dated access-release record naming this source.
 
     For holds that are not about terms (for example a privacy exception the user approved), the release is a
-    dated record rather than a terms acceptance, bound by its SHA-256 in the receipt lineage.
+    dated record rather than a terms acceptance, bound by its SHA-256 in the receipt lineage. The bound record
+    is looked up among the listed records, so receipts that bind an earlier record keep verifying.
     """
-    try:
-        body = ACCESS_RELEASE_PATH.read_bytes()
-        records = [r for r in json.loads(body)["releases"] if r["source_id"] == source["source_id"]]
-        bound = lineage["access_release_sha256"] == hashlib.sha256(body).hexdigest()
-    except (OSError, KeyError, TypeError, ValueError):
-        return False
-    return bound and len(records) == 1 and records[0].get("released") is True
+    for path in ACCESS_RELEASE_PATHS:
+        try:
+            body = path.read_bytes()
+            if lineage["access_release_sha256"] != hashlib.sha256(body).hexdigest():
+                continue
+            records = [r for r in json.loads(body)["releases"] if r["source_id"] == source["source_id"]]
+        except (OSError, KeyError, TypeError, ValueError):
+            return False
+        return len(records) == 1 and records[0].get("released") is True
+    return False
 
 
 def upload_snapshot(

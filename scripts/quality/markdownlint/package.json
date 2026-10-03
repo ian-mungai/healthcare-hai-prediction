@@ -1,0 +1,11 @@
+{
+  "name": "hai-prediction-markdownlint",
+  "private": true,
+  "description": "Pinned markdownlint-cli2 for the markdownlint pre-commit hook; installed into .tools/markdownlint-cli2 by scripts/quality/install_tools.py.",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "markdownlint-cli2": "0.23.3"
+  }
+}

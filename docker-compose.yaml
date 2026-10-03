@@ -1,0 +1,133 @@
+# Local lakehouse services: the Apache Polaris Iceberg REST catalog, its PostgreSQL database, the Spark job image and
+# the DuckDB analytics image for read-only queries.
+# Start through scripts/lakehouse/catalog.py, which supplies the env files from the ignored data/lakehouse/ folder;
+# the repository's .env is never read. Images are pinned by digest and every port listens only on this Mac.
+name: hai-lakehouse
+
+x-polaris-database: &polaris-database
+  POLARIS_PERSISTENCE_TYPE: relational-jdbc
+  POLARIS_PERSISTENCE_RELATIONAL_JDBC_DATABASE_TYPE: postgresql
+  QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://polaris-db:5432/polaris
+  QUARKUS_DATASOURCE_USERNAME: polaris
+  QUARKUS_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?run through scripts/lakehouse/catalog.py}
+
+x-aws-profile: &aws-profile
+  type: bind
+  source: ${HOME}/.aws
+  target: /aws
+  read_only: true
+
+services:
+  polaris-db:
+    image: postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+    environment:
+      POSTGRES_USER: polaris
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run through scripts/lakehouse/catalog.py}
+      POSTGRES_DB: polaris
+      POSTGRES_INITDB_ARGS: --encoding UTF8 --data-checksums
+    volumes:
+      # The catalog database lives in the ignored data/lakehouse/ folder, so recreating the container keeps the tables.
+      - ./data/lakehouse/polaris_db:/var/lib/postgresql/data
+      - ./services/lakehouse/polaris/create-polaris-schema.sql:/docker-entrypoint-initdb.d/create-polaris-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "polaris", "-d", "polaris"]
+      interval: 5s
+      timeout: 2s
+      retries: 15
+
+  polaris-bootstrap:
+    image: apache/polaris-admin-tool:1.8.0@sha256:34dde19bb321aef5925a14ba90b69e26e982a5dcbda76a9d0cfc1aac1534ba4e
+    profiles: [setup]
+    environment: *polaris-database
+    command:
+      - bootstrap
+      - --realm=POLARIS
+      - --credential=POLARIS,${POLARIS_CLIENT_ID:?run through scripts/lakehouse/catalog.py},${POLARIS_CLIENT_SECRET:?run through scripts/lakehouse/catalog.py}
+    depends_on:
+      polaris-db:
+        condition: service_healthy
+
+  polaris:
+    image: apache/polaris:1.8.0@sha256:347615e736cab2c9be0d8c464552ac930be4755302bb0aeb745216bbae99ba5b
+    environment:
+      <<: *polaris-database
+      POLARIS_REALM_CONTEXT_REALMS: POLARIS
+      QUARKUS_OTEL_SDK_DISABLED: "true"
+      # The server writes table metadata with the project's AWS profile (read-only mount); it never vends credentials.
+      AWS_PROFILE: ${AWS_PROFILE:?run through scripts/lakehouse/catalog.py}
+      AWS_REGION: ${AWS_REGION:?run through scripts/lakehouse/catalog.py}
+      AWS_CONFIG_FILE: /aws/config
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+    volumes:
+      - *aws-profile
+    ports:
+      - "127.0.0.1:8181:8181"
+      - "127.0.0.1:8182:8182"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8182/q/health"]
+      interval: 2s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      polaris-db:
+        condition: service_healthy
+
+  spark:
+    image: hai-lakehouse-spark:4.1.2-iceberg1.11.0
+    build: ./services/lakehouse/spark
+    profiles: [job]
+    environment:
+      AWS_PROFILE: ${AWS_PROFILE:?run through scripts/lakehouse/catalog.py}
+      AWS_REGION: ${AWS_REGION:?run through scripts/lakehouse/catalog.py}
+      AWS_CONFIG_FILE: /aws/config
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      POLARIS_URI: http://polaris:8181/api/catalog
+      POLARIS_CLIENT_ID: ${POLARIS_CLIENT_ID:?run through scripts/lakehouse/catalog.py}
+      POLARIS_CLIENT_SECRET: ${POLARIS_CLIENT_SECRET:?run through scripts/lakehouse/catalog.py}
+    volumes:
+      - *aws-profile
+      - ./:/workspace
+    depends_on:
+      polaris:
+        condition: service_healthy
+
+  analytics:
+    image: hai-analytics:duckdb1.5.6
+    build: ./services/analytics
+    profiles: [query]
+    environment:
+      AWS_PROFILE: ${AWS_PROFILE:?run through scripts/lakehouse/catalog.py}
+      AWS_REGION: ${AWS_REGION:?run through scripts/lakehouse/catalog.py}
+      AWS_CONFIG_FILE: /aws/config
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      # The read-only catalog principal; the root credentials never reach this container. Empty until setup creates it.
+      POLARIS_READER_CLIENT_ID: ${POLARIS_READER_CLIENT_ID:-}
+      POLARIS_READER_CLIENT_SECRET: ${POLARIS_READER_CLIENT_SECRET:-}
+    volumes:
+      - *aws-profile
+    depends_on:
+      polaris:
+        condition: service_healthy
+
+  analytics-ui:
+    image: hai-analytics:duckdb1.5.6
+    profiles: [query]
+    entrypoint: ["/opt/analytics/ui.sh"]
+    environment:
+      AWS_PROFILE: ${AWS_PROFILE:?run through scripts/lakehouse/catalog.py}
+      AWS_REGION: ${AWS_REGION:?run through scripts/lakehouse/catalog.py}
+      AWS_CONFIG_FILE: /aws/config
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      POLARIS_READER_CLIENT_ID: ${POLARIS_READER_CLIENT_ID:-}
+      POLARIS_READER_CLIENT_SECRET: ${POLARIS_READER_CLIENT_SECRET:-}
+    volumes:
+      - *aws-profile
+      # Saved UI notebooks live in the ignored data/ folder, so they survive the container.
+      - ./data/analytics/ui:/home/analytics/.duckdb/extension_data/ui
+    ports:
+      # The DuckDB UI has no login: reachable from this Mac only, through the relay in the image.
+      - "127.0.0.1:4213:4214"
+    depends_on:
+      polaris:
+        condition: service_healthy
