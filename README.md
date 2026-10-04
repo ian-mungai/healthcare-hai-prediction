@@ -57,7 +57,9 @@ dictionary and checksum jobs give Spark a 12 GB heap (`JOB_MEMORY` in
 `scripts/lakehouse/session.py`).
 
 Run from this repository's root with its existing Python 3.12 `.venv`.
-Dependencies are shared across development and production in `requirements.txt`.
+Dependencies are shared across development and production in `requirements.txt`;
+a requirement used only as a command carries `# tool: <use>` and one imported by
+name carries `# dynamic: <where>`, so the dependency check reads them correctly.
 Gitleaks, TFLint and trivy are installed only in ignored `.tools/`; versions and
 publisher SHA-256 values are pinned in `config/quality_tools.json`. The markdownlint
 hook's `markdownlint-cli2` is installed into `.tools/markdownlint-cli2` with `npm ci`
@@ -335,14 +337,39 @@ with `bash scripts/acquisition/run_checks.sh`.
   agent/vendor list, so new forms need a failing sample before the check is
   extended. Review pull request text separately; a Git hook cannot read it.
 - **Docs match the code:** every environment variable the code reads is listed
-  in `.env.example`; a removed script, flag or variable no longer appears in the
-  docs; and local commits require an ignored `.documentation_review.json`, a per-document
+  in `.env.example` and every variable listed there is read by code, a script,
+  a workflow or a template. Local commits require an ignored `.documentation_review.json`, a per-document
   review outcome bound to the staged snapshot. Draft it with
   `.venv/bin/python -m scripts.quality.documentation_review prepare --reviewer <name> --reviewed-at <UTC>`
   after staging, review every document and fill each outcome and note locally. Never stage
   this record. The local hook validates its freshness against the index and rejects
   tracked evidence. GitHub Actions checks that the record is untracked and runs
   synthetic hook tests; it cannot verify the private local review itself.
+- **Removed names:** a name the staged change removes is no longer referenced:
+  a deleted script, a command-line flag, an environment variable, a top-level
+  Python function or class, a config key with `_`, `-` or camelCase, a Terraform
+  variable, output, module, resource or data source, a deleted dbt model or a
+  dependency that leaves every requirements file. Code names are searched in
+  code and config and in the code spans and fences of Markdown, not in prose;
+  `CHANGELOG.md` is history and is not searched. GitHub Actions runs the same
+  check over every pushed range. A reference that must stay goes in
+  `.cleanup_allowlist` as `<kind> <path glob> -- <reason>`; an entry without a
+  reason is itself a finding. It blocks: a replay over every earlier commit
+  found only deliberate references (a removed config key that the bronze loader
+  refuses by name).
+- **Unused code, dependencies and files (warn period):** vulture 2.16 (60%
+  confidence) reports functions, classes and variables nothing uses; deptry
+  0.25.1 reports requirements nothing imports and imports no requirements file
+  declares; `orphan-files` reports tracked files no other file names by path,
+  file name, folder or import; tflint (`terraform_unused_declarations`, every
+  module) reports unused Terraform declarations. vulture and deptry are pinned
+  in `requirements.txt`. They print each finding as a `WARN` line and do not
+  block until the whole repository is clean. deptry reads every tracked
+  requirements file at once, so the transitive pins in the hash-locked image
+  and tool files are reported too. Exceptions go in `.cleanup_allowlist` with a
+  reason, under the kinds `unused-code`, `unused-dependencies`, `orphan` and
+  `terraform-unused`; dbt's folder-loaded models and macros are listed there.
+  Run one with `.venv/bin/python -m scripts.quality.repo_checks unused-code --warn`.
 - **Lint settings:** Ruff keeps rule sets `E`, `F`, `I`, `B`, `UP`, `S`, `SIM`
   and `T20` at line length 160 with no ignore or exclude settings; MyPy keeps
   `--check-untyped-defs` and `--disallow-untyped-defs`. The only allowed
@@ -371,7 +398,8 @@ point (`scripts/quality/run_checks_e2e.py` and
 `scripts/quality/run_documentation_review_e2e.py`); both run in local CI.
 Every detection check was run on the whole repository before it was enabled,
 with no false positives, so they block from the start; the writing check blocked
-only after the existing prose was corrected. There are no bypasses:
+only after the existing prose was corrected. The unused code, dependency and file
+checks are the exception: they warn until their findings are resolved. There are no bypasses:
 never use `SKIP=` or `git commit --no-verify`. If a check blocks a valid change,
 fix the check or ask the repository owner.
 

@@ -47,6 +47,7 @@ LAUNCHER_SOURCE = (ROOT / "scripts" / "process.py").read_text()
 CI_SOURCE = (ROOT / "scripts" / "run_ci.sh").read_text()
 ALLOWLIST = ".privacy_allowlist"
 ALLOWLIST_SOURCE = (ROOT / ALLOWLIST).read_text()
+ENV_EXAMPLE_SOURCE = (ROOT / ".env.example").read_text()
 VENDOR_ADDRESS = "noreply" + "@" + "anthropic.com"  # The attribution check matches this vendor address.
 HOME_PATH = "/Us" + "ers/jdoe/projects/app/run.log"
 TEMP_PATH = "/var/" + "folders/zq/k3j9x0000gn/T/run_1"
@@ -70,6 +71,33 @@ CLEAN_WRITING = (
 CLAUSE_COMMA = "Secrets never go into logs or commits" + ", and a privacy scan runs on every commit.\n"
 SERIAL_COMMA = "The check reads Markdown, articles" + ", and commit messages.\n"
 NOR_COMMA = "It is not fast" + ", nor is it cheap.\n"
+# Removed-name samples are assembled so this file never names them literally: the check searches code too.
+OLD_SCRIPT = "old" + "_tool.py"
+OLD_FLAG = "--legacy" + "-mode"
+OLD_FUNCTION = "helper" + "_total"
+OLD_CLASS = "Legacy" + "Loader"
+OLD_KEY = "retention" + "_days"
+OLD_VARIABLE = "bucket" + "_label"
+OLD_MODEL = "stg" + "_orders"
+# Not pinned by any runtime's requirements file that the scratch repository copies.
+OLD_PACKAGE = "hum" + "anize"
+OLD_MODULE = OLD_PACKAGE
+STALE_HELPER = "stale" + "_helper"
+FOLDER_NAME = "run" + "books"
+OLD_NOTES = "old" + "_notes.md"
+UNUSED_PACKAGE = "tabu" + "late"
+UNUSED_SETTING = "OLD" + "_SETTING"
+UNUSED_TF_VARIABLE = "unused" + "_region"
+# The scratch repository holds this repository's scripts; the cleanup samples sit outside them.
+COPIED_ALLOWED = (
+    "orphan scripts/* -- check scripts copied into the scratch repository\n"
+    "orphan dbt/* -- dbt settings copied into the scratch repository\n"
+    "unused-code scripts/* -- check scripts copied into the scratch repository\n"
+    "unused-dependencies scripts/* -- check scripts copied into the scratch repository\n"
+)
+# Cleanup checks in their warn period: they exit 0 and print each finding as a WARN line. A sample that must block
+# must print one; a sample that must pass must print none.
+WARN_HOOKS = {"unused-code", "unused-dependencies", "orphan-files", "terraform-unused"}
 
 
 @dataclass
@@ -123,24 +151,174 @@ CASES = [
     Case("MyPy loosened in settings", "lint-settings", False, {"pyproject.toml": RUFF_STANDARD + "\n[tool.mypy]\nignore_errors = true\n"}),
     Case("documented variable", "env-example", True, {"scripts/tool.py": "import os\n\nNAME = " + ENVIRON + '.get("AWS_REGION", "")\n'}),
     Case("undocumented variable", "env-example", False, {"scripts/tool.py": "import os\n\nNAME = " + ENVIRON + '["NEW_SETTING"]\n'}),
-    Case("script removed with its docs", "removed-names", True, committed={"scripts/old_tool.py": "X = 1\n"}, delete=["scripts/old_tool.py"]),
+    Case("script removed with its docs", "removed-names", True, committed={f"scripts/{OLD_SCRIPT}": "X = 1\n"}, delete=[f"scripts/{OLD_SCRIPT}"]),
     Case(
         "script removed, docs still name it",
         "removed-names",
         False,
-        committed={"scripts/old_tool.py": "X = 1\n", "README.md": "Run `scripts/old_tool.py`.\n"},
-        delete=["scripts/old_tool.py"],
+        committed={f"scripts/{OLD_SCRIPT}": "X = 1\n", "README.md": f"Run `scripts/{OLD_SCRIPT}`.\n"},
+        delete=[f"scripts/{OLD_SCRIPT}"],
     ),
     Case(
         "flag removed, docs still name it",
         "removed-names",
         False,
         committed={
-            "scripts/tool.py": "import argparse\n\nP = argparse.ArgumentParser()\nP." + ADD_ARGUMENT + '("--legacy-mode")\n',
-            "README.md": "Use `--legacy-mode`.\n",
+            "scripts/tool.py": "import argparse\n\nP = argparse.ArgumentParser()\nP." + ADD_ARGUMENT + f'("{OLD_FLAG}")\n',
+            "README.md": f"Use `{OLD_FLAG}`.\n",
         },
         files={"scripts/tool.py": "import argparse\n\nP = argparse.ArgumentParser()\n"},
     ),
+    Case(
+        "function removed with its callers",
+        "removed-names",
+        True,
+        committed={"app/util.py": f"def {OLD_FUNCTION}():\n    return 1\n", "app/main.py": f"from util import {OLD_FUNCTION}\n\nX = {OLD_FUNCTION}()\n"},
+        files={"app/util.py": "X = 1\n", "app/main.py": "X = 1\n"},
+    ),
+    Case(
+        "function moved to another file",
+        "removed-names",
+        True,
+        committed={"app/util.py": f"def {OLD_FUNCTION}():\n    return 1\n", "README.md": f"Call `{OLD_FUNCTION}`.\n"},
+        files={"app/util.py": "X = 1\n", "app/other.py": f"def {OLD_FUNCTION}():\n    return 1\n"},
+    ),
+    Case(
+        "removed function named only in history",
+        "removed-names",
+        True,
+        committed={"app/util.py": f"def {OLD_FUNCTION}():\n    return 1\n", "CHANGELOG.md": f"- Removed `{OLD_FUNCTION}`.\n"},
+        files={"app/util.py": "X = 1\n"},
+    ),
+    Case(
+        "common word in prose after its function is removed",
+        "removed-names",
+        True,
+        committed={"app/main.py": "def render():\n    return 0\n", "README.md": "Render the report.\n"},
+        files={"app/main.py": "X = 1\n"},
+    ),
+    Case(
+        "allowlisted reference",
+        "removed-names",
+        True,
+        committed={"app/models.py": f"class {OLD_CLASS}:\n    pass\n", "docs/history.md": f"The `{OLD_CLASS}` era.\n"},
+        files={"app/models.py": "X = 1\n", ".cleanup_allowlist": "python docs/history.md -- migration notes keep the old name\n"},
+    ),
+    Case(
+        "function named like a folder is removed",
+        "removed-names",
+        True,
+        committed={"app/util.py": f"def {FOLDER_NAME}():\n    return 1\n", "README.md": f"See `{FOLDER_NAME}/deploy.md`.\n"},
+        files={"app/util.py": "X = 1\n"},
+    ),
+    Case(
+        "function removed, caller remains",
+        "removed-names",
+        False,
+        committed={"app/util.py": f"def {OLD_FUNCTION}():\n    return 1\n", "app/main.py": f"from util import {OLD_FUNCTION}\n\nX = {OLD_FUNCTION}()\n"},
+        files={"app/util.py": "X = 1\n"},
+    ),
+    Case(
+        "class removed, Markdown code names it",
+        "removed-names",
+        False,
+        committed={"app/models.py": f"class {OLD_CLASS}:\n    pass\n", "README.md": f"Use `{OLD_CLASS}`.\n"},
+        files={"app/models.py": "X = 1\n"},
+    ),
+    Case(
+        "config key removed, code still reads it",
+        "removed-names",
+        False,
+        committed={"config/settings.yaml": f"{OLD_KEY}: 30\nregion: west\n", "app/job.py": f'SETTINGS = {{}}\nDAYS = SETTINGS["{OLD_KEY}"]\n'},
+        files={"config/settings.yaml": "region: west\n"},
+    ),
+    Case(
+        "Terraform variable removed, still used",
+        "removed-names",
+        False,
+        committed={"infra/variables.tf": f'variable "{OLD_VARIABLE}" {{}}\n', "infra/main.tf": f"locals {{\n  name = var.{OLD_VARIABLE}\n}}\n"},
+        delete=["infra/variables.tf"],
+    ),
+    Case(
+        "dbt model deleted, ref remains",
+        "removed-names",
+        False,
+        committed={
+            f"dbt/models/staging/{OLD_MODEL}.sql": "select 1\n",
+            "dbt/models/silver/orders.sql": "select id from {{ ref('MODEL') }}\n".replace("MODEL", OLD_MODEL),
+        },
+        delete=[f"dbt/models/staging/{OLD_MODEL}.sql"],
+    ),
+    Case(
+        "dependency removed, import remains",
+        "removed-names",
+        False,
+        committed={"requirements.txt": f"{OLD_PACKAGE}==2.9.0\n", "app/dates.py": f"import {OLD_MODULE}\n"},
+        files={"requirements.txt": "\n"},
+    ),
+    Case(
+        "cleanup allowlist entry without a reason",
+        "removed-names",
+        False,
+        committed={"app/models.py": f"class {OLD_CLASS}:\n    pass\n"},
+        files={"app/models.py": "X = 1\n", ".cleanup_allowlist": "python docs/history.md\n"},
+    ),
+    Case("documented variable nothing reads", "env-example", False, {".env.example": ENV_EXAMPLE_SOURCE + f"# Retired setting.\n{UNUSED_SETTING}=\n"}),
+    Case(
+        "function used by another file",
+        "unused-code",
+        True,
+        {
+            "app/util.py": f"def {STALE_HELPER}():\n    return 1\n",
+            "app/main.py": f"from util import {STALE_HELPER}\n\nprint({STALE_HELPER}())\n",
+            ".cleanup_allowlist": COPIED_ALLOWED,
+        },
+    ),
+    Case(
+        "function nothing calls",
+        "unused-code",
+        False,
+        {"app/util.py": f"X = 1\n\n\ndef {STALE_HELPER}():\n    return 1\n", ".cleanup_allowlist": COPIED_ALLOWED},
+    ),
+    Case(
+        "declared dependency is imported",
+        "unused-dependencies",
+        True,
+        {
+            "requirements.txt": f"{UNUSED_PACKAGE}==0.9.0\nruff==0.16.3  # tool: formatter run by pre-commit\n",
+            "app/table.py": f"import {UNUSED_PACKAGE}\n",
+            ".cleanup_allowlist": COPIED_ALLOWED,
+        },
+    ),
+    Case(
+        "dependency nothing imports",
+        "unused-dependencies",
+        False,
+        {"requirements.txt": f"{UNUSED_PACKAGE}==0.9.0\n", ".cleanup_allowlist": COPIED_ALLOWED},
+    ),
+    Case(
+        "import missing from requirements",
+        "unused-dependencies",
+        False,
+        {"requirements.txt": "\n", "app/table.py": f"import {UNUSED_PACKAGE}\n", ".cleanup_allowlist": COPIED_ALLOWED},
+    ),
+    Case(
+        "every file referenced",
+        "orphan-files",
+        True,
+        {"README.md": "Read [the guide](docs/guide.md).\n", "docs/guide.md": "# Guide\n", ".cleanup_allowlist": COPIED_ALLOWED},
+    ),
+    Case("file nothing references", "orphan-files", False, {f"docs/{OLD_NOTES}": "# Old Notes\n", ".cleanup_allowlist": COPIED_ALLOWED}),
+    Case(
+        "used Terraform variable",
+        "terraform-unused",
+        True,
+        {
+            "infra/main.tf": f'variable "{UNUSED_TF_VARIABLE}" {{}}\n\nlocals {{\n  region = var.{UNUSED_TF_VARIABLE}\n}}\n\n'
+            + 'output "region" {\n  value = local.region\n}\n'
+        },
+    ),
+    Case("unused Terraform variable", "terraform-unused", False, {"infra/main.tf": f'variable "{UNUSED_TF_VARIABLE}" {{}}\n'}),
     Case(
         "clean privacy sample",
         "privacy-scan",
@@ -355,7 +533,8 @@ def run_case(case: Case) -> tuple[bool, str]:
         for relative in case.delete:
             git(repo, "rm", "-q", relative)
         git(repo, "add", "-A")
-        args = ["run", case.hook, *(["--verbose"] if case.name in PASS_MARKERS else [])]  # pre-commit hides passing output
+        verbose = case.name in PASS_MARKERS or case.hook in WARN_HOOKS
+        args = ["run", case.hook, *(["--verbose"] if verbose else [])]  # pre-commit hides passing output
         if case.message is not None:
             message = repo / ".git" / "COMMIT_EDITMSG"
             message.write_text(case.message)
@@ -365,6 +544,8 @@ def run_case(case: Case) -> tuple[bool, str]:
         passed = result.returncode == 0
         output = result.stdout + result.stderr
         correct = passed == case.expect_pass and "Traceback (most recent call last)" not in output
+        if case.hook in WARN_HOOKS:
+            correct = passed and ("\nWARN " in output) != case.expect_pass and "Traceback (most recent call last)" not in output
         if not case.expect_pass and case.hook == "commit-msg":
             correct = correct and any(marker in output for marker in ("not a Conventional Commit:", "AI attribution in commit message"))
         if case.hook == "privacy-scan":

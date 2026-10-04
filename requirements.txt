@@ -1,9 +1,11 @@
 python-dotenv==1.2.3
 pytest==9.1.1
-pytest-cov==7.1.0
-ruff==0.16.3
-mypy==2.3.1
-pre-commit==4.6.2
-checkov==3.3.19
-types-jsonschema==4.26.0.20260518
-pyyaml==6.0.3  # The front-matter check imports it; pre-commit installs the same version.
+pytest-cov==7.1.0  # tool: coverage for the acquisition gate
+ruff==0.16.3  # tool: formatter and linter run by pre-commit
+mypy==2.3.1  # tool: type checker run by pre-commit
+pre-commit==4.6.2  # tool: hook runner
+checkov==3.3.19  # tool: Terraform policy scan
+types-jsonschema==4.26.0.20260518  # tool: type stubs for MyPy
+pyyaml==6.0.3  # dynamic: the front-matter check imports it by name (repo_checks.load_yaml); pre-commit installs the same version.
+vulture==2.16  # tool: unused-code check
+deptry==0.25.1  # tool: unused-dependencies check

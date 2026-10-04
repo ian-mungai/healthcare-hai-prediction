@@ -41,11 +41,41 @@ repos:
         pass_filenames: false
         always_run: true
       - id: removed-names
-        name: Removed scripts, flags and variables gone from the docs
+        name: Removed names gone from code, config and docs
         entry: .venv/bin/python -m scripts.quality.repo_checks removed-names
         language: system
         pass_filenames: false
         always_run: true
+      # Cleanup checks in their warn period: each finding is printed as a WARN line; the check blocks once the whole
+      # repository is clean (README, Quality Checks).
+      - id: unused-code
+        name: Unused functions, classes or variables (vulture, warn period)
+        entry: .venv/bin/python -m scripts.quality.repo_checks unused-code --warn
+        language: system
+        pass_filenames: false
+        always_run: true
+        verbose: true
+      - id: unused-dependencies
+        name: Dependencies declared and used (deptry, warn period)
+        entry: .venv/bin/python -m scripts.quality.repo_checks unused-dependencies --warn
+        language: system
+        pass_filenames: false
+        always_run: true
+        verbose: true
+      - id: orphan-files
+        name: Every file referenced by another (warn period)
+        entry: .venv/bin/python -m scripts.quality.repo_checks orphan-files --warn
+        language: system
+        pass_filenames: false
+        always_run: true
+        verbose: true
+      - id: terraform-unused
+        name: Unused Terraform declarations (tflint, warn period)
+        entry: .venv/bin/python -m scripts.quality.repo_checks terraform-unused --warn
+        language: system
+        pass_filenames: false
+        always_run: true
+        verbose: true
       - id: privacy-scan
         name: No personal data or environment-specific values in project files
         entry: .venv/bin/python -m scripts.quality.repo_checks privacy-scan

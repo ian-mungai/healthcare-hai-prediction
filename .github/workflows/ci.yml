@@ -67,6 +67,8 @@ jobs:
             .venv/bin/python -m scripts.quality.repo_checks commit-msg "$RUNNER_TEMP/root_commit_message"
           fi
           .venv/bin/python -m scripts.quality.repo_checks commit-range "$RANGE_START" "$RANGE_END"
+          # The local hook sees only the staged diff; here, names removed anywhere in the pushed range.
+          PRE_COMMIT_FROM_REF="$RANGE_START" PRE_COMMIT_TO_REF="$RANGE_END" .venv/bin/python -m scripts.quality.repo_checks removed-names
 
       # The same hooks as a local commit, at the same pinned versions, with the full manual stage; its local_ci
       # hook runs scripts/run_ci.sh. Acquisition checks run in their own job below.

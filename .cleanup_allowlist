@@ -1,0 +1,3 @@
+# Exceptions to the cleanup checks: <kind> <path glob> -- <reason> (README, Quality Checks).
+orphan dbt/models/* -- dbt loads every model and properties file under model-paths; a final model has no ref() to it
+orphan dbt/macros/* -- dbt loads every macro under macro-paths; models call macros by name, not by file
