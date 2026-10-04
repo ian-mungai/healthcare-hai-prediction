@@ -1,0 +1,41 @@
+{
+  "host": {
+    "requirements": ["requirements.txt"],
+    "provided": {
+      "jsonschema": "pinned for the acquisition collectors in config/acquisition/runtime_dependencies.json"
+    }
+  },
+  "runtimes": {
+    "review": {
+      "reason": "Schema-review tools run on the host with .review_dependencies on PYTHONPATH (requirements-review.txt header).",
+      "requirements": ["requirements.txt", "requirements-review.txt"],
+      "code": ["scripts/review/*.py"]
+    },
+    "spark": {
+      "reason": "The lakehouse jobs that scripts/lakehouse/catalog.py runs in the Spark image, and the modules only they use.",
+      "requirements": ["services/lakehouse/spark/requirements.txt"],
+      "code": [
+        "scripts/lakehouse/bronze.py",
+        "scripts/lakehouse/checksums.py",
+        "scripts/lakehouse/dictionary.py",
+        "scripts/lakehouse/file_readers.py",
+        "scripts/lakehouse/run_bronze_e2e.py",
+        "scripts/lakehouse/session.py",
+        "scripts/lakehouse/smoke.py"
+      ],
+      "provided": {
+        "pyspark": "the checksum-verified Spark distribution in services/lakehouse/spark/Dockerfile"
+      }
+    },
+    "analytics": {
+      "reason": "The DuckDB UI relay runs in the analytics image.",
+      "requirements": ["services/analytics/requirements.txt"],
+      "code": ["services/analytics/*.py"]
+    },
+    "sqlfluff": {
+      "reason": "A tool environment (.tools/sqlfluff) with no project code.",
+      "requirements": ["scripts/quality/sqlfluff/requirements.txt"],
+      "code": []
+    }
+  }
+}

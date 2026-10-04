@@ -7,12 +7,15 @@ Run from the repository root:
 The versions are pinned with hashes by ``scripts/quality/sqlfluff/requirements.txt``. They go into their own virtual
 environment, ``.tools/sqlfluff``, because dbt-core caps pathspec below the version MyPy needs in ``.venv``. pip
 verifies every hash and installs wheels only. A rerun with the same requirements changes nothing; a failed install
-removes the copied requirements so the next run retries instead of looking current.
+removes the copied requirements so the next run retries instead of looking current. It then installs the dbt packages
+from ``dbt/package-lock.yml`` into the ignored ``data/analytics/dbt/dbt_packages``, which the dbt templater needs to
+compile the project; a rerun reinstalls the same locked versions.
 """
 
 from __future__ import annotations
 
 import filecmp
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -24,6 +27,8 @@ SOURCE = ROOT / "scripts/quality/sqlfluff/requirements.txt"
 DESTINATION = ROOT / ".tools/sqlfluff"
 INSTALLED = DESTINATION / "requirements.txt"
 SQLFLUFF = DESTINATION / "bin/sqlfluff"
+DBT_PROJECT = ROOT / "dbt"
+DBT_WORK = ROOT / "data/analytics/dbt/deps"
 
 
 def pinned_version() -> str:
@@ -56,9 +61,23 @@ def install() -> str:
     return f"installed  sqlfluff {pinned} with the dbt templater (hashes verified) in {DESTINATION.relative_to(ROOT)}"
 
 
+def install_packages() -> str:
+    """Install the dbt packages from the committed lock file; return what happened."""
+    lock = DBT_PROJECT / "package-lock.yml"
+    before = lock.read_bytes()
+    env = {**os.environ, "DBT_PROFILES_DIR": str(DBT_PROJECT), "DBT_LOG_PATH": str(DBT_WORK / "logs"), "DBT_TARGET_PATH": str(DBT_WORK / "target")}
+    result = run_command(str(DESTINATION / "bin/dbt"), ["deps", "--project-dir", str(DBT_PROJECT)], cwd=ROOT, env=env, timeout=600)
+    if result.returncode:
+        raise SystemExit(f"dbt deps failed:\n{(result.stdout + result.stderr)[-2000:]}")
+    if lock.read_bytes() != before:
+        raise SystemExit("dbt deps changed dbt/package-lock.yml; restore it and pin the packages there")
+    return "installed  dbt packages from dbt/package-lock.yml"
+
+
 def main() -> int:
-    """Install SQLFluff and report the result."""
+    """Install SQLFluff and the dbt packages and report the result."""
     sys.stdout.write(install() + "\n")
+    sys.stdout.write(install_packages() + "\n")
     return 0
 
 

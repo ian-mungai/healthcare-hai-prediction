@@ -126,6 +126,8 @@ services:
       DBT_PROFILES_DIR: /workspace/dbt
       DBT_TARGET_PATH: /workspace/out/target
       DBT_LOG_PATH: /workspace/out/logs
+      # Packages install from dbt/package-lock.yml into the writable output mount; the project stays read-only.
+      DBT_PACKAGES_INSTALL_PATH: /workspace/out/dbt_packages
     volumes:
       - *aws-profile
       # The project is read-only; the staging database, run artifacts and E2E cases live in the ignored data/ folder.

@@ -21,6 +21,7 @@ import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from scripts.process import run_command
 
@@ -80,7 +81,7 @@ MODULE_NAMES = {
 }
 VULTURE_CONFIDENCE = 60  # Unused functions, classes and variables; lower levels flag dynamic uses vulture cannot see.
 DEPTRY_CODES = {"DEP001", "DEP002", "DEP003"}  # Missing, unused and transitive-only dependencies.
-DEPTRY_EXCLUDED = ("e2e", "data", r"\.review_dependencies", r"\.tools")  # Local records and installed tools, not project code.
+RUNTIME_MAP = "config/quality/dependency_runtimes.json"  # Each runtime's requirements files, the code it runs and what it provides.
 TOOL_COMMENT = re.compile(r"#\s*(?:tool|dynamic):\s*\S")  # A requirement used as a command or imported dynamically, with why.
 # Files every repository may hold without another file naming them.
 WELL_KNOWN_FILES = {
@@ -169,6 +170,16 @@ class Finding:
     problem: str
     rule: str
     fix: str
+
+
+@dataclass
+class Runtime:
+    """One place code runs: its requirements files, the tracked Python files it runs and the modules it gets outside pip."""
+
+    name: str
+    requirements: list[str]
+    files: list[str]
+    provided: dict[str, str]
 
 
 def git(*args: str) -> str:
@@ -473,43 +484,113 @@ def unused_code() -> list[Finding]:
     return findings
 
 
-def unused_dependencies() -> list[Finding]:
-    """Every declared dependency is imported and every imported package is declared (deptry).
+def load_runtimes(python_files: list[str], requirements: list[str]) -> tuple[list[Runtime], list[Finding]]:
+    """Read the runtime map: each runtime's requirements files, the code it runs and the packages it gets outside pip.
 
-    A requirement used as a command or imported dynamically carries ``# tool: <use>`` or ``# dynamic: <where>``.
+    The host runtime takes every tracked Python file no other runtime claims. Without a map, one host runtime reads
+    every requirements file. A malformed map, or a requirements file that does not exist, stops the check.
+    """
+    if not Path(RUNTIME_MAP).is_file():
+        return [Runtime("host", requirements, python_files, {})], []
+    config = json.loads(Path(RUNTIME_MAP).read_text())
+    if set(config) - {"host", "runtimes"} or not isinstance(config.get("runtimes", {}), dict) or "requirements" not in config.get("host", {}):
+        raise SystemExit(f"{RUNTIME_MAP}: expected 'host' with 'requirements' and an optional 'runtimes' object")
+    runtimes, findings, claimed = [], [], set()
+    for name, entry in config.get("runtimes", {}).items():
+        if set(entry) - {"requirements", "code", "provided", "reason"} or not entry.get("requirements") or "code" not in entry:
+            raise SystemExit(f"{RUNTIME_MAP}: runtime {name} needs 'requirements' and 'code' and allows only 'provided' and 'reason'")
+        files = []
+        for pattern in entry["code"]:
+            matched = [path for path in python_files if fnmatch.fnmatch(path, pattern)]
+            if not matched:
+                fix = f"correct or remove the pattern in {RUNTIME_MAP}"
+                findings.append(Finding(RUNTIME_MAP, f"runtime {name}: {pattern} matches no tracked Python file", CLEANUP_RULE, fix))
+            files += [path for path in matched if path not in files]
+        claimed |= set(files)
+        runtimes.append(Runtime(name, entry["requirements"], files, entry.get("provided", {})))
+    host = config["host"]
+    if set(host) - {"requirements", "provided"}:
+        raise SystemExit(f"{RUNTIME_MAP}: host allows only 'requirements' and 'provided'")
+    runtimes.insert(0, Runtime("host", host["requirements"], [path for path in python_files if path not in claimed], host.get("provided", {})))
+    for runtime in runtimes:
+        for path in runtime.requirements:
+            if not Path(path).is_file():
+                raise SystemExit(f"{RUNTIME_MAP}: runtime {runtime.name} names {path}, which does not exist")
+    return runtimes, findings
+
+
+def run_deptry(runtime: Runtime, first_party: list[str], exempt: set[str]) -> list[dict[str, Any]]:
+    """Run deptry on one runtime's files only, copied into a scratch folder, against that runtime's requirements."""
+    with tempfile.TemporaryDirectory(prefix="deptry_") as scratch:
+        root = Path(scratch) / "code"
+        for path in runtime.files:
+            (root / path).parent.mkdir(parents=True, exist_ok=True)
+            (root / path).write_bytes(Path(path).read_bytes())
+        report_path = Path(scratch) / "deptry.json"
+        requirement_files = ",".join(str(Path(path).resolve()) for path in runtime.requirements)
+        args = [str(root), "--requirements-files", requirement_files, "--json-output", str(report_path), "--no-ansi"]
+        args += [flag for name in first_party for flag in ("--known-first-party", name)]
+        ignores = [f"DEP002={'|'.join(sorted(exempt))}"] if exempt else []
+        if runtime.provided:
+            provided = "|".join(sorted(runtime.provided))
+            ignores += [f"DEP001={provided}", f"DEP003={provided}"]
+        args += ["--per-rule-ignores", ",".join(ignores)] if ignores else []
+        result = run_command(str(Path(".venv/bin/deptry").resolve()), args, cwd=root, timeout=300)
+        if not report_path.exists():
+            raise SystemExit(f"deptry failed for runtime {runtime.name} ({result.returncode}): {result.stderr[-2000:]}")
+        issues: list[dict[str, Any]] = json.loads(report_path.read_text())
+        names = {str(Path(path).resolve()): path for path in runtime.requirements}
+        for issue in issues:  # Report repository paths: requirements files by name, code relative to the scratch copy.
+            location = Path(issue["location"]["file"])
+            absolute = location if location.is_absolute() else root / location
+            if str(absolute.resolve()) in names:
+                issue["location"]["file"] = names[str(absolute.resolve())]
+            elif absolute.resolve().is_relative_to(root.resolve()):
+                issue["location"]["file"] = absolute.resolve().relative_to(root.resolve()).as_posix()
+    return issues
+
+
+def unused_dependencies() -> list[Finding]:
+    """Every declared dependency is imported and every imported package is declared by the runtime that runs it (deptry).
+
+    Each runtime in the runtime map is checked on its own code with its own requirements files. A requirement used as
+    a command or imported dynamically carries ``# tool: <use>`` or ``# dynamic: <where>``. A lock file (``--hash=``
+    pins) also pins transitive packages, so only its missing imports are reported. A requirements file two runtimes
+    share reports a package as unused only when every one of them leaves it unused.
     """
     globs, findings = allowed_paths("unused-dependencies")
     requirements = [p for p in git("ls-files").splitlines() if re.search(r"(^|/)requirements[^/]*\.txt$", p) and Path(p).is_file()]
+    python_files = [p for p in git("ls-files", "*.py").splitlines() if not re.match(r"(e2e|data)/", p) and Path(p).is_file()]
     if not requirements:
         return findings
+    runtimes, map_findings = load_runtimes(python_files, requirements)
+    findings += map_findings
     exempt = {
         m.group(1).lower() for p in requirements for line in Path(p).read_text().splitlines() if TOOL_COMMENT.search(line) and (m := REQUIREMENT.match(line))
     }
-    first_party = sorted(
-        {Path(p).stem for p in git("ls-files", "*.py").splitlines()} | {Path(p).parent.name for p in git("ls-files", "*/__init__.py").splitlines()}
-    )
-    with tempfile.TemporaryDirectory(prefix="deptry_") as scratch:
-        report_path = Path(scratch) / "deptry.json"
-        args = [".", "--requirements-files", ",".join(requirements), "--json-output", str(report_path), "--no-ansi"]
-        args += [flag for folder in DEPTRY_EXCLUDED for flag in ("--extend-exclude", folder)]
-        args += [flag for name in first_party for flag in ("--known-first-party", name)]
-        args += ["--per-rule-ignores", "DEP002=" + "|".join(sorted(exempt))] if exempt else []
-        result = run_command(str(Path(".venv/bin/deptry").resolve()), args, timeout=300)
-        if not report_path.exists():
-            raise SystemExit(f"deptry failed ({result.returncode}): {result.stderr[-2000:]}")
-        issues = json.loads(report_path.read_text())
-    for issue in issues:
-        code, module, location = issue["error"]["code"], issue["module"], issue["location"]
-        if code not in DEPTRY_CODES or any(fnmatch.fnmatch(location["file"], glob) for glob in globs):
-            continue
-        if code == "DEP002":
+    # Module names, package folders and top-level folders (scripts is a namespace package with no __init__.py).
+    first_party = sorted({Path(p).stem for p in python_files} | {part for p in python_files for part in Path(p).parts[:-1]})
+    locked = {path for runtime in runtimes for path in runtime.requirements if "--hash=" in Path(path).read_text()}
+    unused: dict[tuple[str, str], int] = {}
+    readers = {path: sum(1 for runtime in runtimes if path in runtime.requirements and runtime.files) for path in requirements}
+    for runtime in runtimes:
+        if not runtime.files:
+            continue  # A tool environment with no project code, such as the SQLFluff tools.
+        for issue in run_deptry(runtime, first_party, exempt):
+            code, module, location = issue["error"]["code"], issue["module"], issue["location"]
+            if code not in DEPTRY_CODES or any(fnmatch.fnmatch(location["file"], glob) for glob in globs):
+                continue
+            if code == "DEP002":
+                if location["file"] not in locked:
+                    unused[(location["file"], module)] = unused.get((location["file"], module), 0) + 1
+                continue
+            fix = f"pin it in {runtime.requirements[-1]} (runtime {runtime.name}), list it under provided in {RUNTIME_MAP}, or replace the import"
+            problem = f"{module} is imported but runtime {runtime.name} does not declare it"
+            findings.append(Finding(f"{location['file']}:{location['line']}", problem, f"{POLICY}: declared dependencies", fix))
+    for (path, module), count in sorted(unused.items()):
+        if count == readers.get(path, 1):
             fix = "remove it, or mark the line '# tool: <use>' or '# dynamic: <where>' when it is not imported directly"
-            findings.append(Finding(location["file"], f"{module} is declared but nothing imports it", CLEANUP_RULE, fix))
-        else:
-            fix = f"pin it in {requirements[0]}, or replace the import"
-            findings.append(
-                Finding(f"{location['file']}:{location['line']}", f"{module} is imported but not declared", f"{POLICY}: declared dependencies", fix)
-            )
+            findings.append(Finding(path, f"{module} is declared but nothing imports it", CLEANUP_RULE, fix))
     return findings
 
 

@@ -513,6 +513,13 @@ def duckdb_csv(database: str, sql: str, init: str | None = None) -> list[list[st
     return [row for row in csv.reader(io.StringIO(stdout)) if row]
 
 
+def install_packages() -> None:
+    """Install the dbt packages from dbt/package-lock.yml into the output mount; the project mount stays read-only."""
+    code, stdout, stderr = compose_run(["analytics-dbt", "deps"], {})
+    if code:
+        raise SystemExit(f"dbt deps failed ({code}): {(stdout + stderr)[-2000:]}")
+
+
 def dbt_build(case: str, target: str, project: bool = False) -> tuple[int, dict[str, str]]:
     """Run dbt build for a case, on its own project copy when asked, and return the exit code and each node's status."""
     case_dir = f"{CONTAINER_OUT}/e2e/{case}"
@@ -745,6 +752,7 @@ def main() -> int:
     parser.add_argument("--real", action="store_true", help="also build from the real bronze tables, twice")
     args = parser.parse_args()
     catalog.up()
+    install_packages()
     report: dict[str, Any] = {"started_at": datetime.now(UTC).isoformat(timespec="seconds"), "image": "hai-analytics:duckdb1.5.6-dbt1.11.15"}
     report["fixture"] = fixture_scenarios()
     if args.real:

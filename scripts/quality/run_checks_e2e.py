@@ -95,6 +95,19 @@ COPIED_ALLOWED = (
     "unused-code scripts/* -- check scripts copied into the scratch repository\n"
     "unused-dependencies scripts/* -- check scripts copied into the scratch repository\n"
 )
+# A runtime map with an image whose lock file pins a package and a transitive pin, and a package the image provides.
+RUNTIME_MAP = "config/quality/dependency_runtimes.json"
+PROVIDED_MODULE = "spark" + "lib"
+RUNTIME_MAP_SOURCE = (
+    '{"host": {"requirements": ["requirements.txt"]}, "runtimes": {"image": {"requirements": ["image/requirements.txt"], '
+    f'"code": ["image/*.py"], "provided": {{"{PROVIDED_MODULE}": "the image\'s own distribution"}}}}}}}}\n'
+)
+RUNTIME_SAMPLE = {
+    RUNTIME_MAP: RUNTIME_MAP_SOURCE,
+    "requirements.txt": "ruff==0.16.3  # tool: formatter run by pre-commit\n",
+    "image/requirements.txt": f"{UNUSED_PACKAGE}==0.9.0 \\\n    --hash=sha256:{'a' * 64}\nsix==1.17.0 \\\n    --hash=sha256:{'b' * 64}\n",
+    ".cleanup_allowlist": COPIED_ALLOWED,
+}
 # Cleanup checks in their warn period: they exit 0 and print each finding as a WARN line. A sample that must block
 # must print one; a sample that must pass must print none.
 WARN_HOOKS = {"unused-code", "unused-dependencies", "orphan-files", "terraform-unused"}
@@ -303,6 +316,24 @@ CASES = [
         {"requirements.txt": "\n", "app/table.py": f"import {UNUSED_PACKAGE}\n", ".cleanup_allowlist": COPIED_ALLOWED},
     ),
     Case(
+        "image package imported by image code",
+        "unused-dependencies",
+        True,
+        {**RUNTIME_SAMPLE, "image/job.py": f"import {UNUSED_PACKAGE}\nimport {PROVIDED_MODULE}\n"},
+    ),
+    Case(
+        "image package imported by host code",
+        "unused-dependencies",
+        False,
+        {**RUNTIME_SAMPLE, "image/job.py": f"import {UNUSED_PACKAGE}\n", "app/table.py": f"import {UNUSED_PACKAGE}\n"},
+    ),
+    Case(
+        "runtime pattern matches no file",
+        "unused-dependencies",
+        False,
+        {**RUNTIME_SAMPLE, "image/job.py": f"import {UNUSED_PACKAGE}\n", RUNTIME_MAP: RUNTIME_MAP_SOURCE.replace("image/*.py", "worker/*.py")},
+    ),
+    Case(
         "every file referenced",
         "orphan-files",
         True,
@@ -457,6 +488,8 @@ CASES = [
 ]
 # Privacy cases must be blocked for their intended cause, shown by file, line and type.
 BLOCK_REASONS = {
+    "image package imported by host code": f"app/table.py:1: {UNUSED_PACKAGE} is imported but runtime host does not declare it",
+    "runtime pattern matches no file": "runtime image: worker/*.py matches no tracked Python file",
     "home path": "notes.md:1: home-directory path with a user name",
     "temp path": "notes.md:1: machine temporary path",
     "personal email": "notes.md:1: email address",
@@ -546,6 +579,7 @@ def run_case(case: Case) -> tuple[bool, str]:
         correct = passed == case.expect_pass and "Traceback (most recent call last)" not in output
         if case.hook in WARN_HOOKS:
             correct = passed and ("\nWARN " in output) != case.expect_pass and "Traceback (most recent call last)" not in output
+            correct = correct and BLOCK_REASONS.get(case.name, "") in output
         if not case.expect_pass and case.hook == "commit-msg":
             correct = correct and any(marker in output for marker in ("not a Conventional Commit:", "AI attribution in commit message"))
         if case.hook == "privacy-scan":

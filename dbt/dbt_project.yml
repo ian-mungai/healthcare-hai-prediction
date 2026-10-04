@@ -11,6 +11,9 @@ seed-paths: ["seeds"]
 test-paths: ["tests"]
 macro-paths: ["macros"]
 clean-targets: []
+# Packages install outside the project, which the dbt container mounts read-only: the container sets
+# DBT_PACKAGES_INSTALL_PATH to its output mount, and on the host the default is the same ignored folder.
+packages-install-path: "{{ env_var('DBT_PACKAGES_INSTALL_PATH', '../data/analytics/dbt/dbt_packages') }}"
 
 flags:
   send_anonymous_usage_stats: false
@@ -37,3 +40,15 @@ models:
       # Window choices scan every HAI row; tables keep downstream reads fast.
       intermediate:
         +materialized: table
+  # dbt-project-evaluator runs only on request (--vars '{run_project_evaluator: true}'); its findings are warnings.
+  dbt_project_evaluator:
+    +enabled: "{{ var('run_project_evaluator', false) }}"
+
+seeds:
+  dbt_project_evaluator:
+    +enabled: "{{ var('run_project_evaluator', false) }}"
+
+data_tests:
+  dbt_project_evaluator:
+    +enabled: "{{ var('run_project_evaluator', false) }}"
+    +severity: warn

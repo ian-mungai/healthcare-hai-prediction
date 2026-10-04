@@ -67,7 +67,8 @@ hook's `markdownlint-cli2` is installed into `.tools/markdownlint-cli2` with `np
 from the lockfile in `scripts/quality/markdownlint/`, which pins each package's
 integrity hash; it needs Node.js 22 or later. The `sqlfluff` hook's SQLFluff and
 its dbt templater are installed into `.tools/sqlfluff` from the hash-pinned
-`scripts/quality/sqlfluff/requirements.txt`. The schema-review tools in
+`scripts/quality/sqlfluff/requirements.txt`; the same command installs the dbt
+packages from `dbt/package-lock.yml` into the ignored `data/analytics/dbt/dbt_packages`. The schema-review tools in
 `scripts/review/` need the hash-pinned packages in `requirements-review.txt`,
 installed into the ignored `.review_dependencies/` (Apple silicon only); the file's
 header gives the command.
@@ -170,11 +171,17 @@ scripts/lakehouse/ui.sh                                             # DuckDB UI 
 The dbt staging layer (`dbt/`, dbt-core with dbt-duckdb in the analytics image) reads bronze read-only. Its E2E builds
 the models on synthetic fixtures, including cases that must fail one named test, then on the real bronze tables twice,
 and reconciles each staging table with bronze. `scripts.lakehouse.ipps_file_labels` regenerates the IPPS and
-occupational-mix label and twin seeds from the S3 manifests; `--check` confirms the committed seeds:
+occupational-mix label and twin seeds from the S3 manifests; `--check` confirms the committed seeds. The dbt packages
+(dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
+publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
+container. The staging E2E installs them before it builds. dbt-project-evaluator is off in every other run and runs
+only on request, on the in-memory `lint` target with no catalog; its findings are warnings:
 
 ```sh
 .venv/bin/python -m scripts.lakehouse.run_staging_e2e              # fixtures; --real adds the real tables; report: data/e2e/staging/
+scripts/lakehouse/dbt.sh deps                                       # install the locked dbt packages (once)
 scripts/lakehouse/dbt.sh build                                      # dbt on the real bronze tables
+.venv/bin/python -m scripts.lakehouse.run_project_evaluator         # dbt-project-evaluator; report: data/e2e/dbt_evaluator/
 .venv/bin/python -m scripts.lakehouse.ipps_file_labels --check      # seeds match the S3 manifests (read-only S3)
 ```
 
@@ -374,9 +381,14 @@ with `bash scripts/acquisition/run_checks.sh`.
   file name, folder or import; tflint (`terraform_unused_declarations`, every
   module) reports unused Terraform declarations. vulture and deptry are pinned
   in `requirements.txt`. They print each finding as a `WARN` line and do not
-  block until the whole repository is clean. deptry reads every tracked
-  requirements file at once, so the transitive pins in the hash-locked image
-  and tool files are reported too. Exceptions go in `.cleanup_allowlist` with a
+  block until the whole repository is clean. deptry checks each runtime on its
+  own code and requirements, as `config/quality/dependency_runtimes.json` maps
+  them: the host (every file no other runtime claims), the review tools, the
+  Spark jobs, the analytics image and the SQLFluff tools (no project code). A
+  package a runtime gets outside pip, such as PySpark, is listed there with its
+  source. A hash-locked requirements file also pins transitive packages, so only
+  its missing imports are reported; a file two runtimes share reports a package
+  as unused only when neither imports it. Exceptions go in `.cleanup_allowlist` with a
   reason, under the kinds `unused-code`, `unused-dependencies`, `orphan` and
   `terraform-unused`; dbt's folder-loaded models and macros are listed there.
   Run one with `.venv/bin/python -m scripts.quality.repo_checks unused-code --warn`.
@@ -497,16 +509,18 @@ No AWS changes implementing these four deferred controls have been applied.
 - `scripts/run_ci.sh`: the local CI script; the `local_ci` hook runs it on every commit and in GitHub CI.
 - `tests/`: retained pytest regression safeguards and their `check()` helper.
 - `config/quality_tools.json`: pinned native tool versions and publisher hashes.
+- `config/quality/dependency_runtimes.json`: each runtime's requirements files and code, for the dependency check.
 - `docs/architecture/`: the architecture diagram source (`architecture.json`), the HTML that Archify renders from it and the PNG.
-- `dbt/`, `.sqlfluff`: the dbt staging project (sources, staging and intermediate models, seeds and tests) and its SQL style.
+- `dbt/`, `.sqlfluff`: the dbt staging project (sources, staging and intermediate models, seeds, tests and the locked
+  packages) and its SQL style.
 - `scripts/review/`, `requirements-review.txt`: the schema-review tools and their hash-pinned packages.
 - `docs/data_collection.md`: how the source data was collected and how to recheck it.
 - `docs/issue_register.md`: the project's single issue register, kept local-only (Git-ignored).
 - `docs/project_guide.md`: the project's target design with each section's build status, kept local-only (Git-ignored).
 - `.github/`: the CI workflow and the pull request template.
 - `scripts/lakehouse/`, `config/lakehouse/`: the catalog script, the bronze loader, file readers, dictionary and
-  checksum jobs, the Care Compare, retired-object and IPPS label generators, the dbt runner and the bronze and staging
-  E2E; the table map, the retired and removed lists and the reviewed label overrides.
+  checksum jobs, the Care Compare, retired-object and IPPS label generators, the dbt runner, the dbt-project-evaluator
+  runner and the bronze and staging E2E; the table map, the retired and removed lists and the reviewed label overrides.
 - `services/`, `docker-compose.yaml`: the Polaris catalog, Spark job and DuckDB analytics containers.
 - `scripts/acquisition/`, `config/acquisition/`: collectors, storage checks, E2E suites and their locked plans and
   registry. Committed at commit `3af1abb` with full documentation of the collection process

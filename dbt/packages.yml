@@ -1,0 +1,5 @@
+# dbt packages, installed from package-lock.yml into the ignored data/analytics/dbt/dbt_packages (packages-install-path
+# in dbt_project.yml). dbt-project-evaluator runs only on request: .venv/bin/python -m scripts.lakehouse.run_project_evaluator
+packages:
+  - package: dbt-labs/dbt_project_evaluator
+    version: 1.4.0
