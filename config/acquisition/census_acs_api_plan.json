@@ -1202,7 +1202,7 @@
       ],
       "id": "9e6858311e1f0b3a18fa3aaa147227665a575ee9a558741c190e753e85d10303",
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP02/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP02/attempt_01/group.json",
         "sha256": "a21569f5446d375df2d2ae7935922d8e947333d54c07012fa7eafd226d60213c",
         "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP02.json"
       },
@@ -2185,7 +2185,7 @@
       ],
       "id": "dd334a052e18d5f49cfca2ae4b475c020a0655c2e1403e480a38d20d0bc9a733",
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP03/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP03/attempt_01/group.json",
         "sha256": "11dde1ea9e1df742a6d3ce80bc7d1650533ddac735510954ffe9dbaa158d5976",
         "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP03.json"
       },
@@ -3328,7 +3328,7 @@
       ],
       "id": "6a38a76ec1a653e2196e71d01926f2fdb6cfaaac736aacb9a8b1ae32bd188808",
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP04/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP04/attempt_01/group.json",
         "sha256": "69973e95d8b24b72c0edd9303dfb9fba74397e3caf806279b59f4f10c304ee57",
         "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP04.json"
       },
@@ -3991,7 +3991,7 @@
       ],
       "id": "201368bf118972fa573b76dfd9c2b4eabc0abd782f329da45660871ef78dc863",
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP05/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP05/attempt_01/group.json",
         "sha256": "96374d9a0e352467b25e2b15047f5fc7d694578874f16caa979d9e0505b82af4",
         "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP05.json"
       },
@@ -7229,572 +7229,572 @@
   "model_eligible": false,
   "references": [
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_01666766b91c396d/captures/ACS/ACS__20260924T190859Z__c7547220f5c64cba9b144e5d226958dd/raw/g20095in.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_01666766b91c396d/captures/ACS/ACS__20260924T190859Z__c7547220f5c64cba9b144e5d226958dd/raw/g20095in.txt",
       "sha256": "95743bd4ec4a20efa96d1b57e3c0e8ea27a7c4484f8265dcd92611412d3251d8",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Indiana/All_Geographies_Not_Tracts_Block_Groups/g20095in.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_01666766b91c396d/captures/ACS/ACS__20260924T190859Z__c7547220f5c64cba9b144e5d226958dd/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_01666766b91c396d/captures/ACS/ACS__20260924T190859Z__c7547220f5c64cba9b144e5d226958dd/receipt.json",
       "sha256": "c3b37d8d80dde02d0eda79d3d3fea6f3d84f624a17b6de82fdceff631ee03b86",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Indiana/All_Geographies_Not_Tracts_Block_Groups/g20095in.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_053dc0aa1b09d0c6/captures/ACS/ACS__20260924T191446Z__591f1b1a6dfa4b00bbf076389d490c0d/raw/g20095nj.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_053dc0aa1b09d0c6/captures/ACS/ACS__20260924T191446Z__591f1b1a6dfa4b00bbf076389d490c0d/raw/g20095nj.txt",
       "sha256": "d0a62b948d06ab0319cca05b608090f13d9928db4c7364db0ea816b932a076b5",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/NewJersey/All_Geographies_Not_Tracts_Block_Groups/g20095nj.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_053dc0aa1b09d0c6/captures/ACS/ACS__20260924T191446Z__591f1b1a6dfa4b00bbf076389d490c0d/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_053dc0aa1b09d0c6/captures/ACS/ACS__20260924T191446Z__591f1b1a6dfa4b00bbf076389d490c0d/receipt.json",
       "sha256": "42aee9944fc017a5f9ec36e287b64e5f2f7f47e5b1c4fa20d1508c6c2743ccee",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/NewJersey/All_Geographies_Not_Tracts_Block_Groups/g20095nj.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_06c32c37f0fcd137/captures/ACS/ACS__20260924T192614Z__14969ed8e178438abee25b794a8a425a/raw/g20095wy.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_06c32c37f0fcd137/captures/ACS/ACS__20260924T192614Z__14969ed8e178438abee25b794a8a425a/raw/g20095wy.txt",
       "sha256": "a774ac31150496c28cf54b9b1fffb1cd5cc08d37561f8bbcfc105db58ccda7aa",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Wyoming/All_Geographies_Not_Tracts_Block_Groups/g20095wy.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_06c32c37f0fcd137/captures/ACS/ACS__20260924T192614Z__14969ed8e178438abee25b794a8a425a/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_06c32c37f0fcd137/captures/ACS/ACS__20260924T192614Z__14969ed8e178438abee25b794a8a425a/receipt.json",
       "sha256": "18b125b5744c04d2b4f4657b85100613e90b6a8bdbd4c1eb65f20b86be77c1f2",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Wyoming/All_Geographies_Not_Tracts_Block_Groups/g20095wy.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_070c5d28a8a39d68/captures/ACS/ACS__20260924T191205Z__de13418701be4454966ffdc47b006eb0/raw/g20095mn.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_070c5d28a8a39d68/captures/ACS/ACS__20260924T191205Z__de13418701be4454966ffdc47b006eb0/raw/g20095mn.txt",
       "sha256": "dd138fa162b5a53817e2d8939ce07ccadeffb5f4dbe744ba368fe77263170744",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Minnesota/All_Geographies_Not_Tracts_Block_Groups/g20095mn.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_070c5d28a8a39d68/captures/ACS/ACS__20260924T191205Z__de13418701be4454966ffdc47b006eb0/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_070c5d28a8a39d68/captures/ACS/ACS__20260924T191205Z__de13418701be4454966ffdc47b006eb0/receipt.json",
       "sha256": "618d2f438780da3518baba92077184594cbc88491188277463a70f2384f91ac9",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Minnesota/All_Geographies_Not_Tracts_Block_Groups/g20095mn.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_07bec9528927d6cf/captures/ACS/ACS__20260924T191042Z__f1f48d9f5a094758882d4f2f8d0c283f/raw/g20095me.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_07bec9528927d6cf/captures/ACS/ACS__20260924T191042Z__f1f48d9f5a094758882d4f2f8d0c283f/raw/g20095me.txt",
       "sha256": "4b35c8c40f65053c2d366c674c85f335b2c97de069b5885062fd3ef22404801c",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Maine/All_Geographies_Not_Tracts_Block_Groups/g20095me.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_07bec9528927d6cf/captures/ACS/ACS__20260924T191042Z__f1f48d9f5a094758882d4f2f8d0c283f/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_07bec9528927d6cf/captures/ACS/ACS__20260924T191042Z__f1f48d9f5a094758882d4f2f8d0c283f/receipt.json",
       "sha256": "77eeea6f17aa2519f66459db671382c9b5d555865d6b736bd457ec493a2e3483",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Maine/All_Geographies_Not_Tracts_Block_Groups/g20095me.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_0ac379f74d73dbe4/captures/ACS/ACS__20260924T192447Z__559d790814a34aeb9a5b0789907d8be9/raw/g20095va.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_0ac379f74d73dbe4/captures/ACS/ACS__20260924T192447Z__559d790814a34aeb9a5b0789907d8be9/raw/g20095va.txt",
       "sha256": "5c7fb539f7a0e9cfc3049f7d79080d06629861adcd71fafb4bc7aed2248f04a3",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Virginia/All_Geographies_Not_Tracts_Block_Groups/g20095va.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_0ac379f74d73dbe4/captures/ACS/ACS__20260924T192447Z__559d790814a34aeb9a5b0789907d8be9/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_0ac379f74d73dbe4/captures/ACS/ACS__20260924T192447Z__559d790814a34aeb9a5b0789907d8be9/receipt.json",
       "sha256": "c1d4b95caf4236be6c7864f7a675e95b6927ed654149c6cd3eb6d4b895827320",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Virginia/All_Geographies_Not_Tracts_Block_Groups/g20095va.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_1b755362b0052757/captures/ACS/ACS__20260924T190741Z__ac9de8eadada4b10b8074eda0d5edab3/raw/g20095hi.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_1b755362b0052757/captures/ACS/ACS__20260924T190741Z__ac9de8eadada4b10b8074eda0d5edab3/raw/g20095hi.txt",
       "sha256": "48d3c5bff70a770f07472b8922457b408d2322a376e19931c002ba94495f0dbd",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Hawaii/All_Geographies_Not_Tracts_Block_Groups/g20095hi.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_1b755362b0052757/captures/ACS/ACS__20260924T190741Z__ac9de8eadada4b10b8074eda0d5edab3/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_1b755362b0052757/captures/ACS/ACS__20260924T190741Z__ac9de8eadada4b10b8074eda0d5edab3/receipt.json",
       "sha256": "85f9117f5bb9c11e741424d1366e0b3c0eab33f86c6f3c6de4b62092bc9d1c01",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Hawaii/All_Geographies_Not_Tracts_Block_Groups/g20095hi.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_26f1246a9121fab7/captures/ACS/ACS__20260924T192550Z__8e812d91d75f42f984a718271b6f2dc4/raw/g20095wi.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_26f1246a9121fab7/captures/ACS/ACS__20260924T192550Z__8e812d91d75f42f984a718271b6f2dc4/raw/g20095wi.txt",
       "sha256": "a5b647a9ffd0ecd2713ac8793e2faeb8b0caed5f9617f0e98ddfc7601304fd1f",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Wisconsin/All_Geographies_Not_Tracts_Block_Groups/g20095wi.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_26f1246a9121fab7/captures/ACS/ACS__20260924T192550Z__8e812d91d75f42f984a718271b6f2dc4/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_26f1246a9121fab7/captures/ACS/ACS__20260924T192550Z__8e812d91d75f42f984a718271b6f2dc4/receipt.json",
       "sha256": "6ea8993c1f9c0f0c7f630550ceae3a09891a60a9a4065cef8b3b191c0db85c6a",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Wisconsin/All_Geographies_Not_Tracts_Block_Groups/g20095wi.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_2ff26368b2490997/captures/ACS/ACS__20260924T190050Z__9b59d7fc68804fefb5b75e53ebfb9aa2/raw/g20095al.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_2ff26368b2490997/captures/ACS/ACS__20260924T190050Z__9b59d7fc68804fefb5b75e53ebfb9aa2/raw/g20095al.txt",
       "sha256": "f482f418e5b6adf3e02f6b2aa8c0797d44899455e501f9608e2cd2aca84036f5",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Alabama/All_Geographies_Not_Tracts_Block_Groups/g20095al.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_2ff26368b2490997/captures/ACS/ACS__20260924T190050Z__9b59d7fc68804fefb5b75e53ebfb9aa2/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_2ff26368b2490997/captures/ACS/ACS__20260924T190050Z__9b59d7fc68804fefb5b75e53ebfb9aa2/receipt.json",
       "sha256": "dfed7688a928cc89d25ac54ea0d10faaed54ddede2998dbe292ce42088808c12",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Alabama/All_Geographies_Not_Tracts_Block_Groups/g20095al.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_3147d5caa58b79c6/captures/ACS/ACS__20260924T191141Z__57e9c69087d24a558168d2fc33d55651/raw/g20095mi.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_3147d5caa58b79c6/captures/ACS/ACS__20260924T191141Z__57e9c69087d24a558168d2fc33d55651/raw/g20095mi.txt",
       "sha256": "e5ec1ff275ffb3d4df1512ba50beb40313d18155906b38bfd04da09b91d8fdc9",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Michigan/All_Geographies_Not_Tracts_Block_Groups/g20095mi.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_3147d5caa58b79c6/captures/ACS/ACS__20260924T191141Z__57e9c69087d24a558168d2fc33d55651/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_3147d5caa58b79c6/captures/ACS/ACS__20260924T191141Z__57e9c69087d24a558168d2fc33d55651/receipt.json",
       "sha256": "d4e27c47977c1035cf16e5b96af634f1a60001a2b4868d8ee565008f93be4c21",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Michigan/All_Geographies_Not_Tracts_Block_Groups/g20095mi.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_3270ba57b0dd5bd4/captures/ACS/ACS__20260924T191358Z__f29578b7c85c4054b9b239c5e68b8792/raw/g20095nv.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_3270ba57b0dd5bd4/captures/ACS/ACS__20260924T191358Z__f29578b7c85c4054b9b239c5e68b8792/raw/g20095nv.txt",
       "sha256": "080041aa0d0e11b023ed3224e315ca8fcaee62fa7bfce3713bbe6a62cc945de2",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Nevada/All_Geographies_Not_Tracts_Block_Groups/g20095nv.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_3270ba57b0dd5bd4/captures/ACS/ACS__20260924T191358Z__f29578b7c85c4054b9b239c5e68b8792/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_3270ba57b0dd5bd4/captures/ACS/ACS__20260924T191358Z__f29578b7c85c4054b9b239c5e68b8792/receipt.json",
       "sha256": "b2a305fc610b7617eb22f6174e9fcb4d6f92a042376d954de53bec266bdb6a12",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Nevada/All_Geographies_Not_Tracts_Block_Groups/g20095nv.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_3a8e3d5078b6a553/captures/ACS/ACS__20260924T191415Z__426329e1756f44899bc7d6b18f570f3d/raw/g20095nh.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_3a8e3d5078b6a553/captures/ACS/ACS__20260924T191415Z__426329e1756f44899bc7d6b18f570f3d/raw/g20095nh.txt",
       "sha256": "0521a5403d49f1b585e435b72a27528b64b9d615bc661a3e04461e59dbe3013b",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/NewHampshire/All_Geographies_Not_Tracts_Block_Groups/g20095nh.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_3a8e3d5078b6a553/captures/ACS/ACS__20260924T191415Z__426329e1756f44899bc7d6b18f570f3d/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_3a8e3d5078b6a553/captures/ACS/ACS__20260924T191415Z__426329e1756f44899bc7d6b18f570f3d/receipt.json",
       "sha256": "7d87d36e2d54df6949c1c04023be0ae098eb60182d09fedf1169772df8d4bd70",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/NewHampshire/All_Geographies_Not_Tracts_Block_Groups/g20095nh.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_3eabcf1a50ef0fc6/captures/ACS/ACS__20260924T190802Z__d9da2854352f4784908acc194d4ccd52/raw/g20095id.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_3eabcf1a50ef0fc6/captures/ACS/ACS__20260924T190802Z__d9da2854352f4784908acc194d4ccd52/raw/g20095id.txt",
       "sha256": "7a1a539684461cafa5daf27440e30536125b42273e09de316a9c1ccac8b18efd",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Idaho/All_Geographies_Not_Tracts_Block_Groups/g20095id.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_3eabcf1a50ef0fc6/captures/ACS/ACS__20260924T190802Z__d9da2854352f4784908acc194d4ccd52/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_3eabcf1a50ef0fc6/captures/ACS/ACS__20260924T190802Z__d9da2854352f4784908acc194d4ccd52/receipt.json",
       "sha256": "c6e479b3f2c1dc7b53ad93e5d7349b25e38f7c10ec16b0677e41238b3a6941de",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Idaho/All_Geographies_Not_Tracts_Block_Groups/g20095id.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_3ee1bd94b7e7a3e9/captures/ACS/ACS__20260924T190338Z__58d6aa3c64264976984549e2fd6f2b84/raw/g20095ar.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_3ee1bd94b7e7a3e9/captures/ACS/ACS__20260924T190338Z__58d6aa3c64264976984549e2fd6f2b84/raw/g20095ar.txt",
       "sha256": "6a3038b3ed991addc42aa1f1e0dd7a9158c3356b3ea09e321736eb345edaad23",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Arkansas/All_Geographies_Not_Tracts_Block_Groups/g20095ar.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_3ee1bd94b7e7a3e9/captures/ACS/ACS__20260924T190338Z__58d6aa3c64264976984549e2fd6f2b84/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_3ee1bd94b7e7a3e9/captures/ACS/ACS__20260924T190338Z__58d6aa3c64264976984549e2fd6f2b84/receipt.json",
       "sha256": "ca20e22b1774a4ccfd28ad0baa21245c13a5551c77037177bbce1add98521507",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Arkansas/All_Geographies_Not_Tracts_Block_Groups/g20095ar.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_43aac056d52fdf43/captures/ACS/ACS__20260924T192049Z__c660fe71a4b3404faca72446bedad506/raw/g20095or.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_43aac056d52fdf43/captures/ACS/ACS__20260924T192049Z__c660fe71a4b3404faca72446bedad506/raw/g20095or.txt",
       "sha256": "ea44908efdcf76abd0af91f75ad36a6c199e3519b9340d192b552765c46e8390",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Oregon/All_Geographies_Not_Tracts_Block_Groups/g20095or.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_43aac056d52fdf43/captures/ACS/ACS__20260924T192049Z__c660fe71a4b3404faca72446bedad506/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_43aac056d52fdf43/captures/ACS/ACS__20260924T192049Z__c660fe71a4b3404faca72446bedad506/receipt.json",
       "sha256": "1d2f4e41c3db9254516df9db07ae52e92cf016f43be899d17f5f91792e0eb417",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Oregon/All_Geographies_Not_Tracts_Block_Groups/g20095or.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_4cd8b6f5c07963fa/captures/ACS/ACS__20260924T191847Z__5a1ac4a9ba4b466f8efa32eff6994717/raw/g20095ny.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_4cd8b6f5c07963fa/captures/ACS/ACS__20260924T191847Z__5a1ac4a9ba4b466f8efa32eff6994717/raw/g20095ny.txt",
       "sha256": "3913377b89f3050489038d4375670b879bc28689a6c9197b9292b29ebd4b9af8",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/NewYork/All_Geographies_Not_Tracts_Block_Groups/g20095ny.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_4cd8b6f5c07963fa/captures/ACS/ACS__20260924T191847Z__5a1ac4a9ba4b466f8efa32eff6994717/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_4cd8b6f5c07963fa/captures/ACS/ACS__20260924T191847Z__5a1ac4a9ba4b466f8efa32eff6994717/receipt.json",
       "sha256": "899da1018207890caaac183395150d65960ec58d340594a6727f8df938f723d1",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/NewYork/All_Geographies_Not_Tracts_Block_Groups/g20095ny.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_56ef0ae1b0218f2c/captures/ACS/ACS__20260924T190919Z__7ba77443f2204022b420bde989570d18/raw/g20095ia.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_56ef0ae1b0218f2c/captures/ACS/ACS__20260924T190919Z__7ba77443f2204022b420bde989570d18/raw/g20095ia.txt",
       "sha256": "c9fc392be0a4f748a67bc7c521005ab515e7f838ab0a0c0a77744f2c095227a7",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Iowa/All_Geographies_Not_Tracts_Block_Groups/g20095ia.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_56ef0ae1b0218f2c/captures/ACS/ACS__20260924T190919Z__7ba77443f2204022b420bde989570d18/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_56ef0ae1b0218f2c/captures/ACS/ACS__20260924T190919Z__7ba77443f2204022b420bde989570d18/receipt.json",
       "sha256": "95c1514590c0f881648815d5aea1d5c2aedf75c97c3670c0a4379a83206305c6",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Iowa/All_Geographies_Not_Tracts_Block_Groups/g20095ia.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_58c6634493b7800d/captures/ACS/ACS__20260924T190559Z__bf95768db42046dc9f538ff503e42095/raw/g20095ct.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_58c6634493b7800d/captures/ACS/ACS__20260924T190559Z__bf95768db42046dc9f538ff503e42095/raw/g20095ct.txt",
       "sha256": "eee2abfc4352741adeae84cc3cda76150022ad983cce525f5096ddfd0fd7a5f7",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Connecticut/All_Geographies_Not_Tracts_Block_Groups/g20095ct.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_58c6634493b7800d/captures/ACS/ACS__20260924T190559Z__bf95768db42046dc9f538ff503e42095/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_58c6634493b7800d/captures/ACS/ACS__20260924T190559Z__bf95768db42046dc9f538ff503e42095/receipt.json",
       "sha256": "711fd4a69b06bd1785acfb27346411392b0c91bdc55cea86e98a7a482527c5c7",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Connecticut/All_Geographies_Not_Tracts_Block_Groups/g20095ct.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_5bf81daa574be70b/captures/ACS/ACS__20260924T190446Z__5e94912dda72435b8ac5674d34eaf98f/raw/g20095ca.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_5bf81daa574be70b/captures/ACS/ACS__20260924T190446Z__5e94912dda72435b8ac5674d34eaf98f/raw/g20095ca.txt",
       "sha256": "86c1c2e01126e11e1784eeda2706605115c07f18b0624e4e84282859222a035e",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/California/All_Geographies_Not_Tracts_Block_Groups/g20095ca.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_5bf81daa574be70b/captures/ACS/ACS__20260924T190446Z__5e94912dda72435b8ac5674d34eaf98f/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_5bf81daa574be70b/captures/ACS/ACS__20260924T190446Z__5e94912dda72435b8ac5674d34eaf98f/receipt.json",
       "sha256": "5d8e306b42be2508a2b4332869ed69f4679668053e398f0388e2f911333ed40f",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/California/All_Geographies_Not_Tracts_Block_Groups/g20095ca.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_5f24701658c7950a/captures/ACS/ACS__20260924T192028Z__0ac9becce0fc4906a1cc5f58497fa3bd/raw/g20095ok.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_5f24701658c7950a/captures/ACS/ACS__20260924T192028Z__0ac9becce0fc4906a1cc5f58497fa3bd/raw/g20095ok.txt",
       "sha256": "1e4a2e3446772112ee0b48e5e458b7305f538e07076d68f4f42e38f9a2caf12c",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Oklahoma/All_Geographies_Not_Tracts_Block_Groups/g20095ok.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_5f24701658c7950a/captures/ACS/ACS__20260924T192028Z__0ac9becce0fc4906a1cc5f58497fa3bd/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_5f24701658c7950a/captures/ACS/ACS__20260924T192028Z__0ac9becce0fc4906a1cc5f58497fa3bd/receipt.json",
       "sha256": "499f96932de9752333f549b72fa15177df2ae5ad47870a8de470297e0c5b0eea",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Oklahoma/All_Geographies_Not_Tracts_Block_Groups/g20095ok.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_6114cf666da70e37/captures/ACS/ACS__20260924T192200Z__e73518d4b15e4535a226bb14ac9f42bc/raw/g20095ri.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_6114cf666da70e37/captures/ACS/ACS__20260924T192200Z__e73518d4b15e4535a226bb14ac9f42bc/raw/g20095ri.txt",
       "sha256": "299e2d1e4b92c6250e53000ba4a742050c93c9b4aecd923554a6524ac76f87fd",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/RhodeIsland/All_Geographies_Not_Tracts_Block_Groups/g20095ri.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_6114cf666da70e37/captures/ACS/ACS__20260924T192200Z__e73518d4b15e4535a226bb14ac9f42bc/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_6114cf666da70e37/captures/ACS/ACS__20260924T192200Z__e73518d4b15e4535a226bb14ac9f42bc/receipt.json",
       "sha256": "7330a0360aac22b6ab279fbe07db72c0b812ce934824a284557360b3e8fbff55",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/RhodeIsland/All_Geographies_Not_Tracts_Block_Groups/g20095ri.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_61312ddd22b2557e/captures/ACS/ACS__20260924T190537Z__89dd57d30c12467f9e7da0f14f5e4087/raw/g20095co.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_61312ddd22b2557e/captures/ACS/ACS__20260924T190537Z__89dd57d30c12467f9e7da0f14f5e4087/raw/g20095co.txt",
       "sha256": "6087261839c3b3d97c8a27b749f27572ad35b7e0fd9031df098f6afb351e33cb",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Colorado/All_Geographies_Not_Tracts_Block_Groups/g20095co.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_61312ddd22b2557e/captures/ACS/ACS__20260924T190537Z__89dd57d30c12467f9e7da0f14f5e4087/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_61312ddd22b2557e/captures/ACS/ACS__20260924T190537Z__89dd57d30c12467f9e7da0f14f5e4087/receipt.json",
       "sha256": "c21470cd2c049d28012489a6fda2ecf02a6c8a98f916f56fe1f1ca47e506c310",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Colorado/All_Geographies_Not_Tracts_Block_Groups/g20095co.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_63623a70e14224e1/captures/ACS/ACS__20260924T192509Z__b0b37b17eaa94c47a422d7ab14519315/raw/g20095wa.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_63623a70e14224e1/captures/ACS/ACS__20260924T192509Z__b0b37b17eaa94c47a422d7ab14519315/raw/g20095wa.txt",
       "sha256": "47a82579cd492cd7417491d539fd339a4e537d775c7651182bed285b2a61de4f",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Washington/All_Geographies_Not_Tracts_Block_Groups/g20095wa.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_63623a70e14224e1/captures/ACS/ACS__20260924T192509Z__b0b37b17eaa94c47a422d7ab14519315/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_63623a70e14224e1/captures/ACS/ACS__20260924T192509Z__b0b37b17eaa94c47a422d7ab14519315/receipt.json",
       "sha256": "731433f092fc825ca73f1d75ebdce842236dbfd5251e5c2c2b76efca7f588cb9",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Washington/All_Geographies_Not_Tracts_Block_Groups/g20095wa.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_6bfc11476f947c37/captures/ACS/ACS__20260924T191118Z__668df923a845490391a695ea94e4e89f/raw/g20095ma.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_6bfc11476f947c37/captures/ACS/ACS__20260924T191118Z__668df923a845490391a695ea94e4e89f/raw/g20095ma.txt",
       "sha256": "8e934de5b69f5eb9deefce9b3cb2b1a7638e3e1b13a3fe2f7f0625563cade611",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Massachusetts/All_Geographies_Not_Tracts_Block_Groups/g20095ma.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_6bfc11476f947c37/captures/ACS/ACS__20260924T191118Z__668df923a845490391a695ea94e4e89f/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_6bfc11476f947c37/captures/ACS/ACS__20260924T191118Z__668df923a845490391a695ea94e4e89f/receipt.json",
       "sha256": "e0770fd7346d643ec4225c3f074d1046cc41d9436ddda729a03dba5f5e67c101",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Massachusetts/All_Geographies_Not_Tracts_Block_Groups/g20095ma.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_70f59470a123ebaa/captures/ACS/ACS__20260924T191938Z__70bed8ccefdf4f6eb2a2c2d1dc396111/raw/g20095nd.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_70f59470a123ebaa/captures/ACS/ACS__20260924T191938Z__70bed8ccefdf4f6eb2a2c2d1dc396111/raw/g20095nd.txt",
       "sha256": "16d0cac53420993b282662503e899e176e833338117ffc59b09fc548c804ba76",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/NorthDakota/All_Geographies_Not_Tracts_Block_Groups/g20095nd.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_70f59470a123ebaa/captures/ACS/ACS__20260924T191938Z__70bed8ccefdf4f6eb2a2c2d1dc396111/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_70f59470a123ebaa/captures/ACS/ACS__20260924T191938Z__70bed8ccefdf4f6eb2a2c2d1dc396111/receipt.json",
       "sha256": "8815e8abfeabdef3b96e5259a718d2692a3b0ca8129673aa4fc2b5c6762c9bbb",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/NorthDakota/All_Geographies_Not_Tracts_Block_Groups/g20095nd.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_72342cc450e6ce81/captures/ACS/ACS__20260924T191021Z__554ca60142e64c528c682c0ac2edea75/raw/g20095la.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_72342cc450e6ce81/captures/ACS/ACS__20260924T191021Z__554ca60142e64c528c682c0ac2edea75/raw/g20095la.txt",
       "sha256": "aa284f7a6752c82ed881f8775b953e92a365be1e9f989bf2cc2728e463a8306d",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Louisiana/All_Geographies_Not_Tracts_Block_Groups/g20095la.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_72342cc450e6ce81/captures/ACS/ACS__20260924T191021Z__554ca60142e64c528c682c0ac2edea75/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_72342cc450e6ce81/captures/ACS/ACS__20260924T191021Z__554ca60142e64c528c682c0ac2edea75/receipt.json",
       "sha256": "649023da7e0f27fb7d33018fdcef54456e9163fd0c1cb410043ff9fc75693f55",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Louisiana/All_Geographies_Not_Tracts_Block_Groups/g20095la.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_75700099a1cb6855/captures/ACS/ACS__20260924T191002Z__afdb7d8290a74325be62bcca8fef30b8/raw/g20095ky.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_75700099a1cb6855/captures/ACS/ACS__20260924T191002Z__afdb7d8290a74325be62bcca8fef30b8/raw/g20095ky.txt",
       "sha256": "eee2e50b1eaa3b720512d383bb9465cc08c52cbd64e4693f8b7449536f133c9b",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Kentucky/All_Geographies_Not_Tracts_Block_Groups/g20095ky.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_75700099a1cb6855/captures/ACS/ACS__20260924T191002Z__afdb7d8290a74325be62bcca8fef30b8/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_75700099a1cb6855/captures/ACS/ACS__20260924T191002Z__afdb7d8290a74325be62bcca8fef30b8/receipt.json",
       "sha256": "5289b42bd901925225a13ccbdb632f924942d0abf3bebd61154d57a4755c6f89",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Kentucky/All_Geographies_Not_Tracts_Block_Groups/g20095ky.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_794b93210882fe1e/captures/ACS/ACS__20260924T192327Z__f5c93c20a6314a0cb3e5f858997e1a6b/raw/g20095tx.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_794b93210882fe1e/captures/ACS/ACS__20260924T192327Z__f5c93c20a6314a0cb3e5f858997e1a6b/raw/g20095tx.txt",
       "sha256": "9c1fe76be8bb42e9f0c9e575f37b70bf26f175778d9d2ed824da0646eec831ac",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Texas/All_Geographies_Not_Tracts_Block_Groups/g20095tx.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_794b93210882fe1e/captures/ACS/ACS__20260924T192327Z__f5c93c20a6314a0cb3e5f858997e1a6b/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_794b93210882fe1e/captures/ACS/ACS__20260924T192327Z__f5c93c20a6314a0cb3e5f858997e1a6b/receipt.json",
       "sha256": "f2dd81023053233484b872bb167b9bd7343de847bfb04af4f0e3efec20e0347d",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Texas/All_Geographies_Not_Tracts_Block_Groups/g20095tx.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_7bb5fb2bf9bd0870/captures/ACS/ACS__20260924T191816Z__fd2beaff96554a3a8d402ecdb7996db4/raw/g20095nm.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_7bb5fb2bf9bd0870/captures/ACS/ACS__20260924T191816Z__fd2beaff96554a3a8d402ecdb7996db4/raw/g20095nm.txt",
       "sha256": "6cea418400982d8e8fb095d75ebd400eb4e5115f593b7e30a175e221baf87798",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/NewMexico/All_Geographies_Not_Tracts_Block_Groups/g20095nm.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_7bb5fb2bf9bd0870/captures/ACS/ACS__20260924T191816Z__fd2beaff96554a3a8d402ecdb7996db4/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_7bb5fb2bf9bd0870/captures/ACS/ACS__20260924T191816Z__fd2beaff96554a3a8d402ecdb7996db4/receipt.json",
       "sha256": "c6d36473d7d4928ff4c7ef02f66f47d7290ba1a3751d41b60845854d6039433f",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/NewMexico/All_Geographies_Not_Tracts_Block_Groups/g20095nm.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_7d0039d9bd2a2dba/captures/ACS/ACS__20260924T192409Z__76cb4e7849f1478ab29cd86c0dd28dc0/raw/g20095ut.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_7d0039d9bd2a2dba/captures/ACS/ACS__20260924T192409Z__76cb4e7849f1478ab29cd86c0dd28dc0/raw/g20095ut.txt",
       "sha256": "e0c0a3eabdcccfe6fe38ef93056da367e24093c96483605503fe0a5e96b3f3e2",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Utah/All_Geographies_Not_Tracts_Block_Groups/g20095ut.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_7d0039d9bd2a2dba/captures/ACS/ACS__20260924T192409Z__76cb4e7849f1478ab29cd86c0dd28dc0/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_7d0039d9bd2a2dba/captures/ACS/ACS__20260924T192409Z__76cb4e7849f1478ab29cd86c0dd28dc0/receipt.json",
       "sha256": "982ba4f10ea1000919d3d78771705f808cfeaaa93451d15bdf90f92f687db9af",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Utah/All_Geographies_Not_Tracts_Block_Groups/g20095ut.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_8efee048dbadcde5/captures/ACS/ACS__20260924T191059Z__2c65ee3632cd414b9deaa7ccc4eaa738/raw/g20095md.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_8efee048dbadcde5/captures/ACS/ACS__20260924T191059Z__2c65ee3632cd414b9deaa7ccc4eaa738/raw/g20095md.txt",
       "sha256": "787415b444ad945c919106ebed0e365e0c514d966a7c19d11555a2a74d61065c",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Maryland/All_Geographies_Not_Tracts_Block_Groups/g20095md.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_8efee048dbadcde5/captures/ACS/ACS__20260924T191059Z__2c65ee3632cd414b9deaa7ccc4eaa738/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_8efee048dbadcde5/captures/ACS/ACS__20260924T191059Z__2c65ee3632cd414b9deaa7ccc4eaa738/receipt.json",
       "sha256": "d071ef348e2993bd2b7e1bab249db7adb2fc89dc2daa500be4d6902afec90937",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Maryland/All_Geographies_Not_Tracts_Block_Groups/g20095md.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_9822092e401a3963/captures/ACS/ACS__20260924T191319Z__1b99b7953d624f2a8de12771c55b139d/raw/g20095mt.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_9822092e401a3963/captures/ACS/ACS__20260924T191319Z__1b99b7953d624f2a8de12771c55b139d/raw/g20095mt.txt",
       "sha256": "9fa4d65cc6922cf965cc2279d9f54c715a00b438843c1c008d1d44b317f4a751",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Montana/All_Geographies_Not_Tracts_Block_Groups/g20095mt.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_9822092e401a3963/captures/ACS/ACS__20260924T191319Z__1b99b7953d624f2a8de12771c55b139d/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_9822092e401a3963/captures/ACS/ACS__20260924T191319Z__1b99b7953d624f2a8de12771c55b139d/receipt.json",
       "sha256": "10a766a726740b9599124b185aa1ad2e33c3aa182e53e3ca6aa58449280f6f06",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Montana/All_Geographies_Not_Tracts_Block_Groups/g20095mt.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_a84cc79956ac860a/captures/ACS/ACS__20260924T190619Z__adc81bc513da4e768cf3a6eea1095adb/raw/g20095de.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_a84cc79956ac860a/captures/ACS/ACS__20260924T190619Z__adc81bc513da4e768cf3a6eea1095adb/raw/g20095de.txt",
       "sha256": "7c330ffcd7029782c6537631bebb232ed8720261fa4b881a47f58f3159a044d3",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Delaware/All_Geographies_Not_Tracts_Block_Groups/g20095de.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_a84cc79956ac860a/captures/ACS/ACS__20260924T190619Z__adc81bc513da4e768cf3a6eea1095adb/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_a84cc79956ac860a/captures/ACS/ACS__20260924T190619Z__adc81bc513da4e768cf3a6eea1095adb/receipt.json",
       "sha256": "6182fc541c52e2f61b5f59ccec2eeb4881a13506c391ea937528c8b89fdb0f0b",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Delaware/All_Geographies_Not_Tracts_Block_Groups/g20095de.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_a8bedd3ed7dc4026/captures/ACS/ACS__20260924T191338Z__05457021d94d48a8af3fcdc172fe98da/raw/g20095ne.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_a8bedd3ed7dc4026/captures/ACS/ACS__20260924T191338Z__05457021d94d48a8af3fcdc172fe98da/raw/g20095ne.txt",
       "sha256": "1bfba13459ac3d6243da6ab5c7dcab4b06fc5c2303c2d1daf478c8a0a3ffcf7c",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Nebraska/All_Geographies_Not_Tracts_Block_Groups/g20095ne.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_a8bedd3ed7dc4026/captures/ACS/ACS__20260924T191338Z__05457021d94d48a8af3fcdc172fe98da/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_a8bedd3ed7dc4026/captures/ACS/ACS__20260924T191338Z__05457021d94d48a8af3fcdc172fe98da/receipt.json",
       "sha256": "2fb6e1ecaec5e855f6162ccf138782663427884925e0717fd59d40da54becbff",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Nebraska/All_Geographies_Not_Tracts_Block_Groups/g20095ne.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_ae7f4c4389d610bf/captures/ACS/ACS__20260924T190830Z__c01664b323f648368d64498adc70757e/raw/g20095il.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_ae7f4c4389d610bf/captures/ACS/ACS__20260924T190830Z__c01664b323f648368d64498adc70757e/raw/g20095il.txt",
       "sha256": "eb5ccfdc8beae41457162327fab7ebe23f91b8c53d7548608ecb093a29bb3e0c",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Illinois/All_Geographies_Not_Tracts_Block_Groups/g20095il.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_ae7f4c4389d610bf/captures/ACS/ACS__20260924T190830Z__c01664b323f648368d64498adc70757e/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_ae7f4c4389d610bf/captures/ACS/ACS__20260924T190830Z__c01664b323f648368d64498adc70757e/receipt.json",
       "sha256": "39f79083843e21d3fa684a96d79765cd2833875820d4a48453f43b94d8145779",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Illinois/All_Geographies_Not_Tracts_Block_Groups/g20095il.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_af2e11d9c199f663/captures/ACS/ACS__20260924T190721Z__66e679f61a34479f8dad1c8067069ae5/raw/g20095ga.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_af2e11d9c199f663/captures/ACS/ACS__20260924T190721Z__66e679f61a34479f8dad1c8067069ae5/raw/g20095ga.txt",
       "sha256": "4f34c639061298831c6117c32a560ae3ca1deb85bec12670fa2aa67e6bd35a32",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Georgia/All_Geographies_Not_Tracts_Block_Groups/g20095ga.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_af2e11d9c199f663/captures/ACS/ACS__20260924T190721Z__66e679f61a34479f8dad1c8067069ae5/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_af2e11d9c199f663/captures/ACS/ACS__20260924T190721Z__66e679f61a34479f8dad1c8067069ae5/receipt.json",
       "sha256": "e9d446ff4648cdcd3e9dc1131d144a5d0a6449d0c58dd721d3f940a1b554db7d",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Georgia/All_Geographies_Not_Tracts_Block_Groups/g20095ga.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_b21391e97649ce25/captures/ACS/ACS__20260924T190242Z__0b4011aedcdc4bd39151d865f971d6e9/raw/g20095az.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_b21391e97649ce25/captures/ACS/ACS__20260924T190242Z__0b4011aedcdc4bd39151d865f971d6e9/raw/g20095az.txt",
       "sha256": "a05a0817dcf01a1ab90d39c6516b937bc323bb2c0f37e256e48d150b7e8ef4ed",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Arizona/All_Geographies_Not_Tracts_Block_Groups/g20095az.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_b21391e97649ce25/captures/ACS/ACS__20260924T190242Z__0b4011aedcdc4bd39151d865f971d6e9/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_b21391e97649ce25/captures/ACS/ACS__20260924T190242Z__0b4011aedcdc4bd39151d865f971d6e9/receipt.json",
       "sha256": "616c775d938d0f5a636faa58442245b97242df6baff1950c2bf6b706af35f27b",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Arizona/All_Geographies_Not_Tracts_Block_Groups/g20095az.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_b514f90f7bf7f907/captures/ACS/ACS__20260924T191227Z__bb490b8c56ea4114bf7ab61f74f62c3f/raw/g20095ms.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_b514f90f7bf7f907/captures/ACS/ACS__20260924T191227Z__bb490b8c56ea4114bf7ab61f74f62c3f/raw/g20095ms.txt",
       "sha256": "4deb0c509582bc4d0522877e2c637e1c78adbb4cb84f670c500c549fec4abda5",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Mississippi/All_Geographies_Not_Tracts_Block_Groups/g20095ms.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_b514f90f7bf7f907/captures/ACS/ACS__20260924T191227Z__bb490b8c56ea4114bf7ab61f74f62c3f/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_b514f90f7bf7f907/captures/ACS/ACS__20260924T191227Z__bb490b8c56ea4114bf7ab61f74f62c3f/receipt.json",
       "sha256": "c12ba13f0b50d96961e16fc4cdb8ad9bac4a158e8faf4773b460a7519f60c14b",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Mississippi/All_Geographies_Not_Tracts_Block_Groups/g20095ms.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_bb9ba817d4943053/captures/ACS/ACS__20260924T192351Z__30d5e43799f140b78e5cc30869ef7cf7/raw/g20095us.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_bb9ba817d4943053/captures/ACS/ACS__20260924T192351Z__30d5e43799f140b78e5cc30869ef7cf7/raw/g20095us.txt",
       "sha256": "df2a23dc54b7845f16c94bed6297fa623b8dae9108cfaf863b85f5ff6dd1279d",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/UnitedStates/All_Geographies_Not_Tracts_Block_Groups/g20095us.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_bb9ba817d4943053/captures/ACS/ACS__20260924T192351Z__30d5e43799f140b78e5cc30869ef7cf7/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_bb9ba817d4943053/captures/ACS/ACS__20260924T192351Z__30d5e43799f140b78e5cc30869ef7cf7/receipt.json",
       "sha256": "39aea7f33a51ef62c638ef27a8d208ec98d1bf65598bfbac7079ec8f5a0f5ecf",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/UnitedStates/All_Geographies_Not_Tracts_Block_Groups/g20095us.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_bc7fb23a89ca72e1/captures/ACS/ACS__20260924T190637Z__89be9308e9d744e1b737672139ff5c33/raw/g20095dc.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_bc7fb23a89ca72e1/captures/ACS/ACS__20260924T190637Z__89be9308e9d744e1b737672139ff5c33/raw/g20095dc.txt",
       "sha256": "a70edae09d9e4a4da73dd9439e805ee4038da81e66988d575f464fe4560e40f1",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/DistrictofColumbia/All_Geographies_Not_Tracts_Block_Groups/g20095dc.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_bc7fb23a89ca72e1/captures/ACS/ACS__20260924T190637Z__89be9308e9d744e1b737672139ff5c33/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_bc7fb23a89ca72e1/captures/ACS/ACS__20260924T190637Z__89be9308e9d744e1b737672139ff5c33/receipt.json",
       "sha256": "ea74a4de8e98a27b3d6ecc538c0813c96a746951cc73a159e826eab20ede7ed7",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/DistrictofColumbia/All_Geographies_Not_Tracts_Block_Groups/g20095dc.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_c292e2827d8ad1dd/captures/ACS/ACS__20260924T190148Z__0293962f69b745bc8c4618f334cc4edf/raw/g20095ak.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_c292e2827d8ad1dd/captures/ACS/ACS__20260924T190148Z__0293962f69b745bc8c4618f334cc4edf/raw/g20095ak.txt",
       "sha256": "1e873b0ae4955259e5e109e85f9b443d87b5dc0232f316cb02a2a15cd977eaed",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Alaska/All_Geographies_Not_Tracts_Block_Groups/g20095ak.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_c292e2827d8ad1dd/captures/ACS/ACS__20260924T190148Z__0293962f69b745bc8c4618f334cc4edf/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_c292e2827d8ad1dd/captures/ACS/ACS__20260924T190148Z__0293962f69b745bc8c4618f334cc4edf/receipt.json",
       "sha256": "9f7d2cffb66a095658781145d4fcbb9edd794f1c5731bacd499656df70e44b39",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Alaska/All_Geographies_Not_Tracts_Block_Groups/g20095ak.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_c3a59f93ea456e74/captures/ACS/ACS__20260924T192005Z__2b0ce40cf58c48a0a770b10401ea2e27/raw/g20095oh.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_c3a59f93ea456e74/captures/ACS/ACS__20260924T192005Z__2b0ce40cf58c48a0a770b10401ea2e27/raw/g20095oh.txt",
       "sha256": "c369cc8d2c9bdecf3b1fdcf4aa691f4337b9b05efe1752ad960c9af1d58553dd",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Ohio/All_Geographies_Not_Tracts_Block_Groups/g20095oh.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_c3a59f93ea456e74/captures/ACS/ACS__20260924T192005Z__2b0ce40cf58c48a0a770b10401ea2e27/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_c3a59f93ea456e74/captures/ACS/ACS__20260924T192005Z__2b0ce40cf58c48a0a770b10401ea2e27/receipt.json",
       "sha256": "d4d8ad97d2c33a23f61a9f41aea8b74283cf921d9ff2a49dfe53ae2f7ea628e8",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Ohio/All_Geographies_Not_Tracts_Block_Groups/g20095oh.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_c8ca09a29c705ef4/captures/ACS/ACS__20260924T190942Z__36511277fc6345fbb2be464e77d8f5e6/raw/g20095ks.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_c8ca09a29c705ef4/captures/ACS/ACS__20260924T190942Z__36511277fc6345fbb2be464e77d8f5e6/raw/g20095ks.txt",
       "sha256": "4a2785cf8199af3b1a24bbf968a44386190e1bc034a9a9fd100f152d9eccb0b4",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Kansas/All_Geographies_Not_Tracts_Block_Groups/g20095ks.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_c8ca09a29c705ef4/captures/ACS/ACS__20260924T190942Z__36511277fc6345fbb2be464e77d8f5e6/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_c8ca09a29c705ef4/captures/ACS/ACS__20260924T190942Z__36511277fc6345fbb2be464e77d8f5e6/receipt.json",
       "sha256": "f530c271dd30c238ff0da281d5a3bccac843cb942cf7f6f91221569a30ebc2e0",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Kansas/All_Geographies_Not_Tracts_Block_Groups/g20095ks.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_c919e83f73548803/captures/ACS/ACS__20260924T192428Z__71821ee0f543423790b6a47a4d2c3468/raw/g20095vt.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_c919e83f73548803/captures/ACS/ACS__20260924T192428Z__71821ee0f543423790b6a47a4d2c3468/raw/g20095vt.txt",
       "sha256": "f9e519237e1bae3dad473e414094c333e4dd09243bcc99c8f651ba5d6583ba2c",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Vermont/All_Geographies_Not_Tracts_Block_Groups/g20095vt.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_c919e83f73548803/captures/ACS/ACS__20260924T192428Z__71821ee0f543423790b6a47a4d2c3468/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_c919e83f73548803/captures/ACS/ACS__20260924T192428Z__71821ee0f543423790b6a47a4d2c3468/receipt.json",
       "sha256": "0620e0afb882fb0c7d61a64f06b9e6a5f37eb9e7e98731c01c8735e2a6c7276d",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Vermont/All_Geographies_Not_Tracts_Block_Groups/g20095vt.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_cc1846c0e139168b/captures/ACS/ACS__20260924T192141Z__b225d5fdb5d047c3a64aaeb2327c76f5/raw/g20095pr.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_cc1846c0e139168b/captures/ACS/ACS__20260924T192141Z__b225d5fdb5d047c3a64aaeb2327c76f5/raw/g20095pr.txt",
       "sha256": "6e753d0c29f54e6eede24e46b8b6a7efe1d2325a37bbe91318a5df6a8abc2e55",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/PuertoRico/All_Geographies_Not_Tracts_Block_Groups/g20095pr.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_cc1846c0e139168b/captures/ACS/ACS__20260924T192141Z__b225d5fdb5d047c3a64aaeb2327c76f5/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_cc1846c0e139168b/captures/ACS/ACS__20260924T192141Z__b225d5fdb5d047c3a64aaeb2327c76f5/receipt.json",
       "sha256": "382122e72904da17eba0571deae88183c8fc5ff99944f77c3b4da9bb6796f0c9",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/PuertoRico/All_Geographies_Not_Tracts_Block_Groups/g20095pr.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_cd2d80631b0dace8/captures/ACS/ACS__20260924T191252Z__c80f6087c9b842ab889f857e7945ffc3/raw/g20095mo.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_cd2d80631b0dace8/captures/ACS/ACS__20260924T191252Z__c80f6087c9b842ab889f857e7945ffc3/raw/g20095mo.txt",
       "sha256": "023c32eefce28b50fb9713274b0710030c75af4fb4233bf41e089a8a0eabc04b",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Missouri/All_Geographies_Not_Tracts_Block_Groups/g20095mo.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_cd2d80631b0dace8/captures/ACS/ACS__20260924T191252Z__c80f6087c9b842ab889f857e7945ffc3/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_cd2d80631b0dace8/captures/ACS/ACS__20260924T191252Z__c80f6087c9b842ab889f857e7945ffc3/receipt.json",
       "sha256": "202cdd9651a49d7c196b30c0dee5be534b23c6b746fd73a40e9c950275ed9c68",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Missouri/All_Geographies_Not_Tracts_Block_Groups/g20095mo.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_cd6cba0258bd3ada/captures/ACS/ACS__20260924T192528Z__2b62ca4af30f4661bd0693bb8ef929be/raw/g20095wv.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_cd6cba0258bd3ada/captures/ACS/ACS__20260924T192528Z__2b62ca4af30f4661bd0693bb8ef929be/raw/g20095wv.txt",
       "sha256": "bee5691b1aa15a9b530066661ef3264641063eafcb26fec545959e670edc1a13",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/WestVirginia/All_Geographies_Not_Tracts_Block_Groups/g20095wv.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_cd6cba0258bd3ada/captures/ACS/ACS__20260924T192528Z__2b62ca4af30f4661bd0693bb8ef929be/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_cd6cba0258bd3ada/captures/ACS/ACS__20260924T192528Z__2b62ca4af30f4661bd0693bb8ef929be/receipt.json",
       "sha256": "52518be70720389f9b266f29f071785586086134106e6308d70de32d6713ebc3",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/WestVirginia/All_Geographies_Not_Tracts_Block_Groups/g20095wv.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_d5287b6a24a8b455/captures/ACS/ACS__20260924T192241Z__b3a88d8d1d704295b56286bb0cba7fbc/raw/g20095sd.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_d5287b6a24a8b455/captures/ACS/ACS__20260924T192241Z__b3a88d8d1d704295b56286bb0cba7fbc/raw/g20095sd.txt",
       "sha256": "ce76addfdd048d07557c0d447446fb298ab5fe03f22e02cf7a17d8813ace1194",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/SouthDakota/All_Geographies_Not_Tracts_Block_Groups/g20095sd.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_d5287b6a24a8b455/captures/ACS/ACS__20260924T192241Z__b3a88d8d1d704295b56286bb0cba7fbc/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_d5287b6a24a8b455/captures/ACS/ACS__20260924T192241Z__b3a88d8d1d704295b56286bb0cba7fbc/receipt.json",
       "sha256": "ca847284b73b2195c666719db0c12674d4269dceda939bc59c338d29f846717f",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/SouthDakota/All_Geographies_Not_Tracts_Block_Groups/g20095sd.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_d5355bfaed75f162/captures/ACS/ACS__20260924T191916Z__f3b37929bcfc41d28d8cc149d09b37b4/raw/g20095nc.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_d5355bfaed75f162/captures/ACS/ACS__20260924T191916Z__f3b37929bcfc41d28d8cc149d09b37b4/raw/g20095nc.txt",
       "sha256": "06abd8f781ec1d2c77cd3dd66b18f5038ea9813cdd1841c1e8d8fed6faa74e78",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/NorthCarolina/All_Geographies_Not_Tracts_Block_Groups/g20095nc.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_d5355bfaed75f162/captures/ACS/ACS__20260924T191916Z__f3b37929bcfc41d28d8cc149d09b37b4/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_d5355bfaed75f162/captures/ACS/ACS__20260924T191916Z__f3b37929bcfc41d28d8cc149d09b37b4/receipt.json",
       "sha256": "75d78cf0085c3a45f364f5bd524f5842c2efa87e850b2502adfc25975e7860cf",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/NorthCarolina/All_Geographies_Not_Tracts_Block_Groups/g20095nc.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_df1046776ca63505/captures/ACS/ACS__20260924T192302Z__c826ec59a7a946208490f4c2324d8596/raw/g20095tn.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_df1046776ca63505/captures/ACS/ACS__20260924T192302Z__c826ec59a7a946208490f4c2324d8596/raw/g20095tn.txt",
       "sha256": "446465ea83426ee64d6b2c6394234a6269e1f434486df6953bf7bf787c6b2666",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Tennessee/All_Geographies_Not_Tracts_Block_Groups/g20095tn.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_df1046776ca63505/captures/ACS/ACS__20260924T192302Z__c826ec59a7a946208490f4c2324d8596/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_df1046776ca63505/captures/ACS/ACS__20260924T192302Z__c826ec59a7a946208490f4c2324d8596/receipt.json",
       "sha256": "c25344dc6446254acfa29ed923bf64d877f2c325271173805942c9ed188f63d0",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Tennessee/All_Geographies_Not_Tracts_Block_Groups/g20095tn.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_e2748fbcc100bb80/captures/ACS/ACS__20260924T190658Z__f9ae72509cb4427fa6ae1f8c303921c6/raw/g20095fl.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_e2748fbcc100bb80/captures/ACS/ACS__20260924T190658Z__f9ae72509cb4427fa6ae1f8c303921c6/raw/g20095fl.txt",
       "sha256": "414a36db195a5d8a55e0b41e25cfe8a6668c3c5f3cd29e2d04fdf49676a18a07",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Florida/All_Geographies_Not_Tracts_Block_Groups/g20095fl.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_e2748fbcc100bb80/captures/ACS/ACS__20260924T190658Z__f9ae72509cb4427fa6ae1f8c303921c6/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_e2748fbcc100bb80/captures/ACS/ACS__20260924T190658Z__f9ae72509cb4427fa6ae1f8c303921c6/receipt.json",
       "sha256": "3a837c52e6f02937f0288e9a93a3e32cdfa43eb153663f73f3f6fd556c6ac65c",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Florida/All_Geographies_Not_Tracts_Block_Groups/g20095fl.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_f17a4c200e3b1bd0/captures/ACS/ACS__20260924T192222Z__4baf7cfae1f24224bcc7e768c3850384/raw/g20095sc.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_f17a4c200e3b1bd0/captures/ACS/ACS__20260924T192222Z__4baf7cfae1f24224bcc7e768c3850384/raw/g20095sc.txt",
       "sha256": "69258dd0605e1439a4e39e908512cff644f48d123549d8e1b4cca723c21750e8",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/SouthCarolina/All_Geographies_Not_Tracts_Block_Groups/g20095sc.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_f17a4c200e3b1bd0/captures/ACS/ACS__20260924T192222Z__4baf7cfae1f24224bcc7e768c3850384/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_f17a4c200e3b1bd0/captures/ACS/ACS__20260924T192222Z__4baf7cfae1f24224bcc7e768c3850384/receipt.json",
       "sha256": "5e062b59b99b37cadaf26cfc398ebacfd44784a0692fe6eb9d3cd1808f131e63",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/SouthCarolina/All_Geographies_Not_Tracts_Block_Groups/g20095sc.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_fe7bd4c1a56314ee/captures/ACS/ACS__20260924T192117Z__716e124bb53e490baabe2ab0083ff953/raw/g20095pa.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_fe7bd4c1a56314ee/captures/ACS/ACS__20260924T192117Z__716e124bb53e490baabe2ab0083ff953/raw/g20095pa.txt",
       "sha256": "323635136d3357386e41da048b5d482ce8357c6652ceeba865f805c138e25b8e",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Pennsylvania/All_Geographies_Not_Tracts_Block_Groups/g20095pa.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_fe7bd4c1a56314ee/captures/ACS/ACS__20260924T192117Z__716e124bb53e490baabe2ab0083ff953/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_fe7bd4c1a56314ee/captures/ACS/ACS__20260924T192117Z__716e124bb53e490baabe2ab0083ff953/receipt.json",
       "sha256": "37470df6e9374ac8843c1fad498f9ef48e989bfb7e1a61c22f734f6dffda6d01",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Pennsylvania/All_Geographies_Not_Tracts_Block_Groups/g20095pa.txt"
     },
     {
-      "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP02/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP02/attempt_01/group.json",
       "sha256": "a21569f5446d375df2d2ae7935922d8e947333d54c07012fa7eafd226d60213c",
       "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP02.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP02/receipt.json",
+      "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP02/receipt.json",
       "sha256": "49acc7365cd07eeee529420caead5beeaa05159bcdcfb52049f29e109e445539",
       "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP02.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP03/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP03/attempt_01/group.json",
       "sha256": "11dde1ea9e1df742a6d3ce80bc7d1650533ddac735510954ffe9dbaa158d5976",
       "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP03.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP03/receipt.json",
+      "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP03/receipt.json",
       "sha256": "8591e107ff031b0477a6f96af88a54b220a37d47941084356ea7f529946ea053",
       "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP03.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP04/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP04/attempt_01/group.json",
       "sha256": "69973e95d8b24b72c0edd9303dfb9fba74397e3caf806279b59f4f10c304ee57",
       "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP04.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP04/receipt.json",
+      "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP04/receipt.json",
       "sha256": "5ad89dc7bd9de7e4db16218705729accef48f9d5910014bb7d69deac0ac2115e",
       "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP04.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP05/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP05/attempt_01/group.json",
       "sha256": "96374d9a0e352467b25e2b15047f5fc7d694578874f16caa979d9e0505b82af4",
       "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP05.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP05/receipt.json",
+      "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP05/receipt.json",
       "sha256": "dca7d46e1a7807ec9aedb338cd15ed280f3f4564bc4e7052ad2317b09d25c451",
       "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP05.json"
     }

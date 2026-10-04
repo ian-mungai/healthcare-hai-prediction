@@ -1,7 +1,7 @@
 ---
 title: Data Collection
 description: How the source data was collected and stored, with the commands that repeat or recheck each step.
-last_updated: 2026-10-03
+last_updated: 2026-10-04
 ---
 
 # Data Collection
@@ -21,6 +21,7 @@ This guide explains how the project's source data was collected and how to repea
 - [Privacy Handling](#privacy-handling)
 - [Checking Stored Data](#checking-stored-data)
 - [Publisher Data Dictionaries](#publisher-data-dictionaries)
+- [Storage Changes After Collection](#storage-changes-after-collection)
 - [What Cannot Be Repeated Exactly](#what-cannot-be-repeated-exactly)
 - [Open Items](#open-items)
 - [Closeout Checklist](#closeout-checklist)
@@ -80,11 +81,11 @@ Prefix every module name with `.venv/bin/python -m scripts.acquisition.`, for ex
 
 Most sources are public files on publisher websites. Their download links come from the approved source registry (`config/acquisition/source_registry.json`, checked against `source_registry_lock.json`) or from links found on the publishers' own index pages.
 
-**Current releases.** One bounded batch, `data/acquisition_batches/<batch_id>/batch.json`, holds 140 download jobs across 35 sources. Validate it offline, then run it:
+**Current releases.** One bounded batch, `data/datasets/acquisition_batches/<batch_id>/batch.json`, holds 140 download jobs across 35 sources. Validate it offline, then run it:
 
 ```sh
-.venv/bin/python -m scripts.acquisition.batch --plan data/acquisition_batches/<batch_id>/batch.json
-.venv/bin/python -m scripts.acquisition.batch --plan data/acquisition_batches/<batch_id>/batch.json --execute
+.venv/bin/python -m scripts.acquisition.batch --plan data/datasets/acquisition_batches/<batch_id>/batch.json
+.venv/bin/python -m scripts.acquisition.batch --plan data/datasets/acquisition_batches/<batch_id>/batch.json --execute
 ```
 
 **Earlier releases.** History is collected in two steps:
@@ -93,8 +94,8 @@ Most sources are public files on publisher websites. Their download links come f
 2. **Download them.** `history_routes` adds the candidates to a copy of the registry (the approved registry itself is never edited) and downloads each file within a byte budget:
 
    ```sh
-   .venv/bin/python -m scripts.acquisition.history_routes --candidates <candidates.json> --state-root data/historical_acquisition/<folder>
-   .venv/bin/python -m scripts.acquisition.history_routes --candidates <candidates.json> --state-root data/historical_acquisition/<folder> --execute
+   .venv/bin/python -m scripts.acquisition.history_routes --candidates <candidates.json> --state-root data/datasets/historical_acquisition/<folder>
+   .venv/bin/python -m scripts.acquisition.history_routes --candidates <candidates.json> --state-root data/datasets/historical_acquisition/<folder> --execute
    ```
 
 ZIP archives are opened only through reviewed, checksum-bound archive maps (`continue_history --archive-maps <maps.json> --plan-register <register.json> --state-root <folder>`); each member is stored separately and the ZIP itself stays local.
@@ -178,7 +179,7 @@ A few sources contain personal names or contact details. The README's [Data sect
 - The unchanged download stays on the local machine with owner-only access.
 - `abstract_public_business_csv --policy <policy> --source-url <url> --input <original> --output <derivative>` writes a privacy-filtered copy; only that copy goes to S3.
 - Stored versions that turned out to contain personal data were deleted by version ID and recorded as retired; `verify_storage_records` accounts for every retired version.
-- **CMS Hospital All Owners** (44 monthly releases, November 2022 to August 2026) has its own collector, `store_cms_owners`. It downloads each original into `data/historical_acquisition/cms_hospital_owners/private_original/` (owner-only) and stores only organization owner rows, without name, title, street address, city or ZIP columns; company names containing an individual owner's whole name are replaced with `[REDACTED]`. Plan: `config/acquisition/cms_owners_plan.json`; failure modes: `data/acquisition_planning/cms_owners_failure_modes.md`.
+- **CMS Hospital All Owners** (44 monthly releases, November 2022 to August 2026) has its own collector, `store_cms_owners`. It downloads each original into `data/datasets/historical_acquisition/cms_hospital_owners/private_original/` (owner-only) and stores only organization owner rows, without name, title, street address, city or ZIP columns; company names containing an individual owner's whole name are replaced with `[REDACTED]`. Plan: `config/acquisition/cms_owners_plan.json`; failure modes: `data/acquisition_planning/cms_owners_failure_modes.md`.
 
   ```sh
   .venv/bin/python -m scripts.acquisition.store_cms_owners                      # offline recheck of completed releases
@@ -186,8 +187,8 @@ A few sources contain personal names or contact details. The README's [Data sect
   ```
 
   The offline recheck rebuilds each stored CSV from its local original, so it needs the originals until they are deleted at closeout.
-- **HCAI hospital annual utilization 2018–2025** (eight annual workbooks, 2025 preliminary) has its own collector, `store_hcai_util`. It downloads each workbook through the reviewed signed redirect into `data/historical_acquisition/hcai_util_2018_2025/private_original/` (owner-only) and stores one abstracted CSV per sheet: personal columns, individual-owner details, copied names and stray contact details are replaced with `[REDACTED]`. Plan: `config/acquisition/hcai_util_2018_2025_plan.json`; failure modes: `data/acquisition_planning/hcai_util_2018_2025_failure_modes.md`. Same commands as the owners collector, with `store_hcai_util`.
-- **ONC meaningful-use attestations 2011–2017** (`store_onc_mu`) downloads `MU_REPORT.csv` into `data/historical_acquisition/onc_mu_attestation/private_original/` (owner-only) and stores hospital rows only, without the clinician-only `Specialty` column; clinician rows never leave this Mac. Plan: `config/acquisition/onc_mu_hospital_plan.json`.
+- **HCAI hospital annual utilization 2018–2025** (eight annual workbooks, 2025 preliminary) has its own collector, `store_hcai_util`. It downloads each workbook through the reviewed signed redirect into `data/datasets/historical_acquisition/hcai_util_2018_2025/private_original/` (owner-only) and stores one abstracted CSV per sheet: personal columns, individual-owner details, copied names and stray contact details are replaced with `[REDACTED]`. Plan: `config/acquisition/hcai_util_2018_2025_plan.json`; failure modes: `data/acquisition_planning/hcai_util_2018_2025_failure_modes.md`. Same commands as the owners collector, with `store_hcai_util`.
+- **ONC meaningful-use attestations 2011–2017** (`store_onc_mu`) downloads `MU_REPORT.csv` into `data/datasets/historical_acquisition/onc_mu_attestation/private_original/` (owner-only) and stores hospital rows only, without the clinician-only `Specialty` column; clinician rows never leave this Mac. Plan: `config/acquisition/onc_mu_hospital_plan.json`.
 - **ACS derived history** (`collect_census_acs_detailed`) collects B17001 (2010–2016), B16001 and B16004 (2009–2015) through the Census API with the runtime-only key, then derives poverty % for 2010–2011 and the limited-English total for 2009–2015. Derived values are stored only after exact checks: B17001 against the stored S1701 exports (2012–2016) and B16001 against B16004 in the same years. Plan: `config/acquisition/census_acs_detailed_plan.json`; decision record: `data/acquisition_planning/acs_derived_history_plan.md`. Run it like the other collectors (`--fetch`, `--execute` or neither for an offline recheck).
 - **Held sources released by a decision, not by terms.** HCAI is on access hold in the locked registry. Storage accepts it only when the receipt binds, by SHA-256, the dated record `config/acquisition/access_releases_20260929.json`; the terms-acceptance record for HUD and WONDER is unchanged.
 
@@ -196,7 +197,7 @@ A few sources contain personal names or contact details. The README's [Data sect
 - **One collector:** rerun it without `--fetch` or `--execute`; it rechecks every completed capture offline.
 - **Census ACS 2009:** `reconcile_census_acs_api_e2e --output <new_report.json>` rebuilds all five tables and compares them with the stored evidence.
 - **MMD:** `reconcile_mmd_history --measure-id <id> --years <years> --output <new_report.json>`.
-- **The whole bucket:** `verify_storage_records --output <new_folder>` lists every S3 object version and matches it against the local storage records, counting retired versions. It compares sizes, not contents; the per-object content checks happen at upload. Pass every retirement record with `--retirements`, including `data/license_removal/20260928/ahrf_retired_objects.json` for the AHRF versions deleted for license reasons; the default only finds the privacy records. A run after the ACS derived-history storage passed with no failures; the closeout run is described under [Clean-Checkout Recheck](#clean-checkout-recheck). The command also needs `--evidence-root "$PWD/data" --empty-capture-dispositions data/privacy_review/20260927/empty_capture_dispositions.json`.
+- **The whole bucket:** `verify_storage_records --output <new_folder>` lists every S3 object version and matches it against the local storage records, counting retired versions. It compares sizes, not contents; the per-object content checks happen at upload. Pass every retirement record with `--retirements`, including `data/license_removal/20260928/ahrf_retired_objects.json` for the AHRF versions deleted for license reasons and `data/lakehouse_planning/dedup_20261003/retired_objects_duplicates.json` for the duplicates removed on Oct 4 2026; the default finds the privacy and duplicate records but not the AHRF one. Versions under the bucket's top-level `lakehouse/` folder are Iceberg table files, not acquisition objects: the check counts them apart instead of as unrecorded. It still checks any upload record that names such a key. A run after the ACS derived-history storage passed with no failures; the closeout run is described under [Clean-Checkout Recheck](#clean-checkout-recheck). The command also needs `--evidence-root "$PWD/data" --empty-capture-dispositions data/privacy_review/20260927/empty_capture_dispositions.json`.
 
 ## Publisher Data Dictionaries
 
@@ -211,12 +212,12 @@ Data dictionaries, record layouts and codebooks are stored as reference document
 - USDA RUCA and RUCC documentation pages and the CDC PLACES data dictionary.
 - The Medicare inpatient by provider (2017+) and by provider and service dictionaries, found through each release's `resourcesAPI` link in `data.json`. Also the HHS hospital capacity column definitions (`columns.json`).
 
-Candidate lists and saved publisher pages are in `data/historical_acquisition/dictionary_discovery_20261002/`; the run folders are `dictionary_history_20261002/`, `dictionary_history_other_20261002/` and `dictionary_history_group1_20261002/`.
+Candidate lists and saved publisher pages are in `data/datasets/historical_acquisition/dictionary_discovery_20261002/`; the run folders are `dictionary_history_20261002/`, `dictionary_history_other_20261002/` and `dictionary_history_group1_20261002/`.
 
 ```sh
-.venv/bin/python -m scripts.acquisition.history_routes --candidates data/historical_acquisition/dictionary_discovery_20261002/cms_dictionary_candidates.json --state-root data/historical_acquisition/dictionary_history_20261002
-.venv/bin/python -m scripts.acquisition.history_routes --candidates data/historical_acquisition/dictionary_discovery_20261002/other_dictionary_candidates.json --state-root data/historical_acquisition/dictionary_history_other_20261002
-.venv/bin/python -m scripts.acquisition.history_routes --candidates data/historical_acquisition/dictionary_discovery_20261002/group1_dictionary_candidates.json --state-root data/historical_acquisition/dictionary_history_group1_20261002
+.venv/bin/python -m scripts.acquisition.history_routes --candidates data/datasets/historical_acquisition/dictionary_discovery_20261002/cms_dictionary_candidates.json --state-root data/datasets/historical_acquisition/dictionary_history_20261002
+.venv/bin/python -m scripts.acquisition.history_routes --candidates data/datasets/historical_acquisition/dictionary_discovery_20261002/other_dictionary_candidates.json --state-root data/datasets/historical_acquisition/dictionary_history_other_20261002
+.venv/bin/python -m scripts.acquisition.history_routes --candidates data/datasets/historical_acquisition/dictionary_discovery_20261002/group1_dictionary_candidates.json --state-root data/datasets/historical_acquisition/dictionary_history_group1_20261002
 ```
 
 Without `--execute` each command validates its list offline and reports no pending jobs once everything is stored.
@@ -237,7 +238,7 @@ Without `--execute` each command validates its list offline and reports no pendi
 
 **SVI documentation:** the SVI documentation tool serves its PDFs from `https://svi2.cdc.gov/webapi/documents/publication?filename=<name>`, which answers scripted requests. The history route stored the editions for 2000, 2010, 2014, 2016, 2018 and 2020 from there. The 2022 county and tract edition came from its ATSDR address, because the tool offers only the ZCTA edition for 2022. Each of the six tool-served files matched the owner's browser copy byte for byte. Candidates: `svi_dictionary_candidates.json`; run folder: `dictionary_history_svi_20261002/`.
 
-**Stored with the browser route:** BLS `la.txt`, the two CDC WONDER help pages (`ucd.html` and `ucd-expanded.html`) and the HUD crosswalk page with its Cityscape 20(2) article. The HUD files are bound to the HUD terms acceptance. Requests: `config/acquisition/reference_download_requests.json`; plan and lock: `config/acquisition/reference_downloads_plan.json`; state folder: `data/historical_acquisition/reference_downloads/`. Three saved pages were renamed in Downloads before planning, because the plan accepts only names without spaces; the origin and creation time move with the file. The HUD page names one HUD staff contact, as published.
+**Stored with the browser route:** BLS `la.txt`, the two CDC WONDER help pages (`ucd.html` and `ucd-expanded.html`) and the HUD crosswalk page with its Cityscape 20(2) article. The HUD files are bound to the HUD terms acceptance. Requests: `config/acquisition/reference_download_requests.json`; plan and lock: `config/acquisition/reference_downloads_plan.json`; state folder: `data/datasets/historical_acquisition/reference_downloads/`. Three saved pages were renamed in Downloads before planning, because the plan accepts only names without spaces; the origin and creation time move with the file. The HUD page names one HUD staff contact, as published.
 
 **Still missing:**
 
@@ -245,6 +246,16 @@ Without `--execute` each command validates its list offline and reports no pendi
 - **Not published:** no dictionary was found for ONC Promoting Interoperability or the Illinois hospital report card.
 
 The full list is in `data/lakehouse_planning/publisher_dictionaries_20261002/inventory.md`.
+
+## Storage Changes After Collection
+
+These changes on Oct 4 2026 follow owner decisions recorded in the local issue register; each kept every stored original that holds unique bytes.
+
+- **Local folders moved.** The dataset folders `historical_acquisition`, `acquisition_batches`, `acquisition_recoveries` and `snapshots` moved under `data/datasets/` in one rename each, with file counts and bytes compared before and after. Receipts and records keep the paths they were written with. `config/data_paths.json` maps each old folder to its new one. The collectors, checks and redownload read recorded paths through `scripts/acquisition/data_paths.py`.
+- **Duplicate S3 versions removed.** 2,193 versions (3.72 GB) that were byte-identical to a kept copy were deleted under a temporary permission, removed again straight after. Each kept twin was verified live by size and S3 SHA-256 before its duplicate was deleted. Each deletion was read back. The retirement record `data/lakehouse_planning/dedup_20261003/retired_objects_duplicates.json` lets the storage check and bronze account for them.
+- **HRSA manifests corrected.** The HPSA and MUA detail files hold the designations themselves but were stored under the dictionary role. `scripts.acquisition.correct_manifest_roles` wrote a corrected manifest for each, from the committed specification `config/acquisition/manifest_corrections.json`: it changes only those two roles to `data` and names the original manifest it supersedes. The originals and the data files are unchanged. A dry run is the default; `--store` needs the specification's SHA-256. Its record is in `data/datasets/manifest_corrections/`.
+- **One-off tools moved into the repository.** Tools that ran once and lived beside their records under `data/`, such as the queue builders and the privacy and duplicate deletions, are in `scripts/acquisition/one_off/`. `data/acquisition_planning/code_moved_20261004.json` maps each old path to its new one.
+- **Redownload run 3 queue.** By owner decision run 3 runs now instead of at the end of the project. It covers only the files bronze uses plus the dictionaries and reference documents stored on Oct 2 2026. The queue is `data/redownload_checks/20261004/queue.json`, built by `scripts/acquisition/one_off/redownload/build_queue_run3.py`: 2,888 active downloads. Its offline preflight resolves every unit with no requests. The run still needs its frozen controls, an independent review and the owner's approval before any download.
 
 ## What Cannot Be Repeated Exactly
 
@@ -271,7 +282,7 @@ At the end of the collection stage:
 
 ### Clean-Checkout Recheck
 
-Closeout checklist item 2 ran with `data/acquisition_planning/closeout_20261001/clean_checkout_replay.sh`. Evidence is in `data/e2e/closeout_clean_20261001/`.
+Closeout checklist item 2 ran with `data/acquisition_planning/closeout_20261001/clean_checkout_replay.sh`, which moved to `scripts/acquisition/one_off/closeout/` on Oct 4 2026. Evidence is in `data/e2e/closeout_clean_20261001/`.
 
 - **Stage A:** a copy holding only the 219 files Git would commit, with no `data/` folder, passed the acquisition gate: 419 tests and 90.94% coverage.
 - **Stage B:** the same copy, linked to the real `data/` folder, passed every offline recheck: BLS, Census ACS profiles and their reconciliation, ACS derived history (22 snapshots), HUD API, HUD workbooks (44), WONDER (6), CMS owners (44), HCAI utilization (8), ONC meaningful use (70,492 rows) and the data-dependent MMD suite (28 scenarios). The redownload preflight resolved every queued unit offline.
@@ -282,7 +293,7 @@ Closeout checklist item 2 ran with `data/acquisition_planning/closeout_20261001/
 
 ## Closeout Records
 
-The approved sequence is code/privacy cleanup, registry versioning, then coverage records and documentation. The bounded publisher redownload is the final substantive verification; by owner decision its final run (run 3) takes place at the end of the project. Personal originals remain local until that verification passes and the user confirms the exact deletion list. The Git checkpoint had its own approval and is commit `3af1abb`.
+The approved sequence is code/privacy cleanup, registry versioning, then coverage records and documentation. The bounded publisher redownload is the final substantive verification; by owner decision of Oct 1 2026 its final run (run 3) was to take place at the end of the project. On Oct 4 2026 the owner moved run 3 forward (see [Storage Changes After Collection](#storage-changes-after-collection)). Personal originals remain local until that verification passes and the user confirms the exact deletion list. The Git checkpoint had its own approval and is commit `3af1abb`.
 
 The successor registry is revision 2. Existing receipts retain their original registry fingerprints. `registry_versions.json` and its lock bind the exact legacy registry, lock and additions files in a private, Git-ignored archive. A legacy replay needs that archive; a public clean checkout must not contain it. Unknown fingerprints, substituted bytes and missing legacy files fail closed. New plan builders use the sanitized successor. The original source and modeling gates remain uncleared; approved closeout decisions, including the C259 crude-rate definition and source/measure exclusions, are recorded separately from the earlier transport approvals.
 
@@ -340,7 +351,7 @@ This supersedes the failed-gate statements above. By user decision, the coverage
 - **Local caveat:** on this Mac, Python skips `.pth` files that macOS marks hidden and every file in `.venv/lib/python3.12/site-packages` carried the hidden flag. Child-process coverage needs `chflags nohidden .venv/lib/python3.12/site-packages/a1_coverage.pth`. If the flag returns, the child-process lines go unmeasured and the gate fails visibly rather than passing falsely.
 - **Code versions:** all nine collectors (BLS, HUD API, Census ACS, ACS detailed, WONDER, CMS owners, HCAI, ONC, MMD) have a reviewed version for the closeout code; prior versions are kept. The basis is recorded in `data/e2e/closeout_20260929/code_version_review.json`: the hashed production modules match the cleanup review's final file hashes and the gate passed.
 
-Not verified here: live publisher downloads (the final bounded redownload, run at the end of the project) and a fresh S3 readback.
+Not verified here: live publisher downloads (the final bounded redownload, run 3) and a fresh S3 readback.
 
 ### Acquisition Checks in CI
 

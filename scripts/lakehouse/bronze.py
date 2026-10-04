@@ -30,16 +30,19 @@ import os
 import re
 import sys
 import tempfile
+from collections import Counter
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from scripts.lakehouse.file_readers import ReaderError, parse_line
+from scripts.lakehouse.file_readers import UTF16_MARKS, ReaderError, parse_line
 
 TABLE_MAP = Path("config/lakehouse/bronze_tables.json")
 # Objects the privacy deletion removed from S3 that manifests still list: skipped by exact key, version and SHA-256 [146].
 RETIRED = Path("config/lakehouse/retired_objects.json")
+# Tables taken out of the table map, dropped with their dictionaries and side rows [257].
+REMOVED = Path("config/lakehouse/removed_tables.json")
 # A manifest with these fields and no objects list records one document by checksum [153].
 SINGLE_DOCUMENT = frozenset({"role", "sha256", "byte_count", "source_id"})
 DEPLOYMENT = Path("infra/deployment.auto.tfvars.json")
@@ -62,7 +65,17 @@ FORMATS: dict[str, tuple[str, ...]] = {
 }
 # Formats a data table's dictionary may be: their rows hold names and descriptions in cells or attributes [124] [126].
 DICTIONARY_FORMATS = ("pdf_rows", "csv_rows", "sheet_rows", "json_variables")
-CSV_OPTIONS = ("delimiter", "byte_order_mark", "label_row", "preamble", "unnamed_headers", "quoted_fields", "end_of_file_marker", "trailing_blank_lines")
+CSV_OPTIONS = (
+    "delimiter",
+    "byte_order_mark",
+    "label_row",
+    "preamble",
+    "unnamed_headers",
+    "quoted_fields",
+    "end_of_file_marker",
+    "trailing_blank_lines",
+    "header_trailing_delimiter",
+)
 PREAMBLE_LIMIT = 500
 # The DOS end-of-file marker some older exporters append after the final line [145].
 EOF_MARKER = "\x1a"
@@ -97,6 +110,25 @@ ENCODINGS = ("utf-8", "cp1252", "utf-16")
 COLUMN_MAP_SCHEMA = "_object_key STRING, table_name STRING, position INT, original_header STRING, column_name STRING, original_label STRING"
 # Lines before a declared CSV header are kept here with their numbers [117].
 PREAMBLE_SCHEMA = "_object_key STRING, table_name STRING, line_number INT, line_text STRING"
+# Delete the side-table rows named in the prune_keys view, in the current namespace; fixed text, never built from values [222].
+PRUNE_SIDE_ROWS = {
+    "column_map": "DELETE FROM column_map WHERE _object_key IN (SELECT _object_key FROM prune_keys) AND table_name IN (SELECT table_name FROM prune_keys)",
+    "file_preambles": (
+        "DELETE FROM file_preambles WHERE _object_key IN (SELECT _object_key FROM prune_keys) AND table_name IN (SELECT table_name FROM prune_keys)"
+    ),
+}
+# Side rows of removed tables, matched by table name only [260].
+REMOVED_SIDE_ROWS = {
+    "column_map": "DELETE FROM column_map WHERE table_name IN (SELECT table_name FROM removed_names)",
+    "file_preambles": "DELETE FROM file_preambles WHERE table_name IN (SELECT table_name FROM removed_names)",
+    "stored_copies": "DELETE FROM stored_copies WHERE table_name IN (SELECT table_name FROM removed_names)",
+}
+# One row per stored copy of each table's files, loaded or not, with its lineage [206].
+COPIES_SCHEMA = (
+    "table_name STRING, _object_key STRING, sha256 STRING, s3_key STRING, s3_version_id STRING, source_id STRING, snapshot_id STRING, "
+    "dataset_id STRING, release_id STRING, release_partition STRING, manifest_key STRING, manifest_version_id STRING, member_path STRING, "
+    "file_name STRING, byte_count BIGINT, loaded BOOLEAN, retired BOOLEAN"
+)
 LINEAGE = (
     "_object_key",
     "_source_id",
@@ -155,7 +187,8 @@ def load_table_map(path: Path = TABLE_MAP) -> dict[str, Any]:
         roles = table.setdefault("roles", ["data"])
         if not roles or any(role not in ROLES for role in roles) or ("data" in roles) != (roles == ["data"]):
             raise BronzeError(f"{table['table']}: roles are either data alone or any of {', '.join(ROLES[1:])}")
-        table.setdefault("distinct_files", False)
+        if "distinct_files" in table:
+            raise BronzeError(f"{table['table']}: distinct_files is gone; every table loads one copy of each file [204]")
         check_csv_options(table)
     by_name = {table["table"]: table for table in config["tables"]}
     for table in config["tables"]:
@@ -178,9 +211,10 @@ def check_csv_options(table: dict[str, Any]) -> None:
     for key in ("byte_order_mark", "quoted_fields"):
         if key in table and (file_format not in {"csv", "csv_rows"} or not isinstance(table[key], bool)):
             raise BronzeError(f"{name}: {key} is true or false, for csv or csv_rows tables")
-    if any(key in table for key in ("label_row", "preamble", "unnamed_headers", "end_of_file_marker", "trailing_blank_lines")) and file_format != "csv":
-        raise BronzeError(f"{name}: label_row, preamble, unnamed_headers, end_of_file_marker and trailing_blank_lines apply to csv tables only")
-    for key in ("end_of_file_marker", "trailing_blank_lines"):
+    csv_only = ("label_row", "preamble", "unnamed_headers", "end_of_file_marker", "trailing_blank_lines", "header_trailing_delimiter")
+    if any(key in table for key in csv_only) and file_format != "csv":
+        raise BronzeError(f"{name}: {', '.join(csv_only)} apply to csv tables only")
+    for key in ("end_of_file_marker", "trailing_blank_lines", "header_trailing_delimiter"):
         if key in table and not isinstance(table[key], bool):
             raise BronzeError(f"{name}: {key} is true or false")
     if "label_row" in table and not (isinstance(table["label_row"], dict) and isinstance(table["label_row"].get("first_label"), str)):
@@ -249,6 +283,76 @@ def load_retired(path: Path = RETIRED) -> dict[tuple[str, str], str]:
     return retired
 
 
+def input_item(
+    table: dict[str, Any],
+    manifest: dict[str, Any],
+    manifest_key: str,
+    manifest_version: str,
+    raw: bytes,
+    target: dict[str, Any],
+    stored: dict[str, Any],
+    chain: list[str],
+) -> dict[str, Any]:
+    """Return one stored object's load input: its table, lineage and the table's read options."""
+    partition = next((part for part in target["key"].split("/") if part.startswith(("release_date=", "capture_id="))), "")
+    return {
+        "table": table["table"],
+        "object_key": hashlib.sha256(f"{manifest['snapshot_id']}\x00{json.dumps(chain)}".encode()).hexdigest()[:32],
+        "source_id": manifest["source_id"],
+        "snapshot_id": manifest["snapshot_id"],
+        "dataset_id": stored.get("dataset_id", ""),
+        "release_id": str(manifest.get("release_id") or ""),
+        "manifest_key": manifest_key,
+        "manifest_version_id": manifest_version,
+        "manifest_sha256": hashlib.sha256(raw).hexdigest(),
+        "bucket": target["bucket"],
+        "key": target["key"],
+        "version_id": target.get("version_id", ""),
+        "sha256": target["sha256"],
+        "byte_count": target["byte_count"],
+        "member_chain": chain,
+        "release_partition": partition,
+        "file_name": chain[-1].rsplit("/", 1)[-1],
+        "encodings": list(table["encodings"]),
+        "format": table["format"],
+        **{key: table[key] for key in CSV_OPTIONS if key in table},
+    }
+
+
+def superseded(manifests: dict[tuple[str, str], bytes]) -> set[tuple[str, str]]:
+    """Return the manifests that a corrected manifest in the same collection replaces [249] to [251].
+
+    A corrected manifest names the one it replaces by key, version and SHA-256 and may change only the roles its
+    correction names. A wrong or ambiguous supersession stops discovery.
+    """
+    replaced: dict[tuple[str, str], str] = {}
+    for (key, _version), raw in manifests.items():
+        manifest = json.loads(raw)
+        named = manifest.get("supersedes")
+        if named is None:
+            continue
+        target = (named.get("key", ""), named.get("version_id", ""))
+        if target not in manifests or hashlib.sha256(manifests[target]).hexdigest() != named.get("sha256"):
+            raise BronzeError(f"{key}: supersedes no stored manifest with that key, version and SHA-256")
+        if target in replaced:
+            raise BronzeError(f"{target[0]}: two manifests supersede it ({replaced[target]}, {key})")
+        replaced[target] = key
+        original = json.loads(manifests[target])
+        changes = {(change["key"], change["version_id"]): change for change in manifest.get("correction", {}).get("changes", [])}
+        rest = {name: value for name, value in manifest.items() if name not in {"objects", "supersedes", "correction"}}
+        same = rest == {name: value for name, value in original.items() if name != "objects"} and len(manifest["objects"]) == len(original["objects"])
+        for new, old in zip(manifest["objects"], original["objects"], strict=False):
+            change = changes.get((old["object"].get("key", ""), old["object"].get("version_id", "")))
+            expected = {**old, "role": change["to_role"]} if change and old.get("role") == change["from_role"] else old
+            same = same and new == expected
+        if not same:
+            raise BronzeError(f"{key}: the corrected manifest changes more than the roles its correction names (beyond the named roles)")
+    chained = sorted(key for key in replaced.values() if any(target[0] == key for target in replaced))
+    if chained:
+        raise BronzeError(f"{chained[0]}: a superseding manifest is itself superseded")
+    return set(replaced)
+
+
 def discover(
     storage: Storage, bucket: str, config: dict[str, Any], names: Iterable[str], retired: dict[tuple[str, str], str] | None = None
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -268,10 +372,15 @@ def discover(
     for collection, group in sorted(by_collection.items()):
         listed = {identity: digest for identity, digest in retired.items() if identity[0].startswith(f"{collection}/")}
         matched: set[tuple[str, str]] = set()
-        for manifest_key, manifest_version in storage.list_keys(bucket, f"{collection}/manifests/"):
-            if not manifest_key.endswith("/manifest.json"):
+        stored_manifests = {
+            (manifest_key, manifest_version): storage.get(bucket, manifest_key, manifest_version)
+            for manifest_key, manifest_version in storage.list_keys(bucket, f"{collection}/manifests/")
+            if manifest_key.endswith("/manifest.json")
+        }
+        skipped = superseded(stored_manifests)
+        for (manifest_key, manifest_version), raw in stored_manifests.items():
+            if (manifest_key, manifest_version) in skipped:
                 continue
-            raw = storage.get(bucket, manifest_key, manifest_version)
             manifest = json.loads(raw)
             if "objects" not in manifest and set(manifest) >= SINGLE_DOCUMENT:
                 manifest = single_document(storage, bucket, collection, manifest_key, manifest)
@@ -280,23 +389,13 @@ def discover(
             for stored in manifest["objects"]:
                 role = stored.get("role")
                 identity = (stored["object"].get("key", ""), stored["object"].get("version_id", ""))
-                if identity in listed:
+                is_retired = identity in listed
+                if is_retired:
                     if listed[identity] != stored["object"].get("sha256"):
                         raise BronzeError(f"{identity[0]}: the retired list's SHA-256 differs from the manifest's")
                     matched.add(identity)
-                    retired_chain = stored.get("member_chain") or [identity[0].rsplit("/", 1)[-1]]
-                    unselected.append(
-                        {
-                            "collection": collection,
-                            "dataset_id": stored.get("dataset_id", ""),
-                            "file_name": retired_chain[-1].rsplit("/", 1)[-1],
-                            "role": role,
-                            "retired": True,
-                        }
-                    )
-                    continue
                 candidates = [table for table in group if role in table["roles"]]
-                if not candidates:
+                if not candidates and not is_retired:
                     continue
                 target = stored["object"]
                 chain = stored.get("member_chain") or [target["key"].rsplit("/", 1)[-1]]
@@ -304,6 +403,13 @@ def discover(
                 matches = [table for table in candidates if select(table, stored.get("dataset_id", ""), chain[-1], manifest["snapshot_id"])]
                 if len(matches) > 1:
                     raise BronzeError(f"{target['key']}: selected by two tables ({', '.join(table['table'] for table in matches)})")
+                if is_retired:
+                    entry = {"collection": collection, "dataset_id": stored.get("dataset_id", ""), "file_name": file_name, "role": role, "retired": True}
+                    # A retired copy of a table's file is still listed with its lineage, never loaded [206].
+                    if matches:
+                        entry["copy"] = {**input_item(matches[0], manifest, manifest_key, manifest_version, raw, target, stored, chain), "retired": True}
+                    unselected.append(entry)
+                    continue
                 if not matches:
                     if role == "data":
                         unselected.append({"collection": collection, "dataset_id": stored.get("dataset_id", ""), "file_name": file_name})
@@ -313,31 +419,7 @@ def discover(
                     raise BronzeError(f"{table['table']}: {file_name!r} does not have the declared {table['format']} format")
                 if not target.get("version_id") or target.get("sha256") != stored.get("member_sha256", target.get("sha256")):
                     raise BronzeError(f"{target['key']}: the manifest gives no S3 version or inconsistent checksums")
-                partition = next((part for part in target["key"].split("/") if part.startswith(("release_date=", "capture_id="))), "")
-                inputs.append(
-                    {
-                        "table": table["table"],
-                        "object_key": hashlib.sha256(f"{manifest['snapshot_id']}\x00{json.dumps(chain)}".encode()).hexdigest()[:32],
-                        "source_id": manifest["source_id"],
-                        "snapshot_id": manifest["snapshot_id"],
-                        "dataset_id": stored.get("dataset_id", ""),
-                        "release_id": str(manifest.get("release_id") or ""),
-                        "manifest_key": manifest_key,
-                        "manifest_version_id": manifest_version,
-                        "manifest_sha256": hashlib.sha256(raw).hexdigest(),
-                        "bucket": target["bucket"],
-                        "key": target["key"],
-                        "version_id": target["version_id"],
-                        "sha256": target["sha256"],
-                        "byte_count": target["byte_count"],
-                        "member_chain": chain,
-                        "release_partition": partition,
-                        "file_name": file_name,
-                        "encodings": list(table["encodings"]),
-                        "format": table["format"],
-                        **{key: table[key] for key in CSV_OPTIONS if key in table},
-                    }
-                )
+                inputs.append(input_item(table, manifest, manifest_key, manifest_version, raw, target, stored, chain))
         stale = sorted(identity[0] for identity in set(listed) - matched)
         if stale:
             raise BronzeError(f"{stale[0]}: the retired list entry matches no manifest object ({len(stale)} such entries)")
@@ -349,24 +431,22 @@ def discover(
         if first is not item and first["sha256"] != item["sha256"]:
             raise BronzeError("two stored objects share one snapshot and member chain")
     inputs = list(unique.values())
-    # Tables that ask for it load one copy of each distinct file; the others are reported as identical copies [100].
-    distinct = {table["table"] for table in chosen if table["distinct_files"]}
-    seen: set[tuple[str, str]] = set()
-    kept = []
-    for item in inputs:
-        if item["table"] in distinct and (item["table"], item["sha256"]) in seen:
+    # Each table loads one copy of each distinct file, the one with the smallest object key; the others are listed as
+    # identical copies with their lineage [204] [205].
+    kept: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in sorted(inputs, key=lambda item: item["object_key"]):
+        first = kept.setdefault((item["table"], item["sha256"]), item)
+        if first is not item:
             unselected.append(
                 {
-                    "collection": item["key"].split("/", 2)[0] + "/" + item["key"].split("/", 2)[1],
+                    "collection": "/".join(item["key"].split("/", 2)[:2]),
                     "dataset_id": item["dataset_id"],
                     "file_name": item["file_name"],
                     "identical_copy": True,
+                    "copy": item,
                 }
             )
-            continue
-        seen.add((item["table"], item["sha256"]))
-        kept.append(item)
-    inputs = kept
+    inputs = [item for item in inputs if kept[(item["table"], item["sha256"])] is item]
     unselected.sort(key=lambda entry: (entry["collection"], entry["dataset_id"], entry["file_name"]))
     return inputs, unselected
 
@@ -384,11 +464,15 @@ def read_csv(path: Path, jsonl: Path | None, encodings: Iterable[str], options: 
     bytes that no allowed encoding defines, malformed quoting and rows that differ from the header width. Python's
     ``csv`` module is the exact reader: Spark's own CSV reader turns empty fields into nulls and quoted CRLF into LF.
     A declared mark is removed and the rest read as UTF-8 [113]; a declared label row, preamble and delimiter follow
-    the table map [114] to [117]. A declared end-of-file marker (0x1A) is accepted only as the last line [145], and
-    declared blank lines only after the last row [161].
+    the table map [114] to [117], and a declared extra header delimiter is dropped [256]. A declared end-of-file
+    marker (0x1A) is accepted only as the last line [145], and declared blank lines only after the last row [161].
     """
     with path.open("rb") as raw:
-        marked = raw.read(3) == b"\xef\xbb\xbf"
+        head = raw.read(3)
+    marked = head == b"\xef\xbb\xbf"
+    # Windows-1252 decodes UTF-16 without error: an undeclared UTF-16 mark is refused [194] [195].
+    if head.startswith(UTF16_MARKS) and list(encodings) != ["utf-16"]:
+        raise BronzeError("the file starts with a UTF-16 byte-order mark; declare the table's encodings as utf-16 alone")
     if marked and not options.get("byte_order_mark"):
         raise BronzeError("the file starts with a UTF-8 byte-order mark")
     failures = []
@@ -427,6 +511,11 @@ def _stream_rows(path: Path, jsonl: Path | None, encoding: str, options: dict[st
             headers = next(reader, None)
             if not headers:
                 raise BronzeError("the file has no header row")
+            # A declared extra delimiter ends the header line only; its empty last field is dropped [256].
+            if options.get("header_trailing_delimiter"):
+                if len(headers) < 2 or headers[-1] != "":
+                    raise BronzeError("the header's last field is not empty, so it has no trailing delimiter to drop")
+                headers = headers[:-1]
             labels: list[str | None] = [None] * len(headers)
             if "label_row" in options:
                 first = options["label_row"]["first_label"]
@@ -680,6 +769,44 @@ def write_preamble(spark: Any, namespace: str, item: dict[str, Any], lines: list
     spark.createDataFrame(rows, PREAMBLE_SCHEMA).writeTo(f"{namespace}.file_preambles").overwrite(col("_object_key") == lit(item["object_key"]))
 
 
+def write_copies(spark: Any, namespace: str, names: Iterable[str], inputs: list[dict[str, Any]], unselected: list[dict[str, Any]]) -> int:
+    """Replace the named tables' rows in the copies table: every loaded input and every listed copy [206]."""
+    from pyspark.sql.functions import col
+
+    chosen = sorted(set(names))
+    copies = [(item, True) for item in inputs] + [(entry["copy"], False) for entry in unselected if "copy" in entry]
+    rows = [
+        (
+            item["table"],
+            item["object_key"],
+            item["sha256"],
+            item["key"],
+            item["version_id"],
+            item["source_id"],
+            item["snapshot_id"],
+            item["dataset_id"],
+            item["release_id"],
+            item["release_partition"],
+            item["manifest_key"],
+            item["manifest_version_id"],
+            "!".join(item["member_chain"]),
+            item["file_name"],
+            int(item["byte_count"]),
+            loaded,
+            bool(item.get("retired")),
+        )
+        for item, loaded in copies
+        if item["table"] in chosen
+    ]
+    spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {namespace}")
+    spark.sql(
+        f"CREATE TABLE IF NOT EXISTS {namespace}.stored_copies ({COPIES_SCHEMA}) USING iceberg PARTITIONED BY (table_name) TBLPROPERTIES ('format-version'='2')"
+    )
+    # Replace exactly the named tables' rows in one commit, also when a table now has none.
+    spark.createDataFrame(rows, COPIES_SCHEMA).writeTo(f"{namespace}.stored_copies").overwrite(col("table_name").isin(chosen))
+    return len(rows)
+
+
 def load_objects(spark: Any, inputs: list[dict[str, Any]], storage: Storage, namespace: str, scratch: Path = SCRATCH) -> dict[str, dict[str, int]]:
     """Load every input object in order and return per-table object and row counts."""
     summary: dict[str, dict[str, int]] = {}
@@ -713,6 +840,15 @@ def verify(spark: Any, config: dict[str, Any], inputs: list[dict[str, Any]], nam
             "distinct_rows": int(distinct.agg(functions.sum("rows")).collect()[0][0] or 0),
         }
         expectations = [check["objects_match_inputs"]]
+        # [207] The copies table agrees with the loaded rows: one loaded copy per file, and exactly the loaded objects.
+        if spark.catalog.tableExists(f"{namespace}.stored_copies"):
+            copies = spark.table(f"{namespace}.stored_copies").where(functions.col("table_name") == table["table"]).collect()
+            live = {row["sha256"] for row in copies if not row["retired"]}
+            per_file = Counter(row["sha256"] for row in copies if row["loaded"])
+            check["copies"] = len(copies)
+            check["one_loaded_copy_per_file"] = set(per_file) == live and all(count == 1 for count in per_file.values())
+            check["loaded_copies_match_rows"] = {row["_object_key"] for row in copies if row["loaded"]} == loaded
+            expectations += [check["one_loaded_copy_per_file"], check["loaded_copies_match_rows"]]
         for field in ("distinct_files", "distinct_rows"):
             if f"expected_{field}" in table:
                 check[f"{field}_match_expected"] = check[field] == table[f"expected_{field}"]
@@ -725,30 +861,92 @@ def verify(spark: Any, config: dict[str, Any], inputs: list[dict[str, Any]], nam
 def prune(spark: Any, config: dict[str, Any], names: Iterable[str], inputs: list[dict[str, Any]], namespace: str) -> dict[str, int]:
     """Drop each run table's partitions that its inputs no longer select, with their column-map and preamble rows [150].
 
-    Only the named tables are touched; a table with no inputs in this run is left as it is and counts 0.
+    Only the named tables are touched; a table with no inputs in this run is left as it is and counts 0. Side-table rows
+    are matched against the inputs directly, so rows left by a run that stopped partway are removed too [223].
     """
+    from pyspark.sql.functions import col
+
     pruned: dict[str, int] = {}
     tables = {table["table"] for table in config["tables"]}
+    keep: dict[str, set[str]] = {}
     for name in names:
         keys = {item["object_key"] for item in inputs if item["table"] == name}
         pruned[name] = 0
-        if not keys or name not in tables or not spark.catalog.tableExists(f"{namespace}.{name}"):
+        if not keys or name not in tables:
+            continue
+        keep[name] = keys
+        if not spark.catalog.tableExists(f"{namespace}.{name}"):
             continue
         loaded = {row["_object_key"] for row in spark.table(f"{namespace}.{name}").select("_object_key").distinct().collect()}
         stale = sorted(loaded - keys)
-        if not stale:
-            continue
-        # An empty overwrite with a filter deletes the matching rows in one commit, with no SQL text built from values.
-        from pyspark.sql.functions import col
-
-        target = spark.table(f"{namespace}.{name}")
-        target.limit(0).writeTo(f"{namespace}.{name}").overwrite(col("_object_key").isin(stale))
-        for side in ("column_map", "file_preambles"):
-            if spark.catalog.tableExists(f"{namespace}.{side}"):
-                rows = spark.table(f"{namespace}.{side}")
-                rows.limit(0).writeTo(f"{namespace}.{side}").overwrite((col("table_name") == name) & col("_object_key").isin(stale))
-        pruned[name] = len(stale)
+        if stale:
+            # An empty overwrite with a filter deletes the matching rows in one commit, with no SQL text built from values.
+            spark.table(f"{namespace}.{name}").limit(0).writeTo(f"{namespace}.{name}").overwrite(col("_object_key").isin(stale))
+            pruned[name] = len(stale)
+    # One row-level delete per side table for the whole run: a side-table file can hold rows of several objects, so a
+    # whole-file overwrite may be refused [222], and one rewrite per table took hours [223]. Keys come from a view.
+    previous = spark.catalog.currentDatabase()
+    spark.catalog.setCurrentDatabase(namespace)
+    try:
+        for side, statement in PRUNE_SIDE_ROWS.items():
+            if not keep or not spark.catalog.tableExists(f"{namespace}.{side}"):
+                continue
+            present = spark.table(f"{namespace}.{side}").where(col("table_name").isin(sorted(keep))).select("table_name", "_object_key").distinct()
+            stale_rows = [(row["table_name"], row["_object_key"]) for row in present.collect() if row["_object_key"] not in keep[row["table_name"]]]
+            if stale_rows:
+                spark.createDataFrame(stale_rows, "table_name STRING, _object_key STRING").createOrReplaceTempView("prune_keys")
+                spark.sql(statement)
+    finally:
+        # The catalog's default namespace can be empty, which cannot be set back; qualified names never depend on it.
+        if previous:
+            spark.catalog.setCurrentDatabase(previous)
     return pruned
+
+
+def load_removed(path: Path, config: dict[str, Any]) -> list[str]:
+    """Read the removed-tables list; refuse a bad name, a repeat or a table still in the map [258]."""
+    if not path.exists():
+        return []
+    mapped = {table["table"] for table in config["tables"]}
+    names: list[str] = []
+    for entry in json.loads(path.read_text())["tables"]:
+        name = entry.get("table")
+        if not (isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,99}", name)):
+            raise BronzeError("a removed table needs a plain lower-case identifier")
+        if not (isinstance(entry.get("reason"), str) and entry["reason"] and isinstance(entry.get("decision"), str) and entry["decision"]):
+            raise BronzeError(f"{name}: a removed table needs a reason and a decision")
+        if name in names:
+            raise BronzeError(f"{name}: the removed list names it twice")
+        if name in mapped:
+            raise BronzeError(f"{name}: still in the table map, so it cannot be removed")
+        names.append(name)
+    return names
+
+
+def drop_removed(spark: Any, names: list[str], namespace: str) -> dict[str, str]:
+    """Drop each removed table with its files, its dictionary and its side rows; report dropped or absent [257] [259]."""
+    from scripts.lakehouse import dictionary
+
+    outcome: dict[str, str] = {}
+    for name in names:
+        found = spark.catalog.tableExists(f"{namespace}.{name}") or spark.catalog.tableExists(f"{dictionary.NAMESPACE}.{name}")
+        outcome[name] = "dropped" if found else "absent"
+    if not names:
+        return outcome
+    spark.createDataFrame([(name,) for name in names], "table_name STRING").createOrReplaceTempView("removed_names")
+    previous = spark.catalog.currentDatabase()
+    spark.catalog.setCurrentDatabase(namespace)
+    try:
+        for side, statement in REMOVED_SIDE_ROWS.items():
+            if spark.catalog.tableExists(f"{namespace}.{side}"):
+                spark.sql(statement)
+    finally:
+        if previous:
+            spark.catalog.setCurrentDatabase(previous)
+    for name in names:
+        spark.sql(f"DROP TABLE IF EXISTS {namespace}.{name} PURGE")
+        spark.sql(f"DROP TABLE IF EXISTS {dictionary.NAMESPACE}.{name} PURGE")
+    return outcome
 
 
 class S3Storage:
@@ -782,6 +980,28 @@ class S3Storage:
         self.client.download_file(bucket, key, str(path), ExtraArgs={"VersionId": version_id})
 
 
+def drop_removed_job(config: dict[str, Any]) -> int:
+    """Drop the listed removed tables and write a counts-only report."""
+    from scripts.lakehouse.session import JOB_MEMORY, spark_session
+
+    try:
+        names = load_removed(REMOVED, config)
+    except BronzeError as error:
+        sys.stderr.write(f"bronze: {error}\n")
+        return 1
+    spark = spark_session("bronze", memory=JOB_MEMORY)
+    try:
+        outcome = drop_removed(spark, names, config["namespace"])
+    finally:
+        spark.stop()
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    report = {"run_at_utc": stamp, "mode": "drop_removed", "removed": outcome, "passed": True}
+    REPORT_ROOT.mkdir(parents=True, exist_ok=True)
+    (REPORT_ROOT / f"report_{stamp}.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    sys.stdout.write(json.dumps(report, sort_keys=True) + "\n")
+    return 0
+
+
 def main() -> int:
     """Load the chosen group or tables into the Polaris catalog and write a counts-only report."""
     from scripts.lakehouse.session import JOB_MEMORY, spark_session
@@ -790,8 +1010,14 @@ def main() -> int:
     choice = parser.add_mutually_exclusive_group(required=True)
     choice.add_argument("--group")
     choice.add_argument("--tables", help="comma-separated table names")
+    choice.add_argument("--drop-removed", action="store_true", help="drop the tables in config/lakehouse/removed_tables.json")
+    # Moving to one copy per file: tables whose kept copy is already loaded only need their copies listed and the other
+    # copies pruned; verification still compares every table with its inputs, so a missing copy fails the run [211].
+    parser.add_argument("--copies-only", action="store_true", help="list copies, prune and verify without loading objects")
     args = parser.parse_args()
     config = load_table_map()
+    if args.drop_removed:
+        return drop_removed_job(config)
     names = [table["table"] for table in config["tables"] if table.get("group") == args.group] if args.group else args.tables.split(",")
     if not names or any(name not in {table["table"] for table in config["tables"]} for name in names):
         sys.stderr.write("bronze: unknown group or table\n")
@@ -808,9 +1034,11 @@ def main() -> int:
     spark = spark_session("bronze", memory=JOB_MEMORY)
     dictionaries: dict[str, int] = {}
     pruned: dict[str, int] = {}
+    copies = 0
     try:
-        summary = load_objects(spark, inputs, storage, config["namespace"])
+        summary = {} if args.copies_only else load_objects(spark, inputs, storage, config["namespace"])
         pruned = prune(spark, config, names, inputs, config["namespace"])
+        copies = write_copies(spark, config["namespace"], names, inputs, unselected)
         checks = verify(spark, config, inputs, config["namespace"])
         # Dictionaries follow every passing load, so they never describe an older bronze table [91].
         if all(check["passed"] for check in checks.values()):
@@ -829,11 +1057,13 @@ def main() -> int:
     passed = all(check["passed"] for check in checks.values())
     report = {
         "run_at_utc": stamp,
+        "mode": "copies_only" if args.copies_only else "load",
         "tables": names,
         "inputs": len(inputs),
         "loaded": summary,
         "checks": checks,
         "pruned": {name: count for name, count in pruned.items() if count},
+        "stored_copies": copies,
         "dictionaries": dictionaries,
         "unselected": unloaded,
         "passed": passed,

@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition.capture import base_receipt, receipt_validator, validate_receipt
 from scripts.acquisition.cli_tools import executable, run_argv
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.mmd_api_contract import (
     FIELDS,
     PLAN_PATH,
@@ -34,7 +35,7 @@ from scripts.infrastructure.render_project_config import REPO_ROOT, load_configu
 
 LOGGER = logging.getLogger(__name__)
 ROOT = PLAN_PATH.parent
-TEMPLATE = Path("data/historical_acquisition/mmd_browser_history/6c65677929ca2363c5b0736eb0b9ebf9a45d2f00648225dc5ad60fc2859ba94e/plan.json")
+TEMPLATE = Path("data/datasets/historical_acquisition/mmd_browser_history/6c65677929ca2363c5b0736eb0b9ebf9a45d2f00648225dc5ad60fc2859ba94e/plan.json")
 
 
 def fetch(root: Path, name: str, url: str, allow_network: bool) -> tuple[bytes, dict]:
@@ -141,7 +142,8 @@ def capture(measure_id: str, year: int, allow_network: bool, root: Path | None =
     raw_path, csv_path = snapshot / "raw" / (file_stem + ".json"), snapshot / "derived" / (file_stem + ".csv")
     proof_path, reference_path = snapshot / "evidence" / "export_evidence.json", snapshot / "references" / "cms_reference_bundle.json"
     bundle = {
-        name: {"url": ref["url"], "sha256": ref["sha256"], "body_hex": Path(ref["path"]).read_bytes().hex()} for name, ref in config["references"].items()
+        name: {"url": ref["url"], "sha256": ref["sha256"], "body_hex": Path(current(ref["path"])).read_bytes().hex()}
+        for name, ref in config["references"].items()
     }
     for path, content in ((raw_path, raw), (csv_path, derived), (proof_path, encoded_json(evidence)), (reference_path, encoded_json(bundle))):
         write_once(path, content)

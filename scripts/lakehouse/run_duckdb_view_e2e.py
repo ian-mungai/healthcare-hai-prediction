@@ -31,7 +31,7 @@ REPORTS = (
     REPO_ROOT / "data/e2e/bronze_load/report_20261002T161250Z.json",
 )
 OUTPUT = REPO_ROOT / "data/e2e/duckdb_view"
-IMAGE = "hai-analytics:duckdb1.5.6"
+IMAGE = "hai-analytics:duckdb1.5.6-dbt1.11.15"
 TIMEOUT = 3600
 # The same row checksum as checksums.checksum, for the table named in the checked_table variable.
 CHECKSUM_SQL = (

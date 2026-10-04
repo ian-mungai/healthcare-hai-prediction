@@ -1,0 +1,143 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: Bronze Iceberg tables, every stored file as published, attached read-only as `lakehouse`.
+    database: lakehouse
+    schema: bronze
+    tables:
+      - name: stored_copies
+        description: Every stored copy of each bronze table's files, loaded or not, with its lineage (failure mode 206).
+        columns:
+          - name: table_name
+            description: The bronze table the copy belongs to.
+            data_tests: [not_null]
+          - name: _object_key
+            description: Hash of the snapshot and member chain; the loaded copy's `_object_key` in its table.
+            data_tests: [not_null]
+          - name: sha256
+            description: SHA-256 of the file.
+            data_tests: [not_null]
+          - name: loaded
+            description: True for the one copy of each file bronze loads.
+            data_tests: [not_null]
+      - name: cms_hai_hospital
+        description: HAI hospital tables, every stored copy of each release.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: cms_hai_state
+        description: HAI state tables, every stored copy of each release.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: cms_hai_national
+        description: HAI national tables, every stored copy of each release.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: cms_hospital_cost_reports
+        description: HCRIS hospital cost-report CSVs, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: cms_ipps_text_lines
+        description: IPPS and CMI text files, one row per line.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: cms_ipps_sheet_rows
+        description: IPPS and CMI workbooks, one row per sheet row.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: cms_ipps_sas
+        description: The IPPS SAS file, one row per record.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: cms_occupational_mix_text_lines
+        description: Occupational-mix text files, one row per line.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: cms_occupational_mix_text_lines_utf16
+        description: The seven UTF-16 FY 2017 final-rule occupational-mix text files, one row per line (BRZ-017).
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: cms_occupational_mix_sheet_rows
+        description: Occupational-mix workbooks, one row per sheet row.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]

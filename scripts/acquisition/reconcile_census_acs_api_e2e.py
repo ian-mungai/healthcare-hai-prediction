@@ -17,7 +17,7 @@ def reconcile() -> dict:
     """Validate captures, transport caches, all storage records and unchanged local files."""
     plans = contract.load_plans()
     plan = plans[0]
-    root = REPO_ROOT / "data/historical_acquisition/census_acs_api_history" / plan["vintage"]
+    root = REPO_ROOT / "data/datasets/historical_acquisition/census_acs_api_history" / plan["vintage"]
     before, tables, objects = inventory(root), [], set()
     for plan_item, batch in [(p, b) for p in plans for b in p["batches"]]:
         branch = root / "batches" / batch["id"]

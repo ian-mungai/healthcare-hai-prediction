@@ -1,0 +1,39 @@
+{
+  "corrections": [
+    {
+      "changes": [
+        {
+          "from_role": "dictionary",
+          "key": "hrsa/shortage_areas/references/capture_id=HPSA__20260924T060817Z__5ef0b8d517d54c64a51ce185cf65e63e/5060978625754f0eafd622e423e24fbe7e532234c7b1902944be2095f3cfcdf5/BCD_HPSA_FCT_DET_PC.csv",
+          "to_role": "data",
+          "version_id": "63DoefJrH.wpkYY0FVJazd5peNNQGOLl"
+        }
+      ],
+      "manifest": {
+        "key": "hrsa/shortage_areas/manifests/capture_id=HPSA__20260924T060817Z__5ef0b8d517d54c64a51ce185cf65e63e/HPSA__20260924T060817Z__5ef0b8d517d54c64a51ce185cf65e63e/4214820de31b3934c2eeba66d67091c6b96e47ab365027dafa618d5c65906b81/manifest.json",
+        "sha256": "4214820de31b3934c2eeba66d67091c6b96e47ab365027dafa618d5c65906b81",
+        "version_id": "_0l1nP0vfjqHgglyuysLD0ctoA50r28V"
+      },
+      "reason": "BCD_HPSA_FCT_DET_PC.csv holds the HPSA designation records themselves, not a description of them; the publisher's data workbooks carry the data role."
+    },
+    {
+      "changes": [
+        {
+          "from_role": "dictionary",
+          "key": "hrsa/shortage_areas/references/capture_id=MUA__20260924T060855Z__417f08630c344de0b8d88b50c4f5d1b2/6617012e7e5f3edcf09bf7f2230bf89acc65786660580050523aab4a5adf9ca4/MUA_DET.csv",
+          "to_role": "data",
+          "version_id": "DNN8IwMpwBjZDyB3UDCTJMlVoTgu57Cp"
+        }
+      ],
+      "manifest": {
+        "key": "hrsa/shortage_areas/manifests/capture_id=MUA__20260924T060855Z__417f08630c344de0b8d88b50c4f5d1b2/MUA__20260924T060855Z__417f08630c344de0b8d88b50c4f5d1b2/571f4533b84738adcfdb29b4daf2e9ff906d88f52317d243dc6f93323de51ba6/manifest.json",
+        "sha256": "571f4533b84738adcfdb29b4daf2e9ff906d88f52317d243dc6f93323de51ba6",
+        "version_id": "vjyAYpviVwKPIatSnkavb.wgEN2NFJZj"
+      },
+      "reason": "MUA_DET.csv holds the MUA designation records themselves, not a description of them; the publisher's data workbooks carry the data role."
+    }
+  ],
+  "decision": "Owner decision, Oct 4 2026: write corrected versions to S3, load them into bronze, then prepare redownload run 3.",
+  "issue": "BRZ-011",
+  "kind": "storage_manifest_corrections"
+}

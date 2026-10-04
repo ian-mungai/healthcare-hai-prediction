@@ -9,13 +9,14 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.discover_history import candidate
 from scripts.acquisition.discover_history import index as publisher_index
 from scripts.acquisition.s3_store import encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json
 from scripts.acquisition.transport import Limits, download
 
-ROOT = Path("data/historical_acquisition/acs_sequence_discovery")
+ROOT = Path("data/datasets/historical_acquisition/acs_sequence_discovery")
 
 
 def index(url: str, root: Path) -> tuple:
@@ -58,7 +59,7 @@ def discover_year(year: int) -> dict:
     receipt_path = root / "lookup_receipt.json"
     if receipt_path.exists():
         record = read_json(receipt_path)
-        path = Path(record["path"])
+        path = Path(current(record["path"]))
         if record["url"] != item["url"] or fingerprint(path)[0] != record["sha256"]:
             raise ValueError("Cached lookup URL or SHA-256 differs from recorded evidence.")
     else:

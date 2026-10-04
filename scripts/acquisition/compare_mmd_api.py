@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import read_json, require
 
@@ -208,7 +209,7 @@ def reconstruct(
 def compare_year(root: Path, manifest: dict, item: dict, fetch: bool, names: dict[int, str], urban: dict[int, str]) -> dict:
     """Check capture integrity, all cells and the complete reconstructed bytes."""
     year = item["year"]
-    receipt_path = Path(item["receipt_path"])
+    receipt_path = Path(current(item["receipt_path"]))
     receipt = read_json(receipt_path)
     artifacts = [r for r in receipt["artifacts"] if r["role"] == "data"]
     require(len(artifacts) == 1, "Expected one saved browser CSV")

@@ -22,12 +22,13 @@ from scripts.acquisition.census_acs_api_transport import request_json
 from scripts.acquisition.collect_census_acs_api import runtime
 from scripts.acquisition.collect_mmd_api import artifact
 from scripts.acquisition.collection_layout import load_routes, object_prefix
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 from scripts.infrastructure.render_project_config import load_configuration
 
 LOGGER = logging.getLogger(__name__)
-ROOT = REPO_ROOT / "data/historical_acquisition/census_acs_detailed"
+ROOT = REPO_ROOT / "data/datasets/historical_acquisition/census_acs_detailed"
 GOVERNANCE = {
     "access_class": "public",
     "contains_phi": False,
@@ -118,7 +119,7 @@ def make_receipt(plan: dict, batch: dict, envelope: dict, root: Path) -> Path:
         ("raw/response.json", raw, "api_page", True),
         ("derived/observations.csv", derived, "data", False),
         ("evidence/request_response.json", encoded_json(proof), "export_receipt", False),
-        ("references/group.json", (REPO_ROOT / batch["metadata"]["path"]).read_bytes(), "dictionary", True),
+        ("references/group.json", (REPO_ROOT / current(batch["metadata"]["path"])).read_bytes(), "dictionary", True),
         ("references/scope.json", encoded_json(plan), "layout", False),
     )
     for name, body, _, _ in files:

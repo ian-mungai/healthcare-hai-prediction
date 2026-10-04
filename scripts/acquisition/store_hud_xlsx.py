@@ -16,6 +16,7 @@ from scripts.acquisition import hud_xlsx_contract as contract
 from scripts.acquisition.capture import base_receipt, receipt_validator, validate_receipt
 from scripts.acquisition.collect_hud_api import TERMS_URL, runtime, verify_storage
 from scripts.acquisition.collect_mmd_api import artifact
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.hud_api_transport import collection_lock
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
@@ -50,7 +51,7 @@ def make_receipt(plan: dict, batch: dict, cached: Path, branch: Path) -> Path:
     registry, validator = load_registry(expected_sha256=plan["registry_sha256"]), receipt_validator()
     require(plan["registry_sha256"] == canonical_hash(registry), "HUD base registry changed")
     source = next(s for s in registry["sources"] if s["source_id"] == "HUD")
-    terms = next(d for d in read_json(REPO_ROOT / plan["terms"]["path"])["datasets"] if d["source_id"] == "HUD")
+    terms = next(d for d in read_json(REPO_ROOT / current(plan["terms"]["path"]))["datasets"] if d["source_id"] == "HUD")
     raw = cached.read_bytes()
     derived, statistics = contract.validate_workbook(raw, batch, plan)
     download = read_json(cached.parent / "download.json")
@@ -276,7 +277,7 @@ def main() -> None:
         sys.stdout.write(json.dumps({"status": "valid", "rows": receipt["schema_profile"]["row_count"], "model_eligible": False}) + "\n")
         return
     plan = contract.load_plan()
-    root = REPO_ROOT / "data/historical_acquisition/hud_usps_crosswalk" / plan["vintage"]
+    root = REPO_ROOT / "data/datasets/historical_acquisition/hud_usps_crosswalk" / plan["vintage"]
     client, outputs = runtime() if args.execute else (None, {})
     results, held = run_all(plan, root, args.downloads, args.execute, client, outputs)
     for result in results:

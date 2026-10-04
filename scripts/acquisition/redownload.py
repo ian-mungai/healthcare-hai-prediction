@@ -32,6 +32,7 @@ from typing import Any
 from scripts.acquisition import bls_api_transport
 from scripts.acquisition import hud_xlsx_contract as download_metadata
 from scripts.acquisition import redownload_controls as controls
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, read_json, require
 from scripts.acquisition.transport import CaptureError, Limits, download, known_failure
@@ -101,7 +102,7 @@ def load_queue(run: Run) -> list[dict]:
         require(len(queue) == lock["entries"] and len({unit["snapshot_id"] for unit in queue}) == len(queue), "Queue entries differ from its lock")
         for unit in queue:
             if unit["disposition"] in ACTIVE:
-                require(digest((run.base / unit["receipt"]).read_bytes()) == unit["receipt_sha256"], "Receipt changed since the queue was frozen")
+                require(digest((receipt_file(unit, run)).read_bytes()) == unit["receipt_sha256"], "Receipt changed since the queue was frozen")
         run.cache["queue"], run.cache["queue_sha256"] = queue, lock["queue_sha256"]
     return run.cache["queue"]
 
@@ -124,12 +125,12 @@ def runtime_controls(run: Run) -> dict:
     for relative in document.get("inputs_sha256", {}):
         # Status documentation is mutable; the immutable queue and this snapshot are the execution controls.
         if not relative.endswith(".md"):
-            path = run.base / relative if "/" in relative else run.base / "data/acquisition_planning/full_redownload_20260929" / relative
+            path = run.base / current(relative) if "/" in relative else run.base / "data/acquisition_planning/full_redownload_20260929" / relative
             require(digest(path.read_bytes()) == document["inputs_sha256"][relative], "Frozen queue input changed")
             inputs.add(path)
     for unit in queue:
         if unit["disposition"] in ACTIVE:
-            receipt = run.base / unit["receipt"]
+            receipt = receipt_file(unit, run)
             job = next((parent / "job.json" for parent in receipt.parents if (parent / "job.json").is_file()), None)
             if job is not None:
                 inputs.add(job)
@@ -247,7 +248,7 @@ def validate_root(run: Run) -> None:
     require(root.is_relative_to(approved.absolute()) and root != approved.absolute(), "State root outside approved redownload subtree")
     controls.validate_path(root, approved)
     for unit in load_queue(run):
-        old = (run.base / unit["receipt"]).parent.absolute()
+        old = (receipt_file(unit, run)).parent.absolute()
         require(not root.is_relative_to(old) and not old.is_relative_to(root), "State root overlaps an original collection")
     if root.exists():
         require(not any(path.is_symlink() for path in root.rglob("*")), "Symlink in redownload staging path")
@@ -335,8 +336,13 @@ def require_bls_budget(roots: list[Path], now: datetime, limit: int = BLS_LIMIT)
         raise Pause("BLS rolling 24-hour budget reached; resume after the oldest request expires")
 
 
+def receipt_file(unit: dict, run: Run) -> Path:
+    """The stored capture's receipt; queues frozen before the dataset move name its old folder [226]."""
+    return run.base / current(unit["receipt"])
+
+
 def stored_receipt(unit: dict, run: Run) -> dict:
-    return read_json(run.base / unit["receipt"])
+    return read_json(receipt_file(unit, run))
 
 
 def lineage(unit: dict, run: Run) -> dict:
@@ -474,7 +480,7 @@ def manual_file_unit(unit: dict, run: Run, started: datetime) -> dict:
     A publisher may rebuild an export archive on every request, so archives are matched by their member
     names and compared member by member; any other file must be byte-identical.
     """
-    receipt_path = run.base / unit["receipt"]
+    receipt_path = receipt_file(unit, run)
     artifact = read_json(receipt_path)["artifacts"][0]
     stored_members = archive_members(receipt_path.parent / artifact["storage_path"])
     host = urllib.parse.urlsplit(unit["url"]).hostname
@@ -584,7 +590,7 @@ def adapt_bls(unit: dict, run: Run) -> Path:
     from scripts.acquisition import collect_bls_api as collector
 
     plan, batch = planned(unit, run)
-    require_bls_budget([collection_root(run.base / unit["receipt"]), fresh_root(unit, run)], datetime.now(UTC))
+    require_bls_budget([collection_root(receipt_file(unit, run)), fresh_root(unit, run)], datetime.now(UTC))
     try:
         result = collector.execute(plan, batch, fresh_root(unit, run), True, False, run.client(), {}, run.api_request or transport.request_live)
     except transport.QuotaPause as pause:
@@ -795,7 +801,7 @@ def handler_mode(unit: dict) -> str:
 
 def file_inputs(unit: dict, run: Run) -> tuple[dict, str, str | None]:
     """The stored artifact, its reviewed format and any reviewed unsigned redirect for a file unit."""
-    path = run.base / unit["receipt"]
+    path = receipt_file(unit, run)
     artifact = read_json(path)["artifacts"][0]
     job = next((parent / "job.json" for parent in path.parents if (parent / "job.json").exists()), None)
     if job:

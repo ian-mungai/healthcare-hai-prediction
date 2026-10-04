@@ -245,7 +245,7 @@
       ],
       "id": "147e04346307edabeff593304168e1c9073e7523736884bb2d977c3b1da487df",
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2010/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2010/attempt_01/group.json",
         "sha256": "be8393874af474064bf2fab7c935f2e472c5611bb1f5f8729e42fe96c8f699c0",
         "url": "https://api.census.gov/data/2010/acs/acs5/groups/B17001.json"
       },
@@ -497,7 +497,7 @@
       ],
       "id": "89d51d2c30268a7c8e71fc0cc52bcd2036d0011ee080feed2975b0be4b36c261",
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2011/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2011/attempt_01/group.json",
         "sha256": "35c9b350c086e3a1cb0ee58711548a7de6d2ed8ab21cf092d51fd5d07640dd15",
         "url": "https://api.census.gov/data/2011/acs/acs5/groups/B17001.json"
       },
@@ -749,7 +749,7 @@
       ],
       "id": "25507adb2f145ef0cadc9ec03cbb1b9893e954667acf7bd84e1c8fae6a96cb99",
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2012/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2012/attempt_01/group.json",
         "sha256": "fab6fb18a7dbd9fd1e1d5595b77e2198b12ed9aff71fdd9cf881800679a1a853",
         "url": "https://api.census.gov/data/2012/acs/acs5/groups/B17001.json"
       },
@@ -1001,7 +1001,7 @@
       ],
       "id": "83444b3baba64f7b40b75c06a41ad12089d7dfa92b4afe7345fff82c84da889a",
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2013/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2013/attempt_01/group.json",
         "sha256": "c439c880475143f83c6d980b3af6c220672acc31fe45a9707f48f9df51f6cc52",
         "url": "https://api.census.gov/data/2013/acs/acs5/groups/B17001.json"
       },
@@ -1253,7 +1253,7 @@
       ],
       "id": "7febe055e85153a13e857bd0b60962f2ff3ce379ad078575c4a961fc3cc588ce",
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2014/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2014/attempt_01/group.json",
         "sha256": "1e64f7002319507b79c986a9dbf068dc01a006e715b0ca7c6f99e9d63c8c6362",
         "url": "https://api.census.gov/data/2014/acs/acs5/groups/B17001.json"
       },
@@ -1505,7 +1505,7 @@
       ],
       "id": "8d7a9cc9207f21dd8859a939b965852047d4fd8668fd62e1bf595b3801761ecc",
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2015/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2015/attempt_01/group.json",
         "sha256": "2ee22a6115d9f22f16a0442d77e6b894a60fea5346e011dcbe81be0d870d7513",
         "url": "https://api.census.gov/data/2015/acs/acs5/groups/B17001.json"
       },
@@ -1757,7 +1757,7 @@
       ],
       "id": "f9824e25d534e55efb269f0a74acf6e82978f01cc9408b9ec1c38fbd27141ee6",
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2016/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2016/attempt_01/group.json",
         "sha256": "9b67cd7c62850d75cc8722f33e1331ca6b78f34d5feed172f7134f9d083c41f6",
         "url": "https://api.census.gov/data/2016/acs/acs5/groups/B17001.json"
       },
@@ -2290,7 +2290,7 @@
         "B16001_119E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2009/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2009/attempt_01/group.json",
         "sha256": "b7c3784e11af1eebc2e1b14c7d36e90147b353c4731edfc68e62fc160457b8e1",
         "url": "https://api.census.gov/data/2009/acs/acs5/groups/B16001.json"
       },
@@ -2823,7 +2823,7 @@
         "B16001_119E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2010/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2010/attempt_01/group.json",
         "sha256": "84c71492ec424981ace4b9e934ffa7dd2271867430cab7857aa5e2e1b5e9118a",
         "url": "https://api.census.gov/data/2010/acs/acs5/groups/B16001.json"
       },
@@ -3356,7 +3356,7 @@
         "B16001_119E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2011/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2011/attempt_01/group.json",
         "sha256": "69157245490648c9836463205f04fdbcdf7a451214984ab16a6f597dd47cb21a",
         "url": "https://api.census.gov/data/2011/acs/acs5/groups/B16001.json"
       },
@@ -3889,7 +3889,7 @@
         "B16001_119E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2012/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2012/attempt_01/group.json",
         "sha256": "38f281da4da5951ebc3ef1a7d696525ed832e8d7e4c6cc61dbd848416a438db1",
         "url": "https://api.census.gov/data/2012/acs/acs5/groups/B16001.json"
       },
@@ -4422,7 +4422,7 @@
         "B16001_119E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2013/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2013/attempt_01/group.json",
         "sha256": "8cd302c389fdce63a10ad1045e6a91f8d0e6126602fa2198b248f1e8a9515769",
         "url": "https://api.census.gov/data/2013/acs/acs5/groups/B16001.json"
       },
@@ -4955,7 +4955,7 @@
         "B16001_119E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2014/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2014/attempt_01/group.json",
         "sha256": "977a856368b3babc3fa10cc882ebcaaee3d7ef0a147021309f890cc8309c34a1",
         "url": "https://api.census.gov/data/2014/acs/acs5/groups/B16001.json"
       },
@@ -5488,7 +5488,7 @@
         "B16001_119E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2015/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2015/attempt_01/group.json",
         "sha256": "9a22e80083cca2794bfede8c4f769cd9b1f4ab47dda7cf3d7f460165c63981ba",
         "url": "https://api.census.gov/data/2015/acs/acs5/groups/B16001.json"
       },
@@ -5810,7 +5810,7 @@
         "B16004_067E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2009/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2009/attempt_01/group.json",
         "sha256": "8585690345b23e4057bc8f0a11b3c9980fb8ae480f88a7df6c2b763fc5742927",
         "url": "https://api.census.gov/data/2009/acs/acs5/groups/B16004.json"
       },
@@ -6132,7 +6132,7 @@
         "B16004_067E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2010/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2010/attempt_01/group.json",
         "sha256": "08910abfcc6113962d27f5290d2b0f067aab4e6f74cdeea86c28eb5b95b5154f",
         "url": "https://api.census.gov/data/2010/acs/acs5/groups/B16004.json"
       },
@@ -6454,7 +6454,7 @@
         "B16004_067E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2011/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2011/attempt_01/group.json",
         "sha256": "3b830668c19ed010439616ea88767ea4320c477c230590bf30db72ed502bd123",
         "url": "https://api.census.gov/data/2011/acs/acs5/groups/B16004.json"
       },
@@ -6776,7 +6776,7 @@
         "B16004_067E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2012/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2012/attempt_01/group.json",
         "sha256": "b981c21677ef07e2387fd8b572a62ab63ab3e172d7e5e8bfd46ed1b87f973d95",
         "url": "https://api.census.gov/data/2012/acs/acs5/groups/B16004.json"
       },
@@ -7098,7 +7098,7 @@
         "B16004_067E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2013/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2013/attempt_01/group.json",
         "sha256": "7586d1b0a2289e5586f3963d068a6d097bc88a86cfb5904995c4103a36fb7b8c",
         "url": "https://api.census.gov/data/2013/acs/acs5/groups/B16004.json"
       },
@@ -7420,7 +7420,7 @@
         "B16004_067E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2014/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2014/attempt_01/group.json",
         "sha256": "4f48492e83bc86aa45d8df90d094511857721196be910c5957d2e1a7278d7f83",
         "url": "https://api.census.gov/data/2014/acs/acs5/groups/B16004.json"
       },
@@ -7742,7 +7742,7 @@
         "B16004_067E"
       ],
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2015/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2015/attempt_01/group.json",
         "sha256": "831de5c7e9ed5346e499981c3886ba901b870774229c387708481f3c1c9f6d3c",
         "url": "https://api.census.gov/data/2015/acs/acs5/groups/B16004.json"
       },
@@ -7753,7 +7753,7 @@
   "comparisons": [
     {
       "file": {
-        "path": "data/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2012.S1701-Data.csv",
+        "path": "data/datasets/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2012.S1701-Data.csv",
         "sha256": "190e6504249f910a1b2c77848df16dac1793ea5a79102b70704a794131082b7e",
         "url": "stored data.census.gov export"
       },
@@ -7762,7 +7762,7 @@
     },
     {
       "file": {
-        "path": "data/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2013.S1701-Data.csv",
+        "path": "data/datasets/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2013.S1701-Data.csv",
         "sha256": "d0ed3d46b5f755bf106bbdc02b940f3d7311df51161e91d5e753511ba8e6e2c5",
         "url": "stored data.census.gov export"
       },
@@ -7771,7 +7771,7 @@
     },
     {
       "file": {
-        "path": "data/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2014.S1701-Data.csv",
+        "path": "data/datasets/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2014.S1701-Data.csv",
         "sha256": "9af4896bafdcce1c89790a1233275210fc0b4ed709d16be4ae2002425de3299d",
         "url": "stored data.census.gov export"
       },
@@ -7780,7 +7780,7 @@
     },
     {
       "file": {
-        "path": "data/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2015.S1701-Data.csv",
+        "path": "data/datasets/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2015.S1701-Data.csv",
         "sha256": "9107158271bc78340ee40f8a0b80ec09543e95c607930af5b79ec76e86e55ed2",
         "url": "stored data.census.gov export"
       },
@@ -7789,7 +7789,7 @@
     },
     {
       "file": {
-        "path": "data/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2016.S1701-Data.csv",
+        "path": "data/datasets/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2016.S1701-Data.csv",
         "sha256": "44fce622b604e4206c94d37c5429bed9dd8a1542a81bff1618cc383f1265a6c1",
         "url": "stored data.census.gov export"
       },
@@ -7855,132 +7855,132 @@
   "model_eligible": false,
   "references": [
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2010/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2010/attempt_01/group.json",
       "sha256": "be8393874af474064bf2fab7c935f2e472c5611bb1f5f8729e42fe96c8f699c0",
       "url": "https://api.census.gov/data/2010/acs/acs5/groups/B17001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2011/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2011/attempt_01/group.json",
       "sha256": "35c9b350c086e3a1cb0ee58711548a7de6d2ed8ab21cf092d51fd5d07640dd15",
       "url": "https://api.census.gov/data/2011/acs/acs5/groups/B17001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2012/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2012/attempt_01/group.json",
       "sha256": "fab6fb18a7dbd9fd1e1d5595b77e2198b12ed9aff71fdd9cf881800679a1a853",
       "url": "https://api.census.gov/data/2012/acs/acs5/groups/B17001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2013/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2013/attempt_01/group.json",
       "sha256": "c439c880475143f83c6d980b3af6c220672acc31fe45a9707f48f9df51f6cc52",
       "url": "https://api.census.gov/data/2013/acs/acs5/groups/B17001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2014/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2014/attempt_01/group.json",
       "sha256": "1e64f7002319507b79c986a9dbf068dc01a006e715b0ca7c6f99e9d63c8c6362",
       "url": "https://api.census.gov/data/2014/acs/acs5/groups/B17001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2015/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2015/attempt_01/group.json",
       "sha256": "2ee22a6115d9f22f16a0442d77e6b894a60fea5346e011dcbe81be0d870d7513",
       "url": "https://api.census.gov/data/2015/acs/acs5/groups/B17001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B17001_2016/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B17001_2016/attempt_01/group.json",
       "sha256": "9b67cd7c62850d75cc8722f33e1331ca6b78f34d5feed172f7134f9d083c41f6",
       "url": "https://api.census.gov/data/2016/acs/acs5/groups/B17001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2009/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2009/attempt_01/group.json",
       "sha256": "b7c3784e11af1eebc2e1b14c7d36e90147b353c4731edfc68e62fc160457b8e1",
       "url": "https://api.census.gov/data/2009/acs/acs5/groups/B16001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2010/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2010/attempt_01/group.json",
       "sha256": "84c71492ec424981ace4b9e934ffa7dd2271867430cab7857aa5e2e1b5e9118a",
       "url": "https://api.census.gov/data/2010/acs/acs5/groups/B16001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2011/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2011/attempt_01/group.json",
       "sha256": "69157245490648c9836463205f04fdbcdf7a451214984ab16a6f597dd47cb21a",
       "url": "https://api.census.gov/data/2011/acs/acs5/groups/B16001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2012/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2012/attempt_01/group.json",
       "sha256": "38f281da4da5951ebc3ef1a7d696525ed832e8d7e4c6cc61dbd848416a438db1",
       "url": "https://api.census.gov/data/2012/acs/acs5/groups/B16001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2013/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2013/attempt_01/group.json",
       "sha256": "8cd302c389fdce63a10ad1045e6a91f8d0e6126602fa2198b248f1e8a9515769",
       "url": "https://api.census.gov/data/2013/acs/acs5/groups/B16001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2014/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2014/attempt_01/group.json",
       "sha256": "977a856368b3babc3fa10cc882ebcaaee3d7ef0a147021309f890cc8309c34a1",
       "url": "https://api.census.gov/data/2014/acs/acs5/groups/B16001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16001_2015/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16001_2015/attempt_01/group.json",
       "sha256": "9a22e80083cca2794bfede8c4f769cd9b1f4ab47dda7cf3d7f460165c63981ba",
       "url": "https://api.census.gov/data/2015/acs/acs5/groups/B16001.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2009/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2009/attempt_01/group.json",
       "sha256": "8585690345b23e4057bc8f0a11b3c9980fb8ae480f88a7df6c2b763fc5742927",
       "url": "https://api.census.gov/data/2009/acs/acs5/groups/B16004.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2010/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2010/attempt_01/group.json",
       "sha256": "08910abfcc6113962d27f5290d2b0f067aab4e6f74cdeea86c28eb5b95b5154f",
       "url": "https://api.census.gov/data/2010/acs/acs5/groups/B16004.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2011/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2011/attempt_01/group.json",
       "sha256": "3b830668c19ed010439616ea88767ea4320c477c230590bf30db72ed502bd123",
       "url": "https://api.census.gov/data/2011/acs/acs5/groups/B16004.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2012/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2012/attempt_01/group.json",
       "sha256": "b981c21677ef07e2387fd8b572a62ab63ab3e172d7e5e8bfd46ed1b87f973d95",
       "url": "https://api.census.gov/data/2012/acs/acs5/groups/B16004.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2013/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2013/attempt_01/group.json",
       "sha256": "7586d1b0a2289e5586f3963d068a6d097bc88a86cfb5904995c4103a36fb7b8c",
       "url": "https://api.census.gov/data/2013/acs/acs5/groups/B16004.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2014/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2014/attempt_01/group.json",
       "sha256": "4f48492e83bc86aa45d8df90d094511857721196be910c5957d2e1a7278d7f83",
       "url": "https://api.census.gov/data/2014/acs/acs5/groups/B16004.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_detailed/references/B16004_2015/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_detailed/references/B16004_2015/attempt_01/group.json",
       "sha256": "831de5c7e9ed5346e499981c3886ba901b870774229c387708481f3c1c9f6d3c",
       "url": "https://api.census.gov/data/2015/acs/acs5/groups/B16004.json"
     },
     {
-      "path": "data/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2012.S1701-Data.csv",
+      "path": "data/datasets/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2012.S1701-Data.csv",
       "sha256": "190e6504249f910a1b2c77848df16dac1793ea5a79102b70704a794131082b7e",
       "url": "stored data.census.gov export"
     },
     {
-      "path": "data/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2013.S1701-Data.csv",
+      "path": "data/datasets/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2013.S1701-Data.csv",
       "sha256": "d0ed3d46b5f755bf106bbdc02b940f3d7311df51161e91d5e753511ba8e6e2c5",
       "url": "stored data.census.gov export"
     },
     {
-      "path": "data/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2014.S1701-Data.csv",
+      "path": "data/datasets/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2014.S1701-Data.csv",
       "sha256": "9af4896bafdcce1c89790a1233275210fc0b4ed709d16be4ae2002425de3299d",
       "url": "stored data.census.gov export"
     },
     {
-      "path": "data/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2015.S1701-Data.csv",
+      "path": "data/datasets/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2015.S1701-Data.csv",
       "sha256": "9107158271bc78340ee40f8a0b80ec09543e95c607930af5b79ec76e86e55ed2",
       "url": "stored data.census.gov export"
     },
     {
-      "path": "data/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2016.S1701-Data.csv",
+      "path": "data/datasets/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/history_members/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/members/ACSST5Y2016.S1701-Data.csv",
       "sha256": "44fce622b604e4206c94d37c5429bed9dd8a1542a81bff1618cc383f1265a6c1",
       "url": "stored data.census.gov export"
     }

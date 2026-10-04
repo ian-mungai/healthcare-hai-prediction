@@ -25,14 +25,15 @@ from typing import Any
 from scripts.lakehouse.bronze import RETIRED, BronzeError
 from scripts.lakehouse.catalog import deployment
 
-# The privacy deletion runs that removed objects from S3, kept locally with their verification results.
-DELETION_RECORDS = "data/privacy_review/*/deletion_run_*_execute.json"
+# The deletion runs that removed objects from S3, kept locally with their verification results: the privacy deletion
+# and the duplicate removal of Oct 4 2026 (failure mode 212).
+DELETION_RECORDS = ("data/privacy_review/*/deletion_run_*_execute.json", "data/lakehouse_planning/dedup_*/deletion_run_*_execute.json")
 
 
-def deleted_versions(pattern: str = DELETION_RECORDS) -> dict[tuple[str, str], str]:
+def deleted_versions(patterns: Iterable[str] = DELETION_RECORDS) -> dict[tuple[str, str], str]:
     """Return (key, version ID) -> SHA-256 for every deletion an executed run verified."""
     verified: dict[tuple[str, str], str] = {}
-    for path in sorted(glob.glob(pattern)):
+    for path in sorted(path for pattern in patterns for path in glob.glob(pattern)):
         for result in json.loads(Path(path).read_text(encoding="utf-8"))["results"]:
             if result.get("status") == "deleted_verified":
                 verified[(result["key"], result["version_id"])] = result["sha256"]
@@ -80,7 +81,10 @@ def main() -> int:
         return 1
     document = {
         "version": 1,
-        "basis": "Objects removed from S3 by the Sep 28 2026 privacy deletion that storage manifests still list (BRZ-012).",
+        "basis": (
+            "Objects removed from S3 that storage manifests still list: the Sep 28 2026 privacy deletion (BRZ-012) and the "
+            "Oct 4 2026 removal of byte-identical duplicates (failure mode 212)."
+        ),
         "collections": sorted(set(args.collection)),
         "objects": entries,
     }

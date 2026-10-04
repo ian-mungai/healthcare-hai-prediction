@@ -7,3 +7,4 @@ aws-account tests/test_project_config.py -- synthetic all-ones and all-twos acco
 home-path docker-compose.yaml -- the analytics container service user home directory, not a person
 home-path services/analytics/Dockerfile -- the analytics container service user home directory, not a person
 home-path scripts/lakehouse/run_duckdb_view_e2e.py -- the analytics container service user home directory, not a person
+email scripts/acquisition/one_off/privacy_review/run_redaction_e2e.py -- a synthetic role address on a reserved-style example domain in the redaction E2E fixture; not a person

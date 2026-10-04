@@ -26,7 +26,7 @@ from scripts.acquisition.transport import Limits, download
 from scripts.infrastructure.render_project_config import load_configuration
 
 LOGGER = logging.getLogger(__name__)
-ROOT = REPO_ROOT / "data/historical_acquisition/cms_hospital_owners"
+ROOT = REPO_ROOT / "data/datasets/historical_acquisition/cms_hospital_owners"
 TRANSFORMATIONS = [
     "Kept rows with TYPE - OWNER = O; dropped name, title, street address, city and ZIP columns.",
     "Replaced owner organisation or DBA names containing an individual owner's whole name with [REDACTED].",

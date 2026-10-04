@@ -363,7 +363,7 @@ def main() -> None:
     """Run the command-line workflow with the supplied arguments and report its outcome."""
     parser = argparse.ArgumentParser(description="Capture an explicitly selected approved source locally. No S3 upload or model eligibility clearance.")
     parser.add_argument("--plan", type=Path)
-    parser.add_argument("--output-root", type=Path, default=REGISTRY_PATH.parents[2] / "data" / "snapshots")
+    parser.add_argument("--output-root", type=Path, default=REGISTRY_PATH.parents[2] / "data" / "datasets" / "snapshots")
     parser.add_argument("--registry", type=Path, default=REGISTRY_PATH)
     parser.add_argument("--lock", type=Path, default=LOCK_PATH)
     parser.add_argument("--schema", type=Path, default=SCHEMA_PATH)

@@ -13,6 +13,7 @@ from scripts.acquisition.capture import base_receipt, receipt_validator, validat
 from scripts.acquisition.census_acs_api_transport import collection_lock, fetch
 from scripts.acquisition.collect_mmd_api import artifact
 from scripts.acquisition.collection_layout import load_routes, object_prefix
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.process import run_command
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
@@ -40,7 +41,7 @@ def make_receipt(plan: dict, batch: dict, envelope: dict, root: Path) -> Path:
         ("raw/response.json", raw, "api_page", True),
         ("derived/observations.csv", derived, "data", False),
         ("evidence/request_response.json", encoded_json(public_proof), "export_receipt", False),
-        ("references/group.json", Path(batch["metadata"]["path"]).read_bytes(), "dictionary", True),
+        ("references/group.json", Path(current(batch["metadata"]["path"])).read_bytes(), "dictionary", True),
         ("references/scope.json", encoded_json(plan), "layout", False),
     )
     for name, body, _, _ in files:
@@ -268,7 +269,7 @@ def main() -> None:
         plans = contract.load_plans()
         require(args.limit > 0, "Census limit must be positive")
         require(len({p["vintage"] for p in plans}) == 1, "Census plans must share one collection folder")
-        root = REPO_ROOT / "data/historical_acquisition/census_acs_api_history" / plans[0]["vintage"]
+        root = REPO_ROOT / "data/datasets/historical_acquisition/census_acs_api_history" / plans[0]["vintage"]
         batches = [(p, b) for p in plans for b in p["batches"] if args.batch_id in {None, b["id"]}]
         require(bool(batches), "Census batch not in locked plan")
         client: AwsCli | None = None

@@ -40,11 +40,13 @@ of the variation. Approved collection is complete; acquisition closeout is pendi
 final verification, confirmed disposal of personal originals and an approved Git checkpoint. Public sources are collected
 through publisher APIs first, then download URLs, into private versioned S3
 storage with a receipt, hash and version readback for every object. The bronze
-layer of a local Apache Iceberg lakehouse then holds every stored data file as
-published, with each row traced to its S3 object version and checksum; 328 of
-the 329 mapped tables are loaded and checked. Staging, modeling and serving come
-later. The [Architecture](#architecture) diagram shows what is built and what is
-planned.
+layer of a local Apache Iceberg lakehouse then holds one copy of every stored data
+file as published, with each row traced to its S3 object version and checksum. It
+also lists every other stored copy. 330 of the 331 mapped tables are loaded and checked;
+the files of the last one were all removed for privacy. A dbt staging layer in DuckDB
+reads the HAI, cost report, IPPS and occupational-mix tables and keeps one row per HAI
+measurement window. Modeling and serving come later. The [Architecture](#architecture)
+diagram shows what is built and what is planned.
 
 ## Install
 
@@ -60,13 +62,19 @@ Gitleaks, TFLint and trivy are installed only in ignored `.tools/`; versions and
 publisher SHA-256 values are pinned in `config/quality_tools.json`. The markdownlint
 hook's `markdownlint-cli2` is installed into `.tools/markdownlint-cli2` with `npm ci`
 from the lockfile in `scripts/quality/markdownlint/`, which pins each package's
-integrity hash; it needs Node.js 22 or later.
+integrity hash; it needs Node.js 22 or later. The `sqlfluff` hook's SQLFluff and
+its dbt templater are installed into `.tools/sqlfluff` from the hash-pinned
+`scripts/quality/sqlfluff/requirements.txt`. The schema-review tools in
+`scripts/review/` need the hash-pinned packages in `requirements-review.txt`,
+installed into the ignored `.review_dependencies/` (Apple silicon only); the file's
+header gives the command.
 
 ```sh
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python scripts/quality/install_tools.py
 .venv/bin/python -m scripts.quality.install_markdownlint
+.venv/bin/python -m scripts.quality.install_sqlfluff
 PRE_COMMIT_HOME="$PWD/.tools/pre_commit_cache" .venv/bin/python -m pre_commit install
 cp .env.example .env
 ```
@@ -138,18 +146,33 @@ The E2E runners can also run on their own; each needs a new output directory:
 ```
 
 The lakehouse jobs run in the Spark container. The bronze E2E uses a throwaway local catalog and synthetic files, never
-S3. Each load reads only the S3 manifests and the committed table map (`config/lakehouse/bronze_tables.json`), replaces
-each object in its own commit, prunes objects a table no longer selects, rebuilds the table's data dictionary and writes
-a counts-only report:
+S3. Each load reads only the S3 manifests and the committed table map (`config/lakehouse/bronze_tables.json`), loads one
+copy of each stored file (the smallest object key), lists every copy in `bronze.stored_copies`, replaces each object in
+its own commit, prunes objects a table no longer selects, rebuilds the table's data dictionary and writes a counts-only
+report. A corrected manifest replaces the manifest it names as superseded; tables taken out of the map are listed in
+`config/lakehouse/removed_tables.json` and dropped with `--drop-removed`:
 
 ```sh
 .venv/bin/python -m scripts.lakehouse.catalog job bronze_e2e        # report: data/e2e/bronze/
 .venv/bin/python -m scripts.lakehouse.catalog job bronze -- --group hai           # or --tables a,b; report: data/e2e/bronze_load/
+.venv/bin/python -m scripts.lakehouse.catalog job bronze -- --tables a,b --copies-only   # list copies, prune, verify
+.venv/bin/python -m scripts.lakehouse.catalog job bronze -- --drop-removed       # drop tables in removed_tables.json
 .venv/bin/python -m scripts.lakehouse.catalog job dictionary -- --tables a,b      # rebuild bronze_dictionary tables
 .venv/bin/python -m scripts.lakehouse.care_compare_tables           # regenerate the care_compare group (read-only S3)
 .venv/bin/python -m scripts.lakehouse.retired_objects --collection <publisher/collection>   # rebuild the retired list
 scripts/lakehouse/query.sh                                          # DuckDB shell, bronze attached read-only
 scripts/lakehouse/ui.sh                                             # DuckDB UI at http://localhost:4213
+```
+
+The dbt staging layer (`dbt/`, dbt-core with dbt-duckdb in the analytics image) reads bronze read-only. Its E2E builds
+the models on synthetic fixtures, including cases that must fail one named test, then on the real bronze tables twice,
+and reconciles each staging table with bronze. `scripts.lakehouse.ipps_file_labels` regenerates the IPPS and
+occupational-mix label and twin seeds from the S3 manifests; `--check` confirms the committed seeds:
+
+```sh
+.venv/bin/python -m scripts.lakehouse.run_staging_e2e              # fixtures; --real adds the real tables; report: data/e2e/staging/
+scripts/lakehouse/dbt.sh build                                      # dbt on the real bronze tables
+.venv/bin/python -m scripts.lakehouse.ipps_file_labels --check      # seeds match the S3 manifests (read-only S3)
 ```
 
 Load large groups in batches of about 20 to 40 tables: each job stops after 1 hour (`COMPOSE_TIMEOUT` in
@@ -208,23 +231,28 @@ operational evidence and the detailed exception record remain untracked.
 The explicitly approved live S3 verification tool is the sole opt-in exception
 to synthetic-only verification. Normal CI does not run it or contact AWS.
 
-**Bronze lakehouse.** Bronze keeps every stored data file as published, every value as text:
+**Bronze lakehouse.** Bronze loads one copy of every stored data file as published, every value as text:
 
 - CSV files keep their columns.
 - Text files keep one row per line.
 - Excel files keep one row per sheet row.
 - PDFs and Word documents keep their table rows and text.
 
-Every row carries its source, snapshot, S3 key, version and SHA-256. Each table's `bronze_dictionary` entry lists its
+Every row carries its source, snapshot, S3 key, version and SHA-256. `bronze.stored_copies` lists every stored copy of
+each file with its lineage and whether it is loaded or retired. Each table's `bronze_dictionary` entry lists its
 columns with counts and the publisher's description or published type where a stored dictionary gives one. CMS Care
 Compare dictionaries give types only. Bronze does not load:
 
-- objects the privacy deletion removed from S3, which the manifests still list (`config/lakehouse/retired_objects.json`,
-  keys, versions and checksums only);
+- objects removed from S3, which the manifests still list (`config/lakehouse/retired_objects.json`, keys, versions and
+  checksums only): the privacy deletion and, on Oct 4 2026, 2,193 byte-identical duplicate versions, each with a kept
+  twin verified first;
+- other copies of a file already loaded, which `bronze.stored_copies` lists;
 - a Care Compare contacts file that names state staff;
 - audit copies, receipts and Office package parts.
 
-Open gaps are tracked in the local issue register.
+Two HRSA detail files, stored under the dictionary role, have corrected manifests in S3 that give them the data role
+(`config/acquisition/manifest_corrections.json`, written by `scripts.acquisition.correct_manifest_roles`); the original
+manifests stay unchanged. Open gaps are tracked in the local issue register.
 
 [docs/data_collection.md](docs/data_collection.md) explains how every source was
 collected and how to recheck it, including the named manual data steps: terms
@@ -332,7 +360,9 @@ configuration or their dependencies change. They need no AWS credentials and no
 collected `data/`. Off macOS, the HUD workbook and WONDER suites substitute only the
 macOS browser-download metadata (the "downloaded from" attribute and file creation
 time); on a Mac the real reads run. When the private archive is absent (as in CI), the
-registry-additions suite skips its single legacy-archive check and records the skip.
+registry-additions suite skips its single legacy-archive check and records the skip. The coverage gate leaves out
+the tools in `scripts/acquisition/one_off/`, which ran once and are evidenced by their run records; a
+gate test loads every committed collector plan through its contract.
 
 Each check has a bad and a good sample run through the real `pre-commit` entry
 point (`scripts/quality/run_checks_e2e.py` and
@@ -428,16 +458,21 @@ No AWS changes implementing these four deferred controls have been applied.
 - `tests/`: retained pytest regression safeguards and their `check()` helper.
 - `config/quality_tools.json`: pinned native tool versions and publisher hashes.
 - `docs/architecture/`: the architecture diagram source and its rendered PNG.
+- `dbt/`, `.sqlfluff`: the dbt staging project (sources, staging and intermediate models, seeds and tests) and its SQL style.
+- `scripts/review/`, `requirements-review.txt`: the schema-review tools and their hash-pinned packages.
 - `docs/data_collection.md`: how the source data was collected and how to recheck it.
 - `docs/issue_register.md`: the project's single issue register, kept local-only (Git-ignored).
 - `docs/project_guide.md`: the project's target design with each section's build status, kept local-only (Git-ignored).
 - `.github/`: the CI workflow and the pull request template.
 - `scripts/lakehouse/`, `config/lakehouse/`: the catalog script, the bronze loader, file readers, dictionary and
-  checksum jobs, the Care Compare and retired-object generators and the bronze E2E; the table map and the retired list.
+  checksum jobs, the Care Compare, retired-object and IPPS label generators, the dbt runner and the bronze and staging
+  E2E; the table map, the retired and removed lists and the reviewed label overrides.
 - `services/`, `docker-compose.yaml`: the Polaris catalog, Spark job and DuckDB analytics containers.
 - `scripts/acquisition/`, `config/acquisition/`: collectors, storage checks, E2E suites and their locked plans and
   registry. Committed at commit `3af1abb` with full documentation of the collection process
   at the end of the data collection stage; collected data and audit evidence stay in the ignored `data/` folder.
+  `scripts/acquisition/one_off/` holds tools that ran once, such as queue builders and the privacy and duplicate
+  deletions, moved there from `data/` on Oct 4 2026; their run records stay in `data/`.
   No tutorial files are added to this repository.
 
 ## Limitations
@@ -449,9 +484,10 @@ Nothing in S3 is approved for modeling: definitions, geography and modeling
 reviews remain open. Raw personal-data retention remains a separate unresolved
 control. The deferred controls above are not implemented.
 
-The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only. It
-keeps every stored copy, including files stored more than once. No staging, typing or deduplication exists yet. The
-bronze E2E runs on synthetic files in Docker and is not part of the local CI script.
+The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only and
+loads one copy per stored file. Staging covers the HAI, cost report, IPPS and occupational-mix tables only. It types
+dates for the HAI windows and nothing else. No gold or model tables exist. The bronze and staging E2E runs use
+Docker and are not part of the local CI script. The final publisher redownload (run 3) is prepared but has not run.
 
 ## Contributing
 

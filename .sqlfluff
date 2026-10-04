@@ -1,0 +1,37 @@
+# SQLFluff for the dbt models and tests, run by the sqlfluff pre-commit hook and scripts/run_ci.sh from the pinned
+# environment in .tools/sqlfluff (scripts/quality/install_sqlfluff.py). The style follows the SQL standard: lowercase
+# keywords and functions, four-space indentation, trailing commas and a 160-character line length.
+[sqlfluff]
+dialect = duckdb
+templater = dbt
+max_line_length = 160
+# Fail the run on any rule violation, and on files SQLFluff cannot template or parse.
+processes = 1
+
+[sqlfluff:templater:dbt]
+project_dir = dbt
+profiles_dir = dbt
+profile = hai
+# An in-memory DuckDB with nothing attached: compiling needs no catalog, credentials or network.
+target = lint
+
+[sqlfluff:indentation]
+indent_unit = space
+tab_space_size = 4
+# Jinja loops that build one CTE per table do not add an indent level of their own.
+template_blocks_indent = False
+
+[sqlfluff:layout:type:comma]
+line_position = trailing
+
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.functions]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.literals]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.types]
+extended_capitalisation_policy = lower

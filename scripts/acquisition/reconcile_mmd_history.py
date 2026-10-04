@@ -18,7 +18,7 @@ def main() -> None:
     parser.add_argument("--years", nargs="+", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    root = Path("data/historical_acquisition/mmd_browser_history")
+    root = Path("data/datasets/historical_acquisition/mmd_browser_history")
     validator = receipt_validator()
     records = []
     seen = set()

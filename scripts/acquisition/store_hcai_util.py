@@ -28,7 +28,7 @@ from scripts.acquisition.transport import Limits, download
 from scripts.infrastructure.render_project_config import load_configuration
 
 LOGGER = logging.getLogger(__name__)
-ROOT = REPO_ROOT / "data/historical_acquisition/hcai_util_2018_2025"
+ROOT = REPO_ROOT / "data/datasets/historical_acquisition/hcai_util_2018_2025"
 TRANSFORMATIONS = [
     "One CSV per workbook sheet, cells as stored in the workbook (Excel date serials and error text kept).",
     "Facility street address and phone, administrator, preparer and revision-preparer names and parent business address replaced with [REDACTED].",

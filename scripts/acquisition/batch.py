@@ -207,7 +207,7 @@ def main() -> None:
     """Run the command-line workflow with the supplied arguments and report its outcome."""
     parser = argparse.ArgumentParser(description="Validate explicit batch plans offline; opt in to bounded execution separately.")
     parser.add_argument("--plan", required=True, type=Path)
-    parser.add_argument("--state-root", type=Path, default=REPO_ROOT / "data" / "acquisition_batches")
+    parser.add_argument("--state-root", type=Path, default=REPO_ROOT / "data" / "datasets" / "acquisition_batches")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--max-jobs", type=int, default=5)
     parser.add_argument("--max-download-bytes", type=int, default=2 * 1024**3)

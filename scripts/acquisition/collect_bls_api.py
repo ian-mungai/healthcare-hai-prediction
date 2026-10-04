@@ -264,7 +264,7 @@ def main() -> None:
             return
         plan = contract.load_plan()
         require(args.limit > 0, "BLS limit must be positive")
-        root = REPO_ROOT / "data/historical_acquisition/bls_api_history" / plan["vintage"]
+        root = REPO_ROOT / "data/datasets/historical_acquisition/bls_api_history" / plan["vintage"]
         batches = [b for b in plan["batches"] if b["id"] == args.batch_id] if args.batch_id else plan["batches"]
         require(bool(batches), "BLS batch not in locked plan")
         client: AwsCli | None = None

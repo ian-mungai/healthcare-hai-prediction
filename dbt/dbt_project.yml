@@ -1,0 +1,39 @@
+# dbt project for the silver and gold layers, built by dbt-duckdb in the analytics image (scripts/lakehouse/dbt.sh).
+# Bronze is read from the Iceberg catalog attached read-only as `lakehouse`; models are written to a local DuckDB file
+# in the ignored data/analytics/dbt/ folder.
+name: hai
+version: "1.0.0"
+config-version: 2
+profile: hai
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+clean-targets: []
+
+flags:
+  send_anonymous_usage_stats: false
+  use_colors: false
+
+vars:
+  # Bronze tables whose stored copies staging resolves (failure modes 166 to 177), with each table's source family.
+  copy_tables:
+    cms_hai_hospital: hai
+    cms_hai_state: hai
+    cms_hai_national: hai
+    cms_hospital_cost_reports: cost_reports
+    cms_ipps_text_lines: ipps
+    cms_ipps_sheet_rows: ipps
+    cms_ipps_sas: ipps
+    cms_occupational_mix_text_lines: occupational_mix
+    cms_occupational_mix_text_lines_utf16: occupational_mix
+    cms_occupational_mix_sheet_rows: occupational_mix
+
+models:
+  hai:
+    silver:
+      +materialized: view
+      # Window choices scan every HAI row; tables keep downstream reads fast.
+      intermediate:
+        +materialized: table

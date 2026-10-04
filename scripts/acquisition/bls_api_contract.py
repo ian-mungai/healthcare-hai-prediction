@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 from scripts.acquisition.code_versions import read_code_versions
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, read_json, require
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/bls_api_plan.json"
@@ -73,7 +74,7 @@ def load_plan() -> dict:
         identities.add(batch["id"])
     require(bool(identities), "BLS plan is empty")
     for ref in plan["references"]:
-        require(digest(Path(ref["path"]).read_bytes()) == ref["sha256"], "BLS county reference differs")
+        require(digest(Path(current(ref["path"])).read_bytes()) == ref["sha256"], "BLS county reference differs")
     return plan
 
 

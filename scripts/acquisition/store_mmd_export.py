@@ -56,7 +56,7 @@ def main() -> None:
             require(bool(row["fips"]) and row["fips"] not in identifiers, "Blank or duplicate native FIPS.")
             identifiers.add(row["fips"])
     require(bool(identifiers), "Empty export.")
-    root = Path("data/historical_acquisition/mmd_browser_history") / digest
+    root = Path("data/datasets/historical_acquisition/mmd_browser_history") / digest
     scope = f"{args.measure_id} {args.year} FFS {args.geography} prevalence; exact browser selections; definition and universe review pending."
     plan = read_json(args.template.parents[3] / "plan.json")
     plan.update(expected_sha256=digest, file_name=args.download.name, export_selections=selections, scope=scope)

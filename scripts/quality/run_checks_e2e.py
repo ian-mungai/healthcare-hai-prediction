@@ -28,6 +28,9 @@ COPIED = [
     ".privacy_allowlist",
     ".writing_allowlist",
     ".markdownlint-cli2.jsonc",
+    ".sqlfluff",
+    "dbt/dbt_project.yml",
+    "dbt/profiles.yml",
     "scripts/run_ci.sh",
 ]
 NOQA = "no" + "qa"
@@ -243,6 +246,9 @@ CASES = [
     Case("star bullet blocked by markdownlint", "markdownlint", False, {"notes.md": "# Notes\n\n* One item\n"}),
     Case("fence without a language blocked by markdownlint", "markdownlint", False, {"notes.md": "# Notes\n\n```\nls\n```\n"}),
     Case("E2E records skipped by markdownlint", "markdownlint", True, {"data/e2e/run/report.md": "* raw record\n"}),
+    Case("clean dbt model through sqlfluff", "sqlfluff", True, {"dbt/models/sample.sql": "select\n    1 as id,\n    'a' as code\n"}),
+    Case("uppercase keyword blocked by sqlfluff", "sqlfluff", False, {"dbt/models/sample.sql": "SELECT\n    1 AS id\n"}),
+    Case("leading comma blocked by sqlfluff", "sqlfluff", False, {"dbt/models/sample.sql": "select\n    1 as id\n    , 2 as code\n"}),
     Case("typed subject with scope", "commit-msg", True, message="feat(infra): tag the data bucket\n\nBody.\n"),
     Case("typed subject without scope", "commit-msg", True, message="fix: handle an empty file\n"),
     Case("breaking change marker", "commit-msg", True, message="feat(infra)!: drop a stack\n"),
@@ -292,6 +298,8 @@ BLOCK_REASONS = {
     "invalid YAML front matter blocked": "front matter is not valid YAML",
     "non-ISO last_updated blocked": "last_updated is not a YYYY-MM-DD date",
     "fence without a language blocked by markdownlint": "MD040",
+    "uppercase keyword blocked by sqlfluff": "CP01",
+    "leading comma blocked by sqlfluff": "LT04",
 }
 # Good cases that must also print a marker, so a skipped check cannot pass silently.
 PASS_MARKERS = {
@@ -362,7 +370,7 @@ def run_case(case: Case) -> tuple[bool, str]:
             reason = BLOCK_REASONS.get(case.name, "").format(line=added)
             marker = PASS_MARKERS.get(case.name, "")
             correct = correct and reason in output and marker in output and not any(value in output for value in PRIVACY_VALUES)
-        if case.hook in ("writing-check", "markdownlint", "front-matter"):
+        if case.hook in ("writing-check", "markdownlint", "front-matter", "sqlfluff"):
             correct = correct and BLOCK_REASONS.get(case.name, "") in output
         return correct, output
 

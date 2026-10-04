@@ -1,0 +1,32 @@
+# Schema-review tool dependencies (scripts/review/), pinned to the wheels verified against PyPI on Oct 1 2026
+# (.review_dependencies/download_verification.json). Install them into the ignored local folder, exactly this set:
+#   .venv/bin/python -m pip install --no-deps --require-hashes --only-binary=:all: --target .review_dependencies -r requirements-review.txt
+# Then run a review tool with PYTHONPATH=.review_dependencies. cffi, cryptography, pillow and pypdfium2 are pinned to their
+# macOS arm64 wheels, so this file installs on Apple silicon only. --no-deps keeps the verified set: pycparser, which cffi
+# lists, is needed only to compile new bindings, which the review tools never do.
+cffi==2.1.1 \
+    --hash=sha256:f81b3b8f3d4e343550fa4baa0e479bba9f2d29ce9c2e9b51d1ce1718d7442fcf
+charset-normalizer==3.5.1 \
+    --hash=sha256:5b6d1386bf0096d26d3a863dc0a487a5b4eb9aa93cf5ba69683d29dde6b9d60f
+cryptography==50.0.1 \
+    --hash=sha256:b8f852c65863251b9e3a1b8c150ce21e59b522dbb6a7d4bc80e680d38388e986
+et-xmlfile==2.0.0 \
+    --hash=sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa
+openpyxl==3.1.5 \
+    --hash=sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2
+pdfminer-six==20251230 \
+    --hash=sha256:9ff2e3466a7dfc6de6fd779478850b6b7c2d9e9405aa2a5869376a822771f485
+pdfplumber==0.11.9 \
+    --hash=sha256:33ec5580959ba524e9100138746e090879504c42955df1b8a997604dd326c443
+pillow==12.3.0 \
+    --hash=sha256:ffd0c5368496f41b0944be820fcb7a838aa6e623d250b01acf2643939c3f99d7
+pypdf==6.10.0 \
+    --hash=sha256:90005e959e1596c6e6c84c8b0ad383285b3e17011751cedd17f2ce8fcdfc86de
+pypdfium2==5.13.0 \
+    --hash=sha256:da5c7b74eebf40b5c1fbe1de01aa1edc8827a79fb1efd999616bc20dcaf77ba4
+types-openpyxl==3.1.5.20260827 \
+    --hash=sha256:94e176d871d12e3cbc34f8fb03dc14db2a4245a6690791daf16fc7b08fd67869
+types-xlrd==2.0.0.20260518 \
+    --hash=sha256:710c97c0a2dae288504a7c7037397b7a639563681b53890529c2342dd5194b42
+xlrd==2.0.2 \
+    --hash=sha256:ea762c3d29f4cca48d82df517b6d89fbce4db3107f9d78713e48cd321d5c9aa9

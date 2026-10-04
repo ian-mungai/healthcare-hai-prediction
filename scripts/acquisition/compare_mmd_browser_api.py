@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from scripts.acquisition.collect_mmd_api import fetch
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.mmd_api_contract import condition_for, current_code_hashes, digest, load_plan, reconstruct, request_parameters, url_for, validate_rows
 from scripts.acquisition.run_mmd_api_collection import BROWSER_ROOT, verify_completion
 from scripts.acquisition.s3_store import encoded_json, write_once
@@ -32,7 +33,7 @@ def compare(item: dict, plan: dict, allow_network: bool) -> dict:
     measure_id, year = item["measure_id"], item["year"]
     condition = condition_for(plan, measure_id, year)
     parameters = request_parameters(plan, condition, year)
-    receipt_path = Path(item["receipt_path"])
+    receipt_path = Path(current(item["receipt_path"]))
     data = next(a for a in read_json(receipt_path)["artifacts"] if a["role"] == "data")
     browser = (receipt_path.parent / data["storage_path"]).read_bytes()
     require(digest(browser) == data["sha256"], "Browser original changed")

@@ -18,7 +18,7 @@ from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint
 from scripts.acquisition.source_registry import load_registry, read_json, require
 
 LOGGER = logging.getLogger(__name__)
-BROWSER_ROOT = Path("data/historical_acquisition/mmd_browser_history")
+BROWSER_ROOT = Path("data/datasets/historical_acquisition/mmd_browser_history")
 ATTEMPTS = 3
 RETRY_WAIT_SECONDS = 30
 

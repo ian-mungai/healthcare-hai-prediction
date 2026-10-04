@@ -69,7 +69,7 @@ def main() -> None:
         "browser_origin": origins,
         "browser_download_sha256": digest,
     }
-    root = Path("data/historical_acquisition/acs_browser_history") / digest
+    root = Path("data/datasets/historical_acquisition/acs_browser_history") / digest
     write_once(root / "export_selections.json", encoded_json(selections))
     candidate = {
         "source_id": "ACS",

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from scripts.acquisition.bls_api_contract import code_hashes, digest
 from scripts.acquisition.code_versions import read_code_versions
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 ENDPOINT = "https://api.census.gov/data/2009/acs/acs5/profile"
@@ -59,11 +60,11 @@ def load_plan(path: Path | None = None) -> dict:
     if plan["version"] == 2:
         require(all(i.startswith(PUERTO_RICO) for i in ids), "Census Puerto Rico plan scope differs")
     for ref in plan["references"]:
-        require(digest(Path(ref["path"]).read_bytes()) == ref["sha256"], "Census reference changed")
+        require(digest(Path(current(ref["path"])).read_bytes()) == ref["sha256"], "Census reference changed")
     require([b["table"] for b in plan["batches"]] == PLAN_SCOPES.get(plan["version"]), "Census table scope differs")
     for batch in plan["batches"]:
         require(batch["id"] == batch_id(batch) and batch["metadata"] in plan["references"], "Census batch binding differs")
-        variables = read_json(Path(batch["metadata"]["path"]))["variables"]
+        variables = read_json(Path(current(batch["metadata"]["path"])))["variables"]
         require(batch["headers"] == sorted([*variables, "state", "county"]), "Census metadata headers differ")
         table = batch["table"]
         require({"GEO_ID", "NAME"} <= variables.keys(), "Census metadata geography missing")

@@ -48147,7 +48147,7 @@
   "stored_snapshots": [
     {
       "active_reconciliation": {
-        "path": "data/snapshots/main-hai-pdc/main-hai-pdc__20260924T014728Z__5163f5b17a2d48758489f3c78c19dd55/s3_collections_reconciliation.json",
+        "path": "data/datasets/snapshots/main-hai-pdc/main-hai-pdc__20260924T014728Z__5163f5b17a2d48758489f3c78c19dd55/s3_collections_reconciliation.json",
         "sha256": "7d9f1f82d7156ad29d77c9d37773eed42682036ad49f2a9898c8228b809995c1"
       },
       "collection_root": "cms/hospitals",

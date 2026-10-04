@@ -13,6 +13,7 @@ from pathlib import Path
 
 from scripts.acquisition.bls_api_contract import code_hashes, digest
 from scripts.acquisition.code_versions import read_code_versions
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/wonder_export_plan.json"
@@ -88,8 +89,8 @@ def load_plan(path: Path | None = None) -> dict:
     require(plan["registry_sha256"] == canonical_hash(load_registry(expected_sha256=plan["registry_sha256"])), "WONDER registry differs")
     require(isinstance(plan["min_counties_per_year"], int) and plan["min_counties_per_year"] > 0, "WONDER county floor invalid")
     terms = plan["terms"]
-    require(digest((REPO_ROOT / terms["path"]).read_bytes()) == terms["sha256"], "WONDER terms record changed")
-    record = next(d for d in read_json(REPO_ROOT / terms["path"])["datasets"] if d["source_id"] == "WONDER")
+    require(digest((REPO_ROOT / current(terms["path"])).read_bytes()) == terms["sha256"], "WONDER terms record changed")
+    record = next(d for d in read_json(REPO_ROOT / current(terms["path"]))["datasets"] if d["source_id"] == "WONDER")
     require(record["terms_accepted"] is True, "WONDER terms not accepted")
     require(bool(plan["batches"]), "WONDER plan has no exports")
     for batch in plan["batches"]:
@@ -242,7 +243,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(
         receipt["schema_profile"]["row_count"] == statistics["rows"] and receipt["schema_profile"]["native_headers"] == HEADER, "WONDER schema profile differs"
     )
-    terms = next(d for d in read_json(REPO_ROOT / plan["terms"]["path"])["datasets"] if d["source_id"] == "WONDER")
+    terms = next(d for d in read_json(REPO_ROOT / current(plan["terms"]["path"]))["datasets"] if d["source_id"] == "WONDER")
     require(receipt["governance"]["use_restrictions"] == terms["restrictions"], "WONDER governance differs")
     period = receipt["measurement_periods"]
     first, last = batch["years"]

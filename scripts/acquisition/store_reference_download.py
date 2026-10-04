@@ -25,7 +25,7 @@ from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_
 from scripts.infrastructure.render_project_config import load_configuration
 
 LOGGER = logging.getLogger(__name__)
-ROOT = REPO_ROOT / "data/historical_acquisition/reference_downloads"
+ROOT = REPO_ROOT / "data/datasets/historical_acquisition/reference_downloads"
 
 
 def stage(entry: dict, downloads: Path, branch: Path) -> Path:

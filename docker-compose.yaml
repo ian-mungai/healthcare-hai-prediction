@@ -1,5 +1,5 @@
 # Local lakehouse services: the Apache Polaris Iceberg REST catalog, its PostgreSQL database, the Spark job image and
-# the DuckDB analytics image for read-only queries.
+# the DuckDB analytics image for read-only queries and the dbt staging models.
 # Start through scripts/lakehouse/catalog.py, which supplies the env files from the ignored data/lakehouse/ folder;
 # the repository's .env is never read. Images are pinned by digest and every port listens only on this Mac.
 name: hai-lakehouse
@@ -93,7 +93,7 @@ services:
         condition: service_healthy
 
   analytics:
-    image: hai-analytics:duckdb1.5.6
+    image: hai-analytics:duckdb1.5.6-dbt1.11.15
     build: ./services/analytics
     profiles: [query]
     environment:
@@ -110,8 +110,33 @@ services:
       polaris:
         condition: service_healthy
 
+  analytics-dbt:
+    image: hai-analytics:duckdb1.5.6-dbt1.11.15
+    profiles: [query]
+    entrypoint: ["dbt"]
+    working_dir: /workspace/dbt
+    environment:
+      AWS_PROFILE: ${AWS_PROFILE:?run through scripts/lakehouse/catalog.py}
+      AWS_REGION: ${AWS_REGION:?run through scripts/lakehouse/catalog.py}
+      AWS_CONFIG_FILE: /aws/config
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      # The read-only catalog principal, named so dbt scrubs the values from its logs.
+      DBT_ENV_SECRET_POLARIS_CLIENT_ID: ${POLARIS_READER_CLIENT_ID:-}
+      DBT_ENV_SECRET_POLARIS_CLIENT_SECRET: ${POLARIS_READER_CLIENT_SECRET:-}
+      DBT_PROFILES_DIR: /workspace/dbt
+      DBT_TARGET_PATH: /workspace/out/target
+      DBT_LOG_PATH: /workspace/out/logs
+    volumes:
+      - *aws-profile
+      # The project is read-only; the staging database, run artifacts and E2E cases live in the ignored data/ folder.
+      - ./dbt:/workspace/dbt:ro
+      - ./data/analytics/dbt:/workspace/out
+    depends_on:
+      polaris:
+        condition: service_healthy
+
   analytics-ui:
-    image: hai-analytics:duckdb1.5.6
+    image: hai-analytics:duckdb1.5.6-dbt1.11.15
     profiles: [query]
     entrypoint: ["/opt/analytics/ui.sh"]
     environment:

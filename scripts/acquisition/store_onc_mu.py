@@ -26,7 +26,7 @@ from scripts.acquisition.transport import Limits, download
 from scripts.infrastructure.render_project_config import load_configuration
 
 LOGGER = logging.getLogger(__name__)
-ROOT = REPO_ROOT / "data/historical_acquisition/onc_mu_attestation"
+ROOT = REPO_ROOT / "data/datasets/historical_acquisition/onc_mu_attestation"
 FILE_NAME = "mu_report.csv"
 TRANSFORMATIONS = [
     "Kept rows whose Provider_Type is Hospital; dropped eligible-professional (clinician) rows and the clinician-only Specialty column.",

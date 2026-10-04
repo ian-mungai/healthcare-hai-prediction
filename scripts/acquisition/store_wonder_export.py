@@ -17,6 +17,7 @@ from scripts.acquisition.capture import base_receipt, receipt_validator, validat
 from scripts.acquisition.collect_hud_api import runtime
 from scripts.acquisition.collect_mmd_api import artifact
 from scripts.acquisition.collection_layout import load_routes, object_prefix
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.dataset_layout import source_folder
 from scripts.acquisition.hud_api_transport import collection_lock
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
@@ -55,7 +56,7 @@ def make_receipt(plan: dict, batch: dict, cached: Path, branch: Path) -> Path:
     registry, validator = load_registry(expected_sha256=plan["registry_sha256"]), receipt_validator()
     require(plan["registry_sha256"] == canonical_hash(registry), "WONDER base registry changed")
     source = next(s for s in registry["sources"] if s["source_id"] == "WONDER")
-    terms = next(d for d in read_json(REPO_ROOT / plan["terms"]["path"])["datasets"] if d["source_id"] == "WONDER")
+    terms = next(d for d in read_json(REPO_ROOT / current(plan["terms"]["path"]))["datasets"] if d["source_id"] == "WONDER")
     raw = cached.read_bytes()
     derived, statistics = contract.validate_export(raw, batch, plan)
     download = read_json(cached.parent / "download.json")
@@ -298,7 +299,7 @@ def main() -> None:
         sys.stdout.write(json.dumps({"status": "valid", "rows": receipt["schema_profile"]["row_count"], "model_eligible": False}) + "\n")
         return
     plan = contract.load_plan()
-    root = REPO_ROOT / "data/historical_acquisition/wonder_county_mortality"
+    root = REPO_ROOT / "data/datasets/historical_acquisition/wonder_county_mortality"
     client, outputs = runtime() if args.execute else (None, {})
     results, held = run_all(plan, root, args.downloads, args.execute, client, outputs)
     for result in results:

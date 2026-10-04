@@ -29636,31 +29636,31 @@
   "references": [
     {
       "county_count": 3235,
-      "path": "data/acquisition_batches/090f97e9566a9b787380e73fab651a4f10eaacbf6f9e407360874bdc4eb64598/jobs/ADJ_file_001/captures/ADJ/ADJ__20260924T060621Z__b803253568d54a87b4c70d70b85f1d9b/raw/county_adjacency2026.txt",
+      "path": "data/datasets/acquisition_batches/090f97e9566a9b787380e73fab651a4f10eaacbf6f9e407360874bdc4eb64598/jobs/ADJ_file_001/captures/ADJ/ADJ__20260924T060621Z__b803253568d54a87b4c70d70b85f1d9b/raw/county_adjacency2026.txt",
       "sha256": "a8ad0d26f5a17deebcc2907633a70dfaf73c4c953c42a74ead4748f076c22015",
       "url": "https://www2.census.gov/geo/docs/reference/county_adjacency/county_adjacency2026.txt"
     },
     {
       "county_count": 3236,
-      "path": "data/historical_acquisition/structure_history/jobs/ADJ_history_25b1c98577e9a937/captures/ADJ/ADJ__20260924T173146Z__c35a136ae98c484abee7a2d9323733ba/raw/county_adjacency2024.txt",
+      "path": "data/datasets/historical_acquisition/structure_history/jobs/ADJ_history_25b1c98577e9a937/captures/ADJ/ADJ__20260924T173146Z__c35a136ae98c484abee7a2d9323733ba/raw/county_adjacency2024.txt",
       "sha256": "912ca408163016864fe64aaf667b53ad03a19ce4acbc586d3ac508395bdac980",
       "url": "https://www2.census.gov/geo/docs/reference/county_adjacency/county_adjacency2024.txt"
     },
     {
       "county_count": 3235,
-      "path": "data/historical_acquisition/structure_history/jobs/ADJ_history_26cb58bd7c8974f6/captures/ADJ/ADJ__20260924T173129Z__9b86fe8d59ac44b09503e29465799ae8/raw/county_adjacency2025.txt",
+      "path": "data/datasets/historical_acquisition/structure_history/jobs/ADJ_history_26cb58bd7c8974f6/captures/ADJ/ADJ__20260924T173129Z__9b86fe8d59ac44b09503e29465799ae8/raw/county_adjacency2025.txt",
       "sha256": "8233d2aed342f62eb02bae9f9002ad1d8fc6bd82d739185eba8bad832bf8fc87",
       "url": "https://www2.census.gov/geo/docs/reference/county_adjacency/county_adjacency2025.txt"
     },
     {
       "county_count": 3235,
-      "path": "data/historical_acquisition/structure_history/jobs/ADJ_history_9a80753794c0fcc3/captures/ADJ/ADJ__20260924T173148Z__0f901467c6994d71ba3e95c9005a899c/raw/county_adjacency2023.txt",
+      "path": "data/datasets/historical_acquisition/structure_history/jobs/ADJ_history_9a80753794c0fcc3/captures/ADJ/ADJ__20260924T173148Z__0f901467c6994d71ba3e95c9005a899c/raw/county_adjacency2023.txt",
       "sha256": "df62fedd7d27528af7fd870c7ec92232fb2d6bea3ec6cbc9928946b78e128f64",
       "url": "https://www2.census.gov/geo/docs/reference/county_adjacency/county_adjacency2023.txt"
     },
     {
       "county_count": 3234,
-      "path": "data/historical_acquisition/structure_history/jobs/ADJ_history_a781cd426896963a/captures/ADJ/ADJ__20260924T173148Z__54733defc85e43929fcc21fb260cc475/raw/county_adjacency2010.txt",
+      "path": "data/datasets/historical_acquisition/structure_history/jobs/ADJ_history_a781cd426896963a/captures/ADJ/ADJ__20260924T173148Z__54733defc85e43929fcc21fb260cc475/raw/county_adjacency2010.txt",
       "sha256": "b6df774db9ad5b94c47036379e207dd4622e46ef22c01ca2b7603453a4901014",
       "url": "https://www2.census.gov/geo/docs/reference/county_adjacency/county_adjacency2010.txt"
     }

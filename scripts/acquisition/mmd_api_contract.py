@@ -10,12 +10,13 @@ from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from scripts.acquisition.code_versions import read_code_versions
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.registry_additions import ADDITIONS_LOCK_PATH, load_registry_additions
 from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json, require
 
-PLAN_PATH = Path("data/historical_acquisition/mmd_api_history/20260925/collection_plan.json")
+PLAN_PATH = Path("data/datasets/historical_acquisition/mmd_api_history/20260925/collection_plan.json")
 PLAN_SHA256 = "97f72f7b82b39bfbb8afec75778fe335aceb59f57c0b5fa72c773517377fbfe4"
-ADDITIONS_PLAN_PATH = Path("data/historical_acquisition/mmd_api_history/20260926/collection_plan_additions.json")
+ADDITIONS_PLAN_PATH = Path("data/datasets/historical_acquisition/mmd_api_history/20260926/collection_plan_additions.json")
 ADDITIONS_PLAN_SHA256 = "1525659d4da7ffd41ce12e4513dc2e04b0e4122a93b21439af2653e19f8656a8"
 # Each capture records the hash of the plan that authorized it, so adding a plan never touches earlier captures.
 PLANS = {PLAN_SHA256: PLAN_PATH, ADDITIONS_PLAN_SHA256: ADDITIONS_PLAN_PATH}
@@ -64,7 +65,7 @@ def load_plan(plan_sha256: str = PLAN_SHA256) -> dict:
     require(plan["registry_sha256"] == canonical_hash(load_registry(expected_sha256=plan["registry_sha256"])), "MMD registry changed")
     require(digest(Path(plan["comparison_report"]).read_bytes()) == plan["comparison_report_sha256"], "AMI parity evidence changed")
     for ref in plan["references"].values():
-        path = Path(ref["path"])
+        path = Path(current(ref["path"]))
         require(not path.is_symlink() and digest(path.read_bytes()) == ref["sha256"], "MMD reference changed")
     if plan_sha256 == ADDITIONS_PLAN_SHA256:
         verify_additions(plan)
@@ -111,12 +112,12 @@ def condition_for(plan: dict, measure_id: str, year: int) -> dict:
 
 def request_parameters(plan: dict, condition: dict, year: int) -> dict[str, str]:
     """Reproduce the independently checked CMS source crosswalk and exact filters."""
-    menu = Path(plan["references"]["menus.js"]["path"]).read_text()
+    menu = Path(current(plan["references"]["menus.js"]["path"])).read_text()
     matches = sorted(set(re.findall(r"'disp':\s*\"" + str(year) + r"\",\s*'val':\s*\"([^\"]+)\"", menu)))
     require(len(matches) == 1, "Ambiguous year code")
     code = matches[0]
     dimensions = {"population": "f", "measure": "v", "year": code, "elig": ".", "race_code": ".", "sex_code": ".", "adjust": "1", "dual": "."}
-    with Path(plan["references"]["codebook_crosswalk.csv"]["path"]).open(newline="") as handle:
+    with Path(current(plan["references"]["codebook_crosswalk.csv"]["path"])).open(newline="") as handle:
         candidates = [row for row in csv.DictReader(handle) if all(not row.get(k) or v in row[k] for k, v in dimensions.items())]
     require(bool(candidates) and candidates[0]["year"] == code, "Crosswalk first match differs from exact year")
     filters = dict(plan["filters"], condition=condition["condition_code"], geography=condition["geography"], year=code)
@@ -194,7 +195,7 @@ def reconstruct(plan: dict, condition: dict, year: int, rows: list[dict]) -> tup
     # Imported at execution time so storage_controls can invoke this module without an import cycle.
     from scripts.acquisition.compare_mmd_api import HEADERS, js_rate, lookup
 
-    root = Path(plan["references"]["countynames.tsv"]["path"]).parent.parent
+    root = Path(current(plan["references"]["countynames.tsv"]["path"])).parent.parent
     names, _ = lookup(root, "countynames.tsv")
     urban, _ = lookup(root, "urban.tsv")
     headers = [h for h in HEADERS if condition["geography"] == "c" or h not in {"county", "urban"}]

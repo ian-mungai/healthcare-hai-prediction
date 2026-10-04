@@ -9,11 +9,15 @@ python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 "$python_bin" -m ruff check scripts tests
 "$python_bin" -m mypy --check-untyped-defs --disallow-untyped-defs scripts/process.py scripts/infrastructure scripts/quality tests/test_project_config.py tests/support.py
 "$python_bin" -m scripts.quality.scan_secrets
+# The local dataset folders moved into data/datasets/; an old folder that appears again would split the data (failure mode 227).
+"$python_bin" -c 'import json, pathlib, sys; old = [p for p in json.load(open("config/data_paths.json"))["moved"] if pathlib.Path(p).exists()]; sys.exit("old dataset folders exist again: " + ", ".join(old) if old else 0)'
 # Repository checks over every file Git tracks or would track; the same checks run as pre-commit hooks.
 "$python_bin" -m scripts.quality.repo_checks lint-settings
 "$python_bin" -m scripts.quality.repo_checks env-example
 "$python_bin" -m scripts.quality.repo_checks privacy-scan
 "$python_bin" -m scripts.quality.repo_checks writing-check
+# dbt SQL style, from the pinned environment the installer creates (scripts/quality/install_sqlfluff.py).
+.tools/sqlfluff/bin/sqlfluff lint dbt/models dbt/tests
 git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks credential-files
 git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks data-files
 git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks suppressions

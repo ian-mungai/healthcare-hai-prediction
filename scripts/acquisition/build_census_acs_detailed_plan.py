@@ -5,11 +5,12 @@ from pathlib import Path
 
 from scripts.acquisition import census_acs_detailed_contract as contract
 from scripts.acquisition.bls_api_contract import digest
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
-REFERENCES = REPO_ROOT / "data/historical_acquisition/census_acs_detailed/references"
-BROWSER = "data/historical_acquisition/acs_browser_history"
+REFERENCES = REPO_ROOT / "data/datasets/historical_acquisition/census_acs_detailed/references"
+BROWSER = "data/datasets/historical_acquisition/acs_browser_history"
 TABLE_YEARS = {"B17001": list(range(2010, 2017)), "B16001": list(range(2009, 2016)), "B16004": list(range(2009, 2016))}
 DERIVED_YEARS = {"poverty": [2010, 2011], "english": list(range(2009, 2016))}
 COMPARISONS = [("poverty", y, f"ACSST5Y{y}.S1701-Data.csv") for y in range(2012, 2017)] + [("english", y, None) for y in range(2009, 2016)]
@@ -31,7 +32,7 @@ def dictionary(folder: Path, table: str, year: int) -> tuple[dict, dict]:
     receipt = read_json(folder / f"{table}_{year}" / "receipt.json")
     url = f"{contract.endpoint(year)}/groups/{table}.json"
     require(receipt["complete"] and receipt["requested_url"] == url, "Census detailed dictionary transport differs")
-    path = REPO_ROOT / receipt["path"]
+    path = REPO_ROOT / current(receipt["path"])
     require(digest(path.read_bytes()) == receipt["sha256"], "Census detailed dictionary bytes differ")
     ref = reference(path, url)
     variables = read_json(path)["variables"]

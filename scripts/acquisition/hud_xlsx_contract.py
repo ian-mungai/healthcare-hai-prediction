@@ -16,6 +16,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from scripts.acquisition import hud_api_contract as api
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.process import run_command
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
@@ -88,8 +89,8 @@ def load_plan(path: Path | None = None) -> dict:
     require(plan["registry_sha256"] == canonical_hash(load_registry(expected_sha256=plan["registry_sha256"])), "HUD registry differs")
     require(plan["required_state_fips"] == api.STATE_FIPS, "HUD state coverage rule differs")
     terms = plan["terms"]
-    require(api.digest((REPO_ROOT / terms["path"]).read_bytes()) == terms["sha256"], "HUD terms record changed")
-    record = next(d for d in read_json(REPO_ROOT / terms["path"])["datasets"] if d["source_id"] == "HUD")
+    require(api.digest((REPO_ROOT / current(terms["path"])).read_bytes()) == terms["sha256"], "HUD terms record changed")
+    record = next(d for d in read_json(REPO_ROOT / current(terms["path"]))["datasets"] if d["source_id"] == "HUD")
     require(record["terms_accepted"] is True, "HUD terms not accepted")
     require([(b["year"], b["quarter"]) for b in plan["batches"]] == quarters(), "HUD workbook quarters differ")
     for batch in plan["batches"]:
@@ -290,7 +291,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(
         receipt["schema_profile"]["row_count"] == statistics["rows"] and receipt["schema_profile"]["native_headers"] == HEADER, "HUD schema profile differs"
     )
-    terms = next(d for d in read_json(REPO_ROOT / plan["terms"]["path"])["datasets"] if d["source_id"] == "HUD")
+    terms = next(d for d in read_json(REPO_ROOT / current(plan["terms"]["path"]))["datasets"] if d["source_id"] == "HUD")
     require(receipt["governance"]["use_restrictions"] == terms["restrictions"], "HUD governance differs")
     start, end = api.quarter_period(batch)
     period = receipt["measurement_periods"]

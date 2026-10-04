@@ -17,6 +17,7 @@ from scripts.process import run_command
 
 BUCKET = "synthetic-bucket"
 PREFIX = "example_pub/example_collection/datasets/example/capture_id=SYN"
+LAKEHOUSE_FILE = "lakehouse/bronze/example/data/00000-0-synthetic.parquet"
 
 
 def version(key: str, version_id: str, size: int) -> dict[str, Any]:
@@ -70,6 +71,19 @@ def main() -> int:
         ("inventory_version_missing", {"Versions": [item for item in base if item["Key"] != "old/raw.csv"]}, 1, {"failure_counts.inventory_missing": 1}),
         ("malformed_listing", {"Versions": "invalid"}, 2, {}),
         ("duplicate_listing", {"Versions": [*base, base[0]]}, 2, {}),
+        # Iceberg table files under lakehouse/ are counted apart, never as unrecorded (failure modes 237 to 240).
+        (
+            "lakehouse_versions_counted_apart",
+            {"Versions": [*base, version(LAKEHOUSE_FILE, "l1", 7)], "DeleteMarkers": [{"Key": LAKEHOUSE_FILE, "VersionId": "l0"}]},
+            0,
+            {"unrecorded": 0, "lakehouse_versions": 1, "lakehouse_delete_markers": 1},
+        ),
+        (
+            "lakehouse_lookalike_prefixes_unrecorded",
+            {"Versions": [*base, version("lakehouse_backup/x.csv", "b1", 3), version(f"{PREFIX}/lakehouse/x.csv", "b2", 3)]},
+            1,
+            {"unrecorded": 2, "lakehouse_versions": 0},
+        ),
     ]
     cases, results = [], {}
     status = "failed"
@@ -191,6 +205,45 @@ def main() -> int:
         if result.returncode != 2:
             raise AssertionError("changed_disposed_capture_rejected")
         empty.unlink()
+        # A disposition written before the dataset move names the old folder; the check reads it through the path map.
+        moved_empty = evidence / "datasets" / "historical_acquisition" / "discovery" / "groups.json"
+        write_once(moved_empty, b"")
+        moved_dispositions = root / "moved_empty_dispositions.json"
+        write_once(
+            moved_dispositions,
+            encoded_json(
+                {
+                    "kind": "empty_publisher_capture_dispositions",
+                    "files": [
+                        {
+                            "path": "historical_acquisition/discovery/groups.json",
+                            "sha256": fingerprint(moved_empty)[0],
+                            "reason": "Synthetic failed publisher metadata download, recorded before the dataset move.",
+                        }
+                    ],
+                }
+            ),
+        )
+        moved_args = [*arguments, "--empty-capture-dispositions", str(moved_dispositions)]
+        moved_args[moved_args.index("--output") + 1] = str(root / "runs" / "moved_empty_capture")
+        result = run_command(sys.executable, moved_args, cwd=REPO_ROOT, timeout=120)
+        cases.append({"case": "moved_empty_capture_read_through_path_map", "passed": result.returncode == 0})
+        if result.returncode != 0:
+            raise AssertionError("moved_empty_capture_read_through_path_map")
+        moved_empty.unlink()
+        # A recorded version under lakehouse/ is still checked: the exclusion covers unrecorded versions only (238).
+        lakehouse_record = evidence / "lakehouse_record" / "upload.json"
+        write_once(lakehouse_record, encoded_json({"object": {"bucket": BUCKET, "key": "lakehouse/recorded.csv", "version_id": "l2", "byte_count": 4}}))
+        arguments[arguments.index("--listing") + 1] = str(root / "listings" / "all_accounted.json")
+        arguments[arguments.index("--output") + 1] = str(root / "runs" / "recorded_lakehouse_missing")
+        result = run_command(sys.executable, arguments, cwd=REPO_ROOT, timeout=120)
+        summary = json.loads(result.stdout) if result.stdout.strip() else {}
+        still_checked = result.returncode == 1 and summary.get("failure_counts", {}).get("missing") == 1
+        cases.append({"case": "recorded_lakehouse_version_still_checked", "passed": still_checked})
+        if not still_checked:
+            raise AssertionError("recorded_lakehouse_version_still_checked")
+        lakehouse_record.unlink()
+        arguments[arguments.index("--output") + 1] = str(root / "runs" / "unreadable_evidence")
         (evidence / "broken_record.json").write_text("{broken", encoding="utf-8")
         arguments[arguments.index("--listing") + 1] = str(root / "listings" / "all_accounted.json")
         result = run_command(sys.executable, arguments, cwd=REPO_ROOT, timeout=120)

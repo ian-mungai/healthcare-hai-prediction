@@ -14,6 +14,7 @@ from pathlib import Path
 
 from scripts.acquisition.bls_api_contract import code_hashes, digest
 from scripts.acquisition.code_versions import read_code_versions
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 ENDPOINT = "https://www.huduser.gov/hudapi/public/usps"
@@ -81,8 +82,8 @@ def load_plan(path: Path | None = None) -> dict:
     require(plan["required_state_fips"] == STATE_FIPS, "HUD state coverage rule differs")
     require(plan["request_spacing_seconds"] >= 1, "HUD request spacing below the 60 per minute limit")
     terms = plan["terms"]
-    require(digest((REPO_ROOT / terms["path"]).read_bytes()) == terms["sha256"], "HUD terms record changed")
-    record = next(d for d in read_json(REPO_ROOT / terms["path"])["datasets"] if d["source_id"] == "HUD")
+    require(digest((REPO_ROOT / current(terms["path"])).read_bytes()) == terms["sha256"], "HUD terms record changed")
+    record = next(d for d in read_json(REPO_ROOT / current(terms["path"]))["datasets"] if d["source_id"] == "HUD")
     require(record["terms_accepted"] is True, "HUD terms not accepted")
     require({"zip", "geoid", *RATIOS} <= set(plan["result_fields"]) and plan["result_fields"] == sorted(set(plan["result_fields"])), "HUD result fields differ")
     require(bool(plan["batches"]), "HUD plan has no batches")

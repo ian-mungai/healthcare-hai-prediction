@@ -1,0 +1,49 @@
+# Connection profiles. Credentials come from the environment at run time and are never written here; the catalog
+# principal is read-only and its variables are named DBT_ENV_SECRET_* so dbt scrubs them from its logs.
+hai:
+  target: lakehouse
+  outputs:
+    lakehouse:
+      type: duckdb
+      path: /workspace/out/staging.duckdb
+      threads: 4
+      extensions: [iceberg, httpfs, aws]
+      settings:
+        autoinstall_known_extensions: false
+        # Bounded below the 24 GB Docker VM so a large comparison spills to disk instead of being killed.
+        memory_limit: 12GB
+      secrets:
+        - type: s3
+          provider: credential_chain
+          chain: config
+          profile: "{{ env_var('AWS_PROFILE') }}"
+          region: "{{ env_var('AWS_REGION') }}"
+        - type: iceberg
+          name: lakehouse_catalog
+          client_id: "{{ env_var('DBT_ENV_SECRET_POLARIS_CLIENT_ID') }}"
+          client_secret: "{{ env_var('DBT_ENV_SECRET_POLARIS_CLIENT_SECRET') }}"
+          oauth2_server_uri: http://polaris:8181/api/catalog/v1/oauth/tokens
+          oauth2_scope: PRINCIPAL_ROLE:ALL
+      attach:
+        - path: hai_lakehouse
+          alias: lakehouse
+          type: iceberg
+          read_only: true
+          options:
+            endpoint: http://polaris:8181/api/catalog
+            secret: lakehouse_catalog
+            access_delegation_mode: none
+    # The staging E2E (scripts/lakehouse/run_staging_e2e.py): a fixture bronze database in place of the catalog.
+    fixture:
+      type: duckdb
+      path: "{{ env_var('STAGING_E2E_CASE') }}/staging.duckdb"
+      threads: 1
+      attach:
+        - path: "{{ env_var('STAGING_E2E_CASE') }}/fixture_lakehouse.duckdb"
+          alias: lakehouse
+          read_only: true
+    # SQLFluff's dbt templater (.sqlfluff): compiles the models without the catalog or any credentials.
+    lint:
+      type: duckdb
+      path: ":memory:"
+      threads: 1

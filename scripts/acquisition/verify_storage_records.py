@@ -6,7 +6,9 @@ copies that replaced them. A recorded version must be live with its recorded siz
 version must be absent. Live versions that no upload record names are reported as observed in a saved S3 inventory, or
 as unrecorded. The evidence root's e2e/, conformance/ and schema_review/ folders contain synthetic, policy-audit or
 derived review evidence and are explicitly excluded with reasons and counts. Nested acquisition folders with those
-names remain inspected. Run from the repository root:
+names remain inspected. Unrecorded versions under the bucket's top-level lakehouse/ folder are Iceberg table files, not
+acquisition objects: they are counted apart, while any upload record naming such a key is still checked. Run from the
+repository root:
 
     .venv/bin/python -m scripts.acquisition.verify_storage_records --output data/storage_checks
 """
@@ -23,11 +25,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import AwsCli, encoded_json, write_once
 from scripts.acquisition.transport import CaptureError
 from scripts.infrastructure.render_project_config import REPO_ROOT, load_configuration, verify_project_identity
 
-RETIREMENTS = "data/privacy_review/*/retired_objects*.json"
+# Retirements: the privacy deletion and the removal of byte-identical duplicates (Oct 4 2026).
+RETIREMENTS = ("data/privacy_review/*/retired_objects*.json", "data/lakehouse_planning/dedup_*/retired_objects*.json")
 REPLACEMENTS = "data/privacy_review/*/replacements*.json"
 SKIPPED_FOLDERS = {"private_original", "storage_checks", "redacted_copies"}
 NON_STORAGE_ROOTS = {
@@ -36,6 +40,12 @@ NON_STORAGE_ROOTS = {
     "schema_review": "Derived schema-review outputs, not upload records (owner decision Oct 1 2026).",
 }
 MAX_RECORD_FILE = 50 * 1024**2
+# Failure modes 237 to 240: only the exact first path segment matches; recorded versions there are still checked.
+TABLE_FILE_PREFIXES = {"lakehouse/": "Iceberg table files written by the lakehouse jobs, which Terraform scopes to this folder."}
+
+
+def table_file(key: str) -> bool:
+    return any(key.startswith(prefix) for prefix in TABLE_FILE_PREFIXES)
 
 
 def size_of(node: dict[str, Any]) -> int | None:
@@ -101,21 +111,23 @@ def load_empty_captures(path: Path | None, root: Path) -> set[str]:
     accepted: set[str] = set()
     for item in record["files"]:
         relative = Path(item["path"])
-        target = root / relative
+        # A disposition written before the dataset move names the old folder [226].
+        located = current(item["path"])
+        target = root / located
         if (
             relative.is_absolute()
             or ".." in relative.parts
             or relative.name != "groups.json"
             or relative.as_posix() != item["path"]
             or not target.resolve().is_relative_to(root.resolve())
-            or item["path"] in accepted
+            or located in accepted
             or not isinstance(item.get("reason"), str)
             or not item["reason"].strip()
             or item.get("sha256") != hashlib.sha256(b"").hexdigest()
             or target.read_bytes() != b""
         ):
             raise CaptureError("Empty-capture disposition is invalid, duplicated, missing or changed.")
-        accepted.add(item["path"])
+        accepted.add(located)
     return accepted
 
 
@@ -192,8 +204,9 @@ def reconcile(
     for identity in sorted(observed - set(live) - markers - set(retired)):
         failures["inventory_missing"].append({"key": identity[0], "version_id": identity[1]})
     accounted = set(uploads) | set(replacements)
-    unrecorded = sorted((set(live) | markers) - accounted - observed)
-    inventory_only = (set(live) | markers) - accounted - set(unrecorded)
+    unexplained = (set(live) | markers) - accounted - observed
+    unrecorded = sorted(identity for identity in unexplained if not table_file(identity[0]))
+    inventory_only = (set(live) | markers) - accounted - unexplained
     return {
         "status": "passed" if not any(failures.values()) and not unrecorded else "failed",
         "live_versions": len(live),
@@ -205,6 +218,8 @@ def reconcile(
         "replacement_versions_verified": len([identity for identity, size in replacements.items() if live.get(identity) == size]),
         "live_versions_known_only_from_saved_inventories": len(inventory_only),
         "inventory_only_by_prefix": dict(sorted(Counter(key.split("/")[0] for key, _version in inventory_only).items())),
+        "lakehouse_versions": len([identity for identity in unexplained - markers if table_file(identity[0])]),
+        "lakehouse_delete_markers": len([identity for identity in unexplained & markers if table_file(identity[0])]),
         "unrecorded": [{"key": key, "version_id": version} for key, version in unrecorded],
         "failures": {name: items for name, items in failures.items() if items},
         "failure_counts": {name: len(items) for name, items in failures.items()},
@@ -223,7 +238,7 @@ def main() -> None:
     args = parser.parse_args()
     started = datetime.now(UTC)
     try:
-        retirements = args.retirements if args.retirements is not None else sorted(REPO_ROOT.glob(RETIREMENTS))
+        retirements = args.retirements if args.retirements is not None else sorted(path for pattern in RETIREMENTS for path in REPO_ROOT.glob(pattern))
         replacements = args.replacements if args.replacements is not None else sorted(REPO_ROOT.glob(REPLACEMENTS))
         if args.listing:
             if not args.bucket:
@@ -255,6 +270,7 @@ def main() -> None:
         "replacement_records": [str(path) for path in replacements],
         "evidence_walk": dict(sorted(walked.items())),
         "excluded_evidence_roots": NON_STORAGE_ROOTS,
+        "table_file_prefixes": TABLE_FILE_PREFIXES,
         "reviewed_empty_capture_paths": sorted(empty_captures),
         "empty_capture_disposition_sha256": hashlib.sha256(args.empty_capture_dispositions.read_bytes()).hexdigest()
         if args.empty_capture_dispositions

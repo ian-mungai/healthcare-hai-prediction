@@ -46,6 +46,11 @@ BOM = b"\xef\xbb\xbf"
 XLS_TYPES = {0: None, 1: "s", 2: "n", 3: "date", 4: "b", 5: "e", 6: None}
 
 
+# UTF-16 byte-order marks and the codec each one selects [194] [198].
+UTF16_CODECS = {b"\xff\xfe": "utf-16-le", b"\xfe\xff": "utf-16-be"}
+UTF16_MARKS = tuple(UTF16_CODECS)
+
+
 class ReaderError(ValueError):
     """A file cannot be stored losslessly; the message names the check, never a value."""
 
@@ -66,20 +71,31 @@ def read_text_lines(path: Path, jsonl: Path, encodings: Iterable[str]) -> tuple[
     data = path.read_bytes()
     if not data:
         raise ReaderError("the file is empty")
+    allowed = list(encodings)
+    if allowed != ["utf-16"]:
+        # Windows-1252 decodes UTF-16 without error, and text never holds a NUL byte [194] [195].
+        if data.startswith(UTF16_MARKS):
+            raise ReaderError("the file starts with a UTF-16 byte-order mark; declare the table's encodings as utf-16 alone")
+        if b"\x00" in data:
+            raise ReaderError("the file holds a NUL byte, which single-byte text never does; if it is UTF-16, declare the table's encodings as utf-16 alone")
     expected = hashlib.sha256(data).hexdigest()
     failures = []
-    for encoding in encodings:
+    for encoding in allowed:
+        # UTF-16 is read from its byte-order mark, and the mark is rebuilt once, before the first line [198].
+        mark, codec, body = (data[:2], UTF16_CODECS.get(data[:2], ""), data[2:]) if encoding == "utf-16" else (b"", encoding, data)
+        if not codec:
+            raise ReaderError("a UTF-16 table needs files that start with a UTF-16 byte-order mark")
         try:
-            text = data.decode(encoding)
+            text = body.decode(codec)
         except UnicodeDecodeError as error:
-            failures.append(f"{encoding.upper()} at byte {error.start}")
+            failures.append(f"{encoding.upper()} at byte {error.start + len(mark)}")
             continue
         rows = 0
-        rebuilt = hashlib.sha256()
+        rebuilt = hashlib.sha256(mark)
         with jsonl.open("w", encoding="ascii") as sink:
             for line, terminator in split_lines(text):
                 rows += 1
-                rebuilt.update((line + terminator).encode(encoding))
+                rebuilt.update((line + terminator).encode(codec))
                 sink.write(json.dumps({"r": rows, "v": [line, terminator]}, ensure_ascii=True) + "\n")
         if rebuilt.hexdigest() != expected:
             raise ReaderError("the stored lines do not rebuild the file byte for byte")

@@ -17,6 +17,7 @@ from typing import Any
 from scripts.acquisition.batch import validate_batch
 from scripts.acquisition.capture import receipt_validator, validate_receipt
 from scripts.acquisition.cli_tools import executable, run_argv
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, preflight, write_once
 from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json
 from scripts.acquisition.transport import CaptureError
@@ -175,7 +176,7 @@ def execute(output: Path, batch: dict, baseline: dict, assertions: list[dict], c
     expected_records: dict[str, dict] = {}
     for job, event in zip(batch["jobs"], result["events"], strict=True):
         require(job["job_id"] == event["job_id"], "job_order_preserved_" + job["job_id"], assertions)
-        receipt_path = Path(event["receipt_path"])
+        receipt_path = Path(current(event["receipt_path"]))
         receipt = read_json(receipt_path)
         validate_receipt(receipt, receipt_validator(), receipt_path.parent)
         reconciliation = read_json(Path(event["reconciliation_path"]))

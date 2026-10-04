@@ -1,4 +1,5 @@
-# Analytics image: DuckDB 1.5.6 (Python package and CLI) with the Iceberg, S3, AWS and UI extensions installed at build time.
+# Analytics image: DuckDB 1.5.6 (Python package and CLI) with the Iceberg, S3, AWS and UI extensions installed at build time,
+# and dbt-core 1.11.15 with the dbt-duckdb 1.11.0 adapter for the staging models.
 # The base image is pinned by digest and the wheels by hash; extensions are fetched once here, never at query time.
 FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
 
@@ -7,6 +8,9 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --require-hashes --only-binary=:all: -r /opt/analytics/requirements.txt
 
 ENV PATH=/opt/venv/bin:${PATH}
+# dbt sends no usage data and makes no version check over the network.
+ENV DBT_SEND_ANONYMOUS_USAGE_STATS=false \
+    DBT_VERSION_CHECK=false
 
 # Run as an unprivileged user; its home holds the extensions, and the code and AWS profile are mounted at run time.
 RUN useradd --create-home --uid 10002 analytics

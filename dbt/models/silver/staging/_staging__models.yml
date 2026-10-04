@@ -1,0 +1,401 @@
+version: 2
+
+models:
+  - name: stg_bronze__file_copies
+    description: >
+      One row per stored copy in the tables whose copies staging resolves, from bronze.stored_copies, loaded or not:
+      the file it holds, where and when it was captured, its publication release and whether it is the copy bronze
+      loads. Every capture location stays listed (failure modes 167 to 171,
+      data/lakehouse_planning/staging_dedup_20261003/failure_modes.md; 204 to 209,
+      data/lakehouse_planning/dedup_20261003/failure_modes.md).
+    columns:
+      - name: copy_key
+        description: Bronze table and object key, the model's key.
+        data_tests: [unique, not_null]
+      - name: bronze_table
+        description: The bronze table the copy belongs to.
+        data_tests: [not_null]
+      - name: source_family
+        description: The source family the table belongs to.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [hai, cost_reports, ipps, occupational_mix]
+      - name: object_key
+        description: Hash of the S3 key, version ID and member path (bronze `_object_key`).
+        data_tests: [not_null]
+      - name: member_sha256
+        description: SHA-256 of the file the object holds.
+        data_tests: [not_null]
+      - name: checksum_count
+        description: Distinct checksums among the loaded copy's rows; always 1. Null for a copy that is not loaded.
+      - name: s3_key
+        description: S3 key of the stored object.
+      - name: s3_version_id
+        description: S3 version ID of the stored object.
+      - name: member_path
+        description: Path of the file inside the stored object; `!` separates nested archives.
+      - name: file_name
+        description: The file's own name, without archive or folder.
+      - name: snapshot_id
+        description: The capture snapshot the object was stored in.
+      - name: dataset_id
+        description: The stored dataset ID.
+      - name: release_id
+        description: The release partition the object was stored under; a capture snapshot for some sources.
+      - name: publication_release
+        description: The release that published the file; for a nested archive member, the date in its nested archive name.
+        data_tests: [not_null]
+      - name: release_source
+        description: Where publication_release comes from.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [release_partition, nested_archive, container]
+      - name: is_release_from_container
+        description: True when a nested archive member had no dated archive name and kept its container's release.
+      - name: row_count
+        description: Rows the loaded copy holds in bronze; null for a copy that is not loaded.
+      - name: is_retired
+        description: True for a copy on the retired list, deleted from S3 and never loaded.
+        data_tests: [not_null]
+      - name: is_canonical
+        description: True for the copy bronze loads, the file's copy with the smallest object key; staging reads it.
+        data_tests: [not_null]
+
+  - name: stg_bronze__files
+    description: >
+      One row per distinct stored file (bronze table and member SHA-256): its canonical copy, its copies and releases,
+      its row count and any label hold (failure modes 166 to 172).
+    columns:
+      - name: file_key
+        description: Bronze table and member SHA-256, the model's key.
+        data_tests: [unique, not_null]
+      - name: bronze_table
+        description: The bronze table holding the file.
+        data_tests: [not_null]
+      - name: source_family
+        description: The source family the table belongs to.
+      - name: member_sha256
+        description: SHA-256 of the file.
+        data_tests: [not_null]
+      - name: canonical_object_key
+        description: Object key of the copy staging reads.
+        data_tests: [not_null]
+      - name: copy_count
+        description: Stored copies of the file, loaded or not.
+      - name: canonical_count
+        description: Canonical copies among them; always 1.
+      - name: row_count
+        description: Rows in the file.
+      - name: publication_releases
+        description: Every release that published the file, sorted.
+      - name: latest_publication_date
+        description: The latest publication release that is a date; null when every release is a capture snapshot.
+      - name: file_names
+        description: Every name the file was stored under, sorted.
+      - name: label_hold_issue
+        description: The issue holding the file's labels, from the staging_label_holds seed.
+      - name: label_hold_reason
+        description: Why the labels are held.
+      - name: has_label_conflict
+        description: True when the file's copies disagree on role or identity year (stg_bronze__file_labels).
+        data_tests: [not_null]
+      - name: is_label_held
+        description: True when the owner holds the file's labels (staging_label_holds); its rows are held from intermediate models.
+        data_tests: [not_null]
+
+  - name: stg_cms_hai_hospital
+    description: >
+      Bronze `cms_hai_hospital` with one copy of each stored file, read from its canonical object (failure mode 166). The data
+      columns pass through as published; lakehouse.bronze_dictionary.cms_hai_hospital documents them. Typing comes in later staging work.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: is_label_held
+        description: True when the file's labels are held (staging_label_holds).
+      - name: label_hold_issue
+        description: The issue holding the file's labels.
+
+  - name: stg_cms_hai_state
+    description: >
+      Bronze `cms_hai_state` with one copy of each stored file, read from its canonical object (failure mode 166). The data
+      columns pass through as published; lakehouse.bronze_dictionary.cms_hai_state documents them. Typing comes in later staging work.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: is_label_held
+        description: True when the file's labels are held (staging_label_holds).
+      - name: label_hold_issue
+        description: The issue holding the file's labels.
+
+  - name: stg_cms_hai_national
+    description: >
+      Bronze `cms_hai_national` with one copy of each stored file, read from its canonical object (failure mode 166). The data
+      columns pass through as published; lakehouse.bronze_dictionary.cms_hai_national documents them. Typing comes in later staging work.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: is_label_held
+        description: True when the file's labels are held (staging_label_holds).
+      - name: label_hold_issue
+        description: The issue holding the file's labels.
+
+  - name: stg_cms_hospital_cost_reports
+    description: >
+      Bronze `cms_hospital_cost_reports` with one copy of each stored file, read from its canonical object (failure mode 166). The data
+      columns pass through as published; lakehouse.bronze_dictionary.cms_hospital_cost_reports documents them. Typing comes in later staging work.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: is_label_held
+        description: True when the file's labels are held (staging_label_holds).
+      - name: label_hold_issue
+        description: The issue holding the file's labels.
+
+  - name: stg_cms_ipps_text_lines
+    description: >
+      Bronze `cms_ipps_text_lines` with one copy of each stored file, read from its canonical object (failure mode 166). The data
+      columns pass through as published; lakehouse.bronze_dictionary.cms_ipps_text_lines documents them. Typing comes in later staging work.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: is_label_held
+        description: True when the file's labels are held (staging_label_holds).
+      - name: label_hold_issue
+        description: The issue holding the file's labels.
+
+  - name: stg_cms_ipps_sheet_rows
+    description: >
+      Bronze `cms_ipps_sheet_rows` with one copy of each stored file, read from its canonical object (failure mode 166). The data
+      columns pass through as published; lakehouse.bronze_dictionary.cms_ipps_sheet_rows documents them. Typing comes in later staging work.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: is_label_held
+        description: True when the file's labels are held (staging_label_holds).
+      - name: label_hold_issue
+        description: The issue holding the file's labels.
+
+  - name: stg_cms_ipps_sas
+    description: >
+      Bronze `cms_ipps_sas` with one copy of each stored file, read from its canonical object (failure mode 166). The data
+      columns pass through as published; lakehouse.bronze_dictionary.cms_ipps_sas documents them. Typing comes in later staging work.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: is_label_held
+        description: True when the file's labels are held (staging_label_holds).
+      - name: label_hold_issue
+        description: The issue holding the file's labels.
+
+  - name: stg_cms_occupational_mix_text_lines
+    description: >
+      Bronze `cms_occupational_mix_text_lines` with one copy of each stored file, read from its canonical object (failure mode 166). The data
+      columns pass through as published; lakehouse.bronze_dictionary.cms_occupational_mix_text_lines documents them. Typing comes in later staging work.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: is_label_held
+        description: True when the file's labels are held (staging_label_holds).
+      - name: label_hold_issue
+        description: The issue holding the file's labels.
+
+  - name: stg_cms_occupational_mix_text_lines_utf16
+    description: >
+      Bronze `cms_occupational_mix_text_lines_utf16` with one copy of each stored file, read from its canonical object (failure mode 166). The data
+      columns pass through as published; lakehouse.bronze_dictionary.cms_occupational_mix_text_lines_utf16 documents them. Typing comes in later staging work.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: is_label_held
+        description: True when the file's labels are held (staging_label_holds).
+      - name: label_hold_issue
+        description: The issue holding the file's labels.
+
+  - name: stg_cms_occupational_mix_sheet_rows
+    description: >
+      Bronze `cms_occupational_mix_sheet_rows` with one copy of each stored file, read from its canonical object (failure mode 166). The data
+      columns pass through as published; lakehouse.bronze_dictionary.cms_occupational_mix_sheet_rows documents them. Typing comes in later staging work.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: is_label_held
+        description: True when the file's labels are held (staging_label_holds).
+      - name: label_hold_issue
+        description: The issue holding the file's labels.
+
+  - name: stg_bronze__file_labels
+    description: >
+      One row per loaded IPPS and occupational-mix object with its labels from the generated map
+      (scripts/lakehouse/ipps_file_labels.py, seed ipps_occmix_copy_labels), read from its names and stored container,
+      never from capture time (failure modes 178 to 182).
+    columns:
+      - name: copy_key
+        description: Bronze table and object key, the model's key.
+        data_tests: [unique, not_null]
+      - name: bronze_table
+        description: The bronze table the copy belongs to.
+      - name: object_key
+        description: The loaded object.
+      - name: member_sha256
+        description: SHA-256 of the file the object holds.
+      - name: file_name
+        description: The file's own name.
+      - name: label_source
+        description: Where the labels come from.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [names, override]
+      - name: family
+        description: A descriptive family name, without years, dates, stages or versions.
+      - name: role
+        description: Data, or a description of the data.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [data, description]
+      - name: rule_fiscal_year
+        description: The fiscal year of the rule that published the file.
+      - name: data_fiscal_year
+        description: For a CMI file published with a later rule, the discharge fiscal year of its data.
+      - name: identity_year
+        description: The data fiscal year when there is one, otherwise the rule fiscal year; copies must agree on it.
+      - name: rule_stage
+        description: The rule stages the names mention (proposed, final, correction, interim, notice), joined with '+'.
+      - name: is_label_checksum_match
+        description: True when the label row was generated for the same file checksum.
+
+  - name: stg_bronze__twin_comparison
+    description: >
+      One row per text/workbook twin pair (seed ipps_occmix_twins): the text layout, the workbook sheet that matches
+      best, data rows on each side, matched rows, and the pair's status and preferred file (failure modes 183 to 190).
+    columns:
+      - name: twin_key
+        description: Text and workbook checksums, the model's key.
+        data_tests: [unique, not_null]
+      - name: text_table
+        description: The bronze table holding the text file.
+      - name: text_sha256
+        description: SHA-256 of the text file.
+      - name: workbook_table
+        description: The bronze table holding the workbook.
+      - name: workbook_sha256
+        description: SHA-256 of the workbook.
+      - name: text_layout
+        description: How the text file's fields are separated.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [tab, comma, fixed_width, empty]
+      - name: compared_sheet
+        description: The workbook sheet with the most rows matching the text file.
+      - name: text_data_rows
+        description: Rows with a number in the text file.
+      - name: workbook_data_rows
+        description: Rows with a number in the compared sheet.
+      - name: matched_rows
+        description: Data rows, aligned by position, whose fields all match.
+      - name: twin_status
+        description: agree, differ, or not_compared when the text file cannot be split.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [agree, differ, not_compared]
+      - name: preferred_sha256
+        description: The file intermediate models read; null when the pair differs.
+
+  - name: stg_bronze__file_selection
+    description: >
+      One row per distinct stored file: whether intermediate models may read it. Not selected while its labels are
+      held, or when a twin pair excludes it (failure modes 172 and 187).
+    columns:
+      - name: file_key
+        description: Bronze table and member SHA-256, the model's key.
+        data_tests: [unique, not_null]
+      - name: bronze_table
+        description: The bronze table holding the file.
+      - name: member_sha256
+        description: SHA-256 of the file.
+      - name: is_label_held
+        description: True when the owner holds the file's labels.
+      - name: has_label_conflict
+        description: True when the file's copies disagree on role or identity year.
+      - name: twin_pair_count
+        description: Twin pairs the file belongs to.
+      - name: is_twin_excluded
+        description: True when any of its twin pairs prefers the other file or differs.
+      - name: is_selected
+        description: True when intermediate models may read the file.
+        data_tests: [not_null]

@@ -15,6 +15,7 @@ from unittest.mock import patch
 from scripts.acquisition import census_acs_api_contract as contract
 from scripts.acquisition import census_acs_api_transport as transport
 from scripts.acquisition.collect_census_acs_api import execute, verify_local
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.run_bls_api_e2e import inventory
 from scripts.acquisition.s3_store import encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json, require
@@ -257,7 +258,7 @@ def exercise(root: Path) -> list[dict]:
         scenario("unreviewed_current_code_before_effects", unreviewed_current, "Unreviewed Census")
 
         def changed_input(kind: str) -> None:
-            path = plan_path if kind == "plan" else Path(batch["metadata"]["path"])
+            path = plan_path if kind == "plan" else Path(current(batch["metadata"]["path"]))
             original = path.read_bytes()
             try:
                 path.write_bytes(encoded_json({"changed": True}) if kind == "plan" else b"{}")

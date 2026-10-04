@@ -9,7 +9,7 @@ local Iceberg catalog under the container's scratch folder, so it never touches 
 are in data/lakehouse_planning/bronze_hai_20261002/ (1 to 35), bronze_manifest_20261002/ (36 to 53),
 bronze_ipps_occmix_20261002/ (68 to 82), bronze_dictionary_20261002/ (83 to 96), publisher_dictionaries_20261002/
 (97 to 112), bronze_county_20261002/ (113 to 131), bronze_remaining_20261003/ (132 to 149) and
-bronze_gaps_20261003/ (150 to 159); numbers in brackets.
+bronze_gaps_20261003/ (150 to 159) and bronze_utf16_20261003/ (194 to 198); numbers in brackets.
 The report under data/e2e/bronze/ holds outcomes only.
 """
 
@@ -23,6 +23,7 @@ import re
 import shutil
 import sys
 import tempfile
+import zipfile
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from functools import partial
@@ -220,6 +221,8 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
     scratch.mkdir()
     hai = "(?:^|/)(?:Healthcare[ _]Associated[ _]Infections ?- ?Hospital|(?:[a-z0-9_]*_)?77hc[-_]ibv8)\\.csv$"
     layout_2019 = csv_bytes(["Provider ID", "Score"], [["010001", "Not Available"]])
+    # A different file in the 2019 layout: identical bytes would load once [204].
+    layout_2019_other = csv_bytes(["Provider ID", "Score"], [["010002", "Not Available"]])
     layout_2024 = csv_bytes(["Facility ID", "City/Town", "Score"], [["010001", "X", "--"], ["020002", "Y", "0.5"]])
     store(storage, "cms/hospitals", "legacy_hai", "snap_a", [(["h.zip", "Healthcare Associated Infections - Hospital.csv"], "h.csv", layout_2019)])
     store(
@@ -227,7 +230,7 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
         "cms/hospitals",
         "hai_ids",
         "snap_b",
-        [(["77hc-ibv8.csv"], "77hc-ibv8.csv", layout_2024), (["pdc_s3_hos_data_77hc_ibv8.csv"], "p.csv", layout_2019)],
+        [(["77hc-ibv8.csv"], "77hc-ibv8.csv", layout_2024), (["pdc_s3_hos_data_77hc_ibv8.csv"], "p.csv", layout_2019_other)],
     )
     store(storage, "cms/hospitals", "other", "snap_c", [(["PCH_HEALTHCARE_ASSOCIATED_INFECTIONS_HOSPITAL.csv"], "pch.csv", layout_2019)])
     store(storage, "cms/provider_of_services", "cms_pos", "snap_d", [(None, "Hospital_and_other.DATA.Q1.csv", csv_bytes(EDGE_HEADER, EDGE_ROWS))])
@@ -240,8 +243,8 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
             "collection": "cms/hospitals",
             "member_pattern": hai,
             "format": "csv",
-            "expected_distinct_files": 2,
-            "expected_distinct_rows": 3,
+            "expected_distinct_files": 3,
+            "expected_distinct_rows": 4,
         },
         {"table": "provider_of_services", "group": "structure", "collection": "cms/provider_of_services", "dataset_ids": ["cms_pos"], "format": "csv"},
     ]
@@ -521,7 +524,6 @@ def publisher_dictionary_scenarios(spark: Any, root: Path, storage: FakeStorage,
             "member_pattern": "(?i)data_dictionary",
             "format": "pdf_rows",
             "roles": roles,
-            "distinct_files": True,
         },
         {
             "table": "care_dictionaries",
@@ -530,7 +532,6 @@ def publisher_dictionary_scenarios(spark: Any, root: Path, storage: FakeStorage,
             "member_pattern": "(?i)HOSPITAL_Data_Dictionary\\.pdf$",
             "format": "pdf_rows",
             "roles": roles,
-            "distinct_files": True,
         },
         {
             "table": "hai_hospital",
@@ -905,6 +906,9 @@ def remaining_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: P
     write_workbook(workbook)
     upper = root / "upper.XLSX"
     write_workbook(upper)
+    # A different archive comment keeps the two workbooks distinct files; identical bytes would load once [204].
+    with zipfile.ZipFile(upper, "a") as archive:
+        archive.comment = b"upper"
     store(
         storage,
         "state/finance",
@@ -1040,6 +1044,10 @@ def remaining_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: P
     )
     results.update(retired_scenarios(spark, root, storage, scratch))
     results.update(gap_scenarios(spark, root, storage, scratch))
+    results.update(utf16_scenarios(spark, root, storage, scratch))
+    results.update(copies_scenarios(spark, root, storage, scratch))
+    results.update(supersession_scenarios(spark, root, storage, scratch))
+    results.update(removed_table_scenarios(spark, root, storage, scratch))
     return results
 
 
@@ -1377,6 +1385,317 @@ def gap_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -
     results["fiscal_year_section_matched"] = bool(fiscal.search("FY2020_NET_CHANGE_IN_BASE_OP_DRG_PAYMENT_AMT.CSV")) and not fiscal.search(
         "FY2020_NET_CHANGE_IN_BASE_OP_DRG_PAYMENT_"
     )
+    return results
+
+
+def utf16_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
+    """UTF-16 files: refused by single-byte tables, read by a UTF-16 table, split from their snapshot's other files [194] to [198]."""
+    results: dict[str, bool] = {}
+    utf16_text = b"\xff\xfe" + "PROV\tWAGE\r\n010001\t$28.20\r\n".encode("utf-16-le")
+    plain_text = "PUF description\r\nWages and hours\r\n".encode("cp1252")
+    names = ("FY_2017_FR_OccMix_PUF.txt", "FY_2017_FR_S3_OCCMIX_PUF description.txt")
+    store(storage, "cms/occmix_utf16", "cms_occmix", "OCCMIX__u", [(None, names[0], utf16_text), (None, names[1], plain_text)])
+    single_byte = {"table": "occmix_text", "group": "g", "collection": "cms/occmix_utf16", "member_pattern": "(?i)\\.txt$", "format": "text_lines"}
+    wide = bronze.load_table_map(table_map(root / "utf16_wide.json", [{**single_byte, "encodings": ["utf-8", "cp1252"]}]))
+    wide_inputs, _ = bronze.discover(storage, BUCKET, wide, ["occmix_text"])
+    # [194] [195] A single-byte table refuses the UTF-16 file by name and says what to declare.
+    results["utf16_mark_refused_by_cp1252_table"] = expect_error(
+        lambda: bronze.load_objects(spark, wide_inputs, storage, "bronze", scratch), "UTF-16 byte-order mark"
+    ) and expect_error(lambda: bronze.load_objects(spark, wide_inputs, storage, "bronze", scratch), names[0])
+    results["utf16_refusal_names_the_fix"] = expect_error(lambda: bronze.load_objects(spark, wide_inputs, storage, "bronze", scratch), "encodings as utf-16")
+    # [194] A NUL byte in a single-byte text file is refused too.
+    store(storage, "cms/occmix_nul", "cms_occmix", "OCCMIX__n", [(None, "nul.txt", b"A\x00B\r\nC\r\n")])
+    nul_table = {**single_byte, "table": "nul_text", "collection": "cms/occmix_nul", "encodings": ["utf-8", "cp1252"]}
+    nul_config = bronze.load_table_map(table_map(root / "utf16_nul.json", [nul_table]))
+    nul_inputs, _ = bronze.discover(storage, BUCKET, nul_config, ["nul_text"])
+    results["nul_byte_refused_by_text_table"] = expect_error(lambda: bronze.load_objects(spark, nul_inputs, storage, "bronze", scratch), "NUL byte")
+    # [194] A CSV table refuses a UTF-16 mark it does not declare.
+    utf16_csv = b"\xff\xfe" + "PROV,WAGE\r\n010001,28.20\r\n".encode("utf-16-le")
+    store(storage, "cms/occmix_csv16", "cms_occmix", "OCCMIX__c", [(None, "wages.csv", utf16_csv)])
+    csv_table = {
+        "table": "csv16",
+        "group": "g",
+        "collection": "cms/occmix_csv16",
+        "member_pattern": "(?i)\\.csv$",
+        "format": "csv",
+        "encodings": ["utf-8", "cp1252"],
+    }
+    csv_config = bronze.load_table_map(table_map(root / "utf16_csv.json", [csv_table]))
+    csv_inputs, _ = bronze.discover(storage, BUCKET, csv_config, ["csv16"])
+    results["utf16_mark_refused_by_cp1252_csv_table"] = expect_error(
+        lambda: bronze.load_objects(spark, csv_inputs, storage, "bronze", scratch), "UTF-16 byte-order mark"
+    )
+    # [196] [198] The UTF-16 table takes exactly the named file; the single-byte table keeps the snapshot's other file.
+    pattern = "FY_2017_FR_OccMix_PUF"
+    split = [
+        {**single_byte, "member_pattern": f"(?i)^(?!{pattern}\\.txt$).*\\.txt$", "encodings": ["utf-8", "cp1252"]},
+        {
+            **single_byte,
+            "table": "occmix_text_utf16",
+            "member_pattern": f"(?i)^{pattern}\\.txt$",
+            "snapshot_pattern": "^OCCMIX__u$",
+            "encodings": ["utf-16"],
+        },
+    ]
+    split_config = bronze.load_table_map(table_map(root / "utf16_split.json", split))
+    split_inputs, _ = bronze.discover(storage, BUCKET, split_config, ["occmix_text", "occmix_text_utf16"])
+    try:
+        bronze.load_objects(spark, split_inputs, storage, "bronze", scratch)
+    except bronze.BronzeError:
+        return {**results, "utf16_table_reads_text": False, "single_byte_table_keeps_other_files": False}
+    checks = bronze.verify(spark, split_config, split_inputs, "bronze")
+    utf16_rows = spark.table("bronze.occmix_text_utf16").orderBy("_row_number").collect()
+    plain_rows = spark.table("bronze.occmix_text").orderBy("_row_number").collect()
+    results["utf16_table_reads_text"] = (
+        [row["line_text"] for row in utf16_rows] == ["PROV\tWAGE", "010001\t$28.20"]
+        and all(row["_source_encoding"] == "utf-16" for row in utf16_rows)
+        and checks["occmix_text_utf16"]["passed"]
+    )
+    results["single_byte_table_keeps_other_files"] = [row["line_text"] for row in plain_rows] == ["PUF description", "Wages and hours"] and (
+        checks["occmix_text"]["passed"]
+    )
+    return results
+
+
+def copies_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
+    """A file stored more than once loads once, from the copy with the smallest object key; every copy is listed [204] to [208]."""
+    results: dict[str, bool] = {}
+    same = csv_bytes(["CCN", "SCORE"], [["010001", "1.5"], ["010002", "2.5"]])
+    other = csv_bytes(["CCN", "SCORE"], [["010003", "3.5"]])
+    same_sha = hashlib.sha256(same).hexdigest()
+    store(storage, "cms/copies", "first", "COPY__a", [(["a.zip", "scores.csv"], "scores.csv", same)])
+    store(storage, "cms/copies", "second", "COPY__b", [(["b.zip", "scores_again.csv"], "scores_again.csv", same)])
+    store(storage, "cms/copies", "third", "COPY__c", [(None, "scores.csv", same), (None, "other.csv", other)])
+    store(storage, "cms/copies", "fourth", "COPY__d", [(None, "scores_retired.csv", same)])
+    retired = stored_identity("cms/copies", "fourth", "scores_retired.csv", same)
+    del storage.objects[(retired["key"], retired["version_id"])]
+    table = {"table": "copy_scores", "group": "c", "collection": "cms/copies", "member_pattern": "\\.csv$", "format": "csv"}
+    config = bronze.load_table_map(table_map(root / "copies.json", [table]))
+    listed = bronze.load_retired(retired_map(root / "copies_retired.json", [retired]))
+    inputs, unselected = bronze.discover(storage, BUCKET, config, ["copy_scores"], listed)
+    copies = [entry["copy"] for entry in unselected if entry.get("identical_copy")]
+    # [204] Every table loads one copy per SHA-256, with no option to ask for it.
+    results["copies_load_once_by_default"] = len(inputs) == 2 and len(copies) == 2 and len({item["sha256"] for item in inputs}) == 2
+    # [205] The kept copy is the one with the smallest object key, whatever the listing order.
+    candidates = sorted(item["object_key"] for item in [*inputs, *copies] if item["sha256"] == same_sha)
+    kept = next(item for item in inputs if item["sha256"] == same_sha)
+    results["kept_copy_has_smallest_object_key"] = kept["object_key"] == candidates[0] and len(candidates) == 3
+    results["distinct_files_option_refused"] = expect_error(
+        lambda: bronze.load_table_map(table_map(root / "copies_flag.json", [{**table, "distinct_files": True}])), "distinct_files"
+    )
+    # [208] Copies loaded before the change are pruned.
+    bronze.load_objects(spark, [*inputs, *copies], storage, "bronze", scratch)
+    pruned = bronze.prune(spark, config, ["copy_scores"], inputs, "bronze")
+    loaded = {row["_object_key"] for row in spark.table("bronze.copy_scores").select("_object_key").distinct().collect()}
+    results["previous_copies_pruned"] = pruned == {"copy_scores": 2} and loaded == {item["object_key"] for item in inputs}
+    # [206] Every copy is listed with its lineage, loaded or not, retired copies included; a rerun replaces the rows.
+    bronze.write_copies(spark, "bronze", ["copy_scores"], inputs, unselected)
+    bronze.write_copies(spark, "bronze", ["copy_scores"], inputs, unselected)
+    rows = spark.table("bronze.stored_copies").where("table_name = 'copy_scores'").collect()
+    same_rows = [row for row in rows if row["sha256"] == same_sha]
+    results["every_copy_listed"] = (
+        len(rows) == 5
+        and len(same_rows) == 4
+        and sum(row["loaded"] for row in same_rows) == 1
+        and len({row["s3_key"] for row in same_rows}) == 4
+        and {row["file_name"] for row in same_rows} == {"scores.csv", "scores_again.csv", "scores_retired.csv"}
+    )
+    results["retired_copy_listed_not_loaded"] = [(row["loaded"], row["retired"]) for row in rows if row["file_name"] == "scores_retired.csv"] == [(False, True)]
+    # [207] Verification checks the copies against the loaded rows.
+    check = bronze.verify(spark, config, inputs, "bronze")["copy_scores"]
+    results["verification_checks_copies"] = check["passed"] and check["one_loaded_copy_per_file"] and check["loaded_copies_match_rows"]
+    wrong = [entry for entry in unselected if entry.get("copy") is not copies[0]]
+    bronze.write_copies(spark, "bronze", ["copy_scores"], [*inputs, copies[0]], wrong)
+    tampered = bronze.verify(spark, config, inputs, "bronze")["copy_scores"]
+    results["verification_catches_two_loaded_copies"] = not tampered["passed"] and not tampered["one_loaded_copy_per_file"]
+    bronze.write_copies(spark, "bronze", ["copy_scores"], inputs, unselected)
+    # [222] A column-map file that also holds rows of kept copies is rewritten, not refused, and keeps those rows.
+    spark.sql("CREATE NAMESPACE IF NOT EXISTS shared")
+    spark.sql("CREATE TABLE shared.column_map (" + bronze.COLUMN_MAP_SCHEMA + ") USING iceberg TBLPROPERTIES ('format-version'='2')")
+    bronze.load_objects(spark, [*inputs, *copies], storage, "shared", scratch)
+    mapped = [(item["object_key"], "copy_scores", 1, "CCN", "ccn", None) for item in [*inputs, *copies]]
+    spark.createDataFrame(mapped, bronze.COLUMN_MAP_SCHEMA).coalesce(1).writeTo("shared.column_map").overwritePartitions()
+    shared_pruned = bronze.prune(spark, config, ["copy_scores"], inputs, "shared")
+    remaining = {row["_object_key"] for row in spark.table("shared.column_map").collect()}
+    results["prune_rewrites_shared_side_files"] = shared_pruned == {"copy_scores": 2} and remaining == {item["object_key"] for item in inputs}
+    # [223] Side rows left behind after their data rows were pruned (a stopped run) are removed by the next run.
+    orphan = [("0" * 32, "copy_scores", 1, "CCN", "ccn", None)]
+    spark.createDataFrame(orphan, bronze.COLUMN_MAP_SCHEMA).writeTo("shared.column_map").append()
+    bronze.prune(spark, config, ["copy_scores"], inputs, "shared")
+    after = {row["_object_key"] for row in spark.table("shared.column_map").collect()}
+    results["prune_removes_orphaned_side_rows"] = after == {item["object_key"] for item in inputs}
+    return results
+
+
+def corrected(storage: FakeStorage, base: str, changes: list[dict[str, str]], extra: dict[str, Any] | None = None, name: str = "corrected") -> dict[str, str]:
+    """Store a manifest that supersedes the one under base, with the named role changes; return its identity."""
+    key = f"{base}/manifest.json"
+    (version,) = [found for stored_key, found in storage.list_keys(BUCKET, key) if stored_key == key]
+    raw = storage.get(BUCKET, key, version)
+    manifest = json.loads(raw)
+    named = {(change["key"], change["version_id"]): change for change in changes}
+    for item in manifest["objects"]:
+        change = named.get((item["object"].get("key", ""), item["object"].get("version_id", "")))
+        if change and item["role"] == change["from_role"]:
+            item["role"] = change["to_role"]
+    manifest.update(extra or {})
+    manifest["supersedes"] = {"key": key, "version_id": version, "sha256": hashlib.sha256(raw).hexdigest()}
+    manifest["correction"] = {"issue": "BRZ-011", "changes": changes}
+    body = json.dumps(manifest).encode()
+    new_key = f"{base.rsplit('/', 1)[0]}/{name}/manifest.json"
+    return {"key": new_key, "version_id": storage.put(new_key, body), "sha256": hashlib.sha256(body).hexdigest()}
+
+
+def supersession_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
+    """A corrected manifest replaces the one it supersedes; a wrong or ambiguous supersession is refused [249] to [252]."""
+    results: dict[str, bool] = {}
+    # The publisher ends the header, and only the header, with a delimiter [256].
+    detail = b"HPSA Name,HPSA ID,\r\nExample Area,1234567890\r\nOther Area,1234567891\r\n"
+
+    def setup(collection: str) -> tuple[str, list[dict[str, str]], dict[str, Any]]:
+        base = store(storage, collection, "hpsa", "HPSA__s", [(None, "DETAIL.csv", detail)], role="dictionary")
+        identity = stored_identity(collection, "hpsa", "DETAIL.csv", detail)
+        change = [{"key": identity["key"], "version_id": identity["version_id"], "from_role": "dictionary", "to_role": "data"}]
+        tables = [
+            {
+                "table": f"{collection.replace('/', '_')}_documents",
+                "group": "s",
+                "collection": collection,
+                "member_pattern": "\\.csv$",
+                "format": "csv_rows",
+                "roles": ["dictionary"],
+            },
+            {
+                "table": f"{collection.replace('/', '_')}_detail",
+                "group": "s",
+                "collection": collection,
+                "member_pattern": "^DETAIL\\.csv$",
+                "format": "csv",
+                "header_trailing_delimiter": True,
+            },
+        ]
+        config = bronze.load_table_map(table_map(root / f"{collection.replace('/', '_')}.json", tables))
+        return base, change, config
+
+    def tables_of(config: dict[str, Any]) -> list[str]:
+        return [table["table"] for table in config["tables"]]
+
+    # [249] Before the correction the file is a document; after it, only the corrected manifest is read.
+    base, change, config = setup("hrsa/supersede")
+    before, _ = bronze.discover(storage, BUCKET, config, tables_of(config))
+    corrected(storage, base, change)
+    after, _ = bronze.discover(storage, BUCKET, config, tables_of(config))
+    results["superseded_manifest_skipped"] = [item["table"] for item in before] == ["hrsa_supersede_documents"] and [item["table"] for item in after] == [
+        "hrsa_supersede_detail"
+    ]
+    # [252] The corrected file loads as a data table with its records.
+    bronze.load_objects(spark, after, storage, "bronze", scratch)
+    rows = spark.table("bronze.hrsa_supersede_detail").collect()
+    results["corrected_file_loads_as_data"] = sorted(row["hpsa_id"] for row in rows) == ["1234567890", "1234567891"]
+    # [256] Without the option the extra header delimiter is refused; with it, a non-empty last header or a wider row is.
+    path = scratch / "trailing_header.csv"
+    path.write_bytes(detail)
+    results["trailing_header_delimiter_needs_option"] = expect_error(lambda: bronze.read_csv(path, None, ["utf-8"], {}), "fields; the header has 3")
+    found = bronze.read_csv(path, None, ["utf-8"], {"header_trailing_delimiter": True})
+    results["trailing_header_delimiter_dropped"] = found["headers"] == ["HPSA Name", "HPSA ID"] and found["rows"] == 2
+    path.write_bytes(b"HPSA Name,HPSA ID\r\nExample Area,1234567890\r\n")
+    results["trailing_header_delimiter_requires_empty_last_header"] = expect_error(
+        lambda: bronze.read_csv(path, None, ["utf-8"], {"header_trailing_delimiter": True}), "empty"
+    )
+    path.write_bytes(b"HPSA Name,HPSA ID,\r\nExample Area,1234567890,\r\n")
+    results["trailing_header_delimiter_rows_keep_width"] = expect_error(
+        lambda: bronze.read_csv(path, None, ["utf-8"], {"header_trailing_delimiter": True}), "fields; the header has 2"
+    )
+    results["trailing_header_delimiter_csv_only"] = expect_error(
+        lambda: bronze.load_table_map(
+            table_map(
+                root / "trailing_rows.json",
+                [{"table": "t_rows", "group": "s", "collection": "x/y", "member_pattern": "x", "format": "csv_rows", "header_trailing_delimiter": True}],
+            )
+        ),
+        "header_trailing_delimiter",
+    )
+    # [250] A supersedes entry that matches no stored manifest, or differs in SHA-256, is refused.
+    base, change, config = setup("hrsa/supersede_missing")
+    target = corrected(storage, base, change)
+    raw = json.loads(storage.get(BUCKET, target["key"], target["version_id"]))
+    raw["supersedes"]["sha256"] = "0" * 64
+    storage.objects[(target["key"], target["version_id"])] = json.dumps(raw).encode()
+    results["supersedes_wrong_hash_refused"] = expect_error(lambda: bronze.discover(storage, BUCKET, config, tables_of(config)), "supersedes")
+    raw["supersedes"]["key"] = f"{base}/gone/manifest.json"
+    storage.objects[(target["key"], target["version_id"])] = json.dumps(raw).encode()
+    results["supersedes_missing_manifest_refused"] = expect_error(lambda: bronze.discover(storage, BUCKET, config, tables_of(config)), "supersedes")
+    # [250] Two manifests superseding one, or a superseding manifest that is itself superseded, are refused.
+    base, change, config = setup("hrsa/supersede_twice")
+    corrected(storage, base, change, name="first")
+    corrected(storage, base, change, name="second")
+    results["two_superseders_refused"] = expect_error(lambda: bronze.discover(storage, BUCKET, config, tables_of(config)), "supersede")
+    base, change, config = setup("hrsa/supersede_chain")
+    corrected(storage, base, change, name="first")
+    chain_base = f"{base.rsplit('/', 1)[0]}/first"
+    corrected(storage, chain_base, [], name="second")
+    results["superseded_superseder_refused"] = expect_error(lambda: bronze.discover(storage, BUCKET, config, tables_of(config)), "supersede")
+    # [251] A superseding manifest with any change beyond the named roles is refused.
+    base, change, config = setup("hrsa/supersede_extra")
+    corrected(storage, base, change, extra={"release_id": "2099-01-01"})
+    results["extra_change_refused"] = expect_error(lambda: bronze.discover(storage, BUCKET, config, tables_of(config)), "beyond")
+    base, change, config = setup("hrsa/supersede_unnamed")
+    corrected(storage, base, [{**change[0], "to_role": "reference"}])
+    raw_key = f"{base.rsplit('/', 1)[0]}/corrected/manifest.json"
+    (version,) = [found for key, found in storage.list_keys(BUCKET, raw_key) if key == raw_key]
+    raw = json.loads(storage.get(BUCKET, raw_key, version))
+    raw["correction"]["changes"][0]["to_role"] = "data"
+    storage.objects[(raw_key, version)] = json.dumps(raw).encode()
+    results["unnamed_role_change_refused"] = expect_error(lambda: bronze.discover(storage, BUCKET, config, tables_of(config)), "beyond")
+    return results
+
+
+def removed_table_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
+    """A table taken out of the map is dropped with its dictionary and side rows; nothing else changes [257] to [260]."""
+    from scripts.lakehouse import dictionary
+
+    results: dict[str, bool] = {}
+    store(storage, "x/removal", "docs", "RM__a", [(None, "drop_me.csv", csv_bytes(["A"], [["1"]])), (None, "keep_me.csv", csv_bytes(["A"], [["2"]]))])
+    drop = {"table": "removal_drop", "group": "rm", "collection": "x/removal", "member_pattern": "^drop_me\\.csv$", "format": "csv"}
+    keep = {"table": "removal_keep", "group": "rm", "collection": "x/removal", "member_pattern": "^keep_me\\.csv$", "format": "csv"}
+    both = bronze.load_table_map(table_map(root / "removal_both.json", [drop, keep]))
+    inputs, unselected = bronze.discover(storage, BUCKET, both, ["removal_drop", "removal_keep"])
+    bronze.load_objects(spark, inputs, storage, "bronze", scratch)
+    bronze.write_copies(spark, "bronze", ["removal_drop", "removal_keep"], inputs, unselected)
+    dictionary.build(spark, both, ["removal_drop", "removal_keep"], "bronze")
+    kept_only = bronze.load_table_map(table_map(root / "removal_kept.json", [keep]))
+    listed = root / "removed_tables.json"
+    listed.write_text(json.dumps({"version": 1, "tables": [{"table": "removal_drop", "reason": "synthetic", "decision": "synthetic"}]}))
+
+    def side_tables(name: str) -> dict[str, int]:
+        return {side: spark.table(f"bronze.{side}").where(f"table_name = '{name}'").count() for side in ("column_map", "stored_copies")}
+
+    # [258] A listed table still in the map, a bad name or a repeat is refused before anything is dropped.
+    results["removed_table_still_mapped_refused"] = expect_error(lambda: bronze.load_removed(listed, both), "still in the table map")
+    bad = root / "removed_bad.json"
+    bad.write_text(json.dumps({"version": 1, "tables": [{"table": "x; DROP", "reason": "r", "decision": "d"}]}))
+    results["removed_table_bad_name_refused"] = expect_error(lambda: bronze.load_removed(bad, kept_only), "identifier")
+    twice = root / "removed_twice.json"
+    twice.write_text(json.dumps({"version": 1, "tables": [{"table": "removal_drop", "reason": "r", "decision": "d"}] * 2}))
+    results["removed_table_repeat_refused"] = expect_error(lambda: bronze.load_removed(twice, kept_only), "twice")
+    before_keep = side_tables("removal_keep")
+    # [257] The table, its dictionary and its side rows go.
+    outcome = bronze.drop_removed(spark, bronze.load_removed(listed, kept_only), "bronze")
+    results["removed_table_dropped"] = (
+        outcome == {"removal_drop": "dropped"}
+        and not spark.catalog.tableExists("bronze.removal_drop")
+        and not spark.catalog.tableExists(f"{dictionary.NAMESPACE}.removal_drop")
+        and side_tables("removal_drop") == {"column_map": 0, "stored_copies": 0}
+    )
+    # [260] Every other table keeps its rows, dictionary and side rows.
+    results["other_tables_untouched"] = (
+        spark.table("bronze.removal_keep").count() == 1
+        and spark.catalog.tableExists(f"{dictionary.NAMESPACE}.removal_keep")
+        and side_tables("removal_keep") == before_keep
+        and before_keep["column_map"] > 0
+    )
+    # [259] A rerun reports the table as absent and changes nothing.
+    results["removed_table_rerun_absent"] = bronze.drop_removed(spark, bronze.load_removed(listed, kept_only), "bronze") == {"removal_drop": "absent"}
     return results
 
 

@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from scripts.acquisition import bls_api_contract as bls_contract
 from scripts.acquisition import reference_download_contract as contract
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.run_bls_api_e2e import inventory
 from scripts.acquisition.run_hud_xlsx_e2e import download_metadata, set_origin
 from scripts.acquisition.s3_store import TERMS_ACCEPTANCE_PATH, encoded_json, fingerprint, write_once
@@ -140,7 +141,7 @@ def exercise(root: Path) -> list[dict]:
         def held_with_terms() -> None:
             held = entries["usps_crosswalk.html"]
             result = execute(plan, held, root / "held", downloads, True, FakeS3(), OUTPUTS)
-            receipt = read_json(Path(result["receipt_path"]))
+            receipt = read_json(Path(current(result["receipt_path"])))
             lineage = json.loads(receipt["lineage"]["extraction_or_query"])
             require(
                 result["status"] == "stored" and receipt["acquisition"]["preferred_route"] == "documentation_only", "Held reference not stored as documentation"

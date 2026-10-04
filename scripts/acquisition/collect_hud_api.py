@@ -15,6 +15,7 @@ from scripts.acquisition.capture import base_receipt, receipt_validator, validat
 from scripts.acquisition.collect_census_acs_api import aws_runner
 from scripts.acquisition.collect_mmd_api import artifact
 from scripts.acquisition.collection_layout import load_routes, object_prefix
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.dataset_layout import source_folder
 from scripts.acquisition.hud_api_transport import collection_lock, fetch
 from scripts.acquisition.process import run_command
@@ -31,7 +32,7 @@ def make_receipt(plan: dict, batch: dict, envelope: dict, root: Path) -> Path:
     registry, validator = load_registry(expected_sha256=plan["registry_sha256"]), receipt_validator()
     require(plan["registry_sha256"] == canonical_hash(registry), "HUD base registry changed")
     source = next(s for s in registry["sources"] if s["source_id"] == "HUD")
-    terms = next(d for d in read_json(REPO_ROOT / plan["terms"]["path"])["datasets"] if d["source_id"] == "HUD")
+    terms = next(d for d in read_json(REPO_ROOT / current(plan["terms"]["path"]))["datasets"] if d["source_id"] == "HUD")
     raw = bytes.fromhex(envelope["body_hex"])
     derived, statistics = contract.validate_response(raw, batch, plan)
     snapshot = root / "batches" / batch["id"] / "capture"
@@ -278,7 +279,7 @@ def main() -> None:
         outputs: dict = {}
         # Quarters run in order; the first failure stops the run so no later quarter is skipped past.
         for plan in contract.load_plans():
-            root = REPO_ROOT / "data/historical_acquisition/hud_usps_crosswalk" / plan["vintage"]
+            root = REPO_ROOT / "data/datasets/historical_acquisition/hud_usps_crosswalk" / plan["vintage"]
             with collection_lock(root):
                 for batch in plan["batches"]:
                     already = (root / "batches" / batch["id"] / "completed.json").exists()

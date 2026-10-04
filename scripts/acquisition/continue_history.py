@@ -61,7 +61,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive-maps", type=Path, required=True)
     parser.add_argument("--plan-register", type=Path, required=True)
-    parser.add_argument("--state-root", type=Path, default=REPO_ROOT / "data/historical_acquisition/reviewed_archives")
+    parser.add_argument("--state-root", type=Path, default=REPO_ROOT / "data/datasets/historical_acquisition/reviewed_archives")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--workers", type=int, default=3, choices=range(1, 5))
     args = parser.parse_args()

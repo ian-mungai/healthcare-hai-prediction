@@ -33,6 +33,7 @@ SUITES = [
     "history",
     "redownload",
     "registry_additions",
+    "manifest_correction",
     # Off macOS, the HUD and WONDER suites substitute only the browser-download metadata reads (see run_hud_xlsx_e2e).
     "hud_xlsx",
 ]

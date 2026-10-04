@@ -72,6 +72,12 @@ repos:
         language: system
         types: [markdown]
         exclude: ^data/
+      - id: sqlfluff
+        # Pinned SQLFluff with the dbt templater from scripts/quality/install_sqlfluff.py, in its own environment.
+        name: dbt SQL follows the SQL style (SQLFluff, dbt templater)
+        entry: .tools/sqlfluff/bin/sqlfluff lint
+        language: system
+        files: ^dbt/(models|tests)/.*\.sql$
       - id: documentation-review
         name: All documentation reviewed for the staged revision
         entry: .venv/bin/python -m scripts.quality.documentation_review check
@@ -108,7 +114,7 @@ repos:
         entry: .venv/bin/python -m scripts.quality.run_checks_e2e
         language: system
         pass_filenames: false
-        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|scan_secrets|install_markdownlint))\.py|scripts/quality/markdownlint/.*|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist|\.markdownlint-cli2\.jsonc)$
+        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|scan_secrets|install_markdownlint|install_sqlfluff))\.py|scripts/quality/(markdownlint|sqlfluff)/.*|\.sqlfluff|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist|\.markdownlint-cli2\.jsonc)$
       - id: test-documentation-review
         name: Documentation review accepts good evidence and rejects bad evidence
         entry: .venv/bin/python -m scripts.quality.run_documentation_review_e2e

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from scripts.acquisition.bls_api_contract import code_hashes, digest
 from scripts.acquisition.code_versions import read_code_versions
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/census_acs_detailed_plan.json"
@@ -53,7 +54,7 @@ def require_code(hashes: dict | None = None) -> dict:
 
 def variables_of(batch: dict) -> dict:
     """The pinned group dictionary's variables."""
-    return read_json(REPO_ROOT / batch["metadata"]["path"])["variables"]
+    return read_json(REPO_ROOT / current(batch["metadata"]["path"]))["variables"]
 
 
 def less_lines(table: str, variables: dict) -> list[str]:
@@ -75,7 +76,7 @@ def load_plan(path: Path | None = None) -> dict:
     )
     require(plan["registry_sha256"] == canonical_hash(load_registry(expected_sha256=plan["registry_sha256"])), "Census detailed registry differs")
     for ref in plan["references"]:
-        require(digest((REPO_ROOT / ref["path"]).read_bytes()) == ref["sha256"], "Census detailed reference changed")
+        require(digest((REPO_ROOT / current(ref["path"])).read_bytes()) == ref["sha256"], "Census detailed reference changed")
     for batch in plan["batches"]:
         require(batch["id"] == batch_id(batch) and batch["metadata"] in plan["references"], "Census detailed batch binding differs")
         variables = variables_of(batch)
@@ -221,7 +222,7 @@ def derive(plan: dict, observations: dict[str, bytes]) -> tuple[dict[str, bytes]
     for check_spec in plan["comparisons"]:
         kind, year = check_spec["kind"], check_spec["year"]
         if kind == "poverty":
-            result = check(kind, values("B17001", year), published(REPO_ROOT / check_spec["file"]["path"]))
+            result = check(kind, values("B17001", year), published(REPO_ROOT / current(check_spec["file"]["path"])))
         else:
             result = check_tables(values("B16001", year), values("B16004", year))
         result["year"] = year

@@ -1,0 +1,143 @@
+version: 2
+
+models:
+  - name: int_hai_hospital_windows
+    description: >
+      One HAI hospital row per entity, measure ID and measurement window, from the file with the latest stored release
+      (BRZ-002; failure modes 230 to 236, data/lakehouse_planning/hai_windows_20261004/failure_modes.md). Windows whose
+      latest release holds two rows are held in int_hai_window_holds instead.
+    columns:
+      - name: window_key
+        description: Entity, measure ID, window start and window end, the model's key.
+        data_tests: [unique, not_null]
+      - name: entity_id
+        description: The CMS Certification Number (facility_id, or provider_id in older layouts).
+        data_tests: [not_null]
+      - name: measure_id
+        description: The CMS measure ID.
+        data_tests: [not_null]
+      - name: window_start
+        description: First day of the measurement window, parsed from m/d/yyyy.
+        data_tests: [not_null]
+      - name: window_end
+        description: Last day of the measurement window.
+        data_tests: [not_null]
+      - name: measure_name
+        description: The measure name as published in the chosen row.
+      - name: score
+        description: The published score, as text; typing happens in later models.
+      - name: footnote
+        description: The published footnote code, as text.
+      - name: member_sha256
+        description: SHA-256 of the file the chosen row comes from.
+        data_tests: [not_null]
+      - name: object_key
+        description: Object key of the loaded copy of that file.
+      - name: release_date
+        description: The file's latest publication date; the latest across files carrying the window.
+        data_tests: [not_null]
+      - name: release_file_count
+        description: Distinct files that carry the window in any release.
+
+  - name: int_hai_state_windows
+    description: >
+      One HAI state row per entity, measure ID and measurement window, from the file with the latest stored release
+      (BRZ-002; failure modes 230 to 236, data/lakehouse_planning/hai_windows_20261004/failure_modes.md). Windows whose
+      latest release holds two rows are held in int_hai_window_holds instead.
+    columns:
+      - name: window_key
+        description: Entity, measure ID, window start and window end, the model's key.
+        data_tests: [unique, not_null]
+      - name: entity_id
+        description: The two-letter state code.
+        data_tests: [not_null]
+      - name: measure_id
+        description: The CMS measure ID.
+        data_tests: [not_null]
+      - name: window_start
+        description: First day of the measurement window, parsed from m/d/yyyy.
+        data_tests: [not_null]
+      - name: window_end
+        description: Last day of the measurement window.
+        data_tests: [not_null]
+      - name: measure_name
+        description: The measure name as published in the chosen row.
+      - name: score
+        description: The published score, as text; typing happens in later models.
+      - name: footnote
+        description: The published footnote code, as text.
+      - name: member_sha256
+        description: SHA-256 of the file the chosen row comes from.
+        data_tests: [not_null]
+      - name: object_key
+        description: Object key of the loaded copy of that file.
+      - name: release_date
+        description: The file's latest publication date; the latest across files carrying the window.
+        data_tests: [not_null]
+      - name: release_file_count
+        description: Distinct files that carry the window in any release.
+
+  - name: int_hai_national_windows
+    description: >
+      One HAI national row per entity, measure ID and measurement window, from the file with the latest stored release
+      (BRZ-002; failure modes 230 to 236, data/lakehouse_planning/hai_windows_20261004/failure_modes.md). Windows whose
+      latest release holds two rows are held in int_hai_window_holds instead.
+    columns:
+      - name: window_key
+        description: Entity, measure ID, window start and window end, the model's key.
+        data_tests: [unique, not_null]
+      - name: entity_id
+        description: Always US.
+        data_tests: [not_null]
+      - name: measure_id
+        description: The CMS measure ID.
+        data_tests: [not_null]
+      - name: window_start
+        description: First day of the measurement window, parsed from m/d/yyyy.
+        data_tests: [not_null]
+      - name: window_end
+        description: Last day of the measurement window.
+        data_tests: [not_null]
+      - name: measure_name
+        description: The measure name as published in the chosen row.
+      - name: score
+        description: The published score, as text; typing happens in later models.
+      - name: footnote
+        description: The published footnote code, as text.
+      - name: member_sha256
+        description: SHA-256 of the file the chosen row comes from.
+        data_tests: [not_null]
+      - name: object_key
+        description: Object key of the loaded copy of that file.
+      - name: release_date
+        description: The file's latest publication date; the latest across files carrying the window.
+        data_tests: [not_null]
+      - name: release_file_count
+        description: Distinct files that carry the window in any release.
+
+  - name: int_hai_window_holds
+    description: >
+      HAI rows the window models leave out, by reason: no_key, unparsed_date, label_held, undated_release,
+      same_date_conflict (two files at the latest release date) or repeated_in_file (failure modes 232 to 235).
+    columns:
+      - name: bronze_table
+        description: The bronze HAI table the rows come from.
+        data_tests: [not_null]
+      - name: hold_reason
+        description: Why the rows are left out.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [no_key, unparsed_date, label_held, undated_release, same_date_conflict, repeated_in_file]
+      - name: entity_id
+        description: The entity, when the rows have one.
+      - name: measure_id
+        description: The measure ID, when the rows have one.
+      - name: window_start
+        description: The window start, for window-level holds.
+      - name: window_end
+        description: The window end, for window-level holds.
+      - name: row_count
+        description: Rows left out for this reason and key.
+        data_tests: [not_null]

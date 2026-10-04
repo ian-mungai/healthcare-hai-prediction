@@ -214,11 +214,22 @@
       "table": "cms_occupational_mix_text_lines",
       "group": "hospital_structure_files",
       "collection": "cms/occupational_mix",
-      "member_pattern": "(?i)\\.(txt|csv)$",
+      "member_pattern": "(?i)^(?!FY_2017_FR_(?:AHW_by_Provider_Area_Listing_072616ml|Deleted_S3_Data|OccMix_PUF|S3_Data_PUF|cbsaoccmix_nooccmix_06302016|provcbsaahw_06302016|provoccmix_06302016)\\.txt$).*\\.(txt|csv)$",
       "format": "text_lines",
       "encodings": [
         "utf-8",
         "cp1252"
+      ]
+    },
+    {
+      "table": "cms_occupational_mix_text_lines_utf16",
+      "group": "hospital_structure_files",
+      "collection": "cms/occupational_mix",
+      "member_pattern": "(?i)^FY_2017_FR_(?:AHW_by_Provider_Area_Listing_072616ml|Deleted_S3_Data|OccMix_PUF|S3_Data_PUF|cbsaoccmix_nooccmix_06302016|provcbsaahw_06302016|provoccmix_06302016)\\.txt$",
+      "snapshot_pattern": "^CMS_OCCMIX__20260924T175937Z__c676a40964ce48d880862390e3dcc187$",
+      "format": "text_lines",
+      "encodings": [
+        "utf-16"
       ]
     },
     {
@@ -238,8 +249,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "cms_provider_of_services_dictionaries",
@@ -251,8 +261,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "cms_hospital_cost_reports_dictionaries",
@@ -264,8 +273,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "cms_hospital_ownership_dictionaries",
@@ -277,8 +285,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "cms_medicare_inpatient_dictionaries",
@@ -290,8 +297,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "cms_ipps_dictionaries",
@@ -303,8 +309,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "bls_laus",
@@ -331,8 +336,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "acs_dp02",
@@ -769,7 +773,6 @@
         "methodology",
         "reference"
       ],
-      "distinct_files": true,
       "byte_order_mark": true,
       "quoted_fields": true
     },
@@ -787,8 +790,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "acs_documents_sheets",
@@ -800,8 +802,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "acs_documents_json",
@@ -811,8 +812,7 @@
       "member_pattern": "\\.json$",
       "roles": [
         "dictionary"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "saipe_text_lines",
@@ -839,8 +839,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "sahie",
@@ -882,8 +881,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "county_adjacency",
@@ -922,8 +920,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "rucc",
@@ -957,8 +954,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "ruca_tracts_2020",
@@ -1014,8 +1010,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "ruca_documents_pdf",
@@ -1027,8 +1022,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "hud_zip_county",
@@ -1062,8 +1056,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "hud_documents_pdf",
@@ -1075,8 +1068,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "svi",
@@ -1104,8 +1096,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "places",
@@ -1132,8 +1123,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "wonder_county_mortality",
@@ -1171,8 +1161,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "cms_mmd_csv",
@@ -1195,8 +1184,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "cms_hsa_csv",
@@ -1224,8 +1212,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "cms_geographic_variation_csv",
@@ -1252,8 +1239,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "cms_chronic_conditions_documents_pdf",
@@ -1265,8 +1251,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "hhs_capacity_csv",
@@ -1293,8 +1278,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "onc_pi_attestations_csv",
@@ -1326,23 +1310,6 @@
       "format": "sheet_rows"
     },
     {
-      "table": "hrsa_shortage_documents_csv",
-      "group": "federal_context",
-      "collection": "hrsa/shortage_areas",
-      "member_pattern": "(?i)\\.csv$",
-      "format": "csv_rows",
-      "encodings": [
-        "utf-8",
-        "cp1252"
-      ],
-      "roles": [
-        "dictionary",
-        "methodology",
-        "reference"
-      ],
-      "distinct_files": true
-    },
-    {
       "table": "hrsa_shortage_documents_sheets",
       "group": "federal_context",
       "collection": "hrsa/shortage_areas",
@@ -1352,8 +1319,28 @@
         "dictionary",
         "methodology",
         "reference"
+      ]
+    },
+    {
+      "table": "hrsa_hpsa_detail",
+      "group": "federal_context",
+      "collection": "hrsa/shortage_areas",
+      "member_pattern": "^BCD_HPSA_FCT_DET_PC\\.csv$",
+      "format": "csv",
+      "encodings": [
+        "utf-8"
       ],
-      "distinct_files": true
+      "header_trailing_delimiter": true
+    },
+    {
+      "table": "hrsa_mua_detail",
+      "group": "federal_context",
+      "collection": "hrsa/shortage_areas",
+      "member_pattern": "^MUA_DET\\.csv$",
+      "format": "csv",
+      "encodings": [
+        "utf-8"
+      ]
     },
     {
       "table": "hrsa_nursing_documents_sheets",
@@ -1365,8 +1352,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "hrsa_nursing_documents_docx",
@@ -1378,8 +1364,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "ahrq_psi_documents_pdf",
@@ -1391,8 +1376,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "nsi_retention_pdf",
@@ -1441,8 +1425,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "hcai_finance_documents_docx",
@@ -1454,8 +1437,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "hcai_finance_documents_sheets",
@@ -1467,8 +1449,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "hcai_util_pages_csv",
@@ -1504,8 +1485,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "hcai_util_documents_csv",
@@ -1521,8 +1501,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "illinois_report_card_csv",
@@ -1587,8 +1566,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "maryland_nurse_support_pdf",
@@ -1621,8 +1599,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "maryland_nurse_support_documents_sheets",
@@ -1634,8 +1611,7 @@
         "dictionary",
         "methodology",
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "new_york_infections_pdf",
@@ -1659,8 +1635,7 @@
       "format": "pdf_rows",
       "roles": [
         "reference"
-      ],
-      "distinct_files": true
+      ]
     },
     {
       "table": "cms_cc_4aav_bsmy",

@@ -8,11 +8,12 @@ from pathlib import Path
 
 from scripts.acquisition import census_acs_api_contract as contract
 from scripts.acquisition.capture import receipt_validator, validate_receipt
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 from scripts.acquisition.transport import Limits, download
 
-REFERENCES = REPO_ROOT / "data/historical_acquisition/census_acs_api_history/20260926/references"
+REFERENCES = REPO_ROOT / "data/datasets/historical_acquisition/census_acs_api_history/20260926/references"
 
 
 def reference(path: Path, url: str) -> dict:
@@ -22,7 +23,7 @@ def reference(path: Path, url: str) -> dict:
 
 def geography() -> list[tuple[list[dict], set[str]]]:
     """Per stored geography file: its references and native summary-level-050 county IDs."""
-    files = sorted((REPO_ROOT / "data/historical_acquisition/acs_2009_history").glob("jobs/*/captures/ACS/*/raw/g20095*.txt"))
+    files = sorted((REPO_ROOT / "data/datasets/historical_acquisition/acs_2009_history").glob("jobs/*/captures/ACS/*/raw/g20095*.txt"))
     require(len(files) == 53, "Expected 2009 geography files for 50 states, DC, PR and US")
     result, counties = [], set()
     for path in files:
@@ -50,7 +51,7 @@ def dictionary(table: str) -> tuple[list[dict], dict]:
     result = read_json(REFERENCES / table / "receipt.json")
     url = f"{contract.ENDPOINT}/groups/{table}.json"
     require(result["complete"] and result["requested_url"] == result["resolved_url"] == url, "Dictionary transport differs")
-    path = REPO_ROOT / result["path"]
+    path = REPO_ROOT / current(result["path"])
     require(contract.digest(path.read_bytes()) == result["sha256"], "Dictionary bytes differ")
     ref = reference(path, url)
     variables = read_json(path)["variables"]

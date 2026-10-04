@@ -1202,7 +1202,7 @@
       ],
       "id": "a384c23fe30d3d68749a0214ad5a25eb19615ec751fb7df185e9449f3a98e5d0",
       "metadata": {
-        "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP02PR/attempt_01/group.json",
+        "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP02PR/attempt_01/group.json",
         "sha256": "283d4750de4529798e7ba4864bdb2058b2d6298c593144c2ab8bd0869e8e461e",
         "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP02PR.json"
       },
@@ -1297,22 +1297,22 @@
   "model_eligible": false,
   "references": [
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_cc1846c0e139168b/captures/ACS/ACS__20260924T192141Z__b225d5fdb5d047c3a64aaeb2327c76f5/raw/g20095pr.txt",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_cc1846c0e139168b/captures/ACS/ACS__20260924T192141Z__b225d5fdb5d047c3a64aaeb2327c76f5/raw/g20095pr.txt",
       "sha256": "6e753d0c29f54e6eede24e46b8b6a7efe1d2325a37bbe91318a5df6a8abc2e55",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/PuertoRico/All_Geographies_Not_Tracts_Block_Groups/g20095pr.txt"
     },
     {
-      "path": "data/historical_acquisition/acs_2009_history/jobs/ACS_history_cc1846c0e139168b/captures/ACS/ACS__20260924T192141Z__b225d5fdb5d047c3a64aaeb2327c76f5/receipt.json",
+      "path": "data/datasets/historical_acquisition/acs_2009_history/jobs/ACS_history_cc1846c0e139168b/captures/ACS/ACS__20260924T192141Z__b225d5fdb5d047c3a64aaeb2327c76f5/receipt.json",
       "sha256": "382122e72904da17eba0571deae88183c8fc5ff99944f77c3b4da9bb6796f0c9",
       "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/PuertoRico/All_Geographies_Not_Tracts_Block_Groups/g20095pr.txt"
     },
     {
-      "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP02PR/attempt_01/group.json",
+      "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP02PR/attempt_01/group.json",
       "sha256": "283d4750de4529798e7ba4864bdb2058b2d6298c593144c2ab8bd0869e8e461e",
       "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP02PR.json"
     },
     {
-      "path": "data/historical_acquisition/census_acs_api_history/20260926/references/DP02PR/receipt.json",
+      "path": "data/datasets/historical_acquisition/census_acs_api_history/20260926/references/DP02PR/receipt.json",
       "sha256": "9528c6c69b371aded2693f6b9dc99b0ffbeba95a2d5d854118bb31119acebc86",
       "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP02PR.json"
     }
@@ -1322,7 +1322,7 @@
   "review_status": "All definition, geography, precision and modeling holds retained",
   "scope": "All published DP02PR variables; all 78 2009 Puerto Rico municipios",
   "source_id": "ACS",
-  "supplements_plan_sha256": "13198e46bc60b8c1c7e1e0d0cf8de7faebc69f68b8a772a2671ffb8f660f3ff5",
+  "supplements_plan_sha256": "142b246e4f0a2e1656d5a2454dc44f7069fe529bfd021e9dccdc4c401ea6c5f3",
   "version": 2,
   "vintage": "20260926",
   "window": [
