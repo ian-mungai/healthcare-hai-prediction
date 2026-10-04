@@ -1,0 +1,468 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "healthcare-hai-prediction Architecture",
+    "output": "docs/architecture/architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/ian-mungai/healthcare-hai-prediction.git",
+      "provider": "github",
+      "link_mode": "local-only",
+      "revision": "e4e7aaefe32b7383e5579b7ffe83d88c9ddc9a28"
+    }
+  },
+  "components": [
+    {
+      "id": "publishers",
+      "type": "external",
+      "label": "Public publishers",
+      "sublabel": "CMS, Census, BLS, HUD, HRSA, states",
+      "pos": [
+        40,
+        200
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "sources": [
+        {
+          "path": "scripts/acquisition/transport.py",
+          "line": 288,
+          "end_line": 310,
+          "label": "HTTPS request"
+        }
+      ]
+    },
+    {
+      "id": "collectors",
+      "type": "backend",
+      "label": "Acquisition collectors",
+      "sublabel": "locked plans, bounded retries",
+      "pos": [
+        340,
+        200
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "scripts/acquisition/capture.py",
+          "line": 241,
+          "label": "capture"
+        },
+        {
+          "path": "scripts/acquisition/transport.py",
+          "line": 37,
+          "end_line": 50,
+          "label": "request limits"
+        },
+        {
+          "path": "scripts/acquisition/transport.py",
+          "line": 394,
+          "end_line": 396,
+          "label": "retry rule"
+        }
+      ]
+    },
+    {
+      "id": "evidence",
+      "type": "database",
+      "label": "Local evidence",
+      "sublabel": "receipts, SHA-256, originals",
+      "tag": "ignored by Git",
+      "pos": [
+        340,
+        380
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "scripts/acquisition/capture.py",
+          "line": 27,
+          "end_line": 40,
+          "label": "receipt schema"
+        }
+      ]
+    },
+    {
+      "id": "terraform",
+      "type": "backend",
+      "label": "Terraform",
+      "sublabel": "storage and IAM stacks",
+      "tag": "saved plans",
+      "pos": [
+        340,
+        540
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "infra/versions.tf",
+          "line": 1,
+          "end_line": 10,
+          "label": "Terraform 1.16"
+        },
+        {
+          "path": "infra/iam/main.tf",
+          "line": 23,
+          "end_line": 43,
+          "label": "IAM policies"
+        }
+      ]
+    },
+    {
+      "id": "secrets",
+      "type": "security",
+      "label": "Secrets Manager",
+      "sublabel": "shared Census, BLS, HUD keys",
+      "pos": [
+        720,
+        40
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "scripts/acquisition/census_acs_api_transport.py",
+          "line": 31,
+          "label": "key read"
+        },
+        {
+          "path": "infra/iam/policies/secrets_policy.json",
+          "line": 4,
+          "end_line": 15,
+          "label": "read-only grant"
+        }
+      ]
+    },
+    {
+      "id": "bucket",
+      "type": "cloud",
+      "label": "S3 data bucket",
+      "sublabel": "versioned, SSE-S3, TLS only",
+      "tag": "Confidential",
+      "pos": [
+        720,
+        200
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "infra/main.tf",
+          "line": 18,
+          "end_line": 52,
+          "label": "bucket, access block"
+        },
+        {
+          "path": "infra/main.tf",
+          "line": 54,
+          "end_line": 77,
+          "label": "versions, encryption"
+        },
+        {
+          "path": "scripts/acquisition/s3_store.py",
+          "line": 160,
+          "end_line": 200,
+          "label": "write-once, readback"
+        }
+      ]
+    },
+    {
+      "id": "iam",
+      "type": "security",
+      "label": "IAM project user",
+      "sublabel": "write-once raw, lakehouse/",
+      "pos": [
+        720,
+        540
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "infra/iam/policies/s3_policy.json",
+          "line": 1,
+          "label": "raw data grants"
+        },
+        {
+          "path": "infra/iam/policies/lakehouse_policy.json",
+          "line": 14,
+          "label": "lakehouse/ prefix"
+        }
+      ]
+    },
+    {
+      "id": "spark",
+      "type": "backend",
+      "label": "Spark jobs",
+      "sublabel": "bronze load, dictionary, checksums",
+      "tag": "one copy per file",
+      "pos": [
+        1100,
+        200
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "sources": [
+        {
+          "path": "scripts/lakehouse/bronze.py",
+          "line": 356,
+          "end_line": 380,
+          "label": "manifest discovery"
+        },
+        {
+          "path": "scripts/lakehouse/bronze.py",
+          "line": 803,
+          "end_line": 806,
+          "label": "stored_copies"
+        },
+        {
+          "path": "docker-compose.yaml",
+          "line": 76,
+          "end_line": 93,
+          "label": "Spark service"
+        }
+      ]
+    },
+    {
+      "id": "polaris",
+      "type": "database",
+      "label": "Polaris catalog",
+      "sublabel": "Iceberg REST, PostgreSQL",
+      "pos": [
+        1440,
+        200
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yaml",
+          "line": 21,
+          "end_line": 75,
+          "label": "catalog services"
+        },
+        {
+          "path": "scripts/lakehouse/catalog.py",
+          "line": 227,
+          "label": "catalog up"
+        }
+      ]
+    },
+    {
+      "id": "duckdb",
+      "type": "database",
+      "label": "DuckDB and dbt",
+      "sublabel": "silver stg_ and int_ models",
+      "tag": "read-only attach",
+      "pos": [
+        1440,
+        380
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "services/analytics/bronze.sql",
+          "line": 22,
+          "end_line": 28,
+          "label": "read-only attach"
+        },
+        {
+          "path": "dbt/profiles.yml",
+          "line": 31,
+          "label": "dbt read_only"
+        },
+        {
+          "path": "docker-compose.yaml",
+          "line": 113,
+          "end_line": 136,
+          "label": "dbt service"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Developer Mac",
+      "wraps": [
+        "collectors",
+        "evidence",
+        "terraform"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "AWS account (us-west-2)",
+      "wraps": [
+        "secrets",
+        "bucket",
+        "iam"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Local lakehouse (Docker Compose on the Mac)",
+      "wraps": [
+        "spark",
+        "polaris",
+        "duckdb"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "fetch",
+      "from": "publishers",
+      "to": "collectors",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "id": "store",
+      "from": "collectors",
+      "to": "bucket",
+      "label": "write-once, readback",
+      "variant": "emphasis"
+    },
+    {
+      "id": "read-manifests",
+      "from": "bucket",
+      "to": "spark",
+      "label": "manifests, objects",
+      "variant": "emphasis"
+    },
+    {
+      "id": "commit-tables",
+      "from": "spark",
+      "to": "polaris",
+      "label": "Iceberg REST",
+      "variant": "emphasis"
+    },
+    {
+      "id": "attach",
+      "from": "polaris",
+      "to": "duckdb",
+      "label": "read-only",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "receipts",
+      "from": "collectors",
+      "to": "evidence",
+      "label": "receipts",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "api-keys",
+      "from": "secrets",
+      "to": "collectors",
+      "label": "API keys",
+      "variant": "security",
+      "fromSide": "left",
+      "toSide": "top"
+    },
+    {
+      "id": "apply",
+      "from": "terraform",
+      "to": "iam",
+      "label": "saved plans",
+      "variant": "dashed"
+    },
+    {
+      "id": "grants",
+      "from": "iam",
+      "to": "bucket",
+      "label": "least privilege",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "table-files",
+      "from": "spark",
+      "to": "bucket",
+      "label": "writes lakehouse/",
+      "fromSide": "top",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Acquisition",
+      "items": [
+        "Publisher APIs first, then download URLs; manual export only by choice",
+        "Locked plans and reviewed code versions gate every new capture",
+        "Raw responses kept byte for byte; CSVs derived and replayed offline"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Storage and access",
+      "items": [
+        "One versioned, encrypted, TLS-only bucket with public access blocked",
+        "Project user: write-once raw data, lakehouse/ read-write, shared keys read-only",
+        "Originals with personal data stay local with owner-only access",
+        "Replaced lakehouse/ versions expire after 30 days; nothing else expires",
+        "Deferred: access logging, KMS, replication, event notifications"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Lakehouse",
+      "items": [
+        "Bronze reads only the S3 manifests and the committed table map",
+        "One copy per stored file; bronze.stored_copies lists every copy",
+        "Each row traces to its S3 key, version and SHA-256",
+        "dbt staging keeps one row per HAI measurement window"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Verification",
+      "items": [
+        "Commits and GitHub Actions run the same pre-commit hooks, without AWS credentials",
+        "Ruff, MyPy, SQLFluff, secret scan, repository and cleanup checks",
+        "Terraform plans are tested with a mock provider; tflint, checkov, trivy",
+        "E2E runs leave repeatable artifacts under data/e2e",
+        "Diagram checked against commit e4e7aae; every component cites its source lines"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Planned (not built)",
+      "items": [
+        "Orchestration with scheduled DAGs",
+        "Gold marts for modeling (dbt dim_ and fact_)",
+        "Feature store, MLflow model comparison and external validation"
+      ]
+    }
+  ]
+}

@@ -51,7 +51,8 @@ diagram shows what is built and what is planned.
 ## Install
 
 Prerequisites: macOS on Apple silicon or Linux AMD64, Python 3.12, Git,
-Terraform 1.16.1 and AWS CLI v2. Google Chrome renders the architecture diagram.
+Terraform 1.16.1 and AWS CLI v2. Node.js 18 or later and Google Chrome render the
+architecture diagram.
 The lakehouse needs Docker Desktop with at least 24 GB of memory: the bronze,
 dictionary and checksum jobs give Spark a 12 GB heap (`JOB_MEMORY` in
 `scripts/lakehouse/session.py`).
@@ -187,14 +188,23 @@ retain the ignored local documentation review record (see [Quality Checks](#qual
 
 ![Architecture diagram](docs/architecture/architecture.png)
 
-The diagram source is `docs/architecture/architecture.html`; the PNG is rendered
-from it with headless Chrome. Dashed components are planned, not built.
+The diagram source is `docs/architecture/architecture.json`, drawn with
+[Archify](https://github.com/tt-a1i/archify) v3.0.1. Each component cites the
+lines of code or configuration it was checked against, at the commit named in
+the JSON. Its `finalize` command validates the JSON, writes
+`docs/architecture/architecture.html` and checks it in Chrome; the PNG is
+rendered from the HTML with headless Chrome. Planned components are listed in
+the "Planned (not built)" card. With Archify unpacked at `<archify>`:
 
 ```sh
+ARCHIFY_UPDATE_CHECK_DISABLED=1 node <archify>/bin/archify.mjs finalize architecture \
+  docs/architecture/architecture.json docs/architecture/architecture.html --repo-root . --quality showcase
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars \
-  --window-size=1200,1640 --virtual-time-budget=5000 \
+  --window-size=1600,1120 --virtual-time-budget=5000 \
   --screenshot=docs/architecture/architecture.png "file://$PWD/docs/architecture/architecture.html"
 ```
+
+`finalize` also writes receipt files beside the HTML; keep them out of Git.
 
 ## Data
 
@@ -487,7 +497,7 @@ No AWS changes implementing these four deferred controls have been applied.
 - `scripts/run_ci.sh`: the local CI script; the `local_ci` hook runs it on every commit and in GitHub CI.
 - `tests/`: retained pytest regression safeguards and their `check()` helper.
 - `config/quality_tools.json`: pinned native tool versions and publisher hashes.
-- `docs/architecture/`: the architecture diagram source and its rendered PNG.
+- `docs/architecture/`: the architecture diagram source (`architecture.json`), the HTML that Archify renders from it and the PNG.
 - `dbt/`, `.sqlfluff`: the dbt staging project (sources, staging and intermediate models, seeds and tests) and its SQL style.
 - `scripts/review/`, `requirements-review.txt`: the schema-review tools and their hash-pinned packages.
 - `docs/data_collection.md`: how the source data was collected and how to recheck it.

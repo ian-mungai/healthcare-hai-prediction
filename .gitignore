@@ -59,3 +59,5 @@ crash.log
 crash.*.log
 # dbt build output from the SQLFluff dbt templater; runs in the container write to data/analytics/dbt/
 /dbt/target/
+# Receipts that Archify finalize writes beside the diagram HTML; the JSON source and HTML are committed.
+/docs/architecture/architecture.*.json
