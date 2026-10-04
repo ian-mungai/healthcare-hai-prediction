@@ -96,6 +96,8 @@ CASES = [
     Case("saved Terraform plan", "credential-files", False, {"infra/reviewed.tfplan": "placeholder\n"}),
     Case("private key file", "credential-files", False, {"keys/deploy.pem": "placeholder\n"}),
     Case("CSV in the declared folder", "data-files", True, {"tests/fixtures/result.csv": "a,b\n1,2\n"}),
+    Case("CSV dbt seed in the declared seeds folder", "data-files", True, {"dbt/seeds/labels.csv": "a,b\n1,2\n"}),
+    Case("CSV beside the dbt seeds folder", "data-files", False, {"dbt/models/labels.csv": "a,b\n1,2\n"}),
     Case("CSV outside the declared folder", "data-files", False, {"data/hospitals.csv": "a,b\n1,2\n"}),
     Case("file over 5 MB", "data-files", False, {"docs/big.bin": b"\0" * (5 * 1024 * 1024 + 1)}),
     Case("file at 5 MB", "data-files", True, {"docs/ok.bin": b"\0" * (5 * 1024 * 1024)}),

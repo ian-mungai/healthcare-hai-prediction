@@ -27,7 +27,9 @@ ASK = "if the rule seems wrong here, stop and ask the repository owner; there ar
 
 CREDENTIAL_NAMES = ("*.tfstate", "*.tfstate.backup", "*.tfplan", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ecdsa", "id_ed25519", "credentials")
 DATA_EXTENSIONS = {".csv", ".tsv", ".parquet", ".xlsx", ".xls", ".jsonl", ".ndjson", ".avro", ".db", ".sqlite"}
-DATA_FOLDERS = ("tests/fixtures/",)  # The only folder declared for data files: synthetic test fixtures.
+# Folders declared for data files: synthetic test fixtures and the reviewed dbt seeds, which hold file labels and
+# checksums from the S3 manifests, never source data values (owner approval of the dbt staging commit, Oct 4 2026).
+DATA_FOLDERS = ("tests/fixtures/", "dbt/seeds/")
 MAX_BYTES = 5 * 1024 * 1024
 
 NOQA = re.compile(r"#\s*" + "no" + r"qa\b(?::\s*(?P<codes>[A-Z]+\d+(?:\s*,\s*[A-Z]+\d+)*))?(?P<rest>.*)", re.IGNORECASE)

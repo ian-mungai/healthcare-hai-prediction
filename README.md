@@ -287,7 +287,8 @@ with `bash scripts/acquisition/run_checks.sh`.
   credential files are blocked.
 - **Data files:** `.csv`, `.tsv`, `.parquet`, `.xlsx`, `.xls`, `.jsonl`,
   `.ndjson`, `.avro`, `.db` and `.sqlite` files are allowed only in
-  `tests/fixtures/`, for synthetic samples. Any file over 5 MB is blocked
+  `tests/fixtures/` for synthetic samples and in `dbt/seeds/` for the reviewed
+  dbt seeds (file labels and checksums from the S3 manifests, no source values). Any file over 5 MB is blocked
   unless Git LFS stores it. Acquired data stays in S3 and ignored local folders.
   Git LFS stores two acquisition config files over the limit,
   `config/acquisition/source_registry.json` and
@@ -362,7 +363,8 @@ macOS browser-download metadata (the "downloaded from" attribute and file creati
 time); on a Mac the real reads run. When the private archive is absent (as in CI), the
 registry-additions suite skips its single legacy-archive check and records the skip. The coverage gate leaves out
 the tools in `scripts/acquisition/one_off/`, which ran once and are evidenced by their run records; a
-gate test loads every committed collector plan through its contract.
+gate test loads every committed collector plan through its contract; it needs the collected `data/`, so CI
+skips it.
 
 Each check has a bad and a good sample run through the real `pre-commit` entry
 point (`scripts/quality/run_checks_e2e.py` and

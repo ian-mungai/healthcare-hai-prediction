@@ -38,6 +38,8 @@ mlruns/
 *.joblib
 *.parquet
 *.csv
+# The reviewed dbt seeds are committed; repo_checks.py declares their folder.
+!dbt/seeds/*.csv
 *.jsonl
 
 # Data collection code, configuration and tests were ignored until the end of the data collection
