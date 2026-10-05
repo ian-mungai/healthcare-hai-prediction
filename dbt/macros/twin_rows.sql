@@ -62,3 +62,98 @@ list_bool_and(list_transform(
 {#- True when any field is a number: such a row is a data row [185]. -#}
 coalesce(list_bool_or(list_transform({{ fields }}, lambda f: {{ field_number('f') }} is not null)), false)
 {%- endmacro %}
+
+{% macro twin_parsed_rows(text_shas, workbook_shas) -%}
+{#- The CTEs text_lines, sheet_rows, text_layouts, text_fields, text_data and sheet_data for the text and workbook
+    checksums the two queries return. The twin comparison and the sheet selection share them, so both read files the
+    same way [275]. -#}
+text_lines as (
+    select
+        _member_sha256,
+        _row_number,
+        line_text
+    from {{ ref('stg_cms_ipps_text_lines') }}
+    where _member_sha256 in ({{ text_shas }})
+    union all
+    select
+        _member_sha256,
+        _row_number,
+        line_text
+    from {{ ref('stg_cms_occupational_mix_text_lines') }}
+    where _member_sha256 in ({{ text_shas }})
+    union all
+    select
+        _member_sha256,
+        _row_number,
+        line_text
+    from {{ ref('stg_cms_occupational_mix_text_lines_utf16') }}
+    where _member_sha256 in ({{ text_shas }})
+),
+
+sheet_rows as (
+    select
+        _member_sha256,
+        sheet_name,
+        sheet_row,
+        cells
+    from {{ ref('stg_cms_ipps_sheet_rows') }}
+    where _member_sha256 in ({{ workbook_shas }})
+    union all
+    select
+        _member_sha256,
+        sheet_name,
+        sheet_row,
+        cells
+    from {{ ref('stg_cms_occupational_mix_sheet_rows') }}
+    where _member_sha256 in ({{ workbook_shas }})
+),
+
+text_layouts as (
+    select
+        _member_sha256,
+        -- Comma-separated only when the header (first non-empty line) has a comma: fixed-width files carry commas in
+        -- their numbers [193].
+        -- Tab-separated only when most non-blank lines hold a tab: a tab header over space-separated data is
+        -- fixed-width [201].
+        case
+            when count(*) filter (where contains(line_text, chr(9))) * 2 > count(*) filter (where trim(line_text) <> '') then 'tab'
+            when contains(arg_min(line_text, _row_number) filter (where trim(line_text) <> ''), ',') then 'comma'
+            else 'fixed_width'
+        end as text_layout
+    from text_lines
+    group by _member_sha256
+),
+
+text_fields as (
+    select
+        text_lines._member_sha256,
+        text_lines._row_number,
+        case
+            when text_layouts.text_layout = 'tab' then string_split(text_lines.line_text, chr(9))
+            -- Commas outside double quotes separate fields.
+            else regexp_extract_all(text_lines.line_text, '("(?:[^"]|"")*"|[^,]*)(?:,|$)', 1)
+        end as row_fields
+    from text_lines
+    inner join text_layouts on text_lines._member_sha256 = text_layouts._member_sha256
+    where text_layouts.text_layout <> 'fixed_width'
+),
+
+text_data as (
+    select
+        _member_sha256,
+        row_fields,
+        row_number() over (partition by _member_sha256 order by _row_number) as data_row
+    from text_fields
+    where {{ row_has_number('row_fields') }}
+),
+
+sheet_data as (
+    select
+        _member_sha256,
+        sheet_name,
+        cells,
+        row_number() over (partition by _member_sha256, sheet_name order by sheet_row) as data_row
+    from sheet_rows
+    where {{ row_has_number('cells') }}
+)
+{%- endmacro %}

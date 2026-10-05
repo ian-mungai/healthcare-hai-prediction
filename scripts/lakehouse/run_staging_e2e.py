@@ -1,4 +1,4 @@
-"""E2E check of the staging copy, label and twin models (failure modes 166 to 173, 177 to 188).
+"""E2E check of the staging copy, label, twin and sheet models (failure modes 166 to 173, 177 to 188, 267 to 278).
 
 Run from the repository root with Docker running:
 
@@ -13,7 +13,8 @@ hold, an object with two checksums, an unheld label conflict and an unlabelled c
 generator reproduces the committed seeds, builds the models from the catalog twice and reconciles them with bronze.
 
 Failure modes: ``data/lakehouse_planning/staging_dedup_20261003/failure_modes.md`` and
-``data/lakehouse_planning/staging_families_20261003/failure_modes.md``. The report in ``data/e2e/staging/`` holds
+``data/lakehouse_planning/staging_families_20261003/failure_modes.md`` and
+``data/lakehouse_planning/sheet_selection_20261005/failure_modes.md``. The report in ``data/e2e/staging/`` holds
 outcomes and counts, never data values or credentials.
 """
 
@@ -99,6 +100,17 @@ TWIN_SHEET = (
     "Data:10002|Beta|0.5|60591269.765|0.0021846031",
 )
 OCCMIX_TEXT = ("Provider,Wage", "010001,3.5", "010002,4.0")
+# The BRZ-016 text held under two names; its workbook twin agrees with it [268].
+HELD_TEXT = ("Provider\tCMI", "010001\t1.5")
+# A final-rule workbook whose correction-notice sheet has the text's row count but other values [267] [269].
+FR_CN_SHEET = (
+    "FR 2024:Provider|Name|CMI|Payment|Share",
+    "FR 2024:10001|Alpha, Hospital|1.23456789|1234.4978|0.0158371255",
+    "FR 2024:10002|Beta|0.5|60591269.765|0.0021846031",
+    "CN 2024:Provider|Name|CMI|Payment|Share",
+    "CN 2024:10001|Alpha, Hospital|1.3|1300|0.016",
+    "CN 2024:10002|Beta|0.6|60000000|0.0022",
+)
 HAI_2021 = (
     "010001|HAI_1_SIR|01/01/2019|12/31/2019|0.5",
     "010001|HAI_2_SIR|01/01/2019|12/31/2019|0.7",
@@ -134,14 +146,36 @@ BASE = (
     Stored("cms_hospital_cost_reports", "c02", "CMS_HCRIS_PUF__20260924T042740Z__bb", "CostReport_2023_Final.csv", sha("c1"), 3, "snap-bb"),
     Stored("cms_hospital_cost_reports", "c03", "CMS_HCRIS_PUF__20260924T040326Z__aa", "CostReport_2022_Final.csv", sha("c2"), 2, "snap-aa"),
     # IPPS: the two BRZ-016 files under conflicting names, held [172]; one ordinary file.
-    Stored("cms_ipps_text_lines", "i01", "CMS_IPPS__a", "FY 2019 IPPS Proposed Rule Impact File.txt", next(iter(HELD)), 2),
-    Stored("cms_ipps_text_lines", "i02", "CMS_IPPS__a", "FY 2019 IPPS Proposed Rule Impact File (Variable Descriptions).txt", next(iter(HELD)), 2),
+    Stored("cms_ipps_text_lines", "i01", "CMS_IPPS__a", "FY 2019 IPPS Proposed Rule Impact File.txt", next(iter(HELD)), 2, content=HELD_TEXT),
+    Stored(
+        "cms_ipps_text_lines",
+        "i02",
+        "CMS_IPPS__a",
+        "FY 2019 IPPS Proposed Rule Impact File (Variable Descriptions).txt",
+        next(iter(HELD)),
+        2,
+        content=HELD_TEXT,
+    ),
+    # Its workbook twin: the text is held, so no selected text covers the data sheet and it is kept [268]; a sheet with no
+    # data rows cannot be compared and is kept [274].
+    Stored(
+        "cms_ipps_sheet_rows",
+        "w05",
+        "CMS_IPPS__a",
+        "FY 2019 IPPS Proposed Rule Impact File.xlsx",
+        sha("n2"),
+        3,
+        content=("FY19 NPRM:Provider|CMI", "FY19 NPRM:10001|1.5", "Variable Descriptions:Variable|Meaning"),
+    ),
     Stored("cms_ipps_text_lines", "i03", "CMS_IPPS__b", "FY 2020 Correction Notice Impact File.txt", list(HELD)[1], 3),
     Stored("cms_ipps_text_lines", "i04", "CMS_IPPS__c", "FY 2019 IPPS FR and CN Impact File (CN data).txt", list(HELD)[1], 3),
     # Twins that agree [185] [189] to [192]: a title line, CSV quoting, a leading zero, $ and separators, displayed decimals,
     # percentages, a value exactly at the half-unit boundary and a space inside quotes [200].
     Stored("cms_ipps_text_lines", "i05", "CMS_IPPS__c", "FY 2021 Final Rule Impact File.txt", sha("d1"), 4, content=TWIN_TEXT),
     Stored("cms_ipps_sheet_rows", "w01", "CMS_IPPS__c", "FY 2021 Final Rule Impact File.xlsx", sha("d2"), 4, content=TWIN_SHEET),
+    # A twin pair that agrees on the final-rule sheet; the correction-notice sheet matches no selected text and is kept [267].
+    Stored("cms_ipps_text_lines", "i11", "CMS_IPPS__m", "FY 2024 Final Rule Impact File.txt", sha("l1"), 4, content=TWIN_TEXT),
+    Stored("cms_ipps_sheet_rows", "w06", "CMS_IPPS__m", "FY 2024 Final Rule Impact File.xlsx", sha("l2"), 6, content=FR_CN_SHEET),
     # Twins whose text file is fixed-width, with thousands separators: not compared, the workbook is preferred [186] [193].
     Stored(
         "cms_ipps_text_lines",
@@ -229,6 +263,22 @@ BASE = (
     # A text file and workbook under different names, paired by a reviewed override, agree like a same-name pair [218] [220].
     Stored("cms_ipps_text_lines", "i10", "CMS_IPPS__h", "FY 2023 Final Rule Impact File.txt", sha("k1"), 4, "CMS_IPPS__h", content=TWIN_TEXT),
     Stored("cms_ipps_sheet_rows", "w04", "CMS_IPPS__h", "IMPACT_FY23_FR_PUF.xlsx", sha("k2"), 4, "CMS_IPPS__h", content=TWIN_SHEET),
+    # An occupational-mix workbook whose second sheet is published as its own text file in the same release: each sheet is
+    # covered by the selected text that matches it [270] [276].
+    Stored("cms_occupational_mix_text_lines", "m04", "CMS_OCCMIX__p", "FY26_S3_PUF.txt", sha("p1"), 2, "CMS_OCCMIX__p", content=("PROV\tS3", "010001\t100")),
+    Stored(
+        "cms_occupational_mix_text_lines", "m05", "CMS_OCCMIX__p", "FY26_OccMix_PUF.txt", sha("p3"), 2, "CMS_OCCMIX__p", content=("PROV\tOM", "010001\t0.5")
+    ),
+    Stored(
+        "cms_occupational_mix_sheet_rows",
+        "v04",
+        "CMS_OCCMIX__p",
+        "FY26_S3_PUF.xlsx",
+        sha("p2"),
+        4,
+        "CMS_OCCMIX__p",
+        content=("S-3 Data:PROV|S3", "S-3 Data:010001|100", "OccMix Data:PROV|OM", "OccMix Data:010001|0.5"),
+    ),
     # The text twin is comma-separated and one value differs from its workbook: the pair differs and both are held [187].
     Stored("cms_occupational_mix_text_lines", "m01", "CMS_OCCMIX__a", "PUFs.zip!AHW_by_Provider.zip!provcbsaahw.txt", sha("e1"), 3, content=OCCMIX_TEXT),
     Stored("cms_occupational_mix_text_lines", "m02", "CMS_OCCMIX__a", "PUFs.zip!provcbsaahw.zip!provcbsaahw.txt", sha("e1"), 3, content=OCCMIX_TEXT),
@@ -477,6 +527,11 @@ SELECTION_SQL = (
     "SELECT left(member_sha256, 2), has_label_conflict::VARCHAR, is_label_held::VARCHAR, is_twin_excluded::VARCHAR, is_selected::VARCHAR "
     "FROM stg_bronze__file_selection WHERE NOT is_selected ORDER BY ALL;"
 )
+# Sheets of twin-excluded workbooks; every sheet of a selected workbook is file_selected [273].
+SHEETS_SQL = (
+    "SELECT left(member_sha256, 2), sheet_name, sheet_status, coalesce(left(covering_sha256, 2), ''), is_selected::VARCHAR "
+    "FROM stg_bronze__sheet_selection WHERE sheet_status <> 'file_selected' ORDER BY ALL;"
+)
 VIEW_ROWS_SQL = "SELECT getvariable('checked_table'), count(*)::VARCHAR FROM query_table(getvariable('checked_table'));\n"
 BRONZE_COUNTS_SQL = (
     "WITH o AS (SELECT _object_key, any_value(_member_sha256) AS sha, count(*) AS n FROM query_table(getvariable('checked_table')) GROUP BY 1), "
@@ -594,6 +649,7 @@ def read_models(case: str) -> dict[str, Any]:
         "rows": rows,
         "twins": [tuple(row) for row in duckdb_csv(database, TWINS_SQL)],
         "selection": [tuple(row) for row in duckdb_csv(database, SELECTION_SQL)],
+        "sheets": [tuple(row) for row in duckdb_csv(database, SHEETS_SQL)],
         "windows": [tuple(row) for row in duckdb_csv(database, WINDOWS_SQL)],
         "holds": [tuple(row) for row in duckdb_csv(database, HOLDS_SQL)],
     }
@@ -621,6 +677,7 @@ def fixture_scenarios() -> dict[str, bool]:
     # Twins: the quoted, zero-padded, rounded pair agrees and prefers its text file; the fixed-width pair prefers its
     # workbook; the comma pair with a changed value differs and keeps neither [184] to [187].
     checks["twins_match_expected"] = base.get("twins") == [
+        ("61", "n2", "tab", "agree", "61"),
         ("d1", "d2", "tab", "agree", "d1"),
         ("d4", "d5", "fixed_width", "not_compared", "d5"),
         ("e1", "e2", "comma", "differ", ""),
@@ -628,6 +685,8 @@ def fixture_scenarios() -> dict[str, bool]:
         ("h1", "h2", "tab", "agree", "h1"),
         ("j1", "j2", "fixed_width", "not_compared", "j2"),
         ("k1", "k2", "tab", "agree", "k1"),
+        ("l1", "l2", "tab", "agree", "l1"),
+        ("p1", "p2", "tab", "agree", "p1"),
     ]
     # Not selected: the two held BRZ-016 files (their copies conflict) and the excluded twins [172] [181] [187].
     checks["selection_matches_expected"] = base.get("selection") == [
@@ -641,6 +700,26 @@ def fixture_scenarios() -> dict[str, bool]:
         ("h2", "false", "false", "true", "false"),
         ("j1", "false", "false", "true", "false"),
         ("k2", "false", "false", "true", "false"),
+        ("l2", "false", "false", "true", "false"),
+        ("n2", "false", "false", "true", "false"),
+        ("p2", "false", "false", "true", "false"),
+    ]
+    # Sheets of twin-excluded workbooks: covered only by a selected text of the same release whose data rows all match;
+    # otherwise kept, except the compared sheet of a pair that differs [267] to [274].
+    checks["sheets_match_expected"] = base.get("sheets") == [
+        ("d2", "Data", "covered", "d1", "false"),
+        ("d2", "Variable Descriptions", "kept", "", "true"),
+        ("e2", "Sheet1", "twin_differs", "", "false"),
+        ("g2", "Data", "covered", "g1", "false"),
+        ("h2", "Sheet1", "covered", "h1", "false"),
+        ("k2", "Data", "covered", "k1", "false"),
+        ("k2", "Variable Descriptions", "kept", "", "true"),
+        ("l2", "CN 2024", "kept", "", "true"),
+        ("l2", "FR 2024", "covered", "l1", "false"),
+        ("n2", "FY19 NPRM", "kept", "", "true"),
+        ("n2", "Variable Descriptions", "kept", "", "true"),
+        ("p2", "OccMix Data", "covered", "p3", "false"),
+        ("p2", "S-3 Data", "covered", "p1", "false"),
     ]
     # [219] [218] A file in two pairs, or a renamed pair from two captures, is refused by the generator.
     stored = generator_objects(BASE)
@@ -722,6 +801,19 @@ def real_stage() -> dict[str, Any]:
         "FROM stg_bronze__file_selection WHERE NOT is_selected GROUP BY 1 ORDER BY 1;"
     )
     outcome["not_selected"] = dict(duckdb_csv(database, held_sql))
+    sheet_sql = "SELECT sheet_status, count(*)::VARCHAR FROM stg_bronze__sheet_selection GROUP BY 1 ORDER BY 1;"
+    outcome["sheet_statuses"] = dict(duckdb_csv(database, sheet_sql))
+    # BRZ-016: the FY 2020 correction-notice sheet and the FY 2019 proposed-rule sheets are selected [267] [268] [274].
+    brz016_sql = (
+        "SELECT left(member_sha256, 10) || ' ' || sheet_name, sheet_status FROM stg_bronze__sheet_selection "
+        "WHERE (left(member_sha256, 10) = 'ac5ffd206e' AND sheet_name = 'CN 2020') "
+        "OR (left(member_sha256, 10) = '6907b7e751' AND sheet_name IN ('FY19 NPRM', 'Variable Descriptions')) ORDER BY 1;"
+    )
+    outcome["checks"]["brz016_sheets_kept"] = duckdb_csv(database, brz016_sql) == [
+        ["6907b7e751 FY19 NPRM", "kept"],
+        ["6907b7e751 Variable Descriptions", "kept"],
+        ["ac5ffd206e CN 2020", "kept"],
+    ]
     bronze = unprefixed(duckdb_csv(database, per_table(BRONZE_COUNTS_SQL, "lakehouse.bronze."), init), "lakehouse.bronze.")
     # Bronze loads one copy per file, so its objects equal the distinct files; the copies table lists every copy [204] [206].
     model_sql = (

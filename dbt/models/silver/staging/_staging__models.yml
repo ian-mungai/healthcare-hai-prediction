@@ -204,6 +204,7 @@ models:
     description: >
       Bronze `cms_ipps_sheet_rows` with one copy of each stored file, read from its canonical object (failure mode 166). The data
       columns pass through as published; lakehouse.bronze_dictionary.cms_ipps_sheet_rows documents them. Typing comes in later staging work.
+      Intermediate models read only the sheets stg_bronze__sheet_selection selects (failure mode 278).
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -280,6 +281,7 @@ models:
     description: >
       Bronze `cms_occupational_mix_sheet_rows` with one copy of each stored file, read from its canonical object (failure mode 166). The data
       columns pass through as published; lakehouse.bronze_dictionary.cms_occupational_mix_sheet_rows documents them. Typing comes in later staging work.
+      Intermediate models read only the sheets stg_bronze__sheet_selection selects (failure mode 278).
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -398,4 +400,41 @@ models:
         description: True when any of its twin pairs prefers the other file or differs.
       - name: is_selected
         description: True when intermediate models may read the file.
+        data_tests: [not_null]
+
+  - name: stg_bronze__sheet_selection
+    description: >
+      One row per workbook sheet in the IPPS and occupational-mix sheet tables: whether intermediate models may read it.
+      A twin-excluded workbook keeps every sheet that no selected text file of the same release covers row for row; all
+      sheets of a selected workbook are selected and none of a held workbook (failure modes 267 to 278).
+    columns:
+      - name: sheet_key
+        description: Bronze table, member SHA-256 and sheet name, the model's key.
+        data_tests: [unique, not_null]
+      - name: file_key
+        description: Bronze table and member SHA-256 of the workbook.
+      - name: bronze_table
+        description: The bronze table holding the workbook.
+      - name: member_sha256
+        description: SHA-256 of the workbook.
+      - name: sheet_name
+        description: The sheet as published.
+      - name: sheet_rows
+        description: Rows in the sheet.
+      - name: data_rows
+        description: Rows with a number in the sheet.
+      - name: sheet_status
+        description: >
+          file_selected (the workbook is selected), kept (no selected text covers the sheet), covered (a selected text
+          of the same release matches every data row), twin_differs (the compared sheet of a twin pair that differs) or
+          label_held (the workbook's labels are held).
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [file_selected, kept, covered, twin_differs, label_held]
+      - name: covering_sha256
+        description: For a covered sheet, the smallest checksum of a selected text file that covers it.
+      - name: is_selected
+        description: True when intermediate models may read the sheet.
         data_tests: [not_null]

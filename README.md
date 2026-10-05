@@ -171,7 +171,9 @@ scripts/lakehouse/ui.sh                                             # DuckDB UI 
 
 The dbt staging layer (`dbt/`, dbt-core with dbt-duckdb in the analytics image) reads bronze read-only. Its E2E builds
 the models on synthetic fixtures, including cases that must fail one named test, then on the real bronze tables twice,
-and reconciles each staging table with bronze. `scripts.lakehouse.ipps_file_labels` regenerates the IPPS and
+and reconciles each staging table with bronze. Where a text file and a workbook hold the same IPPS or occupational-mix
+table, staging reads the text file and drops only the workbook sheets that a selected text file of the same release
+matches row for row; every other sheet stays selected (`stg_bronze__sheet_selection`). `scripts.lakehouse.ipps_file_labels` regenerates the IPPS and
 occupational-mix label and twin seeds from the S3 manifests; `--check` confirms the committed seeds. The dbt packages
 (dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
 publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
