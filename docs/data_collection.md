@@ -48,7 +48,7 @@ This guide explains how the project's source data was collected and how to repea
 
 Run everything from the repository root with the project's Python 3.12 virtual environment.
 
-1. **Python packages:** `requirements.txt`, plus the collection-only package in `config/acquisition/runtime_dependencies.json` (`jsonschema[format]==4.26.0`).
+1. **Python packages:** `requirements.txt`, plus the collection-only packages in `config/acquisition/runtime_dependencies.json` (`jsonschema[format]==4.26.0` and `referencing==0.37.0`, which `capture.py` imports directly).
 2. **Configuration:** a `.env` built from `.env.example`, holding the region, the project's AWS profile, account ID, project name and bucket. Storage refuses to run under any other identity.
 3. **Infrastructure outputs:** `terraform -chdir=infra output -json` must work locally; storage checks the bucket settings against it.
 4. **API keys**, stored by the project owner in AWS Secrets Manager as JSON with one field (`api_key`) and read only at request time: `bls_api_key`, `census_api_key` and `hud_api_key`. They never appear in plans, receipts, logs or S3.

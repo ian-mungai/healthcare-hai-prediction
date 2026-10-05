@@ -2,7 +2,8 @@
   "host": {
     "requirements": ["requirements.txt"],
     "provided": {
-      "jsonschema": "pinned for the acquisition collectors in config/acquisition/runtime_dependencies.json"
+      "jsonschema": "pinned for the acquisition collectors in config/acquisition/runtime_dependencies.json",
+      "referencing": "pinned for the acquisition collectors in config/acquisition/runtime_dependencies.json"
     }
   },
   "runtimes": {
