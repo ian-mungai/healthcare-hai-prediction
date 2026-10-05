@@ -299,7 +299,7 @@ enforce these repository rules at the pinned versions. The full set
 release or push. GitHub CI runs that same command on every push and pull
 request. In the full set gitleaks scans every outgoing source file instead of
 the staged index. The acquisition checks run in their own CI job and through
-their hook when acquisition files change; run them directly before a release
+their hook only when acquisition files change; run them directly before a release
 with `bash scripts/acquisition/run_checks.sh`.
 
 - **Secrets and credential files:** gitleaks scans the staged index; `.env`
@@ -410,10 +410,15 @@ with `bash scripts/acquisition/run_checks.sh`.
 **Acquisition checks** (`bash scripts/acquisition/run_checks.sh`) run Ruff, MyPy,
 registry validation, the acquisition regression tests and every offline E2E
 suite twice, with a 90% coverage gate that also counts collector command lines
-run as child processes. They take 12–14 minutes, so GitHub Actions runs them in a
-separate "Acquisition Checks" job (30-minute limit, LFS checkout, pinned Terraform) and the
-`acquisition-checks` pre-commit hook runs them only when acquisition code,
-configuration or their dependencies change. They need no AWS credentials and no
+run as child processes. They take 12–14 minutes (up to 29 in CI), so they run only
+when acquisition code, configuration or their dependencies change: through the
+`acquisition-checks` pre-commit hook and in a separate GitHub Actions "Acquisition
+Checks" job (30-minute limit, LFS checkout, pinned Terraform). The CI job uses the
+hook's own path pattern through `scripts/acquisition/run_checks_ci.sh`, which also
+matches the CI workflow; a manual run, the first push of a branch or rewritten
+history runs every check. `bash scripts/acquisition/run_checks_ci_e2e.sh` tests
+that gate. Each push to `main` gets its own CI run, so a newer push never cancels
+the check of an earlier range. They need no AWS credentials and no
 collected `data/`. Off macOS, the HUD workbook and WONDER suites substitute only the
 macOS browser-download metadata (the "downloaded from" attribute and file creation
 time); on a Mac the real reads run. When the private archive is absent (as in CI), the

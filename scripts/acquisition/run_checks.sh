@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
-bash -n scripts/acquisition/run_checks.sh
+bash -n scripts/acquisition/run_checks.sh scripts/acquisition/run_checks_ci.sh scripts/acquisition/run_checks_ci_e2e.sh
 "$python_bin" -m ruff check --no-respect-gitignore scripts/acquisition tests/test_source_registry.py
 "$python_bin" -m mypy --check-untyped-defs --disallow-untyped-defs scripts/acquisition tests/test_source_registry.py --ignore-missing-imports
 "$python_bin" -m scripts.acquisition.source_registry

@@ -9,8 +9,10 @@ on:
 permissions:
   contents: read
 
+# A pull request run checks the whole base..head range, so a newer push may cancel it. A push run checks only its
+# pushed range, so each push to main gets its own group and is never cancelled: a cancelled range would go unchecked.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -92,13 +94,16 @@ jobs:
   acquisition:
     name: Acquisition Checks
     runs-on: ubuntu-latest
-    # Every offline E2E suite runs twice; locally this takes 12-14 minutes.
+    # Every offline E2E suite runs twice: 12-14 minutes locally, up to 29 minutes here. It runs only when the range
+    # changes a path the acquisition-checks hook watches (about 1 minute otherwise); see the run step.
     timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          # Both ends of the pushed range must be in the clone.
+          fetch-depth: 0
           lfs: true
 
       # Collectors resolve the Terraform binary to read bucket outputs; the checks never run it against state.
@@ -120,8 +125,12 @@ jobs:
           python -m venv .venv
           .venv/bin/python -m pip install -r requirements.txt
 
+      # Same paths as the local acquisition-checks hook; a manual run, a new branch or rewritten history runs every check.
       - name: Run acquisition checks without AWS credentials or collected data
-        run: bash scripts/acquisition/run_checks.sh
+        env:
+          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
+          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/acquisition/run_checks_ci.sh
 
       - name: Retain acquisition E2E evidence
         if: ${{ always() }}
