@@ -1440,18 +1440,6 @@
       ]
     },
     {
-      "table": "hcai_finance_documents_sheets",
-      "group": "state_sources",
-      "collection": "california_hcai/hospital_finance",
-      "member_pattern": "(?i)\\.xlsx$",
-      "format": "sheet_rows",
-      "roles": [
-        "dictionary",
-        "methodology",
-        "reference"
-      ]
-    },
-    {
       "table": "hcai_util_pages_csv",
       "group": "state_sources",
       "collection": "california_hcai/hospital_utilization",

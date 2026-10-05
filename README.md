@@ -43,8 +43,8 @@ through publisher APIs first, then download URLs, into private versioned S3
 storage with a receipt, hash and version readback for every object. The bronze
 layer of a local Apache Iceberg lakehouse then holds one copy of every stored data
 file as published, with each row traced to its S3 object version and checksum. It
-also lists every other stored copy. 330 of the 331 mapped tables are loaded and checked;
-the files of the last one were all removed for privacy. A dbt staging layer in DuckDB
+also lists every other stored copy. All 330 mapped tables are loaded and checked; a
+table whose files were all removed for privacy left the map. A dbt staging layer in DuckDB
 reads the HAI, cost report, IPPS and occupational-mix tables and keeps one row per HAI
 measurement window. Modeling and serving come later. The [Architecture](#architecture)
 diagram shows what is built and what is planned.
