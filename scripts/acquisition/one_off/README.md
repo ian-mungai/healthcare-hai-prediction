@@ -8,8 +8,8 @@ Owner decision, Oct 4 2026: the acquisition stage's source code and dependencies
 | --- | --- | --- |
 | `redownload` | Queue builders for runs 1 and 3 plus the run 3 scope match | `data/redownload_checks/`, `data/acquisition_planning/run3_scope_20261004/` |
 | `privacy_review` | Pattern and document scans, redaction, the listed-version deletion and their E2E checks | `data/privacy_review/20260927/` |
-| `storage_dedup` | S3 manifest inventory, duplicate deletion list and the checked deletion | `data/lakehouse_planning/dedup_20261003/` |
-| `datasets_move` | The move of the local dataset folders into `data/datasets/` | `data/lakehouse_planning/datasets_move_20261004/` |
+| `storage_dedup` | S3 manifest inventory, duplicate deletion list and the checked deletion (`delete_duplicate_versions.py`) | `data/lakehouse_planning/dedup_20261003/` |
+| `datasets_move` | The move of the local dataset folders into `data/datasets/` (`move.py`) | `data/lakehouse_planning/datasets_move_20261004/` |
 | `cms_admin` | CMS administrative batch build, local capture and screen | `data/acquisition_planning/cms_admin_20260929/` |
 | `closeout` | Clean-checkout gate and replay checks | `data/acquisition_planning/closeout_*/` |
 

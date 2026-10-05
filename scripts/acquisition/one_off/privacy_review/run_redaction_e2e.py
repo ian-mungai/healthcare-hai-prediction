@@ -28,7 +28,6 @@ TOOL = HERE / "redact_text_copies.py"
 POLICY = Path("data/privacy_review/20260927/redaction_policy.json")
 SYNTHETIC = ["Alex Example", "Casey Sample", "Jordan Placeholder", "Riley Fixture", "Morgan Testcase", "Quinn Mockname", "Pat Unlisted", "Taylor Specimen"]
 EMAILS = ["alex.example@example.org", "owner.contact@example.net", "person@example.com"]
-R = "[REDACTED]"
 
 WIDE = (
     "\ufeff_id,FAC_NO,FAC_NAME,PHONE,CEO,CEO_TITLE,WEB_SITE,OWNER,RPT_PREP,ORG_NAME,BED_LIC,NOTE\r\n"

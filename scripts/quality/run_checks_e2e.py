@@ -108,9 +108,9 @@ RUNTIME_SAMPLE = {
     "image/requirements.txt": f"{UNUSED_PACKAGE}==0.9.0 \\\n    --hash=sha256:{'a' * 64}\nsix==1.17.0 \\\n    --hash=sha256:{'b' * 64}\n",
     ".cleanup_allowlist": COPIED_ALLOWED,
 }
-# Cleanup checks in their warn period: they exit 0 and print each finding as a WARN line. A sample that must block
-# must print one; a sample that must pass must print none.
-WARN_HOOKS = {"unused-code", "unused-dependencies", "orphan-files", "terraform-unused"}
+# Cleanup checks: a sample that must block must also print its finding, so a failure for another reason cannot pass.
+CLEANUP_HOOKS = {"unused-code", "unused-dependencies", "orphan-files", "terraform-unused"}
+WHITELIST = "scripts/quality/vulture_whitelist.py"
 
 
 @dataclass
@@ -284,6 +284,16 @@ CASES = [
         {
             "app/util.py": f"def {STALE_HELPER}():\n    return 1\n",
             "app/main.py": f"from util import {STALE_HELPER}\n\nprint({STALE_HELPER}())\n",
+            ".cleanup_allowlist": COPIED_ALLOWED,
+        },
+    ),
+    Case(
+        "function named in the vulture whitelist",
+        "unused-code",
+        True,
+        {
+            "app/util.py": f"def {STALE_HELPER}():\n    return 1\n",
+            WHITELIST: f"from util import {STALE_HELPER}\n\n_ = {STALE_HELPER}\n",
             ".cleanup_allowlist": COPIED_ALLOWED,
         },
     ),
@@ -488,6 +498,11 @@ CASES = [
 ]
 # Privacy cases must be blocked for their intended cause, shown by file, line and type.
 BLOCK_REASONS = {
+    "function nothing calls": f"app/util.py:4: unused function '{STALE_HELPER}'",
+    "dependency nothing imports": f"requirements.txt: {UNUSED_PACKAGE} is declared but nothing imports it",
+    "import missing from requirements": f"app/table.py:1: {UNUSED_PACKAGE} is imported but runtime host does not declare it",
+    "file nothing references": f"docs/{OLD_NOTES}: no other tracked file references it",
+    "unused Terraform variable": f'infra/main.tf:1: variable "{UNUSED_TF_VARIABLE}" is declared but not used',
     "image package imported by host code": f"app/table.py:1: {UNUSED_PACKAGE} is imported but runtime host does not declare it",
     "runtime pattern matches no file": "runtime image: worker/*.py matches no tracked Python file",
     "home path": "notes.md:1: home-directory path with a user name",
@@ -566,7 +581,7 @@ def run_case(case: Case) -> tuple[bool, str]:
         for relative in case.delete:
             git(repo, "rm", "-q", relative)
         git(repo, "add", "-A")
-        verbose = case.name in PASS_MARKERS or case.hook in WARN_HOOKS
+        verbose = case.name in PASS_MARKERS
         args = ["run", case.hook, *(["--verbose"] if verbose else [])]  # pre-commit hides passing output
         if case.message is not None:
             message = repo / ".git" / "COMMIT_EDITMSG"
@@ -577,9 +592,6 @@ def run_case(case: Case) -> tuple[bool, str]:
         passed = result.returncode == 0
         output = result.stdout + result.stderr
         correct = passed == case.expect_pass and "Traceback (most recent call last)" not in output
-        if case.hook in WARN_HOOKS:
-            correct = passed and ("\nWARN " in output) != case.expect_pass and "Traceback (most recent call last)" not in output
-            correct = correct and BLOCK_REASONS.get(case.name, "") in output
         if not case.expect_pass and case.hook == "commit-msg":
             correct = correct and any(marker in output for marker in ("not a Conventional Commit:", "AI attribution in commit message"))
         if case.hook == "privacy-scan":
@@ -587,7 +599,7 @@ def run_case(case: Case) -> tuple[bool, str]:
             reason = BLOCK_REASONS.get(case.name, "").format(line=added)
             marker = PASS_MARKERS.get(case.name, "")
             correct = correct and reason in output and marker in output and not any(value in output for value in PRIVACY_VALUES)
-        if case.hook in ("writing-check", "markdownlint", "front-matter", "sqlfluff"):
+        if case.hook in ("writing-check", "markdownlint", "front-matter", "sqlfluff", *CLEANUP_HOOKS):
             correct = correct and BLOCK_REASONS.get(case.name, "") in output
         return correct, output
 

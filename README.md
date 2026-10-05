@@ -36,8 +36,9 @@ secret or personal value in this repository to the repository owner privately.
 
 The project asks whether a hospital's infection score can be predicted from
 same-period public measures and why a simpler earlier model explained little
-of the variation. Approved collection is complete; acquisition closeout is pending
-final verification, confirmed disposal of personal originals and an approved Git checkpoint. Public sources are collected
+of the variation. Approved collection is complete and its code is committed
+(`3af1abb`); acquisition closeout is pending the final publisher redownload (run 3)
+and confirmed disposal of personal originals. Public sources are collected
 through publisher APIs first, then download URLs, into private versioned S3
 storage with a receipt, hash and version readback for every object. The bronze
 layer of a local Apache Iceberg lakehouse then holds one copy of every stored data
@@ -278,8 +279,8 @@ collected and how to recheck it, including the named manual data steps: terms
 acceptance, API accounts and the browser downloads (CMS Mapping Medicare
 Disparities exports, Census table exports, CDC WONDER county mortality exports
 and the 2010–2020 HUD ZIP-to-county workbooks). Its commands need the acquisition code in `scripts/acquisition/`
-and `config/acquisition/`, which is no longer Git-ignored and is committed at the end of the collection stage. Registry revision 2 preserves exact legacy fingerprints for historic replay;
-its private legacy archive stays outside Git. The bounded publisher redownload remains the final verification.
+and `config/acquisition/`, tracked in Git since commit `3af1abb`. Registry revision 2 preserves exact legacy fingerprints for historic replay;
+its private legacy archive stays outside Git. The bounded publisher redownload (run 3) remains the final verification.
 
 ## Quality Checks
 
@@ -374,14 +375,13 @@ with `bash scripts/acquisition/run_checks.sh`.
   reason is itself a finding. It blocks: a replay over every earlier commit
   found only deliberate references (a removed config key that the bronze loader
   refuses by name).
-- **Unused code, dependencies and files (warn period):** vulture 2.16 (60%
+- **Unused code, dependencies and files:** vulture 2.16 (60%
   confidence) reports functions, classes and variables nothing uses; deptry
   0.25.1 reports requirements nothing imports and imports no requirements file
   declares; `orphan-files` reports tracked files no other file names by path,
   file name, folder or import; tflint (`terraform_unused_declarations`, every
   module) reports unused Terraform declarations. vulture and deptry are pinned
-  in `requirements.txt`. They print each finding as a `WARN` line and do not
-  block until the whole repository is clean. deptry checks each runtime on its
+  in `requirements.txt`. They block. deptry checks each runtime on its
   own code and requirements, as `config/quality/dependency_runtimes.json` maps
   them: the host (every file no other runtime claims), the review tools, the
   Spark jobs, the analytics image and the SQLFluff tools (no project code). A
@@ -391,7 +391,14 @@ with `bash scripts/acquisition/run_checks.sh`.
   as unused only when neither imports it. Exceptions go in `.cleanup_allowlist` with a
   reason, under the kinds `unused-code`, `unused-dependencies`, `orphan` and
   `terraform-unused`; dbt's folder-loaded models and macros are listed there.
-  Run one with `.venv/bin/python -m scripts.quality.repo_checks unused-code --warn`.
+  A name used in a way vulture cannot see (a parser callback, a pytest autouse
+  fixture, a field written out through `dataclasses.asdict`) goes in
+  `scripts/quality/vulture_whitelist.py`, one name per entry with its reason, so
+  the rest of its file is still checked. The whitelist also keeps one dead WONDER
+  constant until the next WONDER code version, because its file is in the
+  approved code hashes of 9 collectors. Run one check with
+  `.venv/bin/python -m scripts.quality.repo_checks unused-code` (`--warn`
+  reports without failing).
 - **Lint settings:** Ruff keeps rule sets `E`, `F`, `I`, `B`, `UP`, `S`, `SIM`
   and `T20` at line length 160 with no ignore or exclude settings; MyPy keeps
   `--check-untyped-defs` and `--disallow-untyped-defs`. The only allowed
@@ -419,9 +426,9 @@ Each check has a bad and a good sample run through the real `pre-commit` entry
 point (`scripts/quality/run_checks_e2e.py` and
 `scripts/quality/run_documentation_review_e2e.py`); both run in local CI.
 Every detection check was run on the whole repository before it was enabled,
-with no false positives, so they block from the start; the writing check blocked
+with no false positives, so they block from the start. The writing check blocked
 only after the existing prose was corrected. The unused code, dependency and file
-checks are the exception: they warn until their findings are resolved. There are no bypasses:
+checks blocked only after their findings were deleted or listed with a reason. There are no bypasses:
 never use `SKIP=` or `git commit --no-verify`. If a check blocks a valid change,
 fix the check or ask the repository owner.
 
@@ -541,7 +548,8 @@ control. The deferred controls above are not implemented.
 The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only and
 loads one copy per stored file. Staging covers the HAI, cost report, IPPS and occupational-mix tables only. It types
 dates for the HAI windows and nothing else. No gold or model tables exist. The bronze and staging E2E runs use
-Docker and are not part of the local CI script. The final publisher redownload (run 3) is prepared but has not run.
+Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
+offline. It has not run: its controls, independent review and the owner's approval are still to come.
 
 ## Contributing
 

@@ -104,8 +104,6 @@ FIXED_COLUMNS = {
     "json_variables": (("variable_name", "STRING"), ("attributes", "MAP<STRING,STRING>")),
     "docx_rows": (("block_kind", "STRING"), ("block_index", "INT"), ("table_index", "INT"), ("table_row", "INT"), ("cells", "ARRAY<STRING>")),
 }
-# UTF-8 is always tried first; a table opts into Windows-1252 when its publisher writes it (failure mode 50).
-ENCODINGS = ("utf-8", "cp1252", "utf-16")
 # Publisher labels (SAS variable labels) sit beside their header; other formats leave them null [96].
 COLUMN_MAP_SCHEMA = "_object_key STRING, table_name STRING, position INT, original_header STRING, column_name STRING, original_label STRING"
 # Lines before a declared CSV header are kept here with their numbers [117].
@@ -180,6 +178,7 @@ def load_table_map(path: Path = TABLE_MAP) -> dict[str, Any]:
         if "member_pattern" in table:
             re.compile(table["member_pattern"])
         encodings = table.setdefault("encodings", ["utf-8"])
+        # UTF-8 is always tried first; a table opts into Windows-1252 when its publisher writes it (failure mode 50).
         # UTF-16 stands alone: a UTF-16 file decodes without error as Windows-1252, so the two never share a table [162].
         eight_bit = bool(encodings) and encodings[0] == "utf-8" and all(name in ("utf-8", "cp1252") for name in encodings)
         if not (eight_bit or encodings == ["utf-16"]) or len(set(encodings)) != len(encodings):

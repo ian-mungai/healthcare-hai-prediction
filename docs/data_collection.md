@@ -1,7 +1,7 @@
 ---
 title: Data Collection
 description: How the source data was collected and stored, with the commands that repeat or recheck each step.
-last_updated: 2026-10-04
+last_updated: 2026-10-05
 ---
 
 # Data Collection
@@ -201,7 +201,7 @@ A few sources contain personal names or contact details. The README's [Data sect
 
 ## Publisher Data Dictionaries
 
-Data dictionaries, record layouts and codebooks are stored as reference documents under each collection's `references/` prefix, never as data. They explain the published columns. The bronze data dictionaries in the lakehouse take their column descriptions and published types from them; the Care Compare dictionaries give names and types only. One stored pair breaks the rule the other way: the HRSA shortage-area detail files `BCD_HPSA_FCT_DET_PC.csv` and `MUA_DET.csv` are data but carry the dictionary role in their manifests. Bronze keeps them as document rows; the next acquisition run corrects the role.
+Data dictionaries, record layouts and codebooks are stored as reference documents under each collection's `references/` prefix, never as data. They explain the published columns. The bronze data dictionaries in the lakehouse take their column descriptions and published types from them; the Care Compare dictionaries give names and types only. One stored pair broke the rule the other way: the HRSA shortage-area detail files `BCD_HPSA_FCT_DET_PC.csv` and `MUA_DET.csv` are data but were stored with the dictionary role. Corrected manifests now give them the data role. Bronze loads them as data tables (see [Storage Changes After Collection](#storage-changes-after-collection)).
 
 **Stored with the data:** the 30 Care Compare dictionary editions inside the HAI archives; one edition each of the CMS cost-report, All Owners, Change of Ownership, Enrollments, Provider of Services (`P.QWB.POSQ.OTHER.LAYOUT.MAR23.pdf`) and 2013–2016 Medicare inpatient dictionaries; the CMS geographic variation, hospital service area and MMD documentation; some IPPS and occupational-mix layouts; the HCAI finance documentation; ACS table notes; the HRSA nursing survey codebook and the HPSA and MUA metadata workbooks; and the Massachusetts technical appendix.
 
@@ -274,9 +274,9 @@ These changes on Oct 4 2026 follow owner decisions recorded in the local issue r
 At the end of the collection stage:
 
 1. Done at commit `3af1abb`: commit `scripts/acquisition/`, `config/acquisition/` and the collection tests, then add them to CI. `source_registry.json` and `planning_v1/acquisition_plans_v1.json` are over the 5 MB data-file limit, so they are committed through Git LFS (user decision); `.gitattributes` lists them, the repository's Git LFS hooks are installed and CI checks out with `lfs: true`.
-2. Rerun the collection checks and one offline replay per collector from a clean checkout, then compare the results with the stored evidence.
-3. Confirm the unmatched history folders above and record which command built each.
-4. Update the source registry to the API-first route order and retire the temporary route overlay.
+2. Done on Oct 1 2026 (see [Clean-Checkout Recheck](#clean-checkout-recheck)): rerun the collection checks and one offline replay per collector from a clean checkout, then compare the results with the stored evidence.
+3. Done (see [Recovered History Provenance](#recovered-history-provenance)): confirm the unmatched history folders above and record which command built each.
+4. Done with registry revision 2: update the source registry to the API-first route order and retire the temporary route overlay.
 5. Update this guide with the final counts.
 6. Delete the local originals that name individuals (the CMS owners originals, the unredacted HCAI 2012–2017 and 2018–2025 originals and the ONC meaningful-use original) after the user confirms the exact list, then record their retirement so the offline rechecks accept their absence.
 
@@ -326,7 +326,7 @@ Nine reviewed code-version documents use typed `file`/`sha256` pairs instead of 
 
 The 387 existing regression tests pass from a disposable copy containing code, tests and configuration, with no `data/` or environment file. Historical MMD replay and registry migration separately require retained originals and the private legacy archive. This is a clean-copy regression check, not a Git checkpoint, full publisher redownload, fresh S3 readback or proof of model eligibility. The last full acquisition run passed all 413 tests, including the existing synthetic integrated suites twice, but coverage is 86.61%, below the unchanged 90% gate. The gate is therefore failed, not complete. Full local CI separately stopped at the untracked-documentation review prerequisite; it was not a complete CI run.
 
-The final combined checks run the existing synthetic integrated suites twice in the acquisition test entry point, with durable per-suite artifacts. The regression-only route fixture is overridden with the real collection layout. The complete local CI attempt stopped at the documentation review prerequisite because this guide is untracked; the staged documentation review and Git checkpoint remain later approval steps. All 16 retained Census browser exports regenerate identical registry, lock and plan files against their exact legacy parents. This is an offline metadata check; rebuilding every source object and fresh S3 reconciliation remain final-stage work.
+The final combined checks run the existing synthetic integrated suites twice in the acquisition test entry point, with durable per-suite artifacts. The regression-only route fixture is overridden with the real collection layout. The complete local CI attempt stopped at the documentation review prerequisite because this guide is untracked; the staged documentation review and Git checkpoint were later approval steps, completed at commit `3af1abb`. All 16 retained Census browser exports regenerate identical registry, lock and plan files against their exact legacy parents. This is an offline metadata check; rebuilding every source object and fresh S3 reconciliation remain final-stage work.
 
 The synthetic CMS/HCAI/ONC E2E drivers use minimal public metadata fixtures under `config/acquisition/e2e_inputs`; those contain URLs, periods, schema headers and file/sheet metadata, with publisher contacts removed. They contain no source rows. ACS scope checking reads its locked config plan rather than requiring ignored dictionary files.
 

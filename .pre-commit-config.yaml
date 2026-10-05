@@ -46,36 +46,31 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
-      # Cleanup checks in their warn period: each finding is printed as a WARN line; the check blocks once the whole
-      # repository is clean (README, Quality Checks).
+      # Cleanup checks: they block; exceptions go in .cleanup_allowlist or scripts/quality/vulture_whitelist.py.
       - id: unused-code
-        name: Unused functions, classes or variables (vulture, warn period)
-        entry: .venv/bin/python -m scripts.quality.repo_checks unused-code --warn
+        name: No unused functions, classes or variables (vulture)
+        entry: .venv/bin/python -m scripts.quality.repo_checks unused-code
         language: system
         pass_filenames: false
         always_run: true
-        verbose: true
       - id: unused-dependencies
-        name: Dependencies declared and used (deptry, warn period)
-        entry: .venv/bin/python -m scripts.quality.repo_checks unused-dependencies --warn
+        name: Dependencies declared and used per runtime (deptry)
+        entry: .venv/bin/python -m scripts.quality.repo_checks unused-dependencies
         language: system
         pass_filenames: false
         always_run: true
-        verbose: true
       - id: orphan-files
-        name: Every file referenced by another (warn period)
-        entry: .venv/bin/python -m scripts.quality.repo_checks orphan-files --warn
+        name: Every file referenced by another
+        entry: .venv/bin/python -m scripts.quality.repo_checks orphan-files
         language: system
         pass_filenames: false
         always_run: true
-        verbose: true
       - id: terraform-unused
-        name: Unused Terraform declarations (tflint, warn period)
-        entry: .venv/bin/python -m scripts.quality.repo_checks terraform-unused --warn
+        name: No unused Terraform declarations (tflint)
+        entry: .venv/bin/python -m scripts.quality.repo_checks terraform-unused
         language: system
         pass_filenames: false
         always_run: true
-        verbose: true
       - id: privacy-scan
         name: No personal data or environment-specific values in project files
         entry: .venv/bin/python -m scripts.quality.repo_checks privacy-scan
