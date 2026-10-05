@@ -1,0 +1,25 @@
+header_name,field
+prov,ccn
+provider,ccn
+provider number,ccn
+provider id,ccn
+provider no.,ccn
+case mix index,cmi
+case mix index (cmi),cmi
+cmi,cmi
+unadjusted cmi,cmi
+cmiv30,cmi
+cases,cases
+unadjusted cases,cases
+total cases,cases
+bills,cases
+sum of relative weights,relative_weights
+sum_rltwts,relative_weights
+total case mix,relative_weights
+total relative weights,relative_weights
+transfer adjusted cmi,transfer_adjusted_cmi
+transfer-adjusted cmi,transfer_adjusted_cmi
+tacmiv30,transfer_adjusted_cmi
+transfer adjusted cases,transfer_adjusted_cases
+transfer-adjusted cases,transfer_adjusted_cases
+caseta30,transfer_adjusted_cases

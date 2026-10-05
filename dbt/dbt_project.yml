@@ -32,6 +32,34 @@ vars:
     cms_occupational_mix_text_lines: occupational_mix
     cms_occupational_mix_text_lines_utf16: occupational_mix
     cms_occupational_mix_sheet_rows: occupational_mix
+    cms_provider_of_services: provider_of_services
+    cms_cc_hospital_general_information: care_compare
+    cms_hospital_enrollments: hospital_ownership
+    cms_hospital_owners: hospital_ownership
+    cms_change_of_ownership: hospital_ownership
+  # Case-mix index files: the label families of the CMI snapshots read as CMI, and the reviewed families that are not CMI,
+  # by name or pattern (failure mode 293).
+  cmi_families:
+    - cmi
+    - cmi02
+    - cmi03
+    - cmi10_v27billeddrg
+    - cmi11
+    - cmi15_billed_drgs
+    - cmi16_fy14mpr_billed_drgs
+    - cmi17_v32billed_drg
+    - cmi_billed_drg
+    - cmi_v28billed
+    - cmi_v32billeddrg
+    - cmis_billed_drgs
+    - cmis_fn07
+    - fn06_cmi_billed_drg
+    - fn06_cmis
+    - fy11nprmcmi
+    - provider_cmi
+    - providercmi
+  cmi_excluded_families: [deleted_om, deleted_s, occmix, prds_hosp10_yr2019, s, s3andoccmixpuf]
+  cmi_excluded_family_patterns: ["alt%", "%alternative%"]
 
 models:
   hai:

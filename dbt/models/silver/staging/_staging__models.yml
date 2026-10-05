@@ -20,7 +20,7 @@ models:
         data_tests:
           - accepted_values:
               arguments:
-                values: [hai, cost_reports, ipps, occupational_mix]
+                values: [hai, cost_reports, ipps, occupational_mix, provider_of_services, care_compare, hospital_ownership]
       - name: object_key
         description: Hash of the S3 key, version ID and member path (bronze `_object_key`).
         data_tests: [not_null]
@@ -437,4 +437,79 @@ models:
         description: For a covered sheet, the smallest checksum of a selected text file that covers it.
       - name: is_selected
         description: True when intermediate models may read the sheet.
+        data_tests: [not_null]
+
+  - name: stg_cms_provider_of_services
+    description: >
+      Bronze `cms_provider_of_services` with one copy of each stored file, read from its canonical object (failure mode 279): Provider of Services files (all provider categories); the hospital snapshots are typed in int_pos_hospital_snapshots.
+      The data columns pass through as published; lakehouse.bronze_dictionary.cms_provider_of_services documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_cms_cc_hospital_general_information
+    description: >
+      Bronze `cms_cc_hospital_general_information` with one copy of each stored file, read from its canonical object (failure mode 279): Care Compare Hospital General Information releases.
+      The data columns pass through as published; lakehouse.bronze_dictionary.cms_cc_hospital_general_information documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_cms_hospital_enrollments
+    description: >
+      Bronze `cms_hospital_enrollments` with one copy of each stored file, read from its canonical object (failure mode 279): Hospital Enrollments releases.
+      The data columns pass through as published; lakehouse.bronze_dictionary.cms_hospital_enrollments documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_cms_hospital_owners
+    description: >
+      Bronze `cms_hospital_owners` with one copy of each stored file, read from its canonical object (failure mode 279): Hospital All Owners releases.
+      The data columns pass through as published; lakehouse.bronze_dictionary.cms_hospital_owners documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_cms_change_of_ownership
+    description: >
+      Bronze `cms_change_of_ownership` with one copy of each stored file, read from its canonical object (failure mode 279): Hospital Change of Ownership releases.
+      The data columns pass through as published; lakehouse.bronze_dictionary.cms_change_of_ownership documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
         data_tests: [not_null]

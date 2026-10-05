@@ -45,8 +45,12 @@ layer of a local Apache Iceberg lakehouse then holds one copy of every stored da
 file as published, with each row traced to its S3 object version and checksum. It
 also lists every other stored copy. All 330 mapped tables are loaded and checked; a
 table whose files were all removed for privacy left the map. A dbt staging layer in DuckDB
-reads the HAI, cost report, IPPS and occupational-mix tables and keeps one row per HAI
-measurement window. Modeling and serving come later. The [Architecture](#architecture)
+reads the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital General
+Information and ownership tables. It keeps one row per HAI measurement window, one Provider of
+Services row per hospital and snapshot and one case-mix index per hospital and payment-rule year.
+A hospital-year spine lines each hospital and calendar-year HAI window up with the Provider of
+Services snapshot and the case-mix index from before the window. It also flags the model population.
+Modeling and serving come later. The [Architecture](#architecture)
 diagram shows what is built and what is planned.
 
 ## Install
@@ -174,7 +178,14 @@ the models on synthetic fixtures, including cases that must fail one named test,
 and reconciles each staging table with bronze. Where a text file and a workbook hold the same IPPS or occupational-mix
 table, staging reads the text file and drops only the workbook sheets that a selected text file of the same release
 matches row for row; every other sheet stays selected (`stg_bronze__sheet_selection`). `scripts.lakehouse.ipps_file_labels` regenerates the IPPS and
-occupational-mix label and twin seeds from the S3 manifests; `--check` confirms the committed seeds. The dbt packages
+occupational-mix label and twin seeds from the S3 manifests; `--check` confirms the committed seeds. `int_pos_hospital_snapshots`
+types the Provider of Services hospital rows; each file is dated by the catalog coverage in `dbt/seeds/pos_file_periods.csv`,
+which `scripts.lakehouse.pos_file_periods` rebuilds from the S3 manifests and the local acquisition job plans. The case-mix index
+models read the unadjusted CMI by exact header name (`dbt/seeds/cmi_layout_columns.csv`), keep the transfer-adjusted CMI in its
+own column and choose one CMI per hospital and rule year from the year's best rule stage; disagreeing files are held in
+`int_cmi_holds`. `int_hospital_spine` has one row per hospital and calendar-year HAI window, as of the window start: the
+Provider of Services snapshot that ends in the 12 months before the window and the CMI of the fiscal year that ends before
+it (`int_cmi_hospital_data_years`), with the primary and sensitivity population flags. The dbt packages
 (dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
 publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
 container. The staging E2E installs them before it builds. dbt-project-evaluator is off in every other run and runs
@@ -186,6 +197,7 @@ scripts/lakehouse/dbt.sh deps                                       # install th
 scripts/lakehouse/dbt.sh build                                      # dbt on the real bronze tables
 .venv/bin/python -m scripts.lakehouse.run_project_evaluator         # dbt-project-evaluator; report: data/e2e/dbt_evaluator/
 .venv/bin/python -m scripts.lakehouse.ipps_file_labels --check      # seeds match the S3 manifests (read-only S3)
+.venv/bin/python -m scripts.lakehouse.pos_file_periods --check      # POS periods match the manifests and job plans
 ```
 
 Load large groups in batches of about 20 to 40 tables: each job stops after 1 hour (`COMPOSE_TIMEOUT` in
@@ -553,8 +565,10 @@ reviews remain open. Raw personal-data retention remains a separate unresolved
 control. The deferred controls above are not implemented.
 
 The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only and
-loads one copy per stored file. Staging covers the HAI, cost report, IPPS and occupational-mix tables only. It types
-dates for the HAI windows and nothing else. No gold or model tables exist. The bronze and staging E2E runs use
+loads one copy per stored file. Staging covers the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital
+General Information and ownership tables. It types the HAI windows, the Provider of Services hospital snapshots and the
+case-mix index. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables
+exist. The bronze and staging E2E runs use
 Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
 offline. It has not run: its controls, independent review and the owner's approval are still to come.
 

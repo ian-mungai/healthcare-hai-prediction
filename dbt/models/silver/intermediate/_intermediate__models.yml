@@ -141,3 +141,195 @@ models:
       - name: row_count
         description: Rows left out for this reason and key.
         data_tests: [not_null]
+
+  - name: int_pos_hospital_snapshots
+    description: >
+      One Provider of Services hospital row (category 01) per CCN and snapshot, the snapshot dated by the catalog
+      coverage in the pos_file_periods seed (failure modes 280 to 292, data/lakehouse_planning/hospital_spine_20261005/
+      failure_modes.md). Codes are left-padded, the county is 5-character FIPS from both padded parts, counts, switches
+      and dates are typed; values that do not fit their kind are null and fail assert_pos_values_cast. Every hospital
+      row stays; the population flags let later models filter.
+    columns:
+      - name: snapshot_key
+        description: CCN (or the raw provider number when it is not a valid CCN) and the snapshot's period end.
+        data_tests: [unique, not_null]
+      - name: ccn
+        description: The CMS Certification Number, 6 characters of digits and capital letters; null when the provider number is not.
+        data_tests: [not_null]
+      - name: provider_number
+        description: The provider number as published.
+      - name: period_start
+        description: First day of the snapshot's catalog coverage.
+        data_tests: [not_null]
+      - name: period_end
+        description: Last day of the snapshot's catalog coverage, the snapshot date.
+        data_tests: [not_null]
+      - name: member_sha256
+        description: SHA-256 of the POS file.
+        data_tests: [not_null]
+      - name: state_code
+        description: The POS state code (includes territories, CN and MX).
+      - name: county_fips
+        description: 5-character county FIPS from the padded FIPS state and county codes; the primary hospital-to-county route.
+      - name: ssa_county_code
+        description: 5-character SSA state and county code.
+      - name: provider_subtype_code
+        description: POS provider subtype, 2 characters (01 short term, 11 critical access, and others).
+      - name: control_type_code
+        description: POS type of control (ownership), 2 characters.
+      - name: termination_code
+        description: POS termination code; 00 is active.
+      - name: is_active
+        description: True when the termination code is 00.
+      - name: is_state_or_dc
+        description: True for the 50 states and DC, the approved universe.
+        data_tests: [not_null]
+      - name: is_connecticut
+        description: True for Connecticut, which stays out of county-level joins (Oct 1 2026).
+        data_tests: [not_null]
+      - name: is_critical_access_by_ccn
+        description: True when CCN positions 3 and 4 are 13 (approved addition to Decision 4).
+        data_tests: [not_null]
+      - name: is_veterans_affairs
+        description: True when the CCN ends in F, a Veterans Health Administration hospital, excluded from the primary model.
+        data_tests: [not_null]
+
+  - name: int_cmi_file_rows
+    description: >
+      Every row of the selected case-mix index files and sheets (label families in the cmi_families variable), split
+      into fields (failure modes 293, 295 and 299).
+    columns:
+      - name: member_sha256
+        description: SHA-256 of the file.
+        data_tests: [not_null]
+      - name: line_number
+        description: Line or sheet row number.
+        data_tests: [not_null]
+
+  - name: int_cmi_file_layouts
+    description: >
+      One row per case-mix index file or sheet: header or headerless, and each field's position by exact header name
+      from the cmi_layout_columns seed (failure modes 294, 295 and 297).
+    columns:
+      - name: layout_key
+        description: Bronze table, file checksum and sheet name.
+        data_tests: [unique, not_null]
+
+  - name: int_cmi_hospital_rows
+    description: >
+      One row per CCN in each selected case-mix index file and each rule year and stage its copies are labelled with
+      (failure modes 293 to 304). The CMI is the unadjusted one; the transfer-adjusted CMI and cases are separate columns
+      and are never substituted (Decision 4). The data fiscal year comes only from the file's name, otherwise null.
+    columns:
+      - name: cmi_row_key
+        description: Bronze table, file checksum, sheet, row, rule year and rule stage.
+        data_tests: [unique, not_null]
+      - name: ccn
+        description: The CCN, 6 characters; a 5-digit workbook value is left-padded.
+        data_tests: [not_null]
+      - name: rule_fiscal_year
+        description: The payment-rule fiscal year the file was published with.
+        data_tests: [not_null]
+      - name: data_fiscal_year
+        description: The discharge fiscal year of the CMI data, when the file name states it.
+      - name: rule_stage
+        description: correction, final, proposed or unspecified, from the generated label.
+      - name: cmi
+        description: The unadjusted case-mix index at source precision.
+      - name: cmi_source_value
+        description: The published CMI text, quotes and separators removed.
+      - name: transfer_adjusted_cmi
+        description: The transfer-adjusted CMI where the file publishes it; a different measure.
+
+  - name: int_cmi_hospital_years
+    description: >
+      One case-mix index per CCN and payment-rule fiscal year from the files of the year's best rule stage (correction,
+      final, interim, proposed, notice, unspecified); disagreeing CCN-years are in int_cmi_holds instead (failure modes
+      300 to 302).
+    columns:
+      - name: year_key
+        description: CCN and rule fiscal year.
+        data_tests: [unique, not_null]
+      - name: cmi
+        description: The chosen unadjusted CMI.
+        data_tests: [not_null]
+      - name: file_count
+        description: Best-stage files that carry the CCN in that rule year and agree.
+
+  - name: int_cmi_hospital_data_years
+    description: >
+      One case-mix index per CCN and discharge (data) fiscal year, from the latest rule year that publishes the data year,
+      then that rule year's best stage; only data years stated in the file names count (failure modes 310 to 312). The
+      FY 2020 data year comes from the FY 2023 proposed rule, the only file that publishes it.
+    columns:
+      - name: year_key
+        description: CCN and data fiscal year.
+        data_tests: [unique, not_null]
+      - name: data_fiscal_year
+        description: The discharge fiscal year of the CMI data.
+        data_tests: [not_null]
+      - name: rule_fiscal_year
+        description: The payment-rule fiscal year of the file the CMI comes from.
+        data_tests: [not_null]
+      - name: cmi
+        description: The chosen unadjusted CMI.
+        data_tests: [not_null]
+
+  - name: int_cmi_holds
+    description: >
+      CCN and year pairs whose chosen CMI rows disagree on the CMI or the data year; no CMI is chosen (failure modes 301
+      and 312). The year basis is rule (int_cmi_hospital_years) or data (int_cmi_hospital_data_years).
+    columns:
+      - name: year_key
+        description: Year basis, CCN and fiscal year.
+        data_tests: [unique, not_null]
+      - name: year_basis
+        description: rule or data.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [rule, data]
+      - name: fiscal_year
+        description: The rule or data fiscal year, by the year basis.
+        data_tests: [not_null]
+      - name: hold_reason
+        description: values_disagree.
+        data_tests: [not_null]
+
+  - name: int_hospital_spine
+    description: >
+      One row per hospital (CCN) and calendar-year HAI window (2018, 2019 and 2021 to 2024 in the stored releases), as of
+      the window start (owner decision, Oct 5 2026): the POS snapshot that ends in the 12 months before the window, the CMI
+      of the fiscal year that ends before it and the population flags (failure modes 306 to 317). Primary population:
+      a CMI, a POS state in the 50 states and DC, no Veterans Health Administration, no critical access and no Maryland
+      hospital (Maryland is paid under its own all-payer model; owner decision, Oct 5 2026). The sensitivity population
+      adds critical access and Maryland hospitals. Connecticut stays in both and is flagged for county joins.
+    columns:
+      - name: spine_key
+        description: CCN and window year.
+        data_tests: [unique, not_null]
+      - name: ccn
+        description: The CCN from the HAI windows.
+        data_tests: [not_null]
+      - name: window_year
+        description: The calendar year of the HAI window.
+        data_tests: [not_null]
+      - name: pos_period_end
+        description: End of the POS snapshot used; null when the hospital is not in the snapshot before the window.
+      - name: cmi
+        description: The unadjusted CMI of the fiscal year that ends before the window; null when absent or held.
+      - name: cmi_data_fiscal_year
+        description: The CMI's discharge fiscal year, the window year minus 1.
+      - name: is_cmi_held
+        description: True when the CMI of that data year is held in int_cmi_holds.
+        data_tests: [not_null]
+      - name: is_maryland
+        description: True when the POS state is Maryland; out of the primary population, in the sensitivity run.
+        data_tests: [not_null]
+      - name: is_primary_population
+        description: In the primary model population.
+        data_tests: [not_null]
+      - name: is_sensitivity_population
+        description: In the sensitivity-run population (adds critical access and Maryland hospitals).
+        data_tests: [not_null]

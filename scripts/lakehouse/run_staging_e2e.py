@@ -1,4 +1,4 @@
-"""E2E check of the staging copy, label, twin and sheet models (failure modes 166 to 173, 177 to 188, 267 to 278).
+"""E2E check of the staging copy, label, twin, sheet, POS, CMI and spine models (failure modes 166 to 173, 177 to 188, 267 to 317).
 
 Run from the repository root with Docker running:
 
@@ -7,14 +7,18 @@ Run from the repository root with Docker running:
 
 Each fixture case writes a small bronze database, runs ``dbt build`` against it in the analytics image and compares the
 models with expectations computed here, independently of the SQL. Each case runs on its own copy of the dbt project,
-whose label and twin seeds are written by the real generator (``ipps_file_labels``) from the fixture's names. Six cases
-must fail one named dbt test each: a name clash under one release, copies with different row counts, a stale label
-hold, an object with two checksums, an unheld label conflict and an unlabelled copy. The real stage checks that the
-generator reproduces the committed seeds, builds the models from the catalog twice and reconciles them with bronze.
+whose label and twin seeds are written by the real generator (``ipps_file_labels``) from the fixture's names and whose
+POS period seed names the fixture's POS files. The failing cases must fail one named dbt test each: a name clash under
+one release, copies with different row counts, a stale label hold, an object with two checksums, an unheld label
+conflict, an unlabelled copy, a POS file without a period, a POS value that does not cast, a CCN twice in one POS file,
+an unreviewed CMI family, an unknown CMI layout, a CMI that disagrees with its relative weights and a CMI out of range.
+The real stage checks that the generators reproduce the committed seeds, builds the models from the catalog twice and
+reconciles them with bronze.
 
-Failure modes: ``data/lakehouse_planning/staging_dedup_20261003/failure_modes.md`` and
-``data/lakehouse_planning/staging_families_20261003/failure_modes.md`` and
-``data/lakehouse_planning/sheet_selection_20261005/failure_modes.md``. The report in ``data/e2e/staging/`` holds
+Failure modes: ``data/lakehouse_planning/staging_dedup_20261003/failure_modes.md``,
+``data/lakehouse_planning/staging_families_20261003/failure_modes.md``,
+``data/lakehouse_planning/sheet_selection_20261005/failure_modes.md`` and
+``data/lakehouse_planning/hospital_spine_20261005/failure_modes.md``. The report in ``data/e2e/staging/`` holds
 outcomes and counts, never data values or credentials.
 """
 
@@ -33,7 +37,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse import catalog, ipps_file_labels
+from scripts.lakehouse import catalog, ipps_file_labels, pos_file_periods
 from scripts.process import run_command
 
 REPO_ROOT = catalog.REPO_ROOT
@@ -53,6 +57,11 @@ TABLES = (
     "cms_occupational_mix_text_lines",
     "cms_occupational_mix_text_lines_utf16",
     "cms_occupational_mix_sheet_rows",
+    "cms_provider_of_services",
+    "cms_cc_hospital_general_information",
+    "cms_hospital_enrollments",
+    "cms_hospital_owners",
+    "cms_change_of_ownership",
 )
 HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
@@ -78,6 +87,8 @@ class Stored:
     content: tuple[str, ...] = ()
     # Bronze also holds this copy's rows although it is not the loaded copy, as before one copy per file [207].
     force_loaded: bool = False
+    # Rows of a wide table (POS, Care Compare, ownership) as (column, value) pairs; absent columns are null.
+    records: tuple[tuple[tuple[str, str], ...], ...] = ()
 
 
 def sha(label: str) -> str:
@@ -127,6 +138,358 @@ HAI_2026_AUG = (
 HAI_STATE = ("AL|HAI_1_SIR|01/01/2019|12/31/2019|0.8", "AL|HAI_2_SIR|01/01/2019|12/31/2019|0.9")
 HAI_NATIONAL = ("|HAI_1_SIR|01/01/2019|12/31/2019|1.0",)
 HAI_TABLES = {"cms_hai_hospital": "facility_id", "cms_hai_state": "state", "cms_hai_national": None}
+PROVENANCE_COLUMNS = (
+    "_object_key",
+    "_source_id",
+    "_snapshot_id",
+    "_dataset_id",
+    "_release_id",
+    "_s3_key",
+    "_s3_version_id",
+    "_member_path",
+    "_member_sha256",
+    "_row_number",
+)
+# The bronze columns each wide fixture table carries; the POS list is every column the POS models read.
+WIDE_COLUMNS = {
+    "cms_provider_of_services": (
+        "prvdr_num",
+        "prvdr_ctgry_cd",
+        "prvdr_ctgry_sbtyp_cd",
+        "fac_name",
+        "state_cd",
+        "fips_state_cd",
+        "fips_cnty_cd",
+        "ssa_state_cd",
+        "ssa_cnty_cd",
+        "zip_cd",
+        "cbsa_cd",
+        "cbsa_urbn_rrl_ind",
+        "gnrl_cntl_type_cd",
+        "pgm_trmntn_cd",
+        "trmntn_exprtn_dt",
+        "crtfctn_dt",
+        "orgnl_prtcptn_dt",
+        "mdcl_schl_afltn_cd",
+        "dctd_er_srvc_cd",
+        "icu_srvc_cd",
+        "srgcl_icu_srvc_cd",
+        "neontl_icu_srvc_cd",
+        "ped_icu_srvc_cd",
+        "burn_care_unit_srvc_cd",
+        "acute_rnl_dlys_srvc_cd",
+        "ip_srgcl_srvc_cd",
+        "open_hrt_srgry_srvc_cd",
+        "rsdnt_pgm_alpthc_sw",
+        "rsdnt_pgm_dntl_sw",
+        "rsdnt_pgm_ostpthc_sw",
+        "rsdnt_pgm_othr_sw",
+        "rsdnt_pgm_pdtrc_sw",
+        "bed_cnt",
+        "crtfd_bed_cnt",
+        "psych_unit_bed_cnt",
+        "rehab_unit_bed_cnt",
+        "oprtg_room_cnt",
+        "endscpy_prcdr_rooms_cnt",
+        "crdc_cthrtztn_prcdr_rooms_cnt",
+        "tot_ofsite_emer_dept_cnt",
+        "rn_cnt",
+        "lpn_lvn_cnt",
+        "nrs_prctnr_cnt",
+        "crna_cnt",
+    ),
+    "cms_cc_hospital_general_information": ("facility_id", "provider_id", "state"),
+    "cms_hospital_enrollments": ("ccn", "enrollment_id"),
+    "cms_hospital_owners": ("enrollment_id", "private_equity_company_owner"),
+    "cms_change_of_ownership": ("ccn_buyer", "ccn_seller", "effective_date"),
+}
+
+
+def pos(ccn: str, category: str = "01", **fields: str) -> tuple[tuple[str, str], ...]:
+    """Return one POS row: the CCN, the provider category and any other bronze columns."""
+    return (("prvdr_num", ccn), ("prvdr_ctgry_cd", category), *fields.items())
+
+
+# Two POS snapshots. Codes with and without leading zeros, a county from short parts, a non-hospital category, a Veterans
+# Health Administration CCN, a critical access CCN, a Canadian row with no county, Connecticut, a blank count, switches as
+# Y/N and true/false, and a terminated hospital [282] to [292].
+POS_DEC18 = (
+    pos(
+        "010001",
+        prvdr_ctgry_sbtyp_cd="1",
+        state_cd="AL",
+        fips_state_cd="1",
+        fips_cnty_cd="73",
+        ssa_state_cd="01",
+        ssa_cnty_cd="360",
+        zip_cd="35233",
+        gnrl_cntl_type_cd="4",
+        pgm_trmntn_cd="00",
+        bed_cnt="250",
+        crtfd_bed_cnt="240",
+        rn_cnt="100.5",
+        rsdnt_pgm_alpthc_sw="Y",
+        rsdnt_pgm_dntl_sw="N",
+        icu_srvc_cd="1",
+        orgnl_prtcptn_dt="19660701",
+    ),
+    pos("01001F", state_cd="AL", fips_state_cd="01", fips_cnty_cd="001", gnrl_cntl_type_cd="10", pgm_trmntn_cd="00", bed_cnt="100"),
+    pos("011301", prvdr_ctgry_sbtyp_cd="11", state_cd="AL", fips_state_cd="01", fips_cnty_cd="003", pgm_trmntn_cd="00", bed_cnt="25"),
+    pos("010100", category="02", state_cd="AL", pgm_trmntn_cd="00"),
+    pos("990001", state_cd="CN", fips_state_cd="", fips_cnty_cd="", pgm_trmntn_cd="00"),
+    pos("070001", state_cd="CT", fips_state_cd="09", fips_cnty_cd="001", pgm_trmntn_cd="00"),
+    pos("010002", state_cd="AL", pgm_trmntn_cd="00", bed_cnt=" "),
+)
+POS_MAR19 = (
+    pos(
+        "010001",
+        prvdr_ctgry_sbtyp_cd="01",
+        state_cd="AL",
+        fips_state_cd="01",
+        fips_cnty_cd="073",
+        pgm_trmntn_cd="00",
+        bed_cnt="255",
+        rn_cnt="101",
+        rsdnt_pgm_alpthc_sw="true",
+        rsdnt_pgm_dntl_sw="false",
+    ),
+    pos("010002", state_cd="AL", pgm_trmntn_cd="01", trmntn_exprtn_dt="20190115", bed_cnt="50"),
+)
+# The snapshot before the 2021 window: a critical access, a Veterans Health Administration, a Connecticut, a Canadian and a
+# Maryland row; 010009 has HAI rows and a CMI but no POS row [309] [313] [314] [316] [317].
+POS_DEC20 = (
+    pos("010001", prvdr_ctgry_sbtyp_cd="01", state_cd="AL", fips_state_cd="01", fips_cnty_cd="073", pgm_trmntn_cd="00", bed_cnt="260"),
+    pos("010005", prvdr_ctgry_sbtyp_cd="01", state_cd="AL", fips_state_cd="01", fips_cnty_cd="089", pgm_trmntn_cd="00", bed_cnt="120"),
+    pos("011301", prvdr_ctgry_sbtyp_cd="11", state_cd="AL", fips_state_cd="01", fips_cnty_cd="003", pgm_trmntn_cd="00", bed_cnt="25"),
+    pos("01001F", state_cd="AL", fips_state_cd="01", fips_cnty_cd="001", pgm_trmntn_cd="00", bed_cnt="100"),
+    pos("070001", prvdr_ctgry_sbtyp_cd="01", state_cd="CT", fips_state_cd="09", fips_cnty_cd="001", pgm_trmntn_cd="00", bed_cnt="300"),
+    pos("990001", state_cd="CN", pgm_trmntn_cd="00"),
+    pos("210001", prvdr_ctgry_sbtyp_cd="01", state_cd="MD", fips_state_cd="24", fips_cnty_cd="005", pgm_trmntn_cd="00", bed_cnt="200"),
+)
+# HAI rows for the 2021 calendar-year window, and one rolling window that is not a spine year [306].
+HAI_SPINE = (
+    "010001|HAI_1_SIR|01/01/2021|12/31/2021|0.4",
+    "010005|HAI_1_SIR|01/01/2021|12/31/2021|0.6",
+    "010005|HAI_1_SIR|04/01/2020|03/31/2021|0.7",
+    "011301|HAI_1_SIR|01/01/2021|12/31/2021|0.5",
+    "01001F|HAI_1_SIR|01/01/2021|12/31/2021|0.3",
+    "070001|HAI_1_SIR|01/01/2021|12/31/2021|0.9",
+    "990001|HAI_1_SIR|01/01/2021|12/31/2021|1.0",
+    "010009|HAI_1_SIR|01/01/2021|12/31/2021|1.1",
+    "210001|HAI_1_SIR|01/01/2021|12/31/2021|0.8",
+)
+# Each POS file's catalog coverage, as the period seed gives it [280].
+POS_PERIODS = {"pa": ("2018-10-01", "2018-12-31"), "pb": ("2019-01-01", "2019-03-31"), "pc": ("2020-10-01", "2020-12-31")}
+CMI_HEADER = "Provider No.\tCase Mix Index (CMI)\tTotal Cases\tTotal Relative Weights"
+CMI_HEADER_2007 = "Provider Number\tSum of Relative Weights\tTransfer Adjusted Cases\tTransfer Adjusted CMI\tUnadjusted Cases\tUnadjusted CMI"
+CMI_HEADER_2011 = "Provider ID\tCases\tTotal Case Mix\tCMI\tTransfer Adjusted Cases\tTransfer Adjusted Case Mix\tTransfer Adjusted CMI"
+GROUP_A = (
+    Stored("cms_provider_of_services", "pa", "CMS_POS__fixture_a", "POS_OTHER_DEC18.csv", sha("t1"), 7, "CMS_POS__fixture_a", records=POS_DEC18),
+    Stored("cms_provider_of_services", "pb", "CMS_POS__fixture_b", "POS_OTHER_MAR19.csv", sha("t2"), 2, "CMS_POS__fixture_b", records=POS_MAR19),
+    Stored(
+        "cms_cc_hospital_general_information",
+        "g1",
+        "2024-01-31",
+        "hospitals_2024-01-31.zip!Hospital_General_Information.csv",
+        sha("u1"),
+        2,
+        records=((("facility_id", "010001"), ("state", "AL")), (("facility_id", "010005"), ("state", "AL"))),
+    ),
+    Stored(
+        "cms_hospital_enrollments",
+        "e1",
+        "ENROLL__fixture",
+        "Hospital_Enrollments_2024.01.05.csv",
+        sha("u2"),
+        1,
+        records=((("ccn", "010001"), ("enrollment_id", "O20000000001")),),
+    ),
+    Stored(
+        "cms_hospital_owners",
+        "o1",
+        "CMS_OWNERS__fixture",
+        "organisation_owners.csv",
+        sha("u3"),
+        1,
+        records=((("enrollment_id", "O20000000001"), ("private_equity_company_owner", "N")),),
+    ),
+    Stored(
+        "cms_change_of_ownership",
+        "x1",
+        "CMS_CHOW__fixture",
+        "Hospital_CHOW_2024.01.05.csv",
+        sha("u4"),
+        1,
+        records=((("ccn_buyer", "010001"), ("ccn_seller", "010001"), ("effective_date", "01/01/2023")),),
+    ),
+    # CMI: quoted thousands and a blank footer line in the current layout [296] [298]; a headerless fixed-width proposed
+    # file whose extra CCN gets no CMI because the year has a final file [295] [301].
+    Stored(
+        "cms_ipps_text_lines",
+        "q1",
+        "main-cmi-ipps__q1",
+        "FY18 CMIs - V35 Billed DRGs (FR 2020).txt",
+        sha("q1"),
+        4,
+        "main-cmi-ipps__q1",
+        content=(CMI_HEADER, '010001\t1.9186\t"7,072"\t"13,568.39"', '010005\t1.3810\t"3,140"\t"4,336.49"', ""),
+    ),
+    Stored(
+        "cms_ipps_text_lines",
+        "q2",
+        "main-cmi-ipps__q2",
+        "FY18 CMIs - V35 Billed DRGs (NPRM 2020).txt",
+        sha("q2"),
+        2,
+        "main-cmi-ipps__q2",
+        content=("010001 07042 01.9188 13511.8844", "010007 01000 01.2000 01200.0000"),
+    ),
+    # A correction notice supersedes the final file of its rule year, CCN by file, not by row [301].
+    Stored(
+        "cms_ipps_text_lines",
+        "q3",
+        "main-cmi-ipps__q3",
+        "FY23 CMIs - V40 Billed DRGs (CN 2025).txt",
+        sha("q3"),
+        2,
+        "main-cmi-ipps__q3",
+        content=(CMI_HEADER, "010001\t2.0542\t4209\t8646.1878"),
+    ),
+    Stored(
+        "cms_ipps_text_lines",
+        "q4",
+        "main-cmi-ipps__q4",
+        "FY23 CMIs - V40 Billed DRGs (FR 2025).txt",
+        sha("q4"),
+        3,
+        "main-cmi-ipps__q4",
+        content=(CMI_HEADER, '010001\t2.0540\t"4,209"\t"8,645.29"', '010005\t1.5456\t"1,479"\t"2,285.89"'),
+    ),
+    # Transfer-adjusted columns beside the unadjusted ones: the unadjusted CMI is read [294].
+    Stored(
+        "cms_ipps_text_lines",
+        "q5",
+        "main-cmi-ipps__q5",
+        "CMIs FN07 Sept.txt",
+        sha("q5"),
+        2,
+        "main-cmi-ipps__q5",
+        content=(CMI_HEADER_2007, "010001\t15192.4568\t10032.7312\t1.4815\t10147\t1.4972"),
+    ),
+    # Two final files of one rule year: a CCN whose CMIs differ, or whose data years differ, is held [301] [302].
+    Stored(
+        "cms_ipps_text_lines",
+        "q6",
+        "main-cmi-ipps__q6",
+        "Provider_CMI_V28_Final.txt",
+        sha("q6"),
+        4,
+        "main-cmi-ipps__q6",
+        content=(
+            CMI_HEADER_2011,
+            "010001\t8178\t13823.4333\t1.690319553\t8086.135317\t13532.49007\t1.673542371",
+            "010005\t2232\t2830.1339\t1.267981138\t2199.355254\t2772.443294\t1.260570928",
+            "010006\t5000\t8000\t1.6\t4950\t7900\t1.59596",
+        ),
+    ),
+    Stored(
+        "cms_ipps_text_lines",
+        "q7",
+        "main-cmi-ipps__q7",
+        "FY19 CMIs - V36 Billed DRGs (FR 2021).txt",
+        sha("q7"),
+        3,
+        "main-cmi-ipps__q7",
+        content=(CMI_HEADER, '010001\t1.9837\t"6,752"\t"13,394.11"', "010006\t1.6000\t5000\t8000.00"),
+    ),
+    # A workbook-only file with a CCN that lost its leading zero [304]; a non-CMI file in a CMI snapshot [293]; a year whose
+    # only file has no rule stage.
+    Stored(
+        "cms_ipps_sheet_rows",
+        "q8",
+        "main-cmi-ipps__q8",
+        "FY25 CMIs - V42 Billed DRGs (FR 2027).xls",
+        sha("q8"),
+        2,
+        "main-cmi-ipps__q8",
+        content=("MPR CMIs:Provider No.|Case Mix Index (CMI)|Total Cases|Total Relative Weights", "MPR CMIs:10001|1.8688|4524.0|8454.4376"),
+    ),
+    Stored(
+        "cms_ipps_text_lines",
+        "q9",
+        "main-cmi-ipps__q9",
+        "FY26_January_PUF.20250131.OccMix Data PUF.txt",
+        sha("q9"),
+        2,
+        "main-cmi-ipps__q9",
+        content=("PROV\tMAC", "010001\t10001"),
+    ),
+    Stored("cms_ipps_text_lines", "r1", "main-cmi-ipps__r1", "CMIF11.txt", sha("r1"), 1, "main-cmi-ipps__r1", content=("010001 07913 01.751124 13856.646",)),
+    # The spine: a POS snapshot before the 2021 window, its HAI rows, the FY 2020 data year published only in a proposed rule
+    # (where 010005 is listed twice with different CMIs, so it is held) and the FY 2021 data year of the same rule's final file;
+    # a data year in two rules takes the later rule [311] [312] [315].
+    Stored("cms_provider_of_services", "pc", "CMS_POS__fixture_c", "POS_OTHER_DEC20.csv", sha("t3"), 7, "CMS_POS__fixture_c", records=POS_DEC20),
+    Stored("cms_hai_hospital", "h08", "2022-06-01", "HAI_Spine_Fixture.csv", sha("a6"), 9, content=HAI_SPINE),
+    Stored(
+        "cms_ipps_text_lines",
+        "s1",
+        "main-cmi-ipps__s1",
+        "FY20 CMIs - V37 Billed DRGs (PR 2023).txt",
+        sha("s1"),
+        7,
+        "main-cmi-ipps__s1",
+        content=(
+            CMI_HEADER,
+            "010001\t2.0352\t4818\t9805.71",
+            "010005\t1.6864\t1950\t3288.40",
+            "070001\t1.5000\t1000\t1500.00",
+            "010009\t1.2000\t500\t600.00",
+            "010005\t1.7000\t2000\t3400.00",
+            "210001\t1.8000\t1000\t1800.00",
+        ),
+    ),
+    Stored(
+        "cms_ipps_text_lines",
+        "s2",
+        "main-cmi-ipps__s2",
+        "FY21 CMIs - V38 Billed DRGs (FR 2023).txt",
+        sha("s2"),
+        2,
+        "main-cmi-ipps__s2",
+        content=(CMI_HEADER, '010001\t2.0375\t"4,837"\t"9,855.42"'),
+    ),
+    Stored(
+        "cms_ipps_text_lines",
+        "s3",
+        "main-cmi-ipps__s3",
+        "FY19 CMIs - V36 Billed DRGs (FR 2022).txt",
+        sha("s3"),
+        3,
+        "main-cmi-ipps__s3",
+        content=(CMI_HEADER, '010001\t1.9837\t"6,752"\t"13,394.11"', "010006\t1.7000\t5000\t8500.00"),
+    ),
+)
+
+
+def with_record(item: Stored, record: tuple[tuple[str, str], ...]) -> Stored:
+    """Return a wide-table object with one more row."""
+    return replace(item, records=(*item.records, record), rows=item.rows + 1)
+
+
+def cmi_case(content: tuple[str, ...]) -> Stored:
+    """Return a FY 2026 final CMI file with the given lines, for the failing CMI cases."""
+    return Stored(
+        "cms_ipps_text_lines",
+        "r2",
+        "main-cmi-ipps__r2",
+        "FY24 CMIs - V41 Billed DRGs (FR 2026).txt",
+        sha("r2"),
+        len(content),
+        "main-cmi-ipps__r2",
+        content=content,
+    )
+
+
 BASE = (
     # HAI: a release republished byte for byte [171]; the year-to-date archive dated by capture [170]; the canonical
     # copy is the smallest object key, here the archive copy, never the earliest or latest capture [167].
@@ -291,8 +654,9 @@ BASE = (
         3,
         content=("Sheet1:Provider|Wage", "Sheet1:10001|3.6", "Sheet1:10002|4"),
     ),
+    *GROUP_A,
 )
-# Each failing case changes the base fixture, or drops label rows, and names the one dbt test that must catch it.
+# Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
     "name_clash": ("assert_no_release_name_clash", (*BASE, Stored("cms_hai_hospital", "h06", "2021-01-27", HAI_FILE, sha("a9"), 2)), frozenset()),
     # Bronze holds rows of a copy the copies table lists as not loaded [207] [209].
@@ -319,6 +683,32 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
     ),
     # The label map misses one loaded copy [182].
     "unlabelled_copy": ("assert_file_labels_cover_copies", BASE, frozenset({"i05"})),
+    # The period seed misses one POS file [281].
+    "pos_missing_period": ("assert_pos_files_have_periods", BASE, frozenset({"pb"})),
+    # A POS bed count that is not a number [288].
+    "pos_uncast_value": (
+        "assert_pos_values_cast",
+        tuple(with_record(item, pos("010003", state_cd="AL", bed_cnt="12a")) if item.key == "pb" else item for item in BASE),
+        frozenset(),
+    ),
+    # One CCN twice in one POS file [283].
+    "pos_duplicate_ccn": (
+        "unique_int_pos_hospital_snapshots_snapshot_key",
+        tuple(with_record(item, pos("010002", state_cd="AL")) if item.key == "pb" else item for item in BASE),
+        frozenset(),
+    ),
+    # A file of a CMI snapshot whose family is neither read as CMI nor reviewed as not CMI [293].
+    "cmi_unreviewed_family": (
+        "assert_cmi_families_reviewed",
+        (*BASE, replace(cmi_case((CMI_HEADER, "010001\t1.5\t10\t15")), member="FY 2020 CMI Extra Table.txt")),
+        frozenset(),
+    ),
+    # A CMI file with no CMI column [297].
+    "cmi_unknown_layout": ("assert_cmi_files_have_layout", (*BASE, cmi_case(("Prov\tIndex", "010001\t1.5"))), frozenset()),
+    # A CMI column that holds the transfer-adjusted values [294].
+    "cmi_transfer_adjusted": ("assert_cmi_matches_relative_weights", (*BASE, cmi_case((CMI_HEADER, "010001\t1.6735\t8178\t13823.43"))), frozenset()),
+    # A CMI outside the plausible range [303].
+    "cmi_out_of_range": ("assert_cmi_values_plausible", (*BASE, cmi_case((CMI_HEADER, "010001\t12.5\t\t"))), frozenset()),
 }
 # Reviewed pairs under different names, as committed in the overrides file [220].
 FIXTURE_RENAMED = ((sha("k1"), sha("k2")),)
@@ -384,6 +774,16 @@ CREATE TABLE bronze.cms_occupational_mix_sheet_rows AS
     SELECT * EXCLUDE (bronze_table, line_text, cells_text), _row_number AS sheet_row, string_split(cells_text, '|') AS cells
     FROM fixture WHERE bronze_table = 'cms_occupational_mix_sheet_rows';
 DROP TABLE fixture;
+CREATE TABLE bronze.cms_provider_of_services AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_provider_of_services_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_cc_hospital_general_information AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_cc_hospital_general_information_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_hospital_enrollments AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_hospital_enrollments_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_hospital_owners AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_hospital_owners_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_change_of_ownership AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_change_of_ownership_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.stored_copies AS
     SELECT * REPLACE (byte_count::BIGINT AS byte_count, loaded::BOOLEAN AS loaded, retired::BOOLEAN AS retired)
     FROM read_csv(getvariable('copies_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
@@ -442,7 +842,7 @@ def fixture_csv(objects: Iterable[Stored]) -> str:
     items = list(objects)
     loaded = loaded_keys(items)
     for item in items:
-        if item.key not in loaded and not item.force_loaded:
+        if (item.key not in loaded and not item.force_loaded) or item.table in WIDE_COLUMNS:
             continue
         if item.content and len(item.content) != item.rows:
             raise ValueError(f"fixture {item.key}: {len(item.content)} content rows but rows={item.rows}")
@@ -466,6 +866,39 @@ def fixture_csv(objects: Iterable[Stored]) -> str:
                 + (hai["facility_id"], "", hai["state"], hai["measure_id"], hai["start_date"], hai["end_date"], "", "", hai["score"], "", "")
             )
     return buffer.getvalue()
+
+
+def wide_csv(objects: Iterable[Stored], table: str) -> str:
+    """Return one wide table's rows as CSV: the provenance columns and the table's bronze columns, absent ones empty."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(PROVENANCE_COLUMNS + WIDE_COLUMNS[table])
+    items = list(objects)
+    loaded = loaded_keys(items)
+    for item in items:
+        if item.table != table or item.key not in loaded:
+            continue
+        if len(item.records) != item.rows:
+            raise ValueError(f"fixture {item.key}: {len(item.records)} records but rows={item.rows}")
+        for row, record in enumerate(item.records, start=1):
+            unknown = set(dict(record)) - set(WIDE_COLUMNS[table])
+            if unknown:
+                raise ValueError(f"fixture {item.key}: columns {sorted(unknown)} are not in the {table} fixture")
+            values = dict(record)
+            provenance = (item.key, "fixture", item.snapshot, "fixture_dataset", item.release, f"fixture/{item.key}.zip", f"v-{item.key}", item.member)
+            writer.writerow(provenance + (item.sha, row) + tuple(values.get(column, "") for column in WIDE_COLUMNS[table]))
+    return buffer.getvalue()
+
+
+def periods_csv(objects: Iterable[Stored], unlabelled: frozenset[str]) -> str:
+    """Return the POS period seed for the fixture's POS files, without the ones a case leaves out [281]."""
+    rows = [
+        {"member_sha256": item.sha, "release_id": item.release, "file_name": item.member, "period_start": start, "period_end": end}
+        for item in objects
+        if item.table == "cms_provider_of_services" and item.key not in unlabelled
+        for start, end in (POS_PERIODS[item.key],)
+    ]
+    return pos_file_periods.as_csv(rows)
 
 
 def publication(item: Stored) -> tuple[str, str]:
@@ -531,6 +964,36 @@ SELECTION_SQL = (
 SHEETS_SQL = (
     "SELECT left(member_sha256, 2), sheet_name, sheet_status, coalesce(left(covering_sha256, 2), ''), is_selected::VARCHAR "
     "FROM stg_bronze__sheet_selection WHERE sheet_status <> 'file_selected' ORDER BY ALL;"
+)
+POS_SQL = (
+    "SELECT ccn, period_end::VARCHAR, coalesce(state_code, ''), coalesce(county_fips, ''), coalesce(ssa_county_code, ''), "
+    "coalesce(provider_subtype_code, ''), coalesce(control_type_code, ''), coalesce(termination_code, ''), coalesce(is_active::VARCHAR, ''), "
+    "coalesce(bed_count::VARCHAR, ''), coalesce(certified_bed_count::VARCHAR, ''), coalesce(rn_count::VARCHAR, ''), "
+    "coalesce(has_residency_allopathic::VARCHAR, ''), coalesce(has_residency_dental::VARCHAR, ''), coalesce(icu_service_code, ''), "
+    "coalesce(original_participation_date::VARCHAR, ''), coalesce(termination_date::VARCHAR, ''), coalesce(zip_code, ''), "
+    "is_state_or_dc::VARCHAR, is_connecticut::VARCHAR, is_critical_access_by_ccn::VARCHAR, is_veterans_affairs::VARCHAR "
+    "FROM int_pos_hospital_snapshots ORDER BY ALL;"
+)
+CMI_ROWS_SQL = (
+    "SELECT left(member_sha256, 2), rule_fiscal_year::VARCHAR, coalesce(data_fiscal_year::VARCHAR, ''), rule_stage, ccn, cmi::VARCHAR, "
+    "coalesce(cases::VARCHAR, ''), coalesce(relative_weights::VARCHAR, ''), coalesce(transfer_adjusted_cmi::VARCHAR, ''), has_header::VARCHAR "
+    "FROM int_cmi_hospital_rows ORDER BY ALL;"
+)
+CMI_YEARS_SQL = (
+    "SELECT ccn, rule_fiscal_year::VARCHAR, coalesce(data_fiscal_year::VARCHAR, ''), rule_stage, cmi::VARCHAR, left(member_sha256, 2) "
+    "FROM int_cmi_hospital_years ORDER BY ALL;"
+)
+CMI_HOLDS_SQL = "SELECT year_basis, ccn, fiscal_year::VARCHAR, hold_reason, file_count::VARCHAR FROM int_cmi_holds ORDER BY ALL;"
+CMI_DATA_YEARS_SQL = (
+    "SELECT ccn, data_fiscal_year::VARCHAR, rule_fiscal_year::VARCHAR, rule_stage, cmi::VARCHAR, left(member_sha256, 2) "
+    "FROM int_cmi_hospital_data_years ORDER BY ALL;"
+)
+SPINE_SQL = (
+    "SELECT ccn, window_year::VARCHAR, coalesce(pos_period_end::VARCHAR, ''), coalesce(state_code, ''), coalesce(county_fips, ''), "
+    "coalesce(cmi::VARCHAR, ''), coalesce(cmi_data_fiscal_year::VARCHAR, ''), coalesce(cmi_rule_fiscal_year::VARCHAR, ''), "
+    "coalesce(cmi_rule_stage, ''), has_pos_snapshot::VARCHAR, has_cmi::VARCHAR, is_cmi_held::VARCHAR, is_critical_access::VARCHAR, "
+    "is_veterans_affairs::VARCHAR, is_state_or_dc::VARCHAR, is_connecticut::VARCHAR, is_primary_population::VARCHAR, "
+    "is_sensitivity_population::VARCHAR FROM int_hospital_spine ORDER BY ALL;"
 )
 VIEW_ROWS_SQL = "SELECT getvariable('checked_table'), count(*)::VARCHAR FROM query_table(getvariable('checked_table'));\n"
 BRONZE_COUNTS_SQL = (
@@ -608,6 +1071,7 @@ def fixture_project(case_dir: Path, objects: tuple[Stored, ...], unlabelled: fro
     (project / "seeds/ipps_occmix_copy_labels.csv").write_text(ipps_file_labels.as_csv(rows, ipps_file_labels.LABEL_COLUMNS))
     twin_rows = ipps_file_labels.twins(stored, FIXTURE_RENAMED)
     (project / "seeds/ipps_occmix_twins.csv").write_text(ipps_file_labels.as_csv(twin_rows, ipps_file_labels.TWIN_COLUMNS))
+    (project / "seeds/pos_file_periods.csv").write_text(periods_csv(objects, unlabelled))
 
 
 def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[str] = frozenset()) -> tuple[int, dict[str, str]]:
@@ -620,6 +1084,9 @@ def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[st
     (case_dir / "bronze.csv").write_text(fixture_csv(objects))
     (case_dir / "copies.csv").write_text(copies_csv(objects))
     variables = f"SET VARIABLE fixture_csv = '{CONTAINER_OUT}/e2e/{case}/bronze.csv';\nSET VARIABLE copies_csv = '{CONTAINER_OUT}/e2e/{case}/copies.csv';\n"
+    for table in WIDE_COLUMNS:
+        (case_dir / f"{table}.csv").write_text(wide_csv(objects, table))
+        variables += f"SET VARIABLE {table}_csv = '{CONTAINER_OUT}/e2e/{case}/{table}.csv';\n"
     (case_dir / "bronze.sql").write_text(variables + FIXTURE_SQL)
     database = f"{CONTAINER_OUT}/e2e/{case}/fixture_lakehouse.duckdb"
     code, _, stderr = compose_run(["--entrypoint", "duckdb", "analytics-dbt", database, "-c", f".read {CONTAINER_OUT}/e2e/{case}/bronze.sql"], {})
@@ -652,6 +1119,12 @@ def read_models(case: str) -> dict[str, Any]:
         "sheets": [tuple(row) for row in duckdb_csv(database, SHEETS_SQL)],
         "windows": [tuple(row) for row in duckdb_csv(database, WINDOWS_SQL)],
         "holds": [tuple(row) for row in duckdb_csv(database, HOLDS_SQL)],
+        "pos": [tuple(row) for row in duckdb_csv(database, POS_SQL)],
+        "cmi_rows": [tuple(row) for row in duckdb_csv(database, CMI_ROWS_SQL)],
+        "cmi_years": [tuple(row) for row in duckdb_csv(database, CMI_YEARS_SQL)],
+        "cmi_holds": [tuple(row) for row in duckdb_csv(database, CMI_HOLDS_SQL)],
+        "cmi_data_years": [tuple(row) for row in duckdb_csv(database, CMI_DATA_YEARS_SQL)],
+        "spine": [tuple(row) for row in duckdb_csv(database, SPINE_SQL)],
     }
 
 
@@ -728,21 +1201,150 @@ def fixture_scenarios() -> dict[str, bool]:
     )
     checks["generator_refuses_pair_across_captures"] = refuses(lambda: ipps_file_labels.twins(stored, ((sha("k1"), sha("j2")),)), "one capture")
     # [230] to [235] One row per HAI measurement window, from the latest dated file; conflicts and unreadable rows held.
-    checks["hai_windows_match_expected"] = base.get("windows") == [
-        ("hospital", "010001", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.6", "a2"),
-        ("hospital", "010001", "HAI_1_SIR", "2025-01-01", "2025-12-31", "1.2", "a3"),
-        ("hospital", "010001", "HAI_2_SIR", "2019-01-01", "2019-12-31", "0.7", "a1"),
-        ("hospital", "010002", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.9", "a1"),
-        ("hospital", "01000F", "HAI_1_SIR", "2025-01-01", "2025-12-31", "0.3", "a3"),
-        ("national", "US", "HAI_1_SIR", "2019-01-01", "2019-12-31", "1.0", "b2"),
-        ("state", "AL", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.8", "b1"),
-        ("state", "AL", "HAI_2_SIR", "2019-01-01", "2019-12-31", "0.9", "b1"),
-    ]
+    checks["hai_windows_match_expected"] = base.get("windows") == sorted(
+        [
+            ("hospital", "010001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.4", "a6"),
+            ("hospital", "010005", "HAI_1_SIR", "2020-04-01", "2021-03-31", "0.7", "a6"),
+            ("hospital", "010005", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.6", "a6"),
+            ("hospital", "010009", "HAI_1_SIR", "2021-01-01", "2021-12-31", "1.1", "a6"),
+            ("hospital", "011301", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.5", "a6"),
+            ("hospital", "01001F", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.3", "a6"),
+            ("hospital", "070001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.9", "a6"),
+            ("hospital", "990001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "1.0", "a6"),
+            ("hospital", "210001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.8", "a6"),
+            ("hospital", "010001", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.6", "a2"),
+            ("hospital", "010001", "HAI_1_SIR", "2025-01-01", "2025-12-31", "1.2", "a3"),
+            ("hospital", "010001", "HAI_2_SIR", "2019-01-01", "2019-12-31", "0.7", "a1"),
+            ("hospital", "010002", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.9", "a1"),
+            ("hospital", "01000F", "HAI_1_SIR", "2025-01-01", "2025-12-31", "0.3", "a3"),
+            ("national", "US", "HAI_1_SIR", "2019-01-01", "2019-12-31", "1.0", "b2"),
+            ("state", "AL", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.8", "b1"),
+            ("state", "AL", "HAI_2_SIR", "2019-01-01", "2019-12-31", "0.9", "b1"),
+        ]
+    )
     checks["hai_holds_match_expected"] = base.get("holds") == [
         ("cms_hai_hospital", "", "", "no_key", "1"),
         ("cms_hai_hospital", "010003", "HAI_1_SIR", "same_date_conflict", "2"),
         ("cms_hai_hospital", "010004", "HAI_1_SIR", "unparsed_date", "1"),
     ]
+    # [280] to [292] Hospital rows only, one per CCN and period; padded codes, 5-character counties, typed counts and
+    # switches, dates, and the population flags.
+    checks["pos_snapshots_match_expected"] = base.get("pos") == sorted(
+        [
+            ("010001", "2018-12-31", "AL", "01073", "01360", "01", "04", "00", "true", "250", "240", "100.5", "true", "false", "1", "1966-07-01")
+            + ("", "35233", "true", "false", "false", "false"),
+            ("010001", "2019-03-31", "AL", "01073", "", "01", "", "00", "true", "255", "", "101.0", "true", "false", "", "")
+            + ("", "", "true", "false", "false", "false"),
+            ("010002", "2018-12-31", "AL", "", "", "", "", "00", "true", "", "", "", "", "", "", "") + ("", "", "true", "false", "false", "false"),
+            ("010002", "2019-03-31", "AL", "", "", "", "", "01", "false", "50", "", "", "", "", "", "") + ("2019-01-15", "", "true", "false", "false", "false"),
+            ("01001F", "2018-12-31", "AL", "01001", "", "", "10", "00", "true", "100", "", "", "", "", "", "") + ("", "", "true", "false", "false", "true"),
+            ("011301", "2018-12-31", "AL", "01003", "", "11", "", "00", "true", "25", "", "", "", "", "", "") + ("", "", "true", "false", "true", "false"),
+            ("070001", "2018-12-31", "CT", "09001", "", "", "", "00", "true", "", "", "", "", "", "", "") + ("", "", "true", "true", "false", "false"),
+            ("990001", "2018-12-31", "CN", "", "", "", "", "00", "true", "", "", "", "", "", "", "") + ("", "", "false", "false", "false", "false"),
+            ("010001", "2020-12-31", "AL", "01073", "", "01", "", "00", "true", "260", "", "", "", "", "", "") + ("", "", "true", "false", "false", "false"),
+            ("010005", "2020-12-31", "AL", "01089", "", "01", "", "00", "true", "120", "", "", "", "", "", "") + ("", "", "true", "false", "false", "false"),
+            ("011301", "2020-12-31", "AL", "01003", "", "11", "", "00", "true", "25", "", "", "", "", "", "") + ("", "", "true", "false", "true", "false"),
+            ("01001F", "2020-12-31", "AL", "01001", "", "", "", "00", "true", "100", "", "", "", "", "", "") + ("", "", "true", "false", "false", "true"),
+            ("070001", "2020-12-31", "CT", "09001", "", "01", "", "00", "true", "300", "", "", "", "", "", "") + ("", "", "true", "true", "false", "false"),
+            ("990001", "2020-12-31", "CN", "", "", "", "", "00", "true", "", "", "", "", "", "", "") + ("", "", "false", "false", "false", "false"),
+            ("210001", "2020-12-31", "MD", "24005", "", "01", "", "00", "true", "200", "", "", "", "", "", "") + ("", "", "true", "false", "false", "false"),
+        ]
+    )
+    # [293] to [304] Every row of the selected CMI files, unadjusted CMI beside the transfer-adjusted one; the occupational-mix
+    # file in a CMI snapshot is not read.
+    checks["cmi_rows_match_expected"] = base.get("cmi_rows") == sorted(
+        [
+            ("q1", "2020", "2018", "final", "010001", "1.9186", "7072.0", "13568.39", "", "true"),
+            ("q1", "2020", "2018", "final", "010005", "1.381", "3140.0", "4336.49", "", "true"),
+            ("q2", "2020", "2018", "proposed", "010001", "1.9188", "7042.0", "13511.8844", "", "false"),
+            ("q2", "2020", "2018", "proposed", "010007", "1.2", "1000.0", "1200.0", "", "false"),
+            ("q3", "2025", "2023", "correction", "010001", "2.0542", "4209.0", "8646.1878", "", "true"),
+            ("q4", "2025", "2023", "final", "010001", "2.054", "4209.0", "8645.29", "", "true"),
+            ("q4", "2025", "2023", "final", "010005", "1.5456", "1479.0", "2285.89", "", "true"),
+            ("q5", "2007", "", "final", "010001", "1.4972", "10147.0", "15192.4568", "1.4815", "true"),
+            ("q6", "2021", "", "final", "010001", "1.690319553", "8178.0", "13823.4333", "1.673542371", "true"),
+            ("q6", "2021", "", "final", "010005", "1.267981138", "2232.0", "2830.1339", "1.260570928", "true"),
+            ("q6", "2021", "", "final", "010006", "1.6", "5000.0", "8000.0", "1.59596", "true"),
+            ("q7", "2021", "2019", "final", "010001", "1.9837", "6752.0", "13394.11", "", "true"),
+            ("q7", "2021", "2019", "final", "010006", "1.6", "5000.0", "8000.0", "", "true"),
+            ("q8", "2027", "2025", "final", "010001", "1.8688", "4524.0", "8454.4376", "", "true"),
+            ("r1", "2011", "", "unspecified", "010001", "1.751124", "7913.0", "13856.646", "", "false"),
+            ("s1", "2023", "2020", "proposed", "010001", "2.0352", "4818.0", "9805.71", "", "true"),
+            ("s1", "2023", "2020", "proposed", "010005", "1.6864", "1950.0", "3288.4", "", "true"),
+            ("s1", "2023", "2020", "proposed", "010005", "1.7", "2000.0", "3400.0", "", "true"),
+            ("s1", "2023", "2020", "proposed", "010009", "1.2", "500.0", "600.0", "", "true"),
+            ("s1", "2023", "2020", "proposed", "070001", "1.5", "1000.0", "1500.0", "", "true"),
+            ("s1", "2023", "2020", "proposed", "210001", "1.8", "1000.0", "1800.0", "", "true"),
+            ("s2", "2023", "2021", "final", "010001", "2.0375", "4837.0", "9855.42", "", "true"),
+            ("s3", "2022", "2019", "final", "010001", "1.9837", "6752.0", "13394.11", "", "true"),
+            ("s3", "2022", "2019", "final", "010006", "1.7", "5000.0", "8500.0", "", "true"),
+        ]
+    )
+    # [301] One CMI per CCN and rule year from the best stage's files: a correction over the final file, a final file over
+    # the proposed one; two final files that disagree on the CMI or the data year are held.
+    checks["cmi_years_match_expected"] = base.get("cmi_years") == sorted(
+        [
+            ("010001", "2007", "", "final", "1.4972", "q5"),
+            ("010001", "2011", "", "unspecified", "1.751124", "r1"),
+            ("010001", "2020", "2018", "final", "1.9186", "q1"),
+            ("010005", "2020", "2018", "final", "1.381", "q1"),
+            ("010005", "2021", "", "final", "1.267981138", "q6"),
+            ("010001", "2025", "2023", "correction", "2.0542", "q3"),
+            ("010001", "2027", "2025", "final", "1.8688", "q8"),
+            ("010001", "2022", "2019", "final", "1.9837", "s3"),
+            ("010006", "2022", "2019", "final", "1.7", "s3"),
+            ("010001", "2023", "2021", "final", "2.0375", "s2"),
+        ]
+    )
+    checks["cmi_holds_match_expected"] = base.get("cmi_holds") == [
+        ("data", "010005", "2020", "values_disagree", "1"),
+        ("rule", "010001", "2021", "values_disagree", "2"),
+        ("rule", "010006", "2021", "values_disagree", "2"),
+    ]
+    # [311] [312] One CMI per CCN and data year: the latest rule that carries the data year, then its best stage.
+    checks["cmi_data_years_match_expected"] = base.get("cmi_data_years") == sorted(
+        [
+            ("010001", "2018", "2020", "final", "1.9186", "q1"),
+            ("010005", "2018", "2020", "final", "1.381", "q1"),
+            ("010001", "2019", "2022", "final", "1.9837", "s3"),
+            ("010006", "2019", "2022", "final", "1.7", "s3"),
+            ("010001", "2020", "2023", "proposed", "2.0352", "s1"),
+            ("010009", "2020", "2023", "proposed", "1.2", "s1"),
+            ("070001", "2020", "2023", "proposed", "1.5", "s1"),
+            ("210001", "2020", "2023", "proposed", "1.8", "s1"),
+            ("010001", "2021", "2023", "final", "2.0375", "s2"),
+            ("010001", "2023", "2025", "correction", "2.0542", "q3"),
+            ("010001", "2025", "2027", "final", "1.8688", "q8"),
+        ]
+    )
+    # [306] to [316] One row per hospital and calendar-year window, as of the window start: the POS snapshot that ends in the
+    # 12 months before the window, the CMI of the fiscal year before it, and the population flags.
+    no_pos = ("", "", "", "")
+    no_cmi = ("", "", "", "")
+    checks["spine_matches_expected"] = base.get("spine") == sorted(
+        [
+            ("010001", "2019", "2018-12-31", "AL", "01073", "1.9186", "2018", "2020", "final")
+            + ("true", "true", "false", "false", "false", "true", "false", "true", "true"),
+            ("010002", "2019", "2018-12-31", "AL", "") + no_cmi + ("true", "false", "false", "false", "false", "true", "false", "false", "false"),
+            ("010001", "2021", "2020-12-31", "AL", "01073", "2.0352", "2020", "2023", "proposed")
+            + ("true", "true", "false", "false", "false", "true", "false", "true", "true"),
+            ("010005", "2021", "2020-12-31", "AL", "01089") + no_cmi + ("true", "false", "true", "false", "false", "true", "false", "false", "false"),
+            ("010009", "2021")
+            + no_pos[:3]
+            + ("1.2", "2020", "2023", "proposed")
+            + ("false", "true", "false", "false", "false", "false", "false", "false", "false"),
+            ("011301", "2021", "2020-12-31", "AL", "01003") + no_cmi + ("true", "false", "false", "true", "false", "true", "false", "false", "true"),
+            ("01001F", "2021", "2020-12-31", "AL", "01001") + no_cmi + ("true", "false", "false", "false", "true", "true", "false", "false", "false"),
+            ("070001", "2021", "2020-12-31", "CT", "09001", "1.5", "2020", "2023", "proposed")
+            + ("true", "true", "false", "false", "false", "true", "true", "true", "true"),
+            ("990001", "2021", "2020-12-31", "CN", "") + no_cmi + ("true", "false", "false", "false", "false", "false", "false", "false", "false"),
+            # Maryland: a CMI, but out of the primary population and in the sensitivity run (owner decision, Oct 5 2026) [317].
+            ("210001", "2021", "2020-12-31", "MD", "24005", "1.8", "2020", "2023", "proposed")
+            + ("true", "true", "false", "false", "false", "true", "false", "false", "true"),
+            ("010001", "2025") + no_pos[:3] + no_cmi + ("false", "false", "false", "false", "false", "false", "false", "false", "false"),
+            ("01000F", "2025") + no_pos[:3] + no_cmi + ("false", "false", "false", "false", "true", "false", "false", "false", "false"),
+        ]
+    )
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -782,6 +1384,7 @@ def real_stage() -> dict[str, Any]:
     outcome["checks"]["generator_reproduces_seeds"] = (
         ipps_file_labels.LABELS_SEED.read_text() == rebuilt_labels and ipps_file_labels.TWINS_SEED.read_text() == rebuilt_twins
     )
+    outcome["checks"]["pos_periods_seed_reproduced"] = pos_file_periods.SEED.read_text() == pos_file_periods.as_csv(pos_file_periods.build())
     database = f"{CONTAINER_OUT}/staging.duckdb"
     (OUT / "real_attach.sql").write_text(REAL_ATTACH)
     init = f"{CONTAINER_OUT}/real_attach.sql"
@@ -814,6 +1417,49 @@ def real_stage() -> dict[str, Any]:
         ["6907b7e751 Variable Descriptions", "kept"],
         ["ac5ffd206e CN 2020", "kept"],
     ]
+    # [282] Hospital rows per POS file equal bronze's category 01 rows; every file has a period [280].
+    model_pos = dict(duckdb_csv(database, "SELECT member_sha256, count(*)::VARCHAR FROM int_pos_hospital_snapshots GROUP BY 1 ORDER BY 1;"))
+    bronze_pos_sql = (
+        "SELECT _member_sha256, count(*)::VARCHAR FROM lakehouse.bronze.cms_provider_of_services "
+        "WHERE lpad(trim(prvdr_ctgry_cd), 2, '0') = '01' GROUP BY 1 ORDER BY 1;"
+    )
+    bronze_pos = dict(duckdb_csv(database, bronze_pos_sql, init))
+    outcome["checks"]["pos_hospital_rows_reconcile"] = bool(model_pos) and model_pos == bronze_pos
+    pos_counts_sql = (
+        "SELECT count(DISTINCT period_end)::VARCHAR, count(*)::VARCHAR, count(*) FILTER (WHERE county_fips IS NULL)::VARCHAR, "
+        "count(*) FILTER (WHERE NOT is_state_or_dc)::VARCHAR, count(*) FILTER (WHERE is_veterans_affairs)::VARCHAR, "
+        "count(*) FILTER (WHERE is_critical_access_by_ccn)::VARCHAR, count(*) FILTER (WHERE ccn IS NULL)::VARCHAR FROM int_pos_hospital_snapshots;"
+    )
+    names = ("periods", "rows", "no_county", "outside_states_dc", "veterans_affairs", "critical_access_by_ccn", "no_ccn")
+    outcome["pos_counts"] = dict(zip(names, (int(value) for value in duckdb_csv(database, pos_counts_sql)[0]), strict=True))
+    # [293] to [304] CMI: rows per rule year and stage, chosen CCN-years, holds and the years without a data year.
+    cmi_files_sql = (
+        "SELECT rule_fiscal_year::VARCHAR || ' ' || rule_stage || ' ' || coalesce(data_fiscal_year::VARCHAR, 'no data year'), "
+        "count(DISTINCT member_sha256)::VARCHAR || ' files, ' || count(*)::VARCHAR || ' rows' FROM int_cmi_hospital_rows GROUP BY 1 ORDER BY 1;"
+    )
+    outcome["cmi_files"] = dict(duckdb_csv(database, cmi_files_sql))
+    cmi_years_sql = (
+        "SELECT rule_fiscal_year::VARCHAR || ' ' || rule_stage || ' ' || coalesce(data_fiscal_year::VARCHAR, 'no data year'), count(*)::VARCHAR "
+        "FROM int_cmi_hospital_years GROUP BY 1 ORDER BY 1;"
+    )
+    outcome["cmi_years"] = dict(duckdb_csv(database, cmi_years_sql))
+    cmi_holds_sql = "SELECT year_basis || ' ' || fiscal_year::VARCHAR || ' ' || hold_reason, count(*)::VARCHAR FROM int_cmi_holds GROUP BY 1 ORDER BY 1;"
+    outcome["cmi_holds"] = dict(duckdb_csv(database, cmi_holds_sql))
+    # [306] [307] One spine row per hospital with a calendar-year HAI window, counted independently from the windows.
+    hai_years_sql = (
+        "SELECT year(window_start)::VARCHAR, count(DISTINCT entity_id)::VARCHAR FROM int_hai_hospital_windows "
+        "WHERE month(window_start) = 1 AND day(window_start) = 1 AND window_end = make_date(year(window_start), 12, 31) GROUP BY 1 ORDER BY 1;"
+    )
+    spine_years_sql = "SELECT window_year::VARCHAR, count(*)::VARCHAR FROM int_hospital_spine GROUP BY 1 ORDER BY 1;"
+    hai_years = dict(duckdb_csv(database, hai_years_sql))
+    outcome["checks"]["spine_rows_match_hai_hospitals"] = bool(hai_years) and dict(duckdb_csv(database, spine_years_sql)) == hai_years
+    spine_counts_sql = (
+        "SELECT window_year::VARCHAR, count(*)::VARCHAR || ' hospitals, ' || count(*) FILTER (WHERE has_pos_snapshot)::VARCHAR || ' with POS, ' "
+        "|| count(*) FILTER (WHERE has_cmi)::VARCHAR || ' with CMI, ' || count(*) FILTER (WHERE is_cmi_held)::VARCHAR || ' CMI held, ' "
+        "|| count(*) FILTER (WHERE is_primary_population)::VARCHAR || ' primary, ' "
+        "|| count(*) FILTER (WHERE is_sensitivity_population)::VARCHAR || ' sensitivity' FROM int_hospital_spine GROUP BY 1 ORDER BY 1;"
+    )
+    outcome["spine"] = dict(duckdb_csv(database, spine_counts_sql))
     bronze = unprefixed(duckdb_csv(database, per_table(BRONZE_COUNTS_SQL, "lakehouse.bronze."), init), "lakehouse.bronze.")
     # Bronze loads one copy per file, so its objects equal the distinct files; the copies table lists every copy [204] [206].
     model_sql = (
