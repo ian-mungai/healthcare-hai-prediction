@@ -333,3 +333,69 @@ models:
       - name: is_sensitivity_population
         description: In the sensitivity-run population (adds critical access and Maryland hospitals).
         data_tests: [not_null]
+
+  - name: int_cc_timely_effective_windows
+    description: >
+      One Care Compare timely and effective care row per hospital, measure and measurement window, from the latest stored
+      release, by the same window macros as the HAI windows; conflicts are held in int_cc_window_holds (failure modes 318
+      to 322, data/lakehouse_planning/group_b_20261005/failure_modes_b1.md). Values stay as published text.
+    columns:
+      - name: window_key
+        description: Entity, measure ID, window start and window end.
+        data_tests: [unique, not_null]
+
+  - name: int_cc_maternal_windows
+    description: >
+      One Care Compare maternal health row per hospital, measure and measurement window, from the latest stored release
+      (failure modes 318 to 322). The table has only facility_id, start_date and end_date.
+    columns:
+      - name: window_key
+        description: Entity, measure ID, window start and window end.
+        data_tests: [unique, not_null]
+
+  - name: int_cc_hcahps_windows
+    description: >
+      One Care Compare HCAHPS row per hospital, HCAHPS measure ID and measurement window, from the latest stored release;
+      the answer percent, linear mean, star rating, completed surveys and response rate each keep their own column and
+      footnote (failure modes 318 to 322).
+    columns:
+      - name: window_key
+        description: Entity, HCAHPS measure ID, window start and window end.
+        data_tests: [unique, not_null]
+
+  - name: int_cc_window_holds
+    description: >
+      Care Compare measure rows the window models leave out, with the reason and row count (failure modes 319 and 322).
+    columns:
+      - name: hold_reason
+        description: no_key, unparsed_date, label_held, undated_release, same_date_conflict or repeated_in_file.
+        data_tests: [not_null]
+
+  - name: int_registry_measure_windows
+    description: >
+      One row per registry measure control of families S14 to S16, hospital and measurement window, for exactly the measure
+      ID and value column the registry_measure_sources seed names (failure modes 323 to 327). value_number is set only for
+      plain numbers; categories and tokens stay in value_text. Staging a measure does not make it a predictor.
+    columns:
+      - name: registry_window_key
+        description: Measure control, entity, window start and window end.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: The registry measure control ID.
+        data_tests: [not_null]
+
+  - name: int_hgi_hospital_releases
+    description: >
+      One Hospital General Information row per CCN and stored file, with the file's release date and the number of files
+      on that date (failure modes 328 and 329). The overall rating (registry C284, excluded from the primary predictors) is
+      an integer 1 to 5 or null with the text and footnote kept; emergency services is a boolean.
+    columns:
+      - name: release_key
+        description: CCN and file checksum.
+        data_tests: [unique, not_null]
+      - name: ccn
+        description: facility_id, or provider_id in the older layout.
+        data_tests: [not_null]
+      - name: release_date
+        description: The file's latest publication date.
+        data_tests: [not_null]

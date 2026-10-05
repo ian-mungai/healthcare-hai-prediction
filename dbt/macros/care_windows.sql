@@ -1,26 +1,32 @@
-{% macro hai_window_rows(table, entity) %}
-{#- The rows of one HAI staging view with their window key, under either layout's column names [233]. -#}
+{% macro care_window_columns(columns) %}
+{#- The value columns a window model carries, as [alias, expression] pairs; HAI's three by default [318] [321]. -#}
+{{ return(columns if columns else [['measure_name', 'measure_name'], ['score', 'score'], ['footnote', 'footnote']]) }}
+{% endmacro %}
+
+{% macro care_window_rows(table, entity, measure, start_column, end_column, columns) %}
+{#- The rows of one Care Compare staging view (HAI and the other measure tables) with their window key, under the table's
+    own entity, measure and date columns [233] [319] [320]. -#}
 select
     '{{ table }}' as bronze_table,
     nullif(trim({{ entity }}), '') as entity_id,
-    nullif(trim(measure_id), '') as measure_id,
-    try_strptime(coalesce(start_date, measure_start_date), '%m/%d/%Y')::date as window_start,
-    try_strptime(coalesce(end_date, measure_end_date), '%m/%d/%Y')::date as window_end,
-    measure_name,
-    score,
-    footnote,
+    nullif(trim({{ measure }}), '') as measure_id,
+    try_strptime({{ start_column }}, '%m/%d/%Y')::date as window_start,
+    try_strptime({{ end_column }}, '%m/%d/%Y')::date as window_end,
+    {%- for alias, expression in care_window_columns(columns) %}
+    {{ expression }} as {{ alias }},
+    {%- endfor %}
     _member_sha256 as member_sha256,
     _object_key as object_key,
     is_label_held
 from {{ ref('stg_' ~ table) }}
 {% endmacro %}
 
-{% macro hai_window_candidates(table, entity) %}
+{% macro care_window_candidates(table, entity, measure, start_column, end_column, columns) %}
 {#- Usable rows with their file's latest publication date, ranked within each window key [230] to [234]. -#}
 with
 
 window_rows as (
-    {{ hai_window_rows(table, entity) }}
+    {{ care_window_rows(table, entity, measure, start_column, end_column, columns) }}
 ),
 
 files as (
@@ -67,12 +73,19 @@ from latest
 where release_date = latest_release_date
 {% endmacro %}
 
-{% macro hai_windows(table, entity) %}
+{% macro care_windows(
+    table,
+    entity,
+    measure='measure_id',
+    start_column='coalesce(start_date, measure_start_date)',
+    end_column='coalesce(end_date, measure_end_date)',
+    columns=none
+) %}
 {#- One row per entity, measure and window: the row from the latest dated file; conflicts are held instead [231] [232]. -#}
 with
 
 candidates as (
-    {{ hai_window_candidates(table, entity) }}
+    {{ care_window_candidates(table, entity, measure, start_column, end_column, columns) }}
 )
 
 select
@@ -80,9 +93,9 @@ select
     measure_id,
     window_start,
     window_end,
-    measure_name,
-    score,
-    footnote,
+    {%- for alias, expression in care_window_columns(columns) %}
+    {{ alias }},
+    {%- endfor %}
     member_sha256,
     object_key,
     release_date,
@@ -92,12 +105,19 @@ from candidates
 where latest_row_count = 1
 {% endmacro %}
 
-{% macro hai_window_holds(table, entity) %}
+{% macro care_window_holds(
+    table,
+    entity,
+    measure='measure_id',
+    start_column='coalesce(start_date, measure_start_date)',
+    end_column='coalesce(end_date, measure_end_date)',
+    columns=none
+) %}
 {#- The rows a window model leaves out, with the reason and row count [232] to [235]. -#}
 with
 
 window_rows as (
-    {{ hai_window_rows(table, entity) }}
+    {{ care_window_rows(table, entity, measure, start_column, end_column, columns) }}
 ),
 
 files as (
@@ -138,7 +158,7 @@ row_holds as (
 ),
 
 candidates as (
-    {{ hai_window_candidates(table, entity) }}
+    {{ care_window_candidates(table, entity, measure, start_column, end_column, columns) }}
 ),
 
 window_holds as (

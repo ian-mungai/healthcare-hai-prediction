@@ -37,6 +37,9 @@ vars:
     cms_hospital_enrollments: hospital_ownership
     cms_hospital_owners: hospital_ownership
     cms_change_of_ownership: hospital_ownership
+    cms_cc_timely_and_effective_care_hospital: care_compare
+    cms_cc_maternal_health_hospital: care_compare
+    cms_cc_hcahps_hospital: care_compare
   # Case-mix index files: the label families of the CMI snapshots read as CMI, and the reviewed families that are not CMI,
   # by name or pattern (failure mode 293).
   cmi_families:

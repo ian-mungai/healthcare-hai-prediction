@@ -138,3 +138,37 @@ seeds:
           - accepted_values:
               arguments:
                 values: [ccn, cmi, cases, relative_weights, transfer_adjusted_cmi, transfer_adjusted_cases]
+
+  - name: registry_measure_sources
+    description: >
+      Each registry measure control of families S13 to S16 and the staged model, measure ID and value column that hold it,
+      exactly as the source registry names them; renamed IDs are never mapped by guess (failure modes 323 to 326). C139 and
+      C140 are facility-level HCAHPS values, read from the H_STAR_RATING row. The staging E2E checks it against the registry.
+    config:
+      column_types:
+        measure_control: varchar
+        family: varchar
+        source_model: varchar
+        source_measure_id: varchar
+        value_column: varchar
+        footnote_column: varchar
+        review_decision: varchar
+    columns:
+      - name: measure_control
+        description: The registry measure control ID.
+        data_tests: [unique, not_null]
+      - name: family
+        description: The registry source family.
+        data_tests: [not_null]
+      - name: source_model
+        description: The staged model that holds the measure.
+        data_tests: [not_null]
+      - name: source_measure_id
+        description: The published measure ID; empty for a column of Hospital General Information.
+      - name: value_column
+        description: The column holding the value.
+        data_tests: [not_null]
+      - name: footnote_column
+        description: The column holding the value's footnote.
+      - name: review_decision
+        description: The registry's current review decision, for reading only; staging does not make a measure a predictor.

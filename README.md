@@ -46,7 +46,8 @@ file as published, with each row traced to its S3 object version and checksum. I
 also lists every other stored copy. All 330 mapped tables are loaded and checked; a
 table whose files were all removed for privacy left the map. A dbt staging layer in DuckDB
 reads the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital General
-Information and ownership tables. It keeps one row per HAI measurement window, one Provider of
+Information, ownership and Care Compare process and patient-experience tables. It keeps one row
+per HAI and Care Compare measurement window, one Provider of
 Services row per hospital and snapshot and one case-mix index per hospital and payment-rule year.
 A hospital-year spine lines each hospital and calendar-year HAI window up with the Provider of
 Services snapshot and the case-mix index from before the window. It also flags the model population.
@@ -185,7 +186,10 @@ models read the unadjusted CMI by exact header name (`dbt/seeds/cmi_layout_colum
 own column and choose one CMI per hospital and rule year from the year's best rule stage; disagreeing files are held in
 `int_cmi_holds`. `int_hospital_spine` has one row per hospital and calendar-year HAI window, as of the window start: the
 Provider of Services snapshot that ends in the 12 months before the window and the CMI of the fiscal year that ends before
-it (`int_cmi_hospital_data_years`), with the primary and sensitivity population flags. The dbt packages
+it (`int_cmi_hospital_data_years`), with the primary and sensitivity population flags. The Care Compare timely and effective
+care, maternal health and HCAHPS tables get the same window models as HAI (`int_cc_*_windows`, holds in
+`int_cc_window_holds`); `int_registry_measure_windows` carries each registry measure of those families by the exact measure ID
+in `dbt/seeds/registry_measure_sources.csv`. `int_hgi_hospital_releases` types Hospital General Information per file. The dbt packages
 (dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
 publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
 container. The staging E2E installs them before it builds. dbt-project-evaluator is off in every other run and runs
@@ -566,9 +570,9 @@ control. The deferred controls above are not implemented.
 
 The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only and
 loads one copy per stored file. Staging covers the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital
-General Information and ownership tables. It types the HAI windows, the Provider of Services hospital snapshots and the
-case-mix index. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables
-exist. The bronze and staging E2E runs use
+General Information, ownership and Care Compare timely and effective care, maternal health and HCAHPS tables. It types the
+HAI and Care Compare windows, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
+index. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables exist. The bronze and staging E2E runs use
 Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
 offline. It has not run: its controls, independent review and the owner's approval are still to come.
 

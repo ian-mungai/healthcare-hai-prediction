@@ -1,4 +1,4 @@
-"""E2E check of the staging copy, label, twin, sheet, POS, CMI and spine models (failure modes 166 to 173, 177 to 188, 267 to 317).
+"""E2E check of the staging copy, label, twin, sheet, POS, CMI, spine and Care Compare models (failure modes 166 to 173, 177 to 188, 267 to 330).
 
 Run from the repository root with Docker running:
 
@@ -11,14 +11,16 @@ whose label and twin seeds are written by the real generator (``ipps_file_labels
 POS period seed names the fixture's POS files. The failing cases must fail one named dbt test each: a name clash under
 one release, copies with different row counts, a stale label hold, an object with two checksums, an unheld label
 conflict, an unlabelled copy, a POS file without a period, a POS value that does not cast, a CCN twice in one POS file,
-an unreviewed CMI family, an unknown CMI layout, a CMI that disagrees with its relative weights and a CMI out of range.
+an unreviewed CMI family, an unknown CMI layout, a CMI that disagrees with its relative weights, a CMI out of range and a
+Hospital General Information value that does not cast.
 The real stage checks that the generators reproduce the committed seeds, builds the models from the catalog twice and
 reconciles them with bronze.
 
 Failure modes: ``data/lakehouse_planning/staging_dedup_20261003/failure_modes.md``,
 ``data/lakehouse_planning/staging_families_20261003/failure_modes.md``,
-``data/lakehouse_planning/sheet_selection_20261005/failure_modes.md`` and
-``data/lakehouse_planning/hospital_spine_20261005/failure_modes.md``. The report in ``data/e2e/staging/`` holds
+``data/lakehouse_planning/sheet_selection_20261005/failure_modes.md``,
+``data/lakehouse_planning/hospital_spine_20261005/failure_modes.md`` and
+``data/lakehouse_planning/group_b_20261005/failure_modes_b1.md``. The report in ``data/e2e/staging/`` holds
 outcomes and counts, never data values or credentials.
 """
 
@@ -62,6 +64,9 @@ TABLES = (
     "cms_hospital_enrollments",
     "cms_hospital_owners",
     "cms_change_of_ownership",
+    "cms_cc_timely_and_effective_care_hospital",
+    "cms_cc_maternal_health_hospital",
+    "cms_cc_hcahps_hospital",
 )
 HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
@@ -198,7 +203,55 @@ WIDE_COLUMNS = {
         "nrs_prctnr_cnt",
         "crna_cnt",
     ),
-    "cms_cc_hospital_general_information": ("facility_id", "provider_id", "state"),
+    "cms_cc_hospital_general_information": (
+        "facility_id",
+        "provider_id",
+        "state",
+        "county_name",
+        "county_parish",
+        "zip_code",
+        "hospital_type",
+        "hospital_ownership",
+        "emergency_services",
+        "hospital_overall_rating",
+        "hospital_overall_rating_footnote",
+    ),
+    "cms_cc_timely_and_effective_care_hospital": (
+        "facility_id",
+        "provider_id",
+        "condition",
+        "measure_id",
+        "measure_name",
+        "score",
+        "sample",
+        "footnote",
+        "start_date",
+        "end_date",
+        "measure_start_date",
+        "measure_end_date",
+    ),
+    # The maternal table has no provider_id and no measure_start_date [319] [320].
+    "cms_cc_maternal_health_hospital": ("facility_id", "measure_id", "measure_name", "score", "sample", "footnote", "start_date", "end_date"),
+    "cms_cc_hcahps_hospital": (
+        "facility_id",
+        "provider_id",
+        "hcahps_measure_id",
+        "hcahps_question",
+        "hcahps_answer_description",
+        "patient_survey_star_rating",
+        "patient_survey_star_rating_footnote",
+        "hcahps_answer_percent",
+        "hcahps_answer_percent_footnote",
+        "hcahps_linear_mean_value",
+        "number_of_completed_surveys",
+        "number_of_completed_surveys_footnote",
+        "survey_response_rate_percent",
+        "survey_response_rate_percent_footnote",
+        "start_date",
+        "end_date",
+        "measure_start_date",
+        "measure_end_date",
+    ),
     "cms_hospital_enrollments": ("ccn", "enrollment_id"),
     "cms_hospital_owners": ("enrollment_id", "private_equity_company_owner"),
     "cms_change_of_ownership": ("ccn_buyer", "ccn_seller", "effective_date"),
@@ -293,7 +346,24 @@ GROUP_A = (
         "hospitals_2024-01-31.zip!Hospital_General_Information.csv",
         sha("u1"),
         2,
-        records=((("facility_id", "010001"), ("state", "AL")), (("facility_id", "010005"), ("state", "AL"))),
+        records=(
+            (
+                ("facility_id", "010001"),
+                ("state", "AL"),
+                ("hospital_type", "Acute Care Hospitals"),
+                ("hospital_ownership", "Proprietary"),
+                ("emergency_services", "Yes"),
+                ("hospital_overall_rating", "4"),
+            ),
+            (
+                ("facility_id", "010005"),
+                ("state", "AL"),
+                ("hospital_type", "Critical Access Hospitals"),
+                ("emergency_services", "No"),
+                ("hospital_overall_rating", "Not Available"),
+                ("hospital_overall_rating_footnote", "16"),
+            ),
+        ),
     ),
     Stored(
         "cms_hospital_enrollments",
@@ -476,6 +546,114 @@ def with_record(item: Stored, record: tuple[tuple[str, str], ...]) -> Stored:
     return replace(item, records=(*item.records, record), rows=item.rows + 1)
 
 
+def cc(**fields: str) -> tuple[tuple[str, str], ...]:
+    """Return one Care Compare row from its bronze columns."""
+    return tuple(fields.items())
+
+
+DATES_2022 = {"start_date": "01/01/2022", "end_date": "12/31/2022"}
+OLD_DATES_2022 = {"measure_start_date": "01/01/2022", "measure_end_date": "12/31/2022"}
+# Care Compare measure windows and a second Hospital General Information file on the same release date [318] to [329].
+GROUP_B = (
+    # Timely and effective care: a later release revises a value; an older layout (provider_id, measure_start_date); a date
+    # that does not parse; two files on one release date that disagree [319] [320] [322].
+    Stored(
+        "cms_cc_timely_and_effective_care_hospital",
+        "te1",
+        "2024-01-31",
+        "Timely_and_Effective_Care-Hospital.csv",
+        sha("w1"),
+        3,
+        records=(
+            cc(facility_id="010001", measure_id="OP_18b", condition="Emergency Department", score="150", sample="300", **DATES_2022),
+            cc(facility_id="010001", measure_id="SEP_1", score="55", sample="80", **DATES_2022),
+            cc(facility_id="010002", measure_id="EDV", score="high", **DATES_2022),
+        ),
+    ),
+    Stored(
+        "cms_cc_timely_and_effective_care_hospital",
+        "te2",
+        "2024-04-30",
+        "timely_effective_older_layout.csv",
+        sha("w2"),
+        3,
+        records=(
+            cc(provider_id="010001", measure_id="OP_18b", score="152", sample="310", **OLD_DATES_2022),
+            cc(provider_id="010003", measure_id="SEP_1", score="40", measure_start_date="13/45/2022", measure_end_date="12/31/2022"),
+            cc(provider_id="010001", measure_id="SEP_1", score="56", **OLD_DATES_2022),
+        ),
+    ),
+    Stored(
+        "cms_cc_timely_and_effective_care_hospital",
+        "te3",
+        "2024-04-30",
+        "Timely_and_Effective_Care-Hospital_supplement.csv",
+        sha("w3"),
+        1,
+        records=(cc(facility_id="010001", measure_id="SEP_1", score="57", **DATES_2022),),
+    ),
+    # Maternal health: start_date and end_date only [319].
+    Stored(
+        "cms_cc_maternal_health_hospital",
+        "mt1",
+        "2025-10-01",
+        "Maternal_Health-Hospital.csv",
+        sha("w4"),
+        2,
+        records=(
+            cc(facility_id="010001", measure_id="SM_7", score="Yes", start_date="01/01/2023", end_date="12/31/2023"),
+            cc(facility_id="010001", measure_id="PC_02", score="30", sample="100", start_date="01/01/2023", end_date="12/31/2023"),
+        ),
+    ),
+    # HCAHPS: each value column stays apart; the facility-level counts repeat on every row [321] [326].
+    Stored(
+        "cms_cc_hcahps_hospital",
+        "hc1",
+        "2024-01-31",
+        "HCAHPS-Hospital.csv",
+        sha("w5"),
+        2,
+        records=(
+            cc(
+                facility_id="010001",
+                hcahps_measure_id="H_STAR_RATING",
+                patient_survey_star_rating="4",
+                hcahps_answer_percent="Not Applicable",
+                number_of_completed_surveys="507",
+                survey_response_rate_percent="21",
+                **DATES_2022,
+            ),
+            cc(
+                facility_id="010001",
+                hcahps_measure_id="H_COMP_1_A_P",
+                hcahps_answer_percent="80",
+                number_of_completed_surveys="507",
+                survey_response_rate_percent="21",
+                **DATES_2022,
+            ),
+        ),
+    ),
+    # A second Hospital General Information file on the same release date, in the older provider_id layout [328].
+    Stored(
+        "cms_cc_hospital_general_information",
+        "g2",
+        "2024-01-31",
+        "Hospital General Information.csv",
+        sha("u5"),
+        1,
+        records=(
+            (
+                ("provider_id", "010001"),
+                ("state", "AL"),
+                ("hospital_type", "Acute Care Hospitals"),
+                ("emergency_services", "Yes"),
+                ("hospital_overall_rating", "3"),
+            ),
+        ),
+    ),
+)
+
+
 def cmi_case(content: tuple[str, ...]) -> Stored:
     """Return a FY 2026 final CMI file with the given lines, for the failing CMI cases."""
     return Stored(
@@ -655,6 +833,7 @@ BASE = (
         content=("Sheet1:Provider|Wage", "Sheet1:10001|3.6", "Sheet1:10002|4"),
     ),
     *GROUP_A,
+    *GROUP_B,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -709,6 +888,12 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
     "cmi_transfer_adjusted": ("assert_cmi_matches_relative_weights", (*BASE, cmi_case((CMI_HEADER, "010001\t1.6735\t8178\t13823.43"))), frozenset()),
     # A CMI outside the plausible range [303].
     "cmi_out_of_range": ("assert_cmi_values_plausible", (*BASE, cmi_case((CMI_HEADER, "010001\t12.5\t\t"))), frozenset()),
+    # An emergency-services value that is neither Yes nor No [329].
+    "hgi_uncast_value": (
+        "assert_hgi_values_cast",
+        tuple(with_record(item, (("facility_id", "010009"), ("emergency_services", "Maybe"))) if item.key == "g2" else item for item in BASE),
+        frozenset(),
+    ),
 }
 # Reviewed pairs under different names, as committed in the overrides file [220].
 FIXTURE_RENAMED = ((sha("k1"), sha("k2")),)
@@ -784,6 +969,12 @@ CREATE TABLE bronze.cms_hospital_owners AS SELECT * REPLACE (_row_number::BIGINT
     FROM read_csv(getvariable('cms_hospital_owners_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.cms_change_of_ownership AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('cms_change_of_ownership_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_cc_timely_and_effective_care_hospital AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_cc_timely_and_effective_care_hospital_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_cc_maternal_health_hospital AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_cc_maternal_health_hospital_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_cc_hcahps_hospital AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_cc_hcahps_hospital_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.stored_copies AS
     SELECT * REPLACE (byte_count::BIGINT AS byte_count, loaded::BOOLEAN AS loaded, retired::BOOLEAN AS retired)
     FROM read_csv(getvariable('copies_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
@@ -995,6 +1186,29 @@ SPINE_SQL = (
     "is_veterans_affairs::VARCHAR, is_state_or_dc::VARCHAR, is_connecticut::VARCHAR, is_primary_population::VARCHAR, "
     "is_sensitivity_population::VARCHAR FROM int_hospital_spine ORDER BY ALL;"
 )
+TE_SQL = (
+    "SELECT entity_id, measure_id, window_start::VARCHAR, window_end::VARCHAR, coalesce(score, ''), coalesce(sample, ''), left(member_sha256, 2) "
+    "FROM int_cc_timely_effective_windows ORDER BY ALL;"
+)
+MATERNAL_SQL = (
+    "SELECT entity_id, measure_id, window_start::VARCHAR, window_end::VARCHAR, coalesce(score, ''), coalesce(sample, ''), left(member_sha256, 2) "
+    "FROM int_cc_maternal_windows ORDER BY ALL;"
+)
+HCAHPS_SQL = (
+    "SELECT entity_id, measure_id, window_start::VARCHAR, window_end::VARCHAR, coalesce(hcahps_answer_percent, ''), "
+    "coalesce(number_of_completed_surveys, ''), coalesce(survey_response_rate_percent, ''), coalesce(patient_survey_star_rating, ''), "
+    "left(member_sha256, 2) FROM int_cc_hcahps_windows ORDER BY ALL;"
+)
+CC_HOLDS_SQL = "SELECT bronze_table, coalesce(entity_id, ''), coalesce(measure_id, ''), hold_reason, row_count::VARCHAR FROM int_cc_window_holds ORDER BY ALL;"
+REGISTRY_SQL = (
+    "SELECT measure_control, entity_id, window_start::VARCHAR, coalesce(value_text, ''), coalesce(value_number::VARCHAR, ''), "
+    "coalesce(footnote_text, '') FROM int_registry_measure_windows ORDER BY ALL;"
+)
+HGI_SQL = (
+    "SELECT ccn, release_date::VARCHAR, release_file_count::VARCHAR, coalesce(hospital_type, ''), coalesce(has_emergency_services::VARCHAR, ''), "
+    "coalesce(overall_rating::VARCHAR, ''), coalesce(overall_rating_text, ''), coalesce(overall_rating_footnote, ''), left(member_sha256, 2) "
+    "FROM int_hgi_hospital_releases ORDER BY ALL;"
+)
 VIEW_ROWS_SQL = "SELECT getvariable('checked_table'), count(*)::VARCHAR FROM query_table(getvariable('checked_table'));\n"
 BRONZE_COUNTS_SQL = (
     "WITH o AS (SELECT _object_key, any_value(_member_sha256) AS sha, count(*) AS n FROM query_table(getvariable('checked_table')) GROUP BY 1), "
@@ -1125,6 +1339,12 @@ def read_models(case: str) -> dict[str, Any]:
         "cmi_holds": [tuple(row) for row in duckdb_csv(database, CMI_HOLDS_SQL)],
         "cmi_data_years": [tuple(row) for row in duckdb_csv(database, CMI_DATA_YEARS_SQL)],
         "spine": [tuple(row) for row in duckdb_csv(database, SPINE_SQL)],
+        "timely": [tuple(row) for row in duckdb_csv(database, TE_SQL)],
+        "maternal": [tuple(row) for row in duckdb_csv(database, MATERNAL_SQL)],
+        "hcahps": [tuple(row) for row in duckdb_csv(database, HCAHPS_SQL)],
+        "cc_holds": [tuple(row) for row in duckdb_csv(database, CC_HOLDS_SQL)],
+        "registry": [tuple(row) for row in duckdb_csv(database, REGISTRY_SQL)],
+        "hgi": [tuple(row) for row in duckdb_csv(database, HGI_SQL)],
     }
 
 
@@ -1345,6 +1565,39 @@ def fixture_scenarios() -> dict[str, bool]:
             ("01000F", "2025") + no_pos[:3] + no_cmi + ("false", "false", "false", "false", "true", "false", "false", "false", "false"),
         ]
     )
+    # [318] to [322] Care Compare windows as for HAI: the latest release wins, conflicts and unparsed dates are held.
+    checks["timely_windows_match_expected"] = base.get("timely") == [
+        ("010001", "OP_18b", "2022-01-01", "2022-12-31", "152", "310", "w2"),
+        ("010002", "EDV", "2022-01-01", "2022-12-31", "high", "", "w1"),
+    ]
+    checks["maternal_windows_match_expected"] = base.get("maternal") == [
+        ("010001", "PC_02", "2023-01-01", "2023-12-31", "30", "100", "w4"),
+        ("010001", "SM_7", "2023-01-01", "2023-12-31", "Yes", "", "w4"),
+    ]
+    checks["hcahps_windows_match_expected"] = base.get("hcahps") == [
+        ("010001", "H_COMP_1_A_P", "2022-01-01", "2022-12-31", "80", "507", "21", "", "w5"),
+        ("010001", "H_STAR_RATING", "2022-01-01", "2022-12-31", "Not Applicable", "507", "21", "4", "w5"),
+    ]
+    checks["cc_holds_match_expected"] = base.get("cc_holds") == [
+        ("cms_cc_timely_and_effective_care_hospital", "010001", "SEP_1", "same_date_conflict", "2"),
+        ("cms_cc_timely_and_effective_care_hospital", "010003", "SEP_1", "unparsed_date", "1"),
+    ]
+    # [323] [325] [326] [327] Registry controls get exactly their named measure; numbers only for plain numbers.
+    checks["registry_windows_match_expected"] = base.get("registry") == [
+        ("C119", "010001", "2022-01-01", "80", "80.0", ""),
+        ("C139", "010001", "2022-01-01", "21", "21.0", ""),
+        ("C140", "010001", "2022-01-01", "507", "507.0", ""),
+        ("C141", "010002", "2022-01-01", "high", "", ""),
+        ("C143", "010001", "2022-01-01", "152", "152.0", ""),
+        ("C167", "010001", "2023-01-01", "Yes", "", ""),
+        ("C168", "010001", "2023-01-01", "30", "30.0", ""),
+    ]
+    # [328] [329] One Hospital General Information row per CCN and file; two files on one release date are both kept.
+    checks["hgi_releases_match_expected"] = base.get("hgi") == [
+        ("010001", "2024-01-31", "2", "Acute Care Hospitals", "true", "3", "3", "", "u5"),
+        ("010001", "2024-01-31", "2", "Acute Care Hospitals", "true", "4", "4", "", "u1"),
+        ("010005", "2024-01-31", "2", "Critical Access Hospitals", "false", "", "Not Available", "16", "u1"),
+    ]
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -1373,6 +1626,27 @@ ATTACH 'hai_lakehouse' AS lakehouse (
 );
 .output stdout
 """
+
+
+def registry_seed_matches() -> bool:
+    """Check the registry measure seed against the source registry: every control of S13 to S16 once, with the named ID [323] [324]."""
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    families = {family["id"]: family for family in registry["source_families"]}
+    sources = {source["source_id"]: source for source in registry["sources"]}
+    fields = {control["id"]: control["preserved_controls"].get("current_exact_field", "") for control in registry["measure_controls"]}
+    expected = {
+        control
+        for family in ("S13", "S14", "S15", "S16")
+        for source_id in families[family]["audit_source_ids"]
+        if source_id in sources
+        for control in sources[source_id]["linked_measure_ids"]
+    }
+    with (REPO_ROOT / "dbt/seeds/registry_measure_sources.csv").open(newline="") as handle:
+        seed = list(csv.DictReader(handle))
+    named = all(
+        not row["source_measure_id"] or row["source_measure_id"] in fields[row["measure_control"]] or row["measure_control"] in ("C139", "C140") for row in seed
+    )
+    return named and sorted(row["measure_control"] for row in seed) == sorted(expected)
 
 
 def real_stage() -> dict[str, Any]:
@@ -1460,6 +1734,25 @@ def real_stage() -> dict[str, Any]:
         "|| count(*) FILTER (WHERE is_sensitivity_population)::VARCHAR || ' sensitivity' FROM int_hospital_spine GROUP BY 1 ORDER BY 1;"
     )
     outcome["spine"] = dict(duckdb_csv(database, spine_counts_sql))
+    # [318] to [329] Care Compare windows, holds, registry coverage and Hospital General Information releases.
+    cc_counts_sql = (
+        "SELECT 'timely', count(*)::VARCHAR FROM int_cc_timely_effective_windows UNION ALL "
+        "SELECT 'maternal', count(*)::VARCHAR FROM int_cc_maternal_windows UNION ALL "
+        "SELECT 'hcahps', count(*)::VARCHAR FROM int_cc_hcahps_windows UNION ALL "
+        "SELECT 'hgi rows', count(*)::VARCHAR FROM int_hgi_hospital_releases UNION ALL "
+        "SELECT 'hgi release dates with two files', count(DISTINCT release_date)::VARCHAR FROM int_hgi_hospital_releases WHERE release_file_count > 1;"
+    )
+    outcome["care_compare_counts"] = dict(duckdb_csv(database, cc_counts_sql))
+    cc_holds_sql = "SELECT bronze_table || ' ' || hold_reason, sum(row_count)::VARCHAR FROM int_cc_window_holds GROUP BY 1 ORDER BY 1;"
+    outcome["care_compare_holds"] = dict(duckdb_csv(database, cc_holds_sql))
+    coverage_sql = (
+        "SELECT seed.measure_control, count(rows.entity_id)::VARCHAR FROM registry_measure_sources AS seed "
+        "LEFT JOIN int_registry_measure_windows AS rows ON seed.measure_control = rows.measure_control "
+        "WHERE seed.source_model <> 'int_hgi_hospital_releases' GROUP BY 1 ORDER BY 1;"
+    )
+    coverage = dict(duckdb_csv(database, coverage_sql))
+    outcome["registry_controls_without_rows"] = sorted(control for control, rows in coverage.items() if rows == "0")
+    outcome["checks"]["registry_seed_matches_registry"] = registry_seed_matches()
     bronze = unprefixed(duckdb_csv(database, per_table(BRONZE_COUNTS_SQL, "lakehouse.bronze."), init), "lakehouse.bronze.")
     # Bronze loads one copy per file, so its objects equal the distinct files; the copies table lists every copy [204] [206].
     model_sql = (
