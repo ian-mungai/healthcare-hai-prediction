@@ -399,3 +399,42 @@ models:
       - name: release_date
         description: The file's latest publication date.
         data_tests: [not_null]
+
+  - name: int_cost_reports
+    description: >
+      One row per hospital cost report (HCRIS public use file, registry family S01), assigned to the federal fiscal year in
+      which the report period starts (Decision 2, approved Oct 1 2026; failure modes 331 to 338). Every report stays, with the
+      number of reports of its CCN in that fiscal year; the alignment step chooses between them. Amounts are typed and never
+      scaled to 365 days. ZIP is the first 5 digits of a 5-digit ZIP, a ZIP with one trailing hyphen or a hyphenated ZIP+4,
+      else null with zip_code_raw kept; rural_urban is urban for U, rural for R, else null with the raw code kept.
+    columns:
+      - name: rpt_rec_num
+        description: The report record number.
+        data_tests: [unique, not_null]
+      - name: ccn
+        description: provider_ccn when it is 6 characters, else null.
+        data_tests: [not_null]
+      - name: fiscal_year
+        description: >
+          The federal fiscal year in which the period starts (October to December count toward the next year); the test
+          assert_cost_report_fiscal_years fails when it differs from the year in the file name.
+      - name: reporting_days
+        description: Inclusive days from period_begin to period_end.
+      - name: is_full_year
+        description: The period ends the day before the anniversary of its start (1 March for a 29 February start).
+      - name: reports_in_fiscal_year
+        description: The number of reports of this CCN in this fiscal year.
+
+  - name: int_cost_report_measures
+    description: >
+      One row per cost report and registry measure control of family S01 whose numerator the report publishes, computed by
+      the cost_report_measures seed (failure modes 339 and 340): value, code, ratio, per_day (numerator over reporting days)
+      or ratio_per_day_denominator (numerator over the denominator per reporting day). A zero or missing denominator gives a
+      null value_number, never infinity. Staging a measure does not make it a predictor; review_decision is the registry's.
+    columns:
+      - name: measure_key
+        description: Report record number and measure control.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: The registry measure control ID.
+        data_tests: [not_null]

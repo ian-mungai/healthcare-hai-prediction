@@ -172,3 +172,35 @@ seeds:
         description: The column holding the value's footnote.
       - name: review_decision
         description: The registry's current review decision, for reading only; staging does not make a measure a predictor.
+
+  - name: cost_report_measures
+    description: >
+      Each registry measure control of family S01 and how it is computed from the typed cost report: value or code (the
+      published column), ratio (numerator / denominator), per_day (numerator / reporting days) or ratio_per_day_denominator
+      (numerator / (denominator / reporting days)), as the registry text defines the primary variant (failure modes 339 and
+      340). The staging E2E checks the controls against the registry.
+    config:
+      column_types:
+        measure_control: varchar
+        rule: varchar
+        numerator_column: varchar
+        denominator_column: varchar
+        review_decision: varchar
+    columns:
+      - name: measure_control
+        description: The registry measure control ID.
+        data_tests: [unique, not_null]
+      - name: rule
+        description: value, code, ratio, per_day or ratio_per_day_denominator.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [value, code, ratio, per_day, ratio_per_day_denominator]
+      - name: numerator_column
+        description: The typed int_cost_reports column holding the value or numerator.
+        data_tests: [not_null]
+      - name: denominator_column
+        description: The typed column holding the denominator, for ratio rules.
+      - name: review_decision
+        description: The registry's current review decision, for reading only.

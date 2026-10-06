@@ -1,4 +1,4 @@
-"""E2E check of the staging copy, label, twin, sheet, POS, CMI, spine and Care Compare models (failure modes 166 to 173, 177 to 188, 267 to 330).
+"""E2E check of the staging copy, label, twin, sheet, POS, CMI, spine and Care Compare models (failure modes 166 to 173, 177 to 188, 267 to 341).
 
 Run from the repository root with Docker running:
 
@@ -11,16 +11,17 @@ whose label and twin seeds are written by the real generator (``ipps_file_labels
 POS period seed names the fixture's POS files. The failing cases must fail one named dbt test each: a name clash under
 one release, copies with different row counts, a stale label hold, an object with two checksums, an unheld label
 conflict, an unlabelled copy, a POS file without a period, a POS value that does not cast, a CCN twice in one POS file,
-an unreviewed CMI family, an unknown CMI layout, a CMI that disagrees with its relative weights, a CMI out of range and a
-Hospital General Information value that does not cast.
+an unreviewed CMI family, an unknown CMI layout, a CMI that disagrees with its relative weights, a CMI out of range, a
+Hospital General Information value that does not cast, a cost report in the wrong file year and a cost-report amount that
+does not cast.
 The real stage checks that the generators reproduce the committed seeds, builds the models from the catalog twice and
 reconciles them with bronze.
 
 Failure modes: ``data/lakehouse_planning/staging_dedup_20261003/failure_modes.md``,
 ``data/lakehouse_planning/staging_families_20261003/failure_modes.md``,
 ``data/lakehouse_planning/sheet_selection_20261005/failure_modes.md``,
-``data/lakehouse_planning/hospital_spine_20261005/failure_modes.md`` and
-``data/lakehouse_planning/group_b_20261005/failure_modes_b1.md``. The report in ``data/e2e/staging/`` holds
+``data/lakehouse_planning/hospital_spine_20261005/failure_modes.md``,
+``data/lakehouse_planning/group_b_20261005/failure_modes_b1.md`` and ``failure_modes_b2.md`` in the same folder. The report in ``data/e2e/staging/`` holds
 outcomes and counts, never data values or credentials.
 """
 
@@ -155,8 +156,129 @@ PROVENANCE_COLUMNS = (
     "_member_sha256",
     "_row_number",
 )
+# Every column of the HCRIS public use file, as bronze names them [336].
+COST_REPORT_COLUMNS = (
+    "rpt_rec_num",
+    "provider_ccn",
+    "hospital_name",
+    "street_address",
+    "city",
+    "state_code",
+    "zip_code",
+    "county",
+    "medicare_cbsa_number",
+    "rural_versus_urban",
+    "ccn_facility_type",
+    "provider_type",
+    "type_of_control",
+    "fiscal_year_begin_date",
+    "fiscal_year_end_date",
+    "fte_employees_on_payroll",
+    "number_of_interns_and_residents_fte",
+    "total_days_title_v",
+    "total_days_title_xviii",
+    "total_days_title_xix",
+    "total_days_v_xviii_xix_unknown",
+    "number_of_beds",
+    "total_bed_days_available",
+    "total_discharges_title_v",
+    "total_discharges_title_xviii",
+    "total_discharges_title_xix",
+    "total_discharges_v_xviii_xix_unknown",
+    "number_of_beds_total_for_all_subproviders",
+    "hospital_total_days_title_v_for_adults_peds",
+    "hospital_total_days_title_xviii_for_adults_peds",
+    "hospital_total_days_title_xix_for_adults_peds",
+    "hospital_total_days_v_xviii_xix_unknown_for_adults_peds",
+    "hospital_number_of_beds_for_adults_peds",
+    "hospital_total_bed_days_available_for_adults_peds",
+    "hospital_total_discharges_title_v_for_adults_peds",
+    "hospital_total_discharges_title_xviii_for_adults_peds",
+    "hospital_total_discharges_title_xix_for_adults_peds",
+    "hospital_total_discharges_v_xviii_xix_unknown_for_adults_peds",
+    "cost_of_charity_care",
+    "total_bad_debt_expense",
+    "cost_of_uncompensated_care",
+    "total_unreimbursed_and_uncompensated_care",
+    "total_salaries_from_worksheet_a",
+    "overhead_non_salary_costs",
+    "depreciation_cost",
+    "total_costs",
+    "inpatient_total_charges",
+    "outpatient_total_charges",
+    "combined_outpatient_inpatient_total_charges",
+    "wage_related_costs_core",
+    "wage_related_costs_rhc_fqhc",
+    "total_salaries_adjusted",
+    "contract_labor_direct_patient_care",
+    "wage_related_costs_for_part_a_teaching_physicians",
+    "wage_related_costs_for_interns_and_residents",
+    "cash_on_hand_and_in_banks",
+    "temporary_investments",
+    "notes_receivable",
+    "accounts_receivable",
+    "less_allowances_for_uncollectible_notes_and_accounts_receivable",
+    "inventory",
+    "prepaid_expenses",
+    "other_current_assets",
+    "total_current_assets",
+    "land",
+    "land_improvements",
+    "buildings",
+    "leasehold_improvements",
+    "fixed_equipment",
+    "major_movable_equipment",
+    "minor_equipment_depreciable",
+    "health_information_technology_designated_assets",
+    "total_fixed_assets",
+    "investments",
+    "other_assets",
+    "total_other_assets",
+    "total_assets",
+    "accounts_payable",
+    "salaries_wages_and_fees_payable",
+    "payroll_taxes_payable",
+    "notes_and_loans_payable_short_term",
+    "deferred_income",
+    "other_current_liabilities",
+    "total_current_liabilities",
+    "mortgage_payable",
+    "notes_payable",
+    "unsecured_loans",
+    "other_long_term_liabilities",
+    "total_long_term_liabilities",
+    "total_liabilities",
+    "general_fund_balance",
+    "total_fund_balances",
+    "total_liabilities_and_fund_balances",
+    "drg_amounts_other_than_outlier_payments",
+    "drg_amounts_before_october_1",
+    "drg_amounts_after_october_1",
+    "outlier_payments_for_discharges",
+    "disproportionate_share_adjustment",
+    "allowable_dsh_percentage",
+    "managed_care_simulated_payments",
+    "total_ime_payment",
+    "inpatient_revenue",
+    "outpatient_revenue",
+    "total_patient_revenue",
+    "less_contractual_allowance_and_discounts_on_patients_accounts",
+    "net_patient_revenue",
+    "less_total_operating_expense",
+    "net_income_from_service_to_patients",
+    "total_other_income",
+    "total_income",
+    "total_other_expenses",
+    "net_income",
+    "cost_to_charge_ratio",
+    "net_revenue_from_medicaid",
+    "medicaid_charges",
+    "net_revenue_from_stand_alone_chip",
+    "stand_alone_chip_charges",
+)
 # The bronze columns each wide fixture table carries; the POS list is every column the POS models read.
 WIDE_COLUMNS = {
+    "cms_hospital_cost_reports": COST_REPORT_COLUMNS,
     "cms_provider_of_services": (
         "prvdr_num",
         "prvdr_ctgry_cd",
@@ -654,6 +776,71 @@ GROUP_B = (
 )
 
 
+# Cost reports [331] to [339]: a full year with every ratio's inputs, scientific notation, a negative amount and a ZIP with a
+# trailing hyphen; a short report with zero denominators and a ZIP+4; a second report of one CCN in one fiscal year, with a
+# 9-digit ZIP and NA; a full year that starts in November, counted in the next fiscal year.
+COSTS_2023 = (
+    cc(
+        rpt_rec_num="100001",
+        provider_ccn="010001",
+        fiscal_year_begin_date="10/01/2022",
+        fiscal_year_end_date="09/30/2023",
+        zip_code="35233-",
+        rural_versus_urban="U",
+        type_of_control="2",
+        provider_type="1",
+        number_of_beds="250",
+        total_bed_days_available="91250",
+        total_days_v_xviii_xix_unknown="73000",
+        total_days_title_xviii="36500",
+        total_days_title_xix="7300",
+        total_discharges_v_xviii_xix_unknown="14600",
+        fte_employees_on_payroll="1500.5",
+        contract_labor_direct_patient_care="4380000",
+        net_patient_revenue="500000000",
+        net_income_from_service_to_patients="62000000",
+        less_total_operating_expense="438000000",
+        total_salaries_from_worksheet_a="219000000",
+        total_current_assets="200000000",
+        total_current_liabilities="100000000",
+        total_liabilities="300000000",
+        total_assets="600000000",
+        cash_on_hand_and_in_banks="36000000",
+        cost_of_charity_care="5000000",
+        cost_of_uncompensated_care="8000000",
+        total_costs="400000000",
+        net_revenue_from_medicaid="50000000",
+        cost_to_charge_ratio="2.5E-1",
+        total_bad_debt_expense="-10",
+    ),
+    cc(
+        rpt_rec_num="100002",
+        provider_ccn="010002",
+        fiscal_year_begin_date="01/01/2023",
+        fiscal_year_end_date="06/30/2023",
+        zip_code="35233-1234",
+        rural_versus_urban="R",
+        number_of_beds="0",
+        total_bed_days_available="0",
+        fte_employees_on_payroll="100",
+        total_current_assets="10",
+        total_current_liabilities="0",
+    ),
+    cc(
+        rpt_rec_num="100003",
+        provider_ccn="010001",
+        fiscal_year_begin_date="07/01/2023",
+        fiscal_year_end_date="09/30/2023",
+        zip_code="352331234",
+        rural_versus_urban="NA",
+    ),
+)
+COSTS_2022 = (
+    cc(rpt_rec_num="090001", provider_ccn="010001", fiscal_year_begin_date="10/01/2021", fiscal_year_end_date="09/30/2022"),
+    cc(rpt_rec_num="090002", provider_ccn="010005", fiscal_year_begin_date="11/15/2021", fiscal_year_end_date="11/14/2022"),
+)
+
+
 def cmi_case(content: tuple[str, ...]) -> Stored:
     """Return a FY 2026 final CMI file with the given lines, for the failing CMI cases."""
     return Stored(
@@ -683,9 +870,9 @@ BASE = (
     Stored("cms_hai_state", "s01", "2021-01-27", "Healthcare_Associated_Infections-State.csv", sha("b1"), 2, content=HAI_STATE),
     Stored("cms_hai_national", "n01", "2021-01-27", "Healthcare_Associated_Infections-National.csv", sha("b2"), 1, content=HAI_NATIONAL),
     # Cost reports: one file captured in two snapshots on the same day.
-    Stored("cms_hospital_cost_reports", "c01", "CMS_HCRIS_PUF__20260924T040326Z__aa", "CostReport_2023_Final.csv", sha("c1"), 3, "snap-aa"),
-    Stored("cms_hospital_cost_reports", "c02", "CMS_HCRIS_PUF__20260924T042740Z__bb", "CostReport_2023_Final.csv", sha("c1"), 3, "snap-bb"),
-    Stored("cms_hospital_cost_reports", "c03", "CMS_HCRIS_PUF__20260924T040326Z__aa", "CostReport_2022_Final.csv", sha("c2"), 2, "snap-aa"),
+    Stored("cms_hospital_cost_reports", "c01", "CMS_HCRIS_PUF__20260924T040326Z__aa", "CostReport_2023_Final.csv", sha("c1"), 3, "snap-aa", records=COSTS_2023),
+    Stored("cms_hospital_cost_reports", "c02", "CMS_HCRIS_PUF__20260924T042740Z__bb", "CostReport_2023_Final.csv", sha("c1"), 3, "snap-bb", records=COSTS_2023),
+    Stored("cms_hospital_cost_reports", "c03", "CMS_HCRIS_PUF__20260924T040326Z__aa", "CostReport_2022_Final.csv", sha("c2"), 2, "snap-aa", records=COSTS_2022),
     # IPPS: the two BRZ-016 files under conflicting names, held [172]; one ordinary file.
     Stored("cms_ipps_text_lines", "i01", "CMS_IPPS__a", "FY 2019 IPPS Proposed Rule Impact File.txt", next(iter(HELD)), 2, content=HELD_TEXT),
     Stored(
@@ -888,6 +1075,28 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
     "cmi_transfer_adjusted": ("assert_cmi_matches_relative_weights", (*BASE, cmi_case((CMI_HEADER, "010001\t1.6735\t8178\t13823.43"))), frozenset()),
     # A CMI outside the plausible range [303].
     "cmi_out_of_range": ("assert_cmi_values_plausible", (*BASE, cmi_case((CMI_HEADER, "010001\t12.5\t\t"))), frozenset()),
+    # A cost report whose period starts in another fiscal year than its file [332].
+    "cost_report_wrong_year": (
+        "assert_cost_report_fiscal_years",
+        tuple(
+            with_record(item, cc(rpt_rec_num="090003", provider_ccn="010009", fiscal_year_begin_date="01/01/2020", fiscal_year_end_date="12/31/2020"))
+            if item.key == "c03"
+            else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
+    # A cost-report amount that is not a number [336].
+    "cost_report_uncast_value": (
+        "assert_cost_report_values_cast",
+        tuple(
+            with_record(item, cc(rpt_rec_num="090004", provider_ccn="010009", fiscal_year_begin_date="10/01/2021", number_of_beds="12a"))
+            if item.key == "c03"
+            else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
     # An emergency-services value that is neither Yes nor No [329].
     "hgi_uncast_value": (
         "assert_hgi_values_cast",
@@ -942,8 +1151,8 @@ CREATE TABLE bronze.cms_hai_state AS
     SELECT * EXCLUDE (bronze_table, line_text, sheet_name, cells_text) FROM fixture WHERE bronze_table = 'cms_hai_state';
 CREATE TABLE bronze.cms_hai_national AS
     SELECT * EXCLUDE (bronze_table, line_text, sheet_name, cells_text) FROM fixture WHERE bronze_table = 'cms_hai_national';
-CREATE TABLE bronze.cms_hospital_cost_reports AS
-    SELECT * EXCLUDE (bronze_table, line_text, sheet_name, cells_text) FROM fixture WHERE bronze_table = 'cms_hospital_cost_reports';
+CREATE TABLE bronze.cms_hospital_cost_reports AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_hospital_cost_reports_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.cms_ipps_sas AS
     SELECT * EXCLUDE (bronze_table, line_text, sheet_name, cells_text) FROM fixture WHERE bronze_table = 'cms_ipps_sas';
 CREATE TABLE bronze.cms_ipps_text_lines AS
@@ -1067,7 +1276,7 @@ def wide_csv(objects: Iterable[Stored], table: str) -> str:
     items = list(objects)
     loaded = loaded_keys(items)
     for item in items:
-        if item.table != table or item.key not in loaded:
+        if item.table != table or (item.key not in loaded and not item.force_loaded):
             continue
         if len(item.records) != item.rows:
             raise ValueError(f"fixture {item.key}: {len(item.records)} records but rows={item.rows}")
@@ -1077,7 +1286,9 @@ def wide_csv(objects: Iterable[Stored], table: str) -> str:
                 raise ValueError(f"fixture {item.key}: columns {sorted(unknown)} are not in the {table} fixture")
             values = dict(record)
             provenance = (item.key, "fixture", item.snapshot, "fixture_dataset", item.release, f"fixture/{item.key}.zip", f"v-{item.key}", item.member)
-            writer.writerow(provenance + (item.sha, row) + tuple(values.get(column, "") for column in WIDE_COLUMNS[table]))
+            # As in fixture_csv: the second checksum, when set, marks the object's last row.
+            checksum = item.second_sha if item.second_sha and row == item.rows else item.sha
+            writer.writerow(provenance + (checksum, row) + tuple(values.get(column, "") for column in WIDE_COLUMNS[table]))
     return buffer.getvalue()
 
 
@@ -1208,6 +1419,16 @@ HGI_SQL = (
     "SELECT ccn, release_date::VARCHAR, release_file_count::VARCHAR, coalesce(hospital_type, ''), coalesce(has_emergency_services::VARCHAR, ''), "
     "coalesce(overall_rating::VARCHAR, ''), coalesce(overall_rating_text, ''), coalesce(overall_rating_footnote, ''), left(member_sha256, 2) "
     "FROM int_hgi_hospital_releases ORDER BY ALL;"
+)
+COST_REPORTS_SQL = (
+    "SELECT rpt_rec_num, ccn, fiscal_year::VARCHAR, file_fiscal_year::VARCHAR, period_begin::VARCHAR, period_end::VARCHAR, "
+    "reporting_days::VARCHAR, is_full_year::VARCHAR, reports_in_fiscal_year::VARCHAR, coalesce(zip_code, ''), coalesce(rural_urban, ''), "
+    "coalesce(number_of_beds::VARCHAR, ''), coalesce(cost_to_charge_ratio::VARCHAR, ''), coalesce(total_bad_debt_expense::VARCHAR, '') "
+    "FROM int_cost_reports ORDER BY ALL;"
+)
+COST_MEASURES_SQL = (
+    "SELECT rpt_rec_num, measure_control, coalesce(value_number::VARCHAR, ''), coalesce(value_code, '') FROM int_cost_report_measures "
+    "WHERE rpt_rec_num IN ('100001', '100002') ORDER BY ALL;"
 )
 VIEW_ROWS_SQL = "SELECT getvariable('checked_table'), count(*)::VARCHAR FROM query_table(getvariable('checked_table'));\n"
 BRONZE_COUNTS_SQL = (
@@ -1345,6 +1566,8 @@ def read_models(case: str) -> dict[str, Any]:
         "cc_holds": [tuple(row) for row in duckdb_csv(database, CC_HOLDS_SQL)],
         "registry": [tuple(row) for row in duckdb_csv(database, REGISTRY_SQL)],
         "hgi": [tuple(row) for row in duckdb_csv(database, HGI_SQL)],
+        "cost_reports": [tuple(row) for row in duckdb_csv(database, COST_REPORTS_SQL)],
+        "cost_measures": [tuple(row) for row in duckdb_csv(database, COST_MEASURES_SQL)],
     }
 
 
@@ -1598,6 +1821,48 @@ def fixture_scenarios() -> dict[str, bool]:
         ("010001", "2024-01-31", "2", "Acute Care Hospitals", "true", "4", "4", "", "u1"),
         ("010005", "2024-01-31", "2", "Critical Access Hospitals", "false", "", "Not Available", "16", "u1"),
     ]
+    # [331] to [338] One row per cost report: fiscal year by the period start, inclusive days, full years by the anniversary,
+    # reports per CCN and fiscal year, ZIP and urban/rural as approved, amounts typed.
+    checks["cost_reports_match_expected"] = base.get("cost_reports") == [
+        ("090001", "010001", "2022", "2022", "2021-10-01", "2022-09-30", "365", "true", "1", "", "", "", "", ""),
+        ("090002", "010005", "2022", "2022", "2021-11-15", "2022-11-14", "365", "true", "1", "", "", "", "", ""),
+        ("100001", "010001", "2023", "2023", "2022-10-01", "2023-09-30", "365", "true", "2", "35233", "urban", "250.0", "0.25", "-10.0"),
+        ("100002", "010002", "2023", "2023", "2023-01-01", "2023-06-30", "181", "false", "1", "35233", "rural", "0.0", "", ""),
+        ("100003", "010001", "2023", "2023", "2023-07-01", "2023-09-30", "92", "false", "2", "", "", "", "", ""),
+    ]
+    # [339] [340] Registry measures by the seed's columns and rule; a zero or missing denominator gives null.
+    checks["cost_measures_match_expected"] = base.get("cost_measures") == [
+        ("100001", "C001", "250.0", ""),
+        ("100001", "C002", "", "2"),
+        ("100001", "C003", "", "1"),
+        ("100001", "C023", "0.5", ""),
+        ("100001", "C024", "0.1", ""),
+        ("100001", "C027", "1500.5", ""),
+        ("100001", "C028", "6.002", ""),
+        ("100001", "C035", "4380000.0", ""),
+        ("100001", "C037", "73000.0", ""),
+        ("100001", "C038", "14600.0", ""),
+        ("100001", "C039", "200.0", ""),
+        ("100001", "C040", "0.8", ""),
+        ("100001", "C041", "58.4", ""),
+        ("100001", "C042", "5.0", ""),
+        ("100001", "C045", "0.124", ""),
+        ("100001", "C046", "2.0", ""),
+        ("100001", "C047", "0.5", ""),
+        ("100001", "C048", "30.0", ""),
+        ("100001", "C049", "0.0125", ""),
+        ("100001", "C050", "0.02", ""),
+        ("100001", "C051", "-10.0", ""),
+        ("100001", "C052", "0.1", ""),
+        ("100001", "C053", "0.5", ""),
+        ("100001", "C054", "0.01", ""),
+        ("100001", "C055", "0.25", ""),
+        ("100001", "C057", "30000.0", ""),
+        ("100002", "C001", "0.0", ""),
+        ("100002", "C027", "100.0", ""),
+        ("100002", "C028", "", ""),
+        ("100002", "C046", "", ""),
+    ]
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -1647,6 +1912,15 @@ def registry_seed_matches() -> bool:
         not row["source_measure_id"] or row["source_measure_id"] in fields[row["measure_control"]] or row["measure_control"] in ("C139", "C140") for row in seed
     )
     return named and sorted(row["measure_control"] for row in seed) == sorted(expected)
+
+
+def cost_seed_matches() -> bool:
+    """Check that the cost-report measure seed covers exactly the registry's S01 controls [340]."""
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    sources = {source["source_id"]: source for source in registry["sources"]}
+    with (REPO_ROOT / "dbt/seeds/cost_report_measures.csv").open(newline="") as handle:
+        seed = sorted(row["measure_control"] for row in csv.DictReader(handle))
+    return seed == sorted(sources["CMS_HCRIS_PUF"]["linked_measure_ids"])
 
 
 def real_stage() -> dict[str, Any]:
@@ -1753,6 +2027,19 @@ def real_stage() -> dict[str, Any]:
     coverage = dict(duckdb_csv(database, coverage_sql))
     outcome["registry_controls_without_rows"] = sorted(control for control, rows in coverage.items() if rows == "0")
     outcome["checks"]["registry_seed_matches_registry"] = registry_seed_matches()
+    # [331] to [340] Cost reports: reports per fiscal year, CCN-years with several reports, measure rows per control.
+    cost_sql = (
+        "SELECT fiscal_year::VARCHAR, count(*)::VARCHAR || ' reports, ' || count(DISTINCT ccn)::VARCHAR || ' CCNs, ' "
+        "|| count(*) FILTER (WHERE reports_in_fiscal_year > 1)::VARCHAR || ' in multi-report years, ' "
+        "|| count(*) FILTER (WHERE NOT is_full_year)::VARCHAR || ' not a full year' FROM int_cost_reports GROUP BY 1 ORDER BY 1;"
+    )
+    outcome["cost_reports"] = dict(duckdb_csv(database, cost_sql))
+    cost_measure_sql = (
+        "SELECT measure_control, count(*)::VARCHAR || ' rows, ' || count(coalesce(value_number::VARCHAR, value_code))::VARCHAR || ' with a value' "
+        "FROM int_cost_report_measures GROUP BY 1 ORDER BY 1;"
+    )
+    outcome["cost_report_measures"] = dict(duckdb_csv(database, cost_measure_sql))
+    outcome["checks"]["cost_seed_matches_registry"] = cost_seed_matches()
     bronze = unprefixed(duckdb_csv(database, per_table(BRONZE_COUNTS_SQL, "lakehouse.bronze."), init), "lakehouse.bronze.")
     # Bronze loads one copy per file, so its objects equal the distinct files; the copies table lists every copy [204] [206].
     model_sql = (
