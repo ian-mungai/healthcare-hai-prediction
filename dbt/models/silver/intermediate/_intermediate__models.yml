@@ -539,3 +539,57 @@ models:
       - name: measure_control
         description: The registry measure control ID.
         data_tests: [not_null]
+
+  - name: int_hospital_owner_rows
+    description: >
+      One row per organisation owner row and owner file (release), with the release label and catalog period from the
+      ownership_release_periods seed. A flag is true for Y and false for N; a blank flag, and every flag of a file in the
+      layout before April 2025, is null; flags_published says whether the file has the private-equity column. Dates and
+      shares are typed (failure modes 365 to 371). Choosing a release for a hospital-year waits for the alignment step.
+    columns:
+      - name: owner_row_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: enrollment_id
+        description: The hospital's enrollment ID, which links the owner to its enrollment row.
+        data_tests: [not_null]
+      - name: period_end
+        description: Last day of the release's catalog period.
+        data_tests: [not_null]
+      - name: flags_published
+        description: True when the file has the private-equity column (the April 2025 layout and later).
+      - name: percentage_ownership
+        description: The published share, 0 to 100; null when blank.
+
+  - name: int_hospital_enrollment_rows
+    description: >
+      One row per hospital enrollment and enrollment file (release), with the release label and catalog period. The CCN
+      is the published 6-character CCN or a 5-digit CCN padded to 6; any other value gives a null CCN, and ccn_published
+      keeps the published value. A flag is true for Y and false for N; dates are typed (failure modes 365, 366 and 369 to
+      371).
+    columns:
+      - name: enrollment_key
+        description: File checksum and enrollment ID.
+        data_tests: [unique, not_null]
+      - name: period_end
+        description: Last day of the release's catalog period.
+        data_tests: [not_null]
+      - name: ccn
+        description: The CCN, 6 characters; null when the published value is not a CCN.
+
+  - name: int_change_of_ownership_rows
+    description: >
+      One row per change of ownership and change-of-ownership file (release), with the release label and catalog period.
+      Each release lists events back to 2016, so one event appears in several files under one event_key; the alignment
+      step chooses the release. CCNs follow the enrollment rule, the published values kept (failure modes 365 and 369 to
+      372).
+    columns:
+      - name: chow_row_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: event_key
+        description: Buyer enrollment ID, seller enrollment ID, effective date and type, joined by |.
+        data_tests: [not_null]
+      - name: period_end
+        description: Last day of the release's catalog period.
+        data_tests: [not_null]

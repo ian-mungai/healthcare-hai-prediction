@@ -198,7 +198,12 @@ impact files from FY 2001 are read by exact header name (`dbt/seeds/impact_layou
 has one row per release, hospital and field. `int_impact_measures` carries the registry measures of source CMS_IPPS. The
 Medicare inpatient provider and DRG summaries are typed per file, with the data and release years from the file name
 (`int_mup_providers`, `int_mup_drg_discharges`); a blank, suppressed cell is null. `int_mup_measures` computes the registry
-measures of sources CMS-MUP-PROVIDER and CMS_MEDICARE_PROVIDER by the fields and rule in `dbt/seeds/mup_measures.csv`. The dbt packages
+measures of sources CMS-MUP-PROVIDER and CMS_MEDICARE_PROVIDER by the fields and rule in `dbt/seeds/mup_measures.csv`. The
+owner, enrollment and change-of-ownership files are typed per release (`int_hospital_owner_rows`,
+`int_hospital_enrollment_rows`, `int_change_of_ownership_rows`). Each file is dated by the publisher's catalog period in
+`dbt/seeds/ownership_release_periods.csv`, which `scripts.lakehouse.ownership_release_periods` rebuilds from the S3
+manifests and the local capture receipts. An owner flag a release's layout lacks (private equity and REIT before
+April 2025) is null; `dbt/seeds/ownership_measures.csv` names the columns each registry control uses. The dbt packages
 (dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
 publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
 container. The staging E2E installs them before it builds. dbt-project-evaluator is off in every other run and runs
@@ -211,6 +216,7 @@ scripts/lakehouse/dbt.sh build                                      # dbt on the
 .venv/bin/python -m scripts.lakehouse.run_project_evaluator         # dbt-project-evaluator; report: data/e2e/dbt_evaluator/
 .venv/bin/python -m scripts.lakehouse.ipps_file_labels --check      # seeds match the S3 manifests (read-only S3)
 .venv/bin/python -m scripts.lakehouse.pos_file_periods --check      # POS periods match the manifests and job plans
+.venv/bin/python -m scripts.lakehouse.ownership_release_periods --check   # ownership periods match the manifests and receipts
 ```
 
 Load large groups in batches of about 20 to 40 tables: each job stops after 1 hour (`COMPOSE_TIMEOUT` in
@@ -580,9 +586,11 @@ control. The deferred controls above are not implemented.
 The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only and
 loads one copy per stored file. Staging covers the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital
 General Information, ownership, Medicare inpatient and Care Compare timely and effective care, maternal health and HCAHPS tables. It types the
-HAI and Care Compare windows, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
+HAI and Care Compare windows, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
 index. The Medicare sepsis share counts only published DRG cells (11 discharges or more), so it can be low for small
-hospitals; the Medicare chronic-condition shares start with data year 2017. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables exist. The bronze and staging E2E runs use
+hospitals; the Medicare chronic-condition shares start with data year 2017. Each change-of-ownership release lists
+events back to 2016, so one event appears once per release until the alignment step chooses one. An enrollment or
+change-of-ownership value with a suffix after the CCN is kept as published, with no CCN. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables exist. The bronze and staging E2E runs use
 Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
 offline. It has not run: its controls, independent review and the owner's approval are still to come.
 

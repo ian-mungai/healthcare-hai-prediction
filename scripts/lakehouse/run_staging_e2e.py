@@ -21,7 +21,7 @@ Failure modes: ``data/lakehouse_planning/staging_dedup_20261003/failure_modes.md
 ``data/lakehouse_planning/staging_families_20261003/failure_modes.md``,
 ``data/lakehouse_planning/sheet_selection_20261005/failure_modes.md``,
 ``data/lakehouse_planning/hospital_spine_20261005/failure_modes.md``,
-``data/lakehouse_planning/group_b_20261005/failure_modes_b1.md`` and ``failure_modes_b2.md`` in the same folder. The report in ``data/e2e/staging/`` holds
+``data/lakehouse_planning/group_b_20261005/failure_modes_b1.md`` to ``failure_modes_b5a.md`` in the same folder. The report in ``data/e2e/staging/`` holds
 outcomes and counts, never data values or credentials.
 """
 
@@ -40,7 +40,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse import catalog, ipps_file_labels, pos_file_periods
+from scripts.lakehouse import catalog, ipps_file_labels, ownership_release_periods, pos_file_periods
 from scripts.process import run_command
 
 REPO_ROOT = catalog.REPO_ROOT
@@ -355,6 +355,105 @@ MUP_DRG_COLUMNS = (
     "avg_tot_pymt_amt",
     "avg_mdcr_pymt_amt",
 )
+# The bronze columns of the owner, enrollment and change-of-ownership tables, without the provenance columns.
+OWNER_COLUMNS = (
+    "enrollment_id",
+    "associate_id",
+    "organization_name",
+    "associate_id_owner",
+    "type_owner",
+    "role_code_owner",
+    "role_text_owner",
+    "association_date_owner",
+    "organization_name_owner",
+    "doing_business_as_name_owner",
+    "state_owner",
+    "percentage_ownership",
+    "created_for_acquisition_owner",
+    "corporation_owner",
+    "llc_owner",
+    "medical_provider_supplier_owner",
+    "management_services_company_owner",
+    "medical_staffing_company_owner",
+    "holding_company_owner",
+    "investment_firm_owner",
+    "financial_institution_owner",
+    "consulting_firm_owner",
+    "for_profit_owner",
+    "non_profit_owner",
+    "other_type_owner",
+    "other_type_text_owner",
+    "private_equity_company_owner",
+    "reit_owner",
+    "chain_home_office_owner",
+    "owned_by_another_org_or_ind_owner",
+)
+ENROLLMENT_COLUMNS = (
+    "enrollment_id",
+    "enrollment_state",
+    "provider_type_code",
+    "provider_type_text",
+    "npi",
+    "multiple_npi_flag",
+    "ccn",
+    "associate_id",
+    "organization_name",
+    "doing_business_as_name",
+    "incorporation_date",
+    "incorporation_state",
+    "organization_type_structure",
+    "organization_other_type_text",
+    "proprietary_nonprofit",
+    "address_line_1",
+    "address_line_2",
+    "city",
+    "state",
+    "zip_code",
+    "practice_location_type",
+    "location_other_type_text",
+    "subgroup_general",
+    "subgroup_acute_care",
+    "subgroup_alcohol_drug",
+    "subgroup_childrens",
+    "subgroup_long_term",
+    "subgroup_psychiatric",
+    "subgroup_rehabilitation",
+    "subgroup_short_term",
+    "subgroup_swing_bed_approved",
+    "subgroup_psychiatric_unit",
+    "subgroup_rehabilitation_unit",
+    "subgroup_specialty_hospital",
+    "subgroup_other",
+    "subgroup_other_text",
+    "reh_conversion_flag",
+    "reh_conversion_date",
+    "cah_or_hospital_ccn",
+)
+CHOW_COLUMNS = (
+    "enrollment_id_buyer",
+    "enrollment_state_buyer",
+    "provider_type_code_buyer",
+    "provider_type_text_buyer",
+    "npi_buyer",
+    "multiple_npi_flag_buyer",
+    "ccn_buyer",
+    "associate_id_buyer",
+    "organization_name_buyer",
+    "doing_business_as_name_buyer",
+    "chow_type_code",
+    "chow_type_text",
+    "effective_date",
+    "enrollment_id_seller",
+    "enrollment_state_seller",
+    "provider_type_code_seller",
+    "provider_type_text_seller",
+    "npi_seller",
+    "multiple_npi_flag_seller",
+    "ccn_seller",
+    "associate_id_seller",
+    "organization_name_seller",
+    "doing_business_as_name_seller",
+)
 WIDE_COLUMNS = {
     "cms_medicare_inpatient_by_provider": MUP_PROVIDER_COLUMNS,
     "cms_medicare_inpatient_by_drg": MUP_DRG_COLUMNS,
@@ -454,9 +553,9 @@ WIDE_COLUMNS = {
         "measure_start_date",
         "measure_end_date",
     ),
-    "cms_hospital_enrollments": ("ccn", "enrollment_id"),
-    "cms_hospital_owners": ("enrollment_id", "private_equity_company_owner"),
-    "cms_change_of_ownership": ("ccn_buyer", "ccn_seller", "effective_date"),
+    "cms_hospital_enrollments": ENROLLMENT_COLUMNS,
+    "cms_hospital_owners": OWNER_COLUMNS,
+    "cms_change_of_ownership": CHOW_COLUMNS,
 }
 
 
@@ -535,6 +634,18 @@ HAI_SPINE = (
 )
 # Each POS file's catalog coverage, as the period seed gives it [280].
 POS_PERIODS = {"pa": ("2018-10-01", "2018-12-31"), "pb": ("2019-01-01", "2019-03-31"), "pc": ("2020-10-01", "2020-12-31")}
+# Each owner, enrollment and change-of-ownership file's release label and catalog period, as the receipts give them [365].
+OWNERSHIP_PERIODS = {
+    "e1": ("Hospital Enrollments : 2024-01-01", "2024-01-01", "2024-01-31"),
+    "o1": ("Hospital All Owners : 2025-05-01", "2025-05-01", "2025-05-31"),
+    "x1": ("Hospital Change of Ownership : 2023-12-01", "2023-10-01", "2023-12-31"),
+    "ow1": ("Hospital All Owners : 2022-11-14", "2022-11-01", "2022-11-30"),
+    "ow2": ("Hospital All Owners : 2025-04-01", "2025-04-01", "2025-04-30"),
+    "ow9": ("Hospital All Owners : 2025-06-01", "2025-06-01", "2025-06-30"),
+    "en1": ("Hospital Enrollments : 2022-11-01", "2022-11-01", "2022-11-30"),
+    "xw1": ("Hospital Change of Ownership : 2022-03-31", "2022-01-01", "2022-03-31"),
+    "xw2": ("Hospital Change of Ownership : 2022-09-30", "2022-07-01", "2022-09-30"),
+}
 CMI_HEADER = "Provider No.\tCase Mix Index (CMI)\tTotal Cases\tTotal Relative Weights"
 CMI_HEADER_2007 = "Provider Number\tSum of Relative Weights\tTransfer Adjusted Cases\tTransfer Adjusted CMI\tUnadjusted Cases\tUnadjusted CMI"
 CMI_HEADER_2011 = "Provider ID\tCases\tTotal Case Mix\tCMI\tTransfer Adjusted Cases\tTransfer Adjusted Case Mix\tTransfer Adjusted CMI"
@@ -583,7 +694,7 @@ GROUP_A = (
         "organisation_owners.csv",
         sha("u3"),
         1,
-        records=((("enrollment_id", "O20000000001"), ("private_equity_company_owner", "N")),),
+        records=((("enrollment_id", "O20000000001"), ("type_owner", "O"), ("private_equity_company_owner", "N")),),
     ),
     Stored(
         "cms_change_of_ownership",
@@ -1044,6 +1155,127 @@ GROUP_B4 = (
 )
 
 
+def owner(enrollment: str, owner_id: str, role: str, **fields: str) -> tuple[tuple[str, str], ...]:
+    """Return one organisation owner row: the hospital enrollment, the owner, the role and any other bronze columns."""
+    return (("enrollment_id", enrollment), ("associate_id_owner", owner_id), ("type_owner", "O"), ("role_code_owner", role), *fields.items())
+
+
+CHOW_EVENT = cc(
+    enrollment_id_buyer="O20000000004",
+    ccn_buyer="10002900",
+    enrollment_id_seller="O20000000005",
+    ccn_seller="100029",
+    chow_type_code="CH",
+    chow_type_text="CHANGE OF OWNERSHIP",
+    effective_date="03/01/2021",
+)
+# B5a ownership. Owners in the layout before April 2025, without the private-equity and REIT columns, and after it, with a
+# blank flag, a one-digit date and decimal shares [366] [368] [369]; an enrollment whose CCN lost its leading zero and a
+# unit CCN [370]; a change of ownership repeated in a later cumulative release, with a buyer value that is not a CCN
+# [370] [372].
+GROUP_B5A = (
+    Stored(
+        "cms_hospital_owners",
+        "ow1",
+        "CMS_OWNERS_ORG__fixture_v1",
+        "organisation_owners.csv",
+        sha("o2"),
+        2,
+        records=(
+            owner("O20000000002", "9876543210", "34", association_date_owner="3/7/2020", percentage_ownership="100", for_profit_owner="Y", llc_owner="Y"),
+            owner("O20000000002", "5555555555", "43", association_date_owner="11/30/2019", for_profit_owner="Y"),
+        ),
+    ),
+    Stored(
+        "cms_hospital_owners",
+        "ow2",
+        "CMS_OWNERS_ORG__fixture_v2",
+        "organisation_owners.csv",
+        sha("o3"),
+        3,
+        records=(
+            owner(
+                "O20000000002",
+                "9876543210",
+                "34",
+                association_date_owner="3/7/2020",
+                percentage_ownership="62.5",
+                for_profit_owner="Y",
+                private_equity_company_owner="Y",
+                reit_owner="N",
+                chain_home_office_owner="N",
+                owned_by_another_org_or_ind_owner="Y",
+            ),
+            owner(
+                "O20000000002",
+                "1111111111",
+                "35",
+                association_date_owner="04/15/2025",
+                percentage_ownership="37.5",
+                private_equity_company_owner="N",
+                reit_owner="N",
+            ),
+            owner("O20000000002", "5555555555", "43", private_equity_company_owner=""),
+        ),
+    ),
+    Stored(
+        "cms_hospital_enrollments",
+        "en1",
+        "ENROLL__fixture_b",
+        "Hospital_Enrollments_2022.11.01.csv",
+        sha("v1"),
+        2,
+        records=(
+            cc(
+                enrollment_id="O20000000002",
+                ccn="13025",
+                npi="1234567893",
+                provider_type_code="00-09",
+                proprietary_nonprofit="P",
+                incorporation_date="1/5/1990",
+                subgroup_acute_care="Y",
+                reh_conversion_flag="N",
+            ),
+            cc(enrollment_id="O20000000003", ccn="01T001", subgroup_acute_care="N"),
+        ),
+    ),
+    Stored("cms_change_of_ownership", "xw1", "CMS_CHOW__fixture_q", "Hospital_CHOW_2022Q1.csv", sha("y1"), 1, records=(CHOW_EVENT,)),
+    Stored(
+        "cms_change_of_ownership",
+        "xw2",
+        "CMS_CHOW__fixture_r",
+        "Hospital_CHOW_2022.09.30.csv",
+        sha("y2"),
+        2,
+        records=(
+            CHOW_EVENT,
+            cc(
+                enrollment_id_buyer="O20000000006",
+                ccn_buyer="13025",
+                enrollment_id_seller="O20000000007",
+                ccn_seller="01T001",
+                chow_type_code="AM",
+                chow_type_text="ACQUISITION/MERGER",
+                effective_date="7/1/2022",
+            ),
+        ),
+    ),
+)
+
+
+def owner_case(**fields: str) -> Stored:
+    """Return one more owner file with one row, for the failing owner cases."""
+    return Stored(
+        "cms_hospital_owners",
+        "ow9",
+        "CMS_OWNERS_ORG__fixture_x",
+        "organisation_owners.csv",
+        sha("o9"),
+        1,
+        records=(owner("O20000000009", "2222222222", "34", **fields),),
+    )
+
+
 def impact_case(content: tuple[str, ...], member: str = "FY 2026 IPPS Proposed Rule Impact File.txt") -> Stored:
     """Return a FY 2026 impact file with the given lines, for the failing impact cases."""
     return Stored("cms_ipps_text_lines", "p09", "CMS_IPPS__r", member, sha("im9"), len(content), content=content)
@@ -1231,6 +1463,7 @@ BASE = (
     *GROUP_B,
     *GROUP_B3,
     *GROUP_B4,
+    *GROUP_B5A,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -1323,6 +1556,19 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
     ),
     # A numeric value that is not a number [349].
     "impact_uncast_value": ("assert_impact_values_cast", (*BASE, impact_case(("Provider Number\tBeds", "010001\t12a"))), frozenset()),
+    # An owner row that is not an organisation [367].
+    "owner_individual": ("assert_owner_rows_are_organisations", (*BASE, owner_case(type_owner="I")), frozenset()),
+    # An owner flag that is neither Y nor N, and a share above 100 [366] [368].
+    "owner_flag_uncast": ("assert_ownership_values_cast", (*BASE, owner_case(private_equity_company_owner="X")), frozenset()),
+    "owner_share_out_of_range": ("assert_ownership_values_cast", (*BASE, owner_case(percentage_ownership="150")), frozenset()),
+    # A change-of-ownership date that is not M/D/YYYY [369].
+    "chow_date_uncast": (
+        "assert_ownership_values_cast",
+        tuple(with_record(item, cc(enrollment_id_buyer="O20000000008", effective_date="2022-07-01")) if item.key == "xw2" else item for item in BASE),
+        frozenset(),
+    ),
+    # An owner file without a recorded period [365].
+    "ownership_no_period": ("assert_ownership_files_have_periods", BASE, frozenset({"ow1"})),
     # A Medicare inpatient file whose name has no data year [355].
     "mup_no_data_year": (
         "assert_mup_files_have_data_year",
@@ -1573,6 +1819,14 @@ def periods_csv(objects: Iterable[Stored], unlabelled: frozenset[str]) -> str:
     return pos_file_periods.as_csv(rows)
 
 
+def ownership_periods_csv(objects: Iterable[Stored], unlabelled: frozenset[str]) -> str:
+    """Return the ownership period seed for the fixture's files, written by the real generator, without the ones a case leaves out [365]."""
+    owned = [item for item in objects if item.table in ownership_release_periods.TABLES and item.key not in unlabelled]
+    loaded = [{"table": item.table, "sha256": item.sha, "release_id": item.release, "file_name": item.member} for item in owned]
+    periods = {item.release: OWNERSHIP_PERIODS[item.key] for item in owned}
+    return ownership_release_periods.as_csv(ownership_release_periods.rows_for(loaded, periods))
+
+
 def publication(item: Stored) -> tuple[str, str]:
     """Return the expected publication release and its source [170]."""
     if "!" not in item.member:
@@ -1715,6 +1969,21 @@ MUP_PROVIDERS_SQL = (
 )
 MUP_DRG_SQL = "SELECT data_year::VARCHAR, ccn, drg_cd, tot_dschrgs::VARCHAR FROM int_mup_drg_discharges ORDER BY ALL;"
 MUP_MEASURES_SQL = "SELECT ccn, measure_control, field, coalesce(value_number::VARCHAR, '') FROM int_mup_measures WHERE data_year = 2023 ORDER BY ALL;"
+OWNERS_SQL = (
+    "SELECT left(member_sha256, 2), period_end::VARCHAR, enrollment_id, coalesce(associate_id_owner, ''), coalesce(role_code, ''), "
+    "coalesce(association_date::VARCHAR, ''), coalesce(percentage_ownership::VARCHAR, ''), flags_published::VARCHAR, "
+    "coalesce(private_equity_company_owner::VARCHAR, ''), coalesce(reit_owner::VARCHAR, ''), coalesce(owned_by_another_org_or_ind_owner::VARCHAR, ''), "
+    "coalesce(for_profit_owner::VARCHAR, '') FROM int_hospital_owner_rows ORDER BY ALL;"
+)
+ENROLLMENTS_SQL = (
+    "SELECT left(member_sha256, 2), period_end::VARCHAR, enrollment_id, coalesce(ccn, ''), coalesce(ccn_published, ''), "
+    "coalesce(proprietary_nonprofit, ''), coalesce(incorporation_date::VARCHAR, ''), coalesce(subgroup_acute_care::VARCHAR, ''), "
+    "coalesce(reh_conversion_flag::VARCHAR, '') FROM int_hospital_enrollment_rows ORDER BY ALL;"
+)
+CHOW_SQL = (
+    "SELECT left(member_sha256, 2), period_end::VARCHAR, coalesce(ccn_buyer, ''), coalesce(ccn_buyer_published, ''), coalesce(ccn_seller, ''), "
+    "coalesce(chow_type_code, ''), coalesce(effective_date::VARCHAR, ''), event_key FROM int_change_of_ownership_rows ORDER BY ALL;"
+)
 VIEW_ROWS_SQL = "SELECT getvariable('checked_table'), count(*)::VARCHAR FROM query_table(getvariable('checked_table'));\n"
 BRONZE_COUNTS_SQL = (
     "WITH o AS (SELECT _object_key, any_value(_member_sha256) AS sha, count(*) AS n FROM query_table(getvariable('checked_table')) GROUP BY 1), "
@@ -1792,6 +2061,7 @@ def fixture_project(case_dir: Path, objects: tuple[Stored, ...], unlabelled: fro
     twin_rows = ipps_file_labels.twins(stored, FIXTURE_RENAMED)
     (project / "seeds/ipps_occmix_twins.csv").write_text(ipps_file_labels.as_csv(twin_rows, ipps_file_labels.TWIN_COLUMNS))
     (project / "seeds/pos_file_periods.csv").write_text(periods_csv(objects, unlabelled))
+    (project / "seeds/ownership_release_periods.csv").write_text(ownership_periods_csv(objects, unlabelled))
 
 
 def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[str] = frozenset()) -> tuple[int, dict[str, str]]:
@@ -1859,6 +2129,9 @@ def read_models(case: str) -> dict[str, Any]:
         "mup_providers": [tuple(row) for row in duckdb_csv(database, MUP_PROVIDERS_SQL)],
         "mup_drg": [tuple(row) for row in duckdb_csv(database, MUP_DRG_SQL)],
         "mup_measures": [tuple(row) for row in duckdb_csv(database, MUP_MEASURES_SQL)],
+        "owners": [tuple(row) for row in duckdb_csv(database, OWNERS_SQL)],
+        "enrollments": [tuple(row) for row in duckdb_csv(database, ENROLLMENTS_SQL)],
+        "chow": [tuple(row) for row in duckdb_csv(database, CHOW_SQL)],
     }
 
 
@@ -1867,6 +2140,15 @@ def refuses(action: Any, fragment: str) -> bool:
     try:
         action()
     except ipps_file_labels.LabelError as error:
+        return fragment in str(error)
+    return False
+
+
+def refuses_period(action: Any, fragment: str) -> bool:
+    """Return whether the action raises the ownership period generator's error with the fragment in its message."""
+    try:
+        action()
+    except ownership_release_periods.PeriodError as error:
         return fragment in str(error)
     return False
 
@@ -2267,6 +2549,46 @@ def fixture_scenarios() -> dict[str, bool]:
         ("010005", "C087", "tot_dschrgs", "12.0"),
         ("010005", "C117", "tot_dschrgs", "1.0"),
     ]
+    # [365] to [372] Ownership: each file dated by its recorded period; owner flags null before the April 2025 layout and for
+    # a blank; one-digit dates; a lost leading zero padded, a unit CCN kept and a value that is not a CCN nulled; a
+    # change of ownership kept once per release under one event key.
+    checks["owners_match_expected"] = base.get("owners") == [
+        ("o2", "2022-11-30", "O20000000002", "5555555555", "43", "2019-11-30", "", "false", "", "", "", "true"),
+        ("o2", "2022-11-30", "O20000000002", "9876543210", "34", "2020-03-07", "100.0", "false", "", "", "", "true"),
+        ("o3", "2025-04-30", "O20000000002", "1111111111", "35", "2025-04-15", "37.5", "true", "false", "false", "", ""),
+        ("o3", "2025-04-30", "O20000000002", "5555555555", "43", "", "", "true", "", "", "", ""),
+        ("o3", "2025-04-30", "O20000000002", "9876543210", "34", "2020-03-07", "62.5", "true", "true", "false", "true", "true"),
+        ("u3", "2025-05-31", "O20000000001", "", "", "", "", "true", "false", "", "", ""),
+    ]
+    checks["enrollments_match_expected"] = base.get("enrollments") == [
+        ("u2", "2024-01-31", "O20000000001", "010001", "010001", "", "", "", ""),
+        ("v1", "2022-11-30", "O20000000002", "013025", "13025", "P", "1990-01-05", "true", "false"),
+        ("v1", "2022-11-30", "O20000000003", "01T001", "01T001", "", "", "false", ""),
+    ]
+    checks["chow_match_expected"] = base.get("chow") == [
+        ("u4", "2023-12-31", "010001", "010001", "010001", "", "2023-01-01", "||2023-01-01|"),
+        ("y1", "2022-03-31", "", "10002900", "100029", "CH", "2021-03-01", "O20000000004|O20000000005|2021-03-01|CH"),
+        ("y2", "2022-09-30", "", "10002900", "100029", "CH", "2021-03-01", "O20000000004|O20000000005|2021-03-01|CH"),
+        ("y2", "2022-09-30", "013025", "13025", "01T001", "AM", "2022-07-01", "O20000000006|O20000000007|2022-07-01|AM"),
+    ]
+    checks["ownership_generator_refuses_file_without_period"] = refuses_period(
+        lambda: ownership_release_periods.rows_for(
+            [{"table": "cms_hospital_owners", "sha256": sha("o9"), "release_id": "missing", "file_name": "organisation_owners.csv"}], {}
+        ),
+        "no recorded period",
+    )
+    checks["ownership_generator_refuses_two_periods"] = refuses_period(
+        lambda: ownership_release_periods.receipt_period(
+            {
+                "snapshot_id": "two",
+                "measurement_periods": [
+                    {"source_basis": "publisher_stated", "start_date": "2022-01-01", "end_date": "2022-01-31"},
+                    {"source_basis": "publisher_stated", "start_date": "2022-02-01", "end_date": "2022-02-28"},
+                ],
+            }
+        ),
+        "more than one",
+    )
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -2334,6 +2656,16 @@ def impact_seed_matches() -> bool:
     with (REPO_ROOT / "dbt/seeds/impact_measures.csv").open(newline="") as handle:
         seed = sorted({row["measure_control"] for row in csv.DictReader(handle)})
     return seed == sorted(sources["CMS_IPPS"]["linked_measure_ids"])
+
+
+def ownership_seed_matches() -> bool:
+    """Check that the ownership measure seed covers exactly the registry's controls of CMS_OWNERS, ENROLL and CMS_CHOW [373]."""
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    sources = {source["source_id"]: source for source in registry["sources"]}
+    with (REPO_ROOT / "dbt/seeds/ownership_measures.csv").open(newline="") as handle:
+        seed = sorted(row["measure_control"] for row in csv.DictReader(handle))
+    expected = {*sources["CMS_OWNERS"]["linked_measure_ids"], *sources["ENROLL"]["linked_measure_ids"], *sources["CMS_CHOW"]["linked_measure_ids"]}
+    return seed == sorted(expected)
 
 
 def mup_seed_matches() -> bool:
@@ -2496,6 +2828,23 @@ def real_stage() -> dict[str, Any]:
         "(SELECT 1 FROM int_mup_measures AS m WHERE m.measure_control = 'C117' AND m.data_year = d.data_year);"
     )
     outcome["checks"]["mup_sepsis_share_every_drg_year"] = duckdb_csv(database, sepsis_gap_sql) == [["0"]]
+    # [365] to [373] Ownership: the period seed reproduced; files, rows and events per table; the measure seed matches.
+    outcome["checks"]["ownership_periods_seed_reproduced"] = ownership_release_periods.SEED.read_text() == ownership_release_periods.as_csv(
+        ownership_release_periods.build()
+    )
+    ownership_sql = (
+        "SELECT 'owners', count(DISTINCT member_sha256)::VARCHAR || ' files, ' || count(*)::VARCHAR || ' rows, ' "
+        "|| count(*) FILTER (WHERE flags_published)::VARCHAR || ' in the flag layout, ' "
+        "|| count(*) FILTER (WHERE private_equity_company_owner)::VARCHAR || ' private equity' FROM int_hospital_owner_rows "
+        "UNION ALL SELECT 'enrollments', count(DISTINCT member_sha256)::VARCHAR || ' files, ' || count(*)::VARCHAR || ' rows, ' "
+        "|| count(*) FILTER (WHERE ccn IS NULL)::VARCHAR || ' without a CCN, ' || count(*) FILTER (WHERE ccn <> ccn_published)::VARCHAR "
+        "|| ' padded' FROM int_hospital_enrollment_rows "
+        "UNION ALL SELECT 'changes_of_ownership', count(DISTINCT member_sha256)::VARCHAR || ' files, ' || count(*)::VARCHAR || ' rows, ' "
+        "|| count(DISTINCT event_key)::VARCHAR || ' events, ' || count(*) FILTER (WHERE ccn_buyer IS NULL OR ccn_seller IS NULL)::VARCHAR "
+        "|| ' with a value that is not a CCN' FROM int_change_of_ownership_rows;"
+    )
+    outcome["ownership"] = dict(duckdb_csv(database, ownership_sql))
+    outcome["checks"]["ownership_seed_matches_registry"] = ownership_seed_matches()
     bronze = unprefixed(duckdb_csv(database, per_table(BRONZE_COUNTS_SQL, "lakehouse.bronze."), init), "lakehouse.bronze.")
     # Bronze loads one copy per file, so its objects equal the distinct files; the copies table lists every copy [204] [206].
     model_sql = (
