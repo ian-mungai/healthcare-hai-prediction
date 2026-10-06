@@ -106,25 +106,25 @@ def sha(label: str) -> str:
 # by position after the title and header rows [190].
 TWIN_TEXT = (
     "FY 2021 IPPS Impact File - Final Rule\t\t",
-    "Provider\tName\tCMI\tPayment\tShare",
+    "Provider Number\tName\tCMI\tPayment\tShare",
     '010001\t"Alpha, Hospital "\t1.2346\t"$1,234.50"\t1.58%',
     '010002\tBeta\t0.5\t"$60,591,269.77"\t0.22%',
 )
 TWIN_SHEET = (
     "Variable Descriptions:Variable|Meaning",
-    "Data:Provider|Name|CMI|Payment|Share",
+    "Data:Provider Number|Name|CMI|Payment|Share",
     "Data:10001|Alpha, Hospital|1.23456789|1234.4978|0.0158371255",
     "Data:10002|Beta|0.5|60591269.765|0.0021846031",
 )
 OCCMIX_TEXT = ("Provider,Wage", "010001,3.5", "010002,4.0")
 # The BRZ-016 text held under two names; its workbook twin agrees with it [268].
-HELD_TEXT = ("Provider\tCMI", "010001\t1.5")
+HELD_TEXT = ("Provider Number\tCMI", "010001\t1.5")
 # A final-rule workbook whose correction-notice sheet has the text's row count but other values [267] [269].
 FR_CN_SHEET = (
-    "FR 2024:Provider|Name|CMI|Payment|Share",
+    "FR 2024:Provider Number|Name|CMI|Payment|Share",
     "FR 2024:10001|Alpha, Hospital|1.23456789|1234.4978|0.0158371255",
     "FR 2024:10002|Beta|0.5|60591269.765|0.0021846031",
-    "CN 2024:Provider|Name|CMI|Payment|Share",
+    "CN 2024:Provider Number|Name|CMI|Payment|Share",
     "CN 2024:10001|Alpha, Hospital|1.3|1300|0.016",
     "CN 2024:10002|Beta|0.6|60000000|0.0022",
 )
@@ -841,6 +841,66 @@ COSTS_2022 = (
 )
 
 
+# IPPS impact files [342] to [353]: a title row over a long-name header with every mapped field, SAS dots, blanks, leading
+# spaces and a footer row; a comma-separated file with a comma inside a quoted name and the pre-FY 2011 wage index; a
+# workbook with a final-rule sheet, a correction-notice sheet with revised columns and lost leading zeros, and a description
+# sheet; a headerless file and a policy alternative, both excluded by family.
+IMPACT_2026_HEADER = (
+    "Provider Number\tName\tGeographic Labor Market Area\tURGEO\tFY 2026 Wage Index\tBeds\tAverage Daily Census\t"
+    "Resident to Bed Ratio\tRDAY\tDSHPCT\tMedicare Percentage\tMedicaid Percentage\tTCHOP\tTCHCP\tBILLS"
+)
+IMPACT_2026 = (
+    "FY 2026 IPPS Impact File -  Final Rule (August 2025)\t\t\t",
+    IMPACT_2026_HEADER,
+    "010001\tSoutheast Health Medical Center\t20020\tOURBAN\t0.9049\t400\t300\t0.0655\t0.05496\t0.2752\t0.187\t0.013\t0.0298\t0.05731\t3952",
+    "010005\tMarshall Medical Center\t01\tRURAL\t0.8\t100\t.\t\t0.1\t.\t \t0.02\t0\t0\t  1200",
+    "Total\t\t\t\t\t\t\t",
+)
+IMPACT_2009 = (
+    "Provider Number,Name,Geographic Labor Market Area,URGEO,Post Reclass Wage Index,BEDS,Average Daily Census,"
+    "Resident to Bed Ratio,DSHPCT,MCR_PCT,TCHOP,TCHCP,BILLS",
+    '010001,"ALPHA, INC",20020,OURBAN,0.8401,370,242,0.28515,0.1274,27.3%,0.05944,0.028,10216',
+)
+IMPACT_2015_WORKBOOK = (
+    "impact_puf15:Provider Number|Name|FY 2015 Wage Index|BILLS|Beds",
+    "impact_puf15:10001|ALPHA|0.75|500|50",
+    "impact_puf15-Sept CN:Provider Number|Name|Revised under correction notice: FY 2015 Wage Index|Revised under correction notice: BILLS|Beds",
+    "impact_puf15-Sept CN:10001|ALPHA|0.76|510|50",
+    "Variable Description:Variable|Description",
+    "Variable Description:BEDS|Number of beds",
+)
+GROUP_B3 = (
+    # A CCN repeated within one release is held [351].
+    Stored(
+        "cms_ipps_text_lines",
+        "p06",
+        "CMS_IPPS__q",
+        "FY 2025 IPPS Final Rule Impact File.txt",
+        sha("im6"),
+        4,
+        content=("Provider Number\tBeds", "010009\t10", "010009\t10", "010010\t20"),
+    ),
+    Stored("cms_ipps_text_lines", "p01", "CMS_IPPS__q", "FY 2026 IPPS Final Rule Impact File.txt", sha("im1"), 5, content=IMPACT_2026),
+    Stored("cms_ipps_text_lines", "p02", "CMS_IPPS__q", "imppuf09_080929.csv", sha("im2"), 2, content=IMPACT_2009),
+    Stored("cms_ipps_sheet_rows", "p03", "CMS_IPPS__q", "FY 2015 IPPS Final Rule Impact PUF-CN.xlsx", sha("im3"), 6, content=IMPACT_2015_WORKBOOK),
+    Stored("cms_ipps_text_lines", "p04", "CMS_IPPS__q", "IMPFIL00.txt", sha("im4"), 1, content=("010001 SOUTHEAST 198 400 8041.25",)),
+    Stored(
+        "cms_ipps_text_lines",
+        "p05",
+        "CMS_IPPS__q",
+        "FY 2023 IPPS Proposed Rule Impact File - Alternative Considered.txt",
+        sha("im5"),
+        2,
+        content=("Provider Number\tName\tFY 2023 Wage Index", "010001\tAlpha\t0.8"),
+    ),
+)
+
+
+def impact_case(content: tuple[str, ...], member: str = "FY 2026 IPPS Proposed Rule Impact File.txt") -> Stored:
+    """Return a FY 2026 impact file with the given lines, for the failing impact cases."""
+    return Stored("cms_ipps_text_lines", "p09", "CMS_IPPS__r", member, sha("im9"), len(content), content=content)
+
+
 def cmi_case(content: tuple[str, ...]) -> Stored:
     """Return a FY 2026 final CMI file with the given lines, for the failing CMI cases."""
     return Stored(
@@ -893,7 +953,7 @@ BASE = (
         "FY 2019 IPPS Proposed Rule Impact File.xlsx",
         sha("n2"),
         3,
-        content=("FY19 NPRM:Provider|CMI", "FY19 NPRM:10001|1.5", "Variable Descriptions:Variable|Meaning"),
+        content=("FY19 NPRM:Provider Number|CMI", "FY19 NPRM:10001|1.5", "Variable Descriptions:Variable|Meaning"),
     ),
     Stored("cms_ipps_text_lines", "i03", "CMS_IPPS__b", "FY 2020 Correction Notice Impact File.txt", list(HELD)[1], 3),
     Stored("cms_ipps_text_lines", "i04", "CMS_IPPS__c", "FY 2019 IPPS FR and CN Impact File (CN data).txt", list(HELD)[1], 3),
@@ -920,8 +980,8 @@ BASE = (
         "CMS_IPPS__c",
         "FY 2022 Final Rule Impact File.xlsx",
         sha("d5"),
-        2,
-        content=("Data:10001|ALPHA|1.2345", "Data:10002|BETA|0.5"),
+        3,
+        content=("Data:PROV|NAME|CMI", "Data:10001|ALPHA|1.2345", "Data:10002|BETA|0.5"),
     ),
     Stored("cms_ipps_sas", "x01", "CMS_IPPS__d", "prds_hosp10_yr2019.sas7bdat", sha("d3"), 2),
     # Occupational mix: one capture packs the same file in two nested archives, neither dated [170].
@@ -1021,6 +1081,7 @@ BASE = (
     ),
     *GROUP_A,
     *GROUP_B,
+    *GROUP_B3,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -1097,6 +1158,22 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
         ),
         frozenset(),
     ),
+    # An impact-like family that is neither read nor excluded [342].
+    "impact_unreviewed_family": (
+        "assert_impact_families_reviewed",
+        (*BASE, impact_case(("Provider Number\tBeds", "010001\t10"), member="FY 2026 IPPS Final Rule Impact Supplement.txt")),
+        frozenset(),
+    ),
+    # A read impact file with no header row [343].
+    "impact_no_header": ("assert_impact_files_have_layout", (*BASE, impact_case(("010001\tAlpha\t0.9",))), frozenset()),
+    # Two headers of one file that map to one field [345].
+    "impact_repeated_field": (
+        "assert_impact_files_have_layout",
+        (*BASE, impact_case(("Provider Number\tMedicare Percentage\tMCR_PCT", "010001\t0.1\t0.1"))),
+        frozenset(),
+    ),
+    # A numeric value that is not a number [349].
+    "impact_uncast_value": ("assert_impact_values_cast", (*BASE, impact_case(("Provider Number\tBeds", "010001\t12a"))), frozenset()),
     # An emergency-services value that is neither Yes nor No [329].
     "hgi_uncast_value": (
         "assert_hgi_values_cast",
@@ -1430,6 +1507,15 @@ COST_MEASURES_SQL = (
     "SELECT rpt_rec_num, measure_control, coalesce(value_number::VARCHAR, ''), coalesce(value_code, '') FROM int_cost_report_measures "
     "WHERE rpt_rec_num IN ('100001', '100002') ORDER BY ALL;"
 )
+IMPACT_VALUES_SQL = (
+    "SELECT rule_fiscal_year::VARCHAR, rule_stage, sheet_name, ccn, field, coalesce(value_text, ''), coalesce(value_number::VARCHAR, '') "
+    "FROM int_impact_hospital_values ORDER BY ALL;"
+)
+IMPACT_HOLDS_SQL = "SELECT rule_fiscal_year::VARCHAR, sheet_name, ccn, hold_reason, hold_rows::VARCHAR FROM int_impact_holds ORDER BY ALL;"
+IMPACT_MEASURES_SQL = (
+    "SELECT ccn, measure_control, field, coalesce(value_number::VARCHAR, ''), coalesce(value_code, '') FROM int_impact_measures "
+    "WHERE rule_fiscal_year = 2026 ORDER BY ALL;"
+)
 VIEW_ROWS_SQL = "SELECT getvariable('checked_table'), count(*)::VARCHAR FROM query_table(getvariable('checked_table'));\n"
 BRONZE_COUNTS_SQL = (
     "WITH o AS (SELECT _object_key, any_value(_member_sha256) AS sha, count(*) AS n FROM query_table(getvariable('checked_table')) GROUP BY 1), "
@@ -1568,6 +1654,9 @@ def read_models(case: str) -> dict[str, Any]:
         "hgi": [tuple(row) for row in duckdb_csv(database, HGI_SQL)],
         "cost_reports": [tuple(row) for row in duckdb_csv(database, COST_REPORTS_SQL)],
         "cost_measures": [tuple(row) for row in duckdb_csv(database, COST_MEASURES_SQL)],
+        "impact_values": [tuple(row) for row in duckdb_csv(database, IMPACT_VALUES_SQL)],
+        "impact_measures": [tuple(row) for row in duckdb_csv(database, IMPACT_MEASURES_SQL)],
+        "impact_holds": [tuple(row) for row in duckdb_csv(database, IMPACT_HOLDS_SQL)],
     }
 
 
@@ -1863,6 +1952,76 @@ def fixture_scenarios() -> dict[str, bool]:
         ("100002", "C028", "", ""),
         ("100002", "C046", "", ""),
     ]
+    # [342] to [352] Impact files by exact header: SAS dots kept as text with no number, blanks null, leading spaces trimmed,
+    # a footer row dropped, a quoted comma kept in one field, no wage index before FY 2011, revised correction-notice columns,
+    # lost leading zeros restored; excluded families and description sheets not read.
+    checks["impact_values_match_expected"] = base.get("impact_values") == [
+        ("2009", "unspecified", "", "010001", "average_daily_census", "242", "242.0"),
+        ("2009", "unspecified", "", "010001", "beds", "370", "370.0"),
+        ("2009", "unspecified", "", "010001", "capital_ime_factor", "0.028", "0.028"),
+        ("2009", "unspecified", "", "010001", "dsh_patient_percentage", "0.1274", "0.1274"),
+        ("2009", "unspecified", "", "010001", "geographic_labor_market_area", "20020", ""),
+        ("2009", "unspecified", "", "010001", "medicare_bills", "10216", "10216.0"),
+        ("2009", "unspecified", "", "010001", "medicare_percentage", "27.3%", "0.273"),
+        ("2009", "unspecified", "", "010001", "operating_ime_factor", "0.05944", "0.05944"),
+        ("2009", "unspecified", "", "010001", "resident_to_bed_ratio", "0.28515", "0.28515"),
+        ("2009", "unspecified", "", "010001", "urgeo", "OURBAN", ""),
+        ("2015", "correction+final", "impact_puf15", "010001", "beds", "50", "50.0"),
+        ("2015", "correction+final", "impact_puf15", "010001", "medicare_bills", "500", "500.0"),
+        ("2015", "correction+final", "impact_puf15", "010001", "wage_index", "0.75", "0.75"),
+        ("2015", "correction+final", "impact_puf15-Sept CN", "010001", "beds", "50", "50.0"),
+        ("2015", "correction+final", "impact_puf15-Sept CN", "010001", "medicare_bills", "510", "510.0"),
+        ("2015", "correction+final", "impact_puf15-Sept CN", "010001", "wage_index", "0.76", "0.76"),
+        ("2025", "final", "", "010010", "beds", "20", "20.0"),
+        ("2026", "final", "", "010001", "average_daily_census", "300", "300.0"),
+        ("2026", "final", "", "010001", "beds", "400", "400.0"),
+        ("2026", "final", "", "010001", "capital_ime_factor", "0.05731", "0.05731"),
+        ("2026", "final", "", "010001", "dsh_patient_percentage", "0.2752", "0.2752"),
+        ("2026", "final", "", "010001", "geographic_labor_market_area", "20020", ""),
+        ("2026", "final", "", "010001", "medicaid_percentage", "0.013", "0.013"),
+        ("2026", "final", "", "010001", "medicare_bills", "3952", "3952.0"),
+        ("2026", "final", "", "010001", "medicare_percentage", "0.187", "0.187"),
+        ("2026", "final", "", "010001", "operating_ime_factor", "0.0298", "0.0298"),
+        ("2026", "final", "", "010001", "resident_to_bed_ratio", "0.0655", "0.0655"),
+        ("2026", "final", "", "010001", "urgeo", "OURBAN", ""),
+        ("2026", "final", "", "010001", "wage_index", "0.9049", "0.9049"),
+        ("2026", "final", "", "010005", "average_daily_census", ".", ""),
+        ("2026", "final", "", "010005", "beds", "100", "100.0"),
+        ("2026", "final", "", "010005", "capital_ime_factor", "0", "0.0"),
+        ("2026", "final", "", "010005", "dsh_patient_percentage", ".", ""),
+        ("2026", "final", "", "010005", "geographic_labor_market_area", "01", ""),
+        ("2026", "final", "", "010005", "medicaid_percentage", "0.02", "0.02"),
+        ("2026", "final", "", "010005", "medicare_bills", "1200", "1200.0"),
+        ("2026", "final", "", "010005", "medicare_percentage", "", ""),
+        ("2026", "final", "", "010005", "operating_ime_factor", "0", "0.0"),
+        ("2026", "final", "", "010005", "resident_to_bed_ratio", "", ""),
+        ("2026", "final", "", "010005", "urgeo", "RURAL", ""),
+        ("2026", "final", "", "010005", "wage_index", "0.8", "0.8"),
+    ]
+    checks["impact_holds_match_expected"] = base.get("impact_holds") == [("2025", "", "010009", "repeated_in_file", "2")]
+    # [353] Registry measures by the seed's field and rule; a missing or dotted value gives no measure row.
+    checks["impact_measures_match_expected"] = base.get("impact_measures") == [
+        ("010001", "C001", "beds", "400.0", ""),
+        ("010001", "C006", "resident_to_bed_ratio", "0.0655", ""),
+        ("010001", "C021", "geographic_labor_market_area", "", "20020"),
+        ("010001", "C021", "urgeo", "", "OURBAN"),
+        ("010001", "C022", "dsh_patient_percentage", "0.2752", ""),
+        ("010001", "C023", "medicare_percentage", "0.187", ""),
+        ("010001", "C024", "medicaid_percentage", "0.013", ""),
+        ("010001", "C025", "wage_index", "0.9049", ""),
+        ("010001", "C026", "capital_ime_factor", "0.05731", ""),
+        ("010001", "C026", "operating_ime_factor", "0.0298", ""),
+        ("010001", "C038", "medicare_bills", "3952.0", ""),
+        ("010001", "C040", "average_daily_census", "0.75", ""),
+        ("010005", "C001", "beds", "100.0", ""),
+        ("010005", "C021", "geographic_labor_market_area", "", "01"),
+        ("010005", "C021", "urgeo", "", "RURAL"),
+        ("010005", "C024", "medicaid_percentage", "0.02", ""),
+        ("010005", "C025", "wage_index", "0.8", ""),
+        ("010005", "C026", "capital_ime_factor", "0.0", ""),
+        ("010005", "C026", "operating_ime_factor", "0.0", ""),
+        ("010005", "C038", "medicare_bills", "1200.0", ""),
+    ]
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -1921,6 +2080,15 @@ def cost_seed_matches() -> bool:
     with (REPO_ROOT / "dbt/seeds/cost_report_measures.csv").open(newline="") as handle:
         seed = sorted(row["measure_control"] for row in csv.DictReader(handle))
     return seed == sorted(sources["CMS_HCRIS_PUF"]["linked_measure_ids"])
+
+
+def impact_seed_matches() -> bool:
+    """Check that the impact measure seed covers exactly the registry's CMS_IPPS controls [353]."""
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    sources = {source["source_id"]: source for source in registry["sources"]}
+    with (REPO_ROOT / "dbt/seeds/impact_measures.csv").open(newline="") as handle:
+        seed = sorted({row["measure_control"] for row in csv.DictReader(handle)})
+    return seed == sorted(sources["CMS_IPPS"]["linked_measure_ids"])
 
 
 def real_stage() -> dict[str, Any]:
@@ -2040,6 +2208,20 @@ def real_stage() -> dict[str, Any]:
     )
     outcome["cost_report_measures"] = dict(duckdb_csv(database, cost_measure_sql))
     outcome["checks"]["cost_seed_matches_registry"] = cost_seed_matches()
+    # [342] to [353] Impact files: releases, CCNs and values per rule year; measure rows per control.
+    impact_sql = (
+        "SELECT rule_fiscal_year::VARCHAR, count(DISTINCT member_sha256 || ':' || sheet_name)::VARCHAR || ' releases, ' "
+        "|| count(DISTINCT ccn)::VARCHAR || ' CCNs, ' || count(*)::VARCHAR || ' values, ' "
+        "|| count(*) FILTER (WHERE value_text = '.')::VARCHAR || ' dots' FROM int_impact_hospital_values GROUP BY 1 ORDER BY 1;"
+    )
+    outcome["impact_values"] = dict(duckdb_csv(database, impact_sql))
+    impact_measure_sql = (
+        "SELECT measure_control || ' ' || field, count(*)::VARCHAR || ' rows, ' || min(rule_fiscal_year)::VARCHAR || '-' "
+        "|| max(rule_fiscal_year)::VARCHAR FROM int_impact_measures GROUP BY 1 ORDER BY 1;"
+    )
+    outcome["impact_measures"] = dict(duckdb_csv(database, impact_measure_sql))
+    outcome["impact_holds"] = duckdb_csv(database, "SELECT rule_fiscal_year::VARCHAR, ccn, hold_reason, hold_rows::VARCHAR FROM int_impact_holds ORDER BY ALL;")
+    outcome["checks"]["impact_seed_matches_registry"] = impact_seed_matches()
     bronze = unprefixed(duckdb_csv(database, per_table(BRONZE_COUNTS_SQL, "lakehouse.bronze."), init), "lakehouse.bronze.")
     # Bronze loads one copy per file, so its objects equal the distinct files; the copies table lists every copy [204] [206].
     model_sql = (

@@ -438,3 +438,65 @@ models:
       - name: measure_control
         description: The registry measure control ID.
         data_tests: [not_null]
+
+  - name: int_impact_file_rows
+    description: >
+      Every row of the selected IPPS impact public use files of the reviewed families (impact_families), split into fields:
+      tab-separated text on tabs, other text as comma-separated values with quoted fields, sheet rows by cell; variable
+      description and layout sheets are not read (failure modes 342, 344 and 348).
+
+  - name: int_impact_file_layouts
+    description: >
+      One row per read impact file or sheet: the header row (the first of the first 5 rows naming a CCN column) and each
+      field's position by exact header name from the impact_layout_columns seed (failure modes 343 to 347 and 352).
+      assert_impact_files_have_layout fails for a file without one CCN column or with two columns for one field.
+    columns:
+      - name: layout_key
+        description: Bronze table, file checksum and sheet name.
+        data_tests: [unique, not_null]
+
+  - name: int_impact_hospital_rows
+    description: >
+      One row per hospital row of a readable impact file or sheet: a row after the header whose first field is a CCN (a
+      5-digit workbook CCN gets its leading zero back), with the number of rows of that CCN in the release (failure modes
+      350 and 351).
+    columns:
+      - name: hospital_row_key
+        description: Bronze table, file checksum, sheet name and line number.
+        data_tests: [unique, not_null]
+
+  - name: int_impact_holds
+    description: >
+      One row per impact-file release and CCN held because the CCN appears in more than one row of the release; none of
+      its rows is read (failure mode 351).
+    columns:
+      - name: hold_key
+        description: File checksum, sheet name and CCN.
+        data_tests: [unique, not_null]
+
+  - name: int_impact_hospital_values
+    description: >
+      One row per impact-file release (file and sheet), CCN and mapped field, for CCNs that appear once in the release
+      (failure modes 349 to 352). value_text is the published text (a SAS missing dot stays as text); value_number is set
+      only for a plain number in a numeric field, or a plain number with a percent sign divided by 100. The wage index is
+      mapped from FY 2011 only (346). Choosing a release for a hospital-year waits for the alignment step.
+    columns:
+      - name: value_key
+        description: File checksum, sheet name, CCN and field.
+        data_tests: [unique, not_null]
+      - name: ccn
+        description: The hospital CCN, 6 characters.
+        data_tests: [not_null]
+
+  - name: int_impact_measures
+    description: >
+      One row per impact-file release, CCN and registry measure field of source CMS_IPPS (family S04) whose value is
+      published, by the impact_measures seed (failure mode 353): value, code or ratio (C040, average daily census over beds;
+      a zero or missing denominator gives null). Staging a measure does not make it a predictor.
+    columns:
+      - name: measure_key
+        description: File checksum, sheet name, CCN, measure control and field.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: The registry measure control ID.
+        data_tests: [not_null]

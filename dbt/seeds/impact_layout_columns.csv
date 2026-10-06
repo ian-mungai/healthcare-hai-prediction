@@ -1,0 +1,39 @@
+header_name,field,rule_fiscal_year
+prov,ccn,
+provider number,ccn,
+beds,beds,
+adc,average_daily_census,
+average daily census,average_daily_census,
+resbed,resident_to_bed_ratio,
+resident -to- bed ratio,resident_to_bed_ratio,
+resident to bed ratio,resident_to_bed_ratio,
+urgeo,urgeo,
+geographic labor market area,geographic_labor_market_area,
+dshpct,dsh_patient_percentage,
+mcr_pct,medicare_percentage,
+medicare pct,medicare_percentage,
+medicare percentage,medicare_percentage,
+medicaid percentage,medicaid_percentage,
+tchop,operating_ime_factor,
+tchcp,capital_ime_factor,
+bills,medicare_bills,
+revised under correction notice: bills,medicare_bills,2015
+fy 2011 wage index,wage_index,2011
+fy 2012 wage index,wage_index,2012
+fy 2013 wage index,wage_index,2013
+fy 2014 wage index,wage_index,2014
+fy 2015 wage index,wage_index,2015
+fy 2016 wage index,wage_index,2016
+fy 2017 wage index,wage_index,2017
+fy 2018 wage index,wage_index,2018
+fy 2019 wage index,wage_index,2019
+fy 2020 wage index,wage_index,2020
+fy 2021 wage index,wage_index,2021
+fy 2022 wage index,wage_index,2022
+fy 2023 wage index,wage_index,2023
+fy 2024 wage index,wage_index,2024
+fy 2025 wage index,wage_index,2025
+fy 2026 wage index,wage_index,2026
+proposed fy 2013 wage index,wage_index,2013
+fy 2014 wage index-updated september 2013,wage_index,2014
+revised under correction notice: fy 2015 wage index,wage_index,2015

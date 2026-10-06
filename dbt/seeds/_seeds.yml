@@ -204,3 +204,75 @@ seeds:
         description: The typed column holding the denominator, for ratio rules.
       - name: review_decision
         description: The registry's current review decision, for reading only.
+
+  - name: impact_layout_columns
+    description: >
+      Reviewed header names of the IPPS impact files and the field each holds, matched exactly after lower-casing, removing
+      quotes and collapsing spaces (failure modes 344 to 347 and 352). A name with a rule_fiscal_year maps only in files of
+      that rule year (the wage index columns). The pre-FY 2011 Post Reclass Wage Index and RDAY are deliberately absent.
+    config:
+      column_types:
+        header_name: varchar
+        field: varchar
+        rule_fiscal_year: integer
+    columns:
+      - name: header_name
+        description: A header cell, lower case, quotes removed and spaces collapsed.
+        data_tests: [unique, not_null]
+      - name: field
+        description: The int_impact_hospital_rows field the column holds.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - ccn
+                  - beds
+                  - average_daily_census
+                  - resident_to_bed_ratio
+                  - urgeo
+                  - geographic_labor_market_area
+                  - dsh_patient_percentage
+                  - medicare_percentage
+                  - medicaid_percentage
+                  - wage_index
+                  - operating_ime_factor
+                  - capital_ime_factor
+                  - medicare_bills
+      - name: rule_fiscal_year
+        description: The only rule year whose files map this name; empty for every year.
+
+  - name: impact_measures
+    description: >
+      Each registry measure control of source CMS_IPPS (family S04) and the impact-file field that holds it: value or code
+      (the published field) or ratio (field / denominator_field); C021 and C026 have two fields each (failure mode 353).
+      The staging E2E checks the controls against the registry. C075 (CMI) is staged in group A.
+    config:
+      column_types:
+        measure_control: varchar
+        field: varchar
+        rule: varchar
+        denominator_field: varchar
+        review_decision: varchar
+    data_tests:
+      - unique:
+          arguments:
+            column_name: "measure_control || ':' || field"
+    columns:
+      - name: measure_control
+        description: The registry measure control ID.
+        data_tests: [not_null]
+      - name: field
+        description: The int_impact_hospital_rows field holding the value or numerator.
+        data_tests: [not_null]
+      - name: rule
+        description: value, code or ratio.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [value, code, ratio]
+      - name: denominator_field
+        description: The field holding the denominator, for the ratio rule.
+      - name: review_decision
+        description: The registry's current review decision, for reading only.

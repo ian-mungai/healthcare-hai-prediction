@@ -1,0 +1,13 @@
+measure_control,field,rule,denominator_field,review_decision
+C001,beds,value,,retain_conditional
+C006,resident_to_bed_ratio,value,,retain_conditional
+C021,geographic_labor_market_area,code,,retain_conditional
+C021,urgeo,code,,retain_conditional
+C022,dsh_patient_percentage,value,,retain_conditional
+C023,medicare_percentage,value,,retain_conditional
+C024,medicaid_percentage,value,,retain_conditional
+C025,wage_index,value,,retain_conditional
+C026,capital_ime_factor,value,,retain_conditional
+C026,operating_ime_factor,value,,retain_conditional
+C038,medicare_bills,value,,retain_conditional
+C040,average_daily_census,ratio,beds,retain_conditional

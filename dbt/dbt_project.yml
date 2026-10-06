@@ -63,6 +63,36 @@ vars:
     - providercmi
   cmi_excluded_families: [deleted_om, deleted_s, occmix, prds_hosp10_yr2019, s, s3andoccmixpuf]
   cmi_excluded_family_patterns: ["alt%", "%alternative%"]
+  # IPPS impact public use files: the label families read for the S04 fields, and the reviewed families that are not read
+  # (failure modes 342 and 343). Sheets that describe the variables are not data (344).
+  impact_families:
+    - impact
+    - impact01
+    - impact02
+    - pubuse_fr03
+    - impact04
+    - impact_fr05
+    - nprm05pufimpsupp
+    - impact06_ext
+    - impact07_mar06_nprm07
+    - impact07_apr2007
+    - impact08
+    - impact09
+    - impact_puf2
+  # Headerless fixed-position files (1994 to 2000), policy alternatives, the regulatory impact table and the FY 2020
+  # measure-of-impact supplement.
+  impact_excluded_families:
+    - impact94
+    - impact95
+    - impact96
+    - impact97
+    - impact98
+    - impact99
+    - impact00
+    - impact_alternative_considered
+    - impact_table
+    - measure_impact_use_supplementary
+  impact_excluded_sheet_patterns: ["%descr%", "layout"]
 
 models:
   hai:

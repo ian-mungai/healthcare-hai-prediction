@@ -192,7 +192,9 @@ care, maternal health and HCAHPS tables get the same window models as HAI (`int_
 in `dbt/seeds/registry_measure_sources.csv`. `int_hgi_hospital_releases` types Hospital General Information per file.
 `int_cost_reports` has one row per hospital cost report, in the federal fiscal year in which its period starts, with the
 number of reports of its CCN in that year; `int_cost_report_measures` computes each registry cost-report measure by the
-columns and rule in `dbt/seeds/cost_report_measures.csv` and gives null for a zero or missing denominator. The dbt packages
+columns and rule in `dbt/seeds/cost_report_measures.csv` and gives null for a zero or missing denominator. The IPPS
+impact files from FY 2001 are read by exact header name (`dbt/seeds/impact_layout_columns.csv`): `int_impact_hospital_values`
+has one row per release, hospital and field. `int_impact_measures` carries the registry measures of source CMS_IPPS. The dbt packages
 (dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
 publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
 container. The staging E2E installs them before it builds. dbt-project-evaluator is off in every other run and runs
@@ -574,7 +576,7 @@ control. The deferred controls above are not implemented.
 The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only and
 loads one copy per stored file. Staging covers the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital
 General Information, ownership and Care Compare timely and effective care, maternal health and HCAHPS tables. It types the
-HAI and Care Compare windows, the cost reports, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
+HAI and Care Compare windows, the cost reports, the IPPS impact-file fields, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
 index. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables exist. The bronze and staging E2E runs use
 Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
 offline. It has not run: its controls, independent review and the owner's approval are still to come.
