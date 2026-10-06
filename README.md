@@ -46,7 +46,8 @@ file as published, with each row traced to its S3 object version and checksum. I
 also lists every other stored copy. All 330 mapped tables are loaded and checked; a
 table whose files were all removed for privacy left the map. A dbt staging layer in DuckDB
 reads the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital General
-Information, ownership, Medicare inpatient and Care Compare process and patient-experience tables. It keeps one row
+Information, ownership, Medicare inpatient, HHS hospital capacity, ONC Promoting Interoperability and Care Compare
+process and patient-experience tables. It keeps one row
 per HAI and Care Compare measurement window, one row per hospital cost report, one Provider of
 Services row per hospital and snapshot and one case-mix index per hospital and payment-rule year.
 A hospital-year spine lines each hospital and calendar-year HAI window up with the Provider of
@@ -203,7 +204,13 @@ owner, enrollment and change-of-ownership files are typed per release (`int_hosp
 `int_hospital_enrollment_rows`, `int_change_of_ownership_rows`). Each file is dated by the publisher's catalog period in
 `dbt/seeds/ownership_release_periods.csv`, which `scripts.lakehouse.ownership_release_periods` rebuilds from the S3
 manifests and the local capture receipts. An owner flag a release's layout lacks (private equity and REIT before
-April 2025) is null; `dbt/seeds/ownership_measures.csv` names the columns each registry control uses. The dbt packages
+April 2025) is null; `dbt/seeds/ownership_measures.csv` names the columns each registry control uses. The HHS weekly
+hospital capacity rows are typed per hospital and week (`int_hhs_capacity_weeks`): a count of 1 to 3, published as
+-999999, is null and listed in `suppressed_fields`; any other negative value is null and listed in `negative_fields`.
+The ONC Promoting Interoperability to certified-product linkage and
+the older 2011 to 2017 EHR incentive attestations are typed apart (`int_onc_chpl_linkage_rows`,
+`int_onc_attestation_rows`). `dbt/seeds/hhs_onc_measures.csv` maps the registry controls; the HHS field names the
+source truncates are resolved through the stored `columns.json`. The dbt packages
 (dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
 publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
 container. The staging E2E installs them before it builds. dbt-project-evaluator is off in every other run and runs
@@ -585,12 +592,13 @@ control. The deferred controls above are not implemented.
 
 The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only and
 loads one copy per stored file. Staging covers the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital
-General Information, ownership, Medicare inpatient and Care Compare timely and effective care, maternal health and HCAHPS tables. It types the
-HAI and Care Compare windows, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
+General Information, ownership, Medicare inpatient, HHS capacity, ONC and Care Compare timely and effective care, maternal health and HCAHPS tables. It types the
+HAI and Care Compare windows, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
 index. The Medicare sepsis share counts only published DRG cells (11 discharges or more), so it can be low for small
 hospitals; the Medicare chronic-condition shares start with data year 2017. Each change-of-ownership release lists
 events back to 2016, so one event appears once per release until the alignment step chooses one. An enrollment or
-change-of-ownership value with a suffix after the CCN is kept as published, with no CCN. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables exist. The bronze and staging E2E runs use
+change-of-ownership value with a suffix after the CCN is kept as published, with no CCN. Registry controls C001 and C040
+name no HHS field, so the HHS columns are staged but not mapped to them. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables exist. The bronze and staging E2E runs use
 Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
 offline. It has not run: its controls, independent review and the owner's approval are still to come.
 

@@ -593,3 +593,43 @@ models:
       - name: period_end
         description: Last day of the release's catalog period.
         data_tests: [not_null]
+
+  - name: int_hhs_capacity_weeks
+    description: >
+      One row per HHS hospital (hospital_pk) and collection week, 2019-12-29 to 2024-04-21, with every weekly number typed.
+      A count of 1 to 3 is published as -999999: it is null and its column is listed in suppressed_fields; any other
+      negative value is null and listed in negative_fields. The CCN follows the B5a rule; a hospital without one keeps its
+      hospital_pk. is_corrected and the coverage counts are kept (failure modes 375 to 379).
+    columns:
+      - name: week_key
+        description: hospital_pk and collection week.
+        data_tests: [unique, not_null]
+      - name: collection_week
+        description: First day of the collection week.
+        data_tests: [not_null]
+      - name: suppressed_fields
+        description: The numeric columns published as -999999 (a count of 1 to 3) in this row, sorted.
+      - name: negative_fields
+        description: The numeric columns published with another negative value in this row, sorted; their values are null.
+
+  - name: int_onc_chpl_linkage_rows
+    description: >
+      One row per hospital, program year, performance period and certified product of the ONC Promoting Interoperability
+      linkage (2023 and 2024). The criterion is true for Y, false for N and null when blank; the telephone column is left
+      out (failure modes 380 to 382).
+    columns:
+      - name: linkage_key
+        description: Facility ID, program year, start and end dates and CHPL ID, joined by |.
+        data_tests: [unique, not_null]
+      - name: program_year
+        description: The program year.
+        data_tests: [not_null]
+
+  - name: int_onc_attestation_rows
+    description: >
+      One row per hospital Medicare and Medicaid EHR incentive attestation, program years 2011 to 2017: a series apart
+      from the CHPL linkage, with no registry control (failure mode 383).
+    columns:
+      - name: attestation_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]

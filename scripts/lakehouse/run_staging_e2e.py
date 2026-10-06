@@ -70,6 +70,9 @@ TABLES = (
     "cms_cc_hcahps_hospital",
     "cms_medicare_inpatient_by_provider",
     "cms_medicare_inpatient_by_drg",
+    "hhs_capacity_csv",
+    "onc_pi_attestations_csv",
+    "onc_pi_chpl_linkage_csv",
 )
 HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
@@ -454,6 +457,180 @@ CHOW_COLUMNS = (
     "organization_name_seller",
     "doing_business_as_name_seller",
 )
+# The bronze columns of the HHS capacity and ONC tables, without the provenance columns.
+HHS_COLUMNS = (
+    "hospital_pk",
+    "collection_week",
+    "state",
+    "ccn",
+    "hospital_name",
+    "address",
+    "city",
+    "zip",
+    "hospital_subtype",
+    "fips_code",
+    "is_metro_micro",
+    "total_beds_7_day_avg",
+    "all_adult_hospital_beds_7_day_avg",
+    "all_adult_hospital_inpatient_beds_7_day_avg",
+    "inpatient_beds_used_7_day_avg",
+    "all_adult_hospital_inpatient_bed_occupied_7_day_avg",
+    "inpatient_beds_used_covid_7_day_avg",
+    "total_adult_patients_hospitalized_confirmed_and_suspected_covid_7_day_avg",
+    "total_adult_patients_hospitalized_confirmed_covid_7_day_avg",
+    "total_pediatric_patients_hospitalized_confirmed_and_suspected_covid_7_day_avg",
+    "total_pediatric_patients_hospitalized_confirmed_covid_7_day_avg",
+    "inpatient_beds_7_day_avg",
+    "total_icu_beds_7_day_avg",
+    "total_staffed_adult_icu_beds_7_day_avg",
+    "icu_beds_used_7_day_avg",
+    "staffed_adult_icu_bed_occupancy_7_day_avg",
+    "staffed_icu_adult_patients_confirmed_and_suspected_covid_7_day_avg",
+    "staffed_icu_adult_patients_confirmed_covid_7_day_avg",
+    "total_patients_hospitalized_confirmed_influenza_7_day_avg",
+    "icu_patients_confirmed_influenza_7_day_avg",
+    "total_patients_hospitalized_confirmed_influenza_and_covid_7_day_avg",
+    "total_beds_7_day_sum",
+    "all_adult_hospital_beds_7_day_sum",
+    "all_adult_hospital_inpatient_beds_7_day_sum",
+    "inpatient_beds_used_7_day_sum",
+    "all_adult_hospital_inpatient_bed_occupied_7_day_sum",
+    "inpatient_beds_used_covid_7_day_sum",
+    "total_adult_patients_hospitalized_confirmed_and_suspected_covid_7_day_sum",
+    "total_adult_patients_hospitalized_confirmed_covid_7_day_sum",
+    "total_pediatric_patients_hospitalized_confirmed_and_suspected_covid_7_day_sum",
+    "total_pediatric_patients_hospitalized_confirmed_covid_7_day_sum",
+    "inpatient_beds_7_day_sum",
+    "total_icu_beds_7_day_sum",
+    "total_staffed_adult_icu_beds_7_day_sum",
+    "icu_beds_used_7_day_sum",
+    "staffed_adult_icu_bed_occupancy_7_day_sum",
+    "staffed_icu_adult_patients_confirmed_and_suspected_covid_7_day_sum",
+    "staffed_icu_adult_patients_confirmed_covid_7_day_sum",
+    "total_patients_hospitalized_confirmed_influenza_7_day_sum",
+    "icu_patients_confirmed_influenza_7_day_sum",
+    "total_patients_hospitalized_confirmed_influenza_and_covid_7_day_sum",
+    "total_beds_7_day_coverage",
+    "all_adult_hospital_beds_7_day_coverage",
+    "all_adult_hospital_inpatient_beds_7_day_coverage",
+    "inpatient_beds_used_7_day_coverage",
+    "all_adult_hospital_inpatient_bed_occupied_7_day_coverage",
+    "inpatient_beds_used_covid_7_day_coverage",
+    "total_adult_patients_hospitalized_confirmed_and_suspected_covid_7_day_coverage",
+    "total_adult_patients_hospitalized_confirmed_covid_7_day_coverage",
+    "total_pediatric_patients_hospitalized_confirmed_and_suspected_covid_7_day_coverage",
+    "total_pediatric_patients_hospitalized_confirmed_covid_7_day_coverage",
+    "inpatient_beds_7_day_coverage",
+    "total_icu_beds_7_day_coverage",
+    "total_staffed_adult_icu_beds_7_day_coverage",
+    "icu_beds_used_7_day_coverage",
+    "staffed_adult_icu_bed_occupancy_7_day_coverage",
+    "staffed_icu_adult_patients_confirmed_and_suspected_covid_7_day_coverage",
+    "staffed_icu_adult_patients_confirmed_covid_7_day_coverage",
+    "total_patients_hospitalized_confirmed_influenza_7_day_coverage",
+    "icu_patients_confirmed_influenza_7_day_coverage",
+    "total_patients_hospitalized_confirmed_influenza_and_covid_7_day_coverage",
+    "previous_day_admission_adult_covid_confirmed_7_day_sum",
+    "previous_day_admission_adult_covid_confirmed_18_19_7_day_sum",
+    "previous_day_admission_adult_covid_confirmed_20_29_7_day_sum",
+    "previous_day_admission_adult_covid_confirmed_30_39_7_day_sum",
+    "previous_day_admission_adult_covid_confirmed_40_49_7_day_sum",
+    "previous_day_admission_adult_covid_confirmed_50_59_7_day_sum",
+    "previous_day_admission_adult_covid_confirmed_60_69_7_day_sum",
+    "previous_day_admission_adult_covid_confirmed_70_79_7_day_sum",
+    "previous_day_admission_adult_covid_confirmed_80_7_day_sum",
+    "previous_day_admission_adult_covid_confirmed_unknown_7_day_sum",
+    "previous_day_admission_pediatric_covid_confirmed_7_day_sum",
+    "previous_day_covid_ed_visits_7_day_sum",
+    "previous_day_admission_adult_covid_suspected_7_day_sum",
+    "previous_day_admission_adult_covid_suspected_18_19_7_day_sum",
+    "previous_day_admission_adult_covid_suspected_20_29_7_day_sum",
+    "previous_day_admission_adult_covid_suspected_30_39_7_day_sum",
+    "previous_day_admission_adult_covid_suspected_40_49_7_day_sum",
+    "previous_day_admission_adult_covid_suspected_50_59_7_day_sum",
+    "previous_day_admission_adult_covid_suspected_60_69_7_day_sum",
+    "previous_day_admission_adult_covid_suspected_70_79_7_day_sum",
+    "previous_day_admission_adult_covid_suspected_80_7_day_sum",
+    "previous_day_admission_adult_covid_suspected_unknown_7_day_sum",
+    "previous_day_admission_pediatric_covid_suspected_7_day_sum",
+    "previous_day_total_ed_visits_7_day_sum",
+    "previous_day_admission_influenza_confirmed_7_day_sum",
+    "geocoded_hospital_address",
+    "hhs_ids",
+    "previous_day_admission_adult_covid_confirmed_7_day_coverage",
+    "previous_day_admission_pediatric_covid_confirmed_7_day_coverage",
+    "previous_day_admission_adult_covid_suspected_7_day_coverage",
+    "previous_day_admission_pediatric_covid_suspected_7_day_coverage",
+    "previous_week_personnel_covid_vaccinated_doses_administered_7_day",
+    "total_personnel_covid_vaccinated_doses_none_7_day",
+    "total_personnel_covid_vaccinated_doses_one_7_day",
+    "total_personnel_covid_vaccinated_doses_all_7_day",
+    "previous_week_patients_covid_vaccinated_doses_one_7_day",
+    "previous_week_patients_covid_vaccinated_doses_all_7_day",
+    "is_corrected",
+    "all_pediatric_inpatient_bed_occupied_7_day_avg",
+    "all_pediatric_inpatient_bed_occupied_7_day_coverage",
+    "all_pediatric_inpatient_bed_occupied_7_day_sum",
+    "all_pediatric_inpatient_beds_7_day_avg",
+    "all_pediatric_inpatient_beds_7_day_coverage",
+    "all_pediatric_inpatient_beds_7_day_sum",
+    "previous_day_admission_pediatric_covid_confirmed_0_4_7_day_sum",
+    "previous_day_admission_pediatric_covid_confirmed_12_17_7_day_sum",
+    "previous_day_admission_pediatric_covid_confirmed_5_11_7_day_sum",
+    "previous_day_admission_pediatric_covid_confirmed_unknown_7_day_sum",
+    "staffed_icu_pediatric_patients_confirmed_covid_7_day_avg",
+    "staffed_icu_pediatric_patients_confirmed_covid_7_day_coverage",
+    "staffed_icu_pediatric_patients_confirmed_covid_7_day_sum",
+    "staffed_pediatric_icu_bed_occupancy_7_day_avg",
+    "staffed_pediatric_icu_bed_occupancy_7_day_coverage",
+    "staffed_pediatric_icu_bed_occupancy_7_day_sum",
+    "total_staffed_pediatric_icu_beds_7_day_avg",
+    "total_staffed_pediatric_icu_beds_7_day_coverage",
+    "total_staffed_pediatric_icu_beds_7_day_sum",
+)
+ONC_CHPL_COLUMNS = (
+    "facility_id",
+    "facility_name",
+    "address",
+    "city_town",
+    "state",
+    "zip_code",
+    "county_parish",
+    "telephone_number",
+    "meets_criteria_for_promoting_interoperability_of_ehrs",
+    "start_date",
+    "end_date",
+    "cehrt_id",
+    "chpl_id",
+    "product_database_id",
+    "developer_name",
+    "product_name",
+    "year",
+)
+ONC_ATTESTATION_COLUMNS = (
+    "npi",
+    "ccn",
+    "provider_type",
+    "business_state_territory",
+    "zip",
+    "hospital_type",
+    "program_type",
+    "program_year",
+    "provider_stage_number",
+    "payment_year",
+    "attestation_month",
+    "attestation_year",
+    "mu_definition_year",
+    "stage_2_scheduled_2014",
+    "ehr_certification_number",
+    "ehr_product_chp_id",
+    "vendor_name",
+    "ehr_product_name",
+    "ehr_product_version",
+    "product_classification",
+    "product_setting",
+    "product_certification_edition_yr",
+)
 WIDE_COLUMNS = {
     "cms_medicare_inpatient_by_provider": MUP_PROVIDER_COLUMNS,
     "cms_medicare_inpatient_by_drg": MUP_DRG_COLUMNS,
@@ -556,6 +733,9 @@ WIDE_COLUMNS = {
     "cms_hospital_enrollments": ENROLLMENT_COLUMNS,
     "cms_hospital_owners": OWNER_COLUMNS,
     "cms_change_of_ownership": CHOW_COLUMNS,
+    "hhs_capacity_csv": HHS_COLUMNS,
+    "onc_pi_chpl_linkage_csv": ONC_CHPL_COLUMNS,
+    "onc_pi_attestations_csv": ONC_ATTESTATION_COLUMNS,
 }
 
 
@@ -1263,6 +1443,93 @@ GROUP_B5A = (
 )
 
 
+# B5b HHS and ONC. Two weeks of one hospital, with a suppressed count, a corrected week and a coverage count, and a hospital
+# without a CCN [375] to [379]; a CHPL linkage row with a telephone number and a blank criterion [380] to [382]; one
+# older attestation [383].
+HHS_WEEK = cc(
+    hospital_pk="010001",
+    collection_week="2021/01/03",
+    ccn="010001",
+    state="AL",
+    hospital_subtype="Short Term",
+    is_metro_micro="true",
+    is_corrected="false",
+    total_beds_7_day_avg="250.5",
+    inpatient_beds_used_7_day_avg="180",
+    inpatient_beds_used_covid_7_day_avg="-999999",
+    total_beds_7_day_coverage="7",
+    previous_day_admission_adult_covid_confirmed_50_59_7_day_sum="-999999",
+    staffed_pediatric_icu_bed_occupancy_7_day_avg="-9",
+)
+GROUP_B5B = (
+    Stored(
+        "hhs_capacity_csv",
+        "hh1",
+        "HHS_CAPACITY__fixture",
+        "rows.csv",
+        sha("z1"),
+        3,
+        records=(
+            HHS_WEEK,
+            cc(hospital_pk="010001", collection_week="2021/01/10", ccn="010001", state="AL", is_corrected="true", total_beds_7_day_avg="251"),
+            cc(hospital_pk="3f" * 32, collection_week="2021/01/03", state="AL", total_beds_7_day_avg="40"),
+        ),
+    ),
+    Stored(
+        "onc_pi_chpl_linkage_csv",
+        "oc1",
+        "ONC_PI__fixture",
+        "hospital-promoting-interoperability-chpl-linkage.csv",
+        sha("z2"),
+        2,
+        records=(
+            cc(
+                facility_id="010001",
+                telephone_number="telephone-placeholder",
+                meets_criteria_for_promoting_interoperability_of_ehrs="Y",
+                start_date="1/1/2023",
+                end_date="12/31/2023",
+                cehrt_id="0015EFIXTURE01",
+                chpl_id="15.04.04.1234.Epic.AM.01.1.220101",
+                product_database_id="11111",
+                developer_name="Fixture Developer A",
+                product_name="Fixture EHR",
+                year="2023",
+            ),
+            cc(
+                facility_id="010005",
+                start_date="07/01/2024",
+                end_date="09/30/2024",
+                chpl_id="15.04.04.2345.Cern.01.01.1.220202",
+                product_database_id="22222",
+                developer_name="Fixture Developer B",
+                year="2024",
+            ),
+        ),
+    ),
+    Stored(
+        "onc_pi_attestations_csv",
+        "oa1",
+        "ONC_PI__fixture_att",
+        "hospital_attestations.csv",
+        sha("z3"),
+        1,
+        records=(
+            cc(
+                npi="1234567893",
+                ccn="010001",
+                program_type="Medicare/Medicaid",
+                program_year="2014",
+                payment_year="3",
+                attestation_month="7",
+                attestation_year="2014",
+                vendor_name="Fixture Developer A",
+            ),
+        ),
+    ),
+)
+
+
 def owner_case(**fields: str) -> Stored:
     """Return one more owner file with one row, for the failing owner cases."""
     return Stored(
@@ -1464,6 +1731,7 @@ BASE = (
     *GROUP_B3,
     *GROUP_B4,
     *GROUP_B5A,
+    *GROUP_B5B,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -1556,6 +1824,31 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
     ),
     # A numeric value that is not a number [349].
     "impact_uncast_value": ("assert_impact_values_cast", (*BASE, impact_case(("Provider Number\tBeds", "010001\t12a"))), frozenset()),
+    # An HHS number that is not a plain number, and a week that is not YYYY/MM/DD [375] [376].
+    "hhs_value_uncast": (
+        "assert_hhs_onc_values_cast",
+        tuple(
+            with_record(item, cc(hospital_pk="010009", collection_week="2021/01/03", total_beds_7_day_avg="12a")) if item.key == "hh1" else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
+    "hhs_week_uncast": (
+        "assert_hhs_onc_values_cast",
+        tuple(with_record(item, cc(hospital_pk="010009", collection_week="2021-01-17")) if item.key == "hh1" else item for item in BASE),
+        frozenset(),
+    ),
+    # A Promoting Interoperability criterion that is neither Y nor N [380].
+    "onc_flag_uncast": (
+        "assert_hhs_onc_values_cast",
+        tuple(
+            with_record(item, cc(facility_id="010009", meets_criteria_for_promoting_interoperability_of_ehrs="Maybe", year="2023"))
+            if item.key == "oc1"
+            else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
     # An owner row that is not an organisation [367].
     "owner_individual": ("assert_owner_rows_are_organisations", (*BASE, owner_case(type_owner="I")), frozenset()),
     # An owner flag that is neither Y nor N, and a share above 100 [366] [368].
@@ -1700,6 +1993,12 @@ CREATE TABLE bronze.cms_medicare_inpatient_by_provider AS SELECT * REPLACE (_row
     FROM read_csv(getvariable('cms_medicare_inpatient_by_provider_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.cms_medicare_inpatient_by_drg AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('cms_medicare_inpatient_by_drg_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.hhs_capacity_csv AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('hhs_capacity_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.onc_pi_chpl_linkage_csv AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('onc_pi_chpl_linkage_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.onc_pi_attestations_csv AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('onc_pi_attestations_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.stored_copies AS
     SELECT * REPLACE (byte_count::BIGINT AS byte_count, loaded::BOOLEAN AS loaded, retired::BOOLEAN AS retired)
     FROM read_csv(getvariable('copies_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
@@ -1969,6 +2268,24 @@ MUP_PROVIDERS_SQL = (
 )
 MUP_DRG_SQL = "SELECT data_year::VARCHAR, ccn, drg_cd, tot_dschrgs::VARCHAR FROM int_mup_drg_discharges ORDER BY ALL;"
 MUP_MEASURES_SQL = "SELECT ccn, measure_control, field, coalesce(value_number::VARCHAR, '') FROM int_mup_measures WHERE data_year = 2023 ORDER BY ALL;"
+HHS_SQL = (
+    "SELECT left(hospital_pk, 6), collection_week::VARCHAR, coalesce(ccn, ''), coalesce(is_corrected::VARCHAR, ''), "
+    "coalesce(total_beds_7_day_avg::VARCHAR, ''), coalesce(inpatient_beds_used_covid_7_day_avg::VARCHAR, ''), "
+    "coalesce(inpatient_beds_used_7_day_avg::VARCHAR, ''), coalesce(total_beds_7_day_coverage::VARCHAR, ''), "
+    "array_to_string(suppressed_fields, '|'), array_to_string(negative_fields, '|') FROM int_hhs_capacity_weeks ORDER BY ALL;"
+)
+ONC_CHPL_SQL = (
+    "SELECT ccn, coalesce(meets_criteria_for_promoting_interoperability_of_ehrs::VARCHAR, ''), coalesce(start_date::VARCHAR, ''), "
+    "coalesce(end_date::VARCHAR, ''), coalesce(program_year::VARCHAR, ''), coalesce(chpl_id, ''), coalesce(developer_name, '') "
+    "FROM int_onc_chpl_linkage_rows ORDER BY ALL;"
+)
+ONC_ATTESTATIONS_SQL = (
+    "SELECT ccn, coalesce(program_year::VARCHAR, ''), coalesce(attestation_month::VARCHAR, ''), coalesce(attestation_year::VARCHAR, ''), "
+    "coalesce(vendor_name, '') FROM int_onc_attestation_rows ORDER BY ALL;"
+)
+PHONE_COLUMNS_SQL = (
+    "SELECT count(*)::VARCHAR FROM information_schema.columns WHERE table_name = 'int_onc_chpl_linkage_rows' AND column_name LIKE '%telephone%';"
+)
 OWNERS_SQL = (
     "SELECT left(member_sha256, 2), period_end::VARCHAR, enrollment_id, coalesce(associate_id_owner, ''), coalesce(role_code, ''), "
     "coalesce(association_date::VARCHAR, ''), coalesce(percentage_ownership::VARCHAR, ''), flags_published::VARCHAR, "
@@ -2132,6 +2449,10 @@ def read_models(case: str) -> dict[str, Any]:
         "owners": [tuple(row) for row in duckdb_csv(database, OWNERS_SQL)],
         "enrollments": [tuple(row) for row in duckdb_csv(database, ENROLLMENTS_SQL)],
         "chow": [tuple(row) for row in duckdb_csv(database, CHOW_SQL)],
+        "hhs": [tuple(row) for row in duckdb_csv(database, HHS_SQL)],
+        "onc_chpl": [tuple(row) for row in duckdb_csv(database, ONC_CHPL_SQL)],
+        "onc_attestations": [tuple(row) for row in duckdb_csv(database, ONC_ATTESTATIONS_SQL)],
+        "phone_columns": [tuple(row) for row in duckdb_csv(database, PHONE_COLUMNS_SQL)],
     }
 
 
@@ -2589,6 +2910,30 @@ def fixture_scenarios() -> dict[str, bool]:
         ),
         "more than one",
     )
+    # [375] to [383] HHS and ONC: a suppressed count and a negative value null and listed, a corrected week kept, a hospital without a CCN kept by
+    # its key; the blank criterion null, M/D/YYYY dates, no telephone column; the older attestations typed apart.
+    checks["hhs_match_expected"] = base.get("hhs") == [
+        (
+            "010001",
+            "2021-01-03",
+            "010001",
+            "false",
+            "250.5",
+            "",
+            "180.0",
+            "7.0",
+            "inpatient_beds_used_covid_7_day_avg|previous_day_admission_adult_covid_confirmed_50_59_7_day_sum",
+            "staffed_pediatric_icu_bed_occupancy_7_day_avg",
+        ),
+        ("010001", "2021-01-10", "010001", "true", "251.0", "", "", "", "", ""),
+        ("3f3f3f", "2021-01-03", "", "", "40.0", "", "", "", "", ""),
+    ]
+    checks["onc_chpl_match_expected"] = base.get("onc_chpl") == [
+        ("010001", "true", "2023-01-01", "2023-12-31", "2023", "15.04.04.1234.Epic.AM.01.1.220101", "Fixture Developer A"),
+        ("010005", "", "2024-07-01", "2024-09-30", "2024", "15.04.04.2345.Cern.01.01.1.220202", "Fixture Developer B"),
+    ]
+    checks["onc_chpl_has_no_telephone"] = base.get("phone_columns") == [("0",)]
+    checks["onc_attestations_match_expected"] = base.get("onc_attestations") == [("010001", "2014", "7", "2014", "Fixture Developer A")]
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -2656,6 +3001,35 @@ def impact_seed_matches() -> bool:
     with (REPO_ROOT / "dbt/seeds/impact_measures.csv").open(newline="") as handle:
         seed = sorted({row["measure_control"] for row in csv.DictReader(handle)})
     return seed == sorted(sources["CMS_IPPS"]["linked_measure_ids"])
+
+
+def hhs_onc_seed_matches(field_names: dict[str, str]) -> bool:
+    """Check the HHS and ONC measure seed against the registry [378] [384].
+
+    Every control HHS_CAPACITY, HHS and ONC_PI link is in the seed once, by itself or by all its children; each child's
+    columns are its exact field names, an API field name the stored columns.json resolves to its CSV header, then the
+    bronze column rule.
+    """
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    sources = {source["source_id"]: source for source in registry["sources"]}
+    controls = {control["id"]: control for control in registry["measure_controls"]}
+    with (REPO_ROOT / "dbt/seeds/hhs_onc_measures.csv").open(newline="") as handle:
+        seed = list(csv.DictReader(handle))
+    linked = {*sources["HHS_CAPACITY"]["linked_measure_ids"], *sources["HHS"]["linked_measure_ids"], *sources["ONC_PI"]["linked_measure_ids"]}
+    if {row["parent_control"] or row["measure_control"] for row in seed} != linked:
+        return False
+    children = {control_id for control_id, control in controls.items() if control.get("parent_id") in linked}
+    if {row["measure_control"] for row in seed if row["parent_control"]} != children:
+        return False
+    columns = set(field_names.values())
+    for row in seed:
+        if not row["parent_control"]:
+            continue
+        names = [name.strip(" .,;") for name in controls[row["measure_control"]]["preserved_controls"]["current_exact_field"].split("/")]
+        derived = [field_names.get(name, name) for name in names]
+        if row["fields"].split() != derived or not set(derived) <= columns:
+            return False
+    return True
 
 
 def ownership_seed_matches() -> bool:
@@ -2845,6 +3219,27 @@ def real_stage() -> dict[str, Any]:
     )
     outcome["ownership"] = dict(duckdb_csv(database, ownership_sql))
     outcome["checks"]["ownership_seed_matches_registry"] = ownership_seed_matches()
+    # [375] to [384] HHS and ONC: rows, hospitals, weeks and suppressed cells; the measure seed against the registry, with
+    # each HHS child's columns derived from the stored columns.json.
+    hhs_onc_sql = (
+        "SELECT 'hhs', count(*)::VARCHAR || ' rows, ' || count(DISTINCT hospital_pk)::VARCHAR || ' hospitals, ' "
+        "|| count(DISTINCT collection_week)::VARCHAR || ' weeks, ' || count(*) FILTER (WHERE ccn IS NULL)::VARCHAR || ' without a CCN, ' "
+        "|| sum(len(suppressed_fields))::VARCHAR || ' suppressed cells, ' || count(*) FILTER (WHERE is_corrected)::VARCHAR || ' corrected' "
+        "FROM int_hhs_capacity_weeks "
+        "UNION ALL SELECT 'onc_chpl_linkage', count(*)::VARCHAR || ' rows, ' || count(DISTINCT ccn)::VARCHAR || ' hospitals, ' "
+        "|| count(*) FILTER (WHERE meets_criteria_for_promoting_interoperability_of_ehrs IS NULL)::VARCHAR || ' blank criterion, ' "
+        "|| min(program_year)::VARCHAR || '-' || max(program_year)::VARCHAR FROM int_onc_chpl_linkage_rows "
+        "UNION ALL SELECT 'onc_attestations', count(*)::VARCHAR || ' rows, ' || count(DISTINCT ccn)::VARCHAR || ' hospitals, ' "
+        "|| min(program_year)::VARCHAR || '-' || max(program_year)::VARCHAR FROM int_onc_attestation_rows;"
+    )
+    outcome["hhs_onc"] = dict(duckdb_csv(database, hhs_onc_sql))
+    columns_sql = (
+        "SELECT line_text FROM lakehouse.bronze.hhs_capacity_documents_text WHERE _member_sha256 = "
+        "(SELECT min(_member_sha256) FROM lakehouse.bronze.hhs_capacity_documents_text WHERE _member_path = 'columns.json') ORDER BY _row_number;"
+    )
+    metadata = json.loads("\n".join(row[0] for row in duckdb_csv(database, columns_sql, init)))
+    field_names = {item["fieldName"]: re.sub(r"[^0-9a-z]+", "_", item["name"].strip().lower()).strip("_") for item in metadata}
+    outcome["checks"]["hhs_onc_seed_matches_registry"] = hhs_onc_seed_matches(field_names)
     bronze = unprefixed(duckdb_csv(database, per_table(BRONZE_COUNTS_SQL, "lakehouse.bronze."), init), "lakehouse.bronze.")
     # Bronze loads one copy per file, so its objects equal the distinct files; the copies table lists every copy [204] [206].
     model_sql = (

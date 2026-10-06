@@ -380,3 +380,39 @@ seeds:
         data_tests: [not_null]
       - name: review_decision
         description: The registry's current review decision, for reading only.
+  - name: hhs_onc_measures
+    description: >
+      Each registry measure control of sources HHS_CAPACITY, HHS and ONC_PI (families S09 and S10), or each child control
+      where the registry names fields per child, and the staged model columns that carry it at source grain. Mapping is
+      exact (the registry's field names), api_field_name (a name the source truncated, resolved through the stored
+      columns.json) or unnamed (C001 and C040 name no HHS field: no columns). A test checks every named column exists; the
+      staging E2E checks the controls and the child mappings against the registry and columns.json (failure modes 378
+      and 384).
+    config:
+      column_types:
+        measure_control: varchar
+        parent_control: varchar
+        source_model: varchar
+        fields: varchar
+        mapping: varchar
+        review_decision: varchar
+    columns:
+      - name: measure_control
+        description: The registry measure control or child control ID.
+        data_tests: [unique, not_null]
+      - name: parent_control
+        description: The parent control of a child control; empty for a control the registry links directly.
+      - name: source_model
+        description: The staged model that carries the control's columns.
+        data_tests: [not_null]
+      - name: fields
+        description: The model's columns the control uses, separated by spaces; empty when unnamed.
+      - name: mapping
+        description: exact, api_field_name or unnamed.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [exact, api_field_name, unnamed]
+      - name: review_decision
+        description: The registry's review decision (of the parent, for a child), for reading only.

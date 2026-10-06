@@ -42,6 +42,9 @@ vars:
     cms_cc_hcahps_hospital: care_compare
     cms_medicare_inpatient_by_provider: medicare_inpatient
     cms_medicare_inpatient_by_drg: medicare_inpatient
+    hhs_capacity_csv: hhs_capacity
+    onc_pi_attestations_csv: onc_pi
+    onc_pi_chpl_linkage_csv: onc_pi
   # Case-mix index files: the label families of the CMI snapshots read as CMI, and the reviewed families that are not CMI,
   # by name or pattern (failure mode 293).
   cmi_families:

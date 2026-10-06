@@ -20,7 +20,7 @@ models:
         data_tests:
           - accepted_values:
               arguments:
-                values: [hai, cost_reports, ipps, occupational_mix, provider_of_services, care_compare, hospital_ownership, medicare_inpatient]
+                values: [hai, cost_reports, ipps, occupational_mix, provider_of_services, care_compare, hospital_ownership, medicare_inpatient, hhs_capacity, onc_pi]
       - name: object_key
         description: Hash of the S3 key, version ID and member path (bronze `_object_key`).
         data_tests: [not_null]
@@ -578,6 +578,51 @@ models:
     description: >
       Bronze `cms_medicare_inpatient_by_drg` with one copy of each stored file, read from its canonical object (failure mode 279): the Medicare inpatient discharges by provider and DRG; typed in int_mup_drg_discharges.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_medicare_inpatient_by_drg documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_hhs_capacity_csv
+    description: >
+      Bronze `hhs_capacity_csv` with one copy of each stored file, read from its canonical object (failure mode 279): the HHS weekly hospital capacity rows; typed in int_hhs_capacity_weeks.
+      The data columns pass through as published; lakehouse.bronze_dictionary.hhs_capacity_csv documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_onc_pi_attestations_csv
+    description: >
+      Bronze `onc_pi_attestations_csv` with one copy of each stored file, read from its canonical object (failure mode 279): the ONC EHR incentive attestations; typed in int_onc_attestation_rows.
+      The data columns pass through as published; lakehouse.bronze_dictionary.onc_pi_attestations_csv documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_onc_pi_chpl_linkage_csv
+    description: >
+      Bronze `onc_pi_chpl_linkage_csv` with one copy of each stored file, read from its canonical object (failure mode 279): the ONC Promoting Interoperability to CHPL linkage rows; typed in int_onc_chpl_linkage_rows.
+      The data columns pass through as published; lakehouse.bronze_dictionary.onc_pi_chpl_linkage_csv documents them.
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
