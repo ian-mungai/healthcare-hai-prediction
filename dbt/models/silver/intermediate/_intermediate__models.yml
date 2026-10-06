@@ -633,3 +633,75 @@ models:
       - name: attestation_key
         description: File checksum and source row number.
         data_tests: [unique, not_null]
+
+  - name: int_occmix_file_rows
+    description: Selected occupational-mix rows with raw fields and source lineage. Public data. File and sheet selection preserve existing holds.
+    columns:
+      - name: source_row_key
+        description: Bronze table, checksum, sheet and row number.
+        data_tests: [unique, not_null]
+
+  - name: int_occmix_file_layouts
+    description: Exact normalized survey header positions per file and sheet. CBSA and S-3 layouts are distinct from survey layouts.
+    columns:
+      - name: layout_key
+        description: Bronze table, checksum and sheet.
+        data_tests: [unique, not_null]
+      - name: is_survey_layout
+        description: All nine required provider, date, salary and paid-hour headers are present.
+        data_tests: [not_null]
+
+  - name: int_occmix_survey_rows
+    description: >
+      Public occupational survey rows per file, sheet and source row. FROM and TO define the survey period.
+      Payment rule years remain separate. Deleted records, invalid identifiers, invalid dates and duplicate
+      provider-period rows yield no derived values. No source revision is selected for a hospital-period feature.
+    columns:
+      - name: survey_row_key
+        description: Bronze table, checksum, sheet and source row number.
+        data_tests: [unique, not_null]
+      - name: ccn_published
+        description: Published provider identifier before normalization.
+      - name: survey_start_date
+        description: FROM date, parsed from M/D/YYYY or a workbook ISO midnight timestamp. A missing or invalid value holds the row.
+      - name: survey_end_date
+        description: TO date, parsed from M/D/YYYY or a workbook ISO midnight timestamp. A missing or invalid value holds the row.
+      - name: field_values
+        description: Published cells retained in source order, including missing tokens.
+      - name: hold_reason
+        description: A deletion, invalid key, invalid period or duplicate provider-period row.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [deleted_survey_record, invalid_provider_id, invalid_survey_period, duplicate_provider_period]
+      - name: rn_paid_hour_wage
+        description: RN salary dollars divided by positive RN paid hours. It is not a productive-hour wage.
+      - name: rn_paid_hour_share
+        description: RNHR divided by positive nursehr. Paid hours are not bedside hours per patient-day.
+      - name: lpnst_paid_hour_share
+        description: Combined LPN/LVN and surgical-technologist paid hours divided by positive nursehr.
+      - name: naorat_paid_hour_share
+        description: NAORATHR divided by positive nursehr.
+
+  - name: int_occmix_measures
+    description: >
+      Six S03 registry controls per survey row. C030 to C034 retain conditional definitions and review decisions.
+      C043 is unavailable from this source and always null. Staging does not approve model use or resolve source timing.
+    columns:
+      - name: measure_key
+        description: Survey row key and measure control.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [C030, C031, C032, C033, C034, C043]
+      - name: source_status
+        description: Conditional availability or an unavailable source definition.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [available_conditional, unavailable_source_definition]

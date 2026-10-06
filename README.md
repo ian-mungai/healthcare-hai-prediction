@@ -210,7 +210,19 @@ hospital capacity rows are typed per hospital and week (`int_hhs_capacity_weeks`
 The ONC Promoting Interoperability to certified-product linkage and
 the older 2011 to 2017 EHR incentive attestations are typed apart (`int_onc_chpl_linkage_rows`,
 `int_onc_attestation_rows`). `dbt/seeds/hhs_onc_measures.csv` maps the registry controls; the HHS field names the
-source truncates are resolved through the stored `columns.json`. The dbt packages
+source truncates are resolved through the stored `columns.json`.
+
+Occupational-mix surveys are typed per file, sheet and source row (`int_occmix_survey_rows`). Exact headers distinguish
+survey records from CBSA and S-3 tables; the layout inventory retains every selected file and sheet. Survey dates come
+from FROM and TO, including workbook ISO dates. Payment-rule years stay separate. Deleted records, invalid
+identifiers or periods and duplicate provider-period rows remain visible with a hold and no derived values.
+`dbt/seeds/occmix_measures.csv` maps all six S03 registry controls: RN paid hours, the RN, combined LPN/LVN plus
+surgical-technologist and NAORAT paid-hour shares and RN salary per paid hour. Missing values and nonpositive
+denominators give null. C043 stays unavailable: paid hours cannot substitute for direct-care worked hours per patient-day.
+Comma-grouped numbers are parsed only when their grouping is valid. Dots, dashes and blanks remain null.
+Source revisions remain separate; hospital-window alignment, publication timing and model eligibility are pending.
+
+The dbt packages
 (dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
 publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
 container. The staging E2E installs them before it builds. dbt-project-evaluator is off in every other run and runs
@@ -593,7 +605,7 @@ control. The deferred controls above are not implemented.
 The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only and
 loads one copy per stored file. Staging covers the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital
 General Information, ownership, Medicare inpatient, HHS capacity, ONC and Care Compare timely and effective care, maternal health and HCAHPS tables. It types the
-HAI and Care Compare windows, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
+HAI and Care Compare windows, the occupational-mix surveys, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
 index. The Medicare sepsis share counts only published DRG cells (11 discharges or more), so it can be low for small
 hospitals; the Medicare chronic-condition shares start with data year 2017. Each change-of-ownership release lists
 events back to 2016, so one event appears once per release until the alignment step chooses one. An enrollment or

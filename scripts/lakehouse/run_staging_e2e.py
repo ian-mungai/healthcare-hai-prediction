@@ -21,7 +21,7 @@ Failure modes: ``data/lakehouse_planning/staging_dedup_20261003/failure_modes.md
 ``data/lakehouse_planning/staging_families_20261003/failure_modes.md``,
 ``data/lakehouse_planning/sheet_selection_20261005/failure_modes.md``,
 ``data/lakehouse_planning/hospital_spine_20261005/failure_modes.md``,
-``data/lakehouse_planning/group_b_20261005/failure_modes_b1.md`` to ``failure_modes_b5a.md`` in the same folder. The report in ``data/e2e/staging/`` holds
+``data/lakehouse_planning/group_b_20261005/failure_modes_b1.md`` to ``failure_modes_b5c.md`` in the same folder. The report in ``data/e2e/staging/`` holds
 outcomes and counts, never data values or credentials.
 """
 
@@ -1562,7 +1562,72 @@ def cmi_case(content: tuple[str, ...]) -> Stored:
     )
 
 
+OM_HEADER = "PROV\tFROM\tTO\t RNSAL \t RNHR \tLPNSTHR\tNAORATHR\tMAHR\tnursehr\trnahw"
+OM_ROWS = (
+    OM_HEADER,
+    '01014F\t1/1/2022\t12/31/2022\t" 1,200 "\t100\t20\t25\t5\t150\t12',
+    "010002\t12/25/2021\t12/24/2022\t0\t0\t0\t0\t0\t0\t.",
+    "010003\t1/1/2022\t12/31/2022\t-\t.\t20\t25\t5\t.\t.",
+    "010006\t1/1/2022\t12/31/2022\t1200\t100\t20\t25\t5\t150\t12",
+    "010006\t1/1/2022\t12/31/2022\t1200\t100\t20\t25\t5\t150\t12",
+    "BAD\t1/1/2022\t12/31/2022\t1200\t100\t20\t25\t5\t150\t12",
+    "010008\t1/1/2023\t12/31/2022\t1200\t100\t20\t25\t5\t150\t12",
+    "010009\tinvalid\t12/31/2022\t1200\t100\t20\t25\t5\t150\t12",
+)
+
 BASE = (
+    Stored(
+        "cms_occupational_mix_sheet_rows",
+        "om05",
+        "CMS_OCCMIX__om5",
+        "FY26_CBSAOccMix_NoOccMix.xlsx",
+        sha("ox5"),
+        4,
+        content=(
+            "CBSAGEO_AHW_w_wo_OccMix:CBSA|HOURS",
+            "CBSAGEO_AHW_w_wo_OccMix:12345|100",
+            "Final_Rule_OccMix_Factor:PROV|FROM|TO|FACTOR",
+            "Final_Rule_OccMix_Factor:010001|1/1/2022|12/31/2022|1.1",
+        ),
+    ),
+    Stored(
+        "cms_occupational_mix_text_lines_utf16",
+        "om03",
+        "CMS_OCCMIX__om3",
+        "FY22_Final_OccMix_PUF.txt",
+        sha("om3"),
+        3,
+        content=(
+            "Occupational Mix Survey",
+            "RNHR\tPROV\tFROM\tTO\tRNSAL\tLPNSTHR\tNAORATHR\tMAHR\tnursehr\trnahw",
+            "80\t010004\t1/1/2019\t12/31/2019\t1600\t10\t5\t5\t100\t20",
+        ),
+    ),
+    Stored(
+        "cms_occupational_mix_sheet_rows",
+        "om04",
+        "CMS_OCCMIX__om4",
+        "FY19_Final_OccMix_PUF.xlsx",
+        sha("om4"),
+        2,
+        content=(
+            "OccMix:PROV|FROM|TO|RNSAL|RNHR|LPNSTHR|NAORATHR|MAHR|nursehr|rnahw",
+            "OccMix:10005|2016-01-01T00:00:00|2016-12-31T00:00:00|3000|100|0|0|0|100|30",
+        ),
+    ),
+    Stored("cms_occupational_mix_text_lines", "om01", "CMS_OCCMIX__om", "FY26_Final_OccMix_PUF.txt", sha("om1"), len(OM_ROWS), content=OM_ROWS),
+    Stored(
+        "cms_occupational_mix_text_lines",
+        "om02",
+        "CMS_OCCMIX__om",
+        "FY26_Final_Survey_PUF.txt",
+        sha("om2"),
+        2,
+        content=(
+            OM_HEADER.replace("PROV", "PROV\tIs Prov on this Occupational Mix Delete List because its Occupational Mix Data is Aberrant? (Y/N)"),
+            OM_ROWS[1].replace("01014F", "01014F\tY"),
+        ),
+    ),
     # HAI: a release republished byte for byte [171]; the year-to-date archive dated by capture [170]; the canonical
     # copy is the smallest object key, here the archive copy, never the earliest or latest capture [167].
     # HAI rows are "entity|measure|start|end|score". A later release revises a value; the latest dated file wins [231].
@@ -1701,9 +1766,7 @@ BASE = (
     # An occupational-mix workbook whose second sheet is published as its own text file in the same release: each sheet is
     # covered by the selected text that matches it [270] [276].
     Stored("cms_occupational_mix_text_lines", "m04", "CMS_OCCMIX__p", "FY26_S3_PUF.txt", sha("p1"), 2, "CMS_OCCMIX__p", content=("PROV\tS3", "010001\t100")),
-    Stored(
-        "cms_occupational_mix_text_lines", "m05", "CMS_OCCMIX__p", "FY26_OccMix_PUF.txt", sha("p3"), 2, "CMS_OCCMIX__p", content=("PROV\tOM", "010001\t0.5")
-    ),
+    Stored("cms_occupational_mix_text_lines", "m05", "CMS_OCCMIX__p", "FY26_AHW_PUF.txt", sha("p3"), 2, "CMS_OCCMIX__p", content=("PROV\tAHW", "010001\t0.5")),
     Stored(
         "cms_occupational_mix_sheet_rows",
         "v04",
@@ -1712,7 +1775,7 @@ BASE = (
         sha("p2"),
         4,
         "CMS_OCCMIX__p",
-        content=("S-3 Data:PROV|S3", "S-3 Data:010001|100", "OccMix Data:PROV|OM", "OccMix Data:010001|0.5"),
+        content=("S-3 Data:PROV|S3", "S-3 Data:010001|100", "AHW Data:PROV|AHW", "AHW Data:010001|0.5"),
     ),
     # The text twin is comma-separated and one value differs from its workbook: the pair differs and both are held [187].
     Stored("cms_occupational_mix_text_lines", "m01", "CMS_OCCMIX__a", "PUFs.zip!AHW_by_Provider.zip!provcbsaahw.txt", sha("e1"), 3, content=OCCMIX_TEXT),
@@ -1735,6 +1798,37 @@ BASE = (
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
+    "occmix_uncast_value": (
+        "assert_occmix_values_cast",
+        tuple(replace(item, content=(OM_HEADER, OM_ROWS[1].replace("1,200", "not-a-number"), *OM_ROWS[2:])) if item.key == "om01" else item for item in BASE),
+        frozenset(),
+    ),
+    "occmix_malformed_grouping": (
+        "assert_occmix_values_cast",
+        tuple(replace(item, content=tuple(line.replace("1,200", "12,00") for line in item.content)) if item.key == "om01" else item for item in BASE),
+        frozenset(),
+    ),
+    "occmix_unknown_layout": (
+        "assert_occmix_layouts_known",
+        tuple(
+            replace(
+                item,
+                content=tuple(
+                    line.replace("RNSAL", "unknown_salary")
+                    .replace("RNHR", "unknown_hours")
+                    .replace("nursehr", "unknown_total")
+                    .replace("LPNSTHR", "unknown_lpnst")
+                    .replace("NAORATHR", "unknown_naorat")
+                    .replace("MAHR", "unknown_ma")
+                    for line in item.content
+                ),
+            )
+            if item.key == "om01"
+            else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
     "name_clash": ("assert_no_release_name_clash", (*BASE, Stored("cms_hai_hospital", "h06", "2021-01-27", HAI_FILE, sha("a9"), 2)), frozenset()),
     # Bronze holds rows of a copy the copies table lists as not loaded [207] [209].
     "copy_rows_in_bronze": (
@@ -2309,6 +2403,15 @@ BRONZE_COUNTS_SQL = (
 )
 
 
+OCCMIX_SQL = (
+    "SELECT ccn_published, survey_start_date::VARCHAR, survey_end_date::VARCHAR, is_deleted::VARCHAR, "
+    "coalesce(rnhr::VARCHAR, ''), coalesce(rn_paid_hour_wage::VARCHAR, ''), "
+    "coalesce(round(rn_paid_hour_share, 4)::VARCHAR, ''), "
+    "coalesce(round(lpnst_paid_hour_share, 4)::VARCHAR, ''), coalesce(round(naorat_paid_hour_share, 4)::VARCHAR, '') "
+    "FROM int_occmix_survey_rows ORDER BY ALL;"
+)
+
+
 def per_table(query: str, prefix: str) -> str:
     """Return the query once per table, each run after setting the checked_table variable to the prefixed table name."""
     return "".join(f"SET VARIABLE checked_table = '{prefix}{table}';\n{query}" for table in TABLES)
@@ -2453,6 +2556,19 @@ def read_models(case: str) -> dict[str, Any]:
         "onc_chpl": [tuple(row) for row in duckdb_csv(database, ONC_CHPL_SQL)],
         "onc_attestations": [tuple(row) for row in duckdb_csv(database, ONC_ATTESTATIONS_SQL)],
         "phone_columns": [tuple(row) for row in duckdb_csv(database, PHONE_COLUMNS_SQL)],
+        "occmix": [tuple(row) for row in duckdb_csv(database, OCCMIX_SQL)],
+        "occmix_holds": [
+            tuple(row)
+            for row in duckdb_csv(
+                database, "SELECT hold_reason, count(*)::VARCHAR FROM int_occmix_survey_rows WHERE hold_reason IS NOT NULL GROUP BY ALL ORDER BY ALL;"
+            )
+        ],
+        "occmix_measures": [
+            tuple(row)
+            for row in duckdb_csv(
+                database, "SELECT measure_control, count(*)::VARCHAR, count(value_number)::VARCHAR FROM int_occmix_measures GROUP BY ALL ORDER BY ALL;"
+            )
+        ],
     }
 
 
@@ -2528,7 +2644,7 @@ def fixture_scenarios() -> dict[str, bool]:
         ("l2", "FR 2024", "covered", "l1", "false"),
         ("n2", "FY19 NPRM", "kept", "", "true"),
         ("n2", "Variable Descriptions", "kept", "", "true"),
-        ("p2", "OccMix Data", "covered", "p3", "false"),
+        ("p2", "AHW Data", "covered", "p3", "false"),
         ("p2", "S-3 Data", "covered", "p1", "false"),
     ]
     # [219] [218] A file in two pairs, or a renamed pair from two captures, is refused by the generator.
@@ -2934,6 +3050,34 @@ def fixture_scenarios() -> dict[str, bool]:
     ]
     checks["onc_chpl_has_no_telephone"] = base.get("phone_columns") == [("0",)]
     checks["onc_attestations_match_expected"] = base.get("onc_attestations") == [("010001", "2014", "7", "2014", "Fixture Developer A")]
+    checks["occmix_matches_expected"] = base.get("occmix") == [
+        ("010002", "2021-12-25", "2022-12-24", "false", "0.0", "", "", "", ""),
+        ("010003", "2022-01-01", "2022-12-31", "false", "", "", "", "", ""),
+        ("010004", "2019-01-01", "2019-12-31", "false", "80.0", "20.0", "0.8", "0.1", "0.05"),
+        ("010006", "2022-01-01", "2022-12-31", "false", "100.0", "", "", "", ""),
+        ("010006", "2022-01-01", "2022-12-31", "false", "100.0", "", "", "", ""),
+        ("010008", "2023-01-01", "2022-12-31", "false", "100.0", "", "", "", ""),
+        ("010009", "NULL", "2022-12-31", "false", "100.0", "", "", "", ""),
+        ("01014F", "2022-01-01", "2022-12-31", "false", "100.0", "12.0", "0.6667", "0.1333", "0.1667"),
+        ("01014F", "2022-01-01", "2022-12-31", "true", "100.0", "", "", "", ""),
+        ("10005", "2016-01-01", "2016-12-31", "false", "100.0", "30.0", "1.0", "0.0", "0.0"),
+        ("BAD", "2022-01-01", "2022-12-31", "false", "100.0", "", "", "", ""),
+    ]
+    checks["occmix_measures_match_expected"] = base.get("occmix_measures") == [
+        ("C030", "11", "4"),
+        ("C031", "11", "3"),
+        ("C032", "11", "3"),
+        ("C033", "11", "3"),
+        ("C034", "11", "3"),
+        ("C043", "11", "0"),
+    ]
+    checks["occmix_seed_matches_registry"] = occmix_seed_matches()
+    checks["occmix_holds_match_expected"] = base.get("occmix_holds") == [
+        ("deleted_survey_record", "1"),
+        ("duplicate_provider_period", "2"),
+        ("invalid_provider_id", "1"),
+        ("invalid_survey_period", "2"),
+    ]
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -3032,6 +3176,22 @@ def hhs_onc_seed_matches(field_names: dict[str, str]) -> bool:
     return True
 
 
+def occmix_seed_matches() -> bool:
+    """Check every S03 definition and decision against the registry, with C043 unmapped."""
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    sources = {source["source_id"]: source for source in registry["sources"]}
+    controls = {control["id"]: control["preserved_controls"] for control in registry["measure_controls"]}
+    with (REPO_ROOT / "dbt/seeds/occmix_measures.csv").open(newline="") as handle:
+        seed = list(csv.DictReader(handle))
+    linked = {*sources["OM"]["linked_measure_ids"], *sources["CMS_OCCMIX"]["linked_measure_ids"]}
+    return sorted(row["measure_control"] for row in seed) == sorted(linked) and all(
+        row["definition"] == controls[row["measure_control"]]["current_exact_field"]
+        and row["review_decision"] == controls[row["measure_control"]]["current_review_decision"]
+        and (row["measure_control"] != "C043" or (not row["value_column"] and row["source_status"] == "unavailable_source_definition"))
+        for row in seed
+    )
+
+
 def ownership_seed_matches() -> bool:
     """Check that the ownership measure seed covers exactly the registry's controls of CMS_OWNERS, ENROLL and CMS_CHOW [373]."""
     registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
@@ -3073,7 +3233,12 @@ def real_stage() -> dict[str, Any]:
         outcome["checks"][f"{run}_build_passes"] = code == 0 and bool(statuses) and not failed
         outcome[f"{run}_not_passing"] = failed
         builds.append([row[:6] for row in duckdb_csv(database, FILES_SQL)])
+        outcome[f"{run}_occmix_fingerprint"] = duckdb_csv(
+            database,
+            "SELECT count(*)::VARCHAR, md5(string_agg(to_json(s), chr(10) ORDER BY survey_row_key)) FROM int_occmix_survey_rows AS s;",
+        )
     outcome["checks"]["real_rebuild_identical"] = builds[0] == builds[1]
+    outcome["checks"]["occmix_real_rebuild_identical"] = outcome["real_occmix_fingerprint"] == outcome["real_again_occmix_fingerprint"]
     status_sql = "SELECT text_layout || ' ' || twin_status, count(*)::VARCHAR FROM stg_bronze__twin_comparison GROUP BY 1 ORDER BY 1;"
     outcome["twin_statuses"] = dict(duckdb_csv(database, status_sql))
     held_sql = (
@@ -3240,6 +3405,22 @@ def real_stage() -> dict[str, Any]:
     metadata = json.loads("\n".join(row[0] for row in duckdb_csv(database, columns_sql, init)))
     field_names = {item["fieldName"]: re.sub(r"[^0-9a-z]+", "_", item["name"].strip().lower()).strip("_") for item in metadata}
     outcome["checks"]["hhs_onc_seed_matches_registry"] = hhs_onc_seed_matches(field_names)
+    outcome["occmix_periods"] = duckdb_csv(
+        database,
+        "SELECT year(survey_end_date)::VARCHAR, is_deleted::VARCHAR, count(*)::VARCHAR, count(DISTINCT member_sha256)::VARCHAR "
+        "FROM int_occmix_survey_rows GROUP BY ALL ORDER BY ALL;",
+    )
+    outcome["occmix_holds"] = duckdb_csv(database, "SELECT hold_reason, count(*)::VARCHAR FROM int_occmix_survey_rows GROUP BY ALL ORDER BY ALL;")
+    outcome["occmix_measures"] = duckdb_csv(
+        database, "SELECT measure_control, count(*)::VARCHAR, count(value_number)::VARCHAR FROM int_occmix_measures GROUP BY ALL ORDER BY ALL;"
+    )
+    occmix_counts = duckdb_csv(
+        database,
+        "SELECT (SELECT count(*) FROM int_occmix_survey_rows)::VARCHAR, count(*)::VARCHAR "
+        "FROM int_occmix_file_rows r JOIN int_occmix_file_layouts l USING (bronze_table, member_sha256, sheet_name) "
+        "WHERE l.is_survey_layout AND l.repeated_fields = 0 AND r.source_row_number > l.header_row_number;",
+    )[0]
+    outcome["checks"]["occmix_source_rows_reconcile"] = int(occmix_counts[0]) > 0 and occmix_counts[0] == occmix_counts[1]
     bronze = unprefixed(duckdb_csv(database, per_table(BRONZE_COUNTS_SQL, "lakehouse.bronze."), init), "lakehouse.bronze.")
     # Bronze loads one copy per file, so its objects equal the distinct files; the copies table lists every copy [204] [206].
     model_sql = (

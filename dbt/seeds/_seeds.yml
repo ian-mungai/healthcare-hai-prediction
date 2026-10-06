@@ -416,3 +416,34 @@ seeds:
                 values: [exact, api_field_name, unnamed]
       - name: review_decision
         description: The registry's review decision (of the parent, for a child), for reading only.
+
+  - name: occmix_measures
+    description: Six S03 controls with the registry's exact definitions and review decisions. C043 has no occupational-mix substitute.
+    config:
+      column_types:
+        measure_control: varchar
+        family: varchar
+        value_column: varchar
+        definition: varchar
+        review_decision: varchar
+        source_status: varchar
+    columns:
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests: [unique, not_null]
+      - name: family
+        description: S03, occupational mix.
+        data_tests: [not_null]
+      - name: value_column
+        description: Typed survey value column. Empty for C043.
+      - name: definition
+        description: Exact field or construction in the source registry.
+      - name: review_decision
+        description: Registry decision, preserved without approving model use.
+      - name: source_status
+        description: Whether the survey can supply the conditional definition.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [available_conditional, unavailable_source_definition]
