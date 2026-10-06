@@ -88,6 +88,7 @@ OLD_NOTES = "old" + "_notes.md"
 UNUSED_PACKAGE = "tabu" + "late"
 UNUSED_SETTING = "OLD" + "_SETTING"
 UNUSED_TF_VARIABLE = "unused" + "_region"
+DASH_M_MODULE = "nightly" + "_report"
 # The scratch repository holds this repository's scripts; the cleanup samples sit outside them.
 COPIED_ALLOWED = (
     "orphan scripts/* -- check scripts copied into the scratch repository\n"
@@ -350,6 +351,12 @@ CASES = [
         {"README.md": "Read [the guide](docs/guide.md).\n", "docs/guide.md": "# Guide\n", ".cleanup_allowlist": COPIED_ALLOWED},
     ),
     Case("file nothing references", "orphan-files", False, {f"docs/{OLD_NOTES}": "# Old Notes\n", ".cleanup_allowlist": COPIED_ALLOWED}),
+    Case(
+        "module run with python -m",
+        "orphan-files",
+        True,
+        {"README.md": f"Run `python -m tools.{DASH_M_MODULE}`.\n", f"tools/{DASH_M_MODULE}.py": "print(1)\n", ".cleanup_allowlist": COPIED_ALLOWED},
+    ),
     Case(
         "used Terraform variable",
         "terraform-unused",

@@ -400,7 +400,7 @@ with `bash scripts/acquisition/run_checks.sh`.
   confidence) reports functions, classes and variables nothing uses; deptry
   0.25.1 reports requirements nothing imports and imports no requirements file
   declares; `orphan-files` reports tracked files no other file names by path,
-  file name, folder or import; tflint (`terraform_unused_declarations`, every
+  file name, folder or import (including `python -m`); tflint (`terraform_unused_declarations`, every
   module) reports unused Terraform declarations. vulture and deptry are pinned
   in `requirements.txt`. They block. deptry checks each runtime on its
   own code and requirements, as `config/quality/dependency_runtimes.json` maps

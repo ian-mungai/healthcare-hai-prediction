@@ -615,7 +615,7 @@ def orphan_files() -> list[Finding]:
         if len(parts) >= 2:  # A file a script loads by folder, such as policies/*.json, is used when the folder is named
             patterns.append(rf"(?<![\w-]){re.escape('/'.join(parts[-2:]))}(?![\w-])")
         if path.endswith(".py"):
-            patterns.append(rf"\b(?:import|from|-m)\s+(?:[\w.]+\.)?{re.escape(Path(path).stem)}\b")
+            patterns.append(rf"(?<![\w-])(?:import|from|-m)\s+(?:[\w.]+\.)?{re.escape(Path(path).stem)}\b")  # \b cannot precede -m
         pattern = re.compile("|".join(patterns))
         if not any(other != path and pattern.search(text) for other, text in texts.items()):
             fix = f"delete it, link it from the file that uses it, or add 'orphan {path} -- <why it stays>' to {CLEANUP_ALLOWLIST}"
