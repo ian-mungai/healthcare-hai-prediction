@@ -46,7 +46,7 @@ file as published, with each row traced to its S3 object version and checksum. I
 also lists every other stored copy. All 330 mapped tables are loaded and checked; a
 table whose files were all removed for privacy left the map. A dbt staging layer in DuckDB
 reads the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital General
-Information, ownership and Care Compare process and patient-experience tables. It keeps one row
+Information, ownership, Medicare inpatient and Care Compare process and patient-experience tables. It keeps one row
 per HAI and Care Compare measurement window, one row per hospital cost report, one Provider of
 Services row per hospital and snapshot and one case-mix index per hospital and payment-rule year.
 A hospital-year spine lines each hospital and calendar-year HAI window up with the Provider of
@@ -59,7 +59,8 @@ diagram shows what is built and what is planned.
 Prerequisites: macOS on Apple silicon or Linux AMD64, Python 3.12, Git,
 Terraform 1.16.1 and AWS CLI v2. Node.js 18 or later and Google Chrome render the
 architecture diagram.
-The lakehouse needs Docker Desktop with at least 24 GB of memory: the bronze,
+The lakehouse needs Docker Desktop with at least 36 GB of memory: dbt staging
+gives DuckDB a 30 GB limit (`memory_limit` in `dbt/profiles.yml`). The bronze,
 dictionary and checksum jobs give Spark a 12 GB heap (`JOB_MEMORY` in
 `scripts/lakehouse/session.py`).
 
@@ -194,7 +195,10 @@ in `dbt/seeds/registry_measure_sources.csv`. `int_hgi_hospital_releases` types H
 number of reports of its CCN in that year; `int_cost_report_measures` computes each registry cost-report measure by the
 columns and rule in `dbt/seeds/cost_report_measures.csv` and gives null for a zero or missing denominator. The IPPS
 impact files from FY 2001 are read by exact header name (`dbt/seeds/impact_layout_columns.csv`): `int_impact_hospital_values`
-has one row per release, hospital and field. `int_impact_measures` carries the registry measures of source CMS_IPPS. The dbt packages
+has one row per release, hospital and field. `int_impact_measures` carries the registry measures of source CMS_IPPS. The
+Medicare inpatient provider and DRG summaries are typed per file, with the data and release years from the file name
+(`int_mup_providers`, `int_mup_drg_discharges`); a blank, suppressed cell is null. `int_mup_measures` computes the registry
+measures of sources CMS-MUP-PROVIDER and CMS_MEDICARE_PROVIDER by the fields and rule in `dbt/seeds/mup_measures.csv`. The dbt packages
 (dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
 publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
 container. The staging E2E installs them before it builds. dbt-project-evaluator is off in every other run and runs
@@ -575,9 +579,10 @@ control. The deferred controls above are not implemented.
 
 The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only and
 loads one copy per stored file. Staging covers the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital
-General Information, ownership and Care Compare timely and effective care, maternal health and HCAHPS tables. It types the
-HAI and Care Compare windows, the cost reports, the IPPS impact-file fields, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
-index. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables exist. The bronze and staging E2E runs use
+General Information, ownership, Medicare inpatient and Care Compare timely and effective care, maternal health and HCAHPS tables. It types the
+HAI and Care Compare windows, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
+index. The Medicare sepsis share counts only published DRG cells (11 discharges or more), so it can be low for small
+hospitals; the Medicare chronic-condition shares start with data year 2017. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables exist. The bronze and staging E2E runs use
 Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
 offline. It has not run: its controls, independent review and the owner's approval are still to come.
 

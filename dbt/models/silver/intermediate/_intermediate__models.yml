@@ -500,3 +500,42 @@ models:
       - name: measure_control
         description: The registry measure control ID.
         data_tests: [not_null]
+
+  - name: int_mup_providers
+    description: >
+      One row per Medicare inpatient provider summary (CCN) and file, with the data year and release year from the file
+      name (any case) and every numeric column typed; a blank (suppressed) value is null (failure modes 355 to 359). The
+      chronic-condition shares are published from data year 2017.
+    columns:
+      - name: provider_key
+        description: File checksum and CCN.
+        data_tests: [unique, not_null]
+      - name: ccn
+        description: rndrng_prvdr_ccn, 6 characters.
+        data_tests: [not_null]
+
+  - name: int_mup_drg_discharges
+    description: >
+      One row per Medicare inpatient provider, DRG and file, with the data and release years from the file name and the
+      published discharges and averages typed; cells under 11 discharges are not published (failure modes 355, 356, 359
+      and 362).
+    columns:
+      - name: drg_key
+        description: File checksum, CCN and DRG code.
+        data_tests: [unique, not_null]
+
+  - name: int_mup_measures
+    description: >
+      One row per Medicare inpatient provider summary and registry measure field of sources CMS-MUP-PROVIDER and
+      CMS_MEDICARE_PROVIDER (family S08) whose value or numerator is published, by the mup_measures seed: value, ratio (a
+      null or zero denominator gives null) or drg_share (C117, the published discharges of DRG 870 to 872 over the provider
+      total in the same data year, from the year's one DRG file, which can be an earlier release; small cells are not
+      published, so the share can be low). C084 has one row per race field; held and closed controls give no rows
+      (failure modes 356, 357 and 360 to 363). Staging a measure does not make it a predictor.
+    columns:
+      - name: measure_key
+        description: File checksum, CCN, measure control and field.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: The registry measure control ID.
+        data_tests: [not_null]

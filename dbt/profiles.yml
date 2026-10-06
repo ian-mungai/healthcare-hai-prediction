@@ -10,8 +10,9 @@ hai:
       extensions: [iceberg, httpfs, aws]
       settings:
         autoinstall_known_extensions: false
-        # Bounded below the 24 GB Docker VM so a large comparison spills to disk instead of being killed.
-        memory_limit: 12GB
+        # Most of the 36 GB Docker VM (owner, Oct 6 2026), leaving about 6 GB for Polaris and PostgreSQL, so a large
+        # comparison spills to disk instead of being killed.
+        memory_limit: 30GB
       secrets:
         - type: s3
           provider: credential_chain

@@ -276,3 +276,42 @@ seeds:
         description: The field holding the denominator, for the ratio rule.
       - name: review_decision
         description: The registry's current review decision, for reading only.
+
+  - name: mup_measures
+    description: >
+      Each registry measure control of sources CMS-MUP-PROVIDER and CMS_MEDICARE_PROVIDER (family S08) and how it is
+      computed from the typed Medicare inpatient provider summary: value (the published field), ratio (field /
+      denominator_field), drg_share (the published discharges of the listed DRG codes over the provider total) or hold (no
+      value: held or closed in the registry). C084 has one row per published race field; its child controls are not
+      assigned (failure modes 360 to 363). The staging E2E checks the controls against the registry.
+    config:
+      column_types:
+        measure_control: varchar
+        field: varchar
+        rule: varchar
+        denominator_field: varchar
+        drg_codes: varchar
+        review_decision: varchar
+    data_tests:
+      - unique:
+          arguments:
+            column_name: "measure_control || ':' || coalesce(field, '')"
+    columns:
+      - name: measure_control
+        description: The registry measure control ID.
+        data_tests: [not_null]
+      - name: field
+        description: The int_mup_providers column holding the value or numerator; empty for hold.
+      - name: rule
+        description: value, ratio, drg_share or hold.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [value, ratio, drg_share, hold]
+      - name: denominator_field
+        description: The column holding the denominator, for ratio and drg_share.
+      - name: drg_codes
+        description: The DRG codes of a drg_share, separated by spaces.
+      - name: review_decision
+        description: The registry's current review decision, for reading only.

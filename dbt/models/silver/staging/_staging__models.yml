@@ -20,7 +20,7 @@ models:
         data_tests:
           - accepted_values:
               arguments:
-                values: [hai, cost_reports, ipps, occupational_mix, provider_of_services, care_compare, hospital_ownership]
+                values: [hai, cost_reports, ipps, occupational_mix, provider_of_services, care_compare, hospital_ownership, medicare_inpatient]
       - name: object_key
         description: Hash of the S3 key, version ID and member path (bronze `_object_key`).
         data_tests: [not_null]
@@ -548,6 +548,36 @@ models:
     description: >
       Bronze `cms_cc_hcahps_hospital` with one copy of each stored file, read from its canonical object (failure mode 279): Care Compare HCAHPS releases; windows in int_cc_hcahps_windows.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_cc_hcahps_hospital documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_cms_medicare_inpatient_by_provider
+    description: >
+      Bronze `cms_medicare_inpatient_by_provider` with one copy of each stored file, read from its canonical object (failure mode 279): the Medicare inpatient provider summaries; typed in int_mup_providers.
+      The data columns pass through as published; lakehouse.bronze_dictionary.cms_medicare_inpatient_by_provider documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_cms_medicare_inpatient_by_drg
+    description: >
+      Bronze `cms_medicare_inpatient_by_drg` with one copy of each stored file, read from its canonical object (failure mode 279): the Medicare inpatient discharges by provider and DRG; typed in int_mup_drg_discharges.
+      The data columns pass through as published; lakehouse.bronze_dictionary.cms_medicare_inpatient_by_drg documents them.
     columns:
       - name: _object_key
         description: The canonical object the row was read from.

@@ -68,6 +68,8 @@ TABLES = (
     "cms_cc_timely_and_effective_care_hospital",
     "cms_cc_maternal_health_hospital",
     "cms_cc_hcahps_hospital",
+    "cms_medicare_inpatient_by_provider",
+    "cms_medicare_inpatient_by_drg",
 )
 HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
@@ -277,7 +279,85 @@ COST_REPORT_COLUMNS = (
     "stand_alone_chip_charges",
 )
 # The bronze columns each wide fixture table carries; the POS list is every column the POS models read.
+MUP_PROVIDER_COLUMNS = (
+    "rndrng_prvdr_ccn",
+    "rndrng_prvdr_org_name",
+    "rndrng_prvdr_st",
+    "rndrng_prvdr_city",
+    "rndrng_prvdr_zip5",
+    "rndrng_prvdr_state_abrvtn",
+    "rndrng_prvdr_state_fips",
+    "rndrng_prvdr_ruca",
+    "rndrng_prvdr_ruca_desc",
+    "tot_benes",
+    "tot_submtd_cvrd_chrg",
+    "tot_pymt_amt",
+    "tot_mdcr_pymt_amt",
+    "tot_dschrgs",
+    "tot_cvrd_days",
+    "tot_days",
+    "bene_avg_age",
+    "bene_age_lt_65_cnt",
+    "bene_age_65_74_cnt",
+    "bene_age_75_84_cnt",
+    "bene_age_gt_84_cnt",
+    "bene_feml_cnt",
+    "bene_male_cnt",
+    "bene_race_wht_cnt",
+    "bene_race_black_cnt",
+    "bene_race_api_cnt",
+    "bene_race_hspnc_cnt",
+    "bene_race_natind_cnt",
+    "bene_race_othr_cnt",
+    "bene_dual_cnt",
+    "bene_ndual_cnt",
+    "bene_cc_bh_adhd_othcd_v1_pct",
+    "bene_cc_bh_alcohol_drug_v1_pct",
+    "bene_cc_bh_tobacco_v1_pct",
+    "bene_cc_bh_alz_nonalzdem_v2_pct",
+    "bene_cc_bh_anxiety_v1_pct",
+    "bene_cc_bh_bipolar_v1_pct",
+    "bene_cc_bh_mood_v2_pct",
+    "bene_cc_bh_depress_v1_pct",
+    "bene_cc_bh_pd_v1_pct",
+    "bene_cc_bh_ptsd_v1_pct",
+    "bene_cc_bh_schizo_othpsy_v1_pct",
+    "bene_cc_ph_asthma_v2_pct",
+    "bene_cc_ph_afib_v2_pct",
+    "bene_cc_ph_cancer6_v2_pct",
+    "bene_cc_ph_ckd_v2_pct",
+    "bene_cc_ph_copd_v2_pct",
+    "bene_cc_ph_diabetes_v2_pct",
+    "bene_cc_ph_hf_nonihd_v2_pct",
+    "bene_cc_ph_hyperlipidemia_v2_pct",
+    "bene_cc_ph_hypertension_v2_pct",
+    "bene_cc_ph_ischemicheart_v2_pct",
+    "bene_cc_ph_osteoporosis_v2_pct",
+    "bene_cc_ph_parkinson_v2_pct",
+    "bene_cc_ph_arthritis_v2_pct",
+    "bene_cc_ph_stroke_tia_v2_pct",
+    "bene_avg_risk_scre",
+)
+MUP_DRG_COLUMNS = (
+    "rndrng_prvdr_ccn",
+    "rndrng_prvdr_org_name",
+    "rndrng_prvdr_city",
+    "rndrng_prvdr_st",
+    "rndrng_prvdr_state_fips",
+    "rndrng_prvdr_zip5",
+    "rndrng_prvdr_state_abrvtn",
+    "rndrng_prvdr_ruca",
+    "rndrng_prvdr_ruca_desc",
+    "drg_cd",
+    "drg_desc",
+    "tot_dschrgs",
+    "avg_submtd_cvrd_chrg",
+    "avg_tot_pymt_amt",
+    "avg_mdcr_pymt_amt",
+)
 WIDE_COLUMNS = {
+    "cms_medicare_inpatient_by_provider": MUP_PROVIDER_COLUMNS,
+    "cms_medicare_inpatient_by_drg": MUP_DRG_COLUMNS,
     "cms_hospital_cost_reports": COST_REPORT_COLUMNS,
     "cms_provider_of_services": (
         "prvdr_num",
@@ -896,6 +976,74 @@ GROUP_B3 = (
 )
 
 
+# Medicare inpatient [355] to [363]: a provider summary with every measure input, a suppressed race count and blank
+# chronic-condition shares; a provider with suppressed totals; a data year in a lower-case file name; DRG cells for the
+# sepsis share.
+MUP_2023_FULL = cc(
+    rndrng_prvdr_ccn="010001",
+    rndrng_prvdr_state_abrvtn="AL",
+    tot_benes="1000",
+    tot_dschrgs="1500",
+    tot_days="7500",
+    tot_cvrd_days="7400",
+    bene_avg_age="74.5",
+    bene_avg_risk_scre="1.8",
+    bene_age_lt_65_cnt="100",
+    bene_age_65_74_cnt="400",
+    bene_age_75_84_cnt="300",
+    bene_age_gt_84_cnt="200",
+    bene_feml_cnt="550",
+    bene_male_cnt="450",
+    bene_race_wht_cnt="700",
+    bene_race_black_cnt="200",
+    bene_race_api_cnt="30",
+    bene_race_hspnc_cnt="50",
+    bene_race_othr_cnt="20",
+    bene_dual_cnt="250",
+    bene_ndual_cnt="750",
+    bene_cc_ph_diabetes_v2_pct="0.35",
+    bene_cc_ph_ckd_v2_pct="0.4",
+    bene_cc_bh_depress_v1_pct="0.3",
+)
+MUP_2023_SUPPRESSED = cc(rndrng_prvdr_ccn="010005", rndrng_prvdr_state_abrvtn="AL", tot_dschrgs="12")
+GROUP_B4 = (
+    Stored(
+        "cms_medicare_inpatient_by_provider",
+        "mp1",
+        "CMS_MEDICARE_PROVIDER__a",
+        "MUP_INP_RY25_P04_V10_DY23_Prv.CSV",
+        sha("mp1"),
+        2,
+        records=(MUP_2023_FULL, MUP_2023_SUPPRESSED),
+    ),
+    Stored(
+        "cms_medicare_inpatient_by_provider",
+        "mp2",
+        "CMS_MEDICARE_PROVIDER__a",
+        "mup_inp_ry26_p04_v10_dy24_prv.csv",
+        sha("mp2"),
+        1,
+        records=(cc(rndrng_prvdr_ccn="010001", tot_benes="900", tot_dschrgs="1350"),),
+    ),
+    # The DRG file of a data year can come from an earlier release than its provider file, as for data years 2013 to
+    # 2021 (provider release 2024, DRG release 2023).
+    Stored(
+        "cms_medicare_inpatient_by_drg",
+        "md1",
+        "CMS_MUP_DRG__a",
+        "MUP_INP_RY24_P03_V10_DY23_PrvSvc.CSV",
+        sha("md1"),
+        4,
+        records=(
+            cc(rndrng_prvdr_ccn="010001", drg_cd="871", tot_dschrgs="60"),
+            cc(rndrng_prvdr_ccn="010001", drg_cd="872", tot_dschrgs="30"),
+            cc(rndrng_prvdr_ccn="010001", drg_cd="470", tot_dschrgs="100"),
+            cc(rndrng_prvdr_ccn="010005", drg_cd="871", tot_dschrgs="12"),
+        ),
+    ),
+)
+
+
 def impact_case(content: tuple[str, ...], member: str = "FY 2026 IPPS Proposed Rule Impact File.txt") -> Stored:
     """Return a FY 2026 impact file with the given lines, for the failing impact cases."""
     return Stored("cms_ipps_text_lines", "p09", "CMS_IPPS__r", member, sha("im9"), len(content), content=content)
@@ -1082,6 +1230,7 @@ BASE = (
     *GROUP_A,
     *GROUP_B,
     *GROUP_B3,
+    *GROUP_B4,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -1174,6 +1323,46 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
     ),
     # A numeric value that is not a number [349].
     "impact_uncast_value": ("assert_impact_values_cast", (*BASE, impact_case(("Provider Number\tBeds", "010001\t12a"))), frozenset()),
+    # A Medicare inpatient file whose name has no data year [355].
+    "mup_no_data_year": (
+        "assert_mup_files_have_data_year",
+        (
+            *BASE,
+            Stored(
+                "cms_medicare_inpatient_by_provider",
+                "mp9",
+                "CMS_MEDICARE_PROVIDER__b",
+                "MUP_INP_Prv.CSV",
+                sha("mp9"),
+                1,
+                records=(cc(rndrng_prvdr_ccn="010009", tot_dschrgs="20"),),
+            ),
+        ),
+        frozenset(),
+    ),
+    # A data year whose DRG cells come from two files, which the sepsis share would sum [356].
+    "mup_drg_year_twice": (
+        "assert_mup_drg_one_file_per_data_year",
+        (
+            *BASE,
+            Stored(
+                "cms_medicare_inpatient_by_drg",
+                "md9",
+                "CMS_MUP_DRG__b",
+                "MUP_INP_RY25_P03_V10_DY23_PrvSvc.CSV",
+                sha("md9"),
+                1,
+                records=(cc(rndrng_prvdr_ccn="010001", drg_cd="871", tot_dschrgs="60"),),
+            ),
+        ),
+        frozenset(),
+    ),
+    # A Medicare inpatient count that is not a plain number [359].
+    "mup_uncast_value": (
+        "assert_mup_values_cast",
+        tuple(with_record(item, cc(rndrng_prvdr_ccn="010009", tot_benes="1,000")) if item.key == "mp2" else item for item in BASE),
+        frozenset(),
+    ),
     # An emergency-services value that is neither Yes nor No [329].
     "hgi_uncast_value": (
         "assert_hgi_values_cast",
@@ -1261,6 +1450,10 @@ CREATE TABLE bronze.cms_cc_maternal_health_hospital AS SELECT * REPLACE (_row_nu
     FROM read_csv(getvariable('cms_cc_maternal_health_hospital_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.cms_cc_hcahps_hospital AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('cms_cc_hcahps_hospital_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_medicare_inpatient_by_provider AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_medicare_inpatient_by_provider_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_medicare_inpatient_by_drg AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_medicare_inpatient_by_drg_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.stored_copies AS
     SELECT * REPLACE (byte_count::BIGINT AS byte_count, loaded::BOOLEAN AS loaded, retired::BOOLEAN AS retired)
     FROM read_csv(getvariable('copies_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
@@ -1516,6 +1709,12 @@ IMPACT_MEASURES_SQL = (
     "SELECT ccn, measure_control, field, coalesce(value_number::VARCHAR, ''), coalesce(value_code, '') FROM int_impact_measures "
     "WHERE rule_fiscal_year = 2026 ORDER BY ALL;"
 )
+MUP_PROVIDERS_SQL = (
+    "SELECT data_year::VARCHAR, release_year::VARCHAR, ccn, coalesce(tot_benes::VARCHAR, ''), coalesce(tot_dschrgs::VARCHAR, ''), "
+    "coalesce(bene_race_natind_cnt::VARCHAR, ''), coalesce(bene_cc_ph_ckd_v2_pct::VARCHAR, '') FROM int_mup_providers ORDER BY ALL;"
+)
+MUP_DRG_SQL = "SELECT data_year::VARCHAR, ccn, drg_cd, tot_dschrgs::VARCHAR FROM int_mup_drg_discharges ORDER BY ALL;"
+MUP_MEASURES_SQL = "SELECT ccn, measure_control, field, coalesce(value_number::VARCHAR, '') FROM int_mup_measures WHERE data_year = 2023 ORDER BY ALL;"
 VIEW_ROWS_SQL = "SELECT getvariable('checked_table'), count(*)::VARCHAR FROM query_table(getvariable('checked_table'));\n"
 BRONZE_COUNTS_SQL = (
     "WITH o AS (SELECT _object_key, any_value(_member_sha256) AS sha, count(*) AS n FROM query_table(getvariable('checked_table')) GROUP BY 1), "
@@ -1657,6 +1856,9 @@ def read_models(case: str) -> dict[str, Any]:
         "impact_values": [tuple(row) for row in duckdb_csv(database, IMPACT_VALUES_SQL)],
         "impact_measures": [tuple(row) for row in duckdb_csv(database, IMPACT_MEASURES_SQL)],
         "impact_holds": [tuple(row) for row in duckdb_csv(database, IMPACT_HOLDS_SQL)],
+        "mup_providers": [tuple(row) for row in duckdb_csv(database, MUP_PROVIDERS_SQL)],
+        "mup_drg": [tuple(row) for row in duckdb_csv(database, MUP_DRG_SQL)],
+        "mup_measures": [tuple(row) for row in duckdb_csv(database, MUP_MEASURES_SQL)],
     }
 
 
@@ -2022,6 +2224,49 @@ def fixture_scenarios() -> dict[str, bool]:
         ("010005", "C026", "operating_ime_factor", "0.0", ""),
         ("010005", "C038", "medicare_bills", "1200.0", ""),
     ]
+    # [355] to [359] Medicare inpatient: the data and release years from the file name in any case; suppressed values null.
+    checks["mup_providers_match_expected"] = base.get("mup_providers") == [
+        ("2023", "2025", "010001", "1000.0", "1500.0", "", "0.4"),
+        ("2023", "2025", "010005", "", "12.0", "", ""),
+        ("2024", "2026", "010001", "900.0", "1350.0", "", ""),
+    ]
+    checks["mup_drg_match_expected"] = base.get("mup_drg") == [
+        ("2023", "010001", "470", "100.0"),
+        ("2023", "010001", "871", "60.0"),
+        ("2023", "010001", "872", "30.0"),
+        ("2023", "010005", "871", "12.0"),
+    ]
+    # [360] to [363] Registry measures by the seed: C084 per race field, a suppressed count gives no row, a missing
+    # denominator gives null, the sepsis share from DRG 870 to 872, held controls give no rows.
+    checks["mup_measures_match_expected"] = base.get("mup_measures") == [
+        ("010001", "C038", "tot_dschrgs", "1500.0"),
+        ("010001", "C042", "tot_days", "5.0"),
+        ("010001", "C076", "bene_avg_risk_scre", "1.8"),
+        ("010001", "C077", "bene_avg_age", "74.5"),
+        ("010001", "C078", "bene_age_lt_65_cnt", "0.1"),
+        ("010001", "C079", "bene_age_65_74_cnt", "0.4"),
+        ("010001", "C080", "bene_age_75_84_cnt", "0.3"),
+        ("010001", "C081", "bene_age_gt_84_cnt", "0.2"),
+        ("010001", "C082", "bene_feml_cnt", "0.55"),
+        ("010001", "C083", "bene_dual_cnt", "0.25"),
+        ("010001", "C084", "bene_race_api_cnt", "0.03"),
+        ("010001", "C084", "bene_race_black_cnt", "0.2"),
+        ("010001", "C084", "bene_race_hspnc_cnt", "0.05"),
+        ("010001", "C084", "bene_race_othr_cnt", "0.02"),
+        ("010001", "C084", "bene_race_wht_cnt", "0.7"),
+        ("010001", "C085", "tot_benes", "1000.0"),
+        ("010001", "C086", "tot_dschrgs", "1.5"),
+        ("010001", "C087", "tot_dschrgs", "1500.0"),
+        ("010001", "C088", "tot_cvrd_days", "7400.0"),
+        ("010001", "C089", "bene_cc_ph_diabetes_v2_pct", "0.35"),
+        ("010001", "C090", "bene_cc_ph_ckd_v2_pct", "0.4"),
+        ("010001", "C109", "bene_cc_bh_depress_v1_pct", "0.3"),
+        ("010001", "C117", "tot_dschrgs", "0.06"),
+        ("010005", "C038", "tot_dschrgs", "12.0"),
+        ("010005", "C086", "tot_dschrgs", ""),
+        ("010005", "C087", "tot_dschrgs", "12.0"),
+        ("010005", "C117", "tot_dschrgs", "1.0"),
+    ]
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -2089,6 +2334,16 @@ def impact_seed_matches() -> bool:
     with (REPO_ROOT / "dbt/seeds/impact_measures.csv").open(newline="") as handle:
         seed = sorted({row["measure_control"] for row in csv.DictReader(handle)})
     return seed == sorted(sources["CMS_IPPS"]["linked_measure_ids"])
+
+
+def mup_seed_matches() -> bool:
+    """Check that the Medicare inpatient measure seed covers exactly the registry's controls of its two sources [363]."""
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    sources = {source["source_id"]: source for source in registry["sources"]}
+    with (REPO_ROOT / "dbt/seeds/mup_measures.csv").open(newline="") as handle:
+        seed = sorted({row["measure_control"] for row in csv.DictReader(handle)})
+    expected = {*sources["CMS-MUP-PROVIDER"]["linked_measure_ids"], *sources["CMS_MEDICARE_PROVIDER"]["linked_measure_ids"]}
+    return seed == sorted(expected)
 
 
 def real_stage() -> dict[str, Any]:
@@ -2222,6 +2477,25 @@ def real_stage() -> dict[str, Any]:
     outcome["impact_measures"] = dict(duckdb_csv(database, impact_measure_sql))
     outcome["impact_holds"] = duckdb_csv(database, "SELECT rule_fiscal_year::VARCHAR, ccn, hold_reason, hold_rows::VARCHAR FROM int_impact_holds ORDER BY ALL;")
     outcome["checks"]["impact_seed_matches_registry"] = impact_seed_matches()
+    # [355] to [363] Medicare inpatient: providers and DRG cells per data year; measure rows per control.
+    mup_sql = (
+        "SELECT p.data_year::VARCHAR, count(*)::VARCHAR || ' providers, ' || count(*) FILTER (WHERE p.tot_benes IS NULL)::VARCHAR "
+        "|| ' without totals, ' || coalesce(max(d.cells), 0)::VARCHAR || ' DRG cells' FROM int_mup_providers AS p LEFT JOIN "
+        "(SELECT data_year, count(*) AS cells FROM int_mup_drg_discharges GROUP BY 1) AS d ON p.data_year = d.data_year GROUP BY 1 ORDER BY 1;"
+    )
+    outcome["mup_providers"] = dict(duckdb_csv(database, mup_sql))
+    mup_measure_sql = (
+        "SELECT measure_control, count(*)::VARCHAR || ' rows, ' || min(data_year)::VARCHAR || '-' || max(data_year)::VARCHAR "
+        "FROM int_mup_measures GROUP BY 1 ORDER BY 1;"
+    )
+    outcome["mup_measures"] = dict(duckdb_csv(database, mup_measure_sql))
+    outcome["checks"]["mup_seed_matches_registry"] = mup_seed_matches()
+    # [362] Every data year with DRG cells has sepsis shares, whichever release its provider file came from.
+    sepsis_gap_sql = (
+        "SELECT count(*)::VARCHAR FROM (SELECT DISTINCT data_year FROM int_mup_drg_discharges) AS d WHERE NOT EXISTS "
+        "(SELECT 1 FROM int_mup_measures AS m WHERE m.measure_control = 'C117' AND m.data_year = d.data_year);"
+    )
+    outcome["checks"]["mup_sepsis_share_every_drg_year"] = duckdb_csv(database, sepsis_gap_sql) == [["0"]]
     bronze = unprefixed(duckdb_csv(database, per_table(BRONZE_COUNTS_SQL, "lakehouse.bronze."), init), "lakehouse.bronze.")
     # Bronze loads one copy per file, so its objects equal the distinct files; the copies table lists every copy [204] [206].
     model_sql = (
