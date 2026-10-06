@@ -89,6 +89,7 @@ UNUSED_PACKAGE = "tabu" + "late"
 UNUSED_SETTING = "OLD" + "_SETTING"
 UNUSED_TF_VARIABLE = "unused" + "_region"
 DASH_M_MODULE = "nightly" + "_report"
+USED_TF = f'variable "{UNUSED_TF_VARIABLE}" {{}}\n\nlocals {{\n  region = var.{UNUSED_TF_VARIABLE}\n}}\n\n' + 'output "region" {\n  value = local.region\n}\n'
 # The scratch repository holds this repository's scripts; the cleanup samples sit outside them.
 COPIED_ALLOWED = (
     "orphan scripts/* -- check scripts copied into the scratch repository\n"
@@ -357,16 +358,22 @@ CASES = [
         True,
         {"README.md": f"Run `python -m tools.{DASH_M_MODULE}`.\n", f"tools/{DASH_M_MODULE}.py": "print(1)\n", ".cleanup_allowlist": COPIED_ALLOWED},
     ),
+    Case("used Terraform variable", "terraform-unused", True, {"infra/main.tf": USED_TF}),
+    Case("unused Terraform variable", "terraform-unused", False, {"infra/main.tf": f'variable "{UNUSED_TF_VARIABLE}" {{}}\n'}),
+    # Only folders that hold a tracked .tf file are checked; an ignored folder is out of scope, as in CI.
     Case(
-        "used Terraform variable",
+        "ignored Terraform folder",
         "terraform-unused",
         True,
-        {
-            "infra/main.tf": f'variable "{UNUSED_TF_VARIABLE}" {{}}\n\nlocals {{\n  region = var.{UNUSED_TF_VARIABLE}\n}}\n\n'
-            + 'output "region" {\n  value = local.region\n}\n'
-        },
+        {".gitignore": "archive/\n", "archive/main.tf": f'variable "{UNUSED_TF_VARIABLE}" {{}}\n', "infra/main.tf": USED_TF},
     ),
-    Case("unused Terraform variable", "terraform-unused", False, {"infra/main.tf": f'variable "{UNUSED_TF_VARIABLE}" {{}}\n'}),
+    # A nested tracked folder is checked on its own and its findings keep their path from the repository root.
+    Case(
+        "unused variable in a nested folder",
+        "terraform-unused",
+        False,
+        {"infra/main.tf": USED_TF, "infra/iam/main.tf": f'variable "{UNUSED_TF_VARIABLE}" {{}}\n'},
+    ),
     Case(
         "clean privacy sample",
         "privacy-scan",
@@ -510,6 +517,7 @@ BLOCK_REASONS = {
     "import missing from requirements": f"app/table.py:1: {UNUSED_PACKAGE} is imported but runtime host does not declare it",
     "file nothing references": f"docs/{OLD_NOTES}: no other tracked file references it",
     "unused Terraform variable": f'infra/main.tf:1: variable "{UNUSED_TF_VARIABLE}" is declared but not used',
+    "unused variable in a nested folder": f'infra/iam/main.tf:1: variable "{UNUSED_TF_VARIABLE}" is declared but not used',
     "image package imported by host code": f"app/table.py:1: {UNUSED_PACKAGE} is imported but runtime host does not declare it",
     "runtime pattern matches no file": "runtime image: worker/*.py matches no tracked Python file",
     "home path": "notes.md:1: home-directory path with a user name",

@@ -626,20 +626,22 @@ def orphan_files() -> list[Finding]:
 def terraform_unused() -> list[Finding]:
     """No Terraform variable, local, data source or module output that nothing uses (tflint, every module)."""
     globs, findings = allowed_paths("terraform-unused")
-    if not git("ls-files", "*.tf").strip():
-        return findings
-    args = ["--recursive", "--only", "terraform_unused_declarations", "--format", "json", "--force"]
-    result = run_command(str(Path(".tools/bin/tflint").resolve()), args, timeout=300)
-    report = json.loads(result.stdout or "{}")
-    if result.returncode or report.get("errors"):
-        raise SystemExit(f"tflint failed ({result.returncode}): {report.get('errors') or result.stderr[-2000:]}")
+    # One run per folder that holds a tracked .tf file: --recursive would walk every ignored folder under data/.
+    folders = sorted({Path(path).parent.as_posix() for path in git("ls-files", "*.tf").splitlines()})
     root = Path.cwd().resolve()
-    for issue in report.get("issues", []):
-        where = issue["range"]
-        path = (root / where["filename"]).resolve().relative_to(root).as_posix()
-        if not any(fnmatch.fnmatch(path, glob) for glob in globs):
-            fix = f"delete the declaration, or add 'terraform-unused {path} -- <who uses it>' to {CLEANUP_ALLOWLIST}"
-            findings.append(Finding(f"{path}:{where['start']['line']}", issue["message"], CLEANUP_RULE, fix))
+    for folder in folders:
+        args = ["--chdir", folder, "--only", "terraform_unused_declarations", "--format", "json", "--force"]
+        result = run_command(str(Path(".tools/bin/tflint").resolve()), args, timeout=120)
+        report = json.loads(result.stdout or "{}")
+        if result.returncode or report.get("errors"):
+            raise SystemExit(f"tflint failed in {folder} ({result.returncode}): {report.get('errors') or result.stderr[-2000:]}")
+        for issue in report.get("issues", []):
+            where = issue["range"]
+            # tflint reports paths from the starting folder, not from the --chdir folder.
+            path = (root / where["filename"]).resolve().relative_to(root).as_posix()
+            if not any(fnmatch.fnmatch(path, glob) for glob in globs):
+                fix = f"delete the declaration, or add 'terraform-unused {path} -- <who uses it>' to {CLEANUP_ALLOWLIST}"
+                findings.append(Finding(f"{path}:{where['start']['line']}", issue["message"], CLEANUP_RULE, fix))
     return findings
 
 
