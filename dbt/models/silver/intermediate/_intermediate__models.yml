@@ -927,3 +927,62 @@ models:
       - name: field
         description: The published field name, lowercase.
         data_tests: [not_null]
+
+  - name: int_saipe_county_estimates
+    description: >
+      SAIPE county estimates per year, 1989 to 2024: poverty counts and percents with 90% bounds and median household
+      income with bounds, from the documented fixed positions. C200 and C201, conditional; annual SAIPE is not ACS
+      five-year poverty, and dollars are nominal.
+    columns:
+      - name: saipe_row_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: estimate_year
+        description: Estimate year from the publisher file name.
+        data_tests: [not_null]
+      - name: county_fips
+        description: County code as 5-character text.
+        data_tests: [not_null]
+      - name: missing_fields
+        description: Fields published as '.'.
+
+  - name: int_sahie_county_rows
+    description: >
+      SAHIE county rows per year and published age, race, sex and income group, 2006 to 2024, with counts, percents and
+      margins of error. C202, conditional: under-65 coverage is not all-age coverage, and groups are never combined.
+    columns:
+      - name: sahie_row_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: estimate_year
+        description: Year as published in the row; must equal the file's year.
+        data_tests: [not_null]
+      - name: county_fips
+        description: County code as 5-character text.
+        data_tests: [not_null]
+      - name: is_all_groups
+        description: Code 0 of every category, defined in each file's preamble as under 65, all races, both sexes and all incomes.
+        data_tests: [not_null]
+
+  - name: int_bls_county_series
+    description: >
+      BLS LAUS county series values as captured, 1990 to 2025: unemployment rate, unemployed, employed and labor force by
+      month and annual average, not seasonally adjusted, with footnote codes and the capture date as revision vintage.
+      C177 and C177.02, conditional: never spliced with ACS or SVI.
+    columns:
+      - name: bls_row_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: measure
+        description: The LAUS measure named from its code.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [unemployment_rate, unemployed, employed, labor_force]
+      - name: county_fips
+        description: County code as 5-character text.
+        data_tests: [not_null]
+      - name: capture_date
+        description: The date of the API capture, the revision vintage of the value.
+        data_tests: [not_null]

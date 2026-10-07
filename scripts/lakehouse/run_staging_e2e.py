@@ -109,6 +109,9 @@ TABLES = (
     "acs_summary_b25091",
     "acs_summary_b26001",
     "acs_summary_c16001",
+    "saipe_text_lines",
+    "sahie",
+    "bls_laus",
 )
 HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
@@ -138,6 +141,8 @@ class Stored:
     records: tuple[tuple[tuple[str, str], ...], ...] = ()
     # The labels the publisher printed under each header, as bronze.column_map keeps them (ACS exports) [420].
     labels: tuple[tuple[str, str], ...] = ()
+    # The note lines before the header, as bronze.file_preambles keeps them (SAHIE) [439].
+    preamble: tuple[str, ...] = ()
 
 
 def sha(label: str) -> str:
@@ -730,6 +735,34 @@ SVI_COLUMNS = (
     "rpl_themes",
     "g1v1r",
 )
+SAHIE_COLUMNS = (
+    "year",
+    "version",
+    "statefips",
+    "countyfips",
+    "geocat",
+    "agecat",
+    "racecat",
+    "sexcat",
+    "iprcat",
+    "nipr",
+    "nipr_moe",
+    "nui",
+    "nui_moe",
+    "nic",
+    "nic_moe",
+    "pctui",
+    "pctui_moe",
+    "pctic",
+    "pctic_moe",
+    "pctelig",
+    "pctelig_moe",
+    "pctliic",
+    "pctliic_moe",
+    "state_name",
+    "county_name",
+)
+BLS_COLUMNS = ("seriesid", "county_fips", "measure_code", "year", "period", "periodname", "value", "footnotes")
 ACS_COLUMNS = {
     "acs_dp04": ("geo_id", "name", "dp04_0077pe", "dp04_0078pe"),
     "acs_s1701": ("geo_id", "name", "s1701_c03_001e"),
@@ -849,6 +882,8 @@ WIDE_COLUMNS = {
     "ruca_zip_2010": RUCA_ZIP_2010_COLUMNS,
     "cms_hsa_csv": HSA_COLUMNS,
     "svi": SVI_COLUMNS,
+    "sahie": SAHIE_COLUMNS,
+    "bls_laus": BLS_COLUMNS,
     "acs_dp02": ACS_COLUMNS.get("acs_dp02", ("geo_id", "name")),
     "acs_dp03": ACS_COLUMNS.get("acs_dp03", ("geo_id", "name")),
     "acs_dp04": ACS_COLUMNS.get("acs_dp04", ("geo_id", "name")),
@@ -2053,6 +2088,105 @@ GROUP_C2 = (
 )
 
 
+def saipe_line(state: str, county: str, values: dict[int, str], name: str) -> str:
+    """Return one 264-character SAIPE line with each value right-aligned to end at its documented column [435]."""
+    line = [" "] * 264
+    for end, value in ((2, state), (6, county), *values.items()):
+        for offset, char in enumerate(reversed(value)):
+            line[end - 1 - offset] = char
+    for offset, char in enumerate(name):
+        line[193 + offset] = char
+    return "".join(line)
+
+
+# Ends of the SAIPE fields the fixture fills: all-ages poverty count, bounds and percent, and median household income.
+SAIPE_ENDS = (15, 24, 33, 38, 43, 48, 139, 146, 153)
+
+
+def saipe_values(*values: str) -> dict[int, str]:
+    """Return the fixture's SAIPE values by the column each ends at."""
+    return dict(zip(SAIPE_ENDS, values, strict=True))
+
+
+SAHIE_PREAMBLE = (
+    "       agecat          1      Age category",
+    "                                0 - Under 65 years",
+    "       racecat         1      Race category",
+    "                                0 - All races",
+    "       sexcat          1      Sex category",
+    "                                0 - Both sexes",
+    "       iprcat          1      Income category",
+    "                                0 - All income levels",
+)
+
+
+def sahie_row(county: str, geocat: str = "50", agecat: str = "0", **values: str) -> tuple[tuple[str, str], ...]:
+    """Return one SAHIE row of 2022 for state 01 unless the county code says otherwise."""
+    state, county_code = county[:2], county[2:]
+    fields = {"year": "2022", "statefips": state, "countyfips": county_code, "geocat": geocat, "agecat": agecat, "racecat": "0", "sexcat": "0", "iprcat": "0"}
+    return tuple((fields | values).items())
+
+
+def bls_row(measure: str, year: str, period: str, value: str, footnotes: str = "[{}]") -> tuple[tuple[str, str], ...]:
+    """Return one BLS LAUS row of Autauga County."""
+    fields = {"seriesid": f"LAUCN0100100000000{measure}", "county_fips": "01001", "measure_code": measure, "year": year, "period": period}
+    return tuple((fields | {"value": value, "footnotes": footnotes}).items())
+
+
+SAIPE_2023 = (
+    saipe_line("00", "0", saipe_values("40763043", "40485829", "41040257", "12.5", "12.4", "12.6", "77719", "77533", "77905"), "United States"),
+    saipe_line("01", "0", saipe_values("780043", "762230", "797856", "15.7", "15.3", "16.1", "62248", "61546", "62950"), "Alabama"),
+    saipe_line("01", "1", saipe_values("7004", "5599", "8409", "11.7", "9.3", "14.1", "68857", "62667", "75047"), "Autauga County"),
+)
+# C3 [435] to [448]: SAIPE with US and state rows, the Alabama-only twin and a missing median; SAHIE with a subgroup, a
+# state row and Kalawao's missing values; BLS with a month, an annual average and a footnoted missing value.
+GROUP_C3 = (
+    Stored("saipe_text_lines", "sp23", "SAIPE__y23", "est23all.txt", sha("sp23"), 3, content=SAIPE_2023),
+    Stored("saipe_text_lines", "spal", "SAIPE__y23", "est23-al.txt", sha("spal"), 1, content=SAIPE_2023[2:]),
+    Stored(
+        "saipe_text_lines",
+        "sp99",
+        "SAIPE__y99",
+        "est99all.dat",
+        sha("sp99"),
+        2,
+        content=(
+            saipe_line("01", "1", saipe_values("4991", "3871", "6110", "11.4", "8.9", "14.0", "39702", "37226", "42342"), "Autauga County"),
+            saipe_line("01", "3", saipe_values("12000", "10000", "14000", "10.1", "8.5", "11.7", ".", ".", "."), "Baldwin County"),
+        ),
+    ),
+    Stored(
+        "sahie",
+        "sh22",
+        "SAHIE__y22",
+        "sahie_2022.csv",
+        sha("sh22"),
+        4,
+        records=(
+            sahie_row("01001", nipr="45000", nui="4000", pctui="  8.9", pctui_moe="1.2"),
+            sahie_row("01001", agecat="1", nipr="30000", nui="3500", pctui=" 11.7", pctui_moe="1.5"),
+            sahie_row("01000", geocat="40", nipr="4000000", nui="400000", pctui="10.0", pctui_moe="0.3"),
+            sahie_row("15005", nipr="   . ", nui="   . ", pctui="   . ", pctui_moe="   . "),
+        ),
+        preamble=SAHIE_PREAMBLE,
+    ),
+    Stored(
+        "bls_laus",
+        "bl1",
+        "BLS_API__20260926T202341Z__fixture",
+        "observations.csv",
+        sha("bl1"),
+        4,
+        records=(
+            bls_row("03", "2023", "M01", "3.1"),
+            bls_row("03", "2023", "M13", "2.8"),
+            bls_row("04", "2025", "M10", "-", '[{"code":"X","text":"Data unavailable due to the 2025 lapse in appropriations."}]'),
+            bls_row("06", "2023", "M01", "26000"),
+        ),
+    ),
+)
+
+
 def owner_case(**fields: str) -> Stored:
     """Return one more owner file with one row, for the failing owner cases."""
     return Stored(
@@ -2320,6 +2454,7 @@ BASE = (
     *GROUP_B5B,
     *GROUP_C1,
     *GROUP_C2,
+    *GROUP_C3,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -2601,6 +2736,38 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
         tuple(with_record(item, svi_row(st="01", fips="01003", ep_pov150="abc")) if item.key == "sv22" else item for item in BASE),
         frozenset(),
     ),
+    # [439] A SAHIE file whose preamble no longer defines code 0 as under 65.
+    "sahie_category_changed": (
+        "assert_sahie_files_consistent",
+        tuple(
+            replace(item, preamble=tuple(line.replace("Under 65 years", "Under 19 years") for line in item.preamble)) if item.key == "sh22" else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
+    # [438] A SAHIE row whose year differs from its file's.
+    "sahie_year_mismatch": (
+        "assert_sahie_files_consistent",
+        tuple(with_record(item, sahie_row("01003", year="2021", nipr="100")) if item.key == "sh22" else item for item in BASE),
+        frozenset(),
+    ),
+    # [435] A SAIPE county row whose numeric positions hold text.
+    "saipe_value_uncast": (
+        "assert_income_labor_values_cast",
+        tuple(
+            replace(item, rows=3, content=(*item.content, saipe_line("01", "5", saipe_values("12a", "1", "2", "3", "4", "5", "6", "7", "8"), "Barbour County")))
+            if item.key == "sp99"
+            else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
+    # [445] A BLS measure code outside the four LAUS measures.
+    "bls_unknown_measure": (
+        "assert_income_labor_values_cast",
+        tuple(with_record(item, bls_row("09", "2023", "M01", "1")) if item.key == "bl1" else item for item in BASE),
+        frozenset(),
+    ),
     # An emergency-services value that is neither Yes nor No [329].
     "hgi_uncast_value": (
         "assert_hgi_values_cast",
@@ -2612,7 +2779,13 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
 FIXTURE_RENAMED = ((sha("k1"), sha("k2")),)
 # The container name the fixture objects stand in, so names without a year still get one [178].
 FIXTURE_CONTAINER = "FY_2021_fixture.zip"
-TEXT_TABLES = {"cms_ipps_text_lines", "cms_occupational_mix_text_lines", "cms_occupational_mix_text_lines_utf16", "county_adjacency_2010_text_lines"}
+TEXT_TABLES = {
+    "cms_ipps_text_lines",
+    "cms_occupational_mix_text_lines",
+    "cms_occupational_mix_text_lines_utf16",
+    "county_adjacency_2010_text_lines",
+    "saipe_text_lines",
+}
 SHEET_TABLES = {"cms_ipps_sheet_rows", "cms_occupational_mix_sheet_rows", "hud_zip_county_sheet_rows", "rucc_sheet_rows", "ruca_sheet_rows"}
 
 
@@ -2673,6 +2846,8 @@ CREATE TABLE bronze.cms_occupational_mix_sheet_rows AS
     FROM fixture WHERE bronze_table = 'cms_occupational_mix_sheet_rows';
 CREATE TABLE bronze.county_adjacency_2010_text_lines AS
     SELECT * EXCLUDE (bronze_table, sheet_name, cells_text) FROM fixture WHERE bronze_table = 'county_adjacency_2010_text_lines';
+CREATE TABLE bronze.saipe_text_lines AS
+    SELECT * EXCLUDE (bronze_table, sheet_name, cells_text) FROM fixture WHERE bronze_table = 'saipe_text_lines';
 CREATE TABLE bronze.hud_zip_county_sheet_rows AS
     SELECT * EXCLUDE (bronze_table, line_text, cells_text), _row_number AS sheet_row, string_split(cells_text, '|') AS cells
     FROM fixture WHERE bronze_table = 'hud_zip_county_sheet_rows';
@@ -2767,6 +2942,12 @@ CREATE TABLE bronze.acs_summary_b26001 AS SELECT * REPLACE (_row_number::BIGINT 
     FROM read_csv(getvariable('acs_summary_b26001_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.acs_summary_c16001 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('acs_summary_c16001_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.sahie AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('sahie_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.bls_laus AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('bls_laus_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.file_preambles AS SELECT * REPLACE (line_number::INTEGER AS line_number)
+    FROM read_csv(getvariable('file_preambles_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.column_map AS SELECT * REPLACE (position::INTEGER AS position)
     FROM read_csv(getvariable('column_map_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.stored_copies AS
@@ -2907,6 +3088,20 @@ def column_map_csv(objects: Iterable[Stored]) -> str:
         if item.key in loaded or item.force_loaded:
             for position, (header, label) in enumerate(item.labels, start=1):
                 writer.writerow((item.key, item.table, position, header, header.lower(), label))
+    return buffer.getvalue()
+
+
+def file_preambles_csv(objects: Iterable[Stored]) -> str:
+    """Return bronze.file_preambles for the fixture: each loaded object's note lines before its header [439]."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(("_object_key", "table_name", "line_number", "line_text"))
+    items = list(objects)
+    loaded = loaded_keys(items)
+    for item in items:
+        if item.key in loaded or item.force_loaded:
+            for number, line in enumerate(item.preamble, start=1):
+                writer.writerow((item.key, item.table, number, line))
     return buffer.getvalue()
 
 
@@ -3150,6 +3345,22 @@ ACS_SQL = (
 )
 SVI_SQL = "SELECT edition, county_fips, field, coalesce(value_number::VARCHAR, ''), coalesce(missing_token, '') FROM int_svi_county_values ORDER BY ALL;"
 
+SAIPE_SQL = (
+    "SELECT estimate_year::VARCHAR, county_fips, coalesce(poverty_all_count::VARCHAR, ''), coalesce(poverty_all_pct::VARCHAR, ''), "
+    "coalesce(median_household_income::VARCHAR, ''), coalesce(median_household_income_lb90::VARCHAR, ''), array_to_string(missing_fields, '|') "
+    "FROM int_saipe_county_estimates ORDER BY ALL;"
+)
+SAHIE_SQL = (
+    "SELECT estimate_year::VARCHAR, county_fips, agecat, racecat, sexcat, iprcat, is_all_groups::VARCHAR, coalesce(nipr::VARCHAR, ''), "
+    "coalesce(nui::VARCHAR, ''), coalesce(pctui::VARCHAR, ''), coalesce(pctui_moe::VARCHAR, ''), array_to_string(missing_fields, '|') "
+    "FROM int_sahie_county_rows ORDER BY ALL;"
+)
+BLS_SQL = (
+    "SELECT county_fips, measure, data_year::VARCHAR, coalesce(month_number::VARCHAR, ''), is_annual_average::VARCHAR, is_seasonally_adjusted::VARCHAR, "
+    "coalesce(value_number::VARCHAR, ''), coalesce(missing_token, ''), array_to_string(footnote_codes, '|'), capture_date "
+    "FROM int_bls_county_series ORDER BY ALL;"
+)
+
 
 def per_table(query: str, prefix: str) -> str:
     """Return the query once per table, each run after setting the checked_table variable to the prefixed table name."""
@@ -3239,6 +3450,8 @@ def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[st
         (case_dir / f"{table}.csv").write_text(wide_csv(objects, table))
         variables += f"SET VARIABLE {table}_csv = '{CONTAINER_OUT}/e2e/{case}/{table}.csv';\n"
     (case_dir / "column_map.csv").write_text(column_map_csv(objects))
+    (case_dir / "file_preambles.csv").write_text(file_preambles_csv(objects))
+    variables += f"SET VARIABLE file_preambles_csv = '{CONTAINER_OUT}/e2e/{case}/file_preambles.csv';\n"
     variables += f"SET VARIABLE column_map_csv = '{CONTAINER_OUT}/e2e/{case}/column_map.csv';\n"
     (case_dir / "bronze.sql").write_text(variables + FIXTURE_SQL)
     database = f"{CONTAINER_OUT}/e2e/{case}/fixture_lakehouse.duckdb"
@@ -3308,6 +3521,9 @@ def read_models(case: str) -> dict[str, Any]:
         "hsa": [tuple(row) for row in duckdb_csv(database, HSA_SQL)],
         "acs": [tuple(row) for row in duckdb_csv(database, ACS_SQL)],
         "svi": [tuple(row) for row in duckdb_csv(database, SVI_SQL)],
+        "saipe": [tuple(row) for row in duckdb_csv(database, SAIPE_SQL)],
+        "sahie": [tuple(row) for row in duckdb_csv(database, SAHIE_SQL)],
+        "bls": [tuple(row) for row in duckdb_csv(database, BLS_SQL)],
         "occmix_holds": [
             tuple(row)
             for row in duckdb_csv(
@@ -3496,6 +3712,45 @@ def county_context_checks(base: dict[str, Any]) -> dict[str, bool]:
     checks["vintage_generator_refuses_svi_without_edition"] = refuses_geography(
         lambda: geography_file_periods.rows_for([{"table": "svi", "sha256": sha("q6"), "release_id": "r", "file_name": "SVI.csv"}], {}, {}, {}),
         "no recorded edition",
+    )
+    return checks
+
+
+def income_labor_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's C3 SAIPE, SAHIE and BLS models with their expected rows and check the vintage generator's refusals."""
+    checks: dict[str, bool] = {}
+    # [435] to [445] County rows only; the Alabama-only twin not typed; `.` and `-` null with the field or token kept; the
+    # annual average flagged; footnote codes kept; the capture date as the BLS vintage.
+    checks["saipe_matches_expected"] = base.get("saipe") == sorted(
+        [
+            ("2023", "01001", "7004.0", "11.7", "68857.0", "62667.0", ""),
+            ("1999", "01001", "4991.0", "11.4", "39702.0", "37226.0", ""),
+            ("1999", "01003", "12000.0", "10.1", "", "", "median_household_income|median_household_income_lb90|median_household_income_ub90"),
+        ]
+    )
+    checks["sahie_matches_expected"] = base.get("sahie") == sorted(
+        [
+            ("2022", "01001", "0", "0", "0", "0", "true", "45000.0", "4000.0", "8.9", "1.2", ""),
+            ("2022", "01001", "1", "0", "0", "0", "false", "30000.0", "3500.0", "11.7", "1.5", ""),
+            ("2022", "15005", "0", "0", "0", "0", "true", "", "", "", "", "nipr|nui|pctui|pctui_moe"),
+        ]
+    )
+    checks["bls_matches_expected"] = base.get("bls") == sorted(
+        [
+            ("01001", "unemployment_rate", "2023", "1", "false", "false", "3.1", "", "", "2026-09-26"),
+            ("01001", "unemployment_rate", "2023", "", "true", "false", "2.8", "", "", "2026-09-26"),
+            ("01001", "unemployed", "2025", "10", "false", "false", "", "-", "X", "2026-09-26"),
+            ("01001", "labor_force", "2023", "1", "false", "false", "26000.0", "", "", "2026-09-26"),
+        ]
+    )
+    checks["income_labor_seed_matches_registry"] = income_labor_seed_matches()
+    checks["vintage_generator_refuses_saipe_name_without_year"] = refuses_geography(
+        lambda: geography_file_periods.rows_for([{"table": "saipe_text_lines", "sha256": sha("q5"), "release_id": "r", "file_name": "estall.txt"}], {}, {}),
+        "no publisher year",
+    )
+    checks["vintage_generator_refuses_bls_without_capture_date"] = refuses_geography(
+        lambda: geography_file_periods.rows_for([{"table": "bls_laus", "sha256": sha("q4"), "release_id": "BLS", "file_name": "observations.csv"}], {}, {}),
+        "no capture date",
     )
     return checks
 
@@ -3990,6 +4245,7 @@ def fixture_scenarios() -> dict[str, bool]:
     ]
     checks.update(geography_checks(base))
     checks.update(county_context_checks(base))
+    checks.update(income_labor_checks(base))
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -4154,6 +4410,25 @@ def acs_svi_seed_matches() -> bool:
     return bool(expected_controls) and seeded == expected_controls and named <= concepts
 
 
+def income_labor_seed_matches() -> bool:
+    """Check the SAIPE, SAHIE and BLS measure seed against the registry: every control of S24, S25 and S29 once per row,
+    with its decision [446]."""
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    families = {source: family["id"] for family in registry["source_families"] for source in family["audit_source_ids"]}
+    wanted = {"S24", "S25", "S29"}
+    expected_rows = sorted(
+        (control["id"], control["preserved_controls"]["current_review_decision"])
+        for control in registry["measure_controls"]
+        if {families[source] for source in control["source_ids"] if source in families} & wanted
+    )
+    seed = REPO_ROOT / "dbt/seeds/income_labor_measures.csv"
+    if not seed.exists():
+        return False
+    with seed.open(newline="") as handle:
+        seeded = sorted((row["measure_control"], row["review_decision"]) for row in csv.DictReader(handle))
+    return bool(expected_rows) and seeded == expected_rows
+
+
 def mup_seed_matches() -> bool:
     """Check that the Medicare inpatient measure seed covers exactly the registry's controls of its two sources [363]."""
     registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
@@ -4174,6 +4449,9 @@ GEOGRAPHY_FINGERPRINTS = {
     "int_hsa_zip_cases": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY hsa_row_key)) FROM int_hsa_zip_cases AS t;",
     "int_acs_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY acs_value_key)) FROM int_acs_county_values AS t;",
     "int_svi_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY svi_value_key)) FROM int_svi_county_values AS t;",
+    "int_saipe_county_estimates": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY saipe_row_key)) FROM int_saipe_county_estimates AS t;",
+    "int_sahie_county_rows": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY sahie_row_key)) FROM int_sahie_county_rows AS t;",
+    "int_bls_county_series": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY bls_row_key)) FROM int_bls_county_series AS t;",
 }
 GEOGRAPHY_RECONCILE_SQL = """SELECT 'hud', (SELECT count(*) FROM stg_hud_zip_county)::VARCHAR,
     ((SELECT count(*) FROM int_hud_zip_county_quarters) + (SELECT count(*) FROM int_hud_zip_county_holds))::VARCHAR
@@ -4285,6 +4563,44 @@ SELECT p.vintage, count(*) FILTER (WHERE regexp_full_match(r.county, '[0-9]{4,5}
 FROM rows AS r JOIN geography_file_periods AS p ON r.member_sha256 = p.member_sha256 GROUP BY 1 ORDER BY 1;"""
 
 
+# Staged rows counted from the staging views without the models: SAIPE county lines of the all-geography files, SAHIE
+# county rows and every BLS row, against the typed rows; and the Alabama-only 2023 SAIPE lines against the full file [437] [448].
+INCOME_LABOR_SQL = """WITH saipe AS (
+    SELECT l._member_sha256, l.line_text FROM stg_saipe_text_lines AS l
+    JOIN geography_file_periods AS p ON l._member_sha256 = p.member_sha256
+    WHERE regexp_full_match(p.file_name, 'est[0-9]{2}all\\.(txt|dat)') AND regexp_full_match(substr(l.line_text, 1, 2), '[0-9]{2}')
+        AND regexp_full_match(trim(substr(l.line_text, 4, 3)), '[0-9]{1,3}') AND trim(substr(l.line_text, 4, 3))::INTEGER > 0
+)
+SELECT 'saipe', (SELECT count(*) FROM saipe)::VARCHAR, (SELECT count(*) FROM int_saipe_county_estimates)::VARCHAR
+UNION ALL SELECT 'sahie', (SELECT count(*) FROM stg_sahie WHERE trim(geocat) = '50')::VARCHAR, (SELECT count(*) FROM int_sahie_county_rows)::VARCHAR
+UNION ALL SELECT 'bls', (SELECT count(*) FROM stg_bls_laus)::VARCHAR, (SELECT count(*) FROM int_bls_county_series)::VARCHAR;"""
+SAIPE_TWIN_SQL = """WITH files AS (SELECT member_sha256, file_name FROM geography_file_periods WHERE bronze_table = 'saipe_text_lines'),
+state_lines AS (
+    SELECT substr(l.line_text, 1, 241) AS line FROM stg_saipe_text_lines AS l JOIN files AS f ON l._member_sha256 = f.member_sha256
+    WHERE f.file_name = 'est23-al.txt'
+),
+full_lines AS (
+    SELECT substr(l.line_text, 1, 241) AS line FROM stg_saipe_text_lines AS l JOIN files AS f ON l._member_sha256 = f.member_sha256
+    WHERE f.file_name = 'est23all.txt' AND substr(l.line_text, 1, 2) = '01'
+)
+SELECT (SELECT count(*) FROM state_lines)::VARCHAR, (SELECT count(*) FROM full_lines)::VARCHAR,
+    (SELECT count(*) FROM (SELECT line FROM state_lines EXCEPT ALL SELECT line FROM full_lines))::VARCHAR;"""
+
+
+def income_labor_real(database: str, init: str) -> dict[str, Any]:
+    """Reconcile the real C3 models with their staging views and the Alabama-only SAIPE file with its full-file twin [437] [448]."""
+    checks: dict[str, bool] = {}
+    counts: dict[str, Any] = {}
+    for name, staged, typed in duckdb_csv(database, INCOME_LABOR_SQL, init):
+        counts[name] = {"staged": int(staged), "typed": int(typed)}
+        checks[f"income_labor_{name}_rows_reconcile"] = staged == typed and int(staged) > 0
+    state_rows, full_rows, unmatched = duckdb_csv(database, SAIPE_TWIN_SQL, init)[0]
+    counts["saipe_alabama_twin"] = {"state_file_rows": int(state_rows), "full_file_rows": int(full_rows), "unmatched": int(unmatched)}
+    checks["income_labor_saipe_state_file_is_twin"] = state_rows == full_rows and unmatched == "0" and int(state_rows) > 0
+    checks["income_labor_seed_matches_registry"] = income_labor_seed_matches()
+    return {"checks": checks, "counts": counts}
+
+
 def county_context_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real C2 models with their staging views, independently of the model SQL [434]."""
     checks: dict[str, bool] = {}
@@ -4336,6 +4652,9 @@ def real_stage() -> dict[str, Any]:
     county_context = county_context_real(database, init)
     outcome["checks"].update(county_context["checks"])
     outcome["county_context_counts"] = county_context["counts"]
+    income_labor = income_labor_real(database, init)
+    outcome["checks"].update(income_labor["checks"])
+    outcome["income_labor_counts"] = income_labor["counts"]
     status_sql = "SELECT text_layout || ' ' || twin_status, count(*)::VARCHAR FROM stg_bronze__twin_comparison GROUP BY 1 ORDER BY 1;"
     outcome["twin_statuses"] = dict(duckdb_csv(database, status_sql))
     held_sql = (

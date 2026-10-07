@@ -244,6 +244,14 @@ median keeps its cap and a flag. SVI's seven editions are staged long under each
 `dbt/seeds/geography_file_periods.csv`. `dbt/seeds/acs_svi_measures.csv` maps the 44 S18 and S19 controls to ACS concepts
 and SVI fields; staging picks no source between them.
 
+SAIPE county estimates for 1989 to 2024 are cut from the fixed-width files at the positions every year's layout documents
+(`int_saipe_county_estimates`): poverty counts and percents with 90% bounds and median household income in nominal dollars.
+SAHIE county rows for 2006 to 2024 keep their published age, race, sex and income groups (`int_sahie_county_rows`); a test
+checks that each file's preamble defines code 0 as under 65, all races, both sexes and all incomes, the group the registry
+names. BLS LAUS county series (`int_bls_county_series`) keep months and annual averages apart, with footnote codes and the
+capture date as the revision vintage. `.` and `-` stay as missing marks. `dbt/seeds/income_labor_measures.csv` maps the
+SAIPE, SAHIE and BLS registry controls.
+
 The dbt packages
 (dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
 publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
@@ -628,8 +636,9 @@ control. The deferred controls above are not implemented.
 The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only and
 loads one copy per stored file. Staging covers the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital
 General Information, ownership, Medicare inpatient, HHS capacity, ONC, Care Compare timely and effective care, maternal health and HCAHPS
-tables, the geography tables (HUD ZIP-to-county, county adjacency, RUCC, RUCA and hospital service areas) and the ACS and SVI
-tables. It types the HAI and Care Compare windows, the geography files, the ACS and SVI values, the occupational-mix surveys, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
+tables, the geography tables (HUD ZIP-to-county, county adjacency, RUCC, RUCA and hospital service areas), the ACS and SVI
+tables and SAIPE, SAHIE and BLS. It types the HAI and Care Compare windows, the geography files, the ACS, SVI, SAIPE, SAHIE
+and BLS values, the occupational-mix surveys, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
 index. The Medicare sepsis share counts only published DRG cells (11 discharges or more), so it can be low for small
 hospitals; the Medicare chronic-condition shares start with data year 2017. Each change-of-ownership release lists
 events back to 2016, so one event appears once per release until the alignment step chooses one. An enrollment or

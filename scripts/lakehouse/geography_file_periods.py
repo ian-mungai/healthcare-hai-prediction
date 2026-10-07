@@ -10,8 +10,10 @@ area file takes the one catalog coverage its acquisition job plan records. RUCC,
 record no period, so each of their files takes the vintage reviewed below for its exact published file name; the
 vintage is the publisher's reference year, not a publication date. An ACS file takes the year in its publisher file name
 (ACSDP5Y2023..., acsdt5y2023-...), with the five-year period ending that year. An SVI file takes the edition year its
-capture receipt's release label names. A loaded file with no period or vintage, or with two, stops the run. Failure modes:
-data/lakehouse_planning/group_c_20261006/failure_modes_c1.md and failure_modes_c2.md.
+capture receipt's release label names. SAIPE and SAHIE files take the year in their publisher file names (est23all.txt,
+sahie_2023.csv); a BLS capture takes its capture date, the revision vintage of the series it holds. A loaded file with no
+period or vintage, or with two, stops the run. Failure modes: data/lakehouse_planning/group_c_20261006/failure_modes_c1.md
+to failure_modes_c3.md.
 """
 
 from __future__ import annotations
@@ -40,6 +42,11 @@ ACS_FILE = re.compile(r"ACS(?:DP|ST|DT)5Y(\d{4})\.(?:DP\d{2}|[BCS]\d{4,5})-Data\
 ACS_EXPORTS = ("dp02", "dp03", "dp04", "dp05", "s0101", "s0601", "s1701", "s2503", "s2701", "b16005", "b19013", "b25070", "b25091", "b26001", "c16001")
 ACS_SUMMARIES = ("b16005", "b19013", "b25070", "b25091", "b26001", "c16001")
 ACS_TABLES = (*(f"acs_{table}" for table in ACS_EXPORTS), *(f"acs_summary_{table}" for table in ACS_SUMMARIES))
+SAIPE_FILE = re.compile(r"est(\d{2})(?:all|-[a-z]{2})\.(?:txt|dat)")
+SAHIE_FILE = re.compile(r"sahie[-_](\d{4})\.csv")
+CAPTURE_DATE = re.compile(r"__(\d{4})(\d{2})(\d{2})T\d{6}Z__")
+NAMED_YEAR_TABLES = ("saipe_text_lines", "sahie")
+CAPTURE_TABLE = "bls_laus"
 TEMPORAL = re.compile(r'"catalog_temporal": "(\d{4}-\d{2}-\d{2})/(\d{4}-\d{2}-\d{2})"')
 # Reviewed Oct 6 2026 against each file's published name and, where present, its year-bearing headers (RUCC_2013,
 # Primary RUCA Code 2010, countyfips20). Two vintages in one workbook are listed together.
@@ -67,7 +74,7 @@ REVIEWED_VINTAGES: dict[tuple[str, str], str] = {
     ("ruca_sheet_rows", "2020-rural-urban-commuting-area-codes-census-tracts.xlsx"): "2020",
     ("ruca_sheet_rows", "2020-rural-urban-commuting-area-codes-zip-codes.xlsx"): "2020",
 }
-TABLES = (QUARTER_TABLE, COVERAGE_TABLE, EDITION_TABLE, *ACS_TABLES, *sorted({table for table, _ in REVIEWED_VINTAGES}))
+TABLES = (QUARTER_TABLE, COVERAGE_TABLE, EDITION_TABLE, CAPTURE_TABLE, *NAMED_YEAR_TABLES, *ACS_TABLES, *sorted({table for table, _ in REVIEWED_VINTAGES}))
 COLUMNS = ("member_sha256", "bronze_table", "release_id", "file_name", "vintage", "period_start", "period_end", "period_basis")
 
 
@@ -159,6 +166,19 @@ def file_row(
         if release not in editions:
             raise PeriodError(f"{table} file {name} (release {release}) has no recorded edition")
         return row | {"vintage": editions[release], "period_start": "", "period_end": "", "period_basis": "receipt_edition_year"}
+    if table in NAMED_YEAR_TABLES:
+        match = (SAIPE_FILE if table == "saipe_text_lines" else SAHIE_FILE).fullmatch(name)
+        if not match:
+            raise PeriodError(f"{table} file {name} (release {release}) has no publisher year in its name")
+        digits = match.group(1)
+        year = int(digits) if len(digits) == 4 else (1900 if int(digits) >= 89 else 2000) + int(digits)
+        return row | {"vintage": str(year), "period_start": f"{year}-01-01", "period_end": f"{year}-12-31", "period_basis": "publisher_file_name"}
+    if table == CAPTURE_TABLE:
+        match = CAPTURE_DATE.search(release)
+        if not match:
+            raise PeriodError(f"{table} file {name} (release {release}) has no capture date")
+        captured = "-".join(match.groups())
+        return row | {"vintage": captured, "period_start": "", "period_end": "", "period_basis": "capture_date"}
     if table in ACS_TABLES:
         match = ACS_FILE.fullmatch(name)
         if not match:

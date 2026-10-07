@@ -484,7 +484,7 @@ seeds:
           - not_null
           - accepted_values:
               arguments:
-                values: [receipt_publisher_quarter, job_catalog_coverage, reviewed_file_name, receipt_edition_year, publisher_file_name]
+                values: [receipt_publisher_quarter, job_catalog_coverage, reviewed_file_name, receipt_edition_year, publisher_file_name, capture_date]
 
   - name: geography_measures
     description: >
@@ -570,3 +570,27 @@ seeds:
                 values: [acs, svi, bls]
       - name: components
         description: Space-separated ACS concepts or SVI fields; empty for the BLS row.
+
+  - name: income_labor_measures
+    description: >
+      The registry controls of S24 SAIPE, S25 SAHIE and S29 BLS with the model and columns that carry each and the
+      registry's review decision (failure mode 446). C177.01 names only ACS and SVI fields and has no columns here.
+    config:
+      column_types:
+        measure_control: varchar
+        family: varchar
+        source_model: varchar
+        fields: varchar
+        review_decision: varchar
+    columns:
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests: [unique, not_null]
+      - name: source_model
+        description: The intermediate model that carries the control.
+        data_tests: [not_null]
+      - name: fields
+        description: Space-separated columns of the model; empty for C177.01.
+      - name: review_decision
+        description: Registry decision, preserved without approving model use.
+        data_tests: [not_null]

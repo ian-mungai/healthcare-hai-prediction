@@ -702,3 +702,45 @@ sources:
           - name: table_name
             description: The bronze table of the object.
             data_tests: [not_null]
+      - name: saipe_text_lines
+        description: Census SAIPE state and county estimate files, 1989 to 2024, fixed-width text lines, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: sahie
+        description: Census SAHIE county and state estimates, 2006 to 2024, after each file's preamble, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: bls_laus
+        description: BLS Local Area Unemployment Statistics county series from the BLS API, one file per request, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: file_preambles
+        description: The note lines bronze skipped before a file's header, with their line numbers (SAHIE category definitions).
+        columns:
+          - name: _object_key
+            description: The loaded object the lines belong to.
+            data_tests: [not_null]

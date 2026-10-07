@@ -1128,3 +1128,48 @@ models:
       - name: _row_number
         description: Row position within the file, from 1.
         data_tests: [not_null]
+
+  - name: stg_saipe_text_lines
+    description: >
+      Bronze `saipe_text_lines` with one copy of each stored file, read from its canonical object (failure mode 447); typed in int_saipe_county_estimates.
+      The data columns pass through as published; lakehouse.bronze_dictionary.saipe_text_lines documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_sahie
+    description: >
+      Bronze `sahie` with one copy of each stored file, read from its canonical object (failure mode 447); typed in int_sahie_county_rows.
+      The data columns pass through as published; lakehouse.bronze_dictionary.sahie documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_bls_laus
+    description: >
+      Bronze `bls_laus` with one copy of each stored file, read from its canonical object (failure mode 447); typed in int_bls_county_series.
+      The data columns pass through as published; lakehouse.bronze_dictionary.bls_laus documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
