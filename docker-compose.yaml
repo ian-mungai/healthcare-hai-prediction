@@ -128,6 +128,8 @@ services:
       DBT_LOG_PATH: /workspace/out/logs
       # Packages install from dbt/package-lock.yml into the writable output mount; the project stays read-only.
       DBT_PACKAGES_INSTALL_PATH: /workspace/out/dbt_packages
+      # DuckDB's memory limit for the lakehouse target, computed by scripts/lakehouse/memory_budget.py before each run.
+      DUCKDB_MEMORY_LIMIT: ${DUCKDB_MEMORY_LIMIT:-}
     volumes:
       - *aws-profile
       # The project is read-only; the staging database, run artifacts and E2E cases live in the ignored data/ folder.

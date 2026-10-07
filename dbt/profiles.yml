@@ -10,9 +10,10 @@ hai:
       extensions: [iceberg, httpfs, aws]
       settings:
         autoinstall_known_extensions: false
-        # Most of the 36 GB Docker VM (owner, Oct 6 2026), leaving about 6 GB for Polaris and PostgreSQL, so a large
-        # comparison spills to disk instead of being killed.
-        memory_limit: 30GB
+        # Computed before each build from the containers running at that moment (scripts/lakehouse/memory_budget.py;
+        # owner decision Oct 7 2026: memory is shared across projects, never hardcoded). No default: a build without a
+        # budget stops instead of using a fixed limit.
+        memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT') }}"
       secrets:
         - type: s3
           provider: credential_chain

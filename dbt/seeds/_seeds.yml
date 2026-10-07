@@ -484,7 +484,7 @@ seeds:
           - not_null
           - accepted_values:
               arguments:
-                values: [receipt_publisher_quarter, job_catalog_coverage, reviewed_file_name, receipt_edition_year, publisher_file_name, capture_date]
+                values: [receipt_publisher_quarter, job_catalog_coverage, reviewed_file_name, receipt_edition_year, publisher_file_name, capture_date, receipt_database_period]
 
   - name: geography_measures
     description: >
@@ -591,6 +591,32 @@ seeds:
         data_tests: [not_null]
       - name: fields
         description: Space-separated columns of the model; empty for C177.01.
+      - name: review_decision
+        description: Registry decision, preserved without approving model use.
+        data_tests: [not_null]
+
+  - name: county_health_measures
+    description: >
+      The 56 registry controls of S20 PLACES, S28 Medicare Geographic Variation and S30 WONDER with the model and the
+      PLACES measure IDs, geographic-variation fields or WONDER columns that carry each, and the registry's review decision
+      (failure mode 460). C242.02 (ISOLATION before LONELINESS) stays held for definition.
+    config:
+      column_types:
+        measure_control: varchar
+        family: varchar
+        source_model: varchar
+        components: varchar
+        review_decision: varchar
+    columns:
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests: [unique, not_null]
+      - name: source_model
+        description: The intermediate model that carries the control.
+        data_tests: [not_null]
+      - name: components
+        description: Space-separated PLACES measure IDs, geographic-variation fields or WONDER columns.
+        data_tests: [not_null]
       - name: review_decision
         description: Registry decision, preserved without approving model use.
         data_tests: [not_null]

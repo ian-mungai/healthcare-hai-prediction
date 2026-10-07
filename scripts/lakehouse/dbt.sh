@@ -13,5 +13,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
 .venv/bin/python -m scripts.lakehouse.catalog up >&2
 mkdir -p "$root/data/analytics/dbt"
-exec env -i PATH="$PATH" HOME="$HOME" docker compose --project-directory "$root" -f "$root/docker-compose.yaml" \
+# DuckDB's limit comes from the containers running now; the run stops if it cannot be computed.
+memory_limit="$(.venv/bin/python -m scripts.lakehouse.memory_budget)"
+exec env -i PATH="$PATH" HOME="$HOME" DUCKDB_MEMORY_LIMIT="$memory_limit" docker compose --project-directory "$root" -f "$root/docker-compose.yaml" \
     --env-file "$root/data/lakehouse/secrets/compose.env" --profile query run --rm --quiet-pull -T analytics-dbt "$@"

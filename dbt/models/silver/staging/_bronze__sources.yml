@@ -744,3 +744,39 @@ sources:
           - name: _object_key
             description: The loaded object the lines belong to.
             data_tests: [not_null]
+      - name: places
+        description: CDC PLACES county releases 2020 to 2025, long format (one row per county, measure, value type and data year), every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: cms_geographic_variation_csv
+        description: CMS Medicare Geographic Variation public use file 2014 to 2024, national, state and county rows, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: wonder_county_mortality
+        description: CDC WONDER underlying cause of death county-year exports, bridged-race 1999 to 2020 and single-race 2018 to 2024, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]

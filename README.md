@@ -60,8 +60,11 @@ diagram shows what is built and what is planned.
 Prerequisites: macOS on Apple silicon or Linux AMD64, Python 3.12, Git,
 Terraform 1.16.1 and AWS CLI v2. Node.js 18 or later and Google Chrome render the
 architecture diagram.
-The lakehouse needs Docker Desktop with at least 36 GB of memory: dbt staging
-gives DuckDB a 30 GB limit (`memory_limit` in `dbt/profiles.yml`). The bronze,
+The lakehouse needs Docker Desktop with at least 36 GB of memory. dbt staging
+gives DuckDB what is free at the start of each build: Docker's total memory minus
+every running container's use minus 8 GiB headroom
+(`scripts/lakehouse/memory_budget.py`, read by `memory_limit` in `dbt/profiles.yml`);
+the build stops below 4 GiB. Close containers you no longer use first. The bronze,
 dictionary and checksum jobs give Spark a 12 GB heap (`JOB_MEMORY` in
 `scripts/lakehouse/session.py`).
 
@@ -251,6 +254,14 @@ checks that each file's preamble defines code 0 as under 65, all races, both sex
 names. BLS LAUS county series (`int_bls_county_series`) keep months and annual averages apart, with footnote codes and the
 capture date as the revision vintage. `.` and `-` stay as missing marks. `dbt/seeds/income_labor_measures.csv` maps the
 SAIPE, SAHIE and BLS registry controls.
+
+PLACES county values keep their release, data year, measure and crude or age-adjusted type (`int_places_county_values`);
+`is_all_states` marks the measure-years whose county rows cover all 50 states and DC, the only ones the approved rule
+allows. The 2020 release has no county codes and is not typed. Medicare Geographic Variation county values are staged
+long for the All age level with `*` kept as a token (`int_gv_county_values`). WONDER deaths and crude rates keep their
+database, bridged race (1999 to 2020) or single race (2018 to 2024), with their Suppressed, Unreliable, Missing and Not
+Available marks (`int_wonder_county_deaths`); the 2024 rows repeated identically in the shorter single-race export are
+held. `dbt/seeds/county_health_measures.csv` maps the 56 registry controls of these sources.
 
 The dbt packages
 (dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
@@ -637,8 +648,8 @@ The lakehouse runs on one Mac against the project bucket; it is not a deployed s
 loads one copy per stored file. Staging covers the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital
 General Information, ownership, Medicare inpatient, HHS capacity, ONC, Care Compare timely and effective care, maternal health and HCAHPS
 tables, the geography tables (HUD ZIP-to-county, county adjacency, RUCC, RUCA and hospital service areas), the ACS and SVI
-tables and SAIPE, SAHIE and BLS. It types the HAI and Care Compare windows, the geography files, the ACS, SVI, SAIPE, SAHIE
-and BLS values, the occupational-mix surveys, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
+tables, SAIPE, SAHIE, BLS, PLACES, Medicare Geographic Variation and WONDER. It types the HAI and Care Compare windows, the
+geography files, the ACS, SVI, SAIPE, SAHIE, BLS, PLACES, geographic variation and WONDER values, the occupational-mix surveys, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
 index. The Medicare sepsis share counts only published DRG cells (11 discharges or more), so it can be low for small
 hospitals; the Medicare chronic-condition shares start with data year 2017. Each change-of-ownership release lists
 events back to 2016, so one event appears once per release until the alignment step chooses one. An enrollment or

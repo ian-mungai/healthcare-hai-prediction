@@ -43,13 +43,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse import catalog, geography_file_periods, ipps_file_labels, ownership_release_periods, pos_file_periods
+from scripts.lakehouse import catalog, geography_file_periods, ipps_file_labels, memory_budget, ownership_release_periods, pos_file_periods
 from scripts.process import run_command
 
 REPO_ROOT = catalog.REPO_ROOT
 OUT = REPO_ROOT / "data/analytics/dbt"
 CASES = OUT / "e2e"
 REPORTS = REPO_ROOT / "data/e2e/staging"
+# The memory budget each real build ran with, recorded in the report [463].
+BUDGETS: list[dict[str, Any]] = []
 CONTAINER_OUT = "/workspace/out"
 TIMEOUT = 7200
 TABLES = (
@@ -112,6 +114,9 @@ TABLES = (
     "saipe_text_lines",
     "sahie",
     "bls_laus",
+    "places",
+    "cms_geographic_variation_csv",
+    "wonder_county_mortality",
 )
 HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
@@ -762,6 +767,43 @@ SAHIE_COLUMNS = (
     "state_name",
     "county_name",
 )
+PLACES_COLUMNS = (
+    "year",
+    "stateabbr",
+    "locationname",
+    "locationid",
+    "measureid",
+    "datavaluetypeid",
+    "data_value",
+    "data_value_footnote_symbol",
+    "low_confidence_limit",
+    "high_confidence_limit",
+    "totalpopulation",
+)
+GV_COLUMNS = (
+    "year",
+    "bene_geo_lvl",
+    "bene_geo_desc",
+    "bene_geo_cd",
+    "bene_age_lvl",
+    "benes_total_cnt",
+    "ma_prtcptn_rate",
+    "bene_dual_pct",
+    "pqi03_dbts_age_65_74",
+)
+WONDER_COLUMNS = (
+    "notes",
+    "county",
+    "county_code",
+    "year",
+    "year_code",
+    "deaths",
+    "population",
+    "crude_rate",
+    "crude_rate_lower_95_confidence_interval",
+    "crude_rate_upper_95_confidence_interval",
+    "crude_rate_standard_error",
+)
 BLS_COLUMNS = ("seriesid", "county_fips", "measure_code", "year", "period", "periodname", "value", "footnotes")
 ACS_COLUMNS = {
     "acs_dp04": ("geo_id", "name", "dp04_0077pe", "dp04_0078pe"),
@@ -884,6 +926,9 @@ WIDE_COLUMNS = {
     "svi": SVI_COLUMNS,
     "sahie": SAHIE_COLUMNS,
     "bls_laus": BLS_COLUMNS,
+    "places": PLACES_COLUMNS,
+    "cms_geographic_variation_csv": GV_COLUMNS,
+    "wonder_county_mortality": WONDER_COLUMNS,
     "acs_dp02": ACS_COLUMNS.get("acs_dp02", ("geo_id", "name")),
     "acs_dp03": ACS_COLUMNS.get("acs_dp03", ("geo_id", "name")),
     "acs_dp04": ACS_COLUMNS.get("acs_dp04", ("geo_id", "name")),
@@ -1942,7 +1987,15 @@ def svi_row(**values: str) -> tuple[tuple[str, str], ...]:
 
 
 # SVI editions as the capture receipts' release labels name them, keyed by release [427].
-SVI_EDITIONS = {"SVI__e22": "2022", "SVI__e00": "2000"}
+SVI_EDITIONS = {"SVI__e22": "2022", "SVI__e00": "2000", "PLACES__e25": "2025", "PLACES__e20": "2020"}
+BRIDGED = "Underlying Cause of Death, 1999-2020"
+SINGLE_RACE = "Underlying Cause of Death, 2018-2024, Single Race"
+# WONDER databases and periods as the capture receipts state them, keyed by release [453].
+WONDER_DATABASES = {
+    "WONDER__b": (BRIDGED, "2013-01-01", "2019-12-31"),
+    "WONDER__s1824": (SINGLE_RACE, "2018-01-01", "2024-12-31"),
+    "WONDER__s24": (SINGLE_RACE, "2024-01-01", "2024-12-31"),
+}
 DP04_LABELS = {
     "1.00 or less": "Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.00 or less",
     "1.01 to 1.50": "Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50",
@@ -2184,6 +2237,85 @@ GROUP_C3 = (
             bls_row("06", "2023", "M01", "26000"),
         ),
     ),
+)
+
+
+def places_row(year: str, state: str, location: str, measure: str, value: str, kind: str = "CrdPrv", **fields: str) -> tuple[tuple[str, str], ...]:
+    """Return one PLACES row."""
+    base = {"year": year, "stateabbr": state, "locationid": location, "measureid": measure, "datavaluetypeid": kind, "data_value": value}
+    return tuple((base | fields).items())
+
+
+def gv_row(year: str, level: str, code: str, **values: str) -> tuple[tuple[str, str], ...]:
+    """Return one geographic variation row at the All age level."""
+    return tuple(({"year": year, "bene_geo_lvl": level, "bene_geo_cd": code, "bene_age_lvl": "All"} | values).items())
+
+
+def wonder_row(county: str, year: str, deaths: str, rate: str, population: str = "55000") -> tuple[tuple[str, str], ...]:
+    """Return one WONDER county-year row; the year keeps a trailing space as the 2024 exports print it."""
+    fields = {"county_code": county, "year": year + " " if year == "2024" else year, "year_code": year, "deaths": deaths, "population": population}
+    return tuple((fields | {"crude_rate": rate}).items())
+
+
+STATE_FIPS = (
+    "01", "02", "04", "05", "06", "08", "09", "10", "11", "12", "13", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26",
+    "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "44", "45", "46", "47", "48", "49", "50",
+    "51", "53", "54", "55", "56",
+)  # fmt: skip
+# C4 [449] to [462]: PLACES with a measure covering every state, one that does not, a national row, a blank value and a
+# release without county codes; geographic variation county and state rows with a suppressed value; WONDER in both
+# databases with a suppressed county and the 2024 row repeated in the single-race exports.
+GROUP_C4 = (
+    Stored(
+        "places",
+        "pl25",
+        "PLACES__e25",
+        "rows.csv",
+        sha("pl25"),
+        56,
+        records=(
+            places_row("2023", "AL", "01001", "DIABETES", "12.1", low_confidence_limit="11.0", high_confidence_limit="13.2"),
+            places_row("2023", "AL", "01001", "DIABETES", "10.5", "AgeAdjPrv"),
+            places_row("2023", "US", "59", "DIABETES", "11.0"),
+            places_row("2023", "AL", "01003", "DIABETES", "", data_value_footnote_symbol="*"),
+            places_row("2022", "CT", "09120", "LONELINESS", "30.2"),
+            *(places_row("2022", "XX", state + "001", "OBESITY", "33.0") for state in STATE_FIPS),
+        ),
+    ),
+    Stored("places", "pl20", "PLACES__e20", "rows.csv", sha("pl20"), 1, records=(places_row("2018", "AL", "", "DIABETES", "11.0", locationname="Autauga"),)),
+    Stored(
+        "cms_geographic_variation_csv",
+        "gv1",
+        "CMS_GV__x",
+        "2014-2024_Original_Medicare_Geographic_Variation_Public_Use_File.csv",
+        sha("gv1"),
+        4,
+        records=(
+            gv_row("2023", "County", "01001", benes_total_cnt="9000", ma_prtcptn_rate="0.45", bene_dual_pct="*", pqi03_dbts_age_65_74="NA"),
+            gv_row("2022", "County", "01001", ma_prtcptn_rate="0.44"),
+            gv_row("2023", "State", "01", ma_prtcptn_rate="0.5"),
+            gv_row("2023", "National", "", ma_prtcptn_rate="0.48"),
+        ),
+    ),
+    Stored(
+        "wonder_county_mortality",
+        "wd1",
+        "WONDER__b",
+        "county_year.csv",
+        sha("wd1"),
+        2,
+        records=(wonder_row("01001", "2018", "500", "909.1"), wonder_row("01003", "2018", "Suppressed", "Suppressed")),
+    ),
+    Stored(
+        "wonder_county_mortality",
+        "wd2",
+        "WONDER__s1824",
+        "county_year.csv",
+        sha("wd2"),
+        2,
+        records=(wonder_row("01001", "2018", "500", "907.4", "55100"), wonder_row("01001", "2024", "520", "Unreliable")),
+    ),
+    Stored("wonder_county_mortality", "wd3", "WONDER__s24", "county_year.csv", sha("wd3"), 1, records=(wonder_row("01001", "2024", "520", "Unreliable"),)),
 )
 
 
@@ -2455,6 +2587,7 @@ BASE = (
     *GROUP_C1,
     *GROUP_C2,
     *GROUP_C3,
+    *GROUP_C4,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -2768,6 +2901,30 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
         tuple(with_record(item, bls_row("09", "2023", "M01", "1")) if item.key == "bl1" else item for item in BASE),
         frozenset(),
     ),
+    # [457] A repeated WONDER county-year whose values differ between exports.
+    "wonder_repeat_differs": (
+        "assert_wonder_repeats_identical",
+        tuple(replace(item, records=(wonder_row("01001", "2024", "521", "Unreliable"),)) if item.key == "wd3" else item for item in BASE),
+        frozenset(),
+    ),
+    # [451] A PLACES release with two values for one county, measure, value type and data year.
+    "places_repeated_grain": (
+        "assert_county_health_grain",
+        tuple(with_record(item, places_row("2023", "AL", "01001", "DIABETES", "12.4")) if item.key == "pl25" else item for item in BASE),
+        frozenset(),
+    ),
+    # [455] A PLACES value that is not a number.
+    "places_value_uncast": (
+        "assert_county_health_values_cast",
+        tuple(with_record(item, places_row("2023", "AL", "01005", "DIABETES", "12a")) if item.key == "pl25" else item for item in BASE),
+        frozenset(),
+    ),
+    # [455] A geographic variation value that is neither a number nor *.
+    "gv_value_uncast": (
+        "assert_county_health_values_cast",
+        tuple(with_record(item, gv_row("2021", "County", "01001", ma_prtcptn_rate="x")) if item.key == "gv1" else item for item in BASE),
+        frozenset(),
+    ),
     # An emergency-services value that is neither Yes nor No [329].
     "hgi_uncast_value": (
         "assert_hgi_values_cast",
@@ -2946,6 +3103,12 @@ CREATE TABLE bronze.sahie AS SELECT * REPLACE (_row_number::BIGINT AS _row_numbe
     FROM read_csv(getvariable('sahie_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.bls_laus AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('bls_laus_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.places AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('places_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_geographic_variation_csv AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_geographic_variation_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.wonder_county_mortality AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('wonder_county_mortality_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.file_preambles AS SELECT * REPLACE (line_number::INTEGER AS line_number)
     FROM read_csv(getvariable('file_preambles_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.column_map AS SELECT * REPLACE (position::INTEGER AS position)
@@ -3122,7 +3285,7 @@ def geography_periods_csv(objects: Iterable[Stored], unlabelled: frozenset[str])
         for item in objects
         if item.table in geography_file_periods.TABLES and item.key not in unlabelled
     ]
-    return geography_file_periods.as_csv(geography_file_periods.rows_for(loaded, GEOGRAPHY_QUARTERS, GEOGRAPHY_COVERAGE, SVI_EDITIONS))
+    return geography_file_periods.as_csv(geography_file_periods.rows_for(loaded, GEOGRAPHY_QUARTERS, GEOGRAPHY_COVERAGE, SVI_EDITIONS, WONDER_DATABASES))
 
 
 def publication(item: Stored) -> tuple[str, str]:
@@ -3361,6 +3524,23 @@ BLS_SQL = (
     "FROM int_bls_county_series ORDER BY ALL;"
 )
 
+PLACES_SQL = (
+    "SELECT edition, data_year::VARCHAR, measureid, datavaluetypeid, count(*)::VARCHAR, count(data_value)::VARCHAR, bool_and(is_all_states)::VARCHAR "
+    "FROM int_places_county_values GROUP BY ALL ORDER BY ALL;"
+)
+PLACES_DETAIL_SQL = (
+    "SELECT county_fips, measureid, datavaluetypeid, coalesce(data_value::VARCHAR, ''), coalesce(low_confidence_limit::VARCHAR, ''), "
+    "coalesce(footnote_symbol, ''), is_connecticut::VARCHAR FROM int_places_county_values WHERE measureid <> 'OBESITY' ORDER BY ALL;"
+)
+GV_SQL = (
+    "SELECT data_year::VARCHAR, county_fips, field, coalesce(value_number::VARCHAR, ''), coalesce(missing_token, '') FROM int_gv_county_values ORDER BY ALL;"
+)
+WONDER_SQL = (
+    "SELECT wonder_database, county_fips, data_year::VARCHAR, coalesce(deaths::VARCHAR, ''), coalesce(crude_rate::VARCHAR, ''), "
+    "coalesce(crude_rate_token, ''), "
+    "coalesce(hold_reason, '') FROM int_wonder_county_deaths ORDER BY ALL;"
+)
+
 
 def per_table(query: str, prefix: str) -> str:
     """Return the query once per table, each run after setting the checked_table variable to the prefixed table name."""
@@ -3401,6 +3581,11 @@ def dbt_build(case: str, target: str, project: bool = False) -> tuple[int, dict[
     """Run dbt build for a case, on its own project copy when asked, and return the exit code and each node's status."""
     case_dir = f"{CONTAINER_OUT}/e2e/{case}"
     env = {"STAGING_E2E_CASE": case_dir, "DBT_TARGET_PATH": f"{case_dir}/target", "DBT_LOG_PATH": f"{case_dir}/logs"}
+    if target == "lakehouse":
+        # Computed now, from the containers running at this moment [463].
+        budget = memory_budget.current()
+        env["DUCKDB_MEMORY_LIMIT"] = budget.setting
+        BUDGETS.append({"case": case, **budget.record()})
     flags = ["--project-dir", f"{case_dir}/project", "--profiles-dir", f"{case_dir}/project"] if project else []
     # A build that dies leaves no results of its own; never read the previous run's.
     (CASES / case / "target/run_results.json").unlink(missing_ok=True)
@@ -3524,6 +3709,10 @@ def read_models(case: str) -> dict[str, Any]:
         "saipe": [tuple(row) for row in duckdb_csv(database, SAIPE_SQL)],
         "sahie": [tuple(row) for row in duckdb_csv(database, SAHIE_SQL)],
         "bls": [tuple(row) for row in duckdb_csv(database, BLS_SQL)],
+        "places": [tuple(row) for row in duckdb_csv(database, PLACES_SQL)],
+        "places_detail": [tuple(row) for row in duckdb_csv(database, PLACES_DETAIL_SQL)],
+        "gv": [tuple(row) for row in duckdb_csv(database, GV_SQL)],
+        "wonder": [tuple(row) for row in duckdb_csv(database, WONDER_SQL)],
         "occmix_holds": [
             tuple(row)
             for row in duckdb_csv(
@@ -3751,6 +3940,55 @@ def income_labor_checks(base: dict[str, Any]) -> dict[str, bool]:
     checks["vintage_generator_refuses_bls_without_capture_date"] = refuses_geography(
         lambda: geography_file_periods.rows_for([{"table": "bls_laus", "sha256": sha("q4"), "release_id": "BLS", "file_name": "observations.csv"}], {}, {}),
         "no capture date",
+    )
+    return checks
+
+
+def county_health_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's C4 PLACES, geographic variation and WONDER models with their expected rows and check the generator's refusal."""
+    checks: dict[str, bool] = {}
+    # [449] to [459] County rows only; the all-state flag only where all 51 are covered; geographic variation long with *
+    # kept; WONDER databases apart, the shorter export's identical 2024 row held, marks kept as tokens.
+    checks["places_matches_expected"] = base.get("places") == sorted(
+        [
+            ("2025", "2023", "DIABETES", "CrdPrv", "2", "1", "false"),
+            ("2025", "2023", "DIABETES", "AgeAdjPrv", "1", "1", "false"),
+            ("2025", "2022", "LONELINESS", "CrdPrv", "1", "1", "false"),
+            ("2025", "2022", "OBESITY", "CrdPrv", "51", "51", "true"),
+        ]
+    )
+    checks["places_detail_matches_expected"] = base.get("places_detail") == sorted(
+        [
+            ("01001", "DIABETES", "CrdPrv", "12.1", "11.0", "", "false"),
+            ("01001", "DIABETES", "AgeAdjPrv", "10.5", "", "", "false"),
+            ("01003", "DIABETES", "CrdPrv", "", "", "*", "false"),
+            ("09120", "LONELINESS", "CrdPrv", "30.2", "", "", "true"),
+        ]
+    )
+    checks["gv_matches_expected"] = base.get("gv") == sorted(
+        [
+            ("2023", "01001", "bene_dual_pct", "", "*"),
+            ("2023", "01001", "benes_total_cnt", "9000.0", ""),
+            ("2023", "01001", "ma_prtcptn_rate", "0.45", ""),
+            ("2023", "01001", "pqi03_dbts_age_65_74", "", "NA"),
+            ("2022", "01001", "ma_prtcptn_rate", "0.44", ""),
+        ]
+    )
+    checks["wonder_matches_expected"] = base.get("wonder") == sorted(
+        [
+            (BRIDGED, "01001", "2018", "500.0", "909.1", "", ""),
+            (BRIDGED, "01003", "2018", "", "", "Suppressed", ""),
+            (SINGLE_RACE, "01001", "2018", "500.0", "907.4", "", ""),
+            (SINGLE_RACE, "01001", "2024", "520.0", "", "Unreliable", ""),
+            (SINGLE_RACE, "01001", "2024", "520.0", "", "Unreliable", "repeated_in_wider_export"),
+        ]
+    )
+    checks["county_health_seed_matches_registry"] = county_health_seed_matches()
+    checks["vintage_generator_refuses_wonder_without_database"] = refuses_geography(
+        lambda: geography_file_periods.rows_for(
+            [{"table": "wonder_county_mortality", "sha256": sha("q3"), "release_id": "r", "file_name": "county_year.csv"}], {}, {}
+        ),
+        "no recorded database",
     )
     return checks
 
@@ -4246,6 +4484,7 @@ def fixture_scenarios() -> dict[str, bool]:
     checks.update(geography_checks(base))
     checks.update(county_context_checks(base))
     checks.update(income_labor_checks(base))
+    checks.update(county_health_checks(base))
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -4429,6 +4668,24 @@ def income_labor_seed_matches() -> bool:
     return bool(expected_rows) and seeded == expected_rows
 
 
+def county_health_seed_matches() -> bool:
+    """Check the PLACES, geographic variation and WONDER measure seed against the registry: every control of S20, S28 and
+    S30 once, with its decision [460]."""
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    families = {source: family["id"] for family in registry["source_families"] for source in family["audit_source_ids"]}
+    expected_rows = sorted(
+        (control["id"], control["preserved_controls"]["current_review_decision"])
+        for control in registry["measure_controls"]
+        if {families[source] for source in control["source_ids"] if source in families} & {"S20", "S28", "S30"}
+    )
+    seed = REPO_ROOT / "dbt/seeds/county_health_measures.csv"
+    if not seed.exists():
+        return False
+    with seed.open(newline="") as handle:
+        seeded = sorted((row["measure_control"], row["review_decision"]) for row in csv.DictReader(handle))
+    return bool(expected_rows) and seeded == expected_rows
+
+
 def mup_seed_matches() -> bool:
     """Check that the Medicare inpatient measure seed covers exactly the registry's controls of its two sources [363]."""
     registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
@@ -4452,6 +4709,9 @@ GEOGRAPHY_FINGERPRINTS = {
     "int_saipe_county_estimates": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY saipe_row_key)) FROM int_saipe_county_estimates AS t;",
     "int_sahie_county_rows": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY sahie_row_key)) FROM int_sahie_county_rows AS t;",
     "int_bls_county_series": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY bls_row_key)) FROM int_bls_county_series AS t;",
+    "int_places_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY places_row_key)) FROM int_places_county_values AS t;",
+    "int_gv_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY gv_value_key)) FROM int_gv_county_values AS t;",
+    "int_wonder_county_deaths": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY wonder_row_key)) FROM int_wonder_county_deaths AS t;",
 }
 GEOGRAPHY_RECONCILE_SQL = """SELECT 'hud', (SELECT count(*) FROM stg_hud_zip_county)::VARCHAR,
     ((SELECT count(*) FROM int_hud_zip_county_quarters) + (SELECT count(*) FROM int_hud_zip_county_holds))::VARCHAR
@@ -4587,6 +4847,36 @@ SELECT (SELECT count(*) FROM state_lines)::VARCHAR, (SELECT count(*) FROM full_l
     (SELECT count(*) FROM (SELECT line FROM state_lines EXCEPT ALL SELECT line FROM full_lines))::VARCHAR;"""
 
 
+# Staged rows counted from the staging views without the models: PLACES rows with and without a county code, WONDER rows,
+# and the repeated rows held; geographic variation county rows at the All level [449] [457] [462].
+COUNTY_HEALTH_SQL = """SELECT 'places', (SELECT count(*) FROM stg_places WHERE regexp_full_match(trim(locationid), '[0-9]{5}'))::VARCHAR,
+    (SELECT count(*) FROM int_places_county_values)::VARCHAR
+UNION ALL SELECT 'places_without_county',
+    (SELECT count(*) FROM stg_places WHERE NOT coalesce(regexp_full_match(trim(locationid), '[0-9]{5}'), false))::VARCHAR, '0'
+UNION ALL SELECT 'wonder', (SELECT count(*) FROM stg_wonder_county_mortality)::VARCHAR, (SELECT count(*) FROM int_wonder_county_deaths)::VARCHAR
+UNION ALL SELECT 'wonder_held', '3142', (SELECT count(*) FROM int_wonder_county_deaths WHERE hold_reason IS NOT NULL)::VARCHAR
+UNION ALL SELECT 'gv_county_rows',
+    (SELECT count(*) FROM stg_cms_geographic_variation_csv WHERE trim(bene_geo_lvl) = 'County' AND trim(bene_age_lvl) = 'All')::VARCHAR,
+    (SELECT count(DISTINCT member_sha256 || source_row_number) FROM int_gv_county_values)::VARCHAR;"""
+PLACES_COVERAGE_SQL = """SELECT edition, data_year::VARCHAR, count(DISTINCT measureid || datavaluetypeid) FILTER (WHERE is_all_states)::VARCHAR,
+    count(DISTINCT measureid || datavaluetypeid)::VARCHAR FROM int_places_county_values GROUP BY 1, 2 ORDER BY 1, 2;"""
+
+
+def county_health_real(database: str, init: str) -> dict[str, Any]:
+    """Reconcile the real C4 models with their staging views; record PLACES all-state coverage per release and year [450] [462]."""
+    checks: dict[str, bool] = {}
+    counts: dict[str, Any] = {}
+    for name, staged, typed in duckdb_csv(database, COUNTY_HEALTH_SQL, init):
+        counts[name] = {"staged": int(staged), "typed": int(typed)}
+        if name != "places_without_county":
+            checks[f"county_health_{name}_reconcile"] = staged == typed and int(staged) > 0
+    counts["places_all_state_measures"] = {
+        f"{edition}:{year}": f"{covered} of {total}" for edition, year, covered, total in duckdb_csv(database, PLACES_COVERAGE_SQL, init)
+    }
+    checks["county_health_seed_matches_registry"] = county_health_seed_matches()
+    return {"checks": checks, "counts": counts}
+
+
 def income_labor_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real C3 models with their staging views and the Alabama-only SAIPE file with its full-file twin [437] [448]."""
     checks: dict[str, bool] = {}
@@ -4644,6 +4934,7 @@ def real_stage() -> dict[str, Any]:
         )
         outcome[f"{run}_geography_fingerprints"] = {model: duckdb_csv(database, query) for model, query in GEOGRAPHY_FINGERPRINTS.items()}
     outcome["checks"]["real_rebuild_identical"] = builds[0] == builds[1]
+    outcome["memory_budgets"] = BUDGETS
     outcome["checks"]["occmix_real_rebuild_identical"] = outcome["real_occmix_fingerprint"] == outcome["real_again_occmix_fingerprint"]
     outcome["checks"]["geography_real_rebuild_identical"] = outcome["real_geography_fingerprints"] == outcome["real_again_geography_fingerprints"]
     geography = geography_real(database, init)
@@ -4655,6 +4946,9 @@ def real_stage() -> dict[str, Any]:
     income_labor = income_labor_real(database, init)
     outcome["checks"].update(income_labor["checks"])
     outcome["income_labor_counts"] = income_labor["counts"]
+    county_health = county_health_real(database, init)
+    outcome["checks"].update(county_health["checks"])
+    outcome["county_health_counts"] = county_health["counts"]
     status_sql = "SELECT text_layout || ' ' || twin_status, count(*)::VARCHAR FROM stg_bronze__twin_comparison GROUP BY 1 ORDER BY 1;"
     outcome["twin_statuses"] = dict(duckdb_csv(database, status_sql))
     held_sql = (

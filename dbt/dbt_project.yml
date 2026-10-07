@@ -81,6 +81,9 @@ vars:
     saipe_text_lines: community
     sahie: community
     bls_laus: community
+    places: community
+    cms_geographic_variation_csv: community
+    wonder_county_mortality: community
   # Case-mix index files: the label families of the CMI snapshots read as CMI, and the reviewed families that are not CMI,
   # by name or pattern (failure mode 293).
   cmi_families:

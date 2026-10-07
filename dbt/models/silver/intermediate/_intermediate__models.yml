@@ -986,3 +986,69 @@ models:
       - name: capture_date
         description: The date of the API capture, the revision vintage of the value.
         data_tests: [not_null]
+
+  - name: int_places_county_values
+    description: >
+      PLACES county values per release, data year, measure and value type, 2020 to 2025 releases. is_all_states marks the
+      measure-years that cover all 50 states and DC, the only ones the approved rule allows. Rows without a county code
+      are not typed. PLACES controls C203 to C243, conditional; C242.02 held for definition.
+    columns:
+      - name: places_row_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: edition
+        description: PLACES release year from the capture receipt.
+        data_tests: [not_null]
+      - name: county_fips
+        description: County code as 5-character text.
+        data_tests: [not_null]
+      - name: datavaluetypeid
+        description: CrdPrv (crude) or AgeAdjPrv (age-adjusted).
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [CrdPrv, AgeAdjPrv]
+      - name: is_all_states
+        description: The release's county rows for this measure, value type and data year cover all 50 states and DC.
+        data_tests: [not_null]
+
+  - name: int_gv_county_values
+    description: >
+      Medicare Geographic Variation county values per year and published field, long, for the All age level. '*' and
+      'NA' are null with the token kept. Controls C252 to C257 and children, conditional.
+    columns:
+      - name: gv_value_key
+        description: File checksum, source row number and field.
+        data_tests: [unique, not_null]
+      - name: county_fips
+        description: County code as 5-character text.
+        data_tests: [not_null]
+      - name: field
+        description: The published field name, lowercase.
+        data_tests: [not_null]
+
+  - name: int_wonder_county_deaths
+    description: >
+      CDC WONDER all-cause deaths, population and crude rate per county, year and export, with each export's database
+      (bridged race 1999 to 2020, single race 2018 to 2024). Identical repeats in a shorter export of the same database are
+      held as repeated_in_wider_export. C259, crude definition: no age adjustment.
+    columns:
+      - name: wonder_row_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: wonder_database
+        description: The WONDER database, as the capture receipt names it.
+        data_tests: [not_null]
+      - name: county_fips
+        description: County code as 5-character text.
+        data_tests: [not_null]
+      - name: data_year
+        description: Year from year_code.
+        data_tests: [not_null]
+      - name: hold_reason
+        description: repeated_in_wider_export for an identical repeat; null otherwise.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [repeated_in_wider_export]
