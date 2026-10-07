@@ -484,7 +484,7 @@ seeds:
           - not_null
           - accepted_values:
               arguments:
-                values: [receipt_publisher_quarter, job_catalog_coverage, reviewed_file_name]
+                values: [receipt_publisher_quarter, job_catalog_coverage, reviewed_file_name, receipt_edition_year, publisher_file_name]
 
   - name: geography_measures
     description: >
@@ -513,3 +513,60 @@ seeds:
       - name: review_decision
         description: Registry decision, preserved without approving model use.
         data_tests: [not_null]
+
+  - name: acs_variable_map
+    description: >
+      Reviewed map of the ACS concepts the S18 and S19 controls name: for each concept and loaded vintage, the column that
+      carries it and the label that column must publish, or a hold with its reason. Built by
+      data/lakehouse_planning/group_c_20261006/c2/build_variable_map.py from the bronze labels (failure modes 420 to 424):
+      labels must match after only case, Estimate wording, segment order, listed universe segments and dollar year; units
+      that change at the 2017 subject-table redesign are held; summary files are matched by column code.
+    config:
+      column_types:
+        concept_id: varchar
+        bronze_table: varchar
+        vintage: varchar
+        column_name: varchar
+        published_label: varchar
+        status: varchar
+        reason: varchar
+    data_tests:
+      - unique:
+          arguments:
+            column_name: "concept_id || ':' || bronze_table || ':' || vintage"
+    columns:
+      - name: concept_id
+        description: The ACS concept, named by its 2023 (or 2017 for detailed tables) column code.
+        data_tests: [not_null]
+      - name: status
+        description: mapped or held.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [mapped, held]
+
+  - name: acs_svi_measures
+    description: >
+      The 44 registry controls of S18 ACS and S19 SVI with the ACS concepts or SVI fields that carry each, one row per
+      source, and the registry's review decision (failure modes 430 and 432). C177.02 is BLS and is staged in C3.
+    config:
+      column_types:
+        measure_control: varchar
+        family: varchar
+        source: varchar
+        components: varchar
+        review_decision: varchar
+    columns:
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests: [not_null]
+      - name: source
+        description: acs, svi or bls.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [acs, svi, bls]
+      - name: components
+        description: Space-separated ACS concepts or SVI fields; empty for the BLS row.

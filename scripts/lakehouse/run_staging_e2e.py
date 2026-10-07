@@ -87,6 +87,28 @@ TABLES = (
     "ruca_zip_2010",
     "ruca_sheet_rows",
     "cms_hsa_csv",
+    "svi",
+    "acs_dp02",
+    "acs_dp03",
+    "acs_dp04",
+    "acs_dp05",
+    "acs_s0101",
+    "acs_s0601",
+    "acs_s1701",
+    "acs_s2503",
+    "acs_s2701",
+    "acs_b16005",
+    "acs_b19013",
+    "acs_b25070",
+    "acs_b25091",
+    "acs_b26001",
+    "acs_c16001",
+    "acs_summary_b16005",
+    "acs_summary_b19013",
+    "acs_summary_b25070",
+    "acs_summary_b25091",
+    "acs_summary_b26001",
+    "acs_summary_c16001",
 )
 HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
@@ -114,6 +136,8 @@ class Stored:
     force_loaded: bool = False
     # Rows of a wide table (POS, Care Compare, ownership) as (column, value) pairs; absent columns are null.
     records: tuple[tuple[tuple[str, str], ...], ...] = ()
+    # The labels the publisher printed under each header, as bronze.column_map keeps them (ACS exports) [420].
+    labels: tuple[tuple[str, str], ...] = ()
 
 
 def sha(label: str) -> str:
@@ -681,6 +705,37 @@ RUCA_TRACT_COLUMNS = (
 RUCA_ZIP_2020_COLUMNS = ("zipcode", "state", "zipcodetype", "poname", "primaryruca", "secondaryruca")
 RUCA_ZIP_2010_COLUMNS = ("zip_code", "state", "zip_type", "ruca1", "ruca2")
 HSA_COLUMNS = ("medicare_prov_num", "zip_cd_of_residence", "total_days_of_care", "total_charges", "total_cases")
+# The C2 tables' bronze columns used by the fixture: SVI identifiers and a few fields of two editions, and the ACS columns
+# of the fixture's variable map; every other ACS table has only its geography columns [420] to [434].
+SVI_COLUMNS = (
+    "st",
+    "state",
+    "st_abbr",
+    "stcnty",
+    "county",
+    "fips",
+    "location",
+    "state_fips",
+    "cnty_fips",
+    "stcofips",
+    "state_name",
+    "state_abbr",
+    "shape",
+    "shape_starea",
+    "shape_stlength",
+    "affgeoid",
+    "e_totpop",
+    "ep_pov150",
+    "ep_unemp",
+    "rpl_themes",
+    "g1v1r",
+)
+ACS_COLUMNS = {
+    "acs_dp04": ("geo_id", "name", "dp04_0077pe", "dp04_0078pe"),
+    "acs_s1701": ("geo_id", "name", "s1701_c03_001e"),
+    "acs_b19013": ("geo_id", "name", "b19013_001e", "b19013_001m"),
+    "acs_summary_b19013": ("geo_id", "b19013_001e", "b19013_001m", "b19013_e001", "b19013_m001"),
+}
 WIDE_COLUMNS = {
     "cms_medicare_inpatient_by_provider": MUP_PROVIDER_COLUMNS,
     "cms_medicare_inpatient_by_drg": MUP_DRG_COLUMNS,
@@ -793,6 +848,28 @@ WIDE_COLUMNS = {
     "ruca_zip_2020": RUCA_ZIP_2020_COLUMNS,
     "ruca_zip_2010": RUCA_ZIP_2010_COLUMNS,
     "cms_hsa_csv": HSA_COLUMNS,
+    "svi": SVI_COLUMNS,
+    "acs_dp02": ACS_COLUMNS.get("acs_dp02", ("geo_id", "name")),
+    "acs_dp03": ACS_COLUMNS.get("acs_dp03", ("geo_id", "name")),
+    "acs_dp04": ACS_COLUMNS.get("acs_dp04", ("geo_id", "name")),
+    "acs_dp05": ACS_COLUMNS.get("acs_dp05", ("geo_id", "name")),
+    "acs_s0101": ACS_COLUMNS.get("acs_s0101", ("geo_id", "name")),
+    "acs_s0601": ACS_COLUMNS.get("acs_s0601", ("geo_id", "name")),
+    "acs_s1701": ACS_COLUMNS.get("acs_s1701", ("geo_id", "name")),
+    "acs_s2503": ACS_COLUMNS.get("acs_s2503", ("geo_id", "name")),
+    "acs_s2701": ACS_COLUMNS.get("acs_s2701", ("geo_id", "name")),
+    "acs_b16005": ACS_COLUMNS.get("acs_b16005", ("geo_id", "name")),
+    "acs_b19013": ACS_COLUMNS.get("acs_b19013", ("geo_id", "name")),
+    "acs_b25070": ACS_COLUMNS.get("acs_b25070", ("geo_id", "name")),
+    "acs_b25091": ACS_COLUMNS.get("acs_b25091", ("geo_id", "name")),
+    "acs_b26001": ACS_COLUMNS.get("acs_b26001", ("geo_id", "name")),
+    "acs_c16001": ACS_COLUMNS.get("acs_c16001", ("geo_id", "name")),
+    "acs_summary_b16005": ACS_COLUMNS.get("acs_summary_b16005", ("geo_id",)),
+    "acs_summary_b19013": ACS_COLUMNS.get("acs_summary_b19013", ("geo_id",)),
+    "acs_summary_b25070": ACS_COLUMNS.get("acs_summary_b25070", ("geo_id",)),
+    "acs_summary_b25091": ACS_COLUMNS.get("acs_summary_b25091", ("geo_id",)),
+    "acs_summary_b26001": ACS_COLUMNS.get("acs_summary_b26001", ("geo_id",)),
+    "acs_summary_c16001": ACS_COLUMNS.get("acs_summary_c16001", ("geo_id",)),
 }
 
 
@@ -1819,6 +1896,163 @@ GROUP_C1 = (
 )
 
 
+def acs(geo: str, **values: str) -> tuple[tuple[str, str], ...]:
+    """Return one ACS row: its geography and the published cells."""
+    return (("geo_id", geo), *values.items())
+
+
+def svi_row(**values: str) -> tuple[tuple[str, str], ...]:
+    """Return one SVI row from its published fields."""
+    return tuple(values.items())
+
+
+# SVI editions as the capture receipts' release labels name them, keyed by release [427].
+SVI_EDITIONS = {"SVI__e22": "2022", "SVI__e00": "2000"}
+DP04_LABELS = {
+    "1.00 or less": "Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.00 or less",
+    "1.01 to 1.50": "Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50",
+    "1.51 or more": "Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.51 or more",
+}
+B19013_LABEL = "Estimate!!Median household income in the past 12 months (in 2017 inflation-adjusted dollars)"
+B19013_MOE_LABEL = "Margin of Error!!Median household income in the past 12 months (in 2017 inflation-adjusted dollars)"
+S1701_LABEL = "Estimate!!Percent below poverty level!!Population for whom poverty status is determined"
+
+
+def acs_row(concept: str, table: str, vintage: str, column: str = "", label: str = "", status: str = "mapped", reason: str = "") -> dict[str, str]:
+    """Return one row of the fixture's ACS variable map."""
+    return {
+        "concept_id": concept,
+        "bronze_table": table,
+        "vintage": vintage,
+        "column_name": column,
+        "published_label": label,
+        "status": status,
+        "reason": reason,
+    }
+
+
+# The fixture's reviewed map: the 1.01 to 1.50 concept moves from DP04_0077PE (2014) to DP04_0078PE (2023); the 1.51 or
+# more concept is held in both; B19013 is labelled in the 2017 export and matched by code in both summary styles [420] to [424].
+FIXTURE_ACS_MAP = (
+    acs_row("DP04_0078PE", "acs_dp04", "2014", "dp04_0077pe", DP04_LABELS["1.01 to 1.50"]),
+    acs_row("DP04_0078PE", "acs_dp04", "2023", "dp04_0078pe", DP04_LABELS["1.01 to 1.50"]),
+    acs_row("DP04_0079PE", "acs_dp04", "2014", status="held", reason="fixture hold"),
+    acs_row("DP04_0079PE", "acs_dp04", "2023", status="held", reason="fixture hold"),
+    acs_row("S1701_C03_001E", "acs_s1701", "2023", "s1701_c03_001e", S1701_LABEL),
+    acs_row("B19013_001E", "acs_b19013", "2017", "b19013_001e", B19013_LABEL),
+    acs_row("B19013_001E", "acs_summary_b19013", "2018", "b19013_001e"),
+    acs_row("B19013_001E", "acs_summary_b19013", "2023", "b19013_e001"),
+    acs_row("B19013_001M", "acs_b19013", "2017", "b19013_001m", B19013_MOE_LABEL),
+    acs_row("B19013_001M", "acs_summary_b19013", "2018", "b19013_001m"),
+    acs_row("B19013_001M", "acs_summary_b19013", "2023", "b19013_m001"),
+)
+# C2 [420] to [434]: SVI 2022 with a -999 field and Connecticut, SVI 2000 with its label row; ACS exports whose codes move,
+# (X), the text null, a top-coded median and suppression marks; summary files in both header styles with a state row and
+# negative sentinels.
+GROUP_C2 = (
+    Stored(
+        "svi",
+        "sv22",
+        "SVI__e22",
+        "SVI_file_001.csv",
+        sha("sv22"),
+        2,
+        records=(
+            svi_row(
+                st="01",
+                state="Alabama",
+                st_abbr="AL",
+                stcnty="01001",
+                county="Autauga County",
+                fips="01001",
+                e_totpop="58761",
+                ep_pov150="20.2",
+                ep_unemp="-999",
+                rpl_themes="0.4",
+            ),
+            svi_row(
+                st="09",
+                state="Connecticut",
+                st_abbr="CT",
+                stcnty="09120",
+                county="Greater Bridgeport",
+                fips="09120",
+                e_totpop="100",
+                ep_pov150="10.0",
+                rpl_themes="0.2",
+            ),
+        ),
+    ),
+    Stored(
+        "svi",
+        "sv00",
+        "SVI__e00",
+        "SVI_history_16dd4e5652b5572f.csv",
+        sha("sv00"),
+        2,
+        records=(svi_row(state_fips="ST", cnty_fips="COU", g1v1r="P_POV"), svi_row(state_fips="01", cnty_fips="001", state_name="Alabama", g1v1r="15.2")),
+    ),
+    Stored(
+        "acs_dp04",
+        "a14",
+        "ACS__d14",
+        "ACSDP5Y2014.DP04-Data.csv",
+        sha("a14"),
+        1,
+        records=(acs("0500000US01001", dp04_0077pe="2.9", dp04_0078pe="0.4"),),
+        labels=(("GEO_ID", "Geography"), ("DP04_0077PE", DP04_LABELS["1.01 to 1.50"]), ("DP04_0078PE", DP04_LABELS["1.51 or more"])),
+    ),
+    Stored(
+        "acs_dp04",
+        "a23",
+        "ACS__d23",
+        "ACSDP5Y2023.DP04-Data.csv",
+        sha("a23"),
+        3,
+        records=(acs("0500000US01001", dp04_0078pe="3.1"), acs("0500000US09110", dp04_0078pe="1.2"), acs("0500000US72001", dp04_0078pe="(X)")),
+        labels=(("GEO_ID", "Geography"), ("DP04_0077PE", DP04_LABELS["1.00 or less"]), ("DP04_0078PE", DP04_LABELS["1.01 to 1.50"])),
+    ),
+    Stored(
+        "acs_s1701",
+        "s23",
+        "ACS__s23",
+        "ACSST5Y2023.S1701-Data.csv",
+        sha("s23"),
+        2,
+        records=(acs("0500000US01001", s1701_c03_001e="15.2"), acs("0500000US35039", s1701_c03_001e="null")),
+        labels=(("GEO_ID", "Geography"), ("S1701_C03_001E", S1701_LABEL)),
+    ),
+    Stored(
+        "acs_b19013",
+        "b17",
+        "ACS__b17",
+        "ACSDT5Y2017.B19013-Data.csv",
+        sha("b17"),
+        2,
+        records=(acs("0500000US01001", b19013_001e="250,000+", b19013_001m="***"), acs("0500000US48301", b19013_001e="-", b19013_001m="**")),
+        labels=(("GEO_ID", "Geography"), ("B19013_001E", B19013_LABEL), ("B19013_001M", B19013_MOE_LABEL)),
+    ),
+    Stored(
+        "acs_summary_b19013",
+        "u18",
+        "ACS__u18",
+        "acsdt5y2018-b19013.dat",
+        sha("u18"),
+        2,
+        records=(acs("0500000US01001", b19013_001e="58000", b19013_001m="1200"), acs("0400000US01", b19013_001e="52000", b19013_001m="300")),
+    ),
+    Stored(
+        "acs_summary_b19013",
+        "u23",
+        "ACS__u23",
+        "acsdt5y2023-b19013.dat",
+        sha("u23"),
+        2,
+        records=(acs("0500000US01001", b19013_e001="62000", b19013_m001="1500"), acs("0500000US01003", b19013_e001="-999999999", b19013_m001="-222222222")),
+    ),
+)
+
+
 def owner_case(**fields: str) -> Stored:
     """Return one more owner file with one row, for the failing owner cases."""
     return Stored(
@@ -2085,6 +2319,7 @@ BASE = (
     *GROUP_B5A,
     *GROUP_B5B,
     *GROUP_C1,
+    *GROUP_C2,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -2330,6 +2565,42 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
         tuple(with_record(item, hsa("010001", "32423", "12a", "60", "500")) if item.key == "hs2" else item for item in BASE),
         frozenset(),
     ),
+    # [420] A mapped column whose published label changed.
+    "acs_label_changed": (
+        "assert_acs_labels_match_map",
+        tuple(replace(item, labels=(("GEO_ID", "Geography"), ("DP04_0078PE", DP04_LABELS["1.51 or more"]))) if item.key == "a23" else item for item in BASE),
+        frozenset(),
+    ),
+    # [423] A loaded vintage the map does not cover.
+    "acs_vintage_unmapped": (
+        "assert_acs_map_covers_files",
+        (
+            *BASE,
+            Stored(
+                "acs_dp04",
+                "a24",
+                "ACS__d24",
+                "ACSDP5Y2024.DP04-Data.csv",
+                sha("a24"),
+                1,
+                records=(acs("0500000US01001", dp04_0078pe="3.3"),),
+                labels=(("GEO_ID", "Geography"), ("DP04_0078PE", DP04_LABELS["1.01 to 1.50"])),
+            ),
+        ),
+        frozenset(),
+    ),
+    # [426] An ACS value that is neither a number nor a published token.
+    "acs_value_uncast": (
+        "assert_county_context_values_cast",
+        tuple(with_record(item, acs("0500000US01003", s1701_c03_001e="12a")) if item.key == "s23" else item for item in BASE),
+        frozenset(),
+    ),
+    # [428] An SVI field that is neither a number nor -999.
+    "svi_value_uncast": (
+        "assert_county_context_values_cast",
+        tuple(with_record(item, svi_row(st="01", fips="01003", ep_pov150="abc")) if item.key == "sv22" else item for item in BASE),
+        frozenset(),
+    ),
     # An emergency-services value that is neither Yes nor No [329].
     "hgi_uncast_value": (
         "assert_hgi_values_cast",
@@ -2452,6 +2723,52 @@ CREATE TABLE bronze.ruca_zip_2010 AS SELECT * REPLACE (_row_number::BIGINT AS _r
     FROM read_csv(getvariable('ruca_zip_2010_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.cms_hsa_csv AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('cms_hsa_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.svi AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('svi_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_dp02 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_dp02_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_dp03 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_dp03_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_dp04 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_dp04_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_dp05 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_dp05_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_s0101 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_s0101_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_s0601 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_s0601_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_s1701 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_s1701_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_s2503 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_s2503_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_s2701 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_s2701_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_b16005 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_b16005_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_b19013 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_b19013_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_b25070 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_b25070_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_b25091 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_b25091_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_b26001 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_b26001_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_c16001 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_c16001_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_summary_b16005 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_summary_b16005_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_summary_b19013 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_summary_b19013_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_summary_b25070 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_summary_b25070_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_summary_b25091 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_summary_b25091_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_summary_b26001 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_summary_b26001_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.acs_summary_c16001 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('acs_summary_c16001_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.column_map AS SELECT * REPLACE (position::INTEGER AS position)
+    FROM read_csv(getvariable('column_map_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.stored_copies AS
     SELECT * REPLACE (byte_count::BIGINT AS byte_count, loaded::BOOLEAN AS loaded, retired::BOOLEAN AS retired)
     FROM read_csv(getvariable('copies_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
@@ -2579,6 +2896,30 @@ def ownership_periods_csv(objects: Iterable[Stored], unlabelled: frozenset[str])
     return ownership_release_periods.as_csv(ownership_release_periods.rows_for(loaded, periods))
 
 
+def column_map_csv(objects: Iterable[Stored]) -> str:
+    """Return bronze.column_map for the fixture: each loaded object's published labels by header [420]."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(("_object_key", "table_name", "position", "original_header", "column_name", "original_label"))
+    items = list(objects)
+    loaded = loaded_keys(items)
+    for item in items:
+        if item.key in loaded or item.force_loaded:
+            for position, (header, label) in enumerate(item.labels, start=1):
+                writer.writerow((item.key, item.table, position, header, header.lower(), label))
+    return buffer.getvalue()
+
+
+def acs_map_csv(rows: Iterable[dict[str, str]]) -> str:
+    """Return the fixture's ACS variable map in the reviewed seed's columns [420] [423]."""
+    columns = ("concept_id", "bronze_table", "vintage", "column_name", "published_label", "status", "reason")
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=columns, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue()
+
+
 def geography_periods_csv(objects: Iterable[Stored], unlabelled: frozenset[str]) -> str:
     """Return the geography period seed for the fixture's files, written by the real generator, without the ones a case leaves out [403]."""
     loaded = [
@@ -2586,7 +2927,7 @@ def geography_periods_csv(objects: Iterable[Stored], unlabelled: frozenset[str])
         for item in objects
         if item.table in geography_file_periods.TABLES and item.key not in unlabelled
     ]
-    return geography_file_periods.as_csv(geography_file_periods.rows_for(loaded, GEOGRAPHY_QUARTERS, GEOGRAPHY_COVERAGE))
+    return geography_file_periods.as_csv(geography_file_periods.rows_for(loaded, GEOGRAPHY_QUARTERS, GEOGRAPHY_COVERAGE, SVI_EDITIONS))
 
 
 def publication(item: Stored) -> tuple[str, str]:
@@ -2803,6 +3144,12 @@ HSA_SQL = (
     "FROM int_hsa_zip_cases ORDER BY ALL;"
 )
 
+ACS_SQL = (
+    "SELECT vintage, concept_id, column_name, county_fips, coalesce(value_number::VARCHAR, ''), coalesce(missing_token, ''), is_top_coded::VARCHAR "
+    "FROM int_acs_county_values ORDER BY ALL;"
+)
+SVI_SQL = "SELECT edition, county_fips, field, coalesce(value_number::VARCHAR, ''), coalesce(missing_token, '') FROM int_svi_county_values ORDER BY ALL;"
+
 
 def per_table(query: str, prefix: str) -> str:
     """Return the query once per table, each run after setting the checked_table variable to the prefixed table name."""
@@ -2875,6 +3222,7 @@ def fixture_project(case_dir: Path, objects: tuple[Stored, ...], unlabelled: fro
     (project / "seeds/pos_file_periods.csv").write_text(periods_csv(objects, unlabelled))
     (project / "seeds/ownership_release_periods.csv").write_text(ownership_periods_csv(objects, unlabelled))
     (project / "seeds/geography_file_periods.csv").write_text(geography_periods_csv(objects, unlabelled))
+    (project / "seeds/acs_variable_map.csv").write_text(acs_map_csv(FIXTURE_ACS_MAP))
 
 
 def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[str] = frozenset()) -> tuple[int, dict[str, str]]:
@@ -2890,6 +3238,8 @@ def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[st
     for table in WIDE_COLUMNS:
         (case_dir / f"{table}.csv").write_text(wide_csv(objects, table))
         variables += f"SET VARIABLE {table}_csv = '{CONTAINER_OUT}/e2e/{case}/{table}.csv';\n"
+    (case_dir / "column_map.csv").write_text(column_map_csv(objects))
+    variables += f"SET VARIABLE column_map_csv = '{CONTAINER_OUT}/e2e/{case}/column_map.csv';\n"
     (case_dir / "bronze.sql").write_text(variables + FIXTURE_SQL)
     database = f"{CONTAINER_OUT}/e2e/{case}/fixture_lakehouse.duckdb"
     code, _, stderr = compose_run(["--entrypoint", "duckdb", "analytics-dbt", database, "-c", f".read {CONTAINER_OUT}/e2e/{case}/bronze.sql"], {})
@@ -2956,6 +3306,8 @@ def read_models(case: str) -> dict[str, Any]:
         "rucc": [tuple(row) for row in duckdb_csv(database, RUCC_SQL)],
         "ruca": [tuple(row) for row in duckdb_csv(database, RUCA_SQL)],
         "hsa": [tuple(row) for row in duckdb_csv(database, HSA_SQL)],
+        "acs": [tuple(row) for row in duckdb_csv(database, ACS_SQL)],
+        "svi": [tuple(row) for row in duckdb_csv(database, SVI_SQL)],
         "occmix_holds": [
             tuple(row)
             for row in duckdb_csv(
@@ -3095,6 +3447,55 @@ def geography_checks(base: dict[str, Any]) -> dict[str, bool]:
     checks["geography_generator_refuses_unreviewed_vintage"] = refuses_geography(
         lambda: geography_file_periods.rows_for([{"table": "rucc", "sha256": sha("q8"), "release_id": "r", "file_name": "2033-rucc.csv"}], {}, {}),
         "no reviewed vintage",
+    )
+    return checks
+
+
+def county_context_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's C2 ACS and SVI models with their expected rows and check the vintage generator's refusals."""
+    checks: dict[str, bool] = {}
+    # [420] to [431] The mapped column per vintage, county rows only, tokens kept, the top-coded median capped and flagged;
+    # held concepts give nothing; SVI -999 null with its token, the 2000 label row left out.
+    checks["acs_matches_expected"] = base.get("acs") == sorted(
+        [
+            ("2014", "DP04_0078PE", "dp04_0077pe", "01001", "2.9", "", "false"),
+            ("2023", "DP04_0078PE", "dp04_0078pe", "01001", "3.1", "", "false"),
+            ("2023", "DP04_0078PE", "dp04_0078pe", "09110", "1.2", "", "false"),
+            ("2023", "DP04_0078PE", "dp04_0078pe", "72001", "", "(X)", "false"),
+            ("2023", "S1701_C03_001E", "s1701_c03_001e", "01001", "15.2", "", "false"),
+            ("2023", "S1701_C03_001E", "s1701_c03_001e", "35039", "", "null", "false"),
+            ("2017", "B19013_001E", "b19013_001e", "01001", "250000.0", "", "true"),
+            ("2017", "B19013_001E", "b19013_001e", "48301", "", "-", "false"),
+            ("2017", "B19013_001M", "b19013_001m", "01001", "", "***", "false"),
+            ("2017", "B19013_001M", "b19013_001m", "48301", "", "**", "false"),
+            ("2018", "B19013_001E", "b19013_001e", "01001", "58000.0", "", "false"),
+            ("2018", "B19013_001M", "b19013_001m", "01001", "1200.0", "", "false"),
+            ("2023", "B19013_001E", "b19013_e001", "01001", "62000.0", "", "false"),
+            ("2023", "B19013_001E", "b19013_e001", "01003", "", "-999999999", "false"),
+            ("2023", "B19013_001M", "b19013_m001", "01001", "1500.0", "", "false"),
+            ("2023", "B19013_001M", "b19013_m001", "01003", "", "-222222222", "false"),
+        ]
+    )
+    checks["svi_matches_expected"] = base.get("svi") == sorted(
+        [
+            ("2022", "01001", "e_totpop", "58761.0", ""),
+            ("2022", "01001", "ep_pov150", "20.2", ""),
+            ("2022", "01001", "ep_unemp", "", "-999"),
+            ("2022", "01001", "rpl_themes", "0.4", ""),
+            ("2022", "09120", "e_totpop", "100.0", ""),
+            ("2022", "09120", "ep_pov150", "10.0", ""),
+            ("2022", "09120", "rpl_themes", "0.2", ""),
+            ("2000", "01001", "g1v1r", "15.2", ""),
+        ]
+    )
+    checks["acs_svi_seed_matches_registry"] = acs_svi_seed_matches()
+    checks["vintage_generator_refuses_acs_name_without_year"] = refuses_geography(
+        lambda: geography_file_periods.rows_for([{"table": "acs_dp04", "sha256": sha("q7"), "release_id": "r", "file_name": "DP04-Data.csv"}], {}, {}),
+        "no publisher vintage",
+    )
+    checks["vintage_generator_refuses_svi_without_edition"] = refuses_geography(
+        lambda: geography_file_periods.rows_for([{"table": "svi", "sha256": sha("q6"), "release_id": "r", "file_name": "SVI.csv"}], {}, {}, {}),
+        "no recorded edition",
     )
     return checks
 
@@ -3588,6 +3989,7 @@ def fixture_scenarios() -> dict[str, bool]:
         ("invalid_survey_period", "2"),
     ]
     checks.update(geography_checks(base))
+    checks.update(county_context_checks(base))
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -3730,6 +4132,28 @@ def geography_seed_matches() -> bool:
     return bool(expected_rows) and seeded == expected_rows
 
 
+def acs_svi_seed_matches() -> bool:
+    """Check the ACS and SVI measure seed against the registry (every control of S18 and S19, with its decision) and its
+    ACS concepts against the reviewed variable map [432]."""
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    families = {source: family["id"] for family in registry["source_families"] for source in family["audit_source_ids"]}
+    expected_controls = {
+        control["id"]: control["preserved_controls"]["current_review_decision"]
+        for control in registry["measure_controls"]
+        if {families[source] for source in control["source_ids"] if source in families} & {"S18", "S19"}
+    }
+    seed = REPO_ROOT / "dbt/seeds/acs_svi_measures.csv"
+    if not seed.exists():
+        return False
+    with seed.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    with (REPO_ROOT / "dbt/seeds/acs_variable_map.csv").open(newline="") as handle:
+        concepts = {row["concept_id"] for row in csv.DictReader(handle)}
+    seeded = {row["measure_control"]: row["review_decision"] for row in rows}
+    named = {item for row in rows if row["source"] == "acs" for item in row["components"].split()}
+    return bool(expected_controls) and seeded == expected_controls and named <= concepts
+
+
 def mup_seed_matches() -> bool:
     """Check that the Medicare inpatient measure seed covers exactly the registry's controls of its two sources [363]."""
     registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
@@ -3748,6 +4172,8 @@ GEOGRAPHY_FINGERPRINTS = {
     "int_rucc_county_codes": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY rucc_key)) FROM int_rucc_county_codes AS t;",
     "int_ruca_codes": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY ruca_row_key)) FROM int_ruca_codes AS t;",
     "int_hsa_zip_cases": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY hsa_row_key)) FROM int_hsa_zip_cases AS t;",
+    "int_acs_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY acs_value_key)) FROM int_acs_county_values AS t;",
+    "int_svi_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY svi_value_key)) FROM int_svi_county_values AS t;",
 }
 GEOGRAPHY_RECONCILE_SQL = """SELECT 'hud', (SELECT count(*) FROM stg_hud_zip_county)::VARCHAR,
     ((SELECT count(*) FROM int_hud_zip_county_quarters) + (SELECT count(*) FROM int_hud_zip_county_holds))::VARCHAR
@@ -3814,6 +4240,67 @@ def geography_real(database: str, init: str) -> dict[str, Any]:
     return {"checks": checks, "counts": counts}
 
 
+# County rows of each ACS file times the columns the map names for its vintage, counted from the staging views without the
+# model; and SVI county rows per edition [434].
+ACS_EXPECTED_SQL = """WITH files AS (
+    SELECT p.member_sha256, p.bronze_table, p.vintage FROM geography_file_periods AS p WHERE starts_with(p.bronze_table, 'acs_')
+), mapped AS (
+    SELECT bronze_table, vintage, count(*) AS columns FROM acs_variable_map WHERE status = 'mapped' GROUP BY 1, 2
+), county_rows AS (
+    SELECT _member_sha256 AS member_sha256, count(*) AS n FROM (
+        SELECT _member_sha256, geo_id FROM stg_acs_dp02
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_dp03
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_dp04
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_dp05
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_s0101
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_s0601
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_s1701
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_s2503
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_s2701
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_b16005
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_b19013
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_b25070
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_b25091
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_b26001
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_c16001
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_summary_b16005
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_summary_b19013
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_summary_b25070
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_summary_b25091
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_summary_b26001
+        UNION ALL SELECT _member_sha256, geo_id FROM stg_acs_summary_c16001
+    ) WHERE regexp_full_match(trim(geo_id), '0500000US[0-9]{5}') GROUP BY 1
+)
+SELECT f.bronze_table, f.vintage, (coalesce(c.n, 0) * coalesce(m.columns, 0))::VARCHAR,
+    (SELECT count(*) FROM int_acs_county_values AS v WHERE v.member_sha256 = f.member_sha256)::VARCHAR
+FROM files AS f LEFT JOIN county_rows AS c ON f.member_sha256 = c.member_sha256
+LEFT JOIN mapped AS m ON f.bronze_table = m.bronze_table AND f.vintage = m.vintage ORDER BY 1, 2;"""
+SVI_EXPECTED_SQL = """WITH rows AS (
+    SELECT s._member_sha256 AS member_sha256, coalesce(nullif(trim(s.fips), ''), trim(s.state_fips) || trim(s.cnty_fips)) AS county
+    FROM stg_svi AS s
+)
+SELECT p.vintage, count(*) FILTER (WHERE regexp_full_match(r.county, '[0-9]{4,5}'))::VARCHAR,
+    count(*) FILTER (WHERE NOT coalesce(regexp_full_match(r.county, '[0-9]{4,5}'), false))::VARCHAR,
+    (SELECT count(DISTINCT v.member_sha256 || v.source_row_number) FROM int_svi_county_values AS v WHERE v.edition = p.vintage)::VARCHAR
+FROM rows AS r JOIN geography_file_periods AS p ON r.member_sha256 = p.member_sha256 GROUP BY 1 ORDER BY 1;"""
+
+
+def county_context_real(database: str, init: str) -> dict[str, Any]:
+    """Reconcile the real C2 models with their staging views, independently of the model SQL [434]."""
+    checks: dict[str, bool] = {}
+    counts: dict[str, Any] = {}
+    acs = duckdb_csv(database, ACS_EXPECTED_SQL, init)
+    counts["acs_files"] = {f"{table}:{vintage}": {"expected": int(expected), "typed": int(typed)} for table, vintage, expected, typed in acs}
+    counts["acs_values"] = sum(int(row[3]) for row in acs)
+    checks["county_context_acs_values_reconcile"] = bool(acs) and all(row[2] == row[3] for row in acs) and counts["acs_values"] > 0
+    svi = duckdb_csv(database, SVI_EXPECTED_SQL, init)
+    counts["svi_editions"] = {edition: {"county_rows": int(rows), "other_rows": int(other), "typed_rows": int(typed)} for edition, rows, other, typed in svi}
+    checks["county_context_svi_rows_reconcile"] = len(svi) == 7 and all(row[1] == row[3] for row in svi)
+    checks["county_context_svi_label_row_only_in_2000"] = [(row[0], row[2]) for row in svi if row[2] != "0"] == [("2000", "1")]
+    checks["county_context_seed_matches_registry"] = acs_svi_seed_matches()
+    return {"checks": checks, "counts": counts}
+
+
 def real_stage() -> dict[str, Any]:
     """Build the models from the catalog twice and reconcile them with bronze."""
     outcome: dict[str, Any] = {"checks": {}, "counts": {}}
@@ -3846,6 +4333,9 @@ def real_stage() -> dict[str, Any]:
     geography = geography_real(database, init)
     outcome["checks"].update(geography["checks"])
     outcome["geography_counts"] = geography["counts"]
+    county_context = county_context_real(database, init)
+    outcome["checks"].update(county_context["checks"])
+    outcome["county_context_counts"] = county_context["counts"]
     status_sql = "SELECT text_layout || ' ' || twin_status, count(*)::VARCHAR FROM stg_bronze__twin_comparison GROUP BY 1 ORDER BY 1;"
     outcome["twin_statuses"] = dict(duckdb_csv(database, status_sql))
     held_sql = (

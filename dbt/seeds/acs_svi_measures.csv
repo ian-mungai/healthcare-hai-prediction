@@ -1,0 +1,60 @@
+measure_control,family,source,components,review_decision
+C175,S18,acs,S1701_C03_001E S1701_C02_001E S1701_C01_001E,retain_conditional
+C175.01,S18,acs,S1701_C03_001E,retain_conditional
+C175.02,S19,svi,ep_pov150,retain_conditional
+C176,S18,acs,B19013_001E B19013_001M,retain_conditional
+C177,S19,svi,ep_unemp,retain_conditional
+C177,S19,acs,DP03_0009PE,retain_conditional
+C177.01,S19,acs,DP03_0009PE,retain_conditional
+C177.01,S19,svi,ep_unemp,retain_conditional
+C177.02,S29,bls,,retain_conditional
+C178,S19,svi,ep_nohsdp,retain_conditional
+C178,S19,acs,S0601_C01_033E,retain_conditional
+C179,S19,svi,ep_uninsur,retain_conditional
+C179,S19,acs,S2701_C05_001E S2701_C04_001E,retain_conditional
+C180,S19,svi,ep_hburd,retain_conditional
+C180,S19,acs,S2503_C01_028E S2503_C01_032E S2503_C01_036E S2503_C01_040E S2503_C01_001E,retain_conditional
+C180.01,S19,svi,ep_hburd,retain_conditional
+C180.02,S19,acs,B25070_001E B25070_007E B25070_008E B25070_009E B25070_010E B25070_011E B25091_001E B25091_008E B25091_009E B25091_010E B25091_011E B25091_012E B25091_019E B25091_020E B25091_021E B25091_022E B25091_023E,hold_definition
+C181,S19,svi,ep_crowd,retain_conditional
+C181,S19,acs,DP04_0078PE DP04_0079PE,retain_conditional
+C182,S19,svi,ep_noveh,retain_conditional
+C182,S19,acs,DP04_0058PE,retain_conditional
+C183,S19,svi,ep_limeng,retain_conditional
+C183,S19,acs,B16005_001E B16005_007E B16005_008E B16005_012E B16005_013E B16005_017E B16005_018E B16005_022E B16005_023E B16005_029E B16005_030E B16005_034E B16005_035E B16005_039E B16005_040E B16005_044E B16005_045E,retain_conditional
+C183.01,S19,svi,ep_limeng,retain_conditional
+C183.02,S19,acs,C16001_001E C16001_005E C16001_008E C16001_011E C16001_014E C16001_017E C16001_020E C16001_023E C16001_026E C16001_029E C16001_032E C16001_035E C16001_038E,hold_definition
+C184,S19,svi,ep_disabl,retain_conditional
+C184,S19,acs,DP02_0072PE,retain_conditional
+C185,S19,svi,e_age65 ep_age65,retain_conditional
+C185,S19,acs,S0101_C01_030E S0101_C02_030E,retain_conditional
+C185.01,S19,svi,e_age65,retain_conditional
+C185.02,S19,svi,ep_age65,retain_conditional
+C186,S19,svi,e_age17 ep_age17,retain_conditional
+C186,S19,acs,DP05_0019E DP05_0019PE,retain_conditional
+C186.01,S19,svi,e_age17,retain_conditional
+C186.02,S19,svi,ep_age17,retain_conditional
+C187,S19,svi,ep_sngpnt,retain_conditional
+C187,S19,acs,DP02_0007PE DP02_0011PE,retain_conditional
+C188,S19,svi,ep_groupq e_totpop,retain_conditional
+C188,S19,acs,B26001_001E,retain_conditional
+C189,S19,svi,ep_munit,retain_conditional
+C189,S19,acs,DP04_0012PE DP04_0013PE,retain_conditional
+C190,S19,svi,ep_mobile,retain_conditional
+C190,S19,acs,DP04_0014PE,retain_conditional
+C191,S19,svi,e_totpop area_sqmi,retain_conditional
+C192,S19,svi,ep_hisp ep_afam ep_asian ep_aian ep_nhpi ep_twomore ep_otherrace ep_minrty,retain_conditional
+C192.01,S19,svi,ep_hisp,retain_conditional
+C192.02,S19,svi,ep_afam,retain_conditional
+C192.03,S19,svi,ep_asian,retain_conditional
+C192.04,S19,svi,ep_aian,retain_conditional
+C192.05,S19,svi,ep_nhpi,retain_conditional
+C192.06,S19,svi,ep_twomore,retain_conditional
+C192.07,S19,svi,ep_otherrace,retain_conditional
+C192.08,S19,svi,ep_minrty,retain_conditional
+C192.09,S19,svi,ep_minrty,retain_conditional
+C193,S19,svi,rpl_themes,retain_conditional
+C194,S19,svi,rpl_theme1,retain_conditional
+C195,S19,svi,rpl_theme2,retain_conditional
+C196,S19,svi,rpl_theme3,retain_conditional
+C197,S19,svi,rpl_theme4,retain_conditional

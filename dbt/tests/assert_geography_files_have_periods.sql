@@ -8,7 +8,7 @@ files as (
         bronze_table,
         member_sha256
     from {{ ref('stg_bronze__files') }}
-    where source_family = 'geography' and bronze_table <> 'hud_zip_county_sheet_rows'
+    where source_family in ('geography', 'community') and bronze_table <> 'hud_zip_county_sheet_rows'
 ),
 
 periods as (

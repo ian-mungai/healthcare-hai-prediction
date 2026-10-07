@@ -885,3 +885,45 @@ models:
       - name: is_cases_suppressed
         description: The case count is published as *.
         data_tests: [not_null]
+
+  - name: int_acs_county_values
+    description: >
+      ACS 5-year values per county, vintage and concept, 2010 to 2024, from the column the reviewed acs_variable_map names
+      for that vintage. Missing tokens and sentinels are null with the token kept; coded medians keep their cap and a flag.
+      Values are in each vintage's units and dollars. Staging picks no source and approves no predictor.
+    columns:
+      - name: acs_value_key
+        description: File checksum, source row number and column.
+        data_tests: [unique, not_null]
+      - name: vintage
+        description: Last year of the five-year period, from the publisher file name.
+        data_tests: [not_null]
+      - name: concept_id
+        description: The mapped concept.
+        data_tests: [not_null]
+      - name: county_fips
+        description: County code as 5-character text.
+        data_tests: [not_null]
+      - name: missing_token
+        description: The published mark when the value is not given, for example (X) or -999999999.
+      - name: is_top_coded
+        description: The published value is a cap such as 250,000+.
+        data_tests: [not_null]
+
+  - name: int_svi_county_values
+    description: >
+      SVI values per county, edition and published field, long. -999 is null with the token kept. Field names stay as
+      each edition publishes them; the 2000 edition's names differ from later editions.
+    columns:
+      - name: svi_value_key
+        description: File checksum, source row number and field.
+        data_tests: [unique, not_null]
+      - name: edition
+        description: SVI edition year from the capture receipt.
+        data_tests: [not_null]
+      - name: county_fips
+        description: County code as 5-character text.
+        data_tests: [not_null]
+      - name: field
+        description: The published field name, lowercase.
+        data_tests: [not_null]

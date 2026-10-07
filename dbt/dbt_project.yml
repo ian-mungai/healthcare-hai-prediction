@@ -56,6 +56,28 @@ vars:
     ruca_zip_2010: geography
     ruca_sheet_rows: geography
     cms_hsa_csv: geography
+    svi: community
+    acs_dp02: community
+    acs_dp03: community
+    acs_dp04: community
+    acs_dp05: community
+    acs_s0101: community
+    acs_s0601: community
+    acs_s1701: community
+    acs_s2503: community
+    acs_s2701: community
+    acs_b16005: community
+    acs_b19013: community
+    acs_b25070: community
+    acs_b25091: community
+    acs_b26001: community
+    acs_c16001: community
+    acs_summary_b16005: community
+    acs_summary_b19013: community
+    acs_summary_b25070: community
+    acs_summary_b25091: community
+    acs_summary_b26001: community
+    acs_summary_c16001: community
   # Case-mix index files: the label families of the CMI snapshots read as CMI, and the reviewed families that are not CMI,
   # by name or pattern (failure mode 293).
   cmi_families:

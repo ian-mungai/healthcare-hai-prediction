@@ -20,7 +20,7 @@ models:
         data_tests:
           - accepted_values:
               arguments:
-                values: [hai, cost_reports, ipps, occupational_mix, provider_of_services, care_compare, hospital_ownership, medicare_inpatient, hhs_capacity, onc_pi, geography]
+                values: [hai, cost_reports, ipps, occupational_mix, provider_of_services, care_compare, hospital_ownership, medicare_inpatient, hhs_capacity, onc_pi, geography, community]
       - name: object_key
         description: Hash of the S3 key, version ID and member path (bronze `_object_key`).
         data_tests: [not_null]
@@ -788,6 +788,336 @@ models:
     description: >
       Bronze `cms_hsa_csv` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_hsa_zip_cases.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_hsa_csv documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_svi
+    description: >
+      Bronze `svi` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_svi_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.svi documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_dp02
+    description: >
+      Bronze `acs_dp02` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_dp02 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_dp03
+    description: >
+      Bronze `acs_dp03` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_dp03 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_dp04
+    description: >
+      Bronze `acs_dp04` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_dp04 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_dp05
+    description: >
+      Bronze `acs_dp05` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_dp05 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_s0101
+    description: >
+      Bronze `acs_s0101` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_s0101 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_s0601
+    description: >
+      Bronze `acs_s0601` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_s0601 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_s1701
+    description: >
+      Bronze `acs_s1701` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_s1701 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_s2503
+    description: >
+      Bronze `acs_s2503` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_s2503 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_s2701
+    description: >
+      Bronze `acs_s2701` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_s2701 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_b16005
+    description: >
+      Bronze `acs_b16005` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_b16005 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_b19013
+    description: >
+      Bronze `acs_b19013` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_b19013 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_b25070
+    description: >
+      Bronze `acs_b25070` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_b25070 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_b25091
+    description: >
+      Bronze `acs_b25091` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_b25091 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_b26001
+    description: >
+      Bronze `acs_b26001` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_b26001 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_c16001
+    description: >
+      Bronze `acs_c16001` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_c16001 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_summary_b16005
+    description: >
+      Bronze `acs_summary_b16005` with one copy of each stored file, read from its canonical object (failure mode 433); county rows typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_summary_b16005 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_summary_b19013
+    description: >
+      Bronze `acs_summary_b19013` with one copy of each stored file, read from its canonical object (failure mode 433); county rows typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_summary_b19013 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_summary_b25070
+    description: >
+      Bronze `acs_summary_b25070` with one copy of each stored file, read from its canonical object (failure mode 433); county rows typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_summary_b25070 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_summary_b25091
+    description: >
+      Bronze `acs_summary_b25091` with one copy of each stored file, read from its canonical object (failure mode 433); county rows typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_summary_b25091 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_summary_b26001
+    description: >
+      Bronze `acs_summary_b26001` with one copy of each stored file, read from its canonical object (failure mode 433); county rows typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_summary_b26001 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_acs_summary_c16001
+    description: >
+      Bronze `acs_summary_c16001` with one copy of each stored file, read from its canonical object (failure mode 433); county rows typed in int_acs_county_values.
+      The data columns pass through as published; lakehouse.bronze_dictionary.acs_summary_c16001 documents them.
     columns:
       - name: _object_key
         description: The canonical object the row was read from.

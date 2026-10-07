@@ -28,4 +28,4 @@ select
     files.file_rows
 from staged
 left join files on staged.bronze_table = files.bronze_table
-where files.file_rows is distinct from staged.staged_rows
+where coalesce(files.file_rows, 0) <> staged.staged_rows

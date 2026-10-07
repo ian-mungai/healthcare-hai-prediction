@@ -1,0 +1,1038 @@
+concept_id,bronze_table,vintage,column_name,published_label,status,reason
+B16005_001E,acs_b16005,2010,b16005_001e,Estimate!!Total,mapped,label equals the reference label
+B16005_001E,acs_b16005,2011,b16005_001e,Estimate!!Total,mapped,label equals the reference label
+B16005_001E,acs_b16005,2012,b16005_001e,Estimate!!Total,mapped,label equals the reference label
+B16005_001E,acs_b16005,2013,b16005_001e,Estimate!!Total,mapped,label equals the reference label
+B16005_001E,acs_b16005,2014,b16005_001e,Estimate!!Total,mapped,label equals the reference label
+B16005_001E,acs_b16005,2015,b16005_001e,Estimate!!Total,mapped,label equals the reference label
+B16005_001E,acs_b16005,2016,b16005_001e,Estimate!!Total,mapped,label equals the reference label
+B16005_001E,acs_b16005,2017,b16005_001e,Estimate!!Total,mapped,label equals the reference label
+B16005_001E,acs_summary_b16005,2018,b16005_001e,,mapped,summary file publishes no labels; matched by column code
+B16005_001E,acs_summary_b16005,2019,b16005_e001,,mapped,summary file publishes no labels; matched by column code
+B16005_001E,acs_summary_b16005,2020,b16005_e001,,mapped,summary file publishes no labels; matched by column code
+B16005_001E,acs_summary_b16005,2021,b16005_e001,,mapped,summary file publishes no labels; matched by column code
+B16005_001E,acs_summary_b16005,2022,b16005_e001,,mapped,summary file publishes no labels; matched by column code
+B16005_001E,acs_summary_b16005,2023,b16005_e001,,mapped,summary file publishes no labels; matched by column code
+B16005_001E,acs_summary_b16005,2024,b16005_e001,,mapped,summary file publishes no labels; matched by column code
+B16005_007E,acs_b16005,2010,b16005_007e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_007E,acs_b16005,2011,b16005_007e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_007E,acs_b16005,2012,b16005_007e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_007E,acs_b16005,2013,b16005_007e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_007E,acs_b16005,2014,b16005_007e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_007E,acs_b16005,2015,b16005_007e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_007E,acs_b16005,2016,b16005_007e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_007E,acs_b16005,2017,b16005_007e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_007E,acs_summary_b16005,2018,b16005_007e,,mapped,summary file publishes no labels; matched by column code
+B16005_007E,acs_summary_b16005,2019,b16005_e007,,mapped,summary file publishes no labels; matched by column code
+B16005_007E,acs_summary_b16005,2020,b16005_e007,,mapped,summary file publishes no labels; matched by column code
+B16005_007E,acs_summary_b16005,2021,b16005_e007,,mapped,summary file publishes no labels; matched by column code
+B16005_007E,acs_summary_b16005,2022,b16005_e007,,mapped,summary file publishes no labels; matched by column code
+B16005_007E,acs_summary_b16005,2023,b16005_e007,,mapped,summary file publishes no labels; matched by column code
+B16005_007E,acs_summary_b16005,2024,b16005_e007,,mapped,summary file publishes no labels; matched by column code
+B16005_008E,acs_b16005,2010,b16005_008e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_008E,acs_b16005,2011,b16005_008e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_008E,acs_b16005,2012,b16005_008e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_008E,acs_b16005,2013,b16005_008e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_008E,acs_b16005,2014,b16005_008e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_008E,acs_b16005,2015,b16005_008e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_008E,acs_b16005,2016,b16005_008e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_008E,acs_b16005,2017,b16005_008e,"Estimate!!Total!!Native!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_008E,acs_summary_b16005,2018,b16005_008e,,mapped,summary file publishes no labels; matched by column code
+B16005_008E,acs_summary_b16005,2019,b16005_e008,,mapped,summary file publishes no labels; matched by column code
+B16005_008E,acs_summary_b16005,2020,b16005_e008,,mapped,summary file publishes no labels; matched by column code
+B16005_008E,acs_summary_b16005,2021,b16005_e008,,mapped,summary file publishes no labels; matched by column code
+B16005_008E,acs_summary_b16005,2022,b16005_e008,,mapped,summary file publishes no labels; matched by column code
+B16005_008E,acs_summary_b16005,2023,b16005_e008,,mapped,summary file publishes no labels; matched by column code
+B16005_008E,acs_summary_b16005,2024,b16005_e008,,mapped,summary file publishes no labels; matched by column code
+B16005_012E,acs_b16005,2010,b16005_012e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_012E,acs_b16005,2011,b16005_012e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_012E,acs_b16005,2012,b16005_012e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_012E,acs_b16005,2013,b16005_012e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_012E,acs_b16005,2014,b16005_012e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_012E,acs_b16005,2015,b16005_012e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_012E,acs_b16005,2016,b16005_012e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_012E,acs_b16005,2017,b16005_012e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_012E,acs_summary_b16005,2018,b16005_012e,,mapped,summary file publishes no labels; matched by column code
+B16005_012E,acs_summary_b16005,2019,b16005_e012,,mapped,summary file publishes no labels; matched by column code
+B16005_012E,acs_summary_b16005,2020,b16005_e012,,mapped,summary file publishes no labels; matched by column code
+B16005_012E,acs_summary_b16005,2021,b16005_e012,,mapped,summary file publishes no labels; matched by column code
+B16005_012E,acs_summary_b16005,2022,b16005_e012,,mapped,summary file publishes no labels; matched by column code
+B16005_012E,acs_summary_b16005,2023,b16005_e012,,mapped,summary file publishes no labels; matched by column code
+B16005_012E,acs_summary_b16005,2024,b16005_e012,,mapped,summary file publishes no labels; matched by column code
+B16005_013E,acs_b16005,2010,b16005_013e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_013E,acs_b16005,2011,b16005_013e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_013E,acs_b16005,2012,b16005_013e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_013E,acs_b16005,2013,b16005_013e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_013E,acs_b16005,2014,b16005_013e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_013E,acs_b16005,2015,b16005_013e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_013E,acs_b16005,2016,b16005_013e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_013E,acs_b16005,2017,b16005_013e,"Estimate!!Total!!Native!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_013E,acs_summary_b16005,2018,b16005_013e,,mapped,summary file publishes no labels; matched by column code
+B16005_013E,acs_summary_b16005,2019,b16005_e013,,mapped,summary file publishes no labels; matched by column code
+B16005_013E,acs_summary_b16005,2020,b16005_e013,,mapped,summary file publishes no labels; matched by column code
+B16005_013E,acs_summary_b16005,2021,b16005_e013,,mapped,summary file publishes no labels; matched by column code
+B16005_013E,acs_summary_b16005,2022,b16005_e013,,mapped,summary file publishes no labels; matched by column code
+B16005_013E,acs_summary_b16005,2023,b16005_e013,,mapped,summary file publishes no labels; matched by column code
+B16005_013E,acs_summary_b16005,2024,b16005_e013,,mapped,summary file publishes no labels; matched by column code
+B16005_017E,acs_b16005,2010,b16005_017e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_017E,acs_b16005,2011,b16005_017e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_017E,acs_b16005,2012,b16005_017e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_017E,acs_b16005,2013,b16005_017e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_017E,acs_b16005,2014,b16005_017e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_017E,acs_b16005,2015,b16005_017e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_017E,acs_b16005,2016,b16005_017e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_017E,acs_b16005,2017,b16005_017e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_017E,acs_summary_b16005,2018,b16005_017e,,mapped,summary file publishes no labels; matched by column code
+B16005_017E,acs_summary_b16005,2019,b16005_e017,,mapped,summary file publishes no labels; matched by column code
+B16005_017E,acs_summary_b16005,2020,b16005_e017,,mapped,summary file publishes no labels; matched by column code
+B16005_017E,acs_summary_b16005,2021,b16005_e017,,mapped,summary file publishes no labels; matched by column code
+B16005_017E,acs_summary_b16005,2022,b16005_e017,,mapped,summary file publishes no labels; matched by column code
+B16005_017E,acs_summary_b16005,2023,b16005_e017,,mapped,summary file publishes no labels; matched by column code
+B16005_017E,acs_summary_b16005,2024,b16005_e017,,mapped,summary file publishes no labels; matched by column code
+B16005_018E,acs_b16005,2010,b16005_018e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_018E,acs_b16005,2011,b16005_018e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_018E,acs_b16005,2012,b16005_018e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_018E,acs_b16005,2013,b16005_018e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_018E,acs_b16005,2014,b16005_018e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_018E,acs_b16005,2015,b16005_018e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_018E,acs_b16005,2016,b16005_018e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_018E,acs_b16005,2017,b16005_018e,"Estimate!!Total!!Native!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_018E,acs_summary_b16005,2018,b16005_018e,,mapped,summary file publishes no labels; matched by column code
+B16005_018E,acs_summary_b16005,2019,b16005_e018,,mapped,summary file publishes no labels; matched by column code
+B16005_018E,acs_summary_b16005,2020,b16005_e018,,mapped,summary file publishes no labels; matched by column code
+B16005_018E,acs_summary_b16005,2021,b16005_e018,,mapped,summary file publishes no labels; matched by column code
+B16005_018E,acs_summary_b16005,2022,b16005_e018,,mapped,summary file publishes no labels; matched by column code
+B16005_018E,acs_summary_b16005,2023,b16005_e018,,mapped,summary file publishes no labels; matched by column code
+B16005_018E,acs_summary_b16005,2024,b16005_e018,,mapped,summary file publishes no labels; matched by column code
+B16005_022E,acs_b16005,2010,b16005_022e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_022E,acs_b16005,2011,b16005_022e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_022E,acs_b16005,2012,b16005_022e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_022E,acs_b16005,2013,b16005_022e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_022E,acs_b16005,2014,b16005_022e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_022E,acs_b16005,2015,b16005_022e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_022E,acs_b16005,2016,b16005_022e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_022E,acs_b16005,2017,b16005_022e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_022E,acs_summary_b16005,2018,b16005_022e,,mapped,summary file publishes no labels; matched by column code
+B16005_022E,acs_summary_b16005,2019,b16005_e022,,mapped,summary file publishes no labels; matched by column code
+B16005_022E,acs_summary_b16005,2020,b16005_e022,,mapped,summary file publishes no labels; matched by column code
+B16005_022E,acs_summary_b16005,2021,b16005_e022,,mapped,summary file publishes no labels; matched by column code
+B16005_022E,acs_summary_b16005,2022,b16005_e022,,mapped,summary file publishes no labels; matched by column code
+B16005_022E,acs_summary_b16005,2023,b16005_e022,,mapped,summary file publishes no labels; matched by column code
+B16005_022E,acs_summary_b16005,2024,b16005_e022,,mapped,summary file publishes no labels; matched by column code
+B16005_023E,acs_b16005,2010,b16005_023e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_023E,acs_b16005,2011,b16005_023e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_023E,acs_b16005,2012,b16005_023e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_023E,acs_b16005,2013,b16005_023e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_023E,acs_b16005,2014,b16005_023e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_023E,acs_b16005,2015,b16005_023e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_023E,acs_b16005,2016,b16005_023e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_023E,acs_b16005,2017,b16005_023e,"Estimate!!Total!!Native!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_023E,acs_summary_b16005,2018,b16005_023e,,mapped,summary file publishes no labels; matched by column code
+B16005_023E,acs_summary_b16005,2019,b16005_e023,,mapped,summary file publishes no labels; matched by column code
+B16005_023E,acs_summary_b16005,2020,b16005_e023,,mapped,summary file publishes no labels; matched by column code
+B16005_023E,acs_summary_b16005,2021,b16005_e023,,mapped,summary file publishes no labels; matched by column code
+B16005_023E,acs_summary_b16005,2022,b16005_e023,,mapped,summary file publishes no labels; matched by column code
+B16005_023E,acs_summary_b16005,2023,b16005_e023,,mapped,summary file publishes no labels; matched by column code
+B16005_023E,acs_summary_b16005,2024,b16005_e023,,mapped,summary file publishes no labels; matched by column code
+B16005_029E,acs_b16005,2010,b16005_029e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_029E,acs_b16005,2011,b16005_029e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_029E,acs_b16005,2012,b16005_029e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_029E,acs_b16005,2013,b16005_029e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_029E,acs_b16005,2014,b16005_029e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_029E,acs_b16005,2015,b16005_029e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_029E,acs_b16005,2016,b16005_029e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_029E,acs_b16005,2017,b16005_029e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not well""",mapped,label equals the reference label
+B16005_029E,acs_summary_b16005,2018,b16005_029e,,mapped,summary file publishes no labels; matched by column code
+B16005_029E,acs_summary_b16005,2019,b16005_e029,,mapped,summary file publishes no labels; matched by column code
+B16005_029E,acs_summary_b16005,2020,b16005_e029,,mapped,summary file publishes no labels; matched by column code
+B16005_029E,acs_summary_b16005,2021,b16005_e029,,mapped,summary file publishes no labels; matched by column code
+B16005_029E,acs_summary_b16005,2022,b16005_e029,,mapped,summary file publishes no labels; matched by column code
+B16005_029E,acs_summary_b16005,2023,b16005_e029,,mapped,summary file publishes no labels; matched by column code
+B16005_029E,acs_summary_b16005,2024,b16005_e029,,mapped,summary file publishes no labels; matched by column code
+B16005_030E,acs_b16005,2010,b16005_030e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_030E,acs_b16005,2011,b16005_030e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_030E,acs_b16005,2012,b16005_030e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_030E,acs_b16005,2013,b16005_030e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_030E,acs_b16005,2014,b16005_030e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_030E,acs_b16005,2015,b16005_030e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_030E,acs_b16005,2016,b16005_030e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_030E,acs_b16005,2017,b16005_030e,"Estimate!!Total!!Foreign born!!Speak Spanish!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_030E,acs_summary_b16005,2018,b16005_030e,,mapped,summary file publishes no labels; matched by column code
+B16005_030E,acs_summary_b16005,2019,b16005_e030,,mapped,summary file publishes no labels; matched by column code
+B16005_030E,acs_summary_b16005,2020,b16005_e030,,mapped,summary file publishes no labels; matched by column code
+B16005_030E,acs_summary_b16005,2021,b16005_e030,,mapped,summary file publishes no labels; matched by column code
+B16005_030E,acs_summary_b16005,2022,b16005_e030,,mapped,summary file publishes no labels; matched by column code
+B16005_030E,acs_summary_b16005,2023,b16005_e030,,mapped,summary file publishes no labels; matched by column code
+B16005_030E,acs_summary_b16005,2024,b16005_e030,,mapped,summary file publishes no labels; matched by column code
+B16005_034E,acs_b16005,2010,b16005_034e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_034E,acs_b16005,2011,b16005_034e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_034E,acs_b16005,2012,b16005_034e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_034E,acs_b16005,2013,b16005_034e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_034E,acs_b16005,2014,b16005_034e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_034E,acs_b16005,2015,b16005_034e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_034E,acs_b16005,2016,b16005_034e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_034E,acs_b16005,2017,b16005_034e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_034E,acs_summary_b16005,2018,b16005_034e,,mapped,summary file publishes no labels; matched by column code
+B16005_034E,acs_summary_b16005,2019,b16005_e034,,mapped,summary file publishes no labels; matched by column code
+B16005_034E,acs_summary_b16005,2020,b16005_e034,,mapped,summary file publishes no labels; matched by column code
+B16005_034E,acs_summary_b16005,2021,b16005_e034,,mapped,summary file publishes no labels; matched by column code
+B16005_034E,acs_summary_b16005,2022,b16005_e034,,mapped,summary file publishes no labels; matched by column code
+B16005_034E,acs_summary_b16005,2023,b16005_e034,,mapped,summary file publishes no labels; matched by column code
+B16005_034E,acs_summary_b16005,2024,b16005_e034,,mapped,summary file publishes no labels; matched by column code
+B16005_035E,acs_b16005,2010,b16005_035e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_035E,acs_b16005,2011,b16005_035e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_035E,acs_b16005,2012,b16005_035e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_035E,acs_b16005,2013,b16005_035e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_035E,acs_b16005,2014,b16005_035e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_035E,acs_b16005,2015,b16005_035e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_035E,acs_b16005,2016,b16005_035e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_035E,acs_b16005,2017,b16005_035e,"Estimate!!Total!!Foreign born!!Speak other Indo-European languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_035E,acs_summary_b16005,2018,b16005_035e,,mapped,summary file publishes no labels; matched by column code
+B16005_035E,acs_summary_b16005,2019,b16005_e035,,mapped,summary file publishes no labels; matched by column code
+B16005_035E,acs_summary_b16005,2020,b16005_e035,,mapped,summary file publishes no labels; matched by column code
+B16005_035E,acs_summary_b16005,2021,b16005_e035,,mapped,summary file publishes no labels; matched by column code
+B16005_035E,acs_summary_b16005,2022,b16005_e035,,mapped,summary file publishes no labels; matched by column code
+B16005_035E,acs_summary_b16005,2023,b16005_e035,,mapped,summary file publishes no labels; matched by column code
+B16005_035E,acs_summary_b16005,2024,b16005_e035,,mapped,summary file publishes no labels; matched by column code
+B16005_039E,acs_b16005,2010,b16005_039e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_039E,acs_b16005,2011,b16005_039e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_039E,acs_b16005,2012,b16005_039e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_039E,acs_b16005,2013,b16005_039e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_039E,acs_b16005,2014,b16005_039e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_039E,acs_b16005,2015,b16005_039e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_039E,acs_b16005,2016,b16005_039e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_039E,acs_b16005,2017,b16005_039e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_039E,acs_summary_b16005,2018,b16005_039e,,mapped,summary file publishes no labels; matched by column code
+B16005_039E,acs_summary_b16005,2019,b16005_e039,,mapped,summary file publishes no labels; matched by column code
+B16005_039E,acs_summary_b16005,2020,b16005_e039,,mapped,summary file publishes no labels; matched by column code
+B16005_039E,acs_summary_b16005,2021,b16005_e039,,mapped,summary file publishes no labels; matched by column code
+B16005_039E,acs_summary_b16005,2022,b16005_e039,,mapped,summary file publishes no labels; matched by column code
+B16005_039E,acs_summary_b16005,2023,b16005_e039,,mapped,summary file publishes no labels; matched by column code
+B16005_039E,acs_summary_b16005,2024,b16005_e039,,mapped,summary file publishes no labels; matched by column code
+B16005_040E,acs_b16005,2010,b16005_040e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_040E,acs_b16005,2011,b16005_040e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_040E,acs_b16005,2012,b16005_040e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_040E,acs_b16005,2013,b16005_040e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_040E,acs_b16005,2014,b16005_040e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_040E,acs_b16005,2015,b16005_040e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_040E,acs_b16005,2016,b16005_040e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_040E,acs_b16005,2017,b16005_040e,"Estimate!!Total!!Foreign born!!Speak Asian and Pacific Island languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_040E,acs_summary_b16005,2018,b16005_040e,,mapped,summary file publishes no labels; matched by column code
+B16005_040E,acs_summary_b16005,2019,b16005_e040,,mapped,summary file publishes no labels; matched by column code
+B16005_040E,acs_summary_b16005,2020,b16005_e040,,mapped,summary file publishes no labels; matched by column code
+B16005_040E,acs_summary_b16005,2021,b16005_e040,,mapped,summary file publishes no labels; matched by column code
+B16005_040E,acs_summary_b16005,2022,b16005_e040,,mapped,summary file publishes no labels; matched by column code
+B16005_040E,acs_summary_b16005,2023,b16005_e040,,mapped,summary file publishes no labels; matched by column code
+B16005_040E,acs_summary_b16005,2024,b16005_e040,,mapped,summary file publishes no labels; matched by column code
+B16005_044E,acs_b16005,2010,b16005_044e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_044E,acs_b16005,2011,b16005_044e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_044E,acs_b16005,2012,b16005_044e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_044E,acs_b16005,2013,b16005_044e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_044E,acs_b16005,2014,b16005_044e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_044E,acs_b16005,2015,b16005_044e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_044E,acs_b16005,2016,b16005_044e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_044E,acs_b16005,2017,b16005_044e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not well""",mapped,label equals the reference label
+B16005_044E,acs_summary_b16005,2018,b16005_044e,,mapped,summary file publishes no labels; matched by column code
+B16005_044E,acs_summary_b16005,2019,b16005_e044,,mapped,summary file publishes no labels; matched by column code
+B16005_044E,acs_summary_b16005,2020,b16005_e044,,mapped,summary file publishes no labels; matched by column code
+B16005_044E,acs_summary_b16005,2021,b16005_e044,,mapped,summary file publishes no labels; matched by column code
+B16005_044E,acs_summary_b16005,2022,b16005_e044,,mapped,summary file publishes no labels; matched by column code
+B16005_044E,acs_summary_b16005,2023,b16005_e044,,mapped,summary file publishes no labels; matched by column code
+B16005_044E,acs_summary_b16005,2024,b16005_e044,,mapped,summary file publishes no labels; matched by column code
+B16005_045E,acs_b16005,2010,b16005_045e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_045E,acs_b16005,2011,b16005_045e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_045E,acs_b16005,2012,b16005_045e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_045E,acs_b16005,2013,b16005_045e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_045E,acs_b16005,2014,b16005_045e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_045E,acs_b16005,2015,b16005_045e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_045E,acs_b16005,2016,b16005_045e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_045E,acs_b16005,2017,b16005_045e,"Estimate!!Total!!Foreign born!!Speak other languages!!Speak English ""not at all""",mapped,label equals the reference label
+B16005_045E,acs_summary_b16005,2018,b16005_045e,,mapped,summary file publishes no labels; matched by column code
+B16005_045E,acs_summary_b16005,2019,b16005_e045,,mapped,summary file publishes no labels; matched by column code
+B16005_045E,acs_summary_b16005,2020,b16005_e045,,mapped,summary file publishes no labels; matched by column code
+B16005_045E,acs_summary_b16005,2021,b16005_e045,,mapped,summary file publishes no labels; matched by column code
+B16005_045E,acs_summary_b16005,2022,b16005_e045,,mapped,summary file publishes no labels; matched by column code
+B16005_045E,acs_summary_b16005,2023,b16005_e045,,mapped,summary file publishes no labels; matched by column code
+B16005_045E,acs_summary_b16005,2024,b16005_e045,,mapped,summary file publishes no labels; matched by column code
+B19013_001E,acs_b19013,2010,b19013_001e,Estimate!!Median household income in the past 12 months (in 2010 inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001E,acs_b19013,2011,b19013_001e,Estimate!!Median household income in the past 12 months (in 2011 inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001E,acs_b19013,2012,b19013_001e,Estimate!!Median household income in the past 12 months (in 2012 inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001E,acs_b19013,2013,b19013_001e,Estimate!!Median household income in the past 12 months (in 2013 inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001E,acs_b19013,2014,b19013_001e,Estimate!!Median household income in the past 12 months (in 2014 Inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001E,acs_b19013,2015,b19013_001e,Estimate!!Median household income in the past 12 months (in 2015 Inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001E,acs_b19013,2016,b19013_001e,Estimate!!Median household income in the past 12 months (in 2016 inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001E,acs_b19013,2017,b19013_001e,Estimate!!Median household income in the past 12 months (in 2017 inflation-adjusted dollars),mapped,label equals the reference label
+B19013_001E,acs_summary_b19013,2018,b19013_001e,,mapped,summary file publishes no labels; matched by column code
+B19013_001E,acs_summary_b19013,2019,b19013_e001,,mapped,summary file publishes no labels; matched by column code
+B19013_001E,acs_summary_b19013,2020,b19013_e001,,mapped,summary file publishes no labels; matched by column code
+B19013_001E,acs_summary_b19013,2021,b19013_e001,,mapped,summary file publishes no labels; matched by column code
+B19013_001E,acs_summary_b19013,2022,b19013_e001,,mapped,summary file publishes no labels; matched by column code
+B19013_001E,acs_summary_b19013,2023,b19013_e001,,mapped,summary file publishes no labels; matched by column code
+B19013_001E,acs_summary_b19013,2024,b19013_e001,,mapped,summary file publishes no labels; matched by column code
+B19013_001M,acs_b19013,2010,b19013_001m,Margin of Error!!Median household income in the past 12 months (in 2010 inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001M,acs_b19013,2011,b19013_001m,Margin of Error!!Median household income in the past 12 months (in 2011 inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001M,acs_b19013,2012,b19013_001m,Margin of Error!!Median household income in the past 12 months (in 2012 inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001M,acs_b19013,2013,b19013_001m,Margin of Error!!Median household income in the past 12 months (in 2013 inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001M,acs_b19013,2014,b19013_001m,Margin of Error!!Median household income in the past 12 months (in 2014 Inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001M,acs_b19013,2015,b19013_001m,Margin of Error!!Median household income in the past 12 months (in 2015 Inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001M,acs_b19013,2016,b19013_001m,Margin of Error!!Median household income in the past 12 months (in 2016 inflation-adjusted dollars),mapped,label matches after wording rules
+B19013_001M,acs_b19013,2017,b19013_001m,Margin of Error!!Median household income in the past 12 months (in 2017 inflation-adjusted dollars),mapped,label equals the reference label
+B19013_001M,acs_summary_b19013,2018,b19013_001m,,mapped,summary file publishes no labels; matched by column code
+B19013_001M,acs_summary_b19013,2019,b19013_m001,,mapped,summary file publishes no labels; matched by column code
+B19013_001M,acs_summary_b19013,2020,b19013_m001,,mapped,summary file publishes no labels; matched by column code
+B19013_001M,acs_summary_b19013,2021,b19013_m001,,mapped,summary file publishes no labels; matched by column code
+B19013_001M,acs_summary_b19013,2022,b19013_m001,,mapped,summary file publishes no labels; matched by column code
+B19013_001M,acs_summary_b19013,2023,b19013_m001,,mapped,summary file publishes no labels; matched by column code
+B19013_001M,acs_summary_b19013,2024,b19013_m001,,mapped,summary file publishes no labels; matched by column code
+B25070_001E,acs_b25070,2010,b25070_001e,Estimate!!Total,mapped,label equals the reference label
+B25070_001E,acs_b25070,2011,b25070_001e,Estimate!!Total,mapped,label equals the reference label
+B25070_001E,acs_b25070,2012,b25070_001e,Estimate!!Total,mapped,label equals the reference label
+B25070_001E,acs_b25070,2013,b25070_001e,Estimate!!Total,mapped,label equals the reference label
+B25070_001E,acs_b25070,2014,b25070_001e,Estimate!!Total,mapped,label equals the reference label
+B25070_001E,acs_b25070,2015,b25070_001e,Estimate!!Total,mapped,label equals the reference label
+B25070_001E,acs_b25070,2016,b25070_001e,Estimate!!Total,mapped,label equals the reference label
+B25070_001E,acs_b25070,2017,b25070_001e,Estimate!!Total,mapped,label equals the reference label
+B25070_001E,acs_summary_b25070,2018,b25070_001e,,mapped,summary file publishes no labels; matched by column code
+B25070_001E,acs_summary_b25070,2019,b25070_e001,,mapped,summary file publishes no labels; matched by column code
+B25070_001E,acs_summary_b25070,2020,b25070_e001,,mapped,summary file publishes no labels; matched by column code
+B25070_001E,acs_summary_b25070,2021,b25070_e001,,mapped,summary file publishes no labels; matched by column code
+B25070_001E,acs_summary_b25070,2022,b25070_e001,,mapped,summary file publishes no labels; matched by column code
+B25070_001E,acs_summary_b25070,2023,b25070_e001,,mapped,summary file publishes no labels; matched by column code
+B25070_001E,acs_summary_b25070,2024,b25070_e001,,mapped,summary file publishes no labels; matched by column code
+B25070_007E,acs_b25070,2010,b25070_007e,Estimate!!Total!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25070_007E,acs_b25070,2011,b25070_007e,Estimate!!Total!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25070_007E,acs_b25070,2012,b25070_007e,Estimate!!Total!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25070_007E,acs_b25070,2013,b25070_007e,Estimate!!Total!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25070_007E,acs_b25070,2014,b25070_007e,Estimate!!Total!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25070_007E,acs_b25070,2015,b25070_007e,Estimate!!Total!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25070_007E,acs_b25070,2016,b25070_007e,Estimate!!Total!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25070_007E,acs_b25070,2017,b25070_007e,Estimate!!Total!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25070_007E,acs_summary_b25070,2018,b25070_007e,,mapped,summary file publishes no labels; matched by column code
+B25070_007E,acs_summary_b25070,2019,b25070_e007,,mapped,summary file publishes no labels; matched by column code
+B25070_007E,acs_summary_b25070,2020,b25070_e007,,mapped,summary file publishes no labels; matched by column code
+B25070_007E,acs_summary_b25070,2021,b25070_e007,,mapped,summary file publishes no labels; matched by column code
+B25070_007E,acs_summary_b25070,2022,b25070_e007,,mapped,summary file publishes no labels; matched by column code
+B25070_007E,acs_summary_b25070,2023,b25070_e007,,mapped,summary file publishes no labels; matched by column code
+B25070_007E,acs_summary_b25070,2024,b25070_e007,,mapped,summary file publishes no labels; matched by column code
+B25070_008E,acs_b25070,2010,b25070_008e,Estimate!!Total!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25070_008E,acs_b25070,2011,b25070_008e,Estimate!!Total!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25070_008E,acs_b25070,2012,b25070_008e,Estimate!!Total!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25070_008E,acs_b25070,2013,b25070_008e,Estimate!!Total!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25070_008E,acs_b25070,2014,b25070_008e,Estimate!!Total!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25070_008E,acs_b25070,2015,b25070_008e,Estimate!!Total!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25070_008E,acs_b25070,2016,b25070_008e,Estimate!!Total!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25070_008E,acs_b25070,2017,b25070_008e,Estimate!!Total!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25070_008E,acs_summary_b25070,2018,b25070_008e,,mapped,summary file publishes no labels; matched by column code
+B25070_008E,acs_summary_b25070,2019,b25070_e008,,mapped,summary file publishes no labels; matched by column code
+B25070_008E,acs_summary_b25070,2020,b25070_e008,,mapped,summary file publishes no labels; matched by column code
+B25070_008E,acs_summary_b25070,2021,b25070_e008,,mapped,summary file publishes no labels; matched by column code
+B25070_008E,acs_summary_b25070,2022,b25070_e008,,mapped,summary file publishes no labels; matched by column code
+B25070_008E,acs_summary_b25070,2023,b25070_e008,,mapped,summary file publishes no labels; matched by column code
+B25070_008E,acs_summary_b25070,2024,b25070_e008,,mapped,summary file publishes no labels; matched by column code
+B25070_009E,acs_b25070,2010,b25070_009e,Estimate!!Total!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25070_009E,acs_b25070,2011,b25070_009e,Estimate!!Total!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25070_009E,acs_b25070,2012,b25070_009e,Estimate!!Total!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25070_009E,acs_b25070,2013,b25070_009e,Estimate!!Total!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25070_009E,acs_b25070,2014,b25070_009e,Estimate!!Total!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25070_009E,acs_b25070,2015,b25070_009e,Estimate!!Total!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25070_009E,acs_b25070,2016,b25070_009e,Estimate!!Total!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25070_009E,acs_b25070,2017,b25070_009e,Estimate!!Total!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25070_009E,acs_summary_b25070,2018,b25070_009e,,mapped,summary file publishes no labels; matched by column code
+B25070_009E,acs_summary_b25070,2019,b25070_e009,,mapped,summary file publishes no labels; matched by column code
+B25070_009E,acs_summary_b25070,2020,b25070_e009,,mapped,summary file publishes no labels; matched by column code
+B25070_009E,acs_summary_b25070,2021,b25070_e009,,mapped,summary file publishes no labels; matched by column code
+B25070_009E,acs_summary_b25070,2022,b25070_e009,,mapped,summary file publishes no labels; matched by column code
+B25070_009E,acs_summary_b25070,2023,b25070_e009,,mapped,summary file publishes no labels; matched by column code
+B25070_009E,acs_summary_b25070,2024,b25070_e009,,mapped,summary file publishes no labels; matched by column code
+B25070_010E,acs_b25070,2010,b25070_010e,Estimate!!Total!!50.0 percent or more,mapped,label equals the reference label
+B25070_010E,acs_b25070,2011,b25070_010e,Estimate!!Total!!50.0 percent or more,mapped,label equals the reference label
+B25070_010E,acs_b25070,2012,b25070_010e,Estimate!!Total!!50.0 percent or more,mapped,label equals the reference label
+B25070_010E,acs_b25070,2013,b25070_010e,Estimate!!Total!!50.0 percent or more,mapped,label equals the reference label
+B25070_010E,acs_b25070,2014,b25070_010e,Estimate!!Total!!50.0 percent or more,mapped,label equals the reference label
+B25070_010E,acs_b25070,2015,b25070_010e,Estimate!!Total!!50.0 percent or more,mapped,label equals the reference label
+B25070_010E,acs_b25070,2016,b25070_010e,Estimate!!Total!!50.0 percent or more,mapped,label equals the reference label
+B25070_010E,acs_b25070,2017,b25070_010e,Estimate!!Total!!50.0 percent or more,mapped,label equals the reference label
+B25070_010E,acs_summary_b25070,2018,b25070_010e,,mapped,summary file publishes no labels; matched by column code
+B25070_010E,acs_summary_b25070,2019,b25070_e010,,mapped,summary file publishes no labels; matched by column code
+B25070_010E,acs_summary_b25070,2020,b25070_e010,,mapped,summary file publishes no labels; matched by column code
+B25070_010E,acs_summary_b25070,2021,b25070_e010,,mapped,summary file publishes no labels; matched by column code
+B25070_010E,acs_summary_b25070,2022,b25070_e010,,mapped,summary file publishes no labels; matched by column code
+B25070_010E,acs_summary_b25070,2023,b25070_e010,,mapped,summary file publishes no labels; matched by column code
+B25070_010E,acs_summary_b25070,2024,b25070_e010,,mapped,summary file publishes no labels; matched by column code
+B25070_011E,acs_b25070,2010,b25070_011e,Estimate!!Total!!Not computed,mapped,label equals the reference label
+B25070_011E,acs_b25070,2011,b25070_011e,Estimate!!Total!!Not computed,mapped,label equals the reference label
+B25070_011E,acs_b25070,2012,b25070_011e,Estimate!!Total!!Not computed,mapped,label equals the reference label
+B25070_011E,acs_b25070,2013,b25070_011e,Estimate!!Total!!Not computed,mapped,label equals the reference label
+B25070_011E,acs_b25070,2014,b25070_011e,Estimate!!Total!!Not computed,mapped,label equals the reference label
+B25070_011E,acs_b25070,2015,b25070_011e,Estimate!!Total!!Not computed,mapped,label equals the reference label
+B25070_011E,acs_b25070,2016,b25070_011e,Estimate!!Total!!Not computed,mapped,label equals the reference label
+B25070_011E,acs_b25070,2017,b25070_011e,Estimate!!Total!!Not computed,mapped,label equals the reference label
+B25070_011E,acs_summary_b25070,2018,b25070_011e,,mapped,summary file publishes no labels; matched by column code
+B25070_011E,acs_summary_b25070,2019,b25070_e011,,mapped,summary file publishes no labels; matched by column code
+B25070_011E,acs_summary_b25070,2020,b25070_e011,,mapped,summary file publishes no labels; matched by column code
+B25070_011E,acs_summary_b25070,2021,b25070_e011,,mapped,summary file publishes no labels; matched by column code
+B25070_011E,acs_summary_b25070,2022,b25070_e011,,mapped,summary file publishes no labels; matched by column code
+B25070_011E,acs_summary_b25070,2023,b25070_e011,,mapped,summary file publishes no labels; matched by column code
+B25070_011E,acs_summary_b25070,2024,b25070_e011,,mapped,summary file publishes no labels; matched by column code
+B25091_001E,acs_b25091,2010,b25091_001e,Estimate!!Total,mapped,label equals the reference label
+B25091_001E,acs_b25091,2011,b25091_001e,Estimate!!Total,mapped,label equals the reference label
+B25091_001E,acs_b25091,2012,b25091_001e,Estimate!!Total,mapped,label equals the reference label
+B25091_001E,acs_b25091,2013,b25091_001e,Estimate!!Total,mapped,label equals the reference label
+B25091_001E,acs_b25091,2014,b25091_001e,Estimate!!Total,mapped,label equals the reference label
+B25091_001E,acs_b25091,2015,b25091_001e,Estimate!!Total,mapped,label equals the reference label
+B25091_001E,acs_b25091,2016,b25091_001e,Estimate!!Total,mapped,label equals the reference label
+B25091_001E,acs_b25091,2017,b25091_001e,Estimate!!Total,mapped,label equals the reference label
+B25091_001E,acs_summary_b25091,2018,b25091_001e,,mapped,summary file publishes no labels; matched by column code
+B25091_001E,acs_summary_b25091,2019,b25091_e001,,mapped,summary file publishes no labels; matched by column code
+B25091_001E,acs_summary_b25091,2020,b25091_e001,,mapped,summary file publishes no labels; matched by column code
+B25091_001E,acs_summary_b25091,2021,b25091_e001,,mapped,summary file publishes no labels; matched by column code
+B25091_001E,acs_summary_b25091,2022,b25091_e001,,mapped,summary file publishes no labels; matched by column code
+B25091_001E,acs_summary_b25091,2023,b25091_e001,,mapped,summary file publishes no labels; matched by column code
+B25091_001E,acs_summary_b25091,2024,b25091_e001,,mapped,summary file publishes no labels; matched by column code
+B25091_008E,acs_b25091,2010,b25091_008e,Estimate!!Total!!Housing units with a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_008E,acs_b25091,2011,b25091_008e,Estimate!!Total!!Housing units with a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_008E,acs_b25091,2012,b25091_008e,Estimate!!Total!!Housing units with a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_008E,acs_b25091,2013,b25091_008e,Estimate!!Total!!Housing units with a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_008E,acs_b25091,2014,b25091_008e,Estimate!!Total!!Housing units with a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_008E,acs_b25091,2015,b25091_008e,Estimate!!Total!!Housing units with a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_008E,acs_b25091,2016,b25091_008e,Estimate!!Total!!Housing units with a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_008E,acs_b25091,2017,b25091_008e,Estimate!!Total!!Housing units with a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_008E,acs_summary_b25091,2018,b25091_008e,,mapped,summary file publishes no labels; matched by column code
+B25091_008E,acs_summary_b25091,2019,b25091_e008,,mapped,summary file publishes no labels; matched by column code
+B25091_008E,acs_summary_b25091,2020,b25091_e008,,mapped,summary file publishes no labels; matched by column code
+B25091_008E,acs_summary_b25091,2021,b25091_e008,,mapped,summary file publishes no labels; matched by column code
+B25091_008E,acs_summary_b25091,2022,b25091_e008,,mapped,summary file publishes no labels; matched by column code
+B25091_008E,acs_summary_b25091,2023,b25091_e008,,mapped,summary file publishes no labels; matched by column code
+B25091_008E,acs_summary_b25091,2024,b25091_e008,,mapped,summary file publishes no labels; matched by column code
+B25091_009E,acs_b25091,2010,b25091_009e,Estimate!!Total!!Housing units with a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_009E,acs_b25091,2011,b25091_009e,Estimate!!Total!!Housing units with a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_009E,acs_b25091,2012,b25091_009e,Estimate!!Total!!Housing units with a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_009E,acs_b25091,2013,b25091_009e,Estimate!!Total!!Housing units with a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_009E,acs_b25091,2014,b25091_009e,Estimate!!Total!!Housing units with a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_009E,acs_b25091,2015,b25091_009e,Estimate!!Total!!Housing units with a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_009E,acs_b25091,2016,b25091_009e,Estimate!!Total!!Housing units with a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_009E,acs_b25091,2017,b25091_009e,Estimate!!Total!!Housing units with a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_009E,acs_summary_b25091,2018,b25091_009e,,mapped,summary file publishes no labels; matched by column code
+B25091_009E,acs_summary_b25091,2019,b25091_e009,,mapped,summary file publishes no labels; matched by column code
+B25091_009E,acs_summary_b25091,2020,b25091_e009,,mapped,summary file publishes no labels; matched by column code
+B25091_009E,acs_summary_b25091,2021,b25091_e009,,mapped,summary file publishes no labels; matched by column code
+B25091_009E,acs_summary_b25091,2022,b25091_e009,,mapped,summary file publishes no labels; matched by column code
+B25091_009E,acs_summary_b25091,2023,b25091_e009,,mapped,summary file publishes no labels; matched by column code
+B25091_009E,acs_summary_b25091,2024,b25091_e009,,mapped,summary file publishes no labels; matched by column code
+B25091_010E,acs_b25091,2010,b25091_010e,Estimate!!Total!!Housing units with a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_010E,acs_b25091,2011,b25091_010e,Estimate!!Total!!Housing units with a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_010E,acs_b25091,2012,b25091_010e,Estimate!!Total!!Housing units with a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_010E,acs_b25091,2013,b25091_010e,Estimate!!Total!!Housing units with a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_010E,acs_b25091,2014,b25091_010e,Estimate!!Total!!Housing units with a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_010E,acs_b25091,2015,b25091_010e,Estimate!!Total!!Housing units with a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_010E,acs_b25091,2016,b25091_010e,Estimate!!Total!!Housing units with a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_010E,acs_b25091,2017,b25091_010e,Estimate!!Total!!Housing units with a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_010E,acs_summary_b25091,2018,b25091_010e,,mapped,summary file publishes no labels; matched by column code
+B25091_010E,acs_summary_b25091,2019,b25091_e010,,mapped,summary file publishes no labels; matched by column code
+B25091_010E,acs_summary_b25091,2020,b25091_e010,,mapped,summary file publishes no labels; matched by column code
+B25091_010E,acs_summary_b25091,2021,b25091_e010,,mapped,summary file publishes no labels; matched by column code
+B25091_010E,acs_summary_b25091,2022,b25091_e010,,mapped,summary file publishes no labels; matched by column code
+B25091_010E,acs_summary_b25091,2023,b25091_e010,,mapped,summary file publishes no labels; matched by column code
+B25091_010E,acs_summary_b25091,2024,b25091_e010,,mapped,summary file publishes no labels; matched by column code
+B25091_011E,acs_b25091,2010,b25091_011e,Estimate!!Total!!Housing units with a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_011E,acs_b25091,2011,b25091_011e,Estimate!!Total!!Housing units with a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_011E,acs_b25091,2012,b25091_011e,Estimate!!Total!!Housing units with a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_011E,acs_b25091,2013,b25091_011e,Estimate!!Total!!Housing units with a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_011E,acs_b25091,2014,b25091_011e,Estimate!!Total!!Housing units with a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_011E,acs_b25091,2015,b25091_011e,Estimate!!Total!!Housing units with a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_011E,acs_b25091,2016,b25091_011e,Estimate!!Total!!Housing units with a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_011E,acs_b25091,2017,b25091_011e,Estimate!!Total!!Housing units with a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_011E,acs_summary_b25091,2018,b25091_011e,,mapped,summary file publishes no labels; matched by column code
+B25091_011E,acs_summary_b25091,2019,b25091_e011,,mapped,summary file publishes no labels; matched by column code
+B25091_011E,acs_summary_b25091,2020,b25091_e011,,mapped,summary file publishes no labels; matched by column code
+B25091_011E,acs_summary_b25091,2021,b25091_e011,,mapped,summary file publishes no labels; matched by column code
+B25091_011E,acs_summary_b25091,2022,b25091_e011,,mapped,summary file publishes no labels; matched by column code
+B25091_011E,acs_summary_b25091,2023,b25091_e011,,mapped,summary file publishes no labels; matched by column code
+B25091_011E,acs_summary_b25091,2024,b25091_e011,,mapped,summary file publishes no labels; matched by column code
+B25091_012E,acs_b25091,2010,b25091_012e,Estimate!!Total!!Housing units with a mortgage!!Not computed,mapped,label equals the reference label
+B25091_012E,acs_b25091,2011,b25091_012e,Estimate!!Total!!Housing units with a mortgage!!Not computed,mapped,label equals the reference label
+B25091_012E,acs_b25091,2012,b25091_012e,Estimate!!Total!!Housing units with a mortgage!!Not computed,mapped,label equals the reference label
+B25091_012E,acs_b25091,2013,b25091_012e,Estimate!!Total!!Housing units with a mortgage!!Not computed,mapped,label equals the reference label
+B25091_012E,acs_b25091,2014,b25091_012e,Estimate!!Total!!Housing units with a mortgage!!Not computed,mapped,label equals the reference label
+B25091_012E,acs_b25091,2015,b25091_012e,Estimate!!Total!!Housing units with a mortgage!!Not computed,mapped,label equals the reference label
+B25091_012E,acs_b25091,2016,b25091_012e,Estimate!!Total!!Housing units with a mortgage!!Not computed,mapped,label equals the reference label
+B25091_012E,acs_b25091,2017,b25091_012e,Estimate!!Total!!Housing units with a mortgage!!Not computed,mapped,label equals the reference label
+B25091_012E,acs_summary_b25091,2018,b25091_012e,,mapped,summary file publishes no labels; matched by column code
+B25091_012E,acs_summary_b25091,2019,b25091_e012,,mapped,summary file publishes no labels; matched by column code
+B25091_012E,acs_summary_b25091,2020,b25091_e012,,mapped,summary file publishes no labels; matched by column code
+B25091_012E,acs_summary_b25091,2021,b25091_e012,,mapped,summary file publishes no labels; matched by column code
+B25091_012E,acs_summary_b25091,2022,b25091_e012,,mapped,summary file publishes no labels; matched by column code
+B25091_012E,acs_summary_b25091,2023,b25091_e012,,mapped,summary file publishes no labels; matched by column code
+B25091_012E,acs_summary_b25091,2024,b25091_e012,,mapped,summary file publishes no labels; matched by column code
+B25091_019E,acs_b25091,2010,b25091_019e,Estimate!!Total!!Housing units without a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_019E,acs_b25091,2011,b25091_019e,Estimate!!Total!!Housing units without a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_019E,acs_b25091,2012,b25091_019e,Estimate!!Total!!Housing units without a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_019E,acs_b25091,2013,b25091_019e,Estimate!!Total!!Housing units without a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_019E,acs_b25091,2014,b25091_019e,Estimate!!Total!!Housing units without a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_019E,acs_b25091,2015,b25091_019e,Estimate!!Total!!Housing units without a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_019E,acs_b25091,2016,b25091_019e,Estimate!!Total!!Housing units without a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_019E,acs_b25091,2017,b25091_019e,Estimate!!Total!!Housing units without a mortgage!!30.0 to 34.9 percent,mapped,label equals the reference label
+B25091_019E,acs_summary_b25091,2018,b25091_019e,,mapped,summary file publishes no labels; matched by column code
+B25091_019E,acs_summary_b25091,2019,b25091_e019,,mapped,summary file publishes no labels; matched by column code
+B25091_019E,acs_summary_b25091,2020,b25091_e019,,mapped,summary file publishes no labels; matched by column code
+B25091_019E,acs_summary_b25091,2021,b25091_e019,,mapped,summary file publishes no labels; matched by column code
+B25091_019E,acs_summary_b25091,2022,b25091_e019,,mapped,summary file publishes no labels; matched by column code
+B25091_019E,acs_summary_b25091,2023,b25091_e019,,mapped,summary file publishes no labels; matched by column code
+B25091_019E,acs_summary_b25091,2024,b25091_e019,,mapped,summary file publishes no labels; matched by column code
+B25091_020E,acs_b25091,2010,b25091_020e,Estimate!!Total!!Housing units without a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_020E,acs_b25091,2011,b25091_020e,Estimate!!Total!!Housing units without a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_020E,acs_b25091,2012,b25091_020e,Estimate!!Total!!Housing units without a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_020E,acs_b25091,2013,b25091_020e,Estimate!!Total!!Housing units without a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_020E,acs_b25091,2014,b25091_020e,Estimate!!Total!!Housing units without a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_020E,acs_b25091,2015,b25091_020e,Estimate!!Total!!Housing units without a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_020E,acs_b25091,2016,b25091_020e,Estimate!!Total!!Housing units without a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_020E,acs_b25091,2017,b25091_020e,Estimate!!Total!!Housing units without a mortgage!!35.0 to 39.9 percent,mapped,label equals the reference label
+B25091_020E,acs_summary_b25091,2018,b25091_020e,,mapped,summary file publishes no labels; matched by column code
+B25091_020E,acs_summary_b25091,2019,b25091_e020,,mapped,summary file publishes no labels; matched by column code
+B25091_020E,acs_summary_b25091,2020,b25091_e020,,mapped,summary file publishes no labels; matched by column code
+B25091_020E,acs_summary_b25091,2021,b25091_e020,,mapped,summary file publishes no labels; matched by column code
+B25091_020E,acs_summary_b25091,2022,b25091_e020,,mapped,summary file publishes no labels; matched by column code
+B25091_020E,acs_summary_b25091,2023,b25091_e020,,mapped,summary file publishes no labels; matched by column code
+B25091_020E,acs_summary_b25091,2024,b25091_e020,,mapped,summary file publishes no labels; matched by column code
+B25091_021E,acs_b25091,2010,b25091_021e,Estimate!!Total!!Housing units without a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_021E,acs_b25091,2011,b25091_021e,Estimate!!Total!!Housing units without a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_021E,acs_b25091,2012,b25091_021e,Estimate!!Total!!Housing units without a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_021E,acs_b25091,2013,b25091_021e,Estimate!!Total!!Housing units without a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_021E,acs_b25091,2014,b25091_021e,Estimate!!Total!!Housing units without a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_021E,acs_b25091,2015,b25091_021e,Estimate!!Total!!Housing units without a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_021E,acs_b25091,2016,b25091_021e,Estimate!!Total!!Housing units without a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_021E,acs_b25091,2017,b25091_021e,Estimate!!Total!!Housing units without a mortgage!!40.0 to 49.9 percent,mapped,label equals the reference label
+B25091_021E,acs_summary_b25091,2018,b25091_021e,,mapped,summary file publishes no labels; matched by column code
+B25091_021E,acs_summary_b25091,2019,b25091_e021,,mapped,summary file publishes no labels; matched by column code
+B25091_021E,acs_summary_b25091,2020,b25091_e021,,mapped,summary file publishes no labels; matched by column code
+B25091_021E,acs_summary_b25091,2021,b25091_e021,,mapped,summary file publishes no labels; matched by column code
+B25091_021E,acs_summary_b25091,2022,b25091_e021,,mapped,summary file publishes no labels; matched by column code
+B25091_021E,acs_summary_b25091,2023,b25091_e021,,mapped,summary file publishes no labels; matched by column code
+B25091_021E,acs_summary_b25091,2024,b25091_e021,,mapped,summary file publishes no labels; matched by column code
+B25091_022E,acs_b25091,2010,b25091_022e,Estimate!!Total!!Housing units without a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_022E,acs_b25091,2011,b25091_022e,Estimate!!Total!!Housing units without a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_022E,acs_b25091,2012,b25091_022e,Estimate!!Total!!Housing units without a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_022E,acs_b25091,2013,b25091_022e,Estimate!!Total!!Housing units without a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_022E,acs_b25091,2014,b25091_022e,Estimate!!Total!!Housing units without a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_022E,acs_b25091,2015,b25091_022e,Estimate!!Total!!Housing units without a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_022E,acs_b25091,2016,b25091_022e,Estimate!!Total!!Housing units without a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_022E,acs_b25091,2017,b25091_022e,Estimate!!Total!!Housing units without a mortgage!!50.0 percent or more,mapped,label equals the reference label
+B25091_022E,acs_summary_b25091,2018,b25091_022e,,mapped,summary file publishes no labels; matched by column code
+B25091_022E,acs_summary_b25091,2019,b25091_e022,,mapped,summary file publishes no labels; matched by column code
+B25091_022E,acs_summary_b25091,2020,b25091_e022,,mapped,summary file publishes no labels; matched by column code
+B25091_022E,acs_summary_b25091,2021,b25091_e022,,mapped,summary file publishes no labels; matched by column code
+B25091_022E,acs_summary_b25091,2022,b25091_e022,,mapped,summary file publishes no labels; matched by column code
+B25091_022E,acs_summary_b25091,2023,b25091_e022,,mapped,summary file publishes no labels; matched by column code
+B25091_022E,acs_summary_b25091,2024,b25091_e022,,mapped,summary file publishes no labels; matched by column code
+B25091_023E,acs_b25091,2010,b25091_023e,Estimate!!Total!!Housing units without a mortgage!!Not computed,mapped,label equals the reference label
+B25091_023E,acs_b25091,2011,b25091_023e,Estimate!!Total!!Housing units without a mortgage!!Not computed,mapped,label equals the reference label
+B25091_023E,acs_b25091,2012,b25091_023e,Estimate!!Total!!Housing units without a mortgage!!Not computed,mapped,label equals the reference label
+B25091_023E,acs_b25091,2013,b25091_023e,Estimate!!Total!!Housing units without a mortgage!!Not computed,mapped,label equals the reference label
+B25091_023E,acs_b25091,2014,b25091_023e,Estimate!!Total!!Housing units without a mortgage!!Not computed,mapped,label equals the reference label
+B25091_023E,acs_b25091,2015,b25091_023e,Estimate!!Total!!Housing units without a mortgage!!Not computed,mapped,label equals the reference label
+B25091_023E,acs_b25091,2016,b25091_023e,Estimate!!Total!!Housing units without a mortgage!!Not computed,mapped,label equals the reference label
+B25091_023E,acs_b25091,2017,b25091_023e,Estimate!!Total!!Housing units without a mortgage!!Not computed,mapped,label equals the reference label
+B25091_023E,acs_summary_b25091,2018,b25091_023e,,mapped,summary file publishes no labels; matched by column code
+B25091_023E,acs_summary_b25091,2019,b25091_e023,,mapped,summary file publishes no labels; matched by column code
+B25091_023E,acs_summary_b25091,2020,b25091_e023,,mapped,summary file publishes no labels; matched by column code
+B25091_023E,acs_summary_b25091,2021,b25091_e023,,mapped,summary file publishes no labels; matched by column code
+B25091_023E,acs_summary_b25091,2022,b25091_e023,,mapped,summary file publishes no labels; matched by column code
+B25091_023E,acs_summary_b25091,2023,b25091_e023,,mapped,summary file publishes no labels; matched by column code
+B25091_023E,acs_summary_b25091,2024,b25091_e023,,mapped,summary file publishes no labels; matched by column code
+B26001_001E,acs_b26001,2010,b26001_001e,Estimate!!Total,mapped,label equals the reference label
+B26001_001E,acs_b26001,2011,b26001_001e,Estimate!!Total,mapped,label equals the reference label
+B26001_001E,acs_b26001,2012,b26001_001e,Estimate!!Total,mapped,label equals the reference label
+B26001_001E,acs_b26001,2013,b26001_001e,Estimate!!Total,mapped,label equals the reference label
+B26001_001E,acs_b26001,2014,b26001_001e,Estimate!!Total,mapped,label equals the reference label
+B26001_001E,acs_b26001,2015,b26001_001e,Estimate!!Total,mapped,label equals the reference label
+B26001_001E,acs_b26001,2016,b26001_001e,Estimate!!Total,mapped,label equals the reference label
+B26001_001E,acs_b26001,2017,b26001_001e,Estimate!!Total,mapped,label equals the reference label
+B26001_001E,acs_summary_b26001,2018,b26001_001e,,mapped,summary file publishes no labels; matched by column code
+B26001_001E,acs_summary_b26001,2019,b26001_e001,,mapped,summary file publishes no labels; matched by column code
+B26001_001E,acs_summary_b26001,2020,b26001_e001,,mapped,summary file publishes no labels; matched by column code
+B26001_001E,acs_summary_b26001,2021,b26001_e001,,mapped,summary file publishes no labels; matched by column code
+B26001_001E,acs_summary_b26001,2022,b26001_e001,,mapped,summary file publishes no labels; matched by column code
+B26001_001E,acs_summary_b26001,2023,b26001_e001,,mapped,summary file publishes no labels; matched by column code
+B26001_001E,acs_summary_b26001,2024,b26001_e001,,mapped,summary file publishes no labels; matched by column code
+C16001_001E,acs_c16001,2016,c16001_001e,Estimate!!Total,mapped,label equals the reference label
+C16001_001E,acs_c16001,2017,c16001_001e,Estimate!!Total,mapped,label equals the reference label
+C16001_001E,acs_summary_c16001,2018,c16001_001e,,mapped,summary file publishes no labels; matched by column code
+C16001_001E,acs_summary_c16001,2019,c16001_e001,,mapped,summary file publishes no labels; matched by column code
+C16001_001E,acs_summary_c16001,2020,c16001_e001,,mapped,summary file publishes no labels; matched by column code
+C16001_001E,acs_summary_c16001,2021,c16001_e001,,mapped,summary file publishes no labels; matched by column code
+C16001_001E,acs_summary_c16001,2022,c16001_e001,,mapped,summary file publishes no labels; matched by column code
+C16001_001E,acs_summary_c16001,2023,c16001_e001,,mapped,summary file publishes no labels; matched by column code
+C16001_001E,acs_summary_c16001,2024,c16001_e001,,mapped,summary file publishes no labels; matched by column code
+C16001_005E,acs_c16001,2016,c16001_005e,"Estimate!!Total!!Spanish!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_005E,acs_c16001,2017,c16001_005e,"Estimate!!Total!!Spanish!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_005E,acs_summary_c16001,2018,c16001_005e,,mapped,summary file publishes no labels; matched by column code
+C16001_005E,acs_summary_c16001,2019,c16001_e005,,mapped,summary file publishes no labels; matched by column code
+C16001_005E,acs_summary_c16001,2020,c16001_e005,,mapped,summary file publishes no labels; matched by column code
+C16001_005E,acs_summary_c16001,2021,c16001_e005,,mapped,summary file publishes no labels; matched by column code
+C16001_005E,acs_summary_c16001,2022,c16001_e005,,mapped,summary file publishes no labels; matched by column code
+C16001_005E,acs_summary_c16001,2023,c16001_e005,,mapped,summary file publishes no labels; matched by column code
+C16001_005E,acs_summary_c16001,2024,c16001_e005,,mapped,summary file publishes no labels; matched by column code
+C16001_008E,acs_c16001,2016,c16001_008e,"Estimate!!Total!!French, Haitian, or Cajun!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_008E,acs_c16001,2017,c16001_008e,"Estimate!!Total!!French, Haitian, or Cajun!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_008E,acs_summary_c16001,2018,c16001_008e,,mapped,summary file publishes no labels; matched by column code
+C16001_008E,acs_summary_c16001,2019,c16001_e008,,mapped,summary file publishes no labels; matched by column code
+C16001_008E,acs_summary_c16001,2020,c16001_e008,,mapped,summary file publishes no labels; matched by column code
+C16001_008E,acs_summary_c16001,2021,c16001_e008,,mapped,summary file publishes no labels; matched by column code
+C16001_008E,acs_summary_c16001,2022,c16001_e008,,mapped,summary file publishes no labels; matched by column code
+C16001_008E,acs_summary_c16001,2023,c16001_e008,,mapped,summary file publishes no labels; matched by column code
+C16001_008E,acs_summary_c16001,2024,c16001_e008,,mapped,summary file publishes no labels; matched by column code
+C16001_011E,acs_c16001,2016,c16001_011e,"Estimate!!Total!!German or other West Germanic languages!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_011E,acs_c16001,2017,c16001_011e,"Estimate!!Total!!German or other West Germanic languages!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_011E,acs_summary_c16001,2018,c16001_011e,,mapped,summary file publishes no labels; matched by column code
+C16001_011E,acs_summary_c16001,2019,c16001_e011,,mapped,summary file publishes no labels; matched by column code
+C16001_011E,acs_summary_c16001,2020,c16001_e011,,mapped,summary file publishes no labels; matched by column code
+C16001_011E,acs_summary_c16001,2021,c16001_e011,,mapped,summary file publishes no labels; matched by column code
+C16001_011E,acs_summary_c16001,2022,c16001_e011,,mapped,summary file publishes no labels; matched by column code
+C16001_011E,acs_summary_c16001,2023,c16001_e011,,mapped,summary file publishes no labels; matched by column code
+C16001_011E,acs_summary_c16001,2024,c16001_e011,,mapped,summary file publishes no labels; matched by column code
+C16001_014E,acs_c16001,2016,c16001_014e,"Estimate!!Total!!Russian, Polish, or other Slavic languages!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_014E,acs_c16001,2017,c16001_014e,"Estimate!!Total!!Russian, Polish, or other Slavic languages!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_014E,acs_summary_c16001,2018,c16001_014e,,mapped,summary file publishes no labels; matched by column code
+C16001_014E,acs_summary_c16001,2019,c16001_e014,,mapped,summary file publishes no labels; matched by column code
+C16001_014E,acs_summary_c16001,2020,c16001_e014,,mapped,summary file publishes no labels; matched by column code
+C16001_014E,acs_summary_c16001,2021,c16001_e014,,mapped,summary file publishes no labels; matched by column code
+C16001_014E,acs_summary_c16001,2022,c16001_e014,,mapped,summary file publishes no labels; matched by column code
+C16001_014E,acs_summary_c16001,2023,c16001_e014,,mapped,summary file publishes no labels; matched by column code
+C16001_014E,acs_summary_c16001,2024,c16001_e014,,mapped,summary file publishes no labels; matched by column code
+C16001_017E,acs_c16001,2016,c16001_017e,"Estimate!!Total!!Other Indo-European languages!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_017E,acs_c16001,2017,c16001_017e,"Estimate!!Total!!Other Indo-European languages!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_017E,acs_summary_c16001,2018,c16001_017e,,mapped,summary file publishes no labels; matched by column code
+C16001_017E,acs_summary_c16001,2019,c16001_e017,,mapped,summary file publishes no labels; matched by column code
+C16001_017E,acs_summary_c16001,2020,c16001_e017,,mapped,summary file publishes no labels; matched by column code
+C16001_017E,acs_summary_c16001,2021,c16001_e017,,mapped,summary file publishes no labels; matched by column code
+C16001_017E,acs_summary_c16001,2022,c16001_e017,,mapped,summary file publishes no labels; matched by column code
+C16001_017E,acs_summary_c16001,2023,c16001_e017,,mapped,summary file publishes no labels; matched by column code
+C16001_017E,acs_summary_c16001,2024,c16001_e017,,mapped,summary file publishes no labels; matched by column code
+C16001_020E,acs_c16001,2016,c16001_020e,"Estimate!!Total!!Korean!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_020E,acs_c16001,2017,c16001_020e,"Estimate!!Total!!Korean!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_020E,acs_summary_c16001,2018,c16001_020e,,mapped,summary file publishes no labels; matched by column code
+C16001_020E,acs_summary_c16001,2019,c16001_e020,,mapped,summary file publishes no labels; matched by column code
+C16001_020E,acs_summary_c16001,2020,c16001_e020,,mapped,summary file publishes no labels; matched by column code
+C16001_020E,acs_summary_c16001,2021,c16001_e020,,mapped,summary file publishes no labels; matched by column code
+C16001_020E,acs_summary_c16001,2022,c16001_e020,,mapped,summary file publishes no labels; matched by column code
+C16001_020E,acs_summary_c16001,2023,c16001_e020,,mapped,summary file publishes no labels; matched by column code
+C16001_020E,acs_summary_c16001,2024,c16001_e020,,mapped,summary file publishes no labels; matched by column code
+C16001_023E,acs_c16001,2016,c16001_023e,"Estimate!!Total!!Chinese (incl. Mandarin, Cantonese)!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_023E,acs_c16001,2017,c16001_023e,"Estimate!!Total!!Chinese (incl. Mandarin, Cantonese)!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_023E,acs_summary_c16001,2018,c16001_023e,,mapped,summary file publishes no labels; matched by column code
+C16001_023E,acs_summary_c16001,2019,c16001_e023,,mapped,summary file publishes no labels; matched by column code
+C16001_023E,acs_summary_c16001,2020,c16001_e023,,mapped,summary file publishes no labels; matched by column code
+C16001_023E,acs_summary_c16001,2021,c16001_e023,,mapped,summary file publishes no labels; matched by column code
+C16001_023E,acs_summary_c16001,2022,c16001_e023,,mapped,summary file publishes no labels; matched by column code
+C16001_023E,acs_summary_c16001,2023,c16001_e023,,mapped,summary file publishes no labels; matched by column code
+C16001_023E,acs_summary_c16001,2024,c16001_e023,,mapped,summary file publishes no labels; matched by column code
+C16001_026E,acs_c16001,2016,c16001_026e,"Estimate!!Total!!Vietnamese!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_026E,acs_c16001,2017,c16001_026e,"Estimate!!Total!!Vietnamese!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_026E,acs_summary_c16001,2018,c16001_026e,,mapped,summary file publishes no labels; matched by column code
+C16001_026E,acs_summary_c16001,2019,c16001_e026,,mapped,summary file publishes no labels; matched by column code
+C16001_026E,acs_summary_c16001,2020,c16001_e026,,mapped,summary file publishes no labels; matched by column code
+C16001_026E,acs_summary_c16001,2021,c16001_e026,,mapped,summary file publishes no labels; matched by column code
+C16001_026E,acs_summary_c16001,2022,c16001_e026,,mapped,summary file publishes no labels; matched by column code
+C16001_026E,acs_summary_c16001,2023,c16001_e026,,mapped,summary file publishes no labels; matched by column code
+C16001_026E,acs_summary_c16001,2024,c16001_e026,,mapped,summary file publishes no labels; matched by column code
+C16001_029E,acs_c16001,2016,c16001_029e,"Estimate!!Total!!Tagalog (incl. Filipino)!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_029E,acs_c16001,2017,c16001_029e,"Estimate!!Total!!Tagalog (incl. Filipino)!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_029E,acs_summary_c16001,2018,c16001_029e,,mapped,summary file publishes no labels; matched by column code
+C16001_029E,acs_summary_c16001,2019,c16001_e029,,mapped,summary file publishes no labels; matched by column code
+C16001_029E,acs_summary_c16001,2020,c16001_e029,,mapped,summary file publishes no labels; matched by column code
+C16001_029E,acs_summary_c16001,2021,c16001_e029,,mapped,summary file publishes no labels; matched by column code
+C16001_029E,acs_summary_c16001,2022,c16001_e029,,mapped,summary file publishes no labels; matched by column code
+C16001_029E,acs_summary_c16001,2023,c16001_e029,,mapped,summary file publishes no labels; matched by column code
+C16001_029E,acs_summary_c16001,2024,c16001_e029,,mapped,summary file publishes no labels; matched by column code
+C16001_032E,acs_c16001,2016,c16001_032e,"Estimate!!Total!!Other Asian and Pacific Island languages!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_032E,acs_c16001,2017,c16001_032e,"Estimate!!Total!!Other Asian and Pacific Island languages!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_032E,acs_summary_c16001,2018,c16001_032e,,mapped,summary file publishes no labels; matched by column code
+C16001_032E,acs_summary_c16001,2019,c16001_e032,,mapped,summary file publishes no labels; matched by column code
+C16001_032E,acs_summary_c16001,2020,c16001_e032,,mapped,summary file publishes no labels; matched by column code
+C16001_032E,acs_summary_c16001,2021,c16001_e032,,mapped,summary file publishes no labels; matched by column code
+C16001_032E,acs_summary_c16001,2022,c16001_e032,,mapped,summary file publishes no labels; matched by column code
+C16001_032E,acs_summary_c16001,2023,c16001_e032,,mapped,summary file publishes no labels; matched by column code
+C16001_032E,acs_summary_c16001,2024,c16001_e032,,mapped,summary file publishes no labels; matched by column code
+C16001_035E,acs_c16001,2016,c16001_035e,"Estimate!!Total!!Arabic!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_035E,acs_c16001,2017,c16001_035e,"Estimate!!Total!!Arabic!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_035E,acs_summary_c16001,2018,c16001_035e,,mapped,summary file publishes no labels; matched by column code
+C16001_035E,acs_summary_c16001,2019,c16001_e035,,mapped,summary file publishes no labels; matched by column code
+C16001_035E,acs_summary_c16001,2020,c16001_e035,,mapped,summary file publishes no labels; matched by column code
+C16001_035E,acs_summary_c16001,2021,c16001_e035,,mapped,summary file publishes no labels; matched by column code
+C16001_035E,acs_summary_c16001,2022,c16001_e035,,mapped,summary file publishes no labels; matched by column code
+C16001_035E,acs_summary_c16001,2023,c16001_e035,,mapped,summary file publishes no labels; matched by column code
+C16001_035E,acs_summary_c16001,2024,c16001_e035,,mapped,summary file publishes no labels; matched by column code
+C16001_038E,acs_c16001,2016,c16001_038e,"Estimate!!Total!!Other and unspecified languages!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_038E,acs_c16001,2017,c16001_038e,"Estimate!!Total!!Other and unspecified languages!!Speak English less than ""very well""",mapped,label equals the reference label
+C16001_038E,acs_summary_c16001,2018,c16001_038e,,mapped,summary file publishes no labels; matched by column code
+C16001_038E,acs_summary_c16001,2019,c16001_e038,,mapped,summary file publishes no labels; matched by column code
+C16001_038E,acs_summary_c16001,2020,c16001_e038,,mapped,summary file publishes no labels; matched by column code
+C16001_038E,acs_summary_c16001,2021,c16001_e038,,mapped,summary file publishes no labels; matched by column code
+C16001_038E,acs_summary_c16001,2022,c16001_e038,,mapped,summary file publishes no labels; matched by column code
+C16001_038E,acs_summary_c16001,2023,c16001_e038,,mapped,summary file publishes no labels; matched by column code
+C16001_038E,acs_summary_c16001,2024,c16001_e038,,mapped,summary file publishes no labels; matched by column code
+DP02_0007PE,acs_dp02,2010,,,held,no column carries the reference label
+DP02_0007PE,acs_dp02,2011,,,held,no column carries the reference label
+DP02_0007PE,acs_dp02,2012,,,held,no column carries the reference label
+DP02_0007PE,acs_dp02,2013,,,held,no column carries the reference label
+DP02_0007PE,acs_dp02,2014,,,held,no column carries the reference label
+DP02_0007PE,acs_dp02,2015,,,held,no column carries the reference label
+DP02_0007PE,acs_dp02,2016,,,held,no column carries the reference label
+DP02_0007PE,acs_dp02,2017,,,held,no column carries the reference label
+DP02_0007PE,acs_dp02,2018,,,held,no column carries the reference label
+DP02_0007PE,acs_dp02,2019,,,held,no column carries the reference label
+DP02_0007PE,acs_dp02,2020,dp02_0007pe,"Percent!!HOUSEHOLDS BY TYPE!!Total households!!Male householder, no spouse/partner present!!With children of the householder under 18 years",mapped,label equals the reference label
+DP02_0007PE,acs_dp02,2021,dp02_0007pe,"Percent!!HOUSEHOLDS BY TYPE!!Total households!!Male householder, no spouse/partner present!!With children of the householder under 18 years",mapped,label equals the reference label
+DP02_0007PE,acs_dp02,2022,dp02_0007pe,"Percent!!HOUSEHOLDS BY TYPE!!Total households!!Male householder, no spouse/partner present!!With children of the householder under 18 years",mapped,label equals the reference label
+DP02_0007PE,acs_dp02,2023,dp02_0007pe,"Percent!!HOUSEHOLDS BY TYPE!!Total households!!Male householder, no spouse/partner present!!With children of the householder under 18 years",mapped,label equals the reference label
+DP02_0007PE,acs_dp02,2024,dp02_0007pe,"Percent!!HOUSEHOLDS BY TYPE!!Total households!!Male householder, no spouse/partner present!!With children of the householder under 18 years",mapped,label equals the reference label
+DP02_0011PE,acs_dp02,2010,,,held,no column carries the reference label
+DP02_0011PE,acs_dp02,2011,,,held,no column carries the reference label
+DP02_0011PE,acs_dp02,2012,,,held,no column carries the reference label
+DP02_0011PE,acs_dp02,2013,,,held,no column carries the reference label
+DP02_0011PE,acs_dp02,2014,,,held,no column carries the reference label
+DP02_0011PE,acs_dp02,2015,,,held,no column carries the reference label
+DP02_0011PE,acs_dp02,2016,,,held,no column carries the reference label
+DP02_0011PE,acs_dp02,2017,,,held,no column carries the reference label
+DP02_0011PE,acs_dp02,2018,,,held,no column carries the reference label
+DP02_0011PE,acs_dp02,2019,,,held,no column carries the reference label
+DP02_0011PE,acs_dp02,2020,dp02_0011pe,"Percent!!HOUSEHOLDS BY TYPE!!Total households!!Female householder, no spouse/partner present!!With children of the householder under 18 years",mapped,label equals the reference label
+DP02_0011PE,acs_dp02,2021,dp02_0011pe,"Percent!!HOUSEHOLDS BY TYPE!!Total households!!Female householder, no spouse/partner present!!With children of the householder under 18 years",mapped,label equals the reference label
+DP02_0011PE,acs_dp02,2022,dp02_0011pe,"Percent!!HOUSEHOLDS BY TYPE!!Total households!!Female householder, no spouse/partner present!!With children of the householder under 18 years",mapped,label equals the reference label
+DP02_0011PE,acs_dp02,2023,dp02_0011pe,"Percent!!HOUSEHOLDS BY TYPE!!Total households!!Female householder, no spouse/partner present!!With children of the householder under 18 years",mapped,label equals the reference label
+DP02_0011PE,acs_dp02,2024,dp02_0011pe,"Percent!!HOUSEHOLDS BY TYPE!!Total households!!Female householder, no spouse/partner present!!With children of the householder under 18 years",mapped,label equals the reference label
+DP02_0072PE,acs_dp02,2010,,,held,no column carries the reference label
+DP02_0072PE,acs_dp02,2011,,,held,no column carries the reference label
+DP02_0072PE,acs_dp02,2012,,,held,no column carries the reference label
+DP02_0072PE,acs_dp02,2013,dp02_0071pe,Percent!!DISABILITY STATUS OF THE CIVILIAN NONINSTITUTIONALIZED POPULATION!!Total Civilian Noninstitutionalized Population!!With a disability,mapped,label equals the reference label
+DP02_0072PE,acs_dp02,2014,dp02_0071pe,Percent!!DISABILITY STATUS OF THE CIVILIAN NONINSTITUTIONALIZED POPULATION!!Total Civilian Noninstitutionalized Population!!With a disability,mapped,label equals the reference label
+DP02_0072PE,acs_dp02,2015,dp02_0071pe,Percent!!DISABILITY STATUS OF THE CIVILIAN NONINSTITUTIONALIZED POPULATION!!Total Civilian Noninstitutionalized Population!!With a disability,mapped,label equals the reference label
+DP02_0072PE,acs_dp02,2016,dp02_0071pe,Percent!!DISABILITY STATUS OF THE CIVILIAN NONINSTITUTIONALIZED POPULATION!!Total Civilian Noninstitutionalized Population!!With a disability,mapped,label equals the reference label
+DP02_0072PE,acs_dp02,2017,dp02_0071pe,Percent Estimate!!DISABILITY STATUS OF THE CIVILIAN NONINSTITUTIONALIZED POPULATION!!Total Civilian Noninstitutionalized Population!!With a disability,mapped,label matches after wording rules
+DP02_0072PE,acs_dp02,2018,dp02_0071pe,Percent Estimate!!DISABILITY STATUS OF THE CIVILIAN NONINSTITUTIONALIZED POPULATION!!Total Civilian Noninstitutionalized Population!!With a disability,mapped,label matches after wording rules
+DP02_0072PE,acs_dp02,2019,dp02_0072pe,Percent!!DISABILITY STATUS OF THE CIVILIAN NONINSTITUTIONALIZED POPULATION!!Total Civilian Noninstitutionalized Population!!With a disability,mapped,label equals the reference label
+DP02_0072PE,acs_dp02,2020,dp02_0072pe,Percent!!DISABILITY STATUS OF THE CIVILIAN NONINSTITUTIONALIZED POPULATION!!Total Civilian Noninstitutionalized Population!!With a disability,mapped,label equals the reference label
+DP02_0072PE,acs_dp02,2021,dp02_0072pe,Percent!!DISABILITY STATUS OF THE CIVILIAN NONINSTITUTIONALIZED POPULATION!!Total Civilian Noninstitutionalized Population!!With a disability,mapped,label equals the reference label
+DP02_0072PE,acs_dp02,2022,dp02_0072pe,Percent!!DISABILITY STATUS OF THE CIVILIAN NONINSTITUTIONALIZED POPULATION!!Total Civilian Noninstitutionalized Population!!With a disability,mapped,label equals the reference label
+DP02_0072PE,acs_dp02,2023,dp02_0072pe,Percent!!DISABILITY STATUS OF THE CIVILIAN NONINSTITUTIONALIZED POPULATION!!Total Civilian Noninstitutionalized Population!!With a disability,mapped,label equals the reference label
+DP02_0072PE,acs_dp02,2024,dp02_0072pe,Percent!!DISABILITY STATUS OF THE CIVILIAN NONINSTITUTIONALIZED POPULATION!!Total Civilian Noninstitutionalized Population!!With a disability,mapped,label equals the reference label
+DP03_0009PE,acs_dp03,2010,,,held,no column carries the reference label
+DP03_0009PE,acs_dp03,2011,,,held,no column carries the reference label
+DP03_0009PE,acs_dp03,2012,,,held,no column carries the reference label
+DP03_0009PE,acs_dp03,2013,,,held,no column carries the reference label
+DP03_0009PE,acs_dp03,2014,,,held,no column carries the reference label
+DP03_0009PE,acs_dp03,2015,dp03_0009pe,Percent!!EMPLOYMENT STATUS!!Civilian labor force!!Unemployment Rate,mapped,label equals the reference label
+DP03_0009PE,acs_dp03,2016,dp03_0009pe,Percent!!EMPLOYMENT STATUS!!Civilian labor force!!Unemployment Rate,mapped,label equals the reference label
+DP03_0009PE,acs_dp03,2017,dp03_0009pe,Percent Estimate!!EMPLOYMENT STATUS!!Civilian labor force!!Unemployment Rate,mapped,label matches after wording rules
+DP03_0009PE,acs_dp03,2018,dp03_0009pe,Percent Estimate!!EMPLOYMENT STATUS!!Civilian labor force!!Unemployment Rate,mapped,label matches after wording rules
+DP03_0009PE,acs_dp03,2019,dp03_0009pe,Percent!!EMPLOYMENT STATUS!!Civilian labor force!!Unemployment Rate,mapped,label equals the reference label
+DP03_0009PE,acs_dp03,2020,dp03_0009pe,Percent!!EMPLOYMENT STATUS!!Civilian labor force!!Unemployment Rate,mapped,label equals the reference label
+DP03_0009PE,acs_dp03,2021,dp03_0009pe,Percent!!EMPLOYMENT STATUS!!Civilian labor force!!Unemployment Rate,mapped,label equals the reference label
+DP03_0009PE,acs_dp03,2022,dp03_0009pe,Percent!!EMPLOYMENT STATUS!!Civilian labor force!!Unemployment Rate,mapped,label equals the reference label
+DP03_0009PE,acs_dp03,2023,dp03_0009pe,Percent!!EMPLOYMENT STATUS!!Civilian labor force!!Unemployment Rate,mapped,label equals the reference label
+DP03_0009PE,acs_dp03,2024,dp03_0009pe,Percent!!EMPLOYMENT STATUS!!Civilian labor force!!Unemployment Rate,mapped,label equals the reference label
+DP04_0012PE,acs_dp04,2010,dp04_0012pe,Percent!!UNITS IN STRUCTURE!!10 to 19 units,mapped,label matches after wording rules
+DP04_0012PE,acs_dp04,2011,dp04_0012pe,Percent!!UNITS IN STRUCTURE!!10 to 19 units,mapped,label matches after wording rules
+DP04_0012PE,acs_dp04,2012,dp04_0012pe,Percent!!UNITS IN STRUCTURE!!10 to 19 units,mapped,label matches after wording rules
+DP04_0012PE,acs_dp04,2013,dp04_0012pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!10 to 19 units,mapped,label equals the reference label
+DP04_0012PE,acs_dp04,2014,dp04_0012pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!10 to 19 units,mapped,label equals the reference label
+DP04_0012PE,acs_dp04,2015,dp04_0012pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!10 to 19 units,mapped,label equals the reference label
+DP04_0012PE,acs_dp04,2016,dp04_0012pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!10 to 19 units,mapped,label equals the reference label
+DP04_0012PE,acs_dp04,2017,dp04_0012pe,Percent Estimate!!UNITS IN STRUCTURE!!Total housing units!!10 to 19 units,mapped,label matches after wording rules
+DP04_0012PE,acs_dp04,2018,dp04_0012pe,Percent Estimate!!UNITS IN STRUCTURE!!Total housing units!!10 to 19 units,mapped,label matches after wording rules
+DP04_0012PE,acs_dp04,2019,dp04_0012pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!10 to 19 units,mapped,label equals the reference label
+DP04_0012PE,acs_dp04,2020,dp04_0012pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!10 to 19 units,mapped,label equals the reference label
+DP04_0012PE,acs_dp04,2021,dp04_0012pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!10 to 19 units,mapped,label equals the reference label
+DP04_0012PE,acs_dp04,2022,dp04_0012pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!10 to 19 units,mapped,label equals the reference label
+DP04_0012PE,acs_dp04,2023,dp04_0012pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!10 to 19 units,mapped,label equals the reference label
+DP04_0012PE,acs_dp04,2024,dp04_0012pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!10 to 19 units,mapped,label equals the reference label
+DP04_0013PE,acs_dp04,2010,dp04_0013pe,Percent!!UNITS IN STRUCTURE!!20 or more units,mapped,label matches after wording rules
+DP04_0013PE,acs_dp04,2011,dp04_0013pe,Percent!!UNITS IN STRUCTURE!!20 or more units,mapped,label matches after wording rules
+DP04_0013PE,acs_dp04,2012,dp04_0013pe,Percent!!UNITS IN STRUCTURE!!20 or more units,mapped,label matches after wording rules
+DP04_0013PE,acs_dp04,2013,dp04_0013pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!20 or more units,mapped,label equals the reference label
+DP04_0013PE,acs_dp04,2014,dp04_0013pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!20 or more units,mapped,label equals the reference label
+DP04_0013PE,acs_dp04,2015,dp04_0013pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!20 or more units,mapped,label equals the reference label
+DP04_0013PE,acs_dp04,2016,dp04_0013pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!20 or more units,mapped,label equals the reference label
+DP04_0013PE,acs_dp04,2017,dp04_0013pe,Percent Estimate!!UNITS IN STRUCTURE!!Total housing units!!20 or more units,mapped,label matches after wording rules
+DP04_0013PE,acs_dp04,2018,dp04_0013pe,Percent Estimate!!UNITS IN STRUCTURE!!Total housing units!!20 or more units,mapped,label matches after wording rules
+DP04_0013PE,acs_dp04,2019,dp04_0013pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!20 or more units,mapped,label equals the reference label
+DP04_0013PE,acs_dp04,2020,dp04_0013pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!20 or more units,mapped,label equals the reference label
+DP04_0013PE,acs_dp04,2021,dp04_0013pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!20 or more units,mapped,label equals the reference label
+DP04_0013PE,acs_dp04,2022,dp04_0013pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!20 or more units,mapped,label equals the reference label
+DP04_0013PE,acs_dp04,2023,dp04_0013pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!20 or more units,mapped,label equals the reference label
+DP04_0013PE,acs_dp04,2024,dp04_0013pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!20 or more units,mapped,label equals the reference label
+DP04_0014PE,acs_dp04,2010,dp04_0014pe,Percent!!UNITS IN STRUCTURE!!Mobile home,mapped,label matches after wording rules
+DP04_0014PE,acs_dp04,2011,dp04_0014pe,Percent!!UNITS IN STRUCTURE!!Mobile home,mapped,label matches after wording rules
+DP04_0014PE,acs_dp04,2012,dp04_0014pe,Percent!!UNITS IN STRUCTURE!!Mobile home,mapped,label matches after wording rules
+DP04_0014PE,acs_dp04,2013,dp04_0014pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!Mobile home,mapped,label equals the reference label
+DP04_0014PE,acs_dp04,2014,dp04_0014pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!Mobile home,mapped,label equals the reference label
+DP04_0014PE,acs_dp04,2015,dp04_0014pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!Mobile home,mapped,label equals the reference label
+DP04_0014PE,acs_dp04,2016,dp04_0014pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!Mobile home,mapped,label equals the reference label
+DP04_0014PE,acs_dp04,2017,dp04_0014pe,Percent Estimate!!UNITS IN STRUCTURE!!Total housing units!!Mobile home,mapped,label matches after wording rules
+DP04_0014PE,acs_dp04,2018,dp04_0014pe,Percent Estimate!!UNITS IN STRUCTURE!!Total housing units!!Mobile home,mapped,label matches after wording rules
+DP04_0014PE,acs_dp04,2019,dp04_0014pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!Mobile home,mapped,label equals the reference label
+DP04_0014PE,acs_dp04,2020,dp04_0014pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!Mobile home,mapped,label equals the reference label
+DP04_0014PE,acs_dp04,2021,dp04_0014pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!Mobile home,mapped,label equals the reference label
+DP04_0014PE,acs_dp04,2022,dp04_0014pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!Mobile home,mapped,label equals the reference label
+DP04_0014PE,acs_dp04,2023,dp04_0014pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!Mobile home,mapped,label equals the reference label
+DP04_0014PE,acs_dp04,2024,dp04_0014pe,Percent!!UNITS IN STRUCTURE!!Total housing units!!Mobile home,mapped,label equals the reference label
+DP04_0058PE,acs_dp04,2010,dp04_0057pe,Percent!!VEHICLES AVAILABLE!!No vehicles available,mapped,label matches after wording rules
+DP04_0058PE,acs_dp04,2011,dp04_0057pe,Percent!!VEHICLES AVAILABLE!!No vehicles available,mapped,label matches after wording rules
+DP04_0058PE,acs_dp04,2012,dp04_0057pe,Percent!!VEHICLES AVAILABLE!!No vehicles available,mapped,label matches after wording rules
+DP04_0058PE,acs_dp04,2013,dp04_0057pe,Percent!!VEHICLES AVAILABLE!!Occupied housing units!!No vehicles available,mapped,label equals the reference label
+DP04_0058PE,acs_dp04,2014,dp04_0057pe,Percent!!VEHICLES AVAILABLE!!Occupied housing units!!No vehicles available,mapped,label equals the reference label
+DP04_0058PE,acs_dp04,2015,dp04_0058pe,Percent!!VEHICLES AVAILABLE!!Occupied housing units!!No vehicles available,mapped,label equals the reference label
+DP04_0058PE,acs_dp04,2016,dp04_0058pe,Percent!!VEHICLES AVAILABLE!!Occupied housing units!!No vehicles available,mapped,label equals the reference label
+DP04_0058PE,acs_dp04,2017,dp04_0058pe,Percent Estimate!!VEHICLES AVAILABLE!!Occupied housing units!!No vehicles available,mapped,label matches after wording rules
+DP04_0058PE,acs_dp04,2018,dp04_0058pe,Percent Estimate!!VEHICLES AVAILABLE!!Occupied housing units!!No vehicles available,mapped,label matches after wording rules
+DP04_0058PE,acs_dp04,2019,dp04_0058pe,Percent!!VEHICLES AVAILABLE!!Occupied housing units!!No vehicles available,mapped,label equals the reference label
+DP04_0058PE,acs_dp04,2020,dp04_0058pe,Percent!!VEHICLES AVAILABLE!!Occupied housing units!!No vehicles available,mapped,label equals the reference label
+DP04_0058PE,acs_dp04,2021,dp04_0058pe,Percent!!VEHICLES AVAILABLE!!Occupied housing units!!No vehicles available,mapped,label equals the reference label
+DP04_0058PE,acs_dp04,2022,dp04_0058pe,Percent!!VEHICLES AVAILABLE!!Occupied housing units!!No vehicles available,mapped,label equals the reference label
+DP04_0058PE,acs_dp04,2023,dp04_0058pe,Percent!!VEHICLES AVAILABLE!!Occupied housing units!!No vehicles available,mapped,label equals the reference label
+DP04_0058PE,acs_dp04,2024,dp04_0058pe,Percent!!VEHICLES AVAILABLE!!Occupied housing units!!No vehicles available,mapped,label equals the reference label
+DP04_0078PE,acs_dp04,2010,dp04_0077pe,Percent!!OCCUPANTS PER ROOM!!1.01 to 1.50,mapped,label matches after wording rules
+DP04_0078PE,acs_dp04,2011,dp04_0077pe,Percent!!OCCUPANTS PER ROOM!!1.01 to 1.50,mapped,label matches after wording rules
+DP04_0078PE,acs_dp04,2012,dp04_0077pe,Percent!!OCCUPANTS PER ROOM!!1.01 to 1.50,mapped,label matches after wording rules
+DP04_0078PE,acs_dp04,2013,dp04_0077pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50,mapped,label equals the reference label
+DP04_0078PE,acs_dp04,2014,dp04_0077pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50,mapped,label equals the reference label
+DP04_0078PE,acs_dp04,2015,dp04_0078pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50,mapped,label equals the reference label
+DP04_0078PE,acs_dp04,2016,dp04_0078pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50,mapped,label equals the reference label
+DP04_0078PE,acs_dp04,2017,dp04_0078pe,Percent Estimate!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50,mapped,label matches after wording rules
+DP04_0078PE,acs_dp04,2018,dp04_0078pe,Percent Estimate!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50,mapped,label matches after wording rules
+DP04_0078PE,acs_dp04,2019,dp04_0078pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50,mapped,label equals the reference label
+DP04_0078PE,acs_dp04,2020,dp04_0078pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50,mapped,label equals the reference label
+DP04_0078PE,acs_dp04,2021,dp04_0078pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50,mapped,label equals the reference label
+DP04_0078PE,acs_dp04,2022,dp04_0078pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50,mapped,label equals the reference label
+DP04_0078PE,acs_dp04,2023,dp04_0078pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50,mapped,label equals the reference label
+DP04_0078PE,acs_dp04,2024,dp04_0078pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.01 to 1.50,mapped,label equals the reference label
+DP04_0079PE,acs_dp04,2010,dp04_0078pe,Percent!!OCCUPANTS PER ROOM!!1.51 or more,mapped,label matches after wording rules
+DP04_0079PE,acs_dp04,2011,dp04_0078pe,Percent!!OCCUPANTS PER ROOM!!1.51 or more,mapped,label matches after wording rules
+DP04_0079PE,acs_dp04,2012,dp04_0078pe,Percent!!OCCUPANTS PER ROOM!!1.51 or more,mapped,label matches after wording rules
+DP04_0079PE,acs_dp04,2013,dp04_0078pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.51 or more,mapped,label equals the reference label
+DP04_0079PE,acs_dp04,2014,dp04_0078pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.51 or more,mapped,label equals the reference label
+DP04_0079PE,acs_dp04,2015,dp04_0079pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.51 or more,mapped,label equals the reference label
+DP04_0079PE,acs_dp04,2016,dp04_0079pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.51 or more,mapped,label equals the reference label
+DP04_0079PE,acs_dp04,2017,dp04_0079pe,Percent Estimate!!OCCUPANTS PER ROOM!!Occupied housing units!!1.51 or more,mapped,label matches after wording rules
+DP04_0079PE,acs_dp04,2018,dp04_0079pe,Percent Estimate!!OCCUPANTS PER ROOM!!Occupied housing units!!1.51 or more,mapped,label matches after wording rules
+DP04_0079PE,acs_dp04,2019,dp04_0079pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.51 or more,mapped,label equals the reference label
+DP04_0079PE,acs_dp04,2020,dp04_0079pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.51 or more,mapped,label equals the reference label
+DP04_0079PE,acs_dp04,2021,dp04_0079pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.51 or more,mapped,label equals the reference label
+DP04_0079PE,acs_dp04,2022,dp04_0079pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.51 or more,mapped,label equals the reference label
+DP04_0079PE,acs_dp04,2023,dp04_0079pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.51 or more,mapped,label equals the reference label
+DP04_0079PE,acs_dp04,2024,dp04_0079pe,Percent!!OCCUPANTS PER ROOM!!Occupied housing units!!1.51 or more,mapped,label equals the reference label
+DP05_0019E,acs_dp05,2010,,,held,no column carries the reference label
+DP05_0019E,acs_dp05,2011,,,held,no column carries the reference label
+DP05_0019E,acs_dp05,2012,,,held,no column carries the reference label
+DP05_0019E,acs_dp05,2013,,,held,no column carries the reference label
+DP05_0019E,acs_dp05,2014,,,held,no column carries the reference label
+DP05_0019E,acs_dp05,2015,,,held,no column carries the reference label
+DP05_0019E,acs_dp05,2016,,,held,no column carries the reference label
+DP05_0019E,acs_dp05,2017,dp05_0019e,Estimate!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+DP05_0019E,acs_dp05,2018,dp05_0019e,Estimate!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+DP05_0019E,acs_dp05,2019,dp05_0019e,Estimate!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+DP05_0019E,acs_dp05,2020,dp05_0019e,Estimate!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+DP05_0019E,acs_dp05,2021,dp05_0019e,Estimate!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+DP05_0019E,acs_dp05,2022,dp05_0019e,Estimate!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+DP05_0019E,acs_dp05,2023,dp05_0019e,Estimate!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+DP05_0019E,acs_dp05,2024,dp05_0019e,Estimate!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+DP05_0019PE,acs_dp05,2010,,,held,no column carries the reference label
+DP05_0019PE,acs_dp05,2011,,,held,no column carries the reference label
+DP05_0019PE,acs_dp05,2012,,,held,no column carries the reference label
+DP05_0019PE,acs_dp05,2013,,,held,no column carries the reference label
+DP05_0019PE,acs_dp05,2014,,,held,no column carries the reference label
+DP05_0019PE,acs_dp05,2015,,,held,no column carries the reference label
+DP05_0019PE,acs_dp05,2016,,,held,no column carries the reference label
+DP05_0019PE,acs_dp05,2017,dp05_0019pe,Percent Estimate!!SEX AND AGE!!Total population!!Under 18 years,mapped,label matches after wording rules
+DP05_0019PE,acs_dp05,2018,dp05_0019pe,Percent Estimate!!SEX AND AGE!!Total population!!Under 18 years,mapped,label matches after wording rules
+DP05_0019PE,acs_dp05,2019,dp05_0019pe,Percent!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+DP05_0019PE,acs_dp05,2020,dp05_0019pe,Percent!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+DP05_0019PE,acs_dp05,2021,dp05_0019pe,Percent!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+DP05_0019PE,acs_dp05,2022,dp05_0019pe,Percent!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+DP05_0019PE,acs_dp05,2023,dp05_0019pe,Percent!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+DP05_0019PE,acs_dp05,2024,dp05_0019pe,Percent!!SEX AND AGE!!Total population!!Under 18 years,mapped,label equals the reference label
+S0101_C01_030E,acs_s0101,2010,,,held,"before 2017 the Total column of S0101 is a percent, not a count"
+S0101_C01_030E,acs_s0101,2011,,,held,"before 2017 the Total column of S0101 is a percent, not a count"
+S0101_C01_030E,acs_s0101,2012,,,held,"before 2017 the Total column of S0101 is a percent, not a count"
+S0101_C01_030E,acs_s0101,2013,,,held,"before 2017 the Total column of S0101 is a percent, not a count"
+S0101_C01_030E,acs_s0101,2014,,,held,"before 2017 the Total column of S0101 is a percent, not a count"
+S0101_C01_030E,acs_s0101,2015,,,held,"before 2017 the Total column of S0101 is a percent, not a count"
+S0101_C01_030E,acs_s0101,2016,,,held,"before 2017 the Total column of S0101 is a percent, not a count"
+S0101_C01_030E,acs_s0101,2017,s0101_c01_030e,Estimate!!Total!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C01_030E,acs_s0101,2018,s0101_c01_030e,Estimate!!Total!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C01_030E,acs_s0101,2019,s0101_c01_030e,Estimate!!Total!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C01_030E,acs_s0101,2020,s0101_c01_030e,Estimate!!Total!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C01_030E,acs_s0101,2021,s0101_c01_030e,Estimate!!Total!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C01_030E,acs_s0101,2022,s0101_c01_030e,Estimate!!Total!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C01_030E,acs_s0101,2023,s0101_c01_030e,Estimate!!Total!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C01_030E,acs_s0101,2024,s0101_c01_030e,Estimate!!Total!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C02_030E,acs_s0101,2010,,,held,no column carries the reference label
+S0101_C02_030E,acs_s0101,2011,,,held,no column carries the reference label
+S0101_C02_030E,acs_s0101,2012,,,held,no column carries the reference label
+S0101_C02_030E,acs_s0101,2013,,,held,no column carries the reference label
+S0101_C02_030E,acs_s0101,2014,,,held,no column carries the reference label
+S0101_C02_030E,acs_s0101,2015,,,held,no column carries the reference label
+S0101_C02_030E,acs_s0101,2016,,,held,no column carries the reference label
+S0101_C02_030E,acs_s0101,2017,s0101_c02_030e,Estimate!!Percent!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C02_030E,acs_s0101,2018,s0101_c02_030e,Estimate!!Percent!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C02_030E,acs_s0101,2019,s0101_c02_030e,Estimate!!Percent!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C02_030E,acs_s0101,2020,s0101_c02_030e,Estimate!!Percent!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C02_030E,acs_s0101,2021,s0101_c02_030e,Estimate!!Percent!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C02_030E,acs_s0101,2022,s0101_c02_030e,Estimate!!Percent!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C02_030E,acs_s0101,2023,s0101_c02_030e,Estimate!!Percent!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0101_C02_030E,acs_s0101,2024,s0101_c02_030e,Estimate!!Percent!!Total population!!SELECTED AGE CATEGORIES!!65 years and over,mapped,label equals the reference label
+S0601_C01_033E,acs_s0601,2010,s0601_c01_033e,Total!!Estimate!!EDUCATIONAL ATTAINMENT!!Less than high school graduate,mapped,label matches after wording rules
+S0601_C01_033E,acs_s0601,2011,s0601_c01_033e,Total!!Estimate!!EDUCATIONAL ATTAINMENT!!Less than high school graduate,mapped,label matches after wording rules
+S0601_C01_033E,acs_s0601,2012,s0601_c01_033e,Total!!Estimate!!EDUCATIONAL ATTAINMENT!!Less than high school graduate,mapped,label matches after wording rules
+S0601_C01_033E,acs_s0601,2013,s0601_c01_033e,Total!!Estimate!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!Less than high school graduate,mapped,label matches after wording rules
+S0601_C01_033E,acs_s0601,2014,s0601_c01_033e,Total!!Estimate!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!Less than high school graduate,mapped,label matches after wording rules
+S0601_C01_033E,acs_s0601,2015,s0601_c01_033e,Total!!Estimate!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!Less than high school graduate,mapped,label matches after wording rules
+S0601_C01_033E,acs_s0601,2016,s0601_c01_033e,Total!!Estimate!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!Less than high school graduate,mapped,label matches after wording rules
+S0601_C01_033E,acs_s0601,2017,s0601_c01_033e,Estimate!!Total!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!Less than high school graduate,mapped,label equals the reference label
+S0601_C01_033E,acs_s0601,2018,s0601_c01_033e,Estimate!!Total!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!Less than high school graduate,mapped,label equals the reference label
+S0601_C01_033E,acs_s0601,2019,s0601_c01_033e,Estimate!!Total!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!Less than high school graduate,mapped,label equals the reference label
+S0601_C01_033E,acs_s0601,2020,s0601_c01_033e,Estimate!!Total!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!Less than high school graduate,mapped,label equals the reference label
+S0601_C01_033E,acs_s0601,2021,s0601_c01_033e,Estimate!!Total!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!Less than high school graduate,mapped,label equals the reference label
+S0601_C01_033E,acs_s0601,2022,s0601_c01_033e,Estimate!!Total!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!Less than high school graduate,mapped,label equals the reference label
+S0601_C01_033E,acs_s0601,2023,s0601_c01_033e,Estimate!!Total!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!Less than high school graduate,mapped,label equals the reference label
+S0601_C01_033E,acs_s0601,2024,s0601_c01_033e,Estimate!!Total!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!Less than high school graduate,mapped,label equals the reference label
+S1701_C01_001E,acs_s1701,2012,s1701_c01_001e,Total!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C01_001E,acs_s1701,2013,s1701_c01_001e,Total!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C01_001E,acs_s1701,2014,s1701_c01_001e,Total!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C01_001E,acs_s1701,2015,s1701_c01_001e,Total!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C01_001E,acs_s1701,2016,s1701_c01_001e,Total!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C01_001E,acs_s1701,2017,s1701_c01_001e,Estimate!!Total!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C01_001E,acs_s1701,2018,s1701_c01_001e,Estimate!!Total!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C01_001E,acs_s1701,2019,s1701_c01_001e,Estimate!!Total!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C01_001E,acs_s1701,2020,s1701_c01_001e,Estimate!!Total!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C01_001E,acs_s1701,2021,s1701_c01_001e,Estimate!!Total!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C01_001E,acs_s1701,2022,s1701_c01_001e,Estimate!!Total!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C01_001E,acs_s1701,2023,s1701_c01_001e,Estimate!!Total!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C01_001E,acs_s1701,2024,s1701_c01_001e,Estimate!!Total!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C02_001E,acs_s1701,2012,s1701_c02_001e,Below poverty level!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C02_001E,acs_s1701,2013,s1701_c02_001e,Below poverty level!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C02_001E,acs_s1701,2014,s1701_c02_001e,Below poverty level!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C02_001E,acs_s1701,2015,s1701_c02_001e,Below poverty level!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C02_001E,acs_s1701,2016,s1701_c02_001e,Below poverty level!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C02_001E,acs_s1701,2017,s1701_c02_001e,Estimate!!Below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C02_001E,acs_s1701,2018,s1701_c02_001e,Estimate!!Below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C02_001E,acs_s1701,2019,s1701_c02_001e,Estimate!!Below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C02_001E,acs_s1701,2020,s1701_c02_001e,Estimate!!Below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C02_001E,acs_s1701,2021,s1701_c02_001e,Estimate!!Below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C02_001E,acs_s1701,2022,s1701_c02_001e,Estimate!!Below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C02_001E,acs_s1701,2023,s1701_c02_001e,Estimate!!Below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C02_001E,acs_s1701,2024,s1701_c02_001e,Estimate!!Below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C03_001E,acs_s1701,2012,s1701_c03_001e,Percent below poverty level!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C03_001E,acs_s1701,2013,s1701_c03_001e,Percent below poverty level!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C03_001E,acs_s1701,2014,s1701_c03_001e,Percent below poverty level!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C03_001E,acs_s1701,2015,s1701_c03_001e,Percent below poverty level!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C03_001E,acs_s1701,2016,s1701_c03_001e,Percent below poverty level!!Estimate!!Population for whom poverty status is determined,mapped,label matches after wording rules
+S1701_C03_001E,acs_s1701,2017,s1701_c03_001e,Estimate!!Percent below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C03_001E,acs_s1701,2018,s1701_c03_001e,Estimate!!Percent below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C03_001E,acs_s1701,2019,s1701_c03_001e,Estimate!!Percent below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C03_001E,acs_s1701,2020,s1701_c03_001e,Estimate!!Percent below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C03_001E,acs_s1701,2021,s1701_c03_001e,Estimate!!Percent below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C03_001E,acs_s1701,2022,s1701_c03_001e,Estimate!!Percent below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C03_001E,acs_s1701,2023,s1701_c03_001e,Estimate!!Percent below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S1701_C03_001E,acs_s1701,2024,s1701_c03_001e,Estimate!!Percent below poverty level!!Population for whom poverty status is determined,mapped,label equals the reference label
+S2503_C01_001E,acs_s2503,2010,s2503_c01_001e,Occupied housing units!!Estimate!!Occupied housing units,mapped,label matches after wording rules
+S2503_C01_001E,acs_s2503,2011,s2503_c01_001e,Occupied housing units!!Estimate!!Occupied housing units,mapped,label matches after wording rules
+S2503_C01_001E,acs_s2503,2012,s2503_c01_001e,Occupied housing units!!Estimate!!Occupied housing units,mapped,label matches after wording rules
+S2503_C01_001E,acs_s2503,2013,s2503_c01_001e,Occupied housing units!!Estimate!!Occupied housing units,mapped,label matches after wording rules
+S2503_C01_001E,acs_s2503,2014,s2503_c01_001e,Occupied housing units!!Estimate!!Occupied housing units,mapped,label matches after wording rules
+S2503_C01_001E,acs_s2503,2015,s2503_c01_001e,Occupied housing units!!Estimate!!Occupied housing units,mapped,label matches after wording rules
+S2503_C01_001E,acs_s2503,2016,s2503_c01_001e,Occupied housing units!!Estimate!!Occupied housing units,mapped,label matches after wording rules
+S2503_C01_001E,acs_s2503,2017,s2503_c01_001e,Estimate!!Occupied housing units!!Occupied housing units,mapped,label equals the reference label
+S2503_C01_001E,acs_s2503,2018,s2503_c01_001e,Estimate!!Occupied housing units!!Occupied housing units,mapped,label equals the reference label
+S2503_C01_001E,acs_s2503,2019,s2503_c01_001e,Estimate!!Occupied housing units!!Occupied housing units,mapped,label equals the reference label
+S2503_C01_001E,acs_s2503,2020,s2503_c01_001e,Estimate!!Occupied housing units!!Occupied housing units,mapped,label equals the reference label
+S2503_C01_001E,acs_s2503,2021,s2503_c01_001e,Estimate!!Occupied housing units!!Occupied housing units,mapped,label equals the reference label
+S2503_C01_001E,acs_s2503,2022,s2503_c01_001e,Estimate!!Occupied housing units!!Occupied housing units,mapped,label equals the reference label
+S2503_C01_001E,acs_s2503,2023,s2503_c01_001e,Estimate!!Occupied housing units!!Occupied housing units,mapped,label equals the reference label
+S2503_C01_001E,acs_s2503,2024,s2503_c01_001e,Estimate!!Occupied housing units!!Occupied housing units,mapped,label equals the reference label
+S2503_C01_028E,acs_s2503,2010,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_028E,acs_s2503,2011,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_028E,acs_s2503,2012,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_028E,acs_s2503,2013,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_028E,acs_s2503,2014,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_028E,acs_s2503,2015,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_028E,acs_s2503,2016,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_028E,acs_s2503,2017,s2503_c01_028e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!Less than $20,000!!30 percent or more",mapped,label equals the reference label
+S2503_C01_028E,acs_s2503,2018,s2503_c01_028e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!Less than $20,000!!30 percent or more",mapped,label equals the reference label
+S2503_C01_028E,acs_s2503,2019,s2503_c01_028e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!Less than $20,000!!30 percent or more",mapped,label equals the reference label
+S2503_C01_028E,acs_s2503,2020,s2503_c01_028e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!Less than $20,000!!30 percent or more",mapped,label equals the reference label
+S2503_C01_028E,acs_s2503,2021,s2503_c01_028e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!Less than $20,000!!30 percent or more",mapped,label equals the reference label
+S2503_C01_028E,acs_s2503,2022,s2503_c01_028e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!Less than $20,000!!30 percent or more",mapped,label equals the reference label
+S2503_C01_028E,acs_s2503,2023,s2503_c01_028e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!Less than $20,000!!30 percent or more",mapped,label equals the reference label
+S2503_C01_028E,acs_s2503,2024,s2503_c01_028e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!Less than $20,000!!30 percent or more",mapped,label equals the reference label
+S2503_C01_032E,acs_s2503,2010,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_032E,acs_s2503,2011,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_032E,acs_s2503,2012,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_032E,acs_s2503,2013,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_032E,acs_s2503,2014,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_032E,acs_s2503,2015,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_032E,acs_s2503,2016,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_032E,acs_s2503,2017,s2503_c01_032e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$20,000 to $34,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_032E,acs_s2503,2018,s2503_c01_032e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$20,000 to $34,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_032E,acs_s2503,2019,s2503_c01_032e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$20,000 to $34,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_032E,acs_s2503,2020,s2503_c01_032e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$20,000 to $34,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_032E,acs_s2503,2021,s2503_c01_032e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$20,000 to $34,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_032E,acs_s2503,2022,s2503_c01_032e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$20,000 to $34,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_032E,acs_s2503,2023,s2503_c01_032e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$20,000 to $34,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_032E,acs_s2503,2024,s2503_c01_032e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$20,000 to $34,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_036E,acs_s2503,2010,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_036E,acs_s2503,2011,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_036E,acs_s2503,2012,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_036E,acs_s2503,2013,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_036E,acs_s2503,2014,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_036E,acs_s2503,2015,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_036E,acs_s2503,2016,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_036E,acs_s2503,2017,s2503_c01_036e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$35,000 to $49,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_036E,acs_s2503,2018,s2503_c01_036e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$35,000 to $49,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_036E,acs_s2503,2019,s2503_c01_036e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$35,000 to $49,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_036E,acs_s2503,2020,s2503_c01_036e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$35,000 to $49,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_036E,acs_s2503,2021,s2503_c01_036e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$35,000 to $49,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_036E,acs_s2503,2022,s2503_c01_036e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$35,000 to $49,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_036E,acs_s2503,2023,s2503_c01_036e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$35,000 to $49,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_036E,acs_s2503,2024,s2503_c01_036e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$35,000 to $49,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_040E,acs_s2503,2010,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_040E,acs_s2503,2011,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_040E,acs_s2503,2012,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_040E,acs_s2503,2013,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_040E,acs_s2503,2014,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_040E,acs_s2503,2015,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_040E,acs_s2503,2016,,,held,"before 2017 the S2503 burden rows are percents, not counts"
+S2503_C01_040E,acs_s2503,2017,s2503_c01_040e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$50,000 to $74,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_040E,acs_s2503,2018,s2503_c01_040e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$50,000 to $74,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_040E,acs_s2503,2019,s2503_c01_040e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$50,000 to $74,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_040E,acs_s2503,2020,s2503_c01_040e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$50,000 to $74,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_040E,acs_s2503,2021,s2503_c01_040e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$50,000 to $74,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_040E,acs_s2503,2022,s2503_c01_040e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$50,000 to $74,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_040E,acs_s2503,2023,s2503_c01_040e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$50,000 to $74,999!!30 percent or more",mapped,label equals the reference label
+S2503_C01_040E,acs_s2503,2024,s2503_c01_040e,"Estimate!!Occupied housing units!!Occupied housing units!!MONTHLY HOUSING COSTS AS A PERCENTAGE OF HOUSEHOLD INCOME IN THE PAST 12 MONTHS!!$50,000 to $74,999!!30 percent or more",mapped,label equals the reference label
+S2701_C04_001E,acs_s2701,2012,,,held,no column carries the reference label
+S2701_C04_001E,acs_s2701,2013,,,held,no column carries the reference label
+S2701_C04_001E,acs_s2701,2014,,,held,no column carries the reference label
+S2701_C04_001E,acs_s2701,2015,s2701_c04_001e,Uninsured!!Estimate!!Civilian noninstitutionalized population,mapped,label matches after wording rules
+S2701_C04_001E,acs_s2701,2016,s2701_c04_001e,Uninsured!!Estimate!!Civilian noninstitutionalized population,mapped,label matches after wording rules
+S2701_C04_001E,acs_s2701,2017,s2701_c04_001e,Estimate!!Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C04_001E,acs_s2701,2018,s2701_c04_001e,Estimate!!Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C04_001E,acs_s2701,2019,s2701_c04_001e,Estimate!!Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C04_001E,acs_s2701,2020,s2701_c04_001e,Estimate!!Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C04_001E,acs_s2701,2021,s2701_c04_001e,Estimate!!Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C04_001E,acs_s2701,2022,s2701_c04_001e,Estimate!!Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C04_001E,acs_s2701,2023,s2701_c04_001e,Estimate!!Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C04_001E,acs_s2701,2024,s2701_c04_001e,Estimate!!Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C05_001E,acs_s2701,2012,,,held,no column carries the reference label
+S2701_C05_001E,acs_s2701,2013,,,held,no column carries the reference label
+S2701_C05_001E,acs_s2701,2014,,,held,no column carries the reference label
+S2701_C05_001E,acs_s2701,2015,s2701_c05_001e,Percent Uninsured!!Estimate!!Civilian noninstitutionalized population,mapped,label matches after wording rules
+S2701_C05_001E,acs_s2701,2016,s2701_c05_001e,Percent Uninsured!!Estimate!!Civilian noninstitutionalized population,mapped,label matches after wording rules
+S2701_C05_001E,acs_s2701,2017,s2701_c05_001e,Estimate!!Percent Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C05_001E,acs_s2701,2018,s2701_c05_001e,Estimate!!Percent Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C05_001E,acs_s2701,2019,s2701_c05_001e,Estimate!!Percent Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C05_001E,acs_s2701,2020,s2701_c05_001e,Estimate!!Percent Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C05_001E,acs_s2701,2021,s2701_c05_001e,Estimate!!Percent Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C05_001E,acs_s2701,2022,s2701_c05_001e,Estimate!!Percent Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C05_001E,acs_s2701,2023,s2701_c05_001e,Estimate!!Percent Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label
+S2701_C05_001E,acs_s2701,2024,s2701_c05_001e,Estimate!!Percent Uninsured!!Civilian noninstitutionalized population,mapped,label equals the reference label

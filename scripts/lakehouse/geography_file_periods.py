@@ -1,4 +1,4 @@
-"""Generate the vintages and periods of the C1 geography files that staging reads (failure modes 403, 410 and 416).
+"""Generate the vintages and periods of the county-context files that staging reads (failure modes 403, 410, 416 and 427).
 
 Run from the repository root with read-only S3 access and the local acquisition records:
 
@@ -8,8 +8,10 @@ Run from the repository root with read-only S3 access and the local acquisition 
 A HUD ZIP-to-county file takes the one publisher-stated USPS quarter its capture receipt records. A hospital service
 area file takes the one catalog coverage its acquisition job plan records. RUCC, RUCA and county adjacency captures
 record no period, so each of their files takes the vintage reviewed below for its exact published file name; the
-vintage is the publisher's reference year, not a publication date. A loaded file with no period or vintage, or with two,
-stops the run. Failure modes: data/lakehouse_planning/group_c_20261006/failure_modes_c1.md.
+vintage is the publisher's reference year, not a publication date. An ACS file takes the year in its publisher file name
+(ACSDP5Y2023..., acsdt5y2023-...), with the five-year period ending that year. An SVI file takes the edition year its
+capture receipt's release label names. A loaded file with no period or vintage, or with two, stops the run. Failure modes:
+data/lakehouse_planning/group_c_20261006/failure_modes_c1.md and failure_modes_c2.md.
 """
 
 from __future__ import annotations
@@ -31,6 +33,13 @@ QUARTER_RECEIPTS = "historical_acquisition/hud_usps_crosswalk/*/batches/*/captur
 COVERAGE_JOBS = "acquisition_batches/*/jobs/HSA_file_*/job.json"
 QUARTER_TABLE = "hud_zip_county"
 COVERAGE_TABLE = "cms_hsa_csv"
+EDITION_RECEIPTS = "*/*/jobs/SVI_*/captures/SVI/*/receipt.json"
+EDITION_TABLE = "svi"
+EDITION = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
+ACS_FILE = re.compile(r"ACS(?:DP|ST|DT)5Y(\d{4})\.(?:DP\d{2}|[BCS]\d{4,5})-Data\.csv|acsdt5y(\d{4})-[bc]\d{5}\.dat")
+ACS_EXPORTS = ("dp02", "dp03", "dp04", "dp05", "s0101", "s0601", "s1701", "s2503", "s2701", "b16005", "b19013", "b25070", "b25091", "b26001", "c16001")
+ACS_SUMMARIES = ("b16005", "b19013", "b25070", "b25091", "b26001", "c16001")
+ACS_TABLES = (*(f"acs_{table}" for table in ACS_EXPORTS), *(f"acs_summary_{table}" for table in ACS_SUMMARIES))
 TEMPORAL = re.compile(r'"catalog_temporal": "(\d{4}-\d{2}-\d{2})/(\d{4}-\d{2}-\d{2})"')
 # Reviewed Oct 6 2026 against each file's published name and, where present, its year-bearing headers (RUCC_2013,
 # Primary RUCA Code 2010, countyfips20). Two vintages in one workbook are listed together.
@@ -58,7 +67,7 @@ REVIEWED_VINTAGES: dict[tuple[str, str], str] = {
     ("ruca_sheet_rows", "2020-rural-urban-commuting-area-codes-census-tracts.xlsx"): "2020",
     ("ruca_sheet_rows", "2020-rural-urban-commuting-area-codes-zip-codes.xlsx"): "2020",
 }
-TABLES = (QUARTER_TABLE, COVERAGE_TABLE, *sorted({table for table, _ in REVIEWED_VINTAGES}))
+TABLES = (QUARTER_TABLE, COVERAGE_TABLE, EDITION_TABLE, *ACS_TABLES, *sorted({table for table, _ in REVIEWED_VINTAGES}))
 COLUMNS = ("member_sha256", "bronze_table", "release_id", "file_name", "vintage", "period_start", "period_end", "period_basis")
 
 
@@ -97,6 +106,21 @@ def receipt_quarters(root: Path = DATASETS) -> dict[str, tuple[str, str, str]]:
     return quarters
 
 
+def receipt_editions(root: Path = DATASETS) -> dict[str, str]:
+    """Return each SVI capture's edition year from its receipt's release label, keyed by release ID [427]."""
+    editions: dict[str, str] = {}
+    for path in sorted(root.glob(EDITION_RECEIPTS)):
+        receipt = json.loads(path.read_text())
+        release = receipt.get("release")
+        label = str(release.get("publisher_release_label") or "") if isinstance(release, dict) else ""
+        years = set(EDITION.findall(label))
+        if len(years) > 1:
+            raise PeriodError(f"release {receipt.get('snapshot_id')} names more than one edition year")
+        if years:
+            editions[str(receipt["snapshot_id"])] = years.pop()
+    return editions
+
+
 def job_coverage(root: Path = DATASETS) -> dict[str, tuple[str, str]]:
     """Return each hospital service area capture's catalog coverage from its job plan, keyed by release ID."""
     coverage: dict[str, tuple[str, str]] = {}
@@ -115,8 +139,10 @@ def job_coverage(root: Path = DATASETS) -> dict[str, tuple[str, str]]:
     return coverage
 
 
-def file_row(item: Mapping[str, str], quarters: Mapping[str, tuple[str, str, str]], coverage: Mapping[str, tuple[str, str]]) -> dict[str, str]:
-    """Return one loaded file's seed row; a file without a period or vintage stops the run [403] [410] [416]."""
+def file_row(
+    item: Mapping[str, str], quarters: Mapping[str, tuple[str, str, str]], coverage: Mapping[str, tuple[str, str]], editions: Mapping[str, str]
+) -> dict[str, str]:
+    """Return one loaded file's seed row; a file without a period or vintage stops the run [403] [410] [416] [427]."""
     table, release, name = item["table"], item["release_id"], item["file_name"]
     row = {"member_sha256": item["sha256"], "bronze_table": table, "release_id": release, "file_name": name}
     if table == QUARTER_TABLE:
@@ -129,18 +155,31 @@ def file_row(item: Mapping[str, str], quarters: Mapping[str, tuple[str, str, str
             raise PeriodError(f"{table} file {name} (release {release}) has no recorded catalog coverage")
         start, end = coverage[release]
         return row | {"vintage": start[:4], "period_start": start, "period_end": end, "period_basis": "job_catalog_coverage"}
+    if table == EDITION_TABLE:
+        if release not in editions:
+            raise PeriodError(f"{table} file {name} (release {release}) has no recorded edition")
+        return row | {"vintage": editions[release], "period_start": "", "period_end": "", "period_basis": "receipt_edition_year"}
+    if table in ACS_TABLES:
+        match = ACS_FILE.fullmatch(name)
+        if not match:
+            raise PeriodError(f"{table} file {name} (release {release}) has no publisher vintage in its name")
+        year = int(match.group(1) or match.group(2))
+        return row | {"vintage": str(year), "period_start": f"{year - 4}-01-01", "period_end": f"{year}-12-31", "period_basis": "publisher_file_name"}
     if (table, name) not in REVIEWED_VINTAGES:
         raise PeriodError(f"{table} file {name} (release {release}) has no reviewed vintage")
     return row | {"vintage": REVIEWED_VINTAGES[(table, name)], "period_start": "", "period_end": "", "period_basis": "reviewed_file_name"}
 
 
 def rows_for(
-    loaded: Iterable[Mapping[str, str]], quarters: Mapping[str, tuple[str, str, str]], coverage: Mapping[str, tuple[str, str]]
+    loaded: Iterable[Mapping[str, str]],
+    quarters: Mapping[str, tuple[str, str, str]],
+    coverage: Mapping[str, tuple[str, str]],
+    editions: Mapping[str, str] | None = None,
 ) -> list[dict[str, str]]:
     """Return one seed row per loaded file; copies of one file must agree, and the row keeps the first release ID."""
     rows: dict[tuple[str, str], dict[str, str]] = {}
     for item in sorted(loaded, key=lambda entry: (entry["table"], entry["sha256"], entry["release_id"])):
-        row = file_row(item, quarters, coverage)
+        row = file_row(item, quarters, coverage, editions or {})
         kept = rows.setdefault((row["bronze_table"], row["member_sha256"]), row)
         dated = ("vintage", "period_start", "period_end")
         if tuple(kept[column] for column in dated) != tuple(row[column] for column in dated):
@@ -162,7 +201,7 @@ def loaded_files() -> list[dict[str, str]]:
 
 def build() -> list[dict[str, str]]:
     """Return the seed rows from storage, the receipts and the job plans."""
-    return rows_for(loaded_files(), receipt_quarters(), job_coverage())
+    return rows_for(loaded_files(), receipt_quarters(), job_coverage(), receipt_editions())
 
 
 def as_csv(rows: Iterable[Mapping[str, str]]) -> str:
