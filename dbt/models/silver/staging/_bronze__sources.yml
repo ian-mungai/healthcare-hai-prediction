@@ -297,3 +297,135 @@ sources:
           - name: _row_number
             description: Row position within the file, from 1.
             data_tests: [not_null]
+      - name: hud_zip_county
+        description: HUD-USPS ZIP-to-county crosswalk, one CSV per USPS quarter 2010 to 2025, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: hud_zip_county_sheet_rows
+        description: HUD ZIP-to-county workbooks of 2010 to 2020, sheet rows as published; twins of the quarterly CSVs, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: county_adjacency
+        description: Census county adjacency files 2023 to 2026, one row per county and neighbor, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: county_adjacency_2010_text_lines
+        description: "Census 2010 county adjacency file as text lines: a county's lead line, then its neighbors on continuation lines."
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: rucc
+        description: USDA ERS 2023 Rural-Urban Continuum Codes, long format (one row per county and attribute), every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: rucc_sheet_rows
+        description: USDA ERS Rural-Urban Continuum Code workbooks 1974 to 2023, sheet rows as published.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: ruca_tracts_2020
+        description: USDA ERS 2020 Rural-Urban Commuting Area codes by census tract, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: ruca_zip_2020
+        description: USDA ERS 2020 Rural-Urban Commuting Area codes by ZIP code, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: ruca_zip_2010
+        description: USDA ERS 2010 Rural-Urban Commuting Area codes by ZIP code, ZIP codes wrapped in apostrophes, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: ruca_sheet_rows
+        description: USDA ERS Rural-Urban Commuting Area workbooks 1990 to 2020, sheet rows as published.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: cms_hsa_csv
+        description: CMS Hospital Service Area files 2015 to 2025 with Medicare cases, days and charges per provider and beneficiary ZIP code, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]

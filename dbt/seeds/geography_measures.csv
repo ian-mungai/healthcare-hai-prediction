@@ -1,0 +1,9 @@
+measure_control,family,source_model,fields,review_decision
+C198,S21,int_rucc_county_codes,vintage county_fips rucc_code rucc_published description population,retain_conditional
+C199,S22,int_ruca_codes,vintage geography_type geography_id county_fips primary_ruca secondary_ruca,retain_conditional
+C199.01,S22,int_ruca_codes,vintage geography_type geography_id county_fips primary_ruca primary_published,retain_conditional
+C199.02,S22,int_ruca_codes,vintage geography_type geography_id county_fips secondary_ruca secondary_published,retain_conditional
+C199.03,S22,int_ruca_codes,vintage geography_type geography_id zip_type primary_ruca secondary_ruca,retain_conditional
+L001,S35,int_hsa_zip_cases,data_year ccn_published zip_code total_cases is_cases_suppressed is_zip_suppressed is_zip_missing,linkage_only
+L002,S36,int_hud_zip_county_quarters,quarter_label zip_code county_fips res_ratio bus_ratio oth_ratio tot_ratio has_residential_addresses,linkage_only
+L004,S38,int_county_adjacency_edges,vintage county_fips neighbor_fips shared_border_length_m is_self_link is_isolated,linkage_only

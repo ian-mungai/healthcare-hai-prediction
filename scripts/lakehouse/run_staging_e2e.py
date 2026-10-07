@@ -1,4 +1,4 @@
-"""E2E check of the staging copy, label, twin, sheet, POS, CMI, spine and Care Compare models (failure modes 166 to 173, 177 to 188, 267 to 341).
+"""E2E check of the staging copy, label, twin, sheet, POS, CMI, spine, Care Compare and geography models (failure modes 166 to 173, 177 to 188, 267 to 419).
 
 Run from the repository root with Docker running:
 
@@ -12,8 +12,10 @@ POS period seed names the fixture's POS files. The failing cases must fail one n
 one release, copies with different row counts, a stale label hold, an object with two checksums, an unheld label
 conflict, an unlabelled copy, a POS file without a period, a POS value that does not cast, a CCN twice in one POS file,
 an unreviewed CMI family, an unknown CMI layout, a CMI that disagrees with its relative weights, a CMI out of range, a
-Hospital General Information value that does not cast, a cost report in the wrong file year and a cost-report amount that
-does not cast.
+Hospital General Information value that does not cast, a cost report in the wrong file year, a cost-report amount that
+does not cast, a geography file without its period, a HUD ratio that is not a number, a ZIP code whose residential ratios
+do not sum to 0 or 1, a one-way adjacency edge, a changed RUCC header, an unknown RUCA code and a service-area count that
+is not a number.
 The real stage checks that the generators reproduce the committed seeds, builds the models from the catalog twice and
 reconciles them with bronze.
 
@@ -21,7 +23,8 @@ Failure modes: ``data/lakehouse_planning/staging_dedup_20261003/failure_modes.md
 ``data/lakehouse_planning/staging_families_20261003/failure_modes.md``,
 ``data/lakehouse_planning/sheet_selection_20261005/failure_modes.md``,
 ``data/lakehouse_planning/hospital_spine_20261005/failure_modes.md``,
-``data/lakehouse_planning/group_b_20261005/failure_modes_b1.md`` to ``failure_modes_b5c.md`` in the same folder. The report in ``data/e2e/staging/`` holds
+``data/lakehouse_planning/group_b_20261005/failure_modes_b1.md`` to ``failure_modes_b5c.md`` in the same folder,
+``data/lakehouse_planning/group_c_20261006/failure_modes_c1.md``. The report in ``data/e2e/staging/`` holds
 outcomes and counts, never data values or credentials.
 """
 
@@ -40,7 +43,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse import catalog, ipps_file_labels, ownership_release_periods, pos_file_periods
+from scripts.lakehouse import catalog, geography_file_periods, ipps_file_labels, ownership_release_periods, pos_file_periods
 from scripts.process import run_command
 
 REPO_ROOT = catalog.REPO_ROOT
@@ -73,6 +76,17 @@ TABLES = (
     "hhs_capacity_csv",
     "onc_pi_attestations_csv",
     "onc_pi_chpl_linkage_csv",
+    "hud_zip_county",
+    "hud_zip_county_sheet_rows",
+    "county_adjacency",
+    "county_adjacency_2010_text_lines",
+    "rucc",
+    "rucc_sheet_rows",
+    "ruca_tracts_2020",
+    "ruca_zip_2020",
+    "ruca_zip_2010",
+    "ruca_sheet_rows",
+    "cms_hsa_csv",
 )
 HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
@@ -631,6 +645,42 @@ ONC_ATTESTATION_COLUMNS = (
     "product_setting",
     "product_certification_edition_yr",
 )
+# The C1 geography tables' bronze columns [400] to [419].
+HUD_COLUMNS = ("zip", "geoid", "res_ratio", "bus_ratio", "oth_ratio", "tot_ratio", "state", "city")
+ADJACENCY_COLUMNS = ("county_name", "county_geoid", "neighbor_name", "neighbor_geoid", "length")
+RUCC_COLUMNS = ("fips", "state", "county_name", "attribute", "value")
+RUCA_TRACT_COLUMNS = (
+    "tractfips23",
+    "countyfips23",
+    "countycode23",
+    "countyname23",
+    "tractfips20",
+    "tractcode20",
+    "tractname20",
+    "countyfips20",
+    "countycode20",
+    "countyname20",
+    "statefips20",
+    "statename20",
+    "urbanareacode20",
+    "urbanareaname20",
+    "urbancore",
+    "urbancoretype",
+    "primaryruca",
+    "primaryrucadescription",
+    "primarydestinationcode",
+    "primarydestinationname",
+    "secondaryruca",
+    "secondaryrucadescription",
+    "secondarydestinationcode",
+    "secondarydestinationname",
+    "population",
+    "landarea",
+    "popdensity",
+)
+RUCA_ZIP_2020_COLUMNS = ("zipcode", "state", "zipcodetype", "poname", "primaryruca", "secondaryruca")
+RUCA_ZIP_2010_COLUMNS = ("zip_code", "state", "zip_type", "ruca1", "ruca2")
+HSA_COLUMNS = ("medicare_prov_num", "zip_cd_of_residence", "total_days_of_care", "total_charges", "total_cases")
 WIDE_COLUMNS = {
     "cms_medicare_inpatient_by_provider": MUP_PROVIDER_COLUMNS,
     "cms_medicare_inpatient_by_drg": MUP_DRG_COLUMNS,
@@ -736,6 +786,13 @@ WIDE_COLUMNS = {
     "hhs_capacity_csv": HHS_COLUMNS,
     "onc_pi_chpl_linkage_csv": ONC_CHPL_COLUMNS,
     "onc_pi_attestations_csv": ONC_ATTESTATION_COLUMNS,
+    "hud_zip_county": HUD_COLUMNS,
+    "county_adjacency": ADJACENCY_COLUMNS,
+    "rucc": RUCC_COLUMNS,
+    "ruca_tracts_2020": RUCA_TRACT_COLUMNS,
+    "ruca_zip_2020": RUCA_ZIP_2020_COLUMNS,
+    "ruca_zip_2010": RUCA_ZIP_2010_COLUMNS,
+    "cms_hsa_csv": HSA_COLUMNS,
 }
 
 
@@ -1530,6 +1587,238 @@ GROUP_B5B = (
 )
 
 
+def hud(zip_code: str, geoid: str, res: str, tot: str, state: str = "") -> tuple[tuple[str, str], ...]:
+    """Return one HUD ZIP-to-county row with its residential and total ratios; business and other ratios equal the total."""
+    return (("zip", zip_code), ("geoid", geoid), ("res_ratio", res), ("bus_ratio", tot), ("oth_ratio", tot), ("tot_ratio", tot), ("state", state))
+
+
+def adjacent(county: str, code: str, neighbor: str, neighbor_code: str, length: str = "") -> tuple[tuple[str, str], ...]:
+    """Return one county adjacency row; an island has an empty neighbor."""
+    return (("county_name", county), ("county_geoid", code), ("neighbor_name", neighbor), ("neighbor_geoid", neighbor_code), ("length", length))
+
+
+def rucc(fips: str, state: str, county: str, attribute: str, value: str) -> tuple[tuple[str, str], ...]:
+    """Return one row of the long 2023 RUCC file."""
+    return (("fips", fips), ("state", state), ("county_name", county), ("attribute", attribute), ("value", value))
+
+
+def hsa(ccn: str, zip_code: str, cases: str, days: str, charges: str) -> tuple[tuple[str, str], ...]:
+    """Return one hospital service area row."""
+    fields = {"medicare_prov_num": ccn, "zip_cd_of_residence": zip_code, "total_cases": cases, "total_days_of_care": days, "total_charges": charges}
+    return tuple(fields.items())
+
+
+# HUD quarters and service-area years as their receipts and job plans record them, keyed by release [403] [416].
+GEOGRAPHY_QUARTERS = {"HUD_API__q1": ("2021Q1", "2021-01-01", "2021-03-31"), "HUD_XLSX__q2": ("2020Q4", "2020-10-01", "2020-12-31")}
+GEOGRAPHY_COVERAGE = {"HSA__y15": ("2015-01-01", "2015-12-31"), "HSA__y16": ("2016-01-01", "2016-12-31")}
+RUCC_2013_HEADER = "FIPS|State|County_Name|Population_2010|RUCC_2013|Description"
+RUCA_2010_HEADER = (
+    "State-County FIPS Code|Select State|Select County|State-County-Tract FIPS Code (lookup by address at http://www.ffiec.gov/Geocode/)"
+    "|Primary RUCA Code 2010|Secondary RUCA Code, 2010 (see errata)|Tract Population, 2010|Land Area (square miles), 2010"
+    "|Population Density (per square mile), 2010"
+)
+# C1 geography [400] to [419]: HUD with a ZIP without residential addresses, Connecticut, a territory, a scientific-notation
+# ratio and two non-county rows; adjacency with islands, self-links, a zero length and a nameless 2010 lead line; RUCC and
+# RUCA vintages with blank and 99 codes; service areas with suppressed rows, cells and ZIPs.
+GROUP_C1 = (
+    Stored(
+        "hud_zip_county",
+        "hz1",
+        "HUD_API__q1",
+        "crosswalk.csv",
+        sha("hz1"),
+        9,
+        records=(
+            hud("00501", "36103", "0", "1", "NY"),
+            hud("01001", "25013", "1", "1", "MA"),
+            hud("06001", "09110", "1", "1", "CT"),
+            hud("96799", "60", "0", "1", "AS"),
+            hud("53001", "99999", "0", "0.0005", "WI"),
+            hud("53001", "55117", "1", "0.9995", "WI"),
+            hud("20001", "11001", "0.75", "0.75", "DC"),
+            hud("20001", "24031", "2.5E-1", "0.25", "DC"),
+            hud("00601", "72001", "1", "1", "PR"),
+        ),
+    ),
+    Stored("hud_zip_county", "hz2", "HUD_XLSX__q2", "crosswalk.csv", sha("hz2"), 2, records=(hud("01001", "25013", "1", "1"), hud("35004", "01073", "1", "1"))),
+    Stored(
+        "hud_zip_county_sheet_rows",
+        "hw2",
+        "HUD_XLSX__q2",
+        "ZIP-COUNTY_122020.xlsx",
+        sha("hw2"),
+        3,
+        content=("Sheet1:zip|geoid|res_ratio|bus_ratio|oth_ratio|tot_ratio", "Sheet1:01001|25013|1|1|1|1", "Sheet1:35004|01073|1|1|1|1"),
+    ),
+    Stored(
+        "county_adjacency",
+        "aj1",
+        "ADJ__a25",
+        "county_adjacency2025.txt",
+        sha("aj1"),
+        5,
+        records=(
+            adjacent("Autauga County, AL", "01001", "Chilton County, AL", "01021", "12345.6"),
+            adjacent("Chilton County, AL", "01021", "Autauga County, AL", "01001", "12345.6"),
+            adjacent("Kauai County, HI", "15007", "", ""),
+            adjacent("Western Connecticut Planning Region, CT", "09190", "Capitol Planning Region, CT", "09110", "0"),
+            adjacent("Capitol Planning Region, CT", "09110", "Western Connecticut Planning Region, CT", "09190", "0"),
+        ),
+    ),
+    Stored(
+        "county_adjacency",
+        "aj2",
+        "ADJ__a24",
+        "county_adjacency2024.txt",
+        sha("aj2"),
+        4,
+        records=(
+            adjacent("Autauga County, AL", "01001", "Autauga County, AL", "01001"),
+            adjacent("Autauga County, AL", "01001", "Chilton County, AL", "01021"),
+            adjacent("Chilton County, AL", "01021", "Autauga County, AL", "01001"),
+            adjacent("Chilton County, AL", "01021", "Chilton County, AL", "01021"),
+        ),
+    ),
+    Stored(
+        "county_adjacency_2010_text_lines",
+        "at0",
+        "ADJ__a10",
+        "county_adjacency2010.txt",
+        sha("at0"),
+        7,
+        content=(
+            '"Autauga County, AL"\t01001\t"Autauga County, AL"\t01001',
+            '\t\t"Chilton County, AL"\t01021',
+            '"Chilton County, AL"\t01021\t"Autauga County, AL"\t01001',
+            '\t\t"Chilton County, AL"\t01021',
+            '\t27165\t"Blue Earth County, MN"\t27013',
+            '\t\t"Watonwan County, MN"\t27165',
+            '"Blue Earth County, MN"\t27013\t"Watonwan County, MN"\t27165',
+        ),
+    ),
+    Stored(
+        "rucc",
+        "rc1",
+        "RUCC__c23",
+        "2023-rural-urban-continuum-codes.csv",
+        sha("rc1"),
+        8,
+        records=(
+            rucc("01001", "AL", "Autauga County", "Population_2020", "58805"),
+            rucc("01001", "AL", "Autauga County", "RUCC_2023", "2"),
+            rucc("01001", "AL", "Autauga County", "Description", "Metro - Counties in metro areas of 250,000 to 1 million population"),
+            rucc("09120", "CT", "Greater Bridgeport Planning Region", "Population_2020", "902412"),
+            rucc("09120", "CT", "Greater Bridgeport Planning Region", "RUCC_2023", "1"),
+            rucc("09120", "CT", "Greater Bridgeport Planning Region", "Description", "Metro - Counties in metro areas of 1 million population or more"),
+            rucc("09001", "CT", "Fairfield County", "Population_2020", "957419"),
+            rucc("09001", "CT", "Fairfield County", "Description", "Not Applicable"),
+        ),
+    ),
+    Stored(
+        "rucc_sheet_rows",
+        "rs1",
+        "RUCC__s13",
+        "2013-rural-urban-continuum-codes.xls",
+        sha("rs1"),
+        4,
+        content=(
+            f"Rural-urban Continuum Code 2013:{RUCC_2013_HEADER}",
+            "Rural-urban Continuum Code 2013:01001|AL|Autauga County|54571.0|2.0|Metro - Counties in metro areas of 250,000 to 1 million population",
+            "Rural-urban Continuum Code 2013:02105|AK|Hoonah-Angoon Census Area|2150.0||",
+            "Documentation:Rural-urban continuum codes, 2013",
+        ),
+    ),
+    Stored(
+        "rucc_sheet_rows",
+        "rs2",
+        "RUCC__s23",
+        "2023-rural-urban-continuum-codes.xlsx",
+        sha("rs2"),
+        2,
+        content=(
+            "Rural-urban Continuum Code 2023:FIPS|State|County_Name|Population_2020|RUCC_2023|Description",
+            "Rural-urban Continuum Code 2023:01001|AL|Autauga County|58805|2|Metro - Counties in metro areas of 250,000 to 1 million population",
+        ),
+    ),
+    Stored(
+        "ruca_tracts_2020",
+        "rt1",
+        "RUCA__t20",
+        "2020-rural-urban-commuting-area-codes-census-tracts.csv",
+        sha("rt1"),
+        3,
+        records=(
+            cc(tractfips20="01001020100", countyfips20="01001", countyfips23="01001", statefips20="01", primaryruca="1", secondaryruca="1"),
+            cc(tractfips20="09001010101", countyfips20="09001", countyfips23="09190", statefips20="09", primaryruca="2", secondaryruca="2.1"),
+            cc(tractfips20="01001990000", countyfips20="01001", countyfips23="01001", statefips20="01", primaryruca="99", secondaryruca="99"),
+        ),
+    ),
+    Stored(
+        "ruca_zip_2020",
+        "rz1",
+        "RUCA__z20",
+        "2020-rural-urban-commuting-area-codes-zip-codes.csv",
+        sha("rz1"),
+        2,
+        records=(
+            cc(zipcode="00501", state="NY", zipcodetype="Post Office or large volume customer", primaryruca="1", secondaryruca="1"),
+            cc(zipcode="99950", state="AK", zipcodetype="ZIP Code Area", primaryruca="10", secondaryruca="10.3"),
+        ),
+    ),
+    Stored(
+        "ruca_zip_2010",
+        "ry1",
+        "RUCA__z10",
+        "2010-rural-urban-commuting-area-codes-zip-code-file.csv",
+        sha("ry1"),
+        1,
+        records=(cc(zip_code="''00501''", state="NY", zip_type="Post Office or large volume customer", ruca1="1", ruca2="1.1"),),
+    ),
+    Stored(
+        "ruca_sheet_rows",
+        "rsh",
+        "RUCA__s10",
+        "2010-rural-urban-commuting-area-codes-revised-732019.xlsx",
+        sha("rsh"),
+        5,
+        content=(
+            "Data:Errata: On July 3, 2019, the RUCA codes were revised.",
+            f"Data:{RUCA_2010_HEADER}",
+            "Data:01001|AL|Autauga County|01001020100|1|1|1912|3.78764071493768|504.7997273",
+            "Data:72153|PR|Yauco Municipio|72153750602|4|4.1|3141|6.76703328355189|464.1620439",
+            "RUCA code description:1 Metropolitan area core",
+        ),
+    ),
+    Stored(
+        "cms_hsa_csv",
+        "hs1",
+        "HSA__y15",
+        "HSAF_2015_SUPPRESS.csv",
+        sha("hs1"),
+        4,
+        records=(
+            hsa("010001", "32420", "23", "130", "915149"),
+            hsa("010001", "*", "", "", ""),
+            hsa("010001", "*", "", "", ""),
+            hsa("010001", "     ", "4", "8", "90"),
+        ),
+    ),
+    Stored(
+        "cms_hsa_csv",
+        "hs2",
+        "HSA__y16",
+        "Hospital_Service_Area_2016.csv",
+        sha("hs2"),
+        3,
+        records=(
+            hsa("010001", "32420", "*", "*         ", "*         "),
+            hsa("01T001", "32421", "12", "60", "50000"),
+            hsa("10001", "32422", "15", "70", "1000"),
+        ),
+    ),
+)
+
+
 def owner_case(**fields: str) -> Stored:
     """Return one more owner file with one row, for the failing owner cases."""
     return Stored(
@@ -1795,6 +2084,7 @@ BASE = (
     *GROUP_B4,
     *GROUP_B5A,
     *GROUP_B5B,
+    *GROUP_C1,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -1996,6 +2286,50 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
         tuple(with_record(item, cc(rndrng_prvdr_ccn="010009", tot_benes="1,000")) if item.key == "mp2" else item for item in BASE),
         frozenset(),
     ),
+    # [403] A HUD file without its recorded quarter.
+    "geography_no_period": ("assert_geography_files_have_periods", BASE, frozenset({"hz2"})),
+    # [405] A HUD ratio that is not a number.
+    "hud_uncast_ratio": (
+        "assert_geography_values_cast",
+        tuple(with_record(item, hud("02108", "25025", "abc", "1")) if item.key == "hz2" else item for item in BASE),
+        frozenset(),
+    ),
+    # [406] A ZIP whose residential ratios sum to neither 0 nor 1.
+    "hud_ratio_sum_off": (
+        "assert_hud_ratios_normalized",
+        tuple(
+            with_record(with_record(item, hud("02109", "25025", "0.6", "0.6")), hud("02109", "25017", "0.2", "0.4")) if item.key == "hz2" else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
+    # [408] An edge without its reciprocal.
+    "adjacency_one_way": (
+        "assert_adjacency_edges_reciprocal",
+        tuple(with_record(item, adjacent("Autauga County, AL", "01001", "Elmore County, AL", "01051", "500")) if item.key == "aj1" else item for item in BASE),
+        frozenset(),
+    ),
+    # [412] A 2013 RUCC sheet whose header changed.
+    "rucc_unknown_layout": (
+        "assert_geography_layouts_known",
+        tuple(replace(item, content=(item.content[0].replace("RUCC_2013", "RUCC_Code"), *item.content[1:])) if item.key == "rs1" else item for item in BASE),
+        frozenset(),
+    ),
+    # [411] A secondary RUCA code outside the published labels.
+    "ruca_unknown_code": (
+        "assert_geography_values_cast",
+        tuple(
+            with_record(item, cc(zipcode="99951", state="AK", zipcodetype="ZIP Code Area", primaryruca="4", secondaryruca="4.7")) if item.key == "rz1" else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
+    # [413] A service-area count that is neither a number nor the suppression mark.
+    "hsa_uncast_count": (
+        "assert_geography_values_cast",
+        tuple(with_record(item, hsa("010001", "32423", "12a", "60", "500")) if item.key == "hs2" else item for item in BASE),
+        frozenset(),
+    ),
     # An emergency-services value that is neither Yes nor No [329].
     "hgi_uncast_value": (
         "assert_hgi_values_cast",
@@ -2007,8 +2341,8 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
 FIXTURE_RENAMED = ((sha("k1"), sha("k2")),)
 # The container name the fixture objects stand in, so names without a year still get one [178].
 FIXTURE_CONTAINER = "FY_2021_fixture.zip"
-TEXT_TABLES = {"cms_ipps_text_lines", "cms_occupational_mix_text_lines", "cms_occupational_mix_text_lines_utf16"}
-SHEET_TABLES = {"cms_ipps_sheet_rows", "cms_occupational_mix_sheet_rows"}
+TEXT_TABLES = {"cms_ipps_text_lines", "cms_occupational_mix_text_lines", "cms_occupational_mix_text_lines_utf16", "county_adjacency_2010_text_lines"}
+SHEET_TABLES = {"cms_ipps_sheet_rows", "cms_occupational_mix_sheet_rows", "hud_zip_county_sheet_rows", "rucc_sheet_rows", "ruca_sheet_rows"}
 
 
 FIXTURE_COLUMNS = (
@@ -2066,6 +2400,17 @@ CREATE TABLE bronze.cms_ipps_sheet_rows AS
 CREATE TABLE bronze.cms_occupational_mix_sheet_rows AS
     SELECT * EXCLUDE (bronze_table, line_text, cells_text), _row_number AS sheet_row, string_split(cells_text, '|') AS cells
     FROM fixture WHERE bronze_table = 'cms_occupational_mix_sheet_rows';
+CREATE TABLE bronze.county_adjacency_2010_text_lines AS
+    SELECT * EXCLUDE (bronze_table, sheet_name, cells_text) FROM fixture WHERE bronze_table = 'county_adjacency_2010_text_lines';
+CREATE TABLE bronze.hud_zip_county_sheet_rows AS
+    SELECT * EXCLUDE (bronze_table, line_text, cells_text), _row_number AS sheet_row, string_split(cells_text, '|') AS cells
+    FROM fixture WHERE bronze_table = 'hud_zip_county_sheet_rows';
+CREATE TABLE bronze.rucc_sheet_rows AS
+    SELECT * EXCLUDE (bronze_table, line_text, cells_text), _row_number AS sheet_row, string_split(cells_text, '|') AS cells
+    FROM fixture WHERE bronze_table = 'rucc_sheet_rows';
+CREATE TABLE bronze.ruca_sheet_rows AS
+    SELECT * EXCLUDE (bronze_table, line_text, cells_text), _row_number AS sheet_row, string_split(cells_text, '|') AS cells
+    FROM fixture WHERE bronze_table = 'ruca_sheet_rows';
 DROP TABLE fixture;
 CREATE TABLE bronze.cms_provider_of_services AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('cms_provider_of_services_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
@@ -2093,6 +2438,20 @@ CREATE TABLE bronze.onc_pi_chpl_linkage_csv AS SELECT * REPLACE (_row_number::BI
     FROM read_csv(getvariable('onc_pi_chpl_linkage_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.onc_pi_attestations_csv AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('onc_pi_attestations_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.hud_zip_county AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('hud_zip_county_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.county_adjacency AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('county_adjacency_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.rucc AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('rucc_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.ruca_tracts_2020 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('ruca_tracts_2020_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.ruca_zip_2020 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('ruca_zip_2020_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.ruca_zip_2010 AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('ruca_zip_2010_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_hsa_csv AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_hsa_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.stored_copies AS
     SELECT * REPLACE (byte_count::BIGINT AS byte_count, loaded::BOOLEAN AS loaded, retired::BOOLEAN AS retired)
     FROM read_csv(getvariable('copies_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
@@ -2218,6 +2577,16 @@ def ownership_periods_csv(objects: Iterable[Stored], unlabelled: frozenset[str])
     loaded = [{"table": item.table, "sha256": item.sha, "release_id": item.release, "file_name": item.member} for item in owned]
     periods = {item.release: OWNERSHIP_PERIODS[item.key] for item in owned}
     return ownership_release_periods.as_csv(ownership_release_periods.rows_for(loaded, periods))
+
+
+def geography_periods_csv(objects: Iterable[Stored], unlabelled: frozenset[str]) -> str:
+    """Return the geography period seed for the fixture's files, written by the real generator, without the ones a case leaves out [403]."""
+    loaded = [
+        {"table": item.table, "sha256": item.sha, "release_id": item.release, "file_name": item.member}
+        for item in objects
+        if item.table in geography_file_periods.TABLES and item.key not in unlabelled
+    ]
+    return geography_file_periods.as_csv(geography_file_periods.rows_for(loaded, GEOGRAPHY_QUARTERS, GEOGRAPHY_COVERAGE))
 
 
 def publication(item: Stored) -> tuple[str, str]:
@@ -2411,6 +2780,29 @@ OCCMIX_SQL = (
     "FROM int_occmix_survey_rows ORDER BY ALL;"
 )
 
+HUD_SQL = (
+    "SELECT quarter_label, zip_code, county_fips, county_scope, is_connecticut::VARCHAR, res_ratio::VARCHAR, tot_ratio::VARCHAR, "
+    "has_residential_addresses::VARCHAR FROM int_hud_zip_county_quarters ORDER BY ALL;"
+)
+HUD_HOLDS_SQL = "SELECT quarter_label, zip_code, geoid_published, hold_reason FROM int_hud_zip_county_holds ORDER BY ALL;"
+ADJACENCY_SQL = (
+    "SELECT vintage, county_fips, coalesce(county_name, ''), coalesce(neighbor_fips, ''), coalesce(shared_border_length_m::VARCHAR, ''), "
+    "is_self_link::VARCHAR, is_isolated::VARCHAR, is_connecticut::VARCHAR FROM int_county_adjacency_edges ORDER BY ALL;"
+)
+RUCC_SQL = (
+    "SELECT vintage, county_fips, coalesce(rucc_code, ''), coalesce(rucc_published, ''), coalesce(population::VARCHAR, ''), "
+    "is_connecticut::VARCHAR FROM int_rucc_county_codes ORDER BY ALL;"
+)
+RUCA_SQL = (
+    "SELECT vintage, geography_type, geography_id, coalesce(county_fips, ''), coalesce(primary_ruca, ''), coalesce(secondary_ruca, ''), "
+    "coalesce(primary_published, ''), coalesce(secondary_published, '') FROM int_ruca_codes ORDER BY ALL;"
+)
+HSA_SQL = (
+    "SELECT data_year, ccn_published, is_ccn_shape_valid::VARCHAR, coalesce(zip_code, ''), is_zip_suppressed::VARCHAR, is_zip_missing::VARCHAR, "
+    "coalesce(total_cases::VARCHAR, ''), is_cases_suppressed::VARCHAR, coalesce(total_charges::VARCHAR, ''), is_charges_suppressed::VARCHAR "
+    "FROM int_hsa_zip_cases ORDER BY ALL;"
+)
+
 
 def per_table(query: str, prefix: str) -> str:
     """Return the query once per table, each run after setting the checked_table variable to the prefixed table name."""
@@ -2482,6 +2874,7 @@ def fixture_project(case_dir: Path, objects: tuple[Stored, ...], unlabelled: fro
     (project / "seeds/ipps_occmix_twins.csv").write_text(ipps_file_labels.as_csv(twin_rows, ipps_file_labels.TWIN_COLUMNS))
     (project / "seeds/pos_file_periods.csv").write_text(periods_csv(objects, unlabelled))
     (project / "seeds/ownership_release_periods.csv").write_text(ownership_periods_csv(objects, unlabelled))
+    (project / "seeds/geography_file_periods.csv").write_text(geography_periods_csv(objects, unlabelled))
 
 
 def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[str] = frozenset()) -> tuple[int, dict[str, str]]:
@@ -2557,6 +2950,12 @@ def read_models(case: str) -> dict[str, Any]:
         "onc_attestations": [tuple(row) for row in duckdb_csv(database, ONC_ATTESTATIONS_SQL)],
         "phone_columns": [tuple(row) for row in duckdb_csv(database, PHONE_COLUMNS_SQL)],
         "occmix": [tuple(row) for row in duckdb_csv(database, OCCMIX_SQL)],
+        "hud": [tuple(row) for row in duckdb_csv(database, HUD_SQL)],
+        "hud_holds": [tuple(row) for row in duckdb_csv(database, HUD_HOLDS_SQL)],
+        "adjacency": [tuple(row) for row in duckdb_csv(database, ADJACENCY_SQL)],
+        "rucc": [tuple(row) for row in duckdb_csv(database, RUCC_SQL)],
+        "ruca": [tuple(row) for row in duckdb_csv(database, RUCA_SQL)],
+        "hsa": [tuple(row) for row in duckdb_csv(database, HSA_SQL)],
         "occmix_holds": [
             tuple(row)
             for row in duckdb_csv(
@@ -2581,6 +2980,15 @@ def refuses(action: Any, fragment: str) -> bool:
     return False
 
 
+def refuses_geography(action: Any, fragment: str) -> bool:
+    """Return whether the action raises the geography period generator's error with the fragment in its message."""
+    try:
+        action()
+    except geography_file_periods.PeriodError as error:
+        return fragment in str(error)
+    return False
+
+
 def refuses_period(action: Any, fragment: str) -> bool:
     """Return whether the action raises the ownership period generator's error with the fragment in its message."""
     try:
@@ -2588,6 +2996,107 @@ def refuses_period(action: Any, fragment: str) -> bool:
     except ownership_release_periods.PeriodError as error:
         return fragment in str(error)
     return False
+
+
+def geography_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's C1 geography models with their expected rows and check the period generator's refusals."""
+    checks: dict[str, bool] = {}
+    # [400] to [416] C1 geography: non-county HUD rows held, Connecticut and territories flagged, ratios typed; adjacency
+    # self-links, islands and 2010 continuation lines; RUCC and RUCA codes as text with blank and 99 codes null; service-area
+    # suppression kept as flags.
+    checks["hud_matches_expected"] = base.get("hud") == sorted(
+        [
+            ("2021Q1", "00501", "36103", "state", "false", "0.0", "1.0", "false"),
+            ("2021Q1", "01001", "25013", "state", "false", "1.0", "1.0", "true"),
+            ("2021Q1", "06001", "09110", "state", "true", "1.0", "1.0", "true"),
+            ("2021Q1", "53001", "55117", "state", "false", "1.0", "0.9995", "true"),
+            ("2021Q1", "20001", "11001", "state", "false", "0.75", "0.75", "true"),
+            ("2021Q1", "20001", "24031", "state", "false", "0.25", "0.25", "true"),
+            ("2021Q1", "00601", "72001", "territory", "false", "1.0", "1.0", "true"),
+            ("2020Q4", "01001", "25013", "state", "false", "1.0", "1.0", "true"),
+            ("2020Q4", "35004", "01073", "state", "false", "1.0", "1.0", "true"),
+        ]
+    )
+    checks["hud_holds_match_expected"] = base.get("hud_holds") == sorted(
+        [("2021Q1", "96799", "60", "not_county_code"), ("2021Q1", "53001", "99999", "not_county_code")]
+    )
+    checks["adjacency_matches_expected"] = base.get("adjacency") == sorted(
+        [
+            ("2025", "01001", "Autauga County, AL", "01021", "12345.6", "false", "false", "false"),
+            ("2025", "01021", "Chilton County, AL", "01001", "12345.6", "false", "false", "false"),
+            ("2025", "15007", "Kauai County, HI", "", "", "false", "true", "false"),
+            ("2025", "09190", "Western Connecticut Planning Region, CT", "09110", "0.0", "false", "false", "true"),
+            ("2025", "09110", "Capitol Planning Region, CT", "09190", "0.0", "false", "false", "true"),
+            ("2024", "01001", "Autauga County, AL", "01001", "", "true", "false", "false"),
+            ("2024", "01001", "Autauga County, AL", "01021", "", "false", "false", "false"),
+            ("2024", "01021", "Chilton County, AL", "01001", "", "false", "false", "false"),
+            ("2024", "01021", "Chilton County, AL", "01021", "", "true", "false", "false"),
+            ("2010", "01001", "Autauga County, AL", "01001", "", "true", "false", "false"),
+            ("2010", "01001", "Autauga County, AL", "01021", "", "false", "false", "false"),
+            ("2010", "01021", "Chilton County, AL", "01001", "", "false", "false", "false"),
+            ("2010", "01021", "Chilton County, AL", "01021", "", "true", "false", "false"),
+            ("2010", "27165", "", "27013", "", "false", "false", "false"),
+            ("2010", "27165", "", "27165", "", "true", "false", "false"),
+            ("2010", "27013", "Blue Earth County, MN", "27165", "", "false", "false", "false"),
+        ]
+    )
+    checks["rucc_matches_expected"] = base.get("rucc") == sorted(
+        [
+            ("2023", "01001", "2", "2", "58805.0", "false"),
+            ("2023", "09120", "1", "1", "902412.0", "true"),
+            ("2023", "09001", "", "", "957419.0", "true"),
+            ("2013", "01001", "2", "2.0", "54571.0", "false"),
+            ("2013", "02105", "", "", "2150.0", "false"),
+        ]
+    )
+    checks["ruca_matches_expected"] = base.get("ruca") == sorted(
+        [
+            ("2020", "tract", "01001020100", "01001", "1", "1", "1", "1"),
+            ("2020", "tract", "09001010101", "09001", "2", "2.1", "2", "2.1"),
+            ("2020", "tract", "01001990000", "01001", "", "", "99", "99"),
+            ("2020", "zip", "00501", "", "1", "1", "1", "1"),
+            ("2020", "zip", "99950", "", "10", "10.3", "10", "10.3"),
+            ("2010", "zip", "00501", "", "1", "1.1", "1", "1.1"),
+            ("2010", "tract", "01001020100", "01001", "1", "1", "1", "1"),
+            ("2010", "tract", "72153750602", "72153", "4", "4.1", "4", "4.1"),
+        ]
+    )
+    checks["hsa_matches_expected"] = base.get("hsa") == sorted(
+        [
+            ("2015", "010001", "true", "32420", "false", "false", "23.0", "false", "915149.0", "false"),
+            ("2015", "010001", "true", "", "true", "false", "", "false", "", "false"),
+            ("2015", "010001", "true", "", "true", "false", "", "false", "", "false"),
+            ("2015", "010001", "true", "", "false", "true", "4.0", "false", "90.0", "false"),
+            ("2016", "010001", "true", "32420", "false", "false", "", "true", "", "true"),
+            ("2016", "01T001", "true", "32421", "false", "false", "12.0", "false", "50000.0", "false"),
+            ("2016", "10001", "false", "32422", "false", "false", "15.0", "false", "1000.0", "false"),
+        ]
+    )
+    checks["geography_seed_matches_registry"] = geography_seed_matches()
+    checks["geography_generator_refuses_file_without_period"] = refuses_geography(
+        lambda: geography_file_periods.rows_for(
+            [{"table": "hud_zip_county", "sha256": sha("q9"), "release_id": "missing", "file_name": "crosswalk.csv"}], {}, {}
+        ),
+        "no recorded quarter",
+    )
+    checks["geography_generator_refuses_two_periods"] = refuses_geography(
+        lambda: geography_file_periods.receipt_quarter(
+            {
+                "snapshot_id": "two",
+                "release": {"publisher_release_label": "2021Q1"},
+                "measurement_periods": [
+                    {"source_basis": "publisher_stated", "start_date": "2021-01-01", "end_date": "2021-03-31"},
+                    {"source_basis": "publisher_stated", "start_date": "2021-04-01", "end_date": "2021-06-30"},
+                ],
+            }
+        ),
+        "more than one",
+    )
+    checks["geography_generator_refuses_unreviewed_vintage"] = refuses_geography(
+        lambda: geography_file_periods.rows_for([{"table": "rucc", "sha256": sha("q8"), "release_id": "r", "file_name": "2033-rucc.csv"}], {}, {}),
+        "no reviewed vintage",
+    )
+    return checks
 
 
 def fixture_scenarios() -> dict[str, bool]:
@@ -3078,6 +3587,7 @@ def fixture_scenarios() -> dict[str, bool]:
         ("invalid_provider_id", "1"),
         ("invalid_survey_period", "2"),
     ]
+    checks.update(geography_checks(base))
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -3202,6 +3712,24 @@ def ownership_seed_matches() -> bool:
     return seed == sorted(expected)
 
 
+def geography_seed_matches() -> bool:
+    """Check the geography measure seed against the source registry: every control of S21, S22, S35, S36 and S38 once, with its family and decision [417]."""
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    families = {source: family["id"] for family in registry["source_families"] for source in family["audit_source_ids"]}
+    wanted = {"S21", "S22", "S35", "S36", "S38"}
+    expected_rows = sorted(
+        (control["id"], family, control["preserved_controls"]["current_review_decision"])
+        for control in registry["measure_controls"]
+        for family in sorted({families[source] for source in control["source_ids"] if source in families} & wanted)
+    )
+    seed = REPO_ROOT / "dbt/seeds/geography_measures.csv"
+    if not seed.exists():
+        return False
+    with seed.open(newline="") as handle:
+        seeded = sorted((row["measure_control"], row["family"], row["review_decision"]) for row in csv.DictReader(handle))
+    return bool(expected_rows) and seeded == expected_rows
+
+
 def mup_seed_matches() -> bool:
     """Check that the Medicare inpatient measure seed covers exactly the registry's controls of its two sources [363]."""
     registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
@@ -3210,6 +3738,80 @@ def mup_seed_matches() -> bool:
         seed = sorted({row["measure_control"] for row in csv.DictReader(handle)})
     expected = {*sources["CMS-MUP-PROVIDER"]["linked_measure_ids"], *sources["CMS_MEDICARE_PROVIDER"]["linked_measure_ids"]}
     return seed == sorted(expected)
+
+
+# Ordered fingerprints of every C1 model, compared between the two real builds [418].
+GEOGRAPHY_FINGERPRINTS = {
+    "int_hud_zip_county_quarters": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY hud_row_key)) FROM int_hud_zip_county_quarters AS t;",
+    "int_hud_zip_county_holds": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY hud_row_key)) FROM int_hud_zip_county_holds AS t;",
+    "int_county_adjacency_edges": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY edge_key)) FROM int_county_adjacency_edges AS t;",
+    "int_rucc_county_codes": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY rucc_key)) FROM int_rucc_county_codes AS t;",
+    "int_ruca_codes": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY ruca_row_key)) FROM int_ruca_codes AS t;",
+    "int_hsa_zip_cases": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY hsa_row_key)) FROM int_hsa_zip_cases AS t;",
+}
+GEOGRAPHY_RECONCILE_SQL = """SELECT 'hud', (SELECT count(*) FROM stg_hud_zip_county)::VARCHAR,
+    ((SELECT count(*) FROM int_hud_zip_county_quarters) + (SELECT count(*) FROM int_hud_zip_county_holds))::VARCHAR
+UNION ALL SELECT 'adjacency', ((SELECT count(*) FROM stg_county_adjacency) + (SELECT count(*) FROM stg_county_adjacency_2010_text_lines))::VARCHAR,
+    (SELECT count(*) FROM int_county_adjacency_edges)::VARCHAR
+UNION ALL SELECT 'rucc_long', (SELECT count(DISTINCT _member_sha256 || ':' || trim(fips)) FROM stg_rucc)::VARCHAR,
+    (SELECT count(*) FROM int_rucc_county_codes WHERE vintage = '2023')::VARCHAR
+UNION ALL SELECT 'ruca_csv',
+    ((SELECT count(*) FROM stg_ruca_tracts_2020) + (SELECT count(*) FROM stg_ruca_zip_2020) + (SELECT count(*) FROM stg_ruca_zip_2010))::VARCHAR,
+    (SELECT count(*) FROM int_ruca_codes WHERE sheet_name IS NULL)::VARCHAR
+UNION ALL SELECT 'hsa', (SELECT count(*) FROM stg_cms_hsa_csv)::VARCHAR, (SELECT count(*) FROM int_hsa_zip_cases)::VARCHAR;"""
+GEOGRAPHY_TWINS_SQL = """WITH csv AS (
+    SELECT _member_sha256 AS csv_sha, _release_id AS release_id, count(*) AS n,
+        md5(string_agg(trim(zip) || ':' || trim(geoid), ',' ORDER BY trim(zip), trim(geoid))) AS pairs
+    FROM stg_hud_zip_county WHERE _release_id LIKE 'HUD_XLSX%' GROUP BY 1, 2
+), sheet_rows AS (
+    SELECT DISTINCT _member_sha256, _release_id, cells FROM stg_hud_zip_county_sheet_rows WHERE sheet_row > 1
+), sheet AS (
+    SELECT s._member_sha256 AS sheet_sha, s._release_id AS release_id, count(*) AS n,
+        (SELECT count(*) FROM stg_hud_zip_county_sheet_rows r WHERE r._member_sha256 = s._member_sha256 AND r.sheet_row > 1) AS all_rows,
+        md5(string_agg(trim(cells[1]) || ':' || trim(cells[2]), ',' ORDER BY trim(cells[1]), trim(cells[2]))) AS pairs
+    FROM sheet_rows AS s GROUP BY 1, 2
+)
+SELECT coalesce(csv.release_id, sheet.release_id), coalesce(sheet.sheet_sha, ''), coalesce(csv.n, 0)::VARCHAR, coalesce(sheet.n, 0)::VARCHAR,
+    coalesce(sheet.all_rows, 0)::VARCHAR, coalesce(csv.pairs = sheet.pairs, false)::VARCHAR
+FROM csv FULL JOIN sheet ON csv.release_id = sheet.release_id ORDER BY 1;"""
+
+
+def geography_real(database: str, init: str) -> dict[str, Any]:
+    """Reconcile the real C1 models with their staging rows, the HUD workbooks with their CSV twins and the period seed with storage [404] [419]."""
+    checks: dict[str, bool] = {}
+    counts: dict[str, Any] = {}
+    for name, staged, typed in duckdb_csv(database, GEOGRAPHY_RECONCILE_SQL, init):
+        counts[name] = {"staged": int(staged), "typed": int(typed)}
+        checks[f"geography_{name}_rows_reconcile"] = int(staged) == int(typed) and int(staged) > 0
+    holds = duckdb_csv(database, "SELECT hold_reason, count(*)::VARCHAR FROM int_hud_zip_county_holds GROUP BY 1 ORDER BY 1;")
+    counts["hud_holds"] = dict(holds)
+    checks["geography_hud_holds_are_the_approved_47"] = holds == [["not_county_code", "47"]]
+    sheets = duckdb_csv(
+        database,
+        "SELECT (SELECT count(*) FROM stg_rucc_sheet_rows r JOIN geography_file_periods p ON r._member_sha256 = p.member_sha256 "
+        "WHERE p.file_name = '2013-rural-urban-continuum-codes.xls' AND r.sheet_name = 'Rural-urban Continuum Code 2013' AND r.sheet_row > 1)::VARCHAR, "
+        "(SELECT count(*) FROM int_rucc_county_codes WHERE vintage = '2013')::VARCHAR, "
+        "(SELECT count(*) FROM stg_ruca_sheet_rows r JOIN geography_file_periods p ON r._member_sha256 = p.member_sha256 "
+        "WHERE p.file_name = '2010-rural-urban-commuting-area-codes-revised-732019.xlsx' AND r.sheet_name = 'Data' AND r.sheet_row > 2)::VARCHAR, "
+        "(SELECT count(*) FROM int_ruca_codes WHERE sheet_name = 'Data')::VARCHAR;",
+        init,
+    )[0]
+    counts["sheets"] = {
+        "rucc_2013": {"staged": int(sheets[0]), "typed": int(sheets[1])},
+        "ruca_2010_tracts": {"staged": int(sheets[2]), "typed": int(sheets[3])},
+    }
+    checks["geography_sheet_rows_reconcile"] = sheets[0] == sheets[1] and sheets[2] == sheets[3] and int(sheets[1]) > 0 and int(sheets[3]) > 0
+    # The CSV of a workbook holds its distinct rows; only the owner-approved 2014 Q2 workbook repeats rows, by its recorded
+    # count, and every other workbook must have none (docs/data_collection.md, 2014 Q2 repeats).
+    approved = json.loads((REPO_ROOT / "config/acquisition/hud_xlsx_exact_repeats_2014q2.json").read_text())
+    repeats = {quarter["sha256"]: int(quarter["exact_repeat_rows"]) for quarter in approved["quarters"]}
+    twins = duckdb_csv(database, GEOGRAPHY_TWINS_SQL, init)
+    matching = [row[0] for row in twins if row[5] == "true" and row[2] == row[3] and int(row[4]) - int(row[3]) == repeats.get(row[1], 0) and int(row[2]) > 0]
+    counts["hud_workbook_twins"] = {"releases": len(twins), "matching": len(matching), "approved_repeat_rows": sum(int(row[4]) - int(row[3]) for row in twins)}
+    checks["geography_hud_workbooks_match_csv_twins"] = len(matching) == len(twins) > 0
+    checks["geography_periods_seed_reproduced"] = geography_file_periods.SEED.read_text() == geography_file_periods.as_csv(geography_file_periods.build())
+    checks["geography_seed_matches_registry"] = geography_seed_matches()
+    return {"checks": checks, "counts": counts}
 
 
 def real_stage() -> dict[str, Any]:
@@ -3237,8 +3839,13 @@ def real_stage() -> dict[str, Any]:
             database,
             "SELECT count(*)::VARCHAR, md5(string_agg(to_json(s), chr(10) ORDER BY survey_row_key)) FROM int_occmix_survey_rows AS s;",
         )
+        outcome[f"{run}_geography_fingerprints"] = {model: duckdb_csv(database, query) for model, query in GEOGRAPHY_FINGERPRINTS.items()}
     outcome["checks"]["real_rebuild_identical"] = builds[0] == builds[1]
     outcome["checks"]["occmix_real_rebuild_identical"] = outcome["real_occmix_fingerprint"] == outcome["real_again_occmix_fingerprint"]
+    outcome["checks"]["geography_real_rebuild_identical"] = outcome["real_geography_fingerprints"] == outcome["real_again_geography_fingerprints"]
+    geography = geography_real(database, init)
+    outcome["checks"].update(geography["checks"])
+    outcome["geography_counts"] = geography["counts"]
     status_sql = "SELECT text_layout || ' ' || twin_status, count(*)::VARCHAR FROM stg_bronze__twin_comparison GROUP BY 1 ORDER BY 1;"
     outcome["twin_statuses"] = dict(duckdb_csv(database, status_sql))
     held_sql = (

@@ -45,6 +45,17 @@ vars:
     hhs_capacity_csv: hhs_capacity
     onc_pi_attestations_csv: onc_pi
     onc_pi_chpl_linkage_csv: onc_pi
+    hud_zip_county: geography
+    hud_zip_county_sheet_rows: geography
+    county_adjacency: geography
+    county_adjacency_2010_text_lines: geography
+    rucc: geography
+    rucc_sheet_rows: geography
+    ruca_tracts_2020: geography
+    ruca_zip_2020: geography
+    ruca_zip_2010: geography
+    ruca_sheet_rows: geography
+    cms_hsa_csv: geography
   # Case-mix index files: the label families of the CMI snapshots read as CMI, and the reviewed families that are not CMI,
   # by name or pattern (failure mode 293).
   cmi_families:
@@ -98,6 +109,27 @@ vars:
     - impact_table
     - measure_impact_use_supplementary
   impact_excluded_sheet_patterns: ["%descr%", "layout"]
+
+  # Workbook sheets C1 types, each by its reviewed file name, sheet and exact header row; other workbooks are twins of a
+  # typed CSV or older than every HAI window (failure modes 404, 410 and 412).
+  geography_sheets:
+    - table: rucc_sheet_rows
+      file_name: 2013-rural-urban-continuum-codes.xls
+      sheet: Rural-urban Continuum Code 2013
+      header: [FIPS, State, County_Name, Population_2010, RUCC_2013, Description]
+    - table: ruca_sheet_rows
+      file_name: 2010-rural-urban-commuting-area-codes-revised-732019.xlsx
+      sheet: Data
+      header:
+        - State-County FIPS Code
+        - Select State
+        - Select County
+        - "State-County-Tract FIPS Code (lookup by address at http://www.ffiec.gov/Geocode/)"
+        - Primary RUCA Code 2010
+        - "Secondary RUCA Code, 2010 (see errata)"
+        - "Tract Population, 2010"
+        - "Land Area (square miles), 2010"
+        - "Population Density (per square mile), 2010"
 
 models:
   hai:

@@ -20,7 +20,7 @@ models:
         data_tests:
           - accepted_values:
               arguments:
-                values: [hai, cost_reports, ipps, occupational_mix, provider_of_services, care_compare, hospital_ownership, medicare_inpatient, hhs_capacity, onc_pi]
+                values: [hai, cost_reports, ipps, occupational_mix, provider_of_services, care_compare, hospital_ownership, medicare_inpatient, hhs_capacity, onc_pi, geography]
       - name: object_key
         description: Hash of the S3 key, version ID and member path (bronze `_object_key`).
         data_tests: [not_null]
@@ -623,6 +623,171 @@ models:
     description: >
       Bronze `onc_pi_chpl_linkage_csv` with one copy of each stored file, read from its canonical object (failure mode 279): the ONC Promoting Interoperability to CHPL linkage rows; typed in int_onc_chpl_linkage_rows.
       The data columns pass through as published; lakehouse.bronze_dictionary.onc_pi_chpl_linkage_csv documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_hud_zip_county
+    description: >
+      Bronze `hud_zip_county` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_hud_zip_county_quarters and int_hud_zip_county_holds.
+      The data columns pass through as published; lakehouse.bronze_dictionary.hud_zip_county documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_hud_zip_county_sheet_rows
+    description: >
+      Bronze `hud_zip_county_sheet_rows` with one copy of each stored file, read from its canonical object (failure mode 418); not typed; the real E2E compares each workbook with its CSV twin (failure mode 404).
+      The data columns pass through as published; lakehouse.bronze_dictionary.hud_zip_county_sheet_rows documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_county_adjacency
+    description: >
+      Bronze `county_adjacency` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_county_adjacency_edges.
+      The data columns pass through as published; lakehouse.bronze_dictionary.county_adjacency documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_county_adjacency_2010_text_lines
+    description: >
+      Bronze `county_adjacency_2010_text_lines` with one copy of each stored file, read from its canonical object (failure mode 418); parsed in int_county_adjacency_edges.
+      The data columns pass through as published; lakehouse.bronze_dictionary.county_adjacency_2010_text_lines documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_rucc
+    description: >
+      Bronze `rucc` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_rucc_county_codes.
+      The data columns pass through as published; lakehouse.bronze_dictionary.rucc documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_rucc_sheet_rows
+    description: >
+      Bronze `rucc_sheet_rows` with one copy of each stored file, read from its canonical object (failure mode 418); the 2013 sheet is typed in int_rucc_county_codes.
+      The data columns pass through as published; lakehouse.bronze_dictionary.rucc_sheet_rows documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_ruca_tracts_2020
+    description: >
+      Bronze `ruca_tracts_2020` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_ruca_codes.
+      The data columns pass through as published; lakehouse.bronze_dictionary.ruca_tracts_2020 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_ruca_zip_2020
+    description: >
+      Bronze `ruca_zip_2020` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_ruca_codes.
+      The data columns pass through as published; lakehouse.bronze_dictionary.ruca_zip_2020 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_ruca_zip_2010
+    description: >
+      Bronze `ruca_zip_2010` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_ruca_codes.
+      The data columns pass through as published; lakehouse.bronze_dictionary.ruca_zip_2010 documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_ruca_sheet_rows
+    description: >
+      Bronze `ruca_sheet_rows` with one copy of each stored file, read from its canonical object (failure mode 418); the 2010 tract sheet is typed in int_ruca_codes.
+      The data columns pass through as published; lakehouse.bronze_dictionary.ruca_sheet_rows documents them.
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_cms_hsa_csv
+    description: >
+      Bronze `cms_hsa_csv` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_hsa_zip_cases.
+      The data columns pass through as published; lakehouse.bronze_dictionary.cms_hsa_csv documents them.
     columns:
       - name: _object_key
         description: The canonical object the row was read from.

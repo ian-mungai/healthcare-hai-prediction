@@ -705,3 +705,183 @@ models:
           - accepted_values:
               arguments:
                 values: [available_conditional, unavailable_source_definition]
+
+  - name: int_hud_zip_county_quarters
+    description: >
+      HUD-USPS ZIP-to-county rows per USPS quarter (the capture receipt's publisher quarter), with the residential,
+      business, other and total address ratios typed separately. Rows whose code is not a county of the states, DC or
+      territories are in int_hud_zip_county_holds. Connecticut is kept and flagged; joins exclude it later. Linkage only
+      (L002): ZIP-to-county ratios are never inverted into county-to-ZIP weights.
+    columns:
+      - name: hud_row_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: quarter_label
+        description: USPS quarter, for example 2021Q1, from the capture receipt.
+        data_tests: [not_null]
+      - name: zip_code
+        description: USPS ZIP code as 5-character text.
+        data_tests: [not_null]
+      - name: county_fips
+        description: County code as 5-character text.
+        data_tests: [not_null]
+      - name: county_scope
+        description: state for the 50 states and DC, territory for the island areas.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [state, territory]
+      - name: res_ratio
+        description: Share of the ZIP code's residential addresses in the county; scientific notation is read as a number.
+      - name: zip_residential_ratio_sum
+        description: Sum of the ZIP code's residential ratios in the file, held rows included.
+      - name: has_residential_addresses
+        description: False when every residential ratio of the ZIP code is 0, so no residential county is assigned.
+        data_tests: [not_null]
+
+  - name: int_hud_zip_county_holds
+    description: >
+      HUD rows removed from int_hud_zip_county_quarters because their code is not a county (two-digit island codes and
+      99999), approved Oct 1 2026. Kept so typed plus held rows equal the bronze rows.
+    columns:
+      - name: hud_row_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: geoid_published
+        description: The published code.
+      - name: hold_reason
+        description: Why the row is not typed.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [not_county_code]
+
+  - name: int_county_adjacency_edges
+    description: >
+      Census county adjacency rows per vintage, 2010 and 2023 to 2026, as published: self-links flagged, islands kept
+      with no neighbor, border length in meters from 2025. Linkage only (L004): no edge is removed, deduplicated or
+      weighted; graph rules come later.
+    columns:
+      - name: edge_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: vintage
+        description: Reviewed reference year of the file.
+        data_tests: [not_null]
+      - name: county_fips
+        description: County code as 5-character text; a 2010 continuation line takes its lead line's county.
+        data_tests: [not_null]
+      - name: neighbor_fips
+        description: Neighbor county code; null for an island with no neighbor.
+      - name: shared_border_length_m
+        description: Shared border length in meters, published from 2025; 0 for counties that touch at a point.
+      - name: county_scope
+        description: state, territory or not_county.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [state, territory, not_county]
+      - name: is_self_link
+        description: The county is listed as its own neighbor (2010, 2023 and 2024 files).
+        data_tests: [not_null]
+      - name: is_isolated
+        description: The row lists no neighbor.
+        data_tests: [not_null]
+
+  - name: int_rucc_county_codes
+    description: >
+      Rural-Urban Continuum Codes per county and vintage (2013 and 2023) as text categories 1 to 9, with the published
+      value, population and description. C198, conditional: codes are categories, the 2023 urban cutoff differs from
+      2013, and the vintage is not a publication date.
+    columns:
+      - name: rucc_key
+        description: File checksum and published county code.
+        data_tests: [unique, not_null]
+      - name: vintage
+        description: Reviewed reference year of the file.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['2013', '2023']
+      - name: county_fips
+        description: County code as 5-character text.
+        data_tests: [not_null]
+      - name: rucc_code
+        description: Code 1 to 9 as text; null when the county has no code.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+      - name: rucc_published
+        description: The code as published, for example 2.0 in the 2013 workbook.
+
+  - name: int_ruca_codes
+    description: >
+      Rural-Urban Commuting Area codes per census tract or ZIP code and vintage (2010 and 2020). C199 and its children,
+      conditional: primary and secondary codes are categories, ZIP codes are postal codes and not ZCTAs, and RUCA 2020
+      was published in 2025.
+    columns:
+      - name: ruca_row_key
+        description: File checksum, sheet and source row number.
+        data_tests: [unique, not_null]
+      - name: vintage
+        description: Reviewed reference year of the file.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['2010', '2020']
+      - name: geography_type
+        description: tract or zip.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [tract, zip]
+      - name: geography_id
+        description: 11-digit tract code or 5-character ZIP code.
+        data_tests: [not_null]
+      - name: county_fips
+        description: The tract's county in its vintage's geography; null for ZIP codes.
+      - name: county_fips_2023
+        description: The 2020 tract's county in 2023 geography (Connecticut planning regions).
+      - name: primary_ruca
+        description: Primary code 1 to 10 as text; null for 99 (not coded) or blank.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+      - name: secondary_ruca
+        description: Secondary code label, for example 10.3; null for 99 or blank.
+
+  - name: int_hsa_zip_cases
+    description: >
+      Hospital service area rows per data year: Medicare cases, days and charges per provider and beneficiary ZIP code,
+      with suppression kept as flags. L001, linkage only: counts are hospital episodes, not residents, and visible cases
+      are a subset of all cases.
+    columns:
+      - name: hsa_row_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: data_year
+        description: Data year from the job plan's catalog coverage.
+        data_tests: [not_null]
+      - name: ccn_published
+        description: Provider ID as published, letters and leading zeros kept.
+        data_tests: [not_null]
+      - name: is_ccn_shape_valid
+        description: The provider ID is 6 letters or digits.
+        data_tests: [not_null]
+      - name: is_zip_suppressed
+        description: The 2015 whole-row suppression mark (ZIP code *).
+        data_tests: [not_null]
+      - name: is_zip_missing
+        description: The ZIP code is blank.
+        data_tests: [not_null]
+      - name: is_cases_suppressed
+        description: The case count is published as *.
+        data_tests: [not_null]
