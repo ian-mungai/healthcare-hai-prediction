@@ -686,7 +686,9 @@ seeds:
       hospital visits and S34 complications and deaths, each parent once per component, and E038 (PSI-90) and E039 (PSI-13),
       which name no published measure ID and stay unmapped. Each row names the window model, the exact measure ID the registry
       gives and the value column; renamed IDs (OP-32, PSI_90_SAFETY, PSI_13_POST_SEPSIS) are never mapped (failure modes 508,
-      509 and 511). All are comparison_only; staging approves no use.
+      509 and 511). The HAC Reduction (C285, C286) and VBP (C287, C288) controls name their program-year columns;
+      C288.total_performance takes its parent's field and C288.payment_adjustment stays unmapped (failure mode 520). All are
+      comparison_only or exclude_primary; staging approves no use.
     config:
       column_types:
         measure_control: varchar
@@ -705,8 +707,28 @@ seeds:
       - name: source_measure_id
         description: The published measure ID or HRRP measure name; empty for E038 and E039.
       - name: value_column
-        description: The column holding the value.
-        data_tests: [not_null]
+        description: The column holding the value; empty for C288.payment_adjustment, which has no published column.
       - name: review_decision
-        description: Registry decision, preserved without approving model use.
+        description: >
+          Registry decision, preserved without approving model use; empty for the C288 children, which have none in the
+          registry.
+
+  - name: vbp_file_fiscal_years
+    description: >
+      The reviewed program fiscal year of each Hospital VBP Total Performance Score file that publishes no fiscal_year, by
+      its published file name, with the evidence (owner decision Oct 8 2026; failure mode 515).
+    config:
+      column_types:
+        file_name: varchar
+        fiscal_year: integer
+        evidence: varchar
+    columns:
+      - name: file_name
+        description: The published file name.
+        data_tests: [unique, not_null]
+      - name: fiscal_year
+        description: The program fiscal year.
+        data_tests: [not_null]
+      - name: evidence
+        description: Why the year is right.
         data_tests: [not_null]

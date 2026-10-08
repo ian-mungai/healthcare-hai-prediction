@@ -123,6 +123,8 @@ TABLES = (
     "cms_cc_unplanned_hospital_visits_hospital",
     "cms_cc_complications_and_deaths_hospital",
     "cms_cc_hospital_readmissions_reduction_program_hospital",
+    "cms_cc_hac_reduction_program_hospital",
+    "cms_cc_hvbp_tps",
 )
 HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
@@ -959,6 +961,37 @@ WIDE_COLUMNS = {
         "number_of_readmissions",
         "start_date",
         "end_date",
+    ),
+    # Group D2: HAC with both PSI-90 column names and a republished SIR; TPS with and without fiscal_year [516] [517].
+    "cms_cc_hac_reduction_program_hospital": (
+        "facility_id",
+        "fiscal_year",
+        "psi_90_composite_value",
+        "psi_90_composite",
+        "psi_90_w_z_score",
+        "psi_90_start_date",
+        "psi_90_end_date",
+        "clabsi_sir",
+        "clabsi_w_z_score",
+        "cauti_w_z_score",
+        "ssi_w_z_score",
+        "cdi_w_z_score",
+        "mrsa_w_z_score",
+        "hai_measures_start_date",
+        "hai_measures_end_date",
+        "total_hac_score",
+        "total_hac_score_footnote",
+        "total_hac_footnote",
+        "payment_reduction",
+        "payment_reduction_footnote",
+    ),
+    "cms_cc_hvbp_tps": (
+        "fiscal_year",
+        "facility_id",
+        "provider_number",
+        "unweighted_normalized_safety_domain_score",
+        "weighted_safety_domain_score",
+        "total_performance_score",
     ),
     # The maternal table has no provider_id and no measure_start_date [319] [320].
     "cms_cc_maternal_health_hospital": ("facility_id", "measure_id", "measure_name", "score", "sample", "footnote", "start_date", "end_date"),
@@ -2468,6 +2501,67 @@ GROUP_D1 = (
     ),
 )
 
+
+def hac_row(facility: str, year: str, total: str, reduction: str, **fields: str) -> tuple[tuple[str, str], ...]:
+    """Return one HAC Reduction Program row."""
+    return tuple(({"facility_id": facility, "fiscal_year": year, "total_hac_score": total, "payment_reduction": reduction} | fields).items())
+
+
+def tps_row(score: str, **fields: str) -> tuple[tuple[str, str], ...]:
+    """Return one Hospital VBP Total Performance Score row."""
+    return tuple(({"total_performance_score": score} | fields).items())
+
+
+# D2 [514] to [523]: HAC FY 2021 in an original and a revised file, FY 2024 with PSI-90, a SIR and a repeated hospital; TPS
+# FY 2025 with fiscal_year, the 2018 file in the provider_number layout without it and the 2019 file with the reviewed odd value.
+GROUP_D2 = (
+    Stored(
+        "cms_cc_hac_reduction_program_hospital",
+        "ha1",
+        "2021-04-28",
+        "FY_2021_HAC_Reduction_Program_Hospital.csv",
+        sha("ha1"),
+        2,
+        records=(hac_row("010001", "2021", "5.5", "No"), hac_row("010003", "2021", "N/A", "N/A")),
+    ),
+    Stored(
+        "cms_cc_hac_reduction_program_hospital",
+        "ha2",
+        "2021-07-21",
+        "FY_2021_HAC_Reduction_Program_Hospital.csv",
+        sha("ha2"),
+        1,
+        records=(hac_row("010001", "2021", "5.7", "No"),),
+    ),
+    Stored(
+        "cms_cc_hac_reduction_program_hospital",
+        "ha3",
+        "2024-07-31",
+        "FY_2024_HAC_Reduction_Program_Hospital.csv",
+        sha("ha3"),
+        3,
+        records=(
+            hac_row("010001", "2024", "6.1", "Yes", psi_90_composite_value="1.02", psi_90_w_z_score="0.4", clabsi_sir="0.8"),
+            hac_row("010005", "2024", "4.0", "No"),
+            hac_row("010005", "2024", "4.2", "No"),
+        ),
+    ),
+    Stored(
+        "cms_cc_hvbp_tps",
+        "tp1",
+        "2025-02-19",
+        "hvbp_tps.csv",
+        sha("tp1"),
+        2,
+        records=(
+            tps_row("23.5", fiscal_year="2025", facility_id="010001", unweighted_normalized_safety_domain_score="10", weighted_safety_domain_score="2.5"),
+            tps_row("Not Available", fiscal_year="2025", facility_id="010003"),
+        ),
+    ),
+    Stored("cms_cc_hvbp_tps", "tp0", "2019-03-04", "hvbp_tps_11_09_2018.csv", sha("tp0"), 1, records=(tps_row("38.0", provider_number="010001"),)),
+    Stored("cms_cc_hvbp_tps", "tp9", "2020-01-04", "hvbp_tps_12_09_2019.csv", sha("tp9"), 1, records=(tps_row("24.083333333333(23)", facility_id="010001"),)),
+)
+
 ALZHEIMERS = "Alzheimer's Disease, Related Disorders, or Senile Dementia"
 AMI = "Acute Myocardial Infarction"
 
@@ -2889,6 +2983,7 @@ BASE = (
     *GROUP_C4,
     *GROUP_C5,
     *GROUP_D1,
+    *GROUP_D2,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -3202,6 +3297,18 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
         tuple(with_record(item, bls_row("09", "2023", "M01", "1")) if item.key == "bl1" else item for item in BASE),
         frozenset(),
     ),
+    # [515] A TPS file with neither fiscal_year nor a reviewed year.
+    "tps_undated": (
+        "assert_program_years_dated",
+        (*BASE, Stored("cms_cc_hvbp_tps", "tpx", "2018-01-04", "hvbp_tps_12_01_2017.csv", sha("tpx"), 1, records=(tps_row("37.0", facility_id="010001"),))),
+        frozenset(),
+    ),
+    # [519] A HAC score that is not a number, a token or the reviewed value.
+    "hac_value_uncast": (
+        "assert_validation_values_cast",
+        tuple(with_record(item, hac_row("010007", "2024", "5..5", "No")) if item.key == "ha3" else item for item in BASE),
+        frozenset(),
+    ),
     # [510] A visits score that is neither a number nor a published token.
     "validation_value_uncast": (
         "assert_validation_values_cast",
@@ -3413,6 +3520,10 @@ CREATE TABLE bronze.cms_cc_hospital_readmissions_reduction_program_hospital AS S
     FROM read_csv(
         getvariable('cms_cc_hospital_readmissions_reduction_program_hospital_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"'
     );
+CREATE TABLE bronze.cms_cc_hac_reduction_program_hospital AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_cc_hac_reduction_program_hospital_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_cc_hvbp_tps AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_cc_hvbp_tps_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.cms_cc_maternal_health_hospital AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('cms_cc_maternal_health_hospital_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.cms_cc_hcahps_hospital AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
@@ -3946,6 +4057,20 @@ VALIDATION_SQL = (
 VALIDATION_HOLDS_SQL = (
     "SELECT bronze_table, coalesce(entity_id, ''), coalesce(measure_id, ''), hold_reason, row_count::VARCHAR FROM int_validation_window_holds ORDER BY ALL;"
 )
+PROGRAM_YEARS_SQL = (
+    "SELECT 'hac', ccn, fiscal_year::VARCHAR, coalesce(total_hac_score, ''), coalesce(is_payment_reduced::VARCHAR, ''), "
+    "coalesce(psi_90_value, ''), left(member_sha256, 3) FROM int_hac_program_years "
+    "UNION ALL SELECT 'vbp', ccn, fiscal_year::VARCHAR, coalesce(total_performance_score, ''), '', '', left(member_sha256, 3) "
+    "FROM int_vbp_program_years ORDER BY ALL;"
+)
+PROGRAM_VALUES_SQL = (
+    "SELECT measure_control, ccn, fiscal_year::VARCHAR, field, coalesce(value_text, ''), coalesce(value_number::VARCHAR, '') "
+    "FROM int_validation_program_values ORDER BY ALL;"
+)
+PROGRAM_HOLDS_SQL = (
+    "SELECT bronze_table, coalesce(ccn, ''), coalesce(fiscal_year::VARCHAR, ''), hold_reason, row_count::VARCHAR "
+    "FROM int_validation_program_holds ORDER BY ALL;"
+)
 MMD_SQL = (
     "SELECT measure_control, coalesce(file_control, ''), data_year::VARCHAR, geography_level, coalesce(county_fips, ''), coalesce(state_fips, ''), "
     "coalesce(value_number::VARCHAR, ''), value_unit, denominator_band, is_possible_suppression::VARCHAR, is_unknown_county::VARCHAR, "
@@ -4139,6 +4264,9 @@ def read_models(case: str) -> dict[str, Any]:
         "d1_windows": [tuple(row) for row in duckdb_csv(database, D1_WINDOWS_SQL)],
         "validation": [tuple(row) for row in duckdb_csv(database, VALIDATION_SQL)],
         "validation_holds": [tuple(row) for row in duckdb_csv(database, VALIDATION_HOLDS_SQL)],
+        "program_years": [tuple(row) for row in duckdb_csv(database, PROGRAM_YEARS_SQL)],
+        "program_values": [tuple(row) for row in duckdb_csv(database, PROGRAM_VALUES_SQL)],
+        "program_holds": [tuple(row) for row in duckdb_csv(database, PROGRAM_HOLDS_SQL)],
         "hpsa": [tuple(row) for row in duckdb_csv(database, HPSA_SQL)],
         "mua": [tuple(row) for row in duckdb_csv(database, MUA_SQL)],
         "occmix_holds": [
@@ -4525,6 +4653,46 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("cms_cc_complications_and_deaths_hospital", "010001", "MORT_30_HF", "repeated_in_file", "2")
     ]
     checks["validation_seed_matches_registry"] = validation_seed_matches()
+    return checks
+
+
+def program_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's D2 program-year models with their expected rows [514] to [520]."""
+    checks: dict[str, bool] = {}
+    # [514] [515] [516] [518] The revised FY 2021 file wins for 010001, the original keeps 010003; the older TPS files get their
+    # reviewed years; Yes/No typed; PSI-90 from either column name; the repeated FY 2024 hospital is held.
+    checks["program_years_match_expected"] = base.get("program_years") == sorted(
+        [
+            ("hac", "010001", "2021", "5.7", "false", "", "ha2"),
+            ("hac", "010003", "2021", "N/A", "", "", "ha1"),
+            ("hac", "010001", "2024", "6.1", "true", "1.02", "ha3"),
+            ("vbp", "010001", "2019", "38.0", "", "", "tp0"),
+            ("vbp", "010001", "2020", "24.083333333333(23)", "", "", "tp9"),
+            ("vbp", "010001", "2025", "23.5", "", "", "tp1"),
+            ("vbp", "010003", "2025", "Not Available", "", "", "tp1"),
+        ]
+    )
+    # [519] [520] Named fields only; the reviewed odd value and tokens stay text; C288.payment_adjustment has no rows.
+    checks["program_values_match_expected"] = base.get("program_values") == sorted(
+        [
+            ("C285", "010001", "2021", "payment_reduction", "No", ""),
+            ("C285", "010003", "2021", "payment_reduction", "N/A", ""),
+            ("C285", "010001", "2024", "payment_reduction", "Yes", ""),
+            ("C286", "010001", "2021", "total_hac_score", "5.7", "5.7"),
+            ("C286", "010003", "2021", "total_hac_score", "N/A", ""),
+            ("C286", "010001", "2024", "total_hac_score", "6.1", "6.1"),
+            ("C287", "010001", "2025", "unweighted_normalized_safety_domain_score", "10", "10.0"),
+            ("C287", "010001", "2025", "weighted_safety_domain_score", "2.5", "2.5"),
+            *(
+                (control, "010001", year, "total_performance_score", text, number)
+                for control in ("C288", "C288.total_performance")
+                for year, text, number in (("2019", "38.0", "38.0"), ("2020", "24.083333333333(23)", ""), ("2025", "23.5", "23.5"))
+            ),
+            ("C288", "010003", "2025", "total_performance_score", "Not Available", ""),
+            ("C288.total_performance", "010003", "2025", "total_performance_score", "Not Available", ""),
+        ]
+    )
+    checks["program_holds_match_expected"] = base.get("program_holds") == [("cms_cc_hac_reduction_program_hospital", "010005", "2024", "repeated_in_file", "2")]
     return checks
 
 
@@ -5031,6 +5199,7 @@ def fixture_scenarios() -> dict[str, bool]:
     checks.update(county_health_checks(base))
     checks.update(shortage_checks(base))
     checks.update(validation_checks(base))
+    checks.update(program_checks(base))
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -5238,23 +5407,34 @@ def validation_seed_matches() -> bool:
     registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
     sources = {source["source_id"]: source for source in registry["sources"]}
     controls = {control["id"]: control for control in registry["measure_controls"]}
-    parents = {control for name in ("care-hrrp-cms", "care-visits-cms", "care-deaths-cms", "PSI90", "PSI13") for control in sources[name]["linked_measure_ids"]}
+    names = ("care-hrrp-cms", "care-visits-cms", "care-deaths-cms", "PSI90", "PSI13", "care-hac-cms", "care-vbp-cms")
+    parents = {control for name in names for control in sources[name]["linked_measure_ids"]}
     expected = parents | {name for name, control in controls.items() if control.get("parent_id") in parents}
     seed = REPO_ROOT / "dbt/seeds/validation_measures.csv"
     if not seed.exists():
         return False
     with seed.open(newline="") as handle:
         rows = list(csv.DictReader(handle))
-    fields = {name: controls[name]["preserved_controls"]["current_exact_field"] for name in expected}
+    # A field is named when it appears in its control's exact field, or its parent's for a child without one (C288 children)
+    # [520]; underscores compare as spaces and case is ignored.
+    fields = {
+        name: (
+            controls[name]["preserved_controls"].get("current_exact_field")
+            or controls[controls[name]["parent_id"]]["preserved_controls"]["current_exact_field"]
+        )
+        .lower()
+        .replace("_", " ")
+        for name in expected
+    }
     children_ids = {row["measure_control"]: row["source_measure_id"] for row in rows if controls[row["measure_control"]].get("parent_id") in parents}
     named = all(
-        (row["source_measure_id"] in fields[row["measure_control"]])
+        (row["source_measure_id"].lower().replace("_", " ") in fields[row["measure_control"]])
         or (row["measure_control"] in parents and row["source_measure_id"] in children_ids.values())
         for row in rows
         if row["source_measure_id"]
     )
-    unmapped = {row["measure_control"] for row in rows if not row["source_measure_id"]} == {"E038", "E039"}
-    decisions = all(row["review_decision"] == controls[row["measure_control"]]["preserved_controls"]["current_review_decision"] for row in rows)
+    unmapped = {row["measure_control"] for row in rows if not row["source_measure_id"]} == {"E038", "E039", "C288.payment_adjustment"}
+    decisions = all(row["review_decision"] == (controls[row["measure_control"]]["preserved_controls"]["current_review_decision"] or "") for row in rows)
     return {row["measure_control"] for row in rows} == expected and named and unmapped and decisions
 
 
@@ -5311,6 +5491,11 @@ GEOGRAPHY_FINGERPRINTS = {
         "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY window_key)) FROM int_cc_complications_deaths_windows AS t;"
     ),
     "int_cc_hrrp_windows": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY window_key)) FROM int_cc_hrrp_windows AS t;",
+    "int_hac_program_years": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY program_key)) FROM int_hac_program_years AS t;",
+    "int_vbp_program_years": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY program_key)) FROM int_vbp_program_years AS t;",
+    "int_validation_program_values": (
+        "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY program_value_key)) FROM int_validation_program_values AS t;"
+    ),
     "int_validation_measure_windows": (
         "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY validation_key)) FROM int_validation_measure_windows AS t;"
     ),
@@ -5510,6 +5695,26 @@ SELECT usable.t, count(*)::VARCHAR, (SELECT count(*) FROM w WHERE w.t = usable.t
 FROM usable GROUP BY usable.t ORDER BY 1;"""
 
 
+# Every distinct usable hospital and fiscal year of a D2 table is a program-year row or held, never both and never neither [523].
+D2_KEYS_SQL = """WITH keys AS (
+    SELECT DISTINCT 'cms_cc_hac_reduction_program_hospital' AS t, trim(facility_id) AS c, try_cast(trim(fiscal_year) AS INTEGER) AS y
+    FROM stg_cms_cc_hac_reduction_program_hospital WHERE NOT is_label_held
+    UNION ALL
+    SELECT DISTINCT 'cms_cc_hvbp_tps', trim(coalesce(facility_id, provider_number)),
+        coalesce(try_cast(trim(stg.fiscal_year) AS INTEGER), seed.fiscal_year)
+    FROM stg_cms_cc_hvbp_tps AS stg LEFT JOIN vbp_file_fiscal_years AS seed ON stg._member_path = seed.file_name WHERE NOT stg.is_label_held
+),
+usable AS (SELECT * FROM keys WHERE nullif(c, '') IS NOT NULL AND y IS NOT NULL),
+p AS (
+    SELECT 'cms_cc_hac_reduction_program_hospital' AS t, ccn AS c, fiscal_year AS y FROM int_hac_program_years
+    UNION ALL SELECT 'cms_cc_hvbp_tps', ccn, fiscal_year FROM int_vbp_program_years
+),
+h AS (SELECT bronze_table AS t, ccn AS c, fiscal_year AS y FROM int_validation_program_holds WHERE fiscal_year IS NOT NULL)
+SELECT usable.t, count(*)::VARCHAR, (SELECT count(*) FROM p WHERE p.t = usable.t)::VARCHAR, (SELECT count(*) FROM h WHERE h.t = usable.t)::VARCHAR,
+    (SELECT count(*) FROM p INNER JOIN h USING (t, c, y) WHERE p.t = usable.t)::VARCHAR
+FROM usable GROUP BY usable.t ORDER BY 1;"""
+
+
 def validation_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real D1 windows with their staging views' window keys; count rows per control [511] [513]."""
     checks: dict[str, bool] = {}
@@ -5517,6 +5722,12 @@ def validation_real(database: str, init: str) -> dict[str, Any]:
     for table, keys, windows, held, both in duckdb_csv(database, D1_KEYS_SQL, init):
         counts[table] = {"window_keys": int(keys), "windows": int(windows), "held_windows": int(held), "both": int(both)}
         checks[f"validation_{table}_keys_reconcile"] = int(keys) == int(windows) + int(held) and int(both) == 0 and int(windows) > 0
+    for table, keys, rows, held, both in duckdb_csv(database, D2_KEYS_SQL, init):
+        counts[table] = {"hospital_years": int(keys), "rows": int(rows), "held": int(held), "both": int(both)}
+        checks[f"validation_{table}_years_reconcile"] = int(keys) == int(rows) + int(held) and int(both) == 0 and int(rows) > 0
+    counts["program_rows_per_control"] = dict(
+        duckdb_csv(database, "SELECT measure_control, count(*)::VARCHAR FROM int_validation_program_values GROUP BY 1 ORDER BY 1;", init)
+    )
     counts["rows_per_control"] = dict(
         duckdb_csv(database, "SELECT measure_control, count(*)::VARCHAR FROM int_validation_measure_windows GROUP BY 1 ORDER BY 1;", init)
     )

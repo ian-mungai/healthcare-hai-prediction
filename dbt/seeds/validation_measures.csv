@@ -1,4 +1,11 @@
 measure_control,family,source_model,source_measure_id,value_column,review_decision
+C285,care-hac-cms,int_hac_program_years,payment_reduction,payment_reduction,comparison_only
+C286,care-hac-cms,int_hac_program_years,total_hac_score,total_hac_score,exclude_primary
+C287,care-vbp-cms,int_vbp_program_years,unweighted_normalized_safety_domain_score,unweighted_normalized_safety_domain_score,exclude_primary
+C287,care-vbp-cms,int_vbp_program_years,weighted_safety_domain_score,weighted_safety_domain_score,exclude_primary
+C288,care-vbp-cms,int_vbp_program_years,total_performance_score,total_performance_score,exclude_primary
+C288.payment_adjustment,care-vbp-cms,int_vbp_program_years,,,
+C288.total_performance,care-vbp-cms,int_vbp_program_years,total_performance_score,total_performance_score,
 C289,S32,int_cc_hrrp_windows,READM-30-AMI-HRRP,excess_readmission_ratio,comparison_only
 C289,S32,int_cc_hrrp_windows,READM-30-CABG-HRRP,excess_readmission_ratio,comparison_only
 C289,S32,int_cc_hrrp_windows,READM-30-COPD-HRRP,excess_readmission_ratio,comparison_only

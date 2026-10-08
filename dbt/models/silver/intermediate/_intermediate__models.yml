@@ -1185,3 +1185,46 @@ models:
       - name: measure_control
         description: Registry control identifier.
         data_tests: [not_null]
+
+  - name: int_hac_program_years
+    description: >
+      HAC Reduction Program per hospital and fiscal year from the latest release: payment reduction (Yes/No typed), Total HAC
+      Score, PSI-90 under either published name and the domain z-scores. The republished HAI SIRs are not staged.
+      C285 comparison_only, C286 exclude_primary; validation only.
+    columns:
+      - name: program_key
+        description: Hospital and fiscal year.
+        data_tests: [unique, not_null]
+
+  - name: int_vbp_program_years
+    description: >
+      Hospital VBP Total Performance Score and safety domain scores per hospital and program fiscal year from the latest
+      release; three older files take their reviewed year from vbp_file_fiscal_years. C287 and C288 exclude_primary;
+      validation only.
+    columns:
+      - name: program_key
+        description: Hospital and fiscal year.
+        data_tests: [unique, not_null]
+
+  - name: int_validation_program_holds
+    description: HAC Reduction and VBP rows the program-year models leave out, with the reason and row count.
+    columns:
+      - name: hold_reason
+        description: no_key, no_fiscal_year, label_held, undated_release, same_date_conflict or repeated_in_file.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [no_key, no_fiscal_year, label_held, undated_release, same_date_conflict, repeated_in_file]
+
+  - name: int_validation_program_values
+    description: >
+      HAC Reduction and VBP registry controls per field, hospital and program fiscal year, from the fields
+      validation_measures names; tokens and the reviewed odd value stay text with a null number.
+    columns:
+      - name: program_value_key
+        description: Control, field, hospital and fiscal year.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests: [not_null]

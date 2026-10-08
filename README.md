@@ -292,6 +292,13 @@ renamed IDs such as `OP-32` and the PSI-90 and PSI-13 controls (E038, E039), whi
 (`int_validation_measure_windows`). `Not Available`, `Not Applicable`, `N/A` and `Too Few to Report` stay text. These
 tables are for validation only; none is a predictor.
 
+The HAC Reduction Program (`int_hac_program_years`) and Hospital VBP Total Performance Score (`int_vbp_program_years`)
+are staged per hospital and program fiscal year from the latest release, so a revised file replaces the original. The
+HAC model keeps the payment reduction, Total HAC Score, PSI-90 and domain z-scores; the HAI SIRs that file republishes
+are not staged, so the outcome comes only from the HAI windows. Three older VBP files publish no fiscal year and take a
+reviewed year from `dbt/seeds/vbp_file_fiscal_years.csv`, whose evidence is the published national average score. The
+registry controls (C285 to C288) are in `int_validation_program_values`; all are comparison_only or exclude_primary.
+
 The dbt packages
 (dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
 publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
@@ -681,7 +688,7 @@ tables, the geography tables (HUD ZIP-to-county, county adjacency, RUCC, RUCA an
 tables, SAIPE, SAHIE, BLS, PLACES, Medicare Geographic Variation, WONDER, MMD and the HRSA HPSA and MUA files. It types the
 HAI and Care Compare windows, the geography files, the ACS, SVI, SAIPE, SAHIE, BLS, PLACES, geographic variation, WONDER
 and MMD values, the HPSA and MUA designations, the group D validation windows (unplanned visits, complications and
-deaths, readmissions reduction), the occupational-mix surveys, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
+deaths, readmissions reduction) and HAC Reduction and VBP program years, the occupational-mix surveys, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
 index. The Medicare sepsis share counts only published DRG cells (11 discharges or more), so it can be low for small
 hospitals; the Medicare chronic-condition shares start with data year 2017. Each change-of-ownership release lists
 events back to 2016, so one event appears once per release until the alignment step chooses one. An enrollment or
