@@ -7,7 +7,7 @@ Run from the repository root with read-only S3 access and the local acquisition 
 
 Each loaded POS file's period is the temporal coverage the data.cms.gov catalog gave its distribution, as the
 acquisition job plan recorded it; file names are never parsed. A loaded file whose release has no recorded coverage
-stops the run. Failure modes: data/lakehouse_planning/hospital_spine_20261005/failure_modes.md.
+stops the run. Failure modes: plans/hospital_spine_20261005/failure_modes.md.
 """
 
 from __future__ import annotations

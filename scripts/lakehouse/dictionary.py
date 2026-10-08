@@ -12,7 +12,7 @@ labels and label rows, or the publisher's data dictionary loaded as PDF, CSV, Ex
 bronze format defines the column, the published type where the dictionary gives one, the files that carry it, the
 release range when releases are dates, and its rows, nulls and empty values counted only within those files. Lineage
 columns are left out. Each dictionary is replaced whole in one Iceberg commit, so reruns are safe. Failure modes 83 to
-96: data/lakehouse_planning/bronze_dictionary_20261002/failure_modes.md; 97 to 112: publisher_dictionaries_20261002/;
+96: plans/bronze_dictionary_20261002/failure_modes.md; 97 to 112: publisher_dictionaries_20261002/;
 113 to 129: bronze_county_20261002/.
 """
 

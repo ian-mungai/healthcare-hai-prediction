@@ -6,7 +6,7 @@ Run from the repository root; the catalog script starts it inside the Spark cont
 
 Every scenario uses synthetic manifests and files held by an in-memory stand-in for versioned S3 and a throwaway
 local Iceberg catalog under the container's scratch folder, so it never touches S3 or the real catalog. Failure modes
-are in data/lakehouse_planning/bronze_hai_20261002/ (1 to 35), bronze_manifest_20261002/ (36 to 53),
+are in plans/bronze_hai_20261002/ (1 to 35), bronze_manifest_20261002/ (36 to 53),
 bronze_ipps_occmix_20261002/ (68 to 82), bronze_dictionary_20261002/ (83 to 96), publisher_dictionaries_20261002/
 (97 to 112), bronze_county_20261002/ (113 to 131), bronze_remaining_20261003/ (132 to 149) and
 bronze_gaps_20261003/ (150 to 159) and bronze_utf16_20261003/ (194 to 198); numbers in brackets.

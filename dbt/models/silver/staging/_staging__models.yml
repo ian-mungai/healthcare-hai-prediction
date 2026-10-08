@@ -6,7 +6,7 @@ models:
       One row per stored copy in the tables whose copies staging resolves, from bronze.stored_copies, loaded or not:
       the file it holds, where and when it was captured, its publication release and whether it is the copy bronze
       loads. Every capture location stays listed (failure modes 167 to 171,
-      data/lakehouse_planning/staging_dedup_20261003/failure_modes.md; 204 to 209,
+      plans/staging_dedup_20261003/failure_modes.md; 204 to 209,
       data/lakehouse_planning/dedup_20261003/failure_modes.md).
     columns:
       - name: copy_key

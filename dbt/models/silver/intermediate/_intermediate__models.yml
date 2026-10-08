@@ -4,7 +4,7 @@ models:
   - name: int_hai_hospital_windows
     description: >
       One HAI hospital row per entity, measure ID and measurement window, from the file with the latest stored release
-      (BRZ-002; failure modes 230 to 236, data/lakehouse_planning/hai_windows_20261004/failure_modes.md). Windows whose
+      (BRZ-002; failure modes 230 to 236, plans/hai_windows_20261004/failure_modes.md). Windows whose
       latest release holds two rows are held in int_hai_window_holds instead.
     columns:
       - name: window_key
@@ -42,7 +42,7 @@ models:
   - name: int_hai_state_windows
     description: >
       One HAI state row per entity, measure ID and measurement window, from the file with the latest stored release
-      (BRZ-002; failure modes 230 to 236, data/lakehouse_planning/hai_windows_20261004/failure_modes.md). Windows whose
+      (BRZ-002; failure modes 230 to 236, plans/hai_windows_20261004/failure_modes.md). Windows whose
       latest release holds two rows are held in int_hai_window_holds instead.
     columns:
       - name: window_key
@@ -80,7 +80,7 @@ models:
   - name: int_hai_national_windows
     description: >
       One HAI national row per entity, measure ID and measurement window, from the file with the latest stored release
-      (BRZ-002; failure modes 230 to 236, data/lakehouse_planning/hai_windows_20261004/failure_modes.md). Windows whose
+      (BRZ-002; failure modes 230 to 236, plans/hai_windows_20261004/failure_modes.md). Windows whose
       latest release holds two rows are held in int_hai_window_holds instead.
     columns:
       - name: window_key
@@ -145,7 +145,7 @@ models:
   - name: int_pos_hospital_snapshots
     description: >
       One Provider of Services hospital row (category 01) per CCN and snapshot, the snapshot dated by the catalog
-      coverage in the pos_file_periods seed (failure modes 280 to 292, data/lakehouse_planning/hospital_spine_20261005/
+      coverage in the pos_file_periods seed (failure modes 280 to 292, plans/hospital_spine_20261005/
       failure_modes.md). Codes are left-padded, the county is 5-character FIPS from both padded parts, counts, switches
       and dates are typed; values that do not fit their kind are null and fail assert_pos_values_cast. Every hospital
       row stays; the population flags let later models filter.
@@ -338,7 +338,7 @@ models:
     description: >
       One Care Compare timely and effective care row per hospital, measure and measurement window, from the latest stored
       release, by the same window macros as the HAI windows; conflicts are held in int_cc_window_holds (failure modes 318
-      to 322, data/lakehouse_planning/group_b_20261005/failure_modes_b1.md). Values stay as published text.
+      to 322, plans/group_b_20261005/failure_modes_b1.md). Values stay as published text.
     columns:
       - name: window_key
         description: Entity, measure ID, window start and window end.

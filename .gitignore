@@ -25,6 +25,8 @@ htmlcov/
 /docs/issue_register.md
 # The local copy of the project guide is local-only; the agent-instructions bundle holds the source.
 /docs/project_guide.md
+# Plans (analysis, implementation and gap plans) stay local and are never committed (agent-instructions v8.18.0).
+/plans/
 
 # macOS
 .DS_Store

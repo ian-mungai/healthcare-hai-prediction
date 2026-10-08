@@ -518,7 +518,7 @@ seeds:
     description: >
       Reviewed map of the ACS concepts the S18 and S19 controls name: for each concept and loaded vintage, the column that
       carries it and the label that column must publish, or a hold with its reason. Built by
-      data/lakehouse_planning/group_c_20261006/c2/build_variable_map.py from the bronze labels (failure modes 420 to 424):
+      plans/group_c_20261006/c2/build_variable_map.py from the bronze labels (failure modes 420 to 424):
       labels must match after only case, Estimate wording, segment order, listed universe segments and dollar year; units
       that change at the 2017 subject-table redesign are held; summary files are matched by column code.
     config:

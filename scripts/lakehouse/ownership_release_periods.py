@@ -8,7 +8,7 @@ Run from the repository root with read-only S3 access and the local acquisition 
 Each loaded file's period and release label are the publisher-stated catalog period its capture receipt records: the
 enrollment and change-of-ownership receipts in the acquisition job folders and the owner receipts in the owners batches.
 File names are never parsed. A loaded file whose release has no recorded period, or two, stops the run. Failure modes:
-data/lakehouse_planning/group_b_20261005/failure_modes_b5a.md.
+plans/group_b_20261005/failure_modes_b5a.md.
 """
 
 from __future__ import annotations

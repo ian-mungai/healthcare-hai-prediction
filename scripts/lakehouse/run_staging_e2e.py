@@ -19,12 +19,12 @@ is not a number.
 The real stage checks that the generators reproduce the committed seeds, builds the models from the catalog twice and
 reconciles them with bronze.
 
-Failure modes: ``data/lakehouse_planning/staging_dedup_20261003/failure_modes.md``,
-``data/lakehouse_planning/staging_families_20261003/failure_modes.md``,
-``data/lakehouse_planning/sheet_selection_20261005/failure_modes.md``,
-``data/lakehouse_planning/hospital_spine_20261005/failure_modes.md``,
-``data/lakehouse_planning/group_b_20261005/failure_modes_b1.md`` to ``failure_modes_b5c.md`` in the same folder,
-``data/lakehouse_planning/group_c_20261006/failure_modes_c1.md``. The report in ``data/e2e/staging/`` holds
+Failure modes: ``plans/staging_dedup_20261003/failure_modes.md``,
+``plans/staging_families_20261003/failure_modes.md``,
+``plans/sheet_selection_20261005/failure_modes.md``,
+``plans/hospital_spine_20261005/failure_modes.md``,
+``plans/group_b_20261005/failure_modes_b1.md`` to ``failure_modes_b5c.md`` in the same folder,
+``plans/group_c_20261006/failure_modes_c1.md``. The report in ``data/e2e/staging/`` holds
 outcomes and counts, never data values or credentials.
 """
 

@@ -15,7 +15,7 @@ lineage back to the manifest and the stored file; ``bronze.column_map`` records 
 variable label, beside its column. After the counts pass, each loaded table's dictionary in ``bronze_dictionary`` is
 rebuilt (``scripts/lakehouse/dictionary.py``). Only S3 and the committed table map are read, so a clean checkout can
 rebuild bronze. A table may declare how its CSV is laid out (delimiter, byte-order mark, label row, preamble, unnamed
-headers) and narrow its files by capture with a snapshot pattern. Failure modes: data/lakehouse_planning/
+headers) and narrow its files by capture with a snapshot pattern. Failure modes: plans/
 bronze_hai_20261002/, bronze_manifest_20261002/ and bronze_county_20261002/.
 """
 

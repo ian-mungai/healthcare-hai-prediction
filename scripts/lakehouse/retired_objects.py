@@ -8,7 +8,7 @@ An object is listed only when the collection's manifests name it, S3 holds no ve
 an executed deletion record verified its removal with the same key, version ID and SHA-256 [149]. A missing object
 without such a record stops the build, so storage loss is never listed as retired. Each run rebuilds the list from
 scratch, so an object restored to S3 drops off it. The list holds keys, version IDs and checksums only. Failure modes
-146 to 149: data/lakehouse_planning/bronze_remaining_20261003/failure_modes.md.
+146 to 149: plans/bronze_remaining_20261003/failure_modes.md.
 """
 
 from __future__ import annotations

@@ -10,7 +10,7 @@ condition code, menu label and geography of every condition: 79 in the first pla
 C258.81 in the second. Each plan must match the SHA-256 the acquisition code pins. A control's unit is a rate per 100,000
 where the registry's exact field says so, otherwise a percentage. A label in two controls, a control twice or a control
 missing from the registry and its additions stops the run. Failure modes:
-data/lakehouse_planning/group_c_20261006/failure_modes_c5.md.
+plans/group_c_20261006/failure_modes_c5.md.
 """
 
 from __future__ import annotations

@@ -13,7 +13,7 @@ Mac cap is skipped once the Docker VM already holds all of Docker's memory (bund
 It is rounded down to whole gigabytes for DuckDB (GB) and whole gibibytes for Spark (g), whose heap also leaves room for
 the JVM. A budget below the floor, an unreadable Docker or an
 unknown size unit stops with the figures instead of falling back to a fixed value. Failure modes:
-data/lakehouse_planning/group_c_20261006/failure_modes_c4.md and data/lakehouse_planning/spark_memory_20261008/failure_modes.md.
+plans/group_c_20261006/failure_modes_c4.md and plans/spark_memory_20261008/failure_modes.md.
 """
 
 from __future__ import annotations

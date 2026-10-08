@@ -5,7 +5,7 @@ never values. Nothing is interpreted: text keeps every line with its terminator,
 as text with its cell type, and SAS keeps each variable's values as text. Splitting, typing and matching happen in
 staging. PDFs keep every table row and text line pdfplumber reads, with the reader's version. CSV documents keep each
 row's cells, Census-style JSON variable lists keep each variable's attributes, and Word documents keep each
-paragraph and table row's text. Failure modes 68 to 80: data/lakehouse_planning/bronze_ipps_occmix_20261002/failure_modes.md;
+paragraph and table row's text. Failure modes 68 to 80: plans/bronze_ipps_occmix_20261002/failure_modes.md;
 97 to 110: publisher_dictionaries_20261002/; 113 to 129: bronze_county_20261002/; 132 to 134: bronze_remaining_20261003/.
 """
 

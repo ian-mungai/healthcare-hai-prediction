@@ -15,7 +15,7 @@ from its receipt. SAIPE, SAHIE and MMD files take the year in their publisher fi
 sahie_2023.csv, mmd_ffs_county_c258_02_prevalence_2023.csv); the one MMD file named mmd_data.csv takes its reviewed year.
 A BLS capture takes its capture date, the revision vintage of the series it holds, and an HPSA or MUA capture its capture
 date, the day its statuses are as of. A loaded file with no period or vintage, or with two, stops the run. Failure modes:
-data/lakehouse_planning/group_c_20261006/failure_modes_c1.md to failure_modes_c5.md.
+plans/group_c_20261006/failure_modes_c1.md to failure_modes_c5.md.
 """
 
 from __future__ import annotations

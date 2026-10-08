@@ -9,7 +9,7 @@ Every loaded object in the five IPPS and occupational-mix bronze tables gets a r
 year for CMI files, an identity year and a rule stage. They are read from the file's own name, then its archive chain,
 then the container the S3 manifest says it was extracted from, never from capture time [178]. A name with no year
 stops the run unless a committed override covers it [179]. Twins are a text file and a workbook in one snapshot with
-the same stem [183]. Failure modes: data/lakehouse_planning/staging_families_20261003/failure_modes.md.
+the same stem [183]. Failure modes: plans/staging_families_20261003/failure_modes.md.
 """
 
 from __future__ import annotations

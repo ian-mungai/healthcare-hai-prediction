@@ -9,7 +9,7 @@ names) and current captures (`cms_<socrata id>`, `<id>_<date>_<family>.csv` or b
 assigned to one family by normalizing its file names: the ID and date prefix, release dates, fiscal years, reporting
 periods and edition words are not part of the family [155]. Every family becomes one table selected by its dataset IDs;
 datasets an existing table already selects and excluded datasets get none [156] [157]. Failure modes 150 to 159:
-data/lakehouse_planning/bronze_gaps_20261003/failure_modes.md.
+plans/bronze_gaps_20261003/failure_modes.md.
 """
 
 from __future__ import annotations

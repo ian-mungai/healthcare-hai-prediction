@@ -245,7 +245,7 @@ Without `--execute` each command validates its list offline and reports no pendi
 - **Mapped at staging:** the IPPS layouts.
 - **Not published:** no dictionary was found for ONC Promoting Interoperability or the Illinois hospital report card.
 
-The full list is in `data/lakehouse_planning/publisher_dictionaries_20261002/inventory.md`.
+The full list is in `plans/publisher_dictionaries_20261002/inventory.md`.
 
 ## Storage Changes After Collection
 
