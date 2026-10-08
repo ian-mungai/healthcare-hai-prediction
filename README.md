@@ -313,8 +313,12 @@ The alignment stage lines each staged source up with the hospital-year spine as 
 `int_spine_hai_outcomes` (step AL1) has one row per spine hospital-window and infection type (HAI_1 CLABSI to HAI_6
 C. difficile): the published SIR, its bounds, the observed and predicted counts and the exposure, by exact measure ID,
 with tokens kept as text and the SIR footnote codes. No SIR is computed from the counts. A part from a release after the
-last 2015-baseline review (August 13 2026) is held and counted, so 2022-baseline SIRs never join the series. Each type
-stays separate; the model target is chosen before training.
+last 2015-baseline review (August 13 2026) is held and counted, so 2022-baseline SIRs never join the series; a part
+held in staging is counted too. Each row has an alignment status (aligned, held_in_staging, not_in_source), every part's
+footnote and the SIR's national benchmark category, which `int_hai_hospital_windows` now keeps as published. Each type
+stays separate; the model target is chosen before training. `int_hai_outcome_values` carries the registry's HAI controls
+(C269 to C283 and C283's children) by the part `dbt/seeds/hai_outcome_measures.csv` names: C269 to C274 as target
+candidates and C275 to C280, the same SIRs, as earlier-outcome forecasting candidates.
 
 Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
 visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the

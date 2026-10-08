@@ -1148,21 +1148,23 @@ HAI_SPINE = (
 HAI_OUTCOME = (
     "070001|HAI_1_CILOWER|01/01/2021|12/31/2021|0.5",
     "070001|HAI_1_CIUPPER|01/01/2021|12/31/2021|1.5",
-    "070001|HAI_1_NUMERATOR|01/01/2021|12/31/2021|9",
+    "070001|HAI_1_NUMERATOR|01/01/2021|12/31/2021|9|3",
     "070001|HAI_1_ELIGCASES|01/01/2021|12/31/2021|10.000",
     "070001|HAI_1_DOPC|01/01/2021|12/31/2021|1000",
-    "070001|HAI_2_SIR|01/01/2021|12/31/2021|Not Available|13 - Results cannot be calculated for this reporting period.",
+    "070001|HAI_2_SIR|01/01/2021|12/31/2021|Not Available|13 - Results cannot be calculated for this reporting period.|Not Available",
     "070001|HAI_2_CILOWER|01/01/2021|12/31/2021|Not Available|13",
     "070001|HAI_2_CIUPPER|01/01/2021|12/31/2021|Not Available|13",
     "070001|HAI_2_NUMERATOR|01/01/2021|12/31/2021|0",
     "070001|HAI_2_ELIGCASES|01/01/2021|12/31/2021|0.412",
     "070001|HAI_2_DOPC|01/01/2021|12/31/2021|800",
-    "070001|HAI_3_SIR|01/01/2021|12/31/2021|--|3, 13",
+    "070001|HAI_3_SIR|01/01/2021|12/31/2021|--|3, 13|No Different than National Benchmark",
     "070001|HAI_6_SIR|01/01/2021|12/31/2021|N/A|12",
 )
 GROUP_AL1 = (
     Stored("cms_hai_hospital", "h09", "2022-06-01", "HAI_Outcome_Fixture.csv", sha("a7"), len(HAI_OUTCOME), content=HAI_OUTCOME),
     Stored("cms_hai_hospital", "h10", "2026-09-01", "HAI_Late_Fixture.csv", sha("a8"), 1, content=("210001|HAI_5_SIR|01/01/2021|12/31/2021|0.7",)),
+    Stored("cms_hai_hospital", "h11", "2022-06-01", "HAI_Conflict_A.csv", sha("a9"), 1, content=("990001|HAI_4_SIR|01/01/2021|12/31/2021|0.4",)),
+    Stored("cms_hai_hospital", "h12", "2022-06-01", "HAI_Conflict_B.csv", sha("b9"), 1, content=("990001|HAI_4_SIR|01/01/2021|12/31/2021|0.6",)),
 )
 # Each POS file's catalog coverage, as the period seed gives it [280].
 POS_PERIODS = {"pa": ("2018-10-01", "2018-12-31"), "pb": ("2019-01-01", "2019-03-31"), "pc": ("2020-10-01", "2020-12-31")}
@@ -3393,7 +3395,7 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
                 "HAI_Bad_Bounds.csv",
                 sha("ax3"),
                 2,
-                content=("990001|HAI_4_SIR|01/01/2021|12/31/2021|1.000", "990001|HAI_4_CILOWER|01/01/2021|12/31/2021|1.200"),
+                content=("990001|HAI_5_SIR|01/01/2021|12/31/2021|1.000", "990001|HAI_5_CILOWER|01/01/2021|12/31/2021|1.200"),
             ),
         ),
         frozenset(),
@@ -3559,6 +3561,7 @@ FIXTURE_COLUMNS = (
     "score",
     "footnote",
     "measure_name",
+    "compared_to_national",
 )
 # Splits the fixture CSV (path in the fixture_csv variable) into the bronze tables; fixed text, never built from values.
 FIXTURE_SQL = """CREATE SCHEMA bronze;
@@ -3786,18 +3789,32 @@ def fixture_csv(objects: Iterable[Stored]) -> str:
             text = item.content[row - 1] if item.content else value
             sheet, _, cells = text.partition(":") if item.table in SHEET_TABLES and item.content else ("Sheet1", "", value)
             # HAI content fills the HAI columns under the newer layout's names; empty parts stay null. A sixth field is the
-            # footnote [555].
-            hai = {"facility_id": "", "state": "", "measure_id": "", "start_date": "", "end_date": "", "score": "", "footnote": ""}
+            # footnote, a seventh the national comparison [555] [563].
+            hai = {"facility_id": "", "state": "", "measure_id": "", "start_date": "", "end_date": "", "score": "", "footnote": "", "compared": ""}
             if item.table in HAI_TABLES and item.content:
-                entity, measure, start, end, score, *footnote = text.split("|")
+                entity, measure, start, end, score, *rest = text.split("|")
                 entity_column = HAI_TABLES[item.table]
                 if entity_column:
                     hai[entity_column] = entity
-                hai.update(measure_id=measure, start_date=start, end_date=end, score=score, footnote="".join(footnote))
+                rest = [*rest, "", ""]
+                hai.update(measure_id=measure, start_date=start, end_date=end, score=score, footnote=rest[0], compared=rest[1])
             writer.writerow(
                 (item.table, item.key, "fixture", item.snapshot, "fixture_dataset", item.release, f"fixture/{item.key}.zip", f"v-{item.key}", item.member)
                 + (checksum, row, value, text, sheet, cells)
-                + (hai["facility_id"], "", hai["state"], hai["measure_id"], hai["start_date"], hai["end_date"], "", "", hai["score"], hai["footnote"], "")
+                + (
+                    hai["facility_id"],
+                    "",
+                    hai["state"],
+                    hai["measure_id"],
+                    hai["start_date"],
+                    hai["end_date"],
+                    "",
+                    "",
+                    hai["score"],
+                    hai["footnote"],
+                    "",
+                    hai["compared"],
+                )
             )
     return buffer.getvalue()
 
@@ -4165,6 +4182,18 @@ OUTCOME_SQL = (
     "coalesce(sir_footnote_codes, ''), baseline_held_parts::VARCHAR, is_primary_population::VARCHAR FROM int_spine_hai_outcomes "
     "WHERE published_parts > 0 OR baseline_held_parts > 0 ORDER BY ALL;"
 )
+OUTCOME_STATUS_SQL = (
+    "SELECT ccn, window_year::VARCHAR, hai_type, alignment_status, staging_held_parts::VARCHAR, coalesce(sir_compared_to_national, ''), "
+    "coalesce(observed_footnote, ''), coalesce(ci_lower_footnote, '') FROM int_spine_hai_outcomes "
+    "WHERE alignment_status <> 'aligned' AND alignment_status <> 'not_in_source' OR sir_compared_to_national IS NOT NULL "
+    "OR observed_footnote IS NOT NULL OR ci_lower_footnote IS NOT NULL ORDER BY ALL;"
+)
+OUTCOME_STATUS_COUNT_SQL = "SELECT alignment_status, count(*)::VARCHAR FROM int_spine_hai_outcomes GROUP BY 1 ORDER BY 1;"
+OUTCOME_VALUES_SQL = "SELECT measure_control, count(*)::VARCHAR FROM int_hai_outcome_values GROUP BY 1 ORDER BY 1;"
+OUTCOME_VALUE_ROWS_SQL = (
+    "SELECT measure_control, outcome_key, field, value_text, coalesce(value_number::VARCHAR, ''), coalesce(review_decision, '') "
+    "FROM int_hai_outcome_values WHERE outcome_key = '070001:2021:HAI_2' OR outcome_key = '070001:2021:HAI_3' ORDER BY ALL;"
+)
 OUTCOME_COUNT_SQL = (
     "SELECT (SELECT count(*) FROM int_spine_hai_outcomes)::VARCHAR, (SELECT 6 * count(*) FROM int_hospital_spine)::VARCHAR, "
     "(SELECT count(DISTINCT outcome_key) FROM int_spine_hai_outcomes)::VARCHAR;"
@@ -4397,6 +4426,10 @@ def read_models(case: str) -> dict[str, Any]:
         "program_holds": [tuple(row) for row in duckdb_csv(database, PROGRAM_HOLDS_SQL)],
         "hai_outcomes": [tuple(row) for row in duckdb_csv(database, OUTCOME_SQL)],
         "hai_outcome_counts": [tuple(row) for row in duckdb_csv(database, OUTCOME_COUNT_SQL)],
+        "hai_outcome_status": [tuple(row) for row in duckdb_csv(database, OUTCOME_STATUS_SQL)],
+        "hai_outcome_status_counts": [tuple(row) for row in duckdb_csv(database, OUTCOME_STATUS_COUNT_SQL)],
+        "hai_outcome_values": [tuple(row) for row in duckdb_csv(database, OUTCOME_VALUES_SQL)],
+        "hai_outcome_value_rows": [tuple(row) for row in duckdb_csv(database, OUTCOME_VALUE_ROWS_SQL)],
         "hpsa": [tuple(row) for row in duckdb_csv(database, HPSA_SQL)],
         "mua": [tuple(row) for row in duckdb_csv(database, MUA_SQL)],
         "occmix_holds": [
@@ -4819,7 +4852,89 @@ def outcome_checks(base: dict[str, Any]) -> dict[str, bool]:
     )
     # [550] [556] Six types for every spine hospital-window, each once.
     checks["hai_outcomes_six_per_spine_row"] = base.get("hai_outcome_counts") == [("72", "72", "72")]
+    # [560] to [563] Statuses: the baseline-held and staging-held parts are held, not missing; each part keeps its footnote;
+    # the SIR's national comparison as published.
+    checks["hai_outcome_status_match_expected"] = base.get("hai_outcome_status") == sorted(
+        [
+            ("070001", "2021", "HAI_1", "aligned", "0", "", "3", ""),
+            ("070001", "2021", "HAI_2", "aligned", "0", "Not Available", "", "13"),
+            ("070001", "2021", "HAI_3", "aligned", "0", "No Different than National Benchmark", "", ""),
+            ("210001", "2021", "HAI_5", "held_in_staging", "0", "", "", ""),
+            ("990001", "2021", "HAI_4", "held_in_staging", "1", "", "", ""),
+        ]
+    )
+    checks["hai_outcome_status_counts_match"] = base.get("hai_outcome_status_counts") == [("aligned", "16"), ("held_in_staging", "2"), ("not_in_source", "54")]
+    # [559] Each registry control from its exact part: the SIR twice (target and earlier-outcome candidates), the counts, the
+    # bounds and the benchmark category under C283 and its children; only published values.
+    checks["hai_outcome_values_per_control"] = base.get("hai_outcome_values") == [
+        ("C269", "12"),
+        ("C270", "2"),
+        ("C271", "1"),
+        ("C274", "1"),
+        ("C275", "12"),
+        ("C276", "2"),
+        ("C277", "1"),
+        ("C280", "1"),
+        ("C281", "2"),
+        ("C282", "2"),
+        ("C283", "6"),
+        ("C283.benchmark_category", "2"),
+        ("C283.lower_limits", "2"),
+        ("C283.upper_limits", "2"),
+    ]
+    checks["hai_outcome_value_rows_match_expected"] = base.get("hai_outcome_value_rows") == sorted(
+        [
+            ("C270", "070001:2021:HAI_2", "sir", "Not Available", "", ""),
+            ("C276", "070001:2021:HAI_2", "sir", "Not Available", "", ""),
+            ("C281", "070001:2021:HAI_2", "observed", "0", "0.0", "exclude_primary"),
+            ("C282", "070001:2021:HAI_2", "predicted", "0.412", "0.412", "exclude_primary"),
+            ("C283", "070001:2021:HAI_2", "ci_lower", "Not Available", "", "exclude_primary"),
+            ("C283", "070001:2021:HAI_2", "ci_upper", "Not Available", "", "exclude_primary"),
+            ("C283", "070001:2021:HAI_2", "sir_compared_to_national", "Not Available", "", "exclude_primary"),
+            ("C283.lower_limits", "070001:2021:HAI_2", "ci_lower", "Not Available", "", ""),
+            ("C283.upper_limits", "070001:2021:HAI_2", "ci_upper", "Not Available", "", ""),
+            ("C283.benchmark_category", "070001:2021:HAI_2", "sir_compared_to_national", "Not Available", "", ""),
+            ("C271", "070001:2021:HAI_3", "sir", "--", "", ""),
+            ("C277", "070001:2021:HAI_3", "sir", "--", "", ""),
+            ("C283", "070001:2021:HAI_3", "sir_compared_to_national", "No Different than National Benchmark", "", "exclude_primary"),
+            ("C283.benchmark_category", "070001:2021:HAI_3", "sir_compared_to_national", "No Different than National Benchmark", "", ""),
+        ]
+    )
+    checks["hai_outcome_seed_matches_registry"] = hai_outcome_seed_matches()
     return checks
+
+
+def hai_outcome_seed_matches() -> bool:
+    """Check the HAI outcome seed against the registry: every control of source main-hai-pdc and each C283 child once per
+    type and part, each part named in its control's exact field (a child takes its parent's), decisions as recorded [559]."""
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    sources = {source["source_id"]: source for source in registry["sources"]}
+    controls = {control["id"]: control for control in registry["measure_controls"]}
+    parents = set(sources["main-hai-pdc"]["linked_measure_ids"])
+    expected = parents | {name for name, control in controls.items() if control.get("parent_id") in parents}
+    seed = REPO_ROOT / "dbt/seeds/hai_outcome_measures.csv"
+    if not seed.exists():
+        return False
+    with seed.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    if {row["measure_control"] for row in rows} != expected or len({(row["measure_control"], row["hai_type"], row["part"]) for row in rows}) != len(rows):
+        return False
+    for row in rows:
+        control = controls[row["measure_control"]]
+        field = (
+            control["preserved_controls"].get("current_exact_field") or controls[control["parent_id"]]["preserved_controls"]["current_exact_field"]
+        ).lower()
+        # A field names one type (HAI_1_SIR) or every type (HAI_1_... through HAI_6_...).
+        types = {f"HAI_{n}" for n in range(1, 7)} if " through " in field else {f"HAI_{n}" for n in re.findall(r"hai_(\d)_", field)}
+        part = "compared_to_national" if row["part"] == "COMPARED" else row["part"].lower()
+        if row["hai_type"] not in types or part not in field:
+            return False
+        if row["review_decision"] != (control["preserved_controls"].get("current_review_decision") or ""):
+            return False
+        if row["original_decision"] != (control["preserved_controls"].get("original_decision") or ""):
+            return False
+    per_control = {name: sum(row["measure_control"] == name for row in rows) for name in expected}
+    return all(count == {"C283": 18}.get(name, 6 if name.startswith(("C281", "C282", "C283")) else 1) for name, count in per_control.items())
 
 
 def program_checks(base: dict[str, Any]) -> dict[str, bool]:
@@ -4977,6 +5092,7 @@ def fixture_scenarios() -> dict[str, bool]:
         ("cms_hai_hospital", "", "", "no_key", "1"),
         ("cms_hai_hospital", "010003", "HAI_1_SIR", "same_date_conflict", "2"),
         ("cms_hai_hospital", "010004", "HAI_1_SIR", "unparsed_date", "1"),
+        ("cms_hai_hospital", "990001", "HAI_4_SIR", "same_date_conflict", "2"),
     ]
     # [280] to [292] Hospital rows only, one per CCN and period; padded codes, 5-character counties, typed counts and
     # switches, dates, and the population flags.
@@ -5916,7 +6032,7 @@ FROM usable GROUP BY usable.t ORDER BY 1;"""
 # AL1 reconciliation [549] to [556]: outcome rows against the spine, and published and held SIRs counted independently
 # from the calendar-year HAI windows (release date against the last 2015-baseline review, Aug 13 2026).
 OUTCOME_REAL_SQL = """WITH cal AS (
-    SELECT measure_id, score, release_date FROM int_hai_hospital_windows
+    SELECT measure_id, score, compared_to_national, release_date FROM int_hai_hospital_windows
     WHERE month(window_start) = 1 AND day(window_start) = 1 AND window_end = make_date(year(window_start), 12, 31)
 )
 SELECT 'rows', (SELECT count(*) FROM int_spine_hai_outcomes)::VARCHAR, (SELECT 6 * count(*) FROM int_hospital_spine)::VARCHAR
@@ -5926,7 +6042,15 @@ UNION ALL SELECT 'sirs', (SELECT count(*) FROM int_spine_hai_outcomes WHERE has_
         AND regexp_full_match(trim(score), '-?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?'))::VARCHAR
 UNION ALL SELECT 'held_parts', (SELECT coalesce(sum(baseline_held_parts), 0) FROM int_spine_hai_outcomes)::VARCHAR,
     (SELECT count(*) FROM cal WHERE release_date > DATE '2026-08-13')::VARCHAR
-UNION ALL SELECT 'sir_without_counts', (SELECT count(*) FROM int_spine_hai_outcomes WHERE has_sir AND (observed IS NULL OR predicted IS NULL))::VARCHAR, '0';"""
+UNION ALL SELECT 'sir_without_counts', (SELECT count(*) FROM int_spine_hai_outcomes WHERE has_sir AND (observed IS NULL OR predicted IS NULL))::VARCHAR, '0'
+UNION ALL SELECT 'c269_values', (SELECT count(*) FROM int_hai_outcome_values WHERE measure_control = 'C269')::VARCHAR,
+    (SELECT count(*) FROM cal WHERE measure_id = 'HAI_1_SIR' AND release_date <= DATE '2026-08-13' AND nullif(trim(score), '') IS NOT NULL)::VARCHAR
+UNION ALL SELECT 'benchmark_values', (SELECT count(*) FROM int_hai_outcome_values WHERE measure_control = 'C283.benchmark_category')::VARCHAR,
+    (SELECT count(*) FROM cal WHERE right(measure_id, 4) = '_SIR' AND release_date <= DATE '2026-08-13'
+        AND nullif(trim(compared_to_national), '') IS NOT NULL)::VARCHAR
+UNION ALL SELECT 'staging_held_parts', (SELECT coalesce(sum(staging_held_parts), 0) FROM int_spine_hai_outcomes)::VARCHAR,
+    (SELECT count(DISTINCT entity_id || measure_id || window_start) FROM int_hai_window_holds WHERE bronze_table = 'cms_hai_hospital'
+        AND month(window_start) = 1 AND day(window_start) = 1 AND window_end = make_date(year(window_start), 12, 31))::VARCHAR;"""
 OUTCOME_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY outcome_key)) FROM int_spine_hai_outcomes AS t;"
 
 
@@ -5937,6 +6061,8 @@ def outcome_real(database: str) -> dict[str, Any]:
     for name, model, independent in duckdb_csv(database, OUTCOME_REAL_SQL):
         counts[name] = {"model": int(model), "independent": int(independent)}
         checks[f"outcome_{name}_reconcile"] = model == independent
+    counts["alignment_status"] = dict(duckdb_csv(database, OUTCOME_STATUS_COUNT_SQL))
+    counts["values_per_control"] = dict(duckdb_csv(database, OUTCOME_VALUES_SQL))
     counts["sirs_per_year_type"] = dict(
         duckdb_csv(
             database,

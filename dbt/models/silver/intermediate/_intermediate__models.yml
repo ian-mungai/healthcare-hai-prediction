@@ -1248,3 +1248,21 @@ models:
           - accepted_values:
               arguments:
                 values: ['HAI_1', 'HAI_2', 'HAI_3', 'HAI_4', 'HAI_5', 'HAI_6']
+      - name: alignment_status
+        description: aligned (a part published), held_in_staging (parts held, none published) or not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, held_in_staging, not_in_source]
+  - name: int_hai_outcome_values
+    description: >
+      HAI registry controls (main-hai-pdc and C283's children) per outcome row and field with a published value, from the
+      part hai_outcome_measures names; tokens stay text with a null number. Staging approves no use.
+    columns:
+      - name: outcome_value_key
+        description: Control, field and outcome key.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests: [not_null]

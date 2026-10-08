@@ -732,3 +732,28 @@ seeds:
       - name: evidence
         description: Why the year is right.
         data_tests: [not_null]
+  - name: hai_outcome_measures
+    description: >
+      The registry controls of the HAI outcome source (main-hai-pdc) and C283's children, each with the part its exact field
+      names: C269 to C274 the SIR of one type each (target candidates) and C275 to C280 the same SIRs (earlier-outcome
+      forecasting candidates), C281 observed, C282 predicted, C283 and its children the bounds and the national benchmark
+      category. Decisions are copied from the registry: current (blank where the registry has none) and original. Staging
+      approves no use (failure mode 559).
+    config:
+      column_types:
+        measure_control: varchar
+        hai_type: varchar
+        part: varchar
+        field: varchar
+        review_decision: varchar
+        original_decision: varchar
+    columns:
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests: [not_null]
+      - name: hai_type
+        description: HAI_1 to HAI_6.
+        data_tests: [not_null]
+      - name: field
+        description: The int_spine_hai_outcomes column the part becomes.
+        data_tests: [not_null]
