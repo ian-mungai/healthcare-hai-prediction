@@ -981,14 +981,14 @@ class S3Storage:
 
 def drop_removed_job(config: dict[str, Any]) -> int:
     """Drop the listed removed tables and write a counts-only report."""
-    from scripts.lakehouse.session import JOB_MEMORY, spark_session
+    from scripts.lakehouse.session import job_memory, spark_session
 
     try:
         names = load_removed(REMOVED, config)
     except BronzeError as error:
         sys.stderr.write(f"bronze: {error}\n")
         return 1
-    spark = spark_session("bronze", memory=JOB_MEMORY)
+    spark = spark_session("bronze", memory=job_memory())
     try:
         outcome = drop_removed(spark, names, config["namespace"])
     finally:
@@ -1003,7 +1003,7 @@ def drop_removed_job(config: dict[str, Any]) -> int:
 
 def main() -> int:
     """Load the chosen group or tables into the Polaris catalog and write a counts-only report."""
-    from scripts.lakehouse.session import JOB_MEMORY, spark_session
+    from scripts.lakehouse.session import job_memory, spark_session
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     choice = parser.add_mutually_exclusive_group(required=True)
@@ -1030,7 +1030,7 @@ def main() -> int:
         return 1
     from scripts.lakehouse import dictionary
 
-    spark = spark_session("bronze", memory=JOB_MEMORY)
+    spark = spark_session("bronze", memory=job_memory())
     dictionaries: dict[str, int] = {}
     pruned: dict[str, int] = {}
     copies = 0

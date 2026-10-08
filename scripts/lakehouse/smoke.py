@@ -4,7 +4,7 @@ Run from the repository root; the catalog script starts it inside the Spark cont
 
     .venv/bin/python -m scripts.lakehouse.catalog job smoke
 
-It prints counts only. The scratch table is purged at the end, and a scratch table left by an interrupted run is purged
+It prints counts and the heap it ran with only. The scratch table is purged at the end, and a scratch table left by an interrupted run is purged
 first, so reruns are safe.
 """
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import sys
 
-from scripts.lakehouse.session import spark_session
+from scripts.lakehouse.session import job_memory, spark_session
 
 NAMESPACE = "smoke_check"
 TABLE = f"{NAMESPACE}.round_trip"
@@ -21,7 +21,7 @@ TABLE = f"{NAMESPACE}.round_trip"
 
 def main() -> int:
     """Create, write, read and purge one scratch table, then report what happened."""
-    spark = spark_session("lakehouse-smoke")
+    spark = spark_session("lakehouse-smoke", memory=job_memory())
     spark.sql("DROP TABLE IF EXISTS smoke_check.round_trip PURGE")
     spark.sql("CREATE NAMESPACE IF NOT EXISTS smoke_check")
     spark.sql("CREATE TABLE smoke_check.round_trip (id STRING, facility_id STRING) USING iceberg")
@@ -38,6 +38,8 @@ def main() -> int:
         "location_under_lakehouse": "/lakehouse/" in location,
         "snapshots": snapshots,
         "namespace_removed": NAMESPACE not in remaining,
+        # The heap the job ran with, to compare with the one the launcher computed [486].
+        "driver_memory": spark.conf.get("spark.driver.memory"),
     }
     sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
     spark.stop()

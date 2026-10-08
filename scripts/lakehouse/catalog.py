@@ -31,6 +31,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
+from scripts.lakehouse import memory_budget
 from scripts.process import run_command
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -264,6 +265,17 @@ def job(name: str, job_args: list[str]) -> None:
     elif not COMPOSE_ENV.is_file():
         write_compose_env(deployment())
     isolation = [] if needs_catalog else ["--no-deps"]
+    # Computed now, after Polaris is up, from every running container; the container has no default [486] [489] [490].
+    try:
+        budget = memory_budget.current()
+    except memory_budget.BudgetError as error:
+        raise CatalogError(f"no Spark heap: {error}") from error
+    sys.stdout.write(
+        f"Spark heap {budget.spark_setting}: Docker {budget.total / memory_budget.GIB:.1f} GiB, running containers "
+        f"{budget.used_by_containers / memory_budget.GIB:.1f} GiB, headroom {budget.headroom / memory_budget.GIB:.0f} GiB, "
+        f"Mac {'not capping' if budget.mac_available is None else f'{budget.mac_available / memory_budget.GIB:.1f} GiB available'}\n"
+    )
+    env = {**env, "SPARK_JOB_MEMORY": budget.spark_setting}
     sys.stdout.write(compose("--profile", "job", "run", "--rm", *isolation, "spark", "python", "-m", module, *job_args, env=env))
 
 

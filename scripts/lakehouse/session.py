@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from pyspark.sql import SparkSession
 
 CATALOG = "hai_lakehouse"
-# Heap for the load, dictionary and checksum jobs. Docker Desktop has 24 GB (owner, Oct 2 2026); Polaris and the
-# other containers keep well under 8 GB, which leaves room for this heap plus JVM overhead (failure mode 131).
-JOB_MEMORY = "12g"
+HEAP = re.compile(r"[1-9][0-9]*g")
+
+
+def job_memory() -> str:
+    """Return the heap the host computed for this job from the running containers; there is no default [488].
+
+    ``scripts/lakehouse/catalog.py`` computes it with ``scripts/lakehouse/memory_budget.py`` before the container starts
+    (owner decision, Oct 7 2026: memory is shared by every project's containers and never hardcoded).
+    """
+    value = os.environ.get("SPARK_JOB_MEMORY", "")
+    if not HEAP.fullmatch(value):
+        raise RuntimeError(
+            f"SPARK_JOB_MEMORY is {value!r}, not a whole number of GiB such as 20g; start jobs with "
+            ".venv/bin/python -m scripts.lakehouse.catalog job <name>, which computes it"
+        )
+    return value
 
 
 def spark_session(app_name: str, warehouse: Path | None = None, memory: str = "2g") -> SparkSession:

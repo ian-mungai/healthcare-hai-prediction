@@ -50,13 +50,13 @@ def checksum(spark: Any, table: str) -> dict[str, int]:
 def main() -> int:
     """Print checksums for the named tables, or create or drop the fixture."""
     # Imported here so the host-side E2E can import EDGE_ROWS without PySpark installed.
-    from scripts.lakehouse.session import JOB_MEMORY, spark_session
+    from scripts.lakehouse.session import job_memory, spark_session
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tables", nargs="*", default=[])
     parser.add_argument("--fixture", choices=["create", "drop"])
     args = parser.parse_args()
-    spark = spark_session("bronze-checksums", memory=JOB_MEMORY)
+    spark = spark_session("bronze-checksums", memory=job_memory())
     result: dict[str, Any] = {}
     if args.fixture == "create":
         spark.sql("DROP TABLE IF EXISTS duckdb_view_check.edge_values PURGE")

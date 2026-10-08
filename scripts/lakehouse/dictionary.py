@@ -339,7 +339,7 @@ def build(spark: Any, config: dict[str, Any], names: list[str], namespace: str, 
 
 def main() -> int:
     """Rebuild the chosen dictionaries in the Polaris catalog and print the column counts."""
-    from scripts.lakehouse.session import JOB_MEMORY, spark_session
+    from scripts.lakehouse.session import job_memory, spark_session
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     choice = parser.add_mutually_exclusive_group(required=True)
@@ -348,7 +348,7 @@ def main() -> int:
     args = parser.parse_args()
     config = bronze.load_table_map()
     names = [table["table"] for table in config["tables"]] if args.all else args.tables.split(",")
-    spark = spark_session("bronze-dictionary", memory=JOB_MEMORY)
+    spark = spark_session("bronze-dictionary", memory=job_memory())
     try:
         written = build(spark, config, names, config["namespace"])
     except bronze.BronzeError as error:

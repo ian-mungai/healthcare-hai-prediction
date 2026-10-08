@@ -85,6 +85,8 @@ services:
       POLARIS_URI: http://polaris:8181/api/catalog
       POLARIS_CLIENT_ID: ${POLARIS_CLIENT_ID:?run through scripts/lakehouse/catalog.py}
       POLARIS_CLIENT_SECRET: ${POLARIS_CLIENT_SECRET:?run through scripts/lakehouse/catalog.py}
+      # The job heap, computed by scripts/lakehouse/catalog.py from the running containers before each job.
+      SPARK_JOB_MEMORY: ${SPARK_JOB_MEMORY:-}
     volumes:
       - *aws-profile
       - ./:/workspace

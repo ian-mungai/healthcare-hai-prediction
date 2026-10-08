@@ -60,13 +60,19 @@ diagram shows what is built and what is planned.
 Prerequisites: macOS on Apple silicon or Linux AMD64, Python 3.12, Git,
 Terraform 1.16.1 and AWS CLI v2. Node.js 18 or later and Google Chrome render the
 architecture diagram.
-The lakehouse needs Docker Desktop with at least 36 GB of memory. dbt staging
-gives DuckDB what is free at the start of each build: Docker's total memory minus
-every running container's use minus 8 GiB headroom
-(`scripts/lakehouse/memory_budget.py`, read by `memory_limit` in `dbt/profiles.yml`);
-the build stops below 4 GiB. Close containers you no longer use first. The bronze,
-dictionary and checksum jobs give Spark a 12 GB heap (`JOB_MEMORY` in
-`scripts/lakehouse/session.py`).
+The lakehouse runs in Docker Desktop (32 GiB of memory on the development Mac in
+October 2026); no memory size is fixed in the code. dbt staging gives DuckDB what
+is free at the start of each build. That is the smaller of two figures: Docker's total
+memory minus every running container's use minus 8 GiB headroom; the memory the Mac
+can give without swapping (free, file-backed and purgeable pages from `vm_stat`) minus 2 GiB.
+The Mac cap is skipped once Docker's virtual machine already holds all of Docker's
+memory (`scripts/lakehouse/memory_budget.py`, read by `memory_limit` in
+`dbt/profiles.yml`); the build stops below 4 GiB. Close containers and apps you no
+longer use first. Spark jobs get the same free memory, less 10% for the JVM's own
+use, as their heap in whole GiB: `scripts/lakehouse/catalog.py job` computes it
+after Polaris starts and passes `SPARK_JOB_MEMORY`, which
+`scripts/lakehouse/session.py` requires (no default). See the figures with
+`.venv/bin/python -m scripts.lakehouse.memory_budget --spark --explain`.
 
 Run from this repository's root with its existing Python 3.12 `.venv`.
 Dependencies are shared across development and production in `requirements.txt`;
