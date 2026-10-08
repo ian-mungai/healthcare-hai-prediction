@@ -173,10 +173,19 @@ select * from year_holds
 {% endmacro %}
 
 {% macro vbp_program_columns() %}
-{#- The TPS columns the registry names [520]. -#}
+{#- Every published TPS domain score and the Total Performance Score, as published; clinical care and clinical outcomes stay
+    separate columns. The registry names the safety domain and the total only [520] [525]. -#}
 {{ return([
+    ['unweighted_normalized_clinical_care_domain_score', 'stg.unweighted_normalized_clinical_care_domain_score'],
+    ['weighted_normalized_clinical_care_domain_score', 'stg.weighted_normalized_clinical_care_domain_score'],
+    ['unweighted_normalized_clinical_outcomes_domain_score', 'stg.unweighted_normalized_clinical_outcomes_domain_score'],
+    ['weighted_normalized_clinical_outcomes_domain_score', 'stg.weighted_normalized_clinical_outcomes_domain_score'],
+    ['unweighted_person_and_community_engagement_domain_score', 'stg.unweighted_person_and_community_engagement_domain_score'],
+    ['weighted_person_and_community_engagement_domain_score', 'stg.weighted_person_and_community_engagement_domain_score'],
     ['unweighted_normalized_safety_domain_score', 'stg.unweighted_normalized_safety_domain_score'],
     ['weighted_safety_domain_score', 'stg.weighted_safety_domain_score'],
+    ['unweighted_normalized_efficiency_and_cost_reduction_domain_score', 'stg.unweighted_normalized_efficiency_and_cost_reduction_domain_score'],
+    ['weighted_efficiency_and_cost_reduction_domain_score', 'stg.weighted_efficiency_and_cost_reduction_domain_score'],
     ['total_performance_score', 'stg.total_performance_score']
 ]) }}
 {% endmacro %}

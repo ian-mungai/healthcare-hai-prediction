@@ -305,15 +305,18 @@ visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_co
 Hospital Readmissions Reduction Program by condition (`int_cc_hrrp_windows`). Every published measure ID is kept;
 `dbt/seeds/validation_measures.csv` maps only the exact IDs the registry names (C289 to C291 and their children), so
 renamed IDs such as `OP-32` and the PSI-90 and PSI-13 controls (E038, E039), which name no published ID, stay unmapped
-(`int_validation_measure_windows`). `Not Available`, `Not Applicable`, `N/A` and `Too Few to Report` stay text. These
-tables are for validation only; none is a predictor.
+(`int_validation_measure_windows`). `Not Available`, `Not Applicable`, `N/A` and `Too Few to Report` stay text. In every
+group D model a 5-digit hospital ID is padded to 6 characters; any other ID that is not 6 digits or capital letters is
+held. These tables are for validation only; none is a predictor.
 
 The HAC Reduction Program (`int_hac_program_years`) and Hospital VBP Total Performance Score (`int_vbp_program_years`)
 are staged per hospital and program fiscal year from the latest release, so a revised file replaces the original. The
 HAC model keeps the payment reduction, Total HAC Score, PSI-90 and domain z-scores; the HAI SIRs that file republishes
-are not staged, so the outcome comes only from the HAI windows. Three older VBP files publish no fiscal year and take a
-reviewed year from `dbt/seeds/vbp_file_fiscal_years.csv`, whose evidence is the published national average score. The
-registry controls (C285 to C288) are in `int_validation_program_values`; all are comparison_only or exclude_primary.
+are not staged, so the outcome comes only from the HAI windows. The VBP model keeps every published domain score as
+published; clinical care (older files) and clinical outcomes (later files) stay separate columns. Three older VBP files
+publish no fiscal year and take a reviewed year from `dbt/seeds/vbp_file_fiscal_years.csv`, whose evidence is the
+published national average score. The registry controls (C285 to C288) are in `int_validation_program_values`; all are
+comparison_only or exclude_primary.
 
 The dbt packages
 (dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub

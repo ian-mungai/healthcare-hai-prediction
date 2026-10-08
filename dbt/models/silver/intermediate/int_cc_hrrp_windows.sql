@@ -1,9 +1,9 @@
 -- One Hospital Readmissions Reduction Program row per hospital, condition (measure_name) and performance window, from the
 -- latest stored release; windows whose latest release holds two rows are held in int_validation_window_holds (failure
--- modes 504 to 507).
+-- modes 504 to 507 and 524).
 {{ care_windows(
     'cms_cc_hospital_readmissions_reduction_program_hospital',
-    "facility_id",
+    validation_ccn('facility_id'),
     measure='measure_name',
     start_column='start_date',
     end_column='end_date',

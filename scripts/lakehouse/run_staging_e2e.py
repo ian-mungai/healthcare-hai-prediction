@@ -989,8 +989,16 @@ WIDE_COLUMNS = {
         "fiscal_year",
         "facility_id",
         "provider_number",
+        "unweighted_normalized_clinical_care_domain_score",
+        "weighted_normalized_clinical_care_domain_score",
+        "unweighted_normalized_clinical_outcomes_domain_score",
+        "weighted_normalized_clinical_outcomes_domain_score",
+        "unweighted_person_and_community_engagement_domain_score",
+        "weighted_person_and_community_engagement_domain_score",
         "unweighted_normalized_safety_domain_score",
         "weighted_safety_domain_score",
+        "unweighted_normalized_efficiency_and_cost_reduction_domain_score",
+        "weighted_efficiency_and_cost_reduction_domain_score",
         "total_performance_score",
     ),
     # The maternal table has no provider_id and no measure_start_date [319] [320].
@@ -2445,7 +2453,7 @@ GROUP_D1 = (
         "2025-07-01",
         "Unplanned_Hospital_Visits-Hospital.csv",
         sha("vi1"),
-        4,
+        6,
         records=(
             cc(
                 facility_id="010001",
@@ -2458,6 +2466,8 @@ GROUP_D1 = (
             cc(facility_id="010001", measure_id="OP-32", score="13.0", **DATES_2022),
             cc(facility_id="010001", measure_id="READM_30_HF", score="20.1", **DATES_2022),
             cc(facility_id="010003", measure_id="OP_35_ED", score="Not Available", **DATES_2022),
+            cc(facility_id="10003", measure_id="OP_36", score="7.0", **DATES_2022),
+            cc(facility_id="01-003", measure_id="OP_32", score="5.0", **DATES_2022),
         ),
     ),
     Stored(
@@ -2512,8 +2522,9 @@ def tps_row(score: str, **fields: str) -> tuple[tuple[str, str], ...]:
     return tuple(({"total_performance_score": score} | fields).items())
 
 
-# D2 [514] to [523]: HAC FY 2021 in an original and a revised file, FY 2024 with PSI-90, a SIR and a repeated hospital; TPS
-# FY 2025 with fiscal_year, the 2018 file in the provider_number layout without it and the 2019 file with the reviewed odd value.
+# D2 [514] to [525]: HAC FY 2021 in an original and a revised file, FY 2024 with PSI-90, a SIR, a repeated hospital and a
+# malformed ID; TPS FY 2025 with fiscal_year and current domains, the 2018 file in the provider_number layout without it (one
+# 5-digit ID, the clinical care domain) and the 2019 file with the reviewed odd value.
 GROUP_D2 = (
     Stored(
         "cms_cc_hac_reduction_program_hospital",
@@ -2539,11 +2550,12 @@ GROUP_D2 = (
         "2024-07-31",
         "FY_2024_HAC_Reduction_Program_Hospital.csv",
         sha("ha3"),
-        3,
+        4,
         records=(
             hac_row("010001", "2024", "6.1", "Yes", psi_90_composite_value="1.02", psi_90_w_z_score="0.4", clabsi_sir="0.8"),
             hac_row("010005", "2024", "4.0", "No"),
             hac_row("010005", "2024", "4.2", "No"),
+            hac_row("01-005", "2024", "3.0", "No"),
         ),
     ),
     Stored(
@@ -2554,11 +2566,27 @@ GROUP_D2 = (
         sha("tp1"),
         2,
         records=(
-            tps_row("23.5", fiscal_year="2025", facility_id="010001", unweighted_normalized_safety_domain_score="10", weighted_safety_domain_score="2.5"),
+            tps_row(
+                "23.5",
+                fiscal_year="2025",
+                facility_id="010001",
+                unweighted_normalized_clinical_outcomes_domain_score="12",
+                weighted_person_and_community_engagement_domain_score="5.25",
+                unweighted_normalized_safety_domain_score="10",
+                weighted_safety_domain_score="2.5",
+            ),
             tps_row("Not Available", fiscal_year="2025", facility_id="010003"),
         ),
     ),
-    Stored("cms_cc_hvbp_tps", "tp0", "2019-03-04", "hvbp_tps_11_09_2018.csv", sha("tp0"), 1, records=(tps_row("38.0", provider_number="010001"),)),
+    Stored(
+        "cms_cc_hvbp_tps",
+        "tp0",
+        "2019-03-04",
+        "hvbp_tps_11_09_2018.csv",
+        sha("tp0"),
+        2,
+        records=(tps_row("38.0", provider_number="010001"), tps_row("30.0", provider_number="10005", unweighted_normalized_clinical_care_domain_score="8")),
+    ),
     Stored("cms_cc_hvbp_tps", "tp9", "2020-01-04", "hvbp_tps_12_09_2019.csv", sha("tp9"), 1, records=(tps_row("24.083333333333(23)", facility_id="010001"),)),
 )
 
@@ -4063,6 +4091,11 @@ PROGRAM_YEARS_SQL = (
     "UNION ALL SELECT 'vbp', ccn, fiscal_year::VARCHAR, coalesce(total_performance_score, ''), '', '', left(member_sha256, 3) "
     "FROM int_vbp_program_years ORDER BY ALL;"
 )
+VBP_DOMAINS_SQL = (
+    "SELECT ccn, fiscal_year::VARCHAR, coalesce(unweighted_normalized_clinical_care_domain_score, ''), "
+    "coalesce(unweighted_normalized_clinical_outcomes_domain_score, ''), coalesce(weighted_person_and_community_engagement_domain_score, ''), "
+    "coalesce(weighted_efficiency_and_cost_reduction_domain_score, '') FROM int_vbp_program_years ORDER BY ALL;"
+)
 PROGRAM_VALUES_SQL = (
     "SELECT measure_control, ccn, fiscal_year::VARCHAR, field, coalesce(value_text, ''), coalesce(value_number::VARCHAR, '') "
     "FROM int_validation_program_values ORDER BY ALL;"
@@ -4276,6 +4309,7 @@ def read_models(case: str) -> dict[str, Any]:
         "validation_holds": [tuple(row) for row in duckdb_csv(database, VALIDATION_HOLDS_SQL)],
         "program_years": [tuple(row) for row in duckdb_csv(database, PROGRAM_YEARS_SQL)],
         "program_values": [tuple(row) for row in duckdb_csv(database, PROGRAM_VALUES_SQL)],
+        "vbp_domains": [tuple(row) for row in duckdb_csv(database, VBP_DOMAINS_SQL)],
         "program_holds": [tuple(row) for row in duckdb_csv(database, PROGRAM_HOLDS_SQL)],
         "hpsa": [tuple(row) for row in duckdb_csv(database, HPSA_SQL)],
         "mua": [tuple(row) for row in duckdb_csv(database, MUA_SQL)],
@@ -4626,14 +4660,15 @@ def shortage_checks(base: dict[str, Any]) -> dict[str, bool]:
 def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
     """Compare the base fixture's D1 window and validation models with their expected rows [504] to [511]."""
     checks: dict[str, bool] = {}
-    # [505] [506] [507] Older-layout windows read; the later release supersedes the older OP_32; HRRP keyed by measure_name;
-    # the repeated MORT_30_HF window is held, not kept.
+    # [505] [506] [507] [524] Older-layout windows read; the later release supersedes the older OP_32; HRRP keyed by
+    # measure_name; the repeated MORT_30_HF window is held, not kept; the 5-digit ID is padded and the malformed one held.
     checks["d1_windows_match_expected"] = base.get("d1_windows") == sorted(
         [
             ("visits", "010001", "OP_32", "2022-01-01", "12.5", "vi1"),
             ("visits", "010001", "OP-32", "2022-01-01", "13.0", "vi1"),
             ("visits", "010001", "READM_30_HF", "2022-01-01", "20.1", "vi1"),
             ("visits", "010003", "OP_35_ED", "2022-01-01", "Not Available", "vi1"),
+            ("visits", "010003", "OP_36", "2022-01-01", "7.0", "vi1"),
             ("visits", "010001", "OP_36", "2020-01-01", "9.9", "vi0"),
             ("deaths", "010001", "MORT_30_AMI", "2022-01-01", "12.3", "de1"),
             ("deaths", "010001", "PSI_90", "2022-01-01", "1.01", "de1"),
@@ -4652,15 +4687,18 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("C290", "010001", "OP_32", "2022-01-01", "12.5", "12.5"),
             ("C290", "010001", "OP_36", "2020-01-01", "9.9", "9.9"),
             ("C290", "010003", "OP_35_ED", "2022-01-01", "Not Available", ""),
+            ("C290", "010003", "OP_36", "2022-01-01", "7.0", "7.0"),
             ("C290.01", "010001", "OP_32", "2022-01-01", "12.5", "12.5"),
             ("C290.03", "010003", "OP_35_ED", "2022-01-01", "Not Available", ""),
             ("C290.04", "010001", "OP_36", "2020-01-01", "9.9", "9.9"),
+            ("C290.04", "010003", "OP_36", "2022-01-01", "7.0", "7.0"),
             ("C291", "010001", "MORT_30_AMI", "2022-01-01", "12.3", "12.3"),
             ("C291.01", "010001", "MORT_30_AMI", "2022-01-01", "12.3", "12.3"),
         ]
     )
     checks["validation_holds_match_expected"] = base.get("validation_holds") == [
-        ("cms_cc_complications_and_deaths_hospital", "010001", "MORT_30_HF", "repeated_in_file", "2")
+        ("cms_cc_complications_and_deaths_hospital", "010001", "MORT_30_HF", "repeated_in_file", "2"),
+        ("cms_cc_unplanned_hospital_visits_hospital", "", "", "no_key", "1"),
     ]
     checks["validation_seed_matches_registry"] = validation_seed_matches()
     return checks
@@ -4669,8 +4707,9 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
 def program_checks(base: dict[str, Any]) -> dict[str, bool]:
     """Compare the base fixture's D2 program-year models with their expected rows [514] to [520]."""
     checks: dict[str, bool] = {}
-    # [514] [515] [516] [518] The revised FY 2021 file wins for 010001, the original keeps 010003; the older TPS files get their
-    # reviewed years; Yes/No typed; PSI-90 from either column name; the repeated FY 2024 hospital is held.
+    # [514] [515] [516] [518] [524] The revised FY 2021 file wins for 010001, the original keeps 010003; the older TPS files get
+    # their reviewed years; Yes/No typed; PSI-90 from either column name; the repeated FY 2024 hospital and the malformed ID are
+    # held; the 5-digit TPS ID is padded.
     checks["program_years_match_expected"] = base.get("program_years") == sorted(
         [
             ("hac", "010001", "2021", "5.7", "false", "", "ha2"),
@@ -4680,8 +4719,17 @@ def program_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("vbp", "010001", "2020", "24.083333333333(23)", "", "", "tp9"),
             ("vbp", "010001", "2025", "23.5", "", "", "tp1"),
             ("vbp", "010003", "2025", "Not Available", "", "", "tp1"),
+            ("vbp", "010005", "2019", "30.0", "", "", "tp0"),
         ]
     )
+    # [525] Every domain score is kept as published; clinical care and clinical outcomes stay apart.
+    checks["vbp_domains_match_expected"] = base.get("vbp_domains") == [
+        ("010001", "2019", "", "", "", ""),
+        ("010001", "2020", "", "", "", ""),
+        ("010001", "2025", "", "12", "5.25", ""),
+        ("010003", "2025", "", "", "", ""),
+        ("010005", "2019", "8", "", "", ""),
+    ]
     # [519] [520] Named fields only; the reviewed odd value and tokens stay text; C288.payment_adjustment has no rows.
     checks["program_values_match_expected"] = base.get("program_values") == sorted(
         [
@@ -4700,9 +4748,14 @@ def program_checks(base: dict[str, Any]) -> dict[str, bool]:
             ),
             ("C288", "010003", "2025", "total_performance_score", "Not Available", ""),
             ("C288.total_performance", "010003", "2025", "total_performance_score", "Not Available", ""),
+            ("C288", "010005", "2019", "total_performance_score", "30.0", "30.0"),
+            ("C288.total_performance", "010005", "2019", "total_performance_score", "30.0", "30.0"),
         ]
     )
-    checks["program_holds_match_expected"] = base.get("program_holds") == [("cms_cc_hac_reduction_program_hospital", "010005", "2024", "repeated_in_file", "2")]
+    checks["program_holds_match_expected"] = base.get("program_holds") == [
+        ("cms_cc_hac_reduction_program_hospital", "", "", "no_key", "1"),
+        ("cms_cc_hac_reduction_program_hospital", "010005", "2024", "repeated_in_file", "2"),
+    ]
     return checks
 
 
@@ -5675,17 +5728,25 @@ UNION ALL SELECT 'mmd_unknown_county', (SELECT count(*) FROM stg_cms_mmd_csv WHE
 MMD_CONTROLS_SQL = "SELECT count(DISTINCT measure_control)::VARCHAR FROM int_mmd_prevalence;"
 
 
-# Every distinct usable window key of a D1 table is a window or a held window, never both and never neither [513].
+# Every distinct usable window key of a D1 table is a window or a held window, never both and never neither; the hospital ID
+# follows the models' rule: a 5-digit ID padded, any other ID that is not 6 digits or capital letters null [513] [524].
 D1_KEYS_SQL = """WITH keys AS (
-    SELECT DISTINCT 'cms_cc_unplanned_hospital_visits_hospital' AS t, trim(coalesce(facility_id, provider_id)) AS e, trim(measure_id) AS m,
+    SELECT DISTINCT 'cms_cc_unplanned_hospital_visits_hospital' AS t,
+        CASE WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9]{5}') THEN lpad(trim(coalesce(facility_id, provider_id)), 6, '0')
+        WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9A-Z]{6}') THEN trim(coalesce(facility_id, provider_id)) END AS e,
+        trim(measure_id) AS m,
         try_strptime(coalesce(start_date, measure_start_date), '%m/%d/%Y')::date AS s, try_strptime(coalesce(end_date, measure_end_date), '%m/%d/%Y')::date AS f
     FROM stg_cms_cc_unplanned_hospital_visits_hospital WHERE NOT is_label_held
     UNION ALL
-    SELECT DISTINCT 'cms_cc_complications_and_deaths_hospital', trim(coalesce(facility_id, provider_id)), trim(measure_id),
+    SELECT DISTINCT 'cms_cc_complications_and_deaths_hospital',
+        CASE WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9]{5}') THEN lpad(trim(coalesce(facility_id, provider_id)), 6, '0')
+        WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9A-Z]{6}') THEN trim(coalesce(facility_id, provider_id)) END, trim(measure_id),
         try_strptime(coalesce(start_date, measure_start_date), '%m/%d/%Y')::date, try_strptime(coalesce(end_date, measure_end_date), '%m/%d/%Y')::date
     FROM stg_cms_cc_complications_and_deaths_hospital WHERE NOT is_label_held
     UNION ALL
-    SELECT DISTINCT 'cms_cc_hospital_readmissions_reduction_program_hospital', trim(facility_id), trim(measure_name),
+    SELECT DISTINCT 'cms_cc_hospital_readmissions_reduction_program_hospital',
+        CASE WHEN regexp_full_match(trim(facility_id), '[0-9]{5}') THEN lpad(trim(facility_id), 6, '0')
+        WHEN regexp_full_match(trim(facility_id), '[0-9A-Z]{6}') THEN trim(facility_id) END, trim(measure_name),
         try_strptime(start_date, '%m/%d/%Y')::date, try_strptime(end_date, '%m/%d/%Y')::date
     FROM stg_cms_cc_hospital_readmissions_reduction_program_hospital WHERE NOT is_label_held
 ),
@@ -5705,12 +5766,17 @@ SELECT usable.t, count(*)::VARCHAR, (SELECT count(*) FROM w WHERE w.t = usable.t
 FROM usable GROUP BY usable.t ORDER BY 1;"""
 
 
-# Every distinct usable hospital and fiscal year of a D2 table is a program-year row or held, never both and never neither [523].
+# Every distinct usable hospital and fiscal year of a D2 table is a program-year row or held, never both and never neither,
+# with the models' hospital ID rule [523] [524].
 D2_KEYS_SQL = """WITH keys AS (
-    SELECT DISTINCT 'cms_cc_hac_reduction_program_hospital' AS t, trim(facility_id) AS c, try_cast(trim(fiscal_year) AS INTEGER) AS y
+    SELECT DISTINCT 'cms_cc_hac_reduction_program_hospital' AS t,
+        CASE WHEN regexp_full_match(trim(facility_id), '[0-9]{5}') THEN lpad(trim(facility_id), 6, '0')
+        WHEN regexp_full_match(trim(facility_id), '[0-9A-Z]{6}') THEN trim(facility_id) END AS c, try_cast(trim(fiscal_year) AS INTEGER) AS y
     FROM stg_cms_cc_hac_reduction_program_hospital WHERE NOT is_label_held
     UNION ALL
-    SELECT DISTINCT 'cms_cc_hvbp_tps', trim(coalesce(facility_id, provider_number)),
+    SELECT DISTINCT 'cms_cc_hvbp_tps',
+        CASE WHEN regexp_full_match(trim(coalesce(facility_id, provider_number)), '[0-9]{5}') THEN lpad(trim(coalesce(facility_id, provider_number)), 6, '0')
+        WHEN regexp_full_match(trim(coalesce(facility_id, provider_number)), '[0-9A-Z]{6}') THEN trim(coalesce(facility_id, provider_number)) END,
         coalesce(try_cast(trim(stg.fiscal_year) AS INTEGER), seed.fiscal_year)
     FROM stg_cms_cc_hvbp_tps AS stg LEFT JOIN vbp_file_fiscal_years AS seed ON stg._member_path = seed.file_name WHERE NOT stg.is_label_held
 ),
