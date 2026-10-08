@@ -1052,3 +1052,84 @@ models:
           - accepted_values:
               arguments:
                 values: [repeated_in_wider_export]
+
+  - name: int_mmd_prevalence
+    description: >
+      CMS Mapping Medicare Disparities fee-for-service prevalence per control, year and county or state, one filter set (all
+      sexes, ages, races, eligibility and dual status). The control comes from the reviewed condition label map; zeros keep
+      a possible-suppression flag. All 82 MMD controls (C258 and C258.01 to C258.81) are held for definition.
+    columns:
+      - name: mmd_row_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: Registry control from the condition label map; assert_mmd_controls_match_labels fails a row without one.
+      - name: file_control
+        description: The control the file name carries; null for C258.01's earlier captures.
+      - name: geography_level
+        description: county or state.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [county, state]
+      - name: value_unit
+        description: percent, or per_100000 for C258.78.
+      - name: is_possible_suppression
+        description: The published value is zero, which MMD may use for a suppressed small numerator (approved Oct 1 2026).
+        data_tests: [not_null]
+      - name: is_unknown_county
+        description: A county row without a county name (codes ending 990).
+        data_tests: [not_null]
+
+  - name: int_hpsa_components
+    description: >
+      HRSA primary-care HPSA components as published at the capture, with score and dates typed and XXXXX county codes kept
+      as tokens. Exact repeat rows are held as exact_repeat. C249 and C250, conditional.
+    columns:
+      - name: hpsa_row_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: capture_date
+        description: The capture date from geography_file_periods; status and dates are as of this day.
+        data_tests: [not_null]
+      - name: hpsa_id
+        description: HPSA ID; one ID can hold successive designations, told apart by designation date.
+        data_tests: [not_null]
+      - name: county_fips
+        description: County code as 5-character text; null where the publisher prints XXXXX or XXX.
+      - name: county_token
+        description: The published XXXXX or XXX mark where there is no county code.
+      - name: hold_reason
+        description: exact_repeat for a row identical to an earlier row of the same file; null otherwise.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [exact_repeat]
+
+  - name: int_mua_components
+    description: >
+      HRSA Medically Underserved Area and Population components as published at the capture, with IMU score and dates
+      typed and XXXXX county codes kept as tokens. Exact repeat rows are held as exact_repeat. C251, conditional; MUA and
+      MUP designations both kept with their type.
+    columns:
+      - name: mua_row_key
+        description: File checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: capture_date
+        description: The capture date from geography_file_periods; status and dates are as of this day.
+        data_tests: [not_null]
+      - name: mua_id
+        description: MUA or MUP ID; one ID can hold designations of two types or dates.
+        data_tests: [not_null]
+      - name: designation_type_code
+        description: MUA or MUP, as published.
+        data_tests: [not_null]
+      - name: county_fips
+        description: County code as 5-character text; null where the publisher prints XXXXX.
+      - name: hold_reason
+        description: exact_repeat for a row identical to an earlier row of the same file; null otherwise.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [exact_repeat]

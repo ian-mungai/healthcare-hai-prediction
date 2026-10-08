@@ -780,3 +780,39 @@ sources:
           - name: _row_number
             description: Row position within the file, from 1.
             data_tests: [not_null]
+      - name: cms_mmd_csv
+        description: CMS Mapping Medicare Disparities fee-for-service prevalence, one file per control, year and geography, 2012 to 2023, every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: hrsa_hpsa_detail
+        description: HRSA primary-care Health Professional Shortage Area components (BCD_HPSA_FCT_DET_PC.csv), every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: hrsa_mua_detail
+        description: HRSA Medically Underserved Area and Population components (MUA_DET.csv), every stored copy.
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]

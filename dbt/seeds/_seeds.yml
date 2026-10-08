@@ -620,3 +620,62 @@ seeds:
       - name: review_decision
         description: Registry decision, preserved without approving model use.
         data_tests: [not_null]
+
+  - name: mmd_conditions
+    description: >
+      The reviewed MMD condition map, written by scripts/lakehouse/mmd_conditions.py from the two pinned MMD collection plans:
+      each control's condition code, menu label, geography and unit (failure modes 468 and 472). 81 controls, C258.01 to
+      C258.81; C258.80 and C258.81 are the user additions of Sep 25 2026.
+    config:
+      column_types:
+        measure_control: varchar
+        condition_code: varchar
+        condition_label: varchar
+        geography_level: varchar
+        value_unit: varchar
+    columns:
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests: [unique, not_null]
+      - name: condition_label
+        description: The condition label the MMD files print.
+        data_tests: [unique, not_null]
+      - name: geography_level
+        description: county or state, the geography the plan collected.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [county, state]
+      - name: value_unit
+        description: percent, or per_100000 where the registry's exact field names a rate per 100,000.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [percent, per_100000]
+
+  - name: shortage_measures
+    description: >
+      The 85 registry controls of S27 MMD (C258 and C258.01 to C258.81, all held for definition) and S23 HPSA and MUA (C249 to
+      C251) with the model and columns that carry each, and the registry's review decision (failure modes 474 and 482).
+    config:
+      column_types:
+        measure_control: varchar
+        family: varchar
+        source_model: varchar
+        components: varchar
+        review_decision: varchar
+    columns:
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests: [unique, not_null]
+      - name: source_model
+        description: The intermediate model that carries the control.
+        data_tests: [not_null]
+      - name: components
+        description: Space-separated columns of the model.
+        data_tests: [not_null]
+      - name: review_decision
+        description: Registry decision, preserved without approving model use.
+        data_tests: [not_null]

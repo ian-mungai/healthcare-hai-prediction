@@ -11,10 +11,11 @@ record no period, so each of their files takes the vintage reviewed below for it
 vintage is the publisher's reference year, not a publication date. An ACS file takes the year in its publisher file name
 (ACSDP5Y2023..., acsdt5y2023-...), with the five-year period ending that year. An SVI file takes the edition year its
 capture receipt's release label names, as does a PLACES file; a WONDER file takes its database name and publisher-stated period
-from its receipt. SAIPE and SAHIE files take the year in their publisher file names (est23all.txt,
-sahie_2023.csv); a BLS capture takes its capture date, the revision vintage of the series it holds. A loaded file with no
-period or vintage, or with two, stops the run. Failure modes: data/lakehouse_planning/group_c_20261006/failure_modes_c1.md
-to failure_modes_c3.md.
+from its receipt. SAIPE, SAHIE and MMD files take the year in their publisher file names (est23all.txt,
+sahie_2023.csv, mmd_ffs_county_c258_02_prevalence_2023.csv); the one MMD file named mmd_data.csv takes its reviewed year.
+A BLS capture takes its capture date, the revision vintage of the series it holds, and an HPSA or MUA capture its capture
+date, the day its statuses are as of. A loaded file with no period or vintage, or with two, stops the run. Failure modes:
+data/lakehouse_planning/group_c_20261006/failure_modes_c1.md to failure_modes_c5.md.
 """
 
 from __future__ import annotations
@@ -47,14 +48,18 @@ ACS_SUMMARIES = ("b16005", "b19013", "b25070", "b25091", "b26001", "c16001")
 ACS_TABLES = (*(f"acs_{table}" for table in ACS_EXPORTS), *(f"acs_summary_{table}" for table in ACS_SUMMARIES))
 SAIPE_FILE = re.compile(r"est(\d{2})(?:all|-[a-z]{2})\.(?:txt|dat)")
 SAHIE_FILE = re.compile(r"sahie[-_](\d{4})\.csv")
+MMD_FILE = re.compile(r"mmd_ffs_(?:county|state)_(?:c258_\d{2}|ami)_prevalence_(\d{4})\.csv")
 CAPTURE_DATE = re.compile(r"__(\d{4})(\d{2})(\d{2})T\d{6}Z__")
-NAMED_YEAR_TABLES = ("saipe_text_lines", "sahie")
-CAPTURE_TABLE = "bls_laus"
+NAMED_YEAR_TABLES = ("saipe_text_lines", "sahie", "cms_mmd_csv")
+NAMED_YEAR_FILES = {"saipe_text_lines": SAIPE_FILE, "sahie": SAHIE_FILE, "cms_mmd_csv": MMD_FILE}
+CAPTURE_TABLES = ("bls_laus", "hrsa_hpsa_detail", "hrsa_mua_detail")
 TEMPORAL = re.compile(r'"catalog_temporal": "(\d{4}-\d{2}-\d{2})/(\d{4}-\d{2}-\d{2})"')
 # Reviewed Oct 6 2026 against each file's published name and, where present, its year-bearing headers (RUCC_2013,
 # Primary RUCA Code 2010, countyfips20). Two vintages in one workbook are listed together.
 REVIEWED_VINTAGES: dict[tuple[str, str], str] = {
     ("county_adjacency", "county_adjacency2023.txt"): "2023",
+    # Its only rows are 2023 data (inspection of Oct 7 2026); the name carries no year.
+    ("cms_mmd_csv", "mmd_data.csv"): "2023",
     ("county_adjacency", "county_adjacency2024.txt"): "2024",
     ("county_adjacency", "county_adjacency2025.txt"): "2025",
     ("county_adjacency", "county_adjacency2026.txt"): "2026",
@@ -78,15 +83,20 @@ REVIEWED_VINTAGES: dict[tuple[str, str], str] = {
     ("ruca_sheet_rows", "2020-rural-urban-commuting-area-codes-zip-codes.xlsx"): "2020",
     ("cms_geographic_variation_csv", "2014-2024_Original_Medicare_Geographic_Variation_Public_Use_File.csv"): "2014-2024",
 }
-TABLES = (
-    QUARTER_TABLE,
-    COVERAGE_TABLE,
-    *EDITION_TABLES,
-    DATABASE_TABLE,
-    CAPTURE_TABLE,
-    *NAMED_YEAR_TABLES,
-    *ACS_TABLES,
-    *sorted({table for table, _ in REVIEWED_VINTAGES}),
+# Each table once: an MMD file is dated by its name or, for mmd_data.csv, by its reviewed vintage.
+TABLES = tuple(
+    dict.fromkeys(
+        (
+            QUARTER_TABLE,
+            COVERAGE_TABLE,
+            *EDITION_TABLES,
+            DATABASE_TABLE,
+            *CAPTURE_TABLES,
+            *NAMED_YEAR_TABLES,
+            *ACS_TABLES,
+            *sorted({table for table, _ in REVIEWED_VINTAGES}),
+        )
+    )
 )
 COLUMNS = ("member_sha256", "bronze_table", "release_id", "file_name", "vintage", "period_start", "period_end", "period_basis")
 
@@ -199,14 +209,14 @@ def file_row(
         if release not in editions:
             raise PeriodError(f"{table} file {name} (release {release}) has no recorded edition")
         return row | {"vintage": editions[release], "period_start": "", "period_end": "", "period_basis": "receipt_edition_year"}
-    if table in NAMED_YEAR_TABLES:
-        match = (SAIPE_FILE if table == "saipe_text_lines" else SAHIE_FILE).fullmatch(name)
+    if table in NAMED_YEAR_TABLES and (table, name) not in REVIEWED_VINTAGES:
+        match = NAMED_YEAR_FILES[table].fullmatch(name)
         if not match:
             raise PeriodError(f"{table} file {name} (release {release}) has no publisher year in its name")
         digits = match.group(1)
         year = int(digits) if len(digits) == 4 else (1900 if int(digits) >= 89 else 2000) + int(digits)
         return row | {"vintage": str(year), "period_start": f"{year}-01-01", "period_end": f"{year}-12-31", "period_basis": "publisher_file_name"}
-    if table == CAPTURE_TABLE:
+    if table in CAPTURE_TABLES:
         match = CAPTURE_DATE.search(release)
         if not match:
             raise PeriodError(f"{table} file {name} (release {release}) has no capture date")

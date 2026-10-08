@@ -43,7 +43,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse import catalog, geography_file_periods, ipps_file_labels, memory_budget, ownership_release_periods, pos_file_periods
+from scripts.lakehouse import catalog, geography_file_periods, ipps_file_labels, memory_budget, mmd_conditions, ownership_release_periods, pos_file_periods
 from scripts.process import run_command
 
 REPO_ROOT = catalog.REPO_ROOT
@@ -117,6 +117,9 @@ TABLES = (
     "places",
     "cms_geographic_variation_csv",
     "wonder_county_mortality",
+    "cms_mmd_csv",
+    "hrsa_hpsa_detail",
+    "hrsa_mua_detail",
 )
 HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
@@ -804,6 +807,41 @@ WONDER_COLUMNS = (
     "crude_rate_upper_95_confidence_interval",
     "crude_rate_standard_error",
 )
+MMD_COLUMNS = ("year", "geography", "domain", "condition", "fips", "county", "state", "urban", "primary_denominator", "analysis_value")
+HPSA_COLUMNS = (
+    "hpsa_name",
+    "hpsa_id",
+    "designation_type",
+    "hpsa_discipline_class",
+    "hpsa_score",
+    "hpsa_status",
+    "hpsa_designation_date",
+    "hpsa_designation_last_update_date",
+    "withdrawn_date",
+    "hpsa_geography_identification_number",
+    "hpsa_component_type_description",
+    "state_and_county_federal_information_processing_standard_code",
+    "common_state_county_fips_code",
+    "state_fips_code",
+    "rural_status",
+)
+MUA_COLUMNS = (
+    "mua_p_id",
+    "designation_type_code",
+    "designation_type",
+    "mua_p_status_description",
+    "designation_date",
+    "mua_p_update_date",
+    "medically_underserved_area_population_mua_p_withdrawal_date",
+    "imu_score",
+    "population_type",
+    "medically_underserved_area_population_mua_p_component_geographic_name",
+    "medically_underserved_area_population_mua_p_component_geographic_type_description",
+    "state_and_county_federal_information_processing_standard_code",
+    "county_subdivision_fips_code",
+    "state_fips_code",
+    "rural_status_description",
+)
 BLS_COLUMNS = ("seriesid", "county_fips", "measure_code", "year", "period", "periodname", "value", "footnotes")
 ACS_COLUMNS = {
     "acs_dp04": ("geo_id", "name", "dp04_0077pe", "dp04_0078pe"),
@@ -929,6 +967,9 @@ WIDE_COLUMNS = {
     "places": PLACES_COLUMNS,
     "cms_geographic_variation_csv": GV_COLUMNS,
     "wonder_county_mortality": WONDER_COLUMNS,
+    "cms_mmd_csv": MMD_COLUMNS,
+    "hrsa_hpsa_detail": HPSA_COLUMNS,
+    "hrsa_mua_detail": MUA_COLUMNS,
     "acs_dp02": ACS_COLUMNS.get("acs_dp02", ("geo_id", "name")),
     "acs_dp03": ACS_COLUMNS.get("acs_dp03", ("geo_id", "name")),
     "acs_dp04": ACS_COLUMNS.get("acs_dp04", ("geo_id", "name")),
@@ -2318,6 +2359,155 @@ GROUP_C4 = (
     Stored("wonder_county_mortality", "wd3", "WONDER__s24", "county_year.csv", sha("wd3"), 1, records=(wonder_row("01001", "2024", "520", "Unreliable"),)),
 )
 
+ALZHEIMERS = "Alzheimer's Disease, Related Disorders, or Senile Dementia"
+AMI = "Acute Myocardial Infarction"
+
+
+def mmd_row(
+    year: str, condition: str, fips: str, county: str, state: str, urban: str, band: str, value: str, geography: str = "County"
+) -> tuple[tuple[str, str], ...]:
+    """Return one MMD row with the one filter set the captures hold."""
+    fields = {"year": year, "geography": geography, "domain": "Primary chronic conditions", "condition": condition, "fips": fips}
+    return tuple((fields | {"county": county, "state": state, "urban": urban, "primary_denominator": band, "analysis_value": value}).items())
+
+
+def hpsa_row(
+    hpsa_id: str, score: str, status: str, designated: str, updated: str, withdrawn: str, geography: str, county: str, **fields: str
+) -> tuple[tuple[str, str], ...]:
+    """Return one primary-care HPSA component row; the county code is published in two columns."""
+    base = {
+        "hpsa_name": f"HPSA {hpsa_id}",
+        "hpsa_id": hpsa_id,
+        "designation_type": "Geographic HPSA",
+        "hpsa_discipline_class": "Primary Care",
+        "hpsa_score": score,
+        "hpsa_status": status,
+        "hpsa_designation_date": designated,
+        "hpsa_designation_last_update_date": updated,
+        "withdrawn_date": withdrawn,
+        "hpsa_geography_identification_number": geography,
+        "hpsa_component_type_description": "Single County",
+        "state_and_county_federal_information_processing_standard_code": county,
+        "common_state_county_fips_code": county,
+        "state_fips_code": county[:2] if county[:2].isdigit() else "09",
+    }
+    return tuple((base | fields).items())
+
+
+def mua_row(
+    mua_id: str, code: str, status: str, designated: str, updated: str, withdrawn: str, score: str, name: str, county: str, **fields: str
+) -> tuple[tuple[str, str], ...]:
+    """Return one MUA or MUP component row."""
+    base = {
+        "mua_p_id": mua_id,
+        "designation_type_code": code,
+        "designation_type": "Medically Underserved Area" if code == "MUA" else "Medically Underserved Population",
+        "mua_p_status_description": status,
+        "designation_date": designated,
+        "mua_p_update_date": updated,
+        "medically_underserved_area_population_mua_p_withdrawal_date": withdrawn,
+        "imu_score": score,
+        "medically_underserved_area_population_mua_p_component_geographic_name": name,
+        "medically_underserved_area_population_mua_p_component_geographic_type_description": "Single County",
+        "state_and_county_federal_information_processing_standard_code": county,
+        "state_fips_code": county[:2] if county[:2].isdigit() else "09",
+    }
+    return tuple((base | fields).items())
+
+
+HPSA_REPEATED = hpsa_row("101", "15", "Designated", "08/13/2013", "07/02/2018", "", "01001", "01001")
+MUA_REPEATED = mua_row("00001", "MUA", "Designated", "1994-01-01", "1994-01-01", "", "52.90", "Autauga", "01001")
+# C5 [468] to [480]: MMD county rows with a 4-digit code, a zero, Connecticut and an unknown county; a state-level rate per
+# 100,000; C258.01 from an earlier capture whose name has no control. HPSA and MUA with an exact repeat, a reused ID with two
+# designations, an MUP and an MUA under one ID and date, an XXXXX county code and a withdrawal without a date.
+GROUP_C5 = (
+    Stored(
+        "cms_mmd_csv",
+        "mm02",
+        "MMD_API_C258_02_2023__x",
+        "mmd_ffs_county_c258_02_prevalence_2023.csv",
+        sha("mm02"),
+        4,
+        records=(
+            mmd_row("2023", ALZHEIMERS, "1001", "Autauga County", "ALABAMA", "Urban", "1,000-4,999", "12.5"),
+            mmd_row("2023", ALZHEIMERS, "1003", "Baldwin County", "ALABAMA", "Rural", "11-499", "0"),
+            mmd_row("2023", ALZHEIMERS, "9001", "Fairfield County", "CONNECTICUT", "Urban", "10,000+", "10.1"),
+            mmd_row("2023", ALZHEIMERS, "9990", "", "CONNECTICUT", "", "11-499", "3.0"),
+        ),
+    ),
+    Stored(
+        "cms_mmd_csv",
+        "mm78",
+        "MMD_API_C258_78_2023__x",
+        "mmd_ffs_state_c258_78_prevalence_2023.csv",
+        sha("mm78"),
+        1,
+        records=(mmd_row("2023", "Sickle Cell Disease", "1", "", "ALABAMA", "", "10,000+", "170", "State/Territory"),),
+    ),
+    Stored(
+        "cms_mmd_csv",
+        "mmami",
+        "MMD__x",
+        "mmd_ffs_county_ami_prevalence_2022.csv",
+        sha("mmami"),
+        1,
+        records=(mmd_row("2022", AMI, "01001", "Autauga County", "ALABAMA", "Urban", "1,000-4,999", "0.8"),),
+    ),
+    Stored(
+        "hrsa_hpsa_detail",
+        "hp1",
+        "HPSA__20260924T060817Z__fixture",
+        "BCD_HPSA_FCT_DET_PC.csv",
+        sha("hp1"),
+        6,
+        records=(
+            HPSA_REPEATED,
+            HPSA_REPEATED,
+            hpsa_row("102", "7", "Withdrawn", "10/08/2008", "06/27/2013", "06/27/2013", "01003", "01003"),
+            hpsa_row("102", "14", "Withdrawn", "08/13/2013", "07/02/2018", "07/02/2018", "01003", "01003"),
+            hpsa_row(
+                "103",
+                "20",
+                "Designated",
+                "01/05/2022",
+                "01/05/2022",
+                "",
+                "09110010100",
+                "XXXXX",
+                hpsa_component_type_description="Census Tract",
+            ),
+            hpsa_row("104", "3", "Withdrawn", "02/01/2000", "02/01/2010", "", "01005", "01005"),
+        ),
+    ),
+    Stored(
+        "hrsa_mua_detail",
+        "mu1",
+        "MUA__20260924T060855Z__fixture",
+        "MUA_DET.csv",
+        sha("mu1"),
+        6,
+        records=(
+            MUA_REPEATED,
+            MUA_REPEATED,
+            mua_row("00001", "MUA", "Withdrawn", "1978-11-01", "2001-01-26", "2001-01-26", "44.10", "Autauga", "01001"),
+            mua_row("00518", "MUP", "Withdrawn", "2001-11-22", "2009-02-26", "2009-02-26", "50.30", "Pasco", "12101"),
+            mua_row("00518", "MUA", "Designated", "2001-11-22", "2009-12-15", "", "54.90", "Pasco", "12101"),
+            mua_row(
+                "00700",
+                "MUA",
+                "Designated",
+                "2005-10-28",
+                "2005-10-28",
+                "",
+                "61.30",
+                "113.02",
+                "XXXXX",
+                medically_underserved_area_population_mua_p_component_geographic_type_description="Census Tract",
+            ),
+        ),
+    ),
+)
+
 
 def owner_case(**fields: str) -> Stored:
     """Return one more owner file with one row, for the failing owner cases."""
@@ -2588,6 +2778,7 @@ BASE = (
     *GROUP_C2,
     *GROUP_C3,
     *GROUP_C4,
+    *GROUP_C5,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -2901,6 +3092,71 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
         tuple(with_record(item, bls_row("09", "2023", "M01", "1")) if item.key == "bl1" else item for item in BASE),
         frozenset(),
     ),
+    # [468] An MMD label the reviewed map does not name.
+    "mmd_label_unmapped": (
+        "assert_mmd_controls_match_labels",
+        tuple(
+            with_record(item, mmd_row("2023", "Unreviewed Condition", "1005", "Barbour County", "ALABAMA", "Rural", "500-999", "4.2"))
+            if item.key == "mm02"
+            else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
+    # [468] A file named for one control holding another control's label.
+    "mmd_file_control_disagrees": (
+        "assert_mmd_controls_match_labels",
+        tuple(
+            with_record(item, mmd_row("2023", AMI, "1005", "Barbour County", "ALABAMA", "Rural", "500-999", "1.1")) if item.key == "mm02" else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
+    # [469] An MMD value that is not a number.
+    "mmd_value_uncast": (
+        "assert_shortage_values_cast",
+        tuple(
+            with_record(item, mmd_row("2023", ALZHEIMERS, "1005", "Barbour County", "ALABAMA", "Rural", "500-999", "x")) if item.key == "mm02" else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
+    # [476] Two different HPSA rows for one ID, designation date and geography.
+    "hpsa_repeated_grain": (
+        "assert_shortage_grain",
+        tuple(
+            with_record(item, hpsa_row("101", "16", "Designated", "08/13/2013", "07/02/2018", "", "01001", "01001")) if item.key == "hp1" else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
+    # [478] An HPSA date in another format.
+    "hpsa_date_uncast": (
+        "assert_shortage_values_cast",
+        tuple(
+            with_record(item, hpsa_row("105", "9", "Designated", "2013-08-13", "07/02/2018", "", "01007", "01007")) if item.key == "hp1" else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
+    # [479] An MUA score that is not a number.
+    "mua_score_uncast": (
+        "assert_shortage_values_cast",
+        tuple(
+            with_record(item, mua_row("00701", "MUA", "Designated", "2005-10-28", "2005-10-28", "", "n/a", "Baldwin", "01003")) if item.key == "mu1" else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
+    # [476] Two different MUA rows for one component of one designation.
+    "mua_repeated_grain": (
+        "assert_shortage_grain",
+        tuple(
+            with_record(item, mua_row("00518", "MUA", "Designated", "2001-11-22", "2009-12-15", "", "55.00", "Pasco", "12101")) if item.key == "mu1" else item
+            for item in BASE
+        ),
+        frozenset(),
+    ),
     # [457] A repeated WONDER county-year whose values differ between exports.
     "wonder_repeat_differs": (
         "assert_wonder_repeats_identical",
@@ -3109,6 +3365,12 @@ CREATE TABLE bronze.cms_geographic_variation_csv AS SELECT * REPLACE (_row_numbe
     FROM read_csv(getvariable('cms_geographic_variation_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.wonder_county_mortality AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('wonder_county_mortality_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_mmd_csv AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_mmd_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.hrsa_hpsa_detail AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('hrsa_hpsa_detail_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.hrsa_mua_detail AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('hrsa_mua_detail_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.file_preambles AS SELECT * REPLACE (line_number::INTEGER AS line_number)
     FROM read_csv(getvariable('file_preambles_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.column_map AS SELECT * REPLACE (position::INTEGER AS position)
@@ -3540,6 +3802,22 @@ WONDER_SQL = (
     "coalesce(crude_rate_token, ''), "
     "coalesce(hold_reason, '') FROM int_wonder_county_deaths ORDER BY ALL;"
 )
+MMD_SQL = (
+    "SELECT measure_control, coalesce(file_control, ''), data_year::VARCHAR, geography_level, coalesce(county_fips, ''), coalesce(state_fips, ''), "
+    "coalesce(value_number::VARCHAR, ''), value_unit, denominator_band, is_possible_suppression::VARCHAR, is_unknown_county::VARCHAR, "
+    "is_connecticut::VARCHAR FROM int_mmd_prevalence ORDER BY ALL;"
+)
+HPSA_SQL = (
+    "SELECT hpsa_id, capture_date::VARCHAR, coalesce(designation_date::VARCHAR, ''), coalesce(geography_id, ''), "
+    "coalesce(county_fips, ''), coalesce(county_token, ''), "
+    "coalesce(hpsa_score::VARCHAR, ''), hpsa_status, coalesce(withdrawn_date::VARCHAR, ''), is_connecticut::VARCHAR, coalesce(hold_reason, '') "
+    "FROM int_hpsa_components ORDER BY ALL;"
+)
+MUA_SQL = (
+    "SELECT mua_id, capture_date::VARCHAR, designation_type_code, coalesce(designation_date::VARCHAR, ''), component_type, coalesce(component_name, ''), "
+    "coalesce(county_fips, ''), coalesce(county_token, ''), coalesce(imu_score::VARCHAR, ''), mua_status, coalesce(withdrawal_date::VARCHAR, ''), "
+    "is_connecticut::VARCHAR, coalesce(hold_reason, '') FROM int_mua_components ORDER BY ALL;"
+)
 
 
 def per_table(query: str, prefix: str) -> str:
@@ -3713,6 +3991,9 @@ def read_models(case: str) -> dict[str, Any]:
         "places_detail": [tuple(row) for row in duckdb_csv(database, PLACES_DETAIL_SQL)],
         "gv": [tuple(row) for row in duckdb_csv(database, GV_SQL)],
         "wonder": [tuple(row) for row in duckdb_csv(database, WONDER_SQL)],
+        "mmd": [tuple(row) for row in duckdb_csv(database, MMD_SQL)],
+        "hpsa": [tuple(row) for row in duckdb_csv(database, HPSA_SQL)],
+        "mua": [tuple(row) for row in duckdb_csv(database, MUA_SQL)],
         "occmix_holds": [
             tuple(row)
             for row in duckdb_csv(
@@ -3991,6 +4272,79 @@ def county_health_checks(base: dict[str, Any]) -> dict[str, bool]:
         "no recorded database",
     )
     return checks
+
+
+def shortage_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's C5 MMD, HPSA and MUA models with their expected rows and check the condition map's refusals."""
+    checks: dict[str, bool] = {}
+    # [468] to [473] Controls from the label map, C258.01 from its earlier capture; codes padded; state rows apart; zeros
+    # flagged; the unknown county and Connecticut flagged; the per-100,000 unit only for C258.78.
+    checks["mmd_matches_expected"] = base.get("mmd") == sorted(
+        [
+            ("C258.01", "", "2022", "county", "01001", "01", "0.8", "percent", "1,000-4,999", "false", "false", "false"),
+            ("C258.02", "C258.02", "2023", "county", "01001", "01", "12.5", "percent", "1,000-4,999", "false", "false", "false"),
+            ("C258.02", "C258.02", "2023", "county", "01003", "01", "0.0", "percent", "11-499", "true", "false", "false"),
+            ("C258.02", "C258.02", "2023", "county", "09001", "09", "10.1", "percent", "10,000+", "false", "false", "true"),
+            ("C258.02", "C258.02", "2023", "county", "09990", "09", "3.0", "percent", "11-499", "false", "true", "true"),
+            ("C258.78", "C258.78", "2023", "state", "", "01", "170.0", "per_100000", "10,000+", "false", "false", "false"),
+        ]
+    )
+    # [475] to [479] The exact repeat held; both designations of a reused ID kept; XXXXX kept as a token; dates and scores typed.
+    checks["hpsa_matches_expected"] = base.get("hpsa") == sorted(
+        [
+            ("101", "2026-09-24", "2013-08-13", "01001", "01001", "", "15", "Designated", "", "false", ""),
+            ("101", "2026-09-24", "2013-08-13", "01001", "01001", "", "15", "Designated", "", "false", "exact_repeat"),
+            ("102", "2026-09-24", "2008-10-08", "01003", "01003", "", "7", "Withdrawn", "2013-06-27", "false", ""),
+            ("102", "2026-09-24", "2013-08-13", "01003", "01003", "", "14", "Withdrawn", "2018-07-02", "false", ""),
+            ("103", "2026-09-24", "2022-01-05", "09110010100", "", "XXXXX", "20", "Designated", "", "true", ""),
+            ("104", "2026-09-24", "2000-02-01", "01005", "01005", "", "3", "Withdrawn", "", "false", ""),
+        ]
+    )
+    checks["mua_matches_expected"] = base.get("mua") == sorted(
+        [
+            ("00001", "2026-09-24", "MUA", "1978-11-01", "Single County", "Autauga", "01001", "", "44.1", "Withdrawn", "2001-01-26", "false", ""),
+            ("00001", "2026-09-24", "MUA", "1994-01-01", "Single County", "Autauga", "01001", "", "52.9", "Designated", "", "false", ""),
+            ("00001", "2026-09-24", "MUA", "1994-01-01", "Single County", "Autauga", "01001", "", "52.9", "Designated", "", "false", "exact_repeat"),
+            ("00518", "2026-09-24", "MUA", "2001-11-22", "Single County", "Pasco", "12101", "", "54.9", "Designated", "", "false", ""),
+            ("00518", "2026-09-24", "MUP", "2001-11-22", "Single County", "Pasco", "12101", "", "50.3", "Withdrawn", "2009-02-26", "false", ""),
+            ("00700", "2026-09-24", "MUA", "2005-10-28", "Census Tract", "113.02", "", "XXXXX", "61.3", "Designated", "", "true", ""),
+        ]
+    )
+    checks["shortage_seed_matches_registry"] = shortage_seed_matches()
+    checks["condition_map_refuses_shared_label"] = refuses_condition(
+        lambda: mmd_conditions.rows_for(
+            [
+                {"measure_id": "C258.01", "condition_code": "2", "condition_label": AMI, "geography": "c"},
+                {"measure_id": "C258.02", "condition_code": "1", "condition_label": AMI, "geography": "c"},
+            ],
+            {"C258.01": "", "C258.02": ""},
+        ),
+        "names both",
+    )
+    checks["vintage_generator_refuses_mmd_name_without_year"] = refuses_geography(
+        lambda: geography_file_periods.rows_for([{"table": "cms_mmd_csv", "sha256": sha("q6"), "release_id": "r", "file_name": "mmd_extract.csv"}], {}, {}),
+        "no publisher year",
+    )
+    checks["vintage_generator_refuses_hpsa_without_capture_date"] = refuses_geography(
+        lambda: geography_file_periods.rows_for(
+            [{"table": "hrsa_hpsa_detail", "sha256": sha("q7"), "release_id": "HPSA", "file_name": "BCD_HPSA_FCT_DET_PC.csv"}], {}, {}
+        ),
+        "no capture date",
+    )
+    checks["condition_map_refuses_unregistered_control"] = refuses_condition(
+        lambda: mmd_conditions.rows_for([{"measure_id": "C258.99", "condition_code": "9", "condition_label": "x", "geography": "c"}], {}),
+        "not in the registry",
+    )
+    return checks
+
+
+def refuses_condition(action: Any, fragment: str) -> bool:
+    """Return whether the action raises the condition map's error with the fragment in its message."""
+    try:
+        action()
+    except mmd_conditions.ConditionError as error:
+        return fragment in str(error)
+    return False
 
 
 def fixture_scenarios() -> dict[str, bool]:
@@ -4485,6 +4839,7 @@ def fixture_scenarios() -> dict[str, bool]:
     checks.update(county_context_checks(base))
     checks.update(income_labor_checks(base))
     checks.update(county_health_checks(base))
+    checks.update(shortage_checks(base))
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -4686,6 +5041,25 @@ def county_health_seed_matches() -> bool:
     return bool(expected_rows) and seeded == expected_rows
 
 
+def shortage_seed_matches() -> bool:
+    """Check the MMD, HPSA and MUA measure seed against the registry and its user additions: every control of S23 and S27
+    once, with its decision [474] [482]."""
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    additions = json.loads((REPO_ROOT / "config/acquisition/registry_additions.json").read_text())
+    families = {source: family["id"] for family in registry["source_families"] for source in family["audit_source_ids"]}
+    expected_rows = sorted(
+        (control["id"], control["preserved_controls"]["current_review_decision"])
+        for control in [*registry["measure_controls"], *additions["measure_controls"]]
+        if {families[source] for source in control["source_ids"] if source in families} & {"S23", "S27"}
+    )
+    seed = REPO_ROOT / "dbt/seeds/shortage_measures.csv"
+    if not seed.exists():
+        return False
+    with seed.open(newline="") as handle:
+        seeded = sorted((row["measure_control"], row["review_decision"]) for row in csv.DictReader(handle))
+    return bool(expected_rows) and seeded == expected_rows
+
+
 def mup_seed_matches() -> bool:
     """Check that the Medicare inpatient measure seed covers exactly the registry's controls of its two sources [363]."""
     registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
@@ -4712,6 +5086,9 @@ GEOGRAPHY_FINGERPRINTS = {
     "int_places_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY places_row_key)) FROM int_places_county_values AS t;",
     "int_gv_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY gv_value_key)) FROM int_gv_county_values AS t;",
     "int_wonder_county_deaths": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY wonder_row_key)) FROM int_wonder_county_deaths AS t;",
+    "int_mmd_prevalence": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY mmd_row_key)) FROM int_mmd_prevalence AS t;",
+    "int_hpsa_components": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY hpsa_row_key)) FROM int_hpsa_components AS t;",
+    "int_mua_components": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY mua_row_key)) FROM int_mua_components AS t;",
 }
 GEOGRAPHY_RECONCILE_SQL = """SELECT 'hud', (SELECT count(*) FROM stg_hud_zip_county)::VARCHAR,
     ((SELECT count(*) FROM int_hud_zip_county_quarters) + (SELECT count(*) FROM int_hud_zip_county_holds))::VARCHAR
@@ -4862,6 +5239,34 @@ PLACES_COVERAGE_SQL = """SELECT edition, data_year::VARCHAR, count(DISTINCT meas
     count(DISTINCT measureid || datavaluetypeid)::VARCHAR FROM int_places_county_values GROUP BY 1, 2 ORDER BY 1, 2;"""
 
 
+# Staged rows counted from the staging views without the models: MMD rows, HPSA and MUA rows (kept plus held) and the
+# approved repeat counts; unknown-county MMD rows are recorded [470] [475] [484].
+SHORTAGE_SQL = """SELECT 'mmd', (SELECT count(*) FROM stg_cms_mmd_csv)::VARCHAR, (SELECT count(*) FROM int_mmd_prevalence)::VARCHAR
+UNION ALL SELECT 'mmd_mapped', (SELECT count(*) FROM stg_cms_mmd_csv)::VARCHAR,
+    (SELECT count(measure_control) FROM int_mmd_prevalence)::VARCHAR
+UNION ALL SELECT 'hpsa', (SELECT count(*) FROM stg_hrsa_hpsa_detail)::VARCHAR, (SELECT count(*) FROM int_hpsa_components)::VARCHAR
+UNION ALL SELECT 'hpsa_held', '4', (SELECT count(*) FROM int_hpsa_components WHERE hold_reason IS NOT NULL)::VARCHAR
+UNION ALL SELECT 'mua', (SELECT count(*) FROM stg_hrsa_mua_detail)::VARCHAR, (SELECT count(*) FROM int_mua_components)::VARCHAR
+UNION ALL SELECT 'mua_held', '358', (SELECT count(*) FROM int_mua_components WHERE hold_reason IS NOT NULL)::VARCHAR
+UNION ALL SELECT 'mmd_unknown_county', (SELECT count(*) FROM stg_cms_mmd_csv WHERE trim(geography) = 'County' AND nullif(trim(county), '') IS NULL)::VARCHAR,
+    (SELECT count(*) FROM int_mmd_prevalence WHERE is_unknown_county)::VARCHAR;"""
+MMD_CONTROLS_SQL = "SELECT count(DISTINCT measure_control)::VARCHAR FROM int_mmd_prevalence;"
+
+
+def shortage_real(database: str, init: str) -> dict[str, Any]:
+    """Reconcile the real C5 models with their staging views; check the condition map reproduces from the pinned plans [468] [484]."""
+    checks: dict[str, bool] = {}
+    counts: dict[str, Any] = {}
+    for name, staged, typed in duckdb_csv(database, SHORTAGE_SQL, init):
+        counts[name] = {"staged": int(staged), "typed": int(typed)}
+        checks[f"shortage_{name}_reconcile"] = staged == typed and int(staged) > 0
+    counts["mmd_controls"] = int(duckdb_csv(database, MMD_CONTROLS_SQL, init)[0][0])
+    checks["shortage_mmd_all_controls_staged"] = counts["mmd_controls"] == 81
+    checks["shortage_seed_matches_registry"] = shortage_seed_matches()
+    checks["mmd_conditions_seed_reproduced"] = mmd_conditions.SEED.read_text() == mmd_conditions.as_csv(mmd_conditions.build())
+    return {"checks": checks, "counts": counts}
+
+
 def county_health_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real C4 models with their staging views; record PLACES all-state coverage per release and year [450] [462]."""
     checks: dict[str, bool] = {}
@@ -4949,6 +5354,9 @@ def real_stage() -> dict[str, Any]:
     county_health = county_health_real(database, init)
     outcome["checks"].update(county_health["checks"])
     outcome["county_health_counts"] = county_health["counts"]
+    shortage = shortage_real(database, init)
+    outcome["checks"].update(shortage["checks"])
+    outcome["shortage_counts"] = shortage["counts"]
     status_sql = "SELECT text_layout || ' ' || twin_status, count(*)::VARCHAR FROM stg_bronze__twin_comparison GROUP BY 1 ORDER BY 1;"
     outcome["twin_statuses"] = dict(duckdb_csv(database, status_sql))
     held_sql = (

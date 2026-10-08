@@ -263,6 +263,17 @@ database, bridged race (1999 to 2020) or single race (2018 to 2024), with their 
 Available marks (`int_wonder_county_deaths`); the 2024 rows repeated identically in the shorter single-race export are
 held. `dbt/seeds/county_health_measures.csv` maps the 56 registry controls of these sources.
 
+CMS Mapping Medicare Disparities prevalence (`int_mmd_prevalence`) is staged per control, year and county or state for its
+one filter set. Each row takes its control from the reviewed condition label map (`dbt/seeds/mmd_conditions.csv`, written by
+`scripts/lakehouse/mmd_conditions.py` from the pinned collection plans), so the earlier acute myocardial infarction captures
+are mapped too. Zeros keep a possible-suppression flag and county rows without a name are flagged as unknown counties.
+C258.78 is a state rate per 100,000. All 82 MMD controls stay held for definition. HRSA primary-care HPSA components
+(`int_hpsa_components`) and MUA and MUP components (`int_mua_components`) keep each designation's type, status, score and
+dates as published at the capture, with `XXXXX` county codes kept as tokens; rows repeated identically in the file are held.
+The period seed dates each MMD file by the year in its name and the HPSA and MUA files by their capture date, which the
+models carry as `capture_date`. The Federal Register HPSA workbooks stay in bronze. `dbt/seeds/shortage_measures.csv`
+maps the 85 registry controls of these sources.
+
 The dbt packages
 (dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
 publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
@@ -278,6 +289,7 @@ scripts/lakehouse/dbt.sh build                                      # dbt on the
 .venv/bin/python -m scripts.lakehouse.pos_file_periods --check      # POS periods match the manifests and job plans
 .venv/bin/python -m scripts.lakehouse.ownership_release_periods --check   # ownership periods match the manifests and receipts
 .venv/bin/python -m scripts.lakehouse.geography_file_periods --check      # geography periods match the manifests and records
+.venv/bin/python -m scripts.lakehouse.mmd_conditions --check             # MMD condition map matches the pinned plans
 ```
 
 Load large groups in batches of about 20 to 40 tables: each job stops after 1 hour (`COMPOSE_TIMEOUT` in
@@ -648,8 +660,9 @@ The lakehouse runs on one Mac against the project bucket; it is not a deployed s
 loads one copy per stored file. Staging covers the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital
 General Information, ownership, Medicare inpatient, HHS capacity, ONC, Care Compare timely and effective care, maternal health and HCAHPS
 tables, the geography tables (HUD ZIP-to-county, county adjacency, RUCC, RUCA and hospital service areas), the ACS and SVI
-tables, SAIPE, SAHIE, BLS, PLACES, Medicare Geographic Variation and WONDER. It types the HAI and Care Compare windows, the
-geography files, the ACS, SVI, SAIPE, SAHIE, BLS, PLACES, geographic variation and WONDER values, the occupational-mix surveys, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
+tables, SAIPE, SAHIE, BLS, PLACES, Medicare Geographic Variation, WONDER, MMD and the HRSA HPSA and MUA files. It types the
+HAI and Care Compare windows, the geography files, the ACS, SVI, SAIPE, SAHIE, BLS, PLACES, geographic variation, WONDER
+and MMD values, the HPSA and MUA designations, the occupational-mix surveys, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
 index. The Medicare sepsis share counts only published DRG cells (11 discharges or more), so it can be low for small
 hospitals; the Medicare chronic-condition shares start with data year 2017. Each change-of-ownership release lists
 events back to 2016, so one event appears once per release until the alignment step chooses one. An enrollment or
