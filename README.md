@@ -72,7 +72,11 @@ longer use first. Spark jobs get the same free memory, less 10% for the JVM's ow
 use, as their heap in whole GiB: `scripts/lakehouse/catalog.py job` computes it
 after Polaris starts and passes `SPARK_JOB_MEMORY`, which
 `scripts/lakehouse/session.py` requires (no default). See the figures with
-`.venv/bin/python -m scripts.lakehouse.memory_budget --spark --explain`.
+`.venv/bin/python -m scripts.lakehouse.memory_budget --spark --explain`. When Polaris
+or its PostgreSQL database starts, `scripts/lakehouse/catalog.py` gives it a container
+limit of 25% or 10% of the same free memory (at least 1 GiB or 256 MiB), so Polaris's
+80% Java heap scales with it. The limits are written to the private Compose env file and
+kept while the container runs, so later commands do not restart it.
 
 Run from this repository's root with its existing Python 3.12 `.venv`.
 Dependencies are shared across development and production in `requirements.txt`;

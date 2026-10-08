@@ -125,6 +125,13 @@ def compute(total: int, usages: list[int], mac_available: int | None = None) -> 
     return budget
 
 
+def service_limit(budget: Budget, share: float, minimum: int) -> int:
+    """Return a long-running service's memory limit: its share of the plan's free memory, at least the minimum, in whole
+    MiB (owner, Oct 8 2026: Polaris 25% and at least 1 GiB, its database 10% and at least 256 MiB) [498] [503]."""
+    mib = 1024**2
+    return max(minimum, int(budget.free * share)) // mib * mib
+
+
 def parse_vm_stat(text: str) -> int:
     """Return the bytes vm_stat counts as free, file-backed or purgeable; compressed memory is not counted [494] [496]."""
     page = VM_STAT_PAGE.search(text)

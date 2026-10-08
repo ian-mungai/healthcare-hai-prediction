@@ -25,6 +25,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run through scripts/lakehouse/catalog.py}
       POSTGRES_DB: polaris
       POSTGRES_INITDB_ARGS: --encoding UTF8 --data-checksums
+    # Computed by scripts/lakehouse/catalog.py from the memory free when the service starts; kept for its life.
+    mem_limit: ${POLARIS_DB_MEMORY_LIMIT:?run through scripts/lakehouse/catalog.py}
     volumes:
       # The catalog database lives in the ignored data/lakehouse/ folder, so recreating the container keeps the tables.
       - ./data/lakehouse/polaris_db:/var/lib/postgresql/data
@@ -39,6 +41,8 @@ services:
     image: apache/polaris-admin-tool:1.8.0@sha256:34dde19bb321aef5925a14ba90b69e26e982a5dcbda76a9d0cfc1aac1534ba4e
     profiles: [setup]
     environment: *polaris-database
+    # The one-time bootstrap uses Polaris's computed limit [502].
+    mem_limit: ${POLARIS_MEMORY_LIMIT:?run through scripts/lakehouse/catalog.py}
     command:
       - bootstrap
       - --realm=POLARIS
@@ -60,6 +64,8 @@ services:
       AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
     volumes:
       - *aws-profile
+    # Computed by scripts/lakehouse/catalog.py from the memory free when Polaris starts; its 80% Java heap scales with it.
+    mem_limit: ${POLARIS_MEMORY_LIMIT:?run through scripts/lakehouse/catalog.py}
     ports:
       - "127.0.0.1:8181:8181"
       - "127.0.0.1:8182:8182"

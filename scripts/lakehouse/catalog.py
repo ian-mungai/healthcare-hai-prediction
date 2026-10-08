@@ -49,6 +49,12 @@ POLARIS_PORT = 8181
 COMPOSE_TIMEOUT = 3600
 # Docker needs the operating system's search path and home folder; no project setting is passed to it.
 SYSTEM_VARIABLES = ("PATH", "HOME")
+PROJECT = "hai-lakehouse"
+# Each long-running service's Compose variable, share of the plan's free memory and minimum (owner, Oct 8 2026) [498].
+SERVICE_MEMORY = {
+    "polaris-db": ("POLARIS_DB_MEMORY_LIMIT", 0.10, 256 * 1024**2),
+    "polaris": ("POLARIS_MEMORY_LIMIT", 0.25, 1024**3),
+}
 # Job name -> (module, needs the running Polaris catalog). Synthetic end-to-end tests use a throwaway local catalog.
 JOBS = {
     "smoke": ("scripts.lakehouse.smoke", True),
@@ -220,9 +226,40 @@ def ensure_reader(access: str, secret: dict[str, str]) -> str:
     return outcome
 
 
+def running_limit(service: str) -> int:
+    """Return the memory limit of the service's running container in bytes, or 0 when it is stopped, missing or unlimited."""
+    result = run_command("docker", ["inspect", f"{PROJECT}-{service}-1", "--format", "{{.State.Running}} {{.HostConfig.Memory}}"], timeout=60)
+    if result.returncode:
+        return 0
+    running, memory = result.stdout.split()
+    return int(memory) if running == "true" else 0
+
+
+def service_limits() -> dict[str, str]:
+    """Return the Compose memory limits of Polaris and its database [498] [499].
+
+    A running service keeps the limit it started with, so Compose never recreates it for a changed value; a stopped or
+    unlimited one gets its share of the memory free now. Too little memory stops with the figures [501].
+    """
+    limits: dict[str, str] = {}
+    budget: memory_budget.Budget | None = None
+    for service, (variable, share, minimum) in SERVICE_MEMORY.items():
+        limit = running_limit(service)
+        if not limit:
+            try:
+                budget = budget or memory_budget.current()
+            except memory_budget.BudgetError as error:
+                raise CatalogError(f"no memory limit for {service}: {error}") from error
+            limit = memory_budget.service_limit(budget, share, minimum)
+        limits[variable] = f"{limit // 1024**2}m"
+    return limits
+
+
 def write_compose_env(settings: dict[str, str]) -> None:
-    """Write the env file docker compose reads, from the owner-only credentials and the deployment settings."""
-    write_private(COMPOSE_ENV, {**credentials(), "AWS_PROFILE": settings["aws_profile"], "AWS_REGION": settings["aws_region"]})
+    """Write the env file docker compose reads, from the owner-only credentials, the deployment settings and the services'
+    memory limits, which every Compose command then reads [500]."""
+    values = {**credentials(), "AWS_PROFILE": settings["aws_profile"], "AWS_REGION": settings["aws_region"], **service_limits()}
+    write_private(COMPOSE_ENV, values)
 
 
 def up() -> None:
