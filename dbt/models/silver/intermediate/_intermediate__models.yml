@@ -1133,3 +1133,55 @@ models:
           - accepted_values:
               arguments:
                 values: [exact_repeat]
+
+  - name: int_cc_unplanned_visits_windows
+    description: >
+      Care Compare unplanned hospital visits per hospital, measure and window from the latest release, every measure ID as
+      published (OP_32, OP-32, OP_35, OP_36, READM and EDAC IDs). Validation only; conflicts held in int_validation_window_holds.
+    columns:
+      - name: window_key
+        description: Hospital, measure and window.
+        data_tests: [unique, not_null]
+
+  - name: int_cc_complications_deaths_windows
+    description: >
+      Care Compare complications and deaths per hospital, measure and window from the latest release: 30-day mortality, PSI
+      and other IDs as published. PSI-90 and PSI-13 are not predictors. Validation only.
+    columns:
+      - name: window_key
+        description: Hospital, measure and window.
+        data_tests: [unique, not_null]
+
+  - name: int_cc_hrrp_windows
+    description: >
+      Hospital Readmissions Reduction Program per hospital, condition (measure_name, kept as measure_id) and performance
+      window from the latest release: excess readmission ratio, predicted and expected rates, discharges and readmissions as
+      published. Validation only.
+    columns:
+      - name: window_key
+        description: Hospital, condition and window.
+        data_tests: [unique, not_null]
+
+  - name: int_validation_window_holds
+    description: >
+      Group D measure rows the window models leave out, with the reason and row count; kept apart from int_cc_window_holds.
+    columns:
+      - name: hold_reason
+        description: no_key, unparsed_date, label_held, undated_release, same_date_conflict or repeated_in_file.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [no_key, unparsed_date, label_held, undated_release, same_date_conflict, repeated_in_file]
+
+  - name: int_validation_measure_windows
+    description: >
+      Group D registry controls per component measure, hospital and window, from the exact IDs validation_measures names;
+      tokens stay text with a null number. Controls C289, C290, C291 and children, comparison_only.
+    columns:
+      - name: validation_key
+        description: Control, measure, hospital and window.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests: [not_null]

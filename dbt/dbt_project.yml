@@ -40,6 +40,9 @@ vars:
     cms_cc_timely_and_effective_care_hospital: care_compare
     cms_cc_maternal_health_hospital: care_compare
     cms_cc_hcahps_hospital: care_compare
+    cms_cc_unplanned_hospital_visits_hospital: care_compare
+    cms_cc_complications_and_deaths_hospital: care_compare
+    cms_cc_hospital_readmissions_reduction_program_hospital: care_compare
     cms_medicare_inpatient_by_provider: medicare_inpatient
     cms_medicare_inpatient_by_drg: medicare_inpatient
     hhs_capacity_csv: hhs_capacity

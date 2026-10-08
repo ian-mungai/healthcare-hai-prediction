@@ -120,6 +120,9 @@ TABLES = (
     "cms_mmd_csv",
     "hrsa_hpsa_detail",
     "hrsa_mua_detail",
+    "cms_cc_unplanned_hospital_visits_hospital",
+    "cms_cc_complications_and_deaths_hospital",
+    "cms_cc_hospital_readmissions_reduction_program_hospital",
 )
 HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
@@ -843,6 +846,22 @@ MUA_COLUMNS = (
     "rural_status_description",
 )
 BLS_COLUMNS = ("seriesid", "county_fips", "measure_code", "year", "period", "periodname", "value", "footnotes")
+D1_WINDOW_COLUMNS = (
+    "facility_id",
+    "provider_id",
+    "measure_id",
+    "measure_name",
+    "compared_to_national",
+    "denominator",
+    "score",
+    "lower_estimate",
+    "higher_estimate",
+    "footnote",
+    "start_date",
+    "end_date",
+    "measure_start_date",
+    "measure_end_date",
+)
 ACS_COLUMNS = {
     "acs_dp04": ("geo_id", "name", "dp04_0077pe", "dp04_0078pe"),
     "acs_s1701": ("geo_id", "name", "s1701_c03_001e"),
@@ -925,6 +944,21 @@ WIDE_COLUMNS = {
         "end_date",
         "measure_start_date",
         "measure_end_date",
+    ),
+    # Group D1: visits and deaths in the HAI-like layout with the older provider_id columns; HRRP keyed by measure_name [505] [506].
+    "cms_cc_unplanned_hospital_visits_hospital": D1_WINDOW_COLUMNS + ("number_of_patients", "number_of_patients_returned"),
+    "cms_cc_complications_and_deaths_hospital": D1_WINDOW_COLUMNS,
+    "cms_cc_hospital_readmissions_reduction_program_hospital": (
+        "facility_id",
+        "measure_name",
+        "number_of_discharges",
+        "footnote",
+        "excess_readmission_ratio",
+        "predicted_readmission_rate",
+        "expected_readmission_rate",
+        "number_of_readmissions",
+        "start_date",
+        "end_date",
     ),
     # The maternal table has no provider_id and no measure_start_date [319] [320].
     "cms_cc_maternal_health_hospital": ("facility_id", "measure_id", "measure_name", "score", "sample", "footnote", "start_date", "end_date"),
@@ -2359,6 +2393,81 @@ GROUP_C4 = (
     Stored("wonder_county_mortality", "wd3", "WONDER__s24", "county_year.csv", sha("wd3"), 1, records=(wonder_row("01001", "2024", "520", "Unreliable"),)),
 )
 
+HRRP_2023 = {"start_date": "07/01/2020", "end_date": "06/30/2023"}
+
+
+def hrrp_row(facility: str, measure: str, ratio: str, readmissions: str, **fields: str) -> tuple[tuple[str, str], ...]:
+    """Return one Hospital Readmissions Reduction Program row for the 2020 to 2023 performance window."""
+    base = {"facility_id": facility, "measure_name": measure, "excess_readmission_ratio": ratio, "number_of_readmissions": readmissions}
+    return tuple((base | HRRP_2023 | fields).items())
+
+
+# D1 [504] to [513]: visits with an exact and a renamed OP_32, a measure no control names, a token and an older-layout file
+# whose OP_32 window a later release supersedes; deaths with a mapped mortality ID, PSI IDs E038 cannot map and a window
+# repeated in one file; HRRP keyed by measure_name with tokens.
+GROUP_D1 = (
+    Stored(
+        "cms_cc_unplanned_hospital_visits_hospital",
+        "vi1",
+        "2025-07-01",
+        "Unplanned_Hospital_Visits-Hospital.csv",
+        sha("vi1"),
+        4,
+        records=(
+            cc(
+                facility_id="010001",
+                measure_id="OP_32",
+                score="12.5",
+                denominator="300",
+                compared_to_national="No Different Than the National Rate",
+                **DATES_2022,
+            ),
+            cc(facility_id="010001", measure_id="OP-32", score="13.0", **DATES_2022),
+            cc(facility_id="010001", measure_id="READM_30_HF", score="20.1", **DATES_2022),
+            cc(facility_id="010003", measure_id="OP_35_ED", score="Not Available", **DATES_2022),
+        ),
+    ),
+    Stored(
+        "cms_cc_unplanned_hospital_visits_hospital",
+        "vi0",
+        "2023-01-01",
+        "Unplanned_Hospital_Visits-Hospital.csv",
+        sha("vi0"),
+        2,
+        records=(
+            cc(provider_id="010001", measure_id="OP_32", score="11.0", **OLD_DATES_2022),
+            cc(provider_id="010001", measure_id="OP_36", score="9.9", measure_start_date="01/01/2020", measure_end_date="12/31/2020"),
+        ),
+    ),
+    Stored(
+        "cms_cc_complications_and_deaths_hospital",
+        "de1",
+        "2025-07-01",
+        "Complications_and_Deaths-Hospital.csv",
+        sha("de1"),
+        5,
+        records=(
+            cc(facility_id="010001", measure_id="MORT_30_AMI", score="12.3", lower_estimate="10.9", higher_estimate="13.8", **DATES_2022),
+            cc(facility_id="010001", measure_id="PSI_90", score="1.01", denominator="Not Applicable", **DATES_2022),
+            cc(facility_id="010001", measure_id="PSI_90_SAFETY", score="0.99", **DATES_2022),
+            cc(facility_id="010001", measure_id="MORT_30_HF", score="10.0", **DATES_2022),
+            cc(facility_id="010001", measure_id="MORT_30_HF", score="10.4", **DATES_2022),
+        ),
+    ),
+    Stored(
+        "cms_cc_hospital_readmissions_reduction_program_hospital",
+        "hr1",
+        "2025-10-01",
+        "FY_2025_Hospital_Readmissions_Reduction_Program_Hospital.csv",
+        sha("hr1"),
+        2,
+        records=(
+            hrrp_row("010001", "READM-30-HF-HRRP", "1.0123", "61", number_of_discharges="300", predicted_readmission_rate="20.1"),
+            hrrp_row("010003", "READM-30-AMI-HRRP", "N/A", "Too Few to Report", number_of_discharges="N/A"),
+        ),
+    ),
+)
+
 ALZHEIMERS = "Alzheimer's Disease, Related Disorders, or Senile Dementia"
 AMI = "Acute Myocardial Infarction"
 
@@ -2779,6 +2888,7 @@ BASE = (
     *GROUP_C3,
     *GROUP_C4,
     *GROUP_C5,
+    *GROUP_D1,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -3092,6 +3202,18 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
         tuple(with_record(item, bls_row("09", "2023", "M01", "1")) if item.key == "bl1" else item for item in BASE),
         frozenset(),
     ),
+    # [510] A visits score that is neither a number nor a published token.
+    "validation_value_uncast": (
+        "assert_validation_values_cast",
+        tuple(with_record(item, cc(facility_id="010005", measure_id="OP_36", score="1O.5", **DATES_2022)) if item.key == "vi1" else item for item in BASE),
+        frozenset(),
+    ),
+    # [510] An HRRP count with an unknown token.
+    "hrrp_token_unknown": (
+        "assert_validation_values_cast",
+        tuple(with_record(item, hrrp_row("010005", "READM-30-PN-HRRP", "0.98", "NA*")) if item.key == "hr1" else item for item in BASE),
+        frozenset(),
+    ),
     # [468] An MMD label the reviewed map does not name.
     "mmd_label_unmapped": (
         "assert_mmd_controls_match_labels",
@@ -3283,6 +3405,14 @@ CREATE TABLE bronze.cms_change_of_ownership AS SELECT * REPLACE (_row_number::BI
     FROM read_csv(getvariable('cms_change_of_ownership_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.cms_cc_timely_and_effective_care_hospital AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('cms_cc_timely_and_effective_care_hospital_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_cc_unplanned_hospital_visits_hospital AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_cc_unplanned_hospital_visits_hospital_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_cc_complications_and_deaths_hospital AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('cms_cc_complications_and_deaths_hospital_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.cms_cc_hospital_readmissions_reduction_program_hospital AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(
+        getvariable('cms_cc_hospital_readmissions_reduction_program_hospital_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"'
+    );
 CREATE TABLE bronze.cms_cc_maternal_health_hospital AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('cms_cc_maternal_health_hospital_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.cms_cc_hcahps_hospital AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
@@ -3802,6 +3932,20 @@ WONDER_SQL = (
     "coalesce(crude_rate_token, ''), "
     "coalesce(hold_reason, '') FROM int_wonder_county_deaths ORDER BY ALL;"
 )
+D1_WINDOWS_SQL = (
+    "SELECT 'visits', entity_id, measure_id, window_start::VARCHAR, coalesce(score, ''), left(member_sha256, 3) FROM int_cc_unplanned_visits_windows "
+    "UNION ALL SELECT 'deaths', entity_id, measure_id, window_start::VARCHAR, coalesce(score, ''), left(member_sha256, 3) "
+    "FROM int_cc_complications_deaths_windows "
+    "UNION ALL SELECT 'hrrp', entity_id, measure_id, window_start::VARCHAR, coalesce(excess_readmission_ratio, ''), left(member_sha256, 3) "
+    "FROM int_cc_hrrp_windows ORDER BY ALL;"
+)
+VALIDATION_SQL = (
+    "SELECT measure_control, entity_id, measure_id, window_start::VARCHAR, coalesce(value_text, ''), coalesce(value_number::VARCHAR, '') "
+    "FROM int_validation_measure_windows ORDER BY ALL;"
+)
+VALIDATION_HOLDS_SQL = (
+    "SELECT bronze_table, coalesce(entity_id, ''), coalesce(measure_id, ''), hold_reason, row_count::VARCHAR FROM int_validation_window_holds ORDER BY ALL;"
+)
 MMD_SQL = (
     "SELECT measure_control, coalesce(file_control, ''), data_year::VARCHAR, geography_level, coalesce(county_fips, ''), coalesce(state_fips, ''), "
     "coalesce(value_number::VARCHAR, ''), value_unit, denominator_band, is_possible_suppression::VARCHAR, is_unknown_county::VARCHAR, "
@@ -3992,6 +4136,9 @@ def read_models(case: str) -> dict[str, Any]:
         "gv": [tuple(row) for row in duckdb_csv(database, GV_SQL)],
         "wonder": [tuple(row) for row in duckdb_csv(database, WONDER_SQL)],
         "mmd": [tuple(row) for row in duckdb_csv(database, MMD_SQL)],
+        "d1_windows": [tuple(row) for row in duckdb_csv(database, D1_WINDOWS_SQL)],
+        "validation": [tuple(row) for row in duckdb_csv(database, VALIDATION_SQL)],
+        "validation_holds": [tuple(row) for row in duckdb_csv(database, VALIDATION_HOLDS_SQL)],
         "hpsa": [tuple(row) for row in duckdb_csv(database, HPSA_SQL)],
         "mua": [tuple(row) for row in duckdb_csv(database, MUA_SQL)],
         "occmix_holds": [
@@ -4335,6 +4482,49 @@ def shortage_checks(base: dict[str, Any]) -> dict[str, bool]:
         lambda: mmd_conditions.rows_for([{"measure_id": "C258.99", "condition_code": "9", "condition_label": "x", "geography": "c"}], {}),
         "not in the registry",
     )
+    return checks
+
+
+def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's D1 window and validation models with their expected rows [504] to [511]."""
+    checks: dict[str, bool] = {}
+    # [505] [506] [507] Older-layout windows read; the later release supersedes the older OP_32; HRRP keyed by measure_name;
+    # the repeated MORT_30_HF window is held, not kept.
+    checks["d1_windows_match_expected"] = base.get("d1_windows") == sorted(
+        [
+            ("visits", "010001", "OP_32", "2022-01-01", "12.5", "vi1"),
+            ("visits", "010001", "OP-32", "2022-01-01", "13.0", "vi1"),
+            ("visits", "010001", "READM_30_HF", "2022-01-01", "20.1", "vi1"),
+            ("visits", "010003", "OP_35_ED", "2022-01-01", "Not Available", "vi1"),
+            ("visits", "010001", "OP_36", "2020-01-01", "9.9", "vi0"),
+            ("deaths", "010001", "MORT_30_AMI", "2022-01-01", "12.3", "de1"),
+            ("deaths", "010001", "PSI_90", "2022-01-01", "1.01", "de1"),
+            ("deaths", "010001", "PSI_90_SAFETY", "2022-01-01", "0.99", "de1"),
+            ("hrrp", "010001", "READM-30-HF-HRRP", "2020-07-01", "1.0123", "hr1"),
+            ("hrrp", "010003", "READM-30-AMI-HRRP", "2020-07-01", "N/A", "hr1"),
+        ]
+    )
+    # [508] [509] [510] Exact IDs only (OP-32, READM_30_HF and the PSI IDs stay unmapped); parents and children both; tokens stay text.
+    checks["validation_matches_expected"] = base.get("validation") == sorted(
+        [
+            ("C289", "010001", "READM-30-HF-HRRP", "2020-07-01", "1.0123", "1.0123"),
+            ("C289", "010003", "READM-30-AMI-HRRP", "2020-07-01", "N/A", ""),
+            ("C289.01", "010003", "READM-30-AMI-HRRP", "2020-07-01", "N/A", ""),
+            ("C289.04", "010001", "READM-30-HF-HRRP", "2020-07-01", "1.0123", "1.0123"),
+            ("C290", "010001", "OP_32", "2022-01-01", "12.5", "12.5"),
+            ("C290", "010001", "OP_36", "2020-01-01", "9.9", "9.9"),
+            ("C290", "010003", "OP_35_ED", "2022-01-01", "Not Available", ""),
+            ("C290.01", "010001", "OP_32", "2022-01-01", "12.5", "12.5"),
+            ("C290.03", "010003", "OP_35_ED", "2022-01-01", "Not Available", ""),
+            ("C290.04", "010001", "OP_36", "2020-01-01", "9.9", "9.9"),
+            ("C291", "010001", "MORT_30_AMI", "2022-01-01", "12.3", "12.3"),
+            ("C291.01", "010001", "MORT_30_AMI", "2022-01-01", "12.3", "12.3"),
+        ]
+    )
+    checks["validation_holds_match_expected"] = base.get("validation_holds") == [
+        ("cms_cc_complications_and_deaths_hospital", "010001", "MORT_30_HF", "repeated_in_file", "2")
+    ]
+    checks["validation_seed_matches_registry"] = validation_seed_matches()
     return checks
 
 
@@ -4840,6 +5030,7 @@ def fixture_scenarios() -> dict[str, bool]:
     checks.update(income_labor_checks(base))
     checks.update(county_health_checks(base))
     checks.update(shortage_checks(base))
+    checks.update(validation_checks(base))
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -5041,6 +5232,32 @@ def county_health_seed_matches() -> bool:
     return bool(expected_rows) and seeded == expected_rows
 
 
+def validation_seed_matches() -> bool:
+    """Check the validation measure seed against the registry: every control of the D1 sources and their children, each named
+    ID found in its control's exact field, E038 and E039 unmapped [508] [511]."""
+    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
+    sources = {source["source_id"]: source for source in registry["sources"]}
+    controls = {control["id"]: control for control in registry["measure_controls"]}
+    parents = {control for name in ("care-hrrp-cms", "care-visits-cms", "care-deaths-cms", "PSI90", "PSI13") for control in sources[name]["linked_measure_ids"]}
+    expected = parents | {name for name, control in controls.items() if control.get("parent_id") in parents}
+    seed = REPO_ROOT / "dbt/seeds/validation_measures.csv"
+    if not seed.exists():
+        return False
+    with seed.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    fields = {name: controls[name]["preserved_controls"]["current_exact_field"] for name in expected}
+    children_ids = {row["measure_control"]: row["source_measure_id"] for row in rows if controls[row["measure_control"]].get("parent_id") in parents}
+    named = all(
+        (row["source_measure_id"] in fields[row["measure_control"]])
+        or (row["measure_control"] in parents and row["source_measure_id"] in children_ids.values())
+        for row in rows
+        if row["source_measure_id"]
+    )
+    unmapped = {row["measure_control"] for row in rows if not row["source_measure_id"]} == {"E038", "E039"}
+    decisions = all(row["review_decision"] == controls[row["measure_control"]]["preserved_controls"]["current_review_decision"] for row in rows)
+    return {row["measure_control"] for row in rows} == expected and named and unmapped and decisions
+
+
 def shortage_seed_matches() -> bool:
     """Check the MMD, HPSA and MUA measure seed against the registry and its user additions: every control of S23 and S27
     once, with its decision [474] [482]."""
@@ -5087,6 +5304,16 @@ GEOGRAPHY_FINGERPRINTS = {
     "int_gv_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY gv_value_key)) FROM int_gv_county_values AS t;",
     "int_wonder_county_deaths": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY wonder_row_key)) FROM int_wonder_county_deaths AS t;",
     "int_mmd_prevalence": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY mmd_row_key)) FROM int_mmd_prevalence AS t;",
+    "int_cc_unplanned_visits_windows": (
+        "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY window_key)) FROM int_cc_unplanned_visits_windows AS t;"
+    ),
+    "int_cc_complications_deaths_windows": (
+        "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY window_key)) FROM int_cc_complications_deaths_windows AS t;"
+    ),
+    "int_cc_hrrp_windows": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY window_key)) FROM int_cc_hrrp_windows AS t;",
+    "int_validation_measure_windows": (
+        "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY validation_key)) FROM int_validation_measure_windows AS t;"
+    ),
     "int_hpsa_components": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY hpsa_row_key)) FROM int_hpsa_components AS t;",
     "int_mua_components": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY mua_row_key)) FROM int_mua_components AS t;",
 }
@@ -5253,6 +5480,56 @@ UNION ALL SELECT 'mmd_unknown_county', (SELECT count(*) FROM stg_cms_mmd_csv WHE
 MMD_CONTROLS_SQL = "SELECT count(DISTINCT measure_control)::VARCHAR FROM int_mmd_prevalence;"
 
 
+# Every distinct usable window key of a D1 table is a window or a held window, never both and never neither [513].
+D1_KEYS_SQL = """WITH keys AS (
+    SELECT DISTINCT 'cms_cc_unplanned_hospital_visits_hospital' AS t, trim(coalesce(facility_id, provider_id)) AS e, trim(measure_id) AS m,
+        try_strptime(coalesce(start_date, measure_start_date), '%m/%d/%Y')::date AS s, try_strptime(coalesce(end_date, measure_end_date), '%m/%d/%Y')::date AS f
+    FROM stg_cms_cc_unplanned_hospital_visits_hospital WHERE NOT is_label_held
+    UNION ALL
+    SELECT DISTINCT 'cms_cc_complications_and_deaths_hospital', trim(coalesce(facility_id, provider_id)), trim(measure_id),
+        try_strptime(coalesce(start_date, measure_start_date), '%m/%d/%Y')::date, try_strptime(coalesce(end_date, measure_end_date), '%m/%d/%Y')::date
+    FROM stg_cms_cc_complications_and_deaths_hospital WHERE NOT is_label_held
+    UNION ALL
+    SELECT DISTINCT 'cms_cc_hospital_readmissions_reduction_program_hospital', trim(facility_id), trim(measure_name),
+        try_strptime(start_date, '%m/%d/%Y')::date, try_strptime(end_date, '%m/%d/%Y')::date
+    FROM stg_cms_cc_hospital_readmissions_reduction_program_hospital WHERE NOT is_label_held
+),
+usable AS (SELECT * FROM keys WHERE nullif(e, '') IS NOT NULL AND nullif(m, '') IS NOT NULL AND s IS NOT NULL AND f IS NOT NULL),
+w AS (
+    SELECT 'cms_cc_unplanned_hospital_visits_hospital' AS t, entity_id AS e, measure_id AS m, window_start AS s, window_end AS f
+    FROM int_cc_unplanned_visits_windows
+    UNION ALL SELECT 'cms_cc_complications_and_deaths_hospital', entity_id, measure_id, window_start, window_end FROM int_cc_complications_deaths_windows
+    UNION ALL SELECT 'cms_cc_hospital_readmissions_reduction_program_hospital', entity_id, measure_id, window_start, window_end FROM int_cc_hrrp_windows
+),
+h AS (
+    SELECT bronze_table AS t, entity_id AS e, measure_id AS m, window_start AS s, window_end AS f
+    FROM int_validation_window_holds WHERE window_start IS NOT NULL
+)
+SELECT usable.t, count(*)::VARCHAR, (SELECT count(*) FROM w WHERE w.t = usable.t)::VARCHAR, (SELECT count(*) FROM h WHERE h.t = usable.t)::VARCHAR,
+    (SELECT count(*) FROM w INNER JOIN h USING (t, e, m, s, f) WHERE w.t = usable.t)::VARCHAR
+FROM usable GROUP BY usable.t ORDER BY 1;"""
+
+
+def validation_real(database: str, init: str) -> dict[str, Any]:
+    """Reconcile the real D1 windows with their staging views' window keys; count rows per control [511] [513]."""
+    checks: dict[str, bool] = {}
+    counts: dict[str, Any] = {}
+    for table, keys, windows, held, both in duckdb_csv(database, D1_KEYS_SQL, init):
+        counts[table] = {"window_keys": int(keys), "windows": int(windows), "held_windows": int(held), "both": int(both)}
+        checks[f"validation_{table}_keys_reconcile"] = int(keys) == int(windows) + int(held) and int(both) == 0 and int(windows) > 0
+    counts["rows_per_control"] = dict(
+        duckdb_csv(database, "SELECT measure_control, count(*)::VARCHAR FROM int_validation_measure_windows GROUP BY 1 ORDER BY 1;", init)
+    )
+    counts["holds"] = dict(
+        duckdb_csv(database, "SELECT bronze_table || ' ' || hold_reason, sum(row_count)::VARCHAR FROM int_validation_window_holds GROUP BY 1 ORDER BY 1;", init)
+    )
+    checks["validation_mapped_controls_have_rows"] = all(
+        control in counts["rows_per_control"] for control in ("C289", "C290", "C291", "C289.01", "C290.01", "C291.01")
+    )
+    checks["validation_seed_matches_registry"] = validation_seed_matches()
+    return {"checks": checks, "counts": counts}
+
+
 def shortage_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real C5 models with their staging views; check the condition map reproduces from the pinned plans [468] [484]."""
     checks: dict[str, bool] = {}
@@ -5312,6 +5589,14 @@ def county_context_real(database: str, init: str) -> dict[str, Any]:
     return {"checks": checks, "counts": counts}
 
 
+def fingerprint(database: str, query: str) -> list[list[str]]:
+    """Return a model's fingerprint, or a marker when the build skipped the model, so the report shows the failed build."""
+    try:
+        return duckdb_csv(database, query)
+    except RuntimeError as error:
+        return [["missing", str(error)[-200:]]]
+
+
 def real_stage() -> dict[str, Any]:
     """Build the models from the catalog twice and reconcile them with bronze."""
     outcome: dict[str, Any] = {"checks": {}, "counts": {}}
@@ -5337,7 +5622,7 @@ def real_stage() -> dict[str, Any]:
             database,
             "SELECT count(*)::VARCHAR, md5(string_agg(to_json(s), chr(10) ORDER BY survey_row_key)) FROM int_occmix_survey_rows AS s;",
         )
-        outcome[f"{run}_geography_fingerprints"] = {model: duckdb_csv(database, query) for model, query in GEOGRAPHY_FINGERPRINTS.items()}
+        outcome[f"{run}_geography_fingerprints"] = {model: fingerprint(database, query) for model, query in GEOGRAPHY_FINGERPRINTS.items()}
     outcome["checks"]["real_rebuild_identical"] = builds[0] == builds[1]
     outcome["memory_budgets"] = BUDGETS
     outcome["checks"]["occmix_real_rebuild_identical"] = outcome["real_occmix_fingerprint"] == outcome["real_again_occmix_fingerprint"]
@@ -5357,6 +5642,9 @@ def real_stage() -> dict[str, Any]:
     shortage = shortage_real(database, init)
     outcome["checks"].update(shortage["checks"])
     outcome["shortage_counts"] = shortage["counts"]
+    validation = validation_real(database, init)
+    outcome["checks"].update(validation["checks"])
+    outcome["validation_counts"] = validation["counts"]
     status_sql = "SELECT text_layout || ' ' || twin_status, count(*)::VARCHAR FROM stg_bronze__twin_comparison GROUP BY 1 ORDER BY 1;"
     outcome["twin_statuses"] = dict(duckdb_csv(database, status_sql))
     held_sql = (
