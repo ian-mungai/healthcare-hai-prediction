@@ -14,6 +14,8 @@ cd "$root"
 .venv/bin/python -m scripts.lakehouse.catalog up >&2
 mkdir -p "$root/data/analytics/dbt"
 # DuckDB's limit comes from the containers running now; the run stops if it cannot be computed.
-memory_limit="$(.venv/bin/python -m scripts.lakehouse.memory_budget)"
-exec env -i PATH="$PATH" HOME="$HOME" DUCKDB_MEMORY_LIMIT="$memory_limit" docker compose --project-directory "$root" -f "$root/docker-compose.yaml" \
-    --env-file "$root/data/lakehouse/secrets/compose.env" --profile query run --rm --quiet-pull -T analytics-dbt "$@"
+resources="$(.venv/bin/python -m scripts.lakehouse.memory_budget --launch)"
+read -r container_memory duckdb_memory spark_memory job_threads <<< "$resources"
+exec env -i PATH="$PATH" HOME="$HOME" JOB_MEMORY_LIMIT="$container_memory" DUCKDB_MEMORY_LIMIT="$duckdb_memory" JOB_THREADS="$job_threads" \
+    docker compose --project-directory "$root" -f "$root/docker-compose.yaml" \
+    --env-file "$root/data/lakehouse/secrets/compose.env" --profile query run --rm --no-deps --quiet-pull -T analytics-dbt "$@"

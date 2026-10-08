@@ -6,7 +6,7 @@ hai:
     lakehouse:
       type: duckdb
       path: /workspace/out/staging.duckdb
-      threads: 4
+      threads: "{{ env_var('JOB_THREADS') | int }}"
       extensions: [iceberg, httpfs, aws]
       settings:
         autoinstall_known_extensions: false
@@ -14,6 +14,7 @@ hai:
         # owner decision Oct 7 2026: memory is shared across projects, never hardcoded). No default: a build without a
         # budget stops instead of using a fixed limit.
         memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT') }}"
+        threads: "{{ env_var('JOB_THREADS') | int }}"
       secrets:
         - type: s3
           provider: credential_chain
@@ -40,6 +41,9 @@ hai:
       type: duckdb
       path: "{{ env_var('STAGING_E2E_CASE') }}/staging.duckdb"
       threads: 1
+      settings:
+        memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT') }}"
+        threads: "{{ env_var('JOB_THREADS') | int }}"
       attach:
         - path: "{{ env_var('STAGING_E2E_CASE') }}/fixture_lakehouse.duckdb"
           alias: lakehouse

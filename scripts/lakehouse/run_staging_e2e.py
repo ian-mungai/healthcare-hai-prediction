@@ -4101,16 +4101,19 @@ def unprefixed(rows: list[list[str]], prefix: str) -> dict[str, list[str]]:
 
 def compose_run(service_args: list[str], extra_env: dict[str, str]) -> tuple[int, str, str]:
     """Run one container of the analytics-dbt service and return its exit code and output."""
+    plan = memory_budget.launch_plan()
+    extra_env = {**extra_env, **plan.environment()}
+    BUDGETS.append({"case": extra_env.get("STAGING_E2E_CASE", "query_or_setup"), **plan.record()})
     env_flags = [flag for name, value in extra_env.items() for flag in ("-e", f"{name}={value}")]
     args = ["compose", "--project-directory", str(REPO_ROOT), "-f", str(REPO_ROOT / "docker-compose.yaml"), "--env-file", str(catalog.COMPOSE_ENV)]
-    args += ["--profile", "query", "run", "--rm", "-T", "--quiet-pull", *env_flags, *service_args]
-    result = run_command("docker", args, cwd=REPO_ROOT, env=catalog.system_environment(), timeout=TIMEOUT)
+    args += ["--profile", "query", "run", "--rm", "--no-deps", "-T", "--quiet-pull", *env_flags, *service_args]
+    result = run_command("docker", args, cwd=REPO_ROOT, env={**catalog.system_environment(), **plan.environment()}, timeout=TIMEOUT)
     return result.returncode, result.stdout, result.stderr
 
 
 def duckdb_csv(database: str, sql: str, init: str | None = None) -> list[list[str]]:
     """Query a database in the case folder with the DuckDB CLI and return the rows without the header."""
-    init_flags = ["-init", init] if init else []
+    init_flags = ["-cmd", ".read /opt/analytics/resources.sql", *(["-init", init] if init else [])]
     code, stdout, stderr = compose_run(["--entrypoint", "duckdb", "analytics-dbt", database, *init_flags, "-csv", "-noheader", "-c", sql], {})
     if code:
         raise RuntimeError(f"duckdb query failed: {stderr.strip().splitlines()[-1:] or ['no output']}")
@@ -4128,11 +4131,6 @@ def dbt_build(case: str, target: str, project: bool = False) -> tuple[int, dict[
     """Run dbt build for a case, on its own project copy when asked, and return the exit code and each node's status."""
     case_dir = f"{CONTAINER_OUT}/e2e/{case}"
     env = {"STAGING_E2E_CASE": case_dir, "DBT_TARGET_PATH": f"{case_dir}/target", "DBT_LOG_PATH": f"{case_dir}/logs"}
-    if target == "lakehouse":
-        # Computed now, from the containers running at this moment [463].
-        budget = memory_budget.current()
-        env["DUCKDB_MEMORY_LIMIT"] = budget.setting
-        BUDGETS.append({"case": case, **budget.record()})
     flags = ["--project-dir", f"{case_dir}/project", "--profiles-dir", f"{case_dir}/project"] if project else []
     # A build that dies leaves no results of its own; never read the previous run's.
     (CASES / case / "target/run_results.json").unlink(missing_ok=True)
@@ -4187,7 +4185,19 @@ def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[st
     variables += f"SET VARIABLE column_map_csv = '{CONTAINER_OUT}/e2e/{case}/column_map.csv';\n"
     (case_dir / "bronze.sql").write_text(variables + FIXTURE_SQL)
     database = f"{CONTAINER_OUT}/e2e/{case}/fixture_lakehouse.duckdb"
-    code, _, stderr = compose_run(["--entrypoint", "duckdb", "analytics-dbt", database, "-c", f".read {CONTAINER_OUT}/e2e/{case}/bronze.sql"], {})
+    code, _, stderr = compose_run(
+        [
+            "--entrypoint",
+            "duckdb",
+            "analytics-dbt",
+            database,
+            "-cmd",
+            ".read /opt/analytics/resources.sql",
+            "-c",
+            f".read {CONTAINER_OUT}/e2e/{case}/bronze.sql",
+        ],
+        {},
+    )
     if code:
         raise RuntimeError(f"fixture {case} failed: {stderr.strip().splitlines()[-1:] or ['no output']}")
     return dbt_build(case, "fixture", project=True)

@@ -1,6 +1,7 @@
 -- Attach the local Polaris catalog read-only for viewing the bronze tables.
 -- Run through scripts/lakehouse/query.sh; credentials come from the environment at run time, never from this file.
 .output /dev/null
+.read /opt/analytics/resources.sql
 SET autoinstall_known_extensions = false;
 LOAD iceberg;
 LOAD httpfs;

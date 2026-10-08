@@ -110,6 +110,10 @@ def system_environment() -> dict[str, str]:
 
 def compose(*args: str, env: dict[str, str]) -> str:
     """Run docker compose with the private env file, never the repository's .env."""
+    if "down" in args or args[0] == "ps":
+        # Old env files predate the job limit. Rendering inactive profiles must not prevent stopping a stack [535].
+        stored = read_env(COMPOSE_ENV)
+        env = {"JOB_MEMORY_LIMIT": stored["POLARIS_MEMORY_LIMIT"], **env}
     command = ["compose", "--project-directory", str(REPO_ROOT), "-f", str(REPO_ROOT / "docker-compose.yaml"), "--env-file", str(COMPOSE_ENV), *args]
     result = run_command("docker", command, cwd=REPO_ROOT, env=env, timeout=COMPOSE_TIMEOUT)
     if result.returncode:
@@ -258,7 +262,16 @@ def service_limits() -> dict[str, str]:
 def write_compose_env(settings: dict[str, str]) -> None:
     """Write the env file docker compose reads, from the owner-only credentials, the deployment settings and the services'
     memory limits, which every Compose command then reads [500]."""
-    values = {**credentials(), "AWS_PROFILE": settings["aws_profile"], "AWS_REGION": settings["aws_region"], **service_limits()}
+    limits = service_limits()
+    # Compose interpolates inactive profiles too. This service-derived value renders them during catalog setup.
+    # Every job launcher overrides it with a fresh launch plan before starting a job [533] [534].
+    values = {
+        **credentials(),
+        "AWS_PROFILE": settings["aws_profile"],
+        "AWS_REGION": settings["aws_region"],
+        **limits,
+        "JOB_MEMORY_LIMIT": limits["POLARIS_MEMORY_LIMIT"],
+    }
     write_private(COMPOSE_ENV, values)
 
 
@@ -301,19 +314,20 @@ def job(name: str, job_args: list[str]) -> None:
         up()
     elif not COMPOSE_ENV.is_file():
         write_compose_env(deployment())
-    isolation = [] if needs_catalog else ["--no-deps"]
     # Computed now, after Polaris is up, from every running container; the container has no default [486] [489] [490].
     try:
-        budget = memory_budget.current()
+        plan = memory_budget.launch_plan()
     except memory_budget.BudgetError as error:
-        raise CatalogError(f"no Spark heap: {error}") from error
+        raise CatalogError(f"no Spark resource plan: {error}") from error
+    budget = plan.budget
     sys.stdout.write(
         f"Spark heap {budget.spark_setting}: Docker {budget.total / memory_budget.GIB:.1f} GiB, running containers "
         f"{budget.used_by_containers / memory_budget.GIB:.1f} GiB, headroom {budget.headroom / memory_budget.GIB:.0f} GiB, "
-        f"Mac {'not capping' if budget.mac_available is None else f'{budget.mac_available / memory_budget.GIB:.1f} GiB available'}\n"
+        f"Mac {'not capping' if budget.mac_available is None else f'{budget.mac_available / memory_budget.GIB:.1f} GiB available'}, "
+        f"container {budget.free / memory_budget.GIB:.1f} GiB, workers {plan.threads}\n"
     )
-    env = {**env, "SPARK_JOB_MEMORY": budget.spark_setting}
-    sys.stdout.write(compose("--profile", "job", "run", "--rm", *isolation, "spark", "python", "-m", module, *job_args, env=env))
+    env = {**env, **plan.environment()}
+    sys.stdout.write(compose("--profile", "job", "run", "--rm", "--no-deps", "spark", "python", "-m", module, *job_args, env=env))
 
 
 def down() -> None:

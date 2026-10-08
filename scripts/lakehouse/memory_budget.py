@@ -1,17 +1,20 @@
-"""Compute DuckDB's memory limit and Spark's job heap from the containers running now (failure modes 463 to 467, 486 to 491).
+"""Compute container memory, engine budgets and job parallelism from launch-time capacity.
 
 Run from the repository root with Docker running:
 
     .venv/bin/python -m scripts.lakehouse.memory_budget            # print DuckDB's limit, for example 26GB
     .venv/bin/python -m scripts.lakehouse.memory_budget --spark    # print Spark's heap, for example 24g
     .venv/bin/python -m scripts.lakehouse.memory_budget --explain  # also print the figures it comes from
+    .venv/bin/python -m scripts.lakehouse.memory_budget --launch  # container bytes, DuckDB, Spark, CPU count
+    .venv/bin/python -m scripts.lakehouse.memory_budget --launch-json  # the same plan with its evidence
 
 Owner decision (Oct 7 2026): memory is shared across every project's containers, so no limit is hardcoded. The limit is
 the smaller of Docker's total memory minus what every running container uses at that moment minus a fixed headroom, and
 the memory the Mac can give without swapping (vm_stat free, file-backed and purgeable pages) minus its own headroom; the
 Mac cap is skipped once the Docker VM already holds all of Docker's memory (bundle v8.18.0, infrastructure.md item 3).
-It is rounded down to whole gigabytes for DuckDB (GB) and whole gibibytes for Spark (g), whose heap also leaves room for
-the JVM. A budget below the floor, an unreadable Docker or an
+The container gets that budget. DuckDB gets 80%, rounded down to whole gigabytes (GB). Spark gets whole gibibytes (g),
+leaving its existing JVM overhead. The 4 GiB floor applies to the container, not the smaller engine budget.
+A budget below the floor, an unreadable Docker or an
 unknown size unit stops with the figures instead of falling back to a fixed value. Failure modes:
 plans/group_c_20261006/failure_modes_c4.md and plans/spark_memory_20261008/failure_modes.md.
 """
@@ -33,7 +36,7 @@ GIB = 1024**3
 HEADROOM = 8 * GIB
 # Room left for macOS when the Mac's own free memory caps the limit (owner, Oct 8 2026) [493].
 MAC_HEADROOM = 2 * GIB
-# Below this a build would spill so much that it is better to free memory first [466] [497].
+# Container floor; the engine receives less because some allocations bypass its memory setting [466] [497] [527].
 FLOOR = 4 * GIB
 VM_PROCESS = "com.apple.Virtualization.VirtualMachine"
 VM_STAT_PAGE = re.compile(r"page size of (\d+) bytes")
@@ -71,8 +74,8 @@ class Budget:
 
     @property
     def setting(self) -> str:
-        """Return the limit as DuckDB's memory_limit setting, in whole decimal gigabytes."""
-        return f"{self.free // 1000**3}GB"
+        """Reserve 20% inside the container for allocations outside DuckDB's buffer limit [527]."""
+        return f"{(self.free * 4 // 5) // 1000**3}GB"
 
     @property
     def spark_setting(self) -> str:
@@ -91,6 +94,44 @@ class Budget:
             "setting": self.setting,
             "spark_setting": self.spark_setting,
         }
+
+
+@dataclass(frozen=True)
+class LaunchPlan:
+    """One resource snapshot shared by the container, engine and worker settings [533]."""
+
+    budget: Budget
+    threads: int
+
+    def environment(self) -> dict[str, str]:
+        """Return the exact variables consumed by Compose and the job engines."""
+        return {
+            "JOB_MEMORY_LIMIT": str(self.budget.free),
+            "DUCKDB_MEMORY_LIMIT": self.budget.setting,
+            "SPARK_JOB_MEMORY": self.budget.spark_setting,
+            "JOB_THREADS": str(self.threads),
+        }
+
+    def record(self) -> dict[str, object]:
+        """Return non-sensitive evidence of the launch plan."""
+        return {"budget": self.budget.record(), "environment": self.environment(), "threads": self.threads}
+
+
+def positive_integer(text: str, source: str) -> int:
+    """Reject missing, malformed or nonpositive capacity rather than using a fixed fallback."""
+    if not text.strip().isdecimal() or int(text.strip()) < 1:
+        raise BudgetError(f"{source} must be a positive integer")
+    return int(text.strip())
+
+
+def launch_plan() -> LaunchPlan:
+    """Read memory once and use the smaller host/Docker CPU capacity for this launch [531] [532]."""
+    budget = current()
+    host = run_command("sysctl", ["-n", "hw.ncpu"], timeout=60)
+    if host.returncode:
+        raise BudgetError("host CPU count could not be read from sysctl -n hw.ncpu")
+    cores = min(positive_integer(host.stdout, "host CPU count"), positive_integer(docker("info", "--format", "{{.NCPU}}"), "Docker CPU count"))
+    return LaunchPlan(budget, cores)
 
 
 def parse_size(text: str) -> int:
@@ -165,7 +206,7 @@ def vm_resident() -> int:
 
 def current() -> Budget:
     """Return the budget from Docker's total memory, every running container's current use and the Mac's available memory [467] [495]."""
-    total = int(docker("info", "--format", "{{.MemTotal}}").strip())
+    total = positive_integer(docker("info", "--format", "{{.MemTotal}}"), "Docker memory")
     lines = [line for line in docker("stats", "--no-stream", "--format", "{{.MemUsage}}").splitlines() if line.strip()]
     mac = None if vm_resident() >= total else mac_available()
     return compute(total, [parse_size(line.split("/")[0]) for line in lines], mac)
@@ -176,8 +217,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--spark", action="store_true", help="print Spark's job heap instead of DuckDB's limit")
     parser.add_argument("--explain", action="store_true", help="also print the figures the limit comes from")
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--launch", action="store_true", help="print container bytes, DuckDB memory, Spark heap and CPU count for the shell launchers")
+    output.add_argument("--launch-json", action="store_true", help="print the complete launch plan as JSON")
     args = parser.parse_args()
     try:
+        if args.launch or args.launch_json:
+            plan = launch_plan()
+            sys.stdout.write((json.dumps(plan.record()) if args.launch_json else " ".join(plan.environment().values())) + "\n")
+            return 0
         budget = current()
     except BudgetError as error:
         sys.stderr.write(f"memory budget: {error}\n")

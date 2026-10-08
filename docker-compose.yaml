@@ -83,6 +83,7 @@ services:
     image: hai-lakehouse-spark:4.1.2-iceberg1.11.0
     build: ./services/lakehouse/spark
     profiles: [job]
+    mem_limit: ${JOB_MEMORY_LIMIT:?run through a lakehouse launch script}
     environment:
       AWS_PROFILE: ${AWS_PROFILE:?run through scripts/lakehouse/catalog.py}
       AWS_REGION: ${AWS_REGION:?run through scripts/lakehouse/catalog.py}
@@ -93,6 +94,7 @@ services:
       POLARIS_CLIENT_SECRET: ${POLARIS_CLIENT_SECRET:?run through scripts/lakehouse/catalog.py}
       # The job heap, computed by scripts/lakehouse/catalog.py from the running containers before each job.
       SPARK_JOB_MEMORY: ${SPARK_JOB_MEMORY:-}
+      JOB_THREADS: ${JOB_THREADS:-}
     volumes:
       - *aws-profile
       - ./:/workspace
@@ -104,6 +106,7 @@ services:
     image: hai-analytics:duckdb1.5.6-dbt1.11.15
     build: ./services/analytics
     profiles: [query]
+    mem_limit: ${JOB_MEMORY_LIMIT:?run through a lakehouse launch script}
     environment:
       AWS_PROFILE: ${AWS_PROFILE:?run through scripts/lakehouse/catalog.py}
       AWS_REGION: ${AWS_REGION:?run through scripts/lakehouse/catalog.py}
@@ -112,8 +115,12 @@ services:
       # The read-only catalog principal; the root credentials never reach this container. Empty until setup creates it.
       POLARIS_READER_CLIENT_ID: ${POLARIS_READER_CLIENT_ID:-}
       POLARIS_READER_CLIENT_SECRET: ${POLARIS_READER_CLIENT_SECRET:-}
+      DUCKDB_MEMORY_LIMIT: ${DUCKDB_MEMORY_LIMIT:-}
+      JOB_THREADS: ${JOB_THREADS:-}
     volumes:
       - *aws-profile
+      - ./services/analytics/resources.sql:/opt/analytics/resources.sql:ro
+      - ./services/analytics/bronze.sql:/opt/analytics/bronze.sql:ro
     depends_on:
       polaris:
         condition: service_healthy
@@ -121,6 +128,7 @@ services:
   analytics-dbt:
     image: hai-analytics:duckdb1.5.6-dbt1.11.15
     profiles: [query]
+    mem_limit: ${JOB_MEMORY_LIMIT:?run through a lakehouse launch script}
     entrypoint: ["dbt"]
     working_dir: /workspace/dbt
     environment:
@@ -138,8 +146,10 @@ services:
       DBT_PACKAGES_INSTALL_PATH: /workspace/out/dbt_packages
       # DuckDB's memory limit for the lakehouse target, computed by scripts/lakehouse/memory_budget.py before each run.
       DUCKDB_MEMORY_LIMIT: ${DUCKDB_MEMORY_LIMIT:-}
+      JOB_THREADS: ${JOB_THREADS:-}
     volumes:
       - *aws-profile
+      - ./services/analytics/resources.sql:/opt/analytics/resources.sql:ro
       # The project is read-only; the staging database, run artifacts and E2E cases live in the ignored data/ folder.
       - ./dbt:/workspace/dbt:ro
       - ./data/analytics/dbt:/workspace/out
@@ -150,6 +160,7 @@ services:
   analytics-ui:
     image: hai-analytics:duckdb1.5.6-dbt1.11.15
     profiles: [query]
+    mem_limit: ${JOB_MEMORY_LIMIT:?run through a lakehouse launch script}
     entrypoint: ["/opt/analytics/ui.sh"]
     environment:
       AWS_PROFILE: ${AWS_PROFILE:?run through scripts/lakehouse/catalog.py}
@@ -158,8 +169,12 @@ services:
       AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
       POLARIS_READER_CLIENT_ID: ${POLARIS_READER_CLIENT_ID:-}
       POLARIS_READER_CLIENT_SECRET: ${POLARIS_READER_CLIENT_SECRET:-}
+      DUCKDB_MEMORY_LIMIT: ${DUCKDB_MEMORY_LIMIT:-}
+      JOB_THREADS: ${JOB_THREADS:-}
     volumes:
       - *aws-profile
+      - ./services/analytics/resources.sql:/opt/analytics/resources.sql:ro
+      - ./services/analytics/bronze.sql:/opt/analytics/bronze.sql:ro
       # Saved UI notebooks live in the ignored data/ folder, so they survive the container.
       - ./data/analytics/ui:/home/analytics/.duckdb/extension_data/ui
     ports:

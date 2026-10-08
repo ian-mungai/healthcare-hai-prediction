@@ -19,7 +19,7 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
-from scripts.lakehouse import bronze, catalog
+from scripts.lakehouse import bronze, catalog, memory_budget
 from scripts.lakehouse.checksums import EDGE_ROWS
 from scripts.process import run_command
 
@@ -163,7 +163,8 @@ def scenarios() -> dict[str, bool]:
     config = catalog.compose("--profile", "query", "config", "--format", "json", env=env)
     analytics_env = json.loads(config)["services"]["analytics"]["environment"]
     results["root_credentials_not_in_analytics"] = "POLARIS_CLIENT_SECRET" not in analytics_env and "POSTGRES_PASSWORD" not in analytics_env
-    _, extensions = run("docker", ["run", "--rm", "--entrypoint", "cat", IMAGE, "/home/analytics/extensions.csv"])
+    inspection_plan = memory_budget.launch_plan()
+    _, extensions = run("docker", ["run", "--rm", "--memory", str(inspection_plan.budget.free), "--entrypoint", "cat", IMAGE, "/home/analytics/extensions.csv"])
     results["extensions_installed_in_image"] = all(name in extensions for name in ("iceberg", "httpfs", "avro", "aws"))
     values = [value for key, value in catalog.read_env(catalog.SECRETS).items() if "SECRET" in key or "PASSWORD" in key]
     values += [stored.get("POLARIS_READER_CLIENT_SECRET", "")]

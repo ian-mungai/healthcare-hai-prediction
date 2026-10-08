@@ -61,22 +61,38 @@ Prerequisites: macOS on Apple silicon or Linux AMD64, Python 3.12, Git,
 Terraform 1.16.1 and AWS CLI v2. Node.js 18 or later and Google Chrome render the
 architecture diagram.
 The lakehouse runs in Docker Desktop (32 GiB of memory on the development Mac in
-October 2026); no memory size is fixed in the code. dbt staging gives DuckDB what
-is free at the start of each build. That is the smaller of two figures: Docker's total
-memory minus every running container's use minus 8 GiB headroom; the memory the Mac
-can give without swapping (free, file-backed and purgeable pages from `vm_stat`) minus 2 GiB.
-The Mac cap is skipped once Docker's virtual machine already holds all of Docker's
-memory (`scripts/lakehouse/memory_budget.py`, read by `memory_limit` in
-`dbt/profiles.yml`); the build stops below 4 GiB. Close containers and apps you no
-longer use first. Spark jobs get the same free memory, less 10% for the JVM's own
-use, as their heap in whole GiB: `scripts/lakehouse/catalog.py job` computes it
-after Polaris starts and passes `SPARK_JOB_MEMORY`, which
-`scripts/lakehouse/session.py` requires (no default). See the figures with
-`.venv/bin/python -m scripts.lakehouse.memory_budget --spark --explain`. When Polaris
-or its PostgreSQL database starts, `scripts/lakehouse/catalog.py` gives it a container
-limit of 25% or 10% of the same free memory (at least 1 GiB or 256 MiB), so Polaris's
-80% Java heap scales with it. The limits are written to the private Compose env file and
-kept while the container runs, so later commands do not restart it.
+October 2026). Every job launch computes one resource plan after the catalog services
+start. Its container limit is the smaller of Docker's total minus running containers'
+use minus 8 GiB headroom and the Mac's free, file-backed and purgeable memory minus
+2 GiB. The Mac cap is skipped once Docker's VM holds its full allocation.
+A container budget below 4 GiB stops the launch. DuckDB receives 80% of the container
+budget, rounded down to whole GB, to leave room for allocations outside its buffer
+limit. The 4 GiB floor applies to the container, so the engine allowance is smaller.
+This reserve does not guarantee that a workload cannot run out of memory.
+
+Spark retains its heap calculation: the smaller of the container budget divided by
+1.10 and the budget minus 384 MiB, rounded down to whole GiB. Job parallelism uses
+the smaller positive CPU count from `sysctl -n hw.ncpu` and Docker. The same count
+sets Spark workers, lakehouse dbt model concurrency and DuckDB engine threads.
+Fixture dbt model concurrency and the lint target stay at one for deterministic checks.
+`scripts/lakehouse/memory_budget.py --launch-json` shows the complete plan.
+The query, UI, dbt, Spark and staging verification launch paths all apply that plan;
+job containers use `--no-deps` so dependencies cannot start after the measurement.
+The analytics SQL settings are read-only Compose mounts and need no image rebuild.
+
+When Polaris or PostgreSQL starts, `scripts/lakehouse/catalog.py` gives it a
+container limit of 25% or 10% of the available budget (at least 1 GiB or 256 MiB).
+Those limits stay fixed for that container's lifetime. A service-derived job limit
+in the private Compose env file lets catalog-only commands render inactive profiles;
+every job launcher overrides it with its fresh plan. Use the launch scripts to run jobs.
+Close containers and apps you no longer use before a heavy run.
+
+Run the non-Docker resource contracts with
+`.venv/bin/python -m scripts.lakehouse.run_resource_checks`.
+The artifact under `data/e2e/resource_limits/` records synthetic resource readings,
+repeated CLI results and configuration checks. It does not prove live container limits;
+verify those through Docker inspection and engine settings before declaring runtime
+resource conformance complete.
 
 Run from this repository's root with its existing Python 3.12 `.venv`.
 Dependencies are shared across development and production in `requirements.txt`;

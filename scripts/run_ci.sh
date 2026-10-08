@@ -16,6 +16,7 @@ python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 "$python_bin" -m scripts.quality.repo_checks env-example
 "$python_bin" -m scripts.quality.repo_checks privacy-scan
 "$python_bin" -m scripts.quality.repo_checks writing-check
+"$python_bin" -m scripts.lakehouse.run_resource_checks
 # dbt SQL style, from the pinned environment the installer creates (scripts/quality/install_sqlfluff.py).
 .tools/sqlfluff/bin/sqlfluff lint dbt/models dbt/tests
 git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks credential-files
