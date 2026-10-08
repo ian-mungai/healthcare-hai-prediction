@@ -1228,3 +1228,23 @@ models:
       - name: measure_control
         description: Registry control identifier.
         data_tests: [not_null]
+  - name: int_spine_hai_outcomes
+    description: >
+      AL1 outcome: one row per spine hospital-window (calendar year) and HAI infection type, with the published SIR,
+      bounds, observed and predicted counts and exposure by exact measure ID, tokens kept as text, the SIR footnote codes
+      and the spine's population flags. Parts from releases after the last 2015-baseline review are held and counted.
+      Every type stays separate; no target is chosen here.
+    columns:
+      - name: outcome_key
+        description: Spine key and infection type.
+        data_tests: [unique, not_null]
+      - name: spine_key
+        description: Hospital and window year, as in int_hospital_spine.
+        data_tests: [not_null]
+      - name: hai_type
+        description: HAI_1 (CLABSI) to HAI_6 (C. difficile).
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['HAI_1', 'HAI_2', 'HAI_3', 'HAI_4', 'HAI_5', 'HAI_6']

@@ -1143,6 +1143,27 @@ HAI_SPINE = (
     "010009|HAI_1_SIR|01/01/2021|12/31/2021|1.1",
     "210001|HAI_1_SIR|01/01/2021|12/31/2021|0.8",
 )
+# AL1 [549] to [556]: 070001's 2021 window with every HAI_1 part, HAI_2 published as counts without a SIR (a footnote with
+# its text), HAI_3 and HAI_6 as other tokens; 210001's HAI_5 SIR from a release after the last 2015-baseline review is held.
+HAI_OUTCOME = (
+    "070001|HAI_1_CILOWER|01/01/2021|12/31/2021|0.5",
+    "070001|HAI_1_CIUPPER|01/01/2021|12/31/2021|1.5",
+    "070001|HAI_1_NUMERATOR|01/01/2021|12/31/2021|9",
+    "070001|HAI_1_ELIGCASES|01/01/2021|12/31/2021|10.000",
+    "070001|HAI_1_DOPC|01/01/2021|12/31/2021|1000",
+    "070001|HAI_2_SIR|01/01/2021|12/31/2021|Not Available|13 - Results cannot be calculated for this reporting period.",
+    "070001|HAI_2_CILOWER|01/01/2021|12/31/2021|Not Available|13",
+    "070001|HAI_2_CIUPPER|01/01/2021|12/31/2021|Not Available|13",
+    "070001|HAI_2_NUMERATOR|01/01/2021|12/31/2021|0",
+    "070001|HAI_2_ELIGCASES|01/01/2021|12/31/2021|0.412",
+    "070001|HAI_2_DOPC|01/01/2021|12/31/2021|800",
+    "070001|HAI_3_SIR|01/01/2021|12/31/2021|--|3, 13",
+    "070001|HAI_6_SIR|01/01/2021|12/31/2021|N/A|12",
+)
+GROUP_AL1 = (
+    Stored("cms_hai_hospital", "h09", "2022-06-01", "HAI_Outcome_Fixture.csv", sha("a7"), len(HAI_OUTCOME), content=HAI_OUTCOME),
+    Stored("cms_hai_hospital", "h10", "2026-09-01", "HAI_Late_Fixture.csv", sha("a8"), 1, content=("210001|HAI_5_SIR|01/01/2021|12/31/2021|0.7",)),
+)
 # Each POS file's catalog coverage, as the period seed gives it [280].
 POS_PERIODS = {"pa": ("2018-10-01", "2018-12-31"), "pb": ("2019-01-01", "2019-03-31"), "pc": ("2020-10-01", "2020-12-31")}
 # Each owner, enrollment and change-of-ownership file's release label and catalog period, as the receipts give them [365].
@@ -3013,6 +3034,7 @@ BASE = (
     *GROUP_C5,
     *GROUP_D1,
     *GROUP_D2,
+    *GROUP_AL1,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -3330,6 +3352,56 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
     "tps_undated": (
         "assert_program_years_dated",
         (*BASE, Stored("cms_cc_hvbp_tps", "tpx", "2018-01-04", "hvbp_tps_12_01_2017.csv", sha("tpx"), 1, records=(tps_row("37.0", facility_id="010001"),))),
+        frozenset(),
+    ),
+    # [551] An outcome value that is neither a number nor a published token.
+    "outcome_value_uncast": (
+        "assert_hai_outcome_values_cast",
+        (*BASE, Stored("cms_hai_hospital", "hx1", "2022-06-01", "HAI_Bad_Value.csv", sha("ax1"), 1, content=("990001|HAI_2_SIR|01/01/2021|12/31/2021|1.2a",))),
+        frozenset(),
+    ),
+    # [553] A SIR that is not observed / predicted.
+    "outcome_ratio_mismatch": (
+        "assert_hai_outcome_consistent",
+        (
+            *BASE,
+            Stored(
+                "cms_hai_hospital",
+                "hx2",
+                "2022-06-01",
+                "HAI_Bad_Ratio.csv",
+                sha("ax2"),
+                3,
+                content=(
+                    "990001|HAI_3_SIR|01/01/2021|12/31/2021|2.000",
+                    "990001|HAI_3_NUMERATOR|01/01/2021|12/31/2021|3",
+                    "990001|HAI_3_ELIGCASES|01/01/2021|12/31/2021|2.000",
+                ),
+            ),
+        ),
+        frozenset(),
+    ),
+    # [553] A SIR outside its published bounds.
+    "outcome_outside_bounds": (
+        "assert_hai_outcome_consistent",
+        (
+            *BASE,
+            Stored(
+                "cms_hai_hospital",
+                "hx3",
+                "2022-06-01",
+                "HAI_Bad_Bounds.csv",
+                sha("ax3"),
+                2,
+                content=("990001|HAI_4_SIR|01/01/2021|12/31/2021|1.000", "990001|HAI_4_CILOWER|01/01/2021|12/31/2021|1.200"),
+            ),
+        ),
+        frozenset(),
+    ),
+    # [550] A calendar-year HAI measure ID outside the 36 known parts.
+    "outcome_measure_unknown": (
+        "assert_hai_outcome_measures_known",
+        (*BASE, Stored("cms_hai_hospital", "hx4", "2022-06-01", "HAI_Bad_Measure.csv", sha("ax4"), 1, content=("990001|HAI_7_SIR|01/01/2021|12/31/2021|0.5",))),
         frozenset(),
     ),
     # [519] A HAC score that is not a number, a token or the reviewed value.
@@ -3713,18 +3785,19 @@ def fixture_csv(objects: Iterable[Stored]) -> str:
             value = f"{item.sha[:6]}-{row}"
             text = item.content[row - 1] if item.content else value
             sheet, _, cells = text.partition(":") if item.table in SHEET_TABLES and item.content else ("Sheet1", "", value)
-            # HAI content fills the HAI columns under the newer layout's names; empty parts stay null.
-            hai = {"facility_id": "", "state": "", "measure_id": "", "start_date": "", "end_date": "", "score": ""}
+            # HAI content fills the HAI columns under the newer layout's names; empty parts stay null. A sixth field is the
+            # footnote [555].
+            hai = {"facility_id": "", "state": "", "measure_id": "", "start_date": "", "end_date": "", "score": "", "footnote": ""}
             if item.table in HAI_TABLES and item.content:
-                entity, measure, start, end, score = text.split("|")
+                entity, measure, start, end, score, *footnote = text.split("|")
                 entity_column = HAI_TABLES[item.table]
                 if entity_column:
                     hai[entity_column] = entity
-                hai.update(measure_id=measure, start_date=start, end_date=end, score=score)
+                hai.update(measure_id=measure, start_date=start, end_date=end, score=score, footnote="".join(footnote))
             writer.writerow(
                 (item.table, item.key, "fixture", item.snapshot, "fixture_dataset", item.release, f"fixture/{item.key}.zip", f"v-{item.key}", item.member)
                 + (checksum, row, value, text, sheet, cells)
-                + (hai["facility_id"], "", hai["state"], hai["measure_id"], hai["start_date"], hai["end_date"], "", "", hai["score"], "", "")
+                + (hai["facility_id"], "", hai["state"], hai["measure_id"], hai["start_date"], hai["end_date"], "", "", hai["score"], hai["footnote"], "")
             )
     return buffer.getvalue()
 
@@ -4086,6 +4159,16 @@ VALIDATION_SQL = (
 VALIDATION_HOLDS_SQL = (
     "SELECT bronze_table, coalesce(entity_id, ''), coalesce(measure_id, ''), hold_reason, row_count::VARCHAR FROM int_validation_window_holds ORDER BY ALL;"
 )
+OUTCOME_SQL = (
+    "SELECT ccn, window_year::VARCHAR, hai_type, coalesce(sir_text, ''), coalesce(sir::VARCHAR, ''), coalesce(ci_lower::VARCHAR, ''), "
+    "coalesce(ci_upper::VARCHAR, ''), coalesce(observed::VARCHAR, ''), coalesce(predicted::VARCHAR, ''), coalesce(exposure::VARCHAR, ''), "
+    "coalesce(sir_footnote_codes, ''), baseline_held_parts::VARCHAR, is_primary_population::VARCHAR FROM int_spine_hai_outcomes "
+    "WHERE published_parts > 0 OR baseline_held_parts > 0 ORDER BY ALL;"
+)
+OUTCOME_COUNT_SQL = (
+    "SELECT (SELECT count(*) FROM int_spine_hai_outcomes)::VARCHAR, (SELECT 6 * count(*) FROM int_hospital_spine)::VARCHAR, "
+    "(SELECT count(DISTINCT outcome_key) FROM int_spine_hai_outcomes)::VARCHAR;"
+)
 PROGRAM_YEARS_SQL = (
     "SELECT 'hac', ccn, fiscal_year::VARCHAR, coalesce(total_hac_score, ''), coalesce(is_payment_reduced::VARCHAR, ''), "
     "coalesce(psi_90_value, ''), left(member_sha256, 3) FROM int_hac_program_years "
@@ -4312,6 +4395,8 @@ def read_models(case: str) -> dict[str, Any]:
         "program_values": [tuple(row) for row in duckdb_csv(database, PROGRAM_VALUES_SQL)],
         "vbp_domains": [tuple(row) for row in duckdb_csv(database, VBP_DOMAINS_SQL)],
         "program_holds": [tuple(row) for row in duckdb_csv(database, PROGRAM_HOLDS_SQL)],
+        "hai_outcomes": [tuple(row) for row in duckdb_csv(database, OUTCOME_SQL)],
+        "hai_outcome_counts": [tuple(row) for row in duckdb_csv(database, OUTCOME_COUNT_SQL)],
         "hpsa": [tuple(row) for row in duckdb_csv(database, HPSA_SQL)],
         "mua": [tuple(row) for row in duckdb_csv(database, MUA_SQL)],
         "occmix_holds": [
@@ -4705,6 +4790,38 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
     return checks
 
 
+def outcome_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's AL1 outcome rows with their expected values [549] to [556]."""
+    checks: dict[str, bool] = {}
+    blank = ("", "", "", "", "", "")
+    # [550] to [556] Published parts by exact ID; tokens stay text with no number; footnote codes from every format; the
+    # late release held, not used; population flags from the spine; types with no row are not listed here.
+    checks["hai_outcomes_match_expected"] = base.get("hai_outcomes") == sorted(
+        [
+            ("010001", "2019", "HAI_1", "0.6", "0.6", *blank, "0", "true"),
+            ("010001", "2019", "HAI_2", "0.7", "0.7", *blank, "0", "true"),
+            ("010001", "2021", "HAI_1", "0.4", "0.4", *blank, "0", "true"),
+            ("010001", "2025", "HAI_1", "1.2", "1.2", *blank, "0", "false"),
+            ("010002", "2019", "HAI_1", "0.9", "0.9", *blank, "0", "false"),
+            ("010005", "2021", "HAI_1", "0.6", "0.6", *blank, "0", "false"),
+            ("010009", "2021", "HAI_1", "1.1", "1.1", *blank, "0", "false"),
+            ("01000F", "2025", "HAI_1", "0.3", "0.3", *blank, "0", "false"),
+            ("01001F", "2021", "HAI_1", "0.3", "0.3", *blank, "0", "false"),
+            ("011301", "2021", "HAI_1", "0.5", "0.5", *blank, "0", "false"),
+            ("070001", "2021", "HAI_1", "0.9", "0.9", "0.5", "1.5", "9.0", "10.0", "1000.0", "", "0", "true"),
+            ("070001", "2021", "HAI_2", "Not Available", "", "", "", "0.0", "0.412", "800.0", "13", "0", "true"),
+            ("070001", "2021", "HAI_3", "--", "", "", "", "", "", "", "3,13", "0", "true"),
+            ("070001", "2021", "HAI_6", "N/A", "", "", "", "", "", "", "12", "0", "true"),
+            ("210001", "2021", "HAI_1", "0.8", "0.8", *blank, "0", "false"),
+            ("210001", "2021", "HAI_5", "", "", *blank, "1", "false"),
+            ("990001", "2021", "HAI_1", "1.0", "1.0", *blank, "0", "false"),
+        ]
+    )
+    # [550] [556] Six types for every spine hospital-window, each once.
+    checks["hai_outcomes_six_per_spine_row"] = base.get("hai_outcome_counts") == [("72", "72", "72")]
+    return checks
+
+
 def program_checks(base: dict[str, Any]) -> dict[str, bool]:
     """Compare the base fixture's D2 program-year models with their expected rows [514] to [520]."""
     checks: dict[str, bool] = {}
@@ -4843,6 +4960,8 @@ def fixture_scenarios() -> dict[str, bool]:
             ("hospital", "01001F", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.3", "a6"),
             ("hospital", "070001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.9", "a6"),
             ("hospital", "990001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "1.0", "a6"),
+            *(("hospital", line.split("|")[0], line.split("|")[1], "2021-01-01", "2021-12-31", line.split("|")[4], "a7") for line in HAI_OUTCOME),
+            ("hospital", "210001", "HAI_5_SIR", "2021-01-01", "2021-12-31", "0.7", "a8"),
             ("hospital", "210001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.8", "a6"),
             ("hospital", "010001", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.6", "a2"),
             ("hospital", "010001", "HAI_1_SIR", "2025-01-01", "2025-12-31", "1.2", "a3"),
@@ -5264,6 +5383,7 @@ def fixture_scenarios() -> dict[str, bool]:
     checks.update(shortage_checks(base))
     checks.update(validation_checks(base))
     checks.update(program_checks(base))
+    checks.update(outcome_checks(base))
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -5793,6 +5913,39 @@ SELECT usable.t, count(*)::VARCHAR, (SELECT count(*) FROM p WHERE p.t = usable.t
 FROM usable GROUP BY usable.t ORDER BY 1;"""
 
 
+# AL1 reconciliation [549] to [556]: outcome rows against the spine, and published and held SIRs counted independently
+# from the calendar-year HAI windows (release date against the last 2015-baseline review, Aug 13 2026).
+OUTCOME_REAL_SQL = """WITH cal AS (
+    SELECT measure_id, score, release_date FROM int_hai_hospital_windows
+    WHERE month(window_start) = 1 AND day(window_start) = 1 AND window_end = make_date(year(window_start), 12, 31)
+)
+SELECT 'rows', (SELECT count(*) FROM int_spine_hai_outcomes)::VARCHAR, (SELECT 6 * count(*) FROM int_hospital_spine)::VARCHAR
+UNION ALL SELECT 'keys', (SELECT count(DISTINCT outcome_key) FROM int_spine_hai_outcomes)::VARCHAR, (SELECT 6 * count(*) FROM int_hospital_spine)::VARCHAR
+UNION ALL SELECT 'sirs', (SELECT count(*) FROM int_spine_hai_outcomes WHERE has_sir)::VARCHAR,
+    (SELECT count(*) FROM cal WHERE right(measure_id, 4) = '_SIR' AND release_date <= DATE '2026-08-13'
+        AND regexp_full_match(trim(score), '-?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?'))::VARCHAR
+UNION ALL SELECT 'held_parts', (SELECT coalesce(sum(baseline_held_parts), 0) FROM int_spine_hai_outcomes)::VARCHAR,
+    (SELECT count(*) FROM cal WHERE release_date > DATE '2026-08-13')::VARCHAR
+UNION ALL SELECT 'sir_without_counts', (SELECT count(*) FROM int_spine_hai_outcomes WHERE has_sir AND (observed IS NULL OR predicted IS NULL))::VARCHAR, '0';"""
+OUTCOME_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY outcome_key)) FROM int_spine_hai_outcomes AS t;"
+
+
+def outcome_real(database: str) -> dict[str, Any]:
+    """Reconcile the real AL1 outcome with the spine and the calendar-year HAI windows; count SIRs per year and type."""
+    checks: dict[str, bool] = {}
+    counts: dict[str, Any] = {}
+    for name, model, independent in duckdb_csv(database, OUTCOME_REAL_SQL):
+        counts[name] = {"model": int(model), "independent": int(independent)}
+        checks[f"outcome_{name}_reconcile"] = model == independent
+    counts["sirs_per_year_type"] = dict(
+        duckdb_csv(
+            database,
+            "SELECT window_year || ' ' || hai_type, count(*) FILTER (WHERE has_sir)::VARCHAR FROM int_spine_hai_outcomes GROUP BY 1 ORDER BY 1;",
+        )
+    )
+    return {"checks": checks, "counts": counts}
+
+
 def validation_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real D1 windows with their staging views' window keys; count rows per control [511] [513]."""
     checks: dict[str, bool] = {}
@@ -5912,6 +6065,7 @@ def real_stage() -> dict[str, Any]:
             "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(s)), '' ORDER BY survey_row_key)) FROM int_occmix_survey_rows AS s;",
         )
         outcome[f"{run}_geography_fingerprints"] = {model: fingerprint(database, query) for model, query in GEOGRAPHY_FINGERPRINTS.items()}
+        outcome[f"{run}_outcome_fingerprint"] = fingerprint(database, OUTCOME_FINGERPRINT_SQL)
         if run == "real":
             # Free the memory the first build left in Docker's VM before the second build; the catalog starts again [545] [547].
             outcome["docker_release"] = [catalog.release()]
@@ -5935,6 +6089,10 @@ def real_stage() -> dict[str, Any]:
     shortage = shortage_real(database, init)
     outcome["checks"].update(shortage["checks"])
     outcome["shortage_counts"] = shortage["counts"]
+    outcome["checks"]["outcome_real_rebuild_identical"] = outcome["real_outcome_fingerprint"] == outcome["real_again_outcome_fingerprint"]
+    hai_outcome = outcome_real(database)
+    outcome["checks"].update(hai_outcome["checks"])
+    outcome["outcome_counts"] = hai_outcome["counts"]
     validation = validation_real(database, init)
     outcome["checks"].update(validation["checks"])
     outcome["validation_counts"] = validation["counts"]

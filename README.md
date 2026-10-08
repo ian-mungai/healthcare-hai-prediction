@@ -4,7 +4,9 @@ Predicting hospital healthcare-associated infection rates from public CMS, Censu
 
 Hospital-acquired infection prediction research for a data engineer. This fresh
 repository builds on the capstone concept, not its implementation. Same-period
-prediction is primary; forecasting is a later extension. Acquisition and S3
+prediction is primary: a hospital's infection score for a window is predicted from
+measures whose measured period ends before that window starts (owner decision,
+October 8 2026). Forecasting later windows is a later extension. Acquisition and S3
 storage precede comprehensive schema review and tutorial drafting. Availability
 does not establish clinical validity or model eligibility.
 
@@ -35,7 +37,7 @@ secret or personal value in this repository to the repository owner privately.
 ## Background
 
 The project asks whether a hospital's infection score can be predicted from
-same-period public measures and why a simpler earlier model explained little
+public measures known as of the window start and why a simpler earlier model explained little
 of the variation. Approved collection is complete and its code is committed
 (`3af1abb`); acquisition closeout is pending the final publisher redownload (run 3)
 and confirmed disposal of personal originals. Public sources are collected
@@ -306,6 +308,13 @@ dates as published at the capture, with `XXXXX` county codes kept as tokens; row
 The period seed dates each MMD file by the year in its name and the HPSA and MUA files by their capture date, which the
 models carry as `capture_date`. The Federal Register HPSA workbooks stay in bronze. `dbt/seeds/shortage_measures.csv`
 maps the 85 registry controls of these sources.
+
+The alignment stage lines each staged source up with the hospital-year spine as of the HAI window start.
+`int_spine_hai_outcomes` (step AL1) has one row per spine hospital-window and infection type (HAI_1 CLABSI to HAI_6
+C. difficile): the published SIR, its bounds, the observed and predicted counts and the exposure, by exact measure ID,
+with tokens kept as text and the SIR footnote codes. No SIR is computed from the counts. A part from a release after the
+last 2015-baseline review (August 13 2026) is held and counted, so 2022-baseline SIRs never join the series. Each type
+stays separate; the model target is chosen before training.
 
 Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
 visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the
