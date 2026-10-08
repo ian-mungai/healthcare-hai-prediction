@@ -44,6 +44,20 @@ def current() -> bool:
     return result.returncode == 0 and result.stdout.strip().endswith(pinned_version())
 
 
+def base_python() -> str:
+    """Return the interpreter the running virtual environment was made from, by the path its pyvenv.cfg records.
+
+    A virtual environment made by another one's Python records the versioned Homebrew Cellar folder, which a patch upgrade
+    removes, so the hook's interpreter link breaks; the recorded path (/opt/homebrew/opt/python@3.12/bin) survives it.
+    """
+    config = Path(sys.prefix) / "pyvenv.cfg"
+    if sys.prefix == sys.base_prefix or not config.exists():
+        return sys.executable
+    home = next((line.split("=", 1)[1].strip() for line in config.read_text().splitlines() if line.split("=", 1)[0].strip() == "home"), "")
+    candidate = Path(home) / f"python{sys.version_info.major}.{sys.version_info.minor}"
+    return str(candidate) if candidate.exists() else sys.executable
+
+
 def install() -> str:
     """Create the environment and install the hash-pinned requirements; return what happened."""
     pinned = pinned_version()
@@ -52,7 +66,7 @@ def install() -> str:
     INSTALLED.unlink(missing_ok=True)
     if DESTINATION.exists():
         shutil.rmtree(DESTINATION)
-    run_command(sys.executable, ["-m", "venv", str(DESTINATION)], timeout=300, check=True)
+    run_command(base_python(), ["-m", "venv", str(DESTINATION)], timeout=300, check=True)
     pip = [str(DESTINATION / "bin/python"), "-m", "pip", "install", "--quiet", "--require-hashes", "--only-binary=:all:", "-r", str(SOURCE)]
     result = run_command(pip[0], pip[1:], timeout=900)
     if result.returncode:
