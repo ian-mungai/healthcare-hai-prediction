@@ -8,6 +8,7 @@ Run from the repository root:
     .venv/bin/python -m scripts.lakehouse.catalog job bronze_e2e
     .venv/bin/python -m scripts.lakehouse.catalog job bronze -- --group hai
     .venv/bin/python -m scripts.lakehouse.catalog down
+    .venv/bin/python -m scripts.lakehouse.catalog release   # after a heavy run: stop, restart Docker Desktop
     scripts/lakehouse/query.sh                      # interactive DuckDB shell, bronze tables attached read-only
 
 ``up`` is idempotent. On first use it generates the PostgreSQL password and the Polaris root secret into the ignored,
@@ -16,7 +17,9 @@ database, bootstraps the Polaris realm once, starts Polaris and creates the ``ha
 location is ``lakehouse/`` in the project bucket. A catalog that already exists must match that location exactly.
 It also creates a read-only principal for the DuckDB viewer once and stores its credentials in the same file; a
 principal whose stored secret is missing has its credentials reset, never recreated. ``down`` stops the containers and
-keeps the database files, so the tables survive a restart.
+keeps the database files, so the tables survive a restart. ``release`` frees the memory Docker's VM keeps after a heavy
+run (owner decision, Oct 8 2026): it stops this project's containers and restarts Docker Desktop, but only when no other
+container runs; otherwise it changes nothing and names them (failure modes 545 to 547).
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ import json
 import os
 import secrets
 import sys
+import time
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -338,16 +342,56 @@ def down() -> None:
     sys.stdout.write("Catalog services stopped; the database in data/lakehouse/polaris_db is kept.\n")
 
 
+def foreign_containers(listing: str) -> list[str]:
+    """Return the running containers, as "name (project)", that this project's Compose did not create [546].
+
+    A container from a project image carries the image's project label, so only the oneoff label, which Compose sets when
+    it creates a container, marks one of ours (a probe run with docker run from the analytics image showed this, Oct 8 2026).
+    """
+    others = []
+    for line in listing.splitlines():
+        name, project, oneoff = (line.split("\t") + ["", ""])[:3]
+        if name.strip() and not (project.strip() == PROJECT and oneoff.strip() in ("True", "False")):
+            others.append(f"{name.strip()} ({project.strip() or 'no Compose project'})")
+    return others
+
+
+def release() -> str:
+    """Restart Docker Desktop to free the VM's memory when only this project's containers run; return what happened [545] to [547]."""
+    listing = run_command(
+        "docker", ["ps", "--format", '{{.Names}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.oneoff"}}'], timeout=120
+    )
+    if listing.returncode:
+        raise CatalogError(f"docker ps failed: {listing.stderr.strip()[-200:]}")
+    others = foreign_containers(listing.stdout)
+    if others:
+        return f"Docker not restarted: other containers are running ({', '.join(others)})."
+    before = memory_budget.vm_resident()
+    down()
+    restart = run_command("docker", ["desktop", "restart"], timeout=600)
+    if restart.returncode:
+        raise CatalogError(f"docker desktop restart failed: {restart.stderr.strip()[-200:]}")
+    deadline = time.monotonic() + 300
+    while run_command("docker", ["info", "--format", "{{.MemTotal}}"], timeout=60).returncode:
+        if time.monotonic() > deadline:
+            raise CatalogError("Docker did not return within 5 minutes of the restart")
+        time.sleep(5)
+    after = memory_budget.vm_resident()
+    return f"Docker restarted: VM {before / memory_budget.GIB:.1f} GiB before, {after / memory_budget.GIB:.1f} GiB after."
+
+
 def main() -> int:
     """Parse the command and report failures without credentials."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["up", "status", "job", "down"])
+    parser.add_argument("command", choices=["up", "status", "job", "down", "release"])
     parser.add_argument("job_name", nargs="?", help="job to run with the job command")
     parser.add_argument("job_args", nargs=argparse.REMAINDER, help="arguments passed to the job after --")
     args = parser.parse_args()
     try:
         if args.command == "job":
             job(args.job_name or "", [value for value in args.job_args if value != "--"])
+        elif args.command == "release":
+            sys.stdout.write(release() + "\n")
         else:
             {"up": up, "status": status, "down": down}[args.command]()
     except (CatalogError, OSError, KeyError, json.JSONDecodeError) as error:

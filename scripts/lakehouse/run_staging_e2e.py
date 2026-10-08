@@ -4,6 +4,7 @@ Run from the repository root with Docker running:
 
     .venv/bin/python -m scripts.lakehouse.run_staging_e2e            # fixture cases only
     .venv/bin/python -m scripts.lakehouse.run_staging_e2e --real     # then the real bronze tables, built twice
+    .venv/bin/python -m scripts.lakehouse.run_staging_e2e --real-only  # the real builds only, when no fixture changed
 
 Each fixture case writes a small bronze database, runs ``dbt build`` against it in the analytics image and compares the
 models with expectations computed here, independently of the SQL. Each case runs on its own copy of the dbt project,
@@ -5530,40 +5531,41 @@ def mup_seed_matches() -> bool:
     return seed == sorted(expected)
 
 
-# Ordered fingerprints of every C1 model, compared between the two real builds [418].
+# Ordered fingerprints of every C1 model, compared between the two real builds [418]. Each row is hashed before the ordered
+# aggregate, so an 11.9 million-row model needs about 0.4 GB, not one string of every row (Oct 8 2026, failure mode 544).
 GEOGRAPHY_FINGERPRINTS = {
-    "int_hud_zip_county_quarters": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY hud_row_key)) FROM int_hud_zip_county_quarters AS t;",
-    "int_hud_zip_county_holds": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY hud_row_key)) FROM int_hud_zip_county_holds AS t;",
-    "int_county_adjacency_edges": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY edge_key)) FROM int_county_adjacency_edges AS t;",
-    "int_rucc_county_codes": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY rucc_key)) FROM int_rucc_county_codes AS t;",
-    "int_ruca_codes": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY ruca_row_key)) FROM int_ruca_codes AS t;",
-    "int_hsa_zip_cases": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY hsa_row_key)) FROM int_hsa_zip_cases AS t;",
-    "int_acs_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY acs_value_key)) FROM int_acs_county_values AS t;",
-    "int_svi_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY svi_value_key)) FROM int_svi_county_values AS t;",
-    "int_saipe_county_estimates": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY saipe_row_key)) FROM int_saipe_county_estimates AS t;",
-    "int_sahie_county_rows": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY sahie_row_key)) FROM int_sahie_county_rows AS t;",
-    "int_bls_county_series": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY bls_row_key)) FROM int_bls_county_series AS t;",
-    "int_places_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY places_row_key)) FROM int_places_county_values AS t;",
-    "int_gv_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY gv_value_key)) FROM int_gv_county_values AS t;",
-    "int_wonder_county_deaths": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY wonder_row_key)) FROM int_wonder_county_deaths AS t;",
-    "int_mmd_prevalence": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY mmd_row_key)) FROM int_mmd_prevalence AS t;",
+    "int_hud_zip_county_quarters": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY hud_row_key)) FROM int_hud_zip_county_quarters AS t;",
+    "int_hud_zip_county_holds": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY hud_row_key)) FROM int_hud_zip_county_holds AS t;",
+    "int_county_adjacency_edges": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY edge_key)) FROM int_county_adjacency_edges AS t;",
+    "int_rucc_county_codes": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY rucc_key)) FROM int_rucc_county_codes AS t;",
+    "int_ruca_codes": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY ruca_row_key)) FROM int_ruca_codes AS t;",
+    "int_hsa_zip_cases": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY hsa_row_key)) FROM int_hsa_zip_cases AS t;",
+    "int_acs_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY acs_value_key)) FROM int_acs_county_values AS t;",
+    "int_svi_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY svi_value_key)) FROM int_svi_county_values AS t;",
+    "int_saipe_county_estimates": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY saipe_row_key)) FROM int_saipe_county_estimates AS t;",
+    "int_sahie_county_rows": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY sahie_row_key)) FROM int_sahie_county_rows AS t;",
+    "int_bls_county_series": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY bls_row_key)) FROM int_bls_county_series AS t;",
+    "int_places_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY places_row_key)) FROM int_places_county_values AS t;",
+    "int_gv_county_values": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY gv_value_key)) FROM int_gv_county_values AS t;",
+    "int_wonder_county_deaths": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY wonder_row_key)) FROM int_wonder_county_deaths AS t;",
+    "int_mmd_prevalence": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY mmd_row_key)) FROM int_mmd_prevalence AS t;",
     "int_cc_unplanned_visits_windows": (
-        "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY window_key)) FROM int_cc_unplanned_visits_windows AS t;"
+        "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY window_key)) FROM int_cc_unplanned_visits_windows AS t;"
     ),
     "int_cc_complications_deaths_windows": (
-        "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY window_key)) FROM int_cc_complications_deaths_windows AS t;"
+        "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY window_key)) FROM int_cc_complications_deaths_windows AS t;"
     ),
-    "int_cc_hrrp_windows": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY window_key)) FROM int_cc_hrrp_windows AS t;",
-    "int_hac_program_years": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY program_key)) FROM int_hac_program_years AS t;",
-    "int_vbp_program_years": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY program_key)) FROM int_vbp_program_years AS t;",
+    "int_cc_hrrp_windows": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY window_key)) FROM int_cc_hrrp_windows AS t;",
+    "int_hac_program_years": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY program_key)) FROM int_hac_program_years AS t;",
+    "int_vbp_program_years": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY program_key)) FROM int_vbp_program_years AS t;",
     "int_validation_program_values": (
-        "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY program_value_key)) FROM int_validation_program_values AS t;"
+        "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY program_value_key)) FROM int_validation_program_values AS t;"
     ),
     "int_validation_measure_windows": (
-        "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY validation_key)) FROM int_validation_measure_windows AS t;"
+        "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY validation_key)) FROM int_validation_measure_windows AS t;"
     ),
-    "int_hpsa_components": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY hpsa_row_key)) FROM int_hpsa_components AS t;",
-    "int_mua_components": "SELECT count(*)::VARCHAR, md5(string_agg(to_json(t), chr(10) ORDER BY mua_row_key)) FROM int_mua_components AS t;",
+    "int_hpsa_components": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY hpsa_row_key)) FROM int_hpsa_components AS t;",
+    "int_mua_components": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY mua_row_key)) FROM int_mua_components AS t;",
 }
 GEOGRAPHY_RECONCILE_SQL = """SELECT 'hud', (SELECT count(*) FROM stg_hud_zip_county)::VARCHAR,
     ((SELECT count(*) FROM int_hud_zip_county_quarters) + (SELECT count(*) FROM int_hud_zip_county_holds))::VARCHAR
@@ -5907,9 +5909,13 @@ def real_stage() -> dict[str, Any]:
         builds.append([row[:6] for row in duckdb_csv(database, FILES_SQL)])
         outcome[f"{run}_occmix_fingerprint"] = duckdb_csv(
             database,
-            "SELECT count(*)::VARCHAR, md5(string_agg(to_json(s), chr(10) ORDER BY survey_row_key)) FROM int_occmix_survey_rows AS s;",
+            "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(s)), '' ORDER BY survey_row_key)) FROM int_occmix_survey_rows AS s;",
         )
         outcome[f"{run}_geography_fingerprints"] = {model: fingerprint(database, query) for model, query in GEOGRAPHY_FINGERPRINTS.items()}
+        if run == "real":
+            # Free the memory the first build left in Docker's VM before the second build; the catalog starts again [545] [547].
+            outcome["docker_release"] = [catalog.release()]
+            catalog.up()
     outcome["checks"]["real_rebuild_identical"] = builds[0] == builds[1]
     outcome["memory_budgets"] = BUDGETS
     outcome["checks"]["occmix_real_rebuild_identical"] = outcome["real_occmix_fingerprint"] == outcome["real_again_occmix_fingerprint"]
@@ -6139,17 +6145,25 @@ def real_stage() -> dict[str, Any]:
 
 
 def main() -> int:
-    """Run the fixture cases, then the real stage when asked, and write the report."""
+    """Run the fixture cases (unless --real-only), then the real stage when asked, and write the report."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--real", action="store_true", help="also build from the real bronze tables, twice")
+    parser.add_argument(
+        "--real-only", action="store_true", help="only the real builds and their checks; use when no fixture input or expectation changed [548]"
+    )
     args = parser.parse_args()
+    real = args.real or args.real_only
     catalog.up()
     install_packages()
     report: dict[str, Any] = {"started_at": datetime.now(UTC).isoformat(timespec="seconds"), "image": "hai-analytics:duckdb1.5.6-dbt1.11.15"}
-    report["fixture"] = fixture_scenarios()
-    if args.real:
+    report["fixture"] = {} if args.real_only else fixture_scenarios()
+    if args.real_only:
+        report["fixture_skipped"] = "--real-only: the fixture cases did not run; cite the last full pass for them"
+    if real:
         report["real"] = real_stage()
-    checks = dict(report["fixture"]) | (report["real"]["checks"] if args.real else {})
+        # The heavy run is over: free Docker's VM memory for the next one, unless another project's containers run [545] [546].
+        report["real"]["docker_release"].append(catalog.release())
+    checks = dict(report["fixture"]) | (report["real"]["checks"] if real else {})
     report["passed"] = sum(checks.values())
     report["total"] = len(checks)
     results = CASES / "base/target/run_results.json"

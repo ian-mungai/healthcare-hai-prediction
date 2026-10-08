@@ -2,7 +2,7 @@
 
 Run ``.venv/bin/python -m scripts.lakehouse.run_resource_checks``. Reports stay in data/e2e/resource_limits/.
 No Docker daemon, catalog or AWS service is contacted. These process-level contracts and configuration checks do not
-prove live container enforcement. Failure modes 526 to 540 are in plans/resource_limits_20261008/failure_modes.md.
+prove live container enforcement. Failure modes 526 to 543 are in plans/resource_limits_20261008/failure_modes.md.
 """
 
 from __future__ import annotations
@@ -82,6 +82,11 @@ def main() -> int:
             {"JOB_MEMORY_LIMIT": str(21 * GIB), "DUCKDB_MEMORY_LIMIT": "18GB", "SPARK_JOB_MEMORY": "19g", "JOB_THREADS": "6"},
         ),
         "container_floor": ({"mac_gib": 6}, {"JOB_MEMORY_LIMIT": str(4 * GIB), "DUCKDB_MEMORY_LIMIT": "3GB", "SPARK_JOB_MEMORY": "3g", "JOB_THREADS": "16"}),
+        # [543] Memory the VM already holds and no container uses is reusable: 6 + (14 - 1 - 2) - 2 = 15 GiB.
+        "vm_holds_memory": (
+            {"mac_gib": 6, "vm_gib": 14, "usage": "1GiB"},
+            {"JOB_MEMORY_LIMIT": str(15 * GIB), "DUCKDB_MEMORY_LIMIT": "12GB", "SPARK_JOB_MEMORY": "13g", "JOB_THREADS": "16"},
+        ),
     }
     results: dict[str, bool] = {}
     for name, (inputs, expected) in cases.items():

@@ -12,6 +12,8 @@ Owner decision (Oct 7 2026): memory is shared across every project's containers,
 the smaller of Docker's total memory minus what every running container uses at that moment minus a fixed headroom, and
 the memory the Mac can give without swapping (vm_stat free, file-backed and purgeable pages) minus its own headroom; the
 Mac cap is skipped once the Docker VM already holds all of Docker's memory (bundle v8.18.0, infrastructure.md item 3).
+Memory the VM already holds and no running container uses counts toward the Mac figure, less a VM base (owner, Oct 8
+2026): a build that follows another can reuse it without the Mac swapping.
 The container gets that budget. DuckDB gets 80%, rounded down to whole gigabytes (GB). Spark gets whole gibibytes (g),
 leaving its existing JVM overhead. The 4 GiB floor applies to the container, not the smaller engine budget.
 A budget below the floor, an unreadable Docker or an
@@ -36,6 +38,8 @@ GIB = 1024**3
 HEADROOM = 8 * GIB
 # Room left for macOS when the Mac's own free memory caps the limit (owner, Oct 8 2026) [493].
 MAC_HEADROOM = 2 * GIB
+# The Docker VM's own resident memory with no container running: 1.9 GiB after a restart, Oct 8 2026 [543].
+VM_BASE = 2 * GIB
 # Container floor; the engine receives less because some allocations bypass its memory setting [466] [497] [527].
 FLOOR = 4 * GIB
 VM_PROCESS = "com.apple.Virtualization.VirtualMachine"
@@ -63,6 +67,8 @@ class Budget:
     # The Mac's free, file-backed and purgeable memory; None when the Docker VM already holds its memory [495].
     mac_available: int | None = None
     mac_headroom: int = MAC_HEADROOM
+    # Memory the Docker VM holds that no running container uses, less its base; counted with the Mac's memory [543].
+    vm_reusable: int = 0
 
     @property
     def free(self) -> int:
@@ -70,7 +76,7 @@ class Budget:
         docker_free = self.total - self.used_by_containers - self.headroom
         if self.mac_available is None:
             return docker_free
-        return min(docker_free, self.mac_available - self.mac_headroom)
+        return min(docker_free, self.mac_available + self.vm_reusable - self.mac_headroom)
 
     @property
     def setting(self) -> str:
@@ -91,6 +97,7 @@ class Budget:
             "headroom": self.headroom,
             "mac_available": self.mac_available,
             "mac_headroom": self.mac_headroom,
+            "vm_reusable": self.vm_reusable,
             "setting": self.setting,
             "spark_setting": self.spark_setting,
         }
@@ -153,12 +160,18 @@ def docker(*args: str) -> str:
     return result.stdout
 
 
-def compute(total: int, usages: list[int], mac_available: int | None = None) -> Budget:
-    """Return the budget for a total, the running containers' use and the Mac's available memory (None: no Mac cap);
-    too little free memory stops with every figure [463] [466] [493] [497]."""
-    budget = Budget(total=total, used_by_containers=sum(usages), headroom=HEADROOM, mac_available=mac_available)
+def compute(total: int, usages: list[int], mac_available: int | None = None, vm_held: int = 0) -> Budget:
+    """Return the budget for a total, the running containers' use, the Mac's available memory (None: no Mac cap) and the
+    Docker VM's resident memory; too little free memory stops with every figure [463] [466] [493] [497] [543]."""
+    used = sum(usages)
+    reusable = max(0, vm_held - used - VM_BASE)
+    budget = Budget(total=total, used_by_containers=used, headroom=HEADROOM, mac_available=mac_available, vm_reusable=reusable)
     if budget.free < FLOOR:
-        mac = "not capping" if mac_available is None else f"{mac_available / GIB:.1f} GiB less {MAC_HEADROOM / GIB:.0f} GiB headroom"
+        mac = (
+            "not capping"
+            if mac_available is None
+            else f"{mac_available / GIB:.1f} GiB plus {reusable / GIB:.1f} GiB reusable in the VM, less {MAC_HEADROOM / GIB:.0f} GiB headroom"
+        )
         raise BudgetError(
             f"only {budget.free / GIB:.1f} GiB free for DuckDB or Spark: Docker {total / GIB:.1f} GiB, "
             f"containers {budget.used_by_containers / GIB:.1f} GiB, headroom {HEADROOM / GIB:.0f} GiB; Mac {mac}"
@@ -208,8 +221,9 @@ def current() -> Budget:
     """Return the budget from Docker's total memory, every running container's current use and the Mac's available memory [467] [495]."""
     total = positive_integer(docker("info", "--format", "{{.MemTotal}}"), "Docker memory")
     lines = [line for line in docker("stats", "--no-stream", "--format", "{{.MemUsage}}").splitlines() if line.strip()]
-    mac = None if vm_resident() >= total else mac_available()
-    return compute(total, [parse_size(line.split("/")[0]) for line in lines], mac)
+    held = vm_resident()
+    mac = None if held >= total else mac_available()
+    return compute(total, [parse_size(line.split("/")[0]) for line in lines], mac, held)
 
 
 def main() -> int:

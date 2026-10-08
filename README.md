@@ -64,7 +64,9 @@ The lakehouse runs in Docker Desktop (32 GiB of memory on the development Mac in
 October 2026). Every job launch computes one resource plan after the catalog services
 start. Its container limit is the smaller of Docker's total minus running containers'
 use minus 8 GiB headroom and the Mac's free, file-backed and purgeable memory minus
-2 GiB. The Mac cap is skipped once Docker's VM holds its full allocation.
+2 GiB, plus the memory Docker's VM already holds that no running container uses, less a
+2 GiB VM base, so a build that follows another can reuse it. The Mac cap is skipped once
+Docker's VM holds its full allocation.
 A container budget below 4 GiB stops the launch. DuckDB receives 80% of the container
 budget, rounded down to whole GB, to leave room for allocations outside its buffer
 limit. The 4 GiB floor applies to the container, so the engine allowance is smaller.
@@ -86,6 +88,11 @@ Those limits stay fixed for that container's lifetime. A service-derived job lim
 in the private Compose env file lets catalog-only commands render inactive profiles;
 every job launcher overrides it with its fresh plan. Use the launch scripts to run jobs.
 Close containers and apps you no longer use before a heavy run.
+Docker's VM keeps a heavy build's memory, much of it compressed by macOS, so
+`.venv/bin/python -m scripts.lakehouse.catalog release` stops this project's containers and
+restarts Docker Desktop; it restarts nothing while another project's container runs.
+The staging E2E calls it after each real build. `run_staging_e2e --real-only` runs the
+real builds and their checks without the fixture cases, for changes that touch no fixture.
 
 Run the non-Docker resource contracts with
 `.venv/bin/python -m scripts.lakehouse.run_resource_checks`.
