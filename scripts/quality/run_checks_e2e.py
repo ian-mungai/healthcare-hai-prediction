@@ -573,6 +573,10 @@ def scratch_repo(root: Path, case: Case) -> Path:
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.name", "check test")
     git(repo, "config", "user.email", "test@example.invalid")
+    # No background garbage collection or maintenance: a detached run can still be writing into .git when the scratch
+    # folder is removed, which failed CI run 37736374173 with "Directory not empty".
+    git(repo, "config", "gc.auto", "0")
+    git(repo, "config", "maintenance.auto", "false")
     # Copy only files Git tracks or would track, so ignored local code never enters the scratch repository.
     listed = run_command("git", ["ls-files", "--cached", "--others", "--exclude-standard", "scripts"], cwd=ROOT, check=True).stdout.splitlines()
     for relative in [*COPIED, *listed]:
