@@ -1174,6 +1174,7 @@ OWNERSHIP_PERIODS = {
     "o1": ("Hospital All Owners : 2025-05-01", "2025-05-01", "2025-05-31"),
     "x1": ("Hospital Change of Ownership : 2023-12-01", "2023-10-01", "2023-12-31"),
     "ow1": ("Hospital All Owners : 2022-11-14", "2022-11-01", "2022-11-30"),
+    "ow0": ("Hospital All Owners : 2020-07-01", "2020-07-01", "2020-07-31"),
     "ow2": ("Hospital All Owners : 2025-04-01", "2025-04-01", "2025-04-30"),
     "ow9": ("Hospital All Owners : 2025-06-01", "2025-06-01", "2025-06-30"),
     "en1": ("Hospital Enrollments : 2022-11-01", "2022-11-01", "2022-11-30"),
@@ -1762,6 +1763,73 @@ CHOW_EVENT = cc(
     chow_type_text="CHANGE OF OWNERSHIP",
     effective_date="03/01/2021",
 )
+# AL3b [587] to [594]: HHS weeks of 2020 for 010001 (a ratio of sums and a sum; a December 2019 week outside the year) and
+# a 2020 week where two HHS hospitals share 010005's CCN (skipped); an owner release before the 2021 window where a direct
+# owner reports private equity and a managing organisation reports a REIT (a role that does not count).
+GROUP_AL3B = (
+    Stored(
+        "hhs_capacity_csv",
+        "hh_al3b",
+        "HHS_CAPACITY__fixture_al3b",
+        "rows.csv",
+        sha("r7"),
+        5,
+        records=(
+            cc(
+                hospital_pk="010001",
+                collection_week="2019/12/29",
+                ccn="010001",
+                all_adult_hospital_inpatient_bed_occupied_7_day_avg="90",
+                all_adult_hospital_inpatient_beds_7_day_avg="100",
+                previous_day_admission_influenza_confirmed_7_day_sum="9",
+            ),
+            cc(
+                hospital_pk="010001",
+                collection_week="2020/01/05",
+                ccn="010001",
+                all_adult_hospital_inpatient_bed_occupied_7_day_avg="50",
+                all_adult_hospital_inpatient_beds_7_day_avg="100",
+                previous_day_admission_influenza_confirmed_7_day_sum="3",
+            ),
+            cc(
+                hospital_pk="010001",
+                collection_week="2020/01/12",
+                ccn="010001",
+                all_adult_hospital_inpatient_bed_occupied_7_day_avg="60",
+                all_adult_hospital_inpatient_beds_7_day_avg="100",
+                previous_day_admission_influenza_confirmed_7_day_sum="4",
+            ),
+            cc(
+                hospital_pk="010005",
+                collection_week="2020/01/05",
+                ccn="010005",
+                all_adult_hospital_inpatient_bed_occupied_7_day_avg="70",
+                all_adult_hospital_inpatient_beds_7_day_avg="100",
+            ),
+            cc(
+                hospital_pk="010005B",
+                collection_week="2020/01/05",
+                ccn="010005",
+                all_adult_hospital_inpatient_bed_occupied_7_day_avg="20",
+                all_adult_hospital_inpatient_beds_7_day_avg="40",
+            ),
+        ),
+    ),
+    Stored(
+        "cms_hospital_owners",
+        "ow0",
+        "CMS_OWNERS_ORG__fixture_v0",
+        "organisation_owners.csv",
+        sha("r8"),
+        2,
+        records=(
+            owner("O20000000001", "1111111111", "34", percentage_ownership="60", private_equity_company_owner="Y", reit_owner="N"),
+            owner("O20000000001", "2222222222", "43", private_equity_company_owner="N", reit_owner="Y"),
+        ),
+    ),
+)
+
+
 # B5a ownership. Owners in the layout before April 2025, without the private-equity and REIT columns, and after it, with a
 # blank flag, a one-digit date and decimal shares [366] [368] [369]; an enrollment whose CCN lost its leading zero and a
 # unit CCN [370]; a change of ownership repeated in a later cumulative release, with a buyer value that is not a CCN
@@ -3097,6 +3165,7 @@ BASE = (
     *GROUP_D2,
     *GROUP_AL1,
     *GROUP_AL2,
+    *GROUP_AL3B,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -4260,6 +4329,16 @@ OUTCOME_VALUE_ROWS_SQL = (
     "SELECT measure_control, outcome_key, field, value_text, coalesce(value_number::VARCHAR, ''), coalesce(review_decision, '') "
     "FROM int_hai_outcome_values WHERE outcome_key = '070001:2021:HAI_2' OR outcome_key = '070001:2021:HAI_3' ORDER BY ALL;"
 )
+OPERATIONS_SQL = (
+    "SELECT ccn, window_year::VARCHAR, measure_source, measure_control, alignment_status, coalesce(value_text, ''), "
+    "coalesce(value_number::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(age_months::VARCHAR, ''), coalesce(unit_count::VARCHAR, ''), "
+    "coalesce(skipped_count::VARCHAR, '') FROM int_spine_operations_measures WHERE alignment_status IN ('aligned', 'held_in_staging') ORDER BY ALL;"
+)
+OPERATIONS_COUNT_SQL = (
+    "SELECT 'rows', (SELECT count(*) FROM int_spine_operations_measures)::VARCHAR UNION ALL "
+    "SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_operations_measures)::VARCHAR UNION ALL "
+    "SELECT alignment_status, count(*)::VARCHAR FROM int_spine_operations_measures GROUP BY 1 ORDER BY 1;"
+)
 HOSPITAL_SQL = (
     "SELECT ccn, window_year::VARCHAR, measure_source, measure_control, field, alignment_status, coalesce(value_code, ''), "
     "coalesce(value_number::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(rule_stage, ''), coalesce(age_months::VARCHAR, ''), "
@@ -4514,6 +4593,8 @@ def read_models(case: str) -> dict[str, Any]:
         "hai_outcomes": [tuple(row) for row in duckdb_csv(database, OUTCOME_SQL)],
         "care_compare": [tuple(row) for row in duckdb_csv(database, CARE_SQL)],
         "hospital_measures": [tuple(row) for row in duckdb_csv(database, HOSPITAL_SQL)],
+        "operations_measures": [tuple(row) for row in duckdb_csv(database, OPERATIONS_SQL)],
+        "operations_measure_counts": [tuple(row) for row in duckdb_csv(database, OPERATIONS_COUNT_SQL)],
         "hospital_measure_counts": [tuple(row) for row in duckdb_csv(database, HOSPITAL_COUNT_SQL)],
         "care_compare_counts": [tuple(row) for row in duckdb_csv(database, CARE_COUNT_SQL)],
         "hai_outcome_counts": [tuple(row) for row in duckdb_csv(database, OUTCOME_COUNT_SQL)],
@@ -4911,6 +4992,89 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("cms_cc_unplanned_hospital_visits_hospital", "", "", "no_key", "1"),
     ]
     checks["validation_seed_matches_registry"] = validation_seed_matches()
+    return checks
+
+
+def operations_measure_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's AL3b rows with their expected values [587] to [595]."""
+    checks: dict[str, bool] = {}
+    # [587] [588] HHS 2020 weeks only: C260 = (50 + 60) / (100 + 100), E035.01 = 3 + 4; [592] [593] the 2020 owner release
+    # through the enrollment CCN: private equity Y from a direct owner, the managing organisation's REIT flag not counted;
+    # [591] ONC's latest period; [594] no change of ownership in 2024 and 24 months since the latest. Reviewed row by row.
+    held = [
+        ("010005", "2021", "hhs_capacity", control, "held_in_staging", "", "", "2020-12-31", "1", "0", "1")
+        for control in [
+            "C260",
+            "C261",
+            "C262.01",
+            "C262.02",
+            "C262.03",
+            "C262.04",
+            "C262.05",
+            "C262.06",
+            "C263.01",
+            "C263.02",
+            "C263.03",
+            "C263.04",
+            "C263.05",
+            "C263.06",
+            "E034.01",
+            "E034.02",
+            "E034.03",
+            "E034.04",
+            "E034.05",
+            "E034.06",
+            "E034.07",
+            "E034.08",
+            "E034.09",
+            "E034.10",
+            "E034.11",
+            "E034.12",
+            "E034.13",
+            "E034.14",
+            "E034.15",
+            "E034.16",
+            "E034.17",
+            "E034.18",
+            "E034.19",
+            "E034.20",
+            "E034.21",
+            "E034.22",
+            "E034.23",
+            "E034.24",
+            "E034.25",
+            "E034.26",
+            "E035.01",
+        ]
+    ]
+    checks["operations_measures_match_expected"] = base.get("operations_measures") == sorted(
+        [
+            ("010001", "2021", "hhs_capacity", "C260", "aligned", "", "0.55", "2020-12-31", "1", "2", "0"),
+            ("010001", "2021", "hhs_capacity", "E035.01", "aligned", "", "7.0", "2020-12-31", "1", "2", "0"),
+            ("010001", "2021", "ownership", "C067", "aligned", "Y", "1.0", "2020-07-31", "6", "2", "0"),
+            ("010001", "2021", "ownership", "C068", "aligned", "not_reported", "0.0", "2020-07-31", "6", "2", "0"),
+            ("010001", "2021", "ownership", "L005", "aligned", "O20000000001", "1.0", "2020-07-31", "6", "2", "0"),
+            ("010001", "2025", "onc", "C071", "aligned", "Y", "", "2023-12-31", "13", "1", "0"),
+            ("010001", "2025", "onc", "C072", "aligned", "Fixture Developer A", "1.0", "2023-12-31", "13", "1", "0"),
+            ("010001", "2025", "onc", "C073", "aligned", "", "1.0", "2023-12-31", "13", "1", "0"),
+            ("010001", "2025", "onc", "C074", "aligned", "0015EFIXTURE01", "", "2023-12-31", "13", "1", "0"),
+            ("010001", "2025", "ownership", "C067", "aligned", "Y", "1.0", "2020-07-31", "54", "2", "0"),
+            ("010001", "2025", "ownership", "C068", "aligned", "not_reported", "0.0", "2020-07-31", "54", "2", "0"),
+            ("010001", "2025", "ownership", "C069", "aligned", "", "0.0", "2024-12-31", "1", "1", "0"),
+            ("010001", "2025", "ownership", "C070", "aligned", "", "24.0", "2023-01-01", "24", "1", "0"),
+            ("010001", "2025", "ownership", "L005", "aligned", "O20000000001", "1.0", "2020-07-31", "54", "2", "0"),
+            *held,
+        ]
+    )
+    # [589] 010005's only 2020 week has two HHS hospitals, so every HHS control is held; [595] one row per control (12 x 52).
+    checks["operations_measure_counts_match_expected"] = base.get("operations_measure_counts") == [
+        ("aligned", "14"),
+        ("held_in_staging", "41"),
+        ("keys", "624"),
+        ("no_period_before_start", "109"),
+        ("not_in_source", "460"),
+        ("rows", "624"),
+    ]
     return checks
 
 
@@ -5659,6 +5823,8 @@ def fixture_scenarios() -> dict[str, bool]:
         ("o3", "2025-04-30", "O20000000002", "1111111111", "35", "2025-04-15", "37.5", "true", "false", "false", "", ""),
         ("o3", "2025-04-30", "O20000000002", "5555555555", "43", "", "", "true", "", "", "", ""),
         ("o3", "2025-04-30", "O20000000002", "9876543210", "34", "2020-03-07", "62.5", "true", "true", "false", "true", "true"),
+        ("r8", "2020-07-31", "O20000000001", "1111111111", "34", "", "60.0", "true", "true", "false", "", ""),
+        ("r8", "2020-07-31", "O20000000001", "2222222222", "43", "", "", "true", "false", "true", "", ""),
         ("u3", "2025-05-31", "O20000000001", "", "", "", "", "true", "false", "", "", ""),
     ]
     checks["enrollments_match_expected"] = base.get("enrollments") == [
@@ -5693,6 +5859,9 @@ def fixture_scenarios() -> dict[str, bool]:
     # [375] to [383] HHS and ONC: a suppressed count and a negative value null and listed, a corrected week kept, a hospital without a CCN kept by
     # its key; the blank criterion null, M/D/YYYY dates, no telephone column; the older attestations typed apart.
     checks["hhs_match_expected"] = base.get("hhs") == [
+        ("010001", "2019-12-29", "010001", "", "", "", "", "", "", ""),
+        ("010001", "2020-01-05", "010001", "", "", "", "", "", "", ""),
+        ("010001", "2020-01-12", "010001", "", "", "", "", "", "", ""),
         (
             "010001",
             "2021-01-03",
@@ -5706,6 +5875,8 @@ def fixture_scenarios() -> dict[str, bool]:
             "staffed_pediatric_icu_bed_occupancy_7_day_avg",
         ),
         ("010001", "2021-01-10", "010001", "true", "251.0", "", "", "", "", ""),
+        ("010005", "2020-01-05", "010005", "", "", "", "", "", "", ""),
+        ("010005", "2020-01-05", "010005", "", "", "", "", "", "", ""),
         ("3f3f3f", "2021-01-03", "", "", "40.0", "", "", "", "", ""),
     ]
     checks["onc_chpl_match_expected"] = base.get("onc_chpl") == [
@@ -5752,6 +5923,7 @@ def fixture_scenarios() -> dict[str, bool]:
     checks.update(outcome_checks(base))
     checks.update(care_compare_checks(base))
     checks.update(hospital_measure_checks(base))
+    checks.update(operations_measure_checks(base))
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -6423,6 +6595,39 @@ def hospital_measures_real(database: str) -> dict[str, Any]:
     return {"checks": checks, "counts": counts}
 
 
+# AL3b reconciliation [587] to [595]: rows against the spine and the two seeds; HHS, ONC and change-of-ownership periods
+# counted independently from the staged tables; no aligned period on or after the start.
+OPERATIONS_REAL_SQL = """WITH spine AS (SELECT spine_key, ccn, window_year, make_date(window_year, 1, 1) AS start FROM int_hospital_spine),
+controls AS (SELECT (SELECT count(*) FROM hhs_onc_measures) + (SELECT count(*) FROM ownership_measures) AS n),
+model AS (SELECT measure_source, measure_control, count(*) FILTER (WHERE period_end IS NOT NULL) AS n FROM int_spine_operations_measures GROUP BY ALL)
+SELECT 'rows', (SELECT count(*) FROM int_spine_operations_measures)::VARCHAR, ((SELECT count(*) FROM spine) * (SELECT n FROM controls))::VARCHAR
+UNION ALL SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_operations_measures)::VARCHAR,
+    ((SELECT count(*) FROM spine) * (SELECT n FROM controls))::VARCHAR
+UNION ALL SELECT 'hhs_years', (SELECT n FROM model WHERE measure_control = 'C260')::VARCHAR,
+    (SELECT count(DISTINCT spine.spine_key) FROM spine JOIN int_hhs_capacity_weeks AS w ON w.ccn = spine.ccn
+        AND year(w.collection_week) = spine.window_year - 1)::VARCHAR
+UNION ALL SELECT 'onc_periods', (SELECT n FROM model WHERE measure_control = 'C073')::VARCHAR,
+    (SELECT count(DISTINCT spine.spine_key) FROM spine JOIN int_onc_chpl_linkage_rows AS o ON o.ccn = spine.ccn AND o.end_date < spine.start)::VARCHAR
+UNION ALL SELECT 'chow_hospital_windows', (SELECT n FROM model WHERE measure_control = 'C070')::VARCHAR,
+    (SELECT count(DISTINCT spine.spine_key) FROM spine JOIN int_change_of_ownership_rows AS c
+        ON (c.ccn_buyer = spine.ccn OR c.ccn_seller = spine.ccn) AND c.effective_date < spine.start)::VARCHAR
+UNION ALL SELECT 'periods_on_or_after_start', (SELECT count(*) FROM int_spine_operations_measures
+    WHERE alignment_status = 'aligned' AND period_end >= window_start)::VARCHAR, '0';"""
+OPERATIONS_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_operations_measures AS t;"
+
+
+def operations_measures_real(database: str) -> dict[str, Any]:
+    """Reconcile the real AL3b rows with the spine and the staged sources; count statuses per source."""
+    checks: dict[str, bool] = {}
+    counts: dict[str, Any] = {}
+    for name, model, independent in duckdb_csv(database, OPERATIONS_REAL_SQL):
+        counts[name] = {"model": int(model), "independent": int(independent)}
+        checks[f"operations_measures_{name}_reconcile"] = model == independent
+    status_sql = "SELECT measure_source || ' ' || alignment_status, count(*)::VARCHAR FROM int_spine_operations_measures GROUP BY 1 ORDER BY 1;"
+    counts["alignment_status"] = dict(duckdb_csv(database, status_sql))
+    return {"checks": checks, "counts": counts}
+
+
 def validation_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real D1 windows with their staging views' window keys; count rows per control [511] [513]."""
     checks: dict[str, bool] = {}
@@ -6545,6 +6750,7 @@ def real_stage() -> dict[str, Any]:
         outcome[f"{run}_outcome_fingerprint"] = fingerprint(database, OUTCOME_FINGERPRINT_SQL)
         outcome[f"{run}_care_compare_fingerprint"] = fingerprint(database, CARE_FINGERPRINT_SQL)
         outcome[f"{run}_hospital_measures_fingerprint"] = fingerprint(database, HOSPITAL_FINGERPRINT_SQL)
+        outcome[f"{run}_operations_measures_fingerprint"] = fingerprint(database, OPERATIONS_FINGERPRINT_SQL)
         if run == "real":
             # Free the memory the first build left in Docker's VM before the second build; the catalog starts again [545] [547].
             outcome["docker_release"] = [catalog.release()]
@@ -6582,6 +6788,12 @@ def real_stage() -> dict[str, Any]:
     hospital = hospital_measures_real(database)
     outcome["checks"].update(hospital["checks"])
     outcome["al3a_hospital_measure_counts"] = hospital["counts"]
+    outcome["checks"]["operations_measures_real_rebuild_identical"] = (
+        outcome["real_operations_measures_fingerprint"] == outcome["real_again_operations_measures_fingerprint"]
+    )
+    operations = operations_measures_real(database)
+    outcome["checks"].update(operations["checks"])
+    outcome["al3b_operations_measure_counts"] = operations["counts"]
     validation = validation_real(database, init)
     outcome["checks"].update(validation["checks"])
     outcome["validation_counts"] = validation["counts"]

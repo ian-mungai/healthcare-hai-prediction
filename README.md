@@ -331,6 +331,12 @@ IPPS impact value of the latest rule fiscal year that ends before the start (Oct
 first), the latest Medicare inpatient data year and the latest occupational-mix survey. Values that disagree for one
 period are held and counted. Occupational-mix copies of one survey (text and workbook twins in several rule-year files)
 within 0.0001 of each other count as one value.
+`int_spine_operations_measures` (step AL3b) adds the operations controls as each registry field defines them: HHS capacity
+from the weeks of the calendar year before the window (a ratio of sums for two fields, a sum of 7-day sums or a mean of
+7-day averages; a week where two HHS hospitals share a CCN is skipped and counted), ONC certified-EHR status, developers
+and product count from the latest performance period, private-equity and REIT ownership from the latest owner release
+before the start (direct, indirect and partnership owners only; a blank is `not_reported`, never no). Changes of
+ownership count those in the year before the start, with the completed months since the latest one.
 
 Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
 visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the
