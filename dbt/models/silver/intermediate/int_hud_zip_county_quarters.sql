@@ -56,7 +56,8 @@ scoped as (
         *,
         {{ county_scope('county_fips') }} as county_scope,
         -- Rounded so the parallel sum's last-digit noise cannot change a rebuild [418].
-        round(sum(res_ratio) over (partition by member_sha256, zip_code), 9) as zip_residential_ratio_sum
+        -- Exact decimals, so the sum does not depend on the order the engine adds the rows in.
+        round(sum(res_ratio::decimal(38, 12)) over (partition by member_sha256, zip_code), 9)::double as zip_residential_ratio_sum
     from typed
 )
 
