@@ -1289,6 +1289,33 @@ models:
           - accepted_values:
               arguments:
                 values: [aligned, no_period_before_start, held_in_staging, not_in_source]
+  - name: int_spine_hospital_measures
+    description: >
+      AL3a: one row per spine hospital-window and hospital finance or operations control by source and field (cost
+      reports, IPPS impact files, Medicare inpatient summaries, occupational-mix surveys). Each takes the latest period that
+      ends before the HAI window starts: the report period, the rule fiscal year (Oct 1 to Sep 30, most final stage), the
+      data year or the survey. Values that disagree for one period are held; occupational-mix copies within 0.0001 count
+      as one value. Age in months, no limit; no eligibility choice.
+    columns:
+      - name: alignment_key
+        description: Spine key, measure source, registry control and field.
+        data_tests: [unique, not_null]
+      - name: measure_source
+        description: cost_report, ipps_impact, medicare_inpatient or occupational_mix.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [cost_report, ipps_impact, medicare_inpatient, occupational_mix]
+      - name: period_copy_count
+        description: Reports, files or copies behind the chosen period.
+      - name: alignment_status
+        description: aligned, no_period_before_start, held_in_staging (values that disagree, or only held survey rows) or not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, no_period_before_start, held_in_staging, not_in_source]
   - name: int_hai_outcome_values
     description: >
       HAI registry controls (main-hai-pdc and C283's children) per outcome row and field with a published value, from the

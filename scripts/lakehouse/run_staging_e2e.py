@@ -4260,6 +4260,17 @@ OUTCOME_VALUE_ROWS_SQL = (
     "SELECT measure_control, outcome_key, field, value_text, coalesce(value_number::VARCHAR, ''), coalesce(review_decision, '') "
     "FROM int_hai_outcome_values WHERE outcome_key = '070001:2021:HAI_2' OR outcome_key = '070001:2021:HAI_3' ORDER BY ALL;"
 )
+HOSPITAL_SQL = (
+    "SELECT ccn, window_year::VARCHAR, measure_source, measure_control, field, alignment_status, coalesce(value_code, ''), "
+    "coalesce(value_number::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(rule_stage, ''), coalesce(age_months::VARCHAR, ''), "
+    "coalesce(period_copy_count::VARCHAR, '') FROM int_spine_hospital_measures WHERE alignment_status IN ('aligned', 'held_in_staging') ORDER BY ALL;"
+)
+HOSPITAL_COUNT_SQL = (
+    "SELECT 'rows', (SELECT count(*) FROM int_spine_hospital_measures)::VARCHAR UNION ALL "
+    "SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_hospital_measures)::VARCHAR UNION ALL "
+    "SELECT 'spine', (SELECT count(*) FROM int_hospital_spine)::VARCHAR UNION ALL "
+    "SELECT alignment_status, count(*)::VARCHAR FROM int_spine_hospital_measures GROUP BY 1 ORDER BY 1;"
+)
 CARE_SQL = (
     "SELECT ccn, window_year::VARCHAR, measure_control, alignment_status, coalesce(value_text, ''), coalesce(value_number::VARCHAR, ''), "
     "coalesce(value_category, ''), coalesce(period_end::VARCHAR, ''), coalesce(age_months::VARCHAR, ''), coalesce(release_file_count::VARCHAR, '') "
@@ -4502,6 +4513,8 @@ def read_models(case: str) -> dict[str, Any]:
         "program_holds": [tuple(row) for row in duckdb_csv(database, PROGRAM_HOLDS_SQL)],
         "hai_outcomes": [tuple(row) for row in duckdb_csv(database, OUTCOME_SQL)],
         "care_compare": [tuple(row) for row in duckdb_csv(database, CARE_SQL)],
+        "hospital_measures": [tuple(row) for row in duckdb_csv(database, HOSPITAL_SQL)],
+        "hospital_measure_counts": [tuple(row) for row in duckdb_csv(database, HOSPITAL_COUNT_SQL)],
         "care_compare_counts": [tuple(row) for row in duckdb_csv(database, CARE_COUNT_SQL)],
         "hai_outcome_counts": [tuple(row) for row in duckdb_csv(database, OUTCOME_COUNT_SQL)],
         "hai_outcome_status": [tuple(row) for row in duckdb_csv(database, OUTCOME_STATUS_SQL)],
@@ -4898,6 +4911,114 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("cms_cc_unplanned_hospital_visits_hospital", "", "", "no_key", "1"),
     ]
     checks["validation_seed_matches_registry"] = validation_seed_matches()
+    return checks
+
+
+def hospital_measure_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's AL3a rows with their expected values [576] to [586]."""
+    checks: dict[str, bool] = {}
+    # [576] to [581] Every aligned or held row: the latest cost report before the start; the IPPS rule year that ends before
+    # it, most final stage first, with same-stage files that disagree held (C025, C038); the Medicare inpatient data year;
+    # the occupational-mix survey. Reviewed row by row against the rules before being fixed here.
+    checks["hospital_measures_match_expected"] = base.get("hospital_measures") == [
+        ("010001", "2019", "ipps_impact", "C001", "beds", "aligned", "", "50.0", "2015-09-30", "correction+final", "40", "1"),
+        ("010001", "2019", "ipps_impact", "C006", "resident_to_bed_ratio", "aligned", "", "0.28515", "2009-09-30", "unspecified", "112", "1"),
+        ("010001", "2019", "ipps_impact", "C021", "geographic_labor_market_area", "aligned", "20020", "", "2009-09-30", "unspecified", "112", "1"),
+        ("010001", "2019", "ipps_impact", "C021", "urgeo", "aligned", "OURBAN", "", "2009-09-30", "unspecified", "112", "1"),
+        ("010001", "2019", "ipps_impact", "C022", "dsh_patient_percentage", "aligned", "", "0.1274", "2009-09-30", "unspecified", "112", "1"),
+        ("010001", "2019", "ipps_impact", "C023", "medicare_percentage", "aligned", "", "0.273", "2009-09-30", "unspecified", "112", "1"),
+        ("010001", "2019", "ipps_impact", "C025", "wage_index", "held_in_staging", "", "", "2015-09-30", "correction+final", "40", "1"),
+        ("010001", "2019", "ipps_impact", "C026", "capital_ime_factor", "aligned", "", "0.028", "2009-09-30", "unspecified", "112", "1"),
+        ("010001", "2019", "ipps_impact", "C026", "operating_ime_factor", "aligned", "", "0.05944", "2009-09-30", "unspecified", "112", "1"),
+        ("010001", "2019", "ipps_impact", "C038", "medicare_bills", "held_in_staging", "", "", "2015-09-30", "correction+final", "40", "1"),
+        ("010001", "2019", "ipps_impact", "C040", "average_daily_census", "aligned", "", "0.654054054054054", "2009-09-30", "unspecified", "112", "1"),
+        ("010001", "2021", "ipps_impact", "C001", "beds", "aligned", "", "50.0", "2015-09-30", "correction+final", "64", "1"),
+        ("010001", "2021", "ipps_impact", "C006", "resident_to_bed_ratio", "aligned", "", "0.28515", "2009-09-30", "unspecified", "136", "1"),
+        ("010001", "2021", "ipps_impact", "C021", "geographic_labor_market_area", "aligned", "20020", "", "2009-09-30", "unspecified", "136", "1"),
+        ("010001", "2021", "ipps_impact", "C021", "urgeo", "aligned", "OURBAN", "", "2009-09-30", "unspecified", "136", "1"),
+        ("010001", "2021", "ipps_impact", "C022", "dsh_patient_percentage", "aligned", "", "0.1274", "2009-09-30", "unspecified", "136", "1"),
+        ("010001", "2021", "ipps_impact", "C023", "medicare_percentage", "aligned", "", "0.273", "2009-09-30", "unspecified", "136", "1"),
+        ("010001", "2021", "ipps_impact", "C025", "wage_index", "held_in_staging", "", "", "2015-09-30", "correction+final", "64", "1"),
+        ("010001", "2021", "ipps_impact", "C026", "capital_ime_factor", "aligned", "", "0.028", "2009-09-30", "unspecified", "136", "1"),
+        ("010001", "2021", "ipps_impact", "C026", "operating_ime_factor", "aligned", "", "0.05944", "2009-09-30", "unspecified", "136", "1"),
+        ("010001", "2021", "ipps_impact", "C038", "medicare_bills", "held_in_staging", "", "", "2015-09-30", "correction+final", "64", "1"),
+        ("010001", "2021", "ipps_impact", "C040", "average_daily_census", "aligned", "", "0.654054054054054", "2009-09-30", "unspecified", "136", "1"),
+        ("010001", "2025", "cost_report", "C001", "value", "aligned", "", "250.0", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C002", "value", "aligned", "2", "", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C003", "value", "aligned", "1", "", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C023", "value", "aligned", "", "0.5", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C024", "value", "aligned", "", "0.1", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C027", "value", "aligned", "", "1500.5", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C028", "value", "aligned", "", "6.002", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C035", "value", "aligned", "", "4380000.0", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C037", "value", "aligned", "", "73000.0", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C038", "value", "aligned", "", "14600.0", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C039", "value", "aligned", "", "200.0", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C040", "value", "aligned", "", "0.8", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C041", "value", "aligned", "", "58.4", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C042", "value", "aligned", "", "5.0", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C045", "value", "aligned", "", "0.124", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C046", "value", "aligned", "", "2.0", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C047", "value", "aligned", "", "0.5", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C048", "value", "aligned", "", "30.0", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C049", "value", "aligned", "", "0.0125", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C050", "value", "aligned", "", "0.02", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C051", "value", "aligned", "", "-10.0", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C052", "value", "aligned", "", "0.1", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C053", "value", "aligned", "", "0.5", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C054", "value", "aligned", "", "0.01", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C055", "value", "aligned", "", "0.25", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "cost_report", "C057", "value", "aligned", "", "30000.0", "2023-09-30", "", "16", "1"),
+        ("010001", "2025", "ipps_impact", "C001", "beds", "aligned", "", "50.0", "2015-09-30", "correction+final", "112", "1"),
+        ("010001", "2025", "ipps_impact", "C006", "resident_to_bed_ratio", "aligned", "", "0.28515", "2009-09-30", "unspecified", "184", "1"),
+        ("010001", "2025", "ipps_impact", "C021", "geographic_labor_market_area", "aligned", "20020", "", "2009-09-30", "unspecified", "184", "1"),
+        ("010001", "2025", "ipps_impact", "C021", "urgeo", "aligned", "OURBAN", "", "2009-09-30", "unspecified", "184", "1"),
+        ("010001", "2025", "ipps_impact", "C022", "dsh_patient_percentage", "aligned", "", "0.1274", "2009-09-30", "unspecified", "184", "1"),
+        ("010001", "2025", "ipps_impact", "C023", "medicare_percentage", "aligned", "", "0.273", "2009-09-30", "unspecified", "184", "1"),
+        ("010001", "2025", "ipps_impact", "C025", "wage_index", "held_in_staging", "", "", "2015-09-30", "correction+final", "112", "1"),
+        ("010001", "2025", "ipps_impact", "C026", "capital_ime_factor", "aligned", "", "0.028", "2009-09-30", "unspecified", "184", "1"),
+        ("010001", "2025", "ipps_impact", "C026", "operating_ime_factor", "aligned", "", "0.05944", "2009-09-30", "unspecified", "184", "1"),
+        ("010001", "2025", "ipps_impact", "C038", "medicare_bills", "held_in_staging", "", "", "2015-09-30", "correction+final", "112", "1"),
+        ("010001", "2025", "ipps_impact", "C040", "average_daily_census", "aligned", "", "0.654054054054054", "2009-09-30", "unspecified", "184", "1"),
+        ("010001", "2025", "medicare_inpatient", "C038", "tot_dschrgs", "aligned", "", "1350.0", "2024-12-31", "", "1", "1"),
+        ("010001", "2025", "medicare_inpatient", "C042", "tot_days", "aligned", "", "5.0", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C076", "bene_avg_risk_scre", "aligned", "", "1.8", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C077", "bene_avg_age", "aligned", "", "74.5", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C078", "bene_age_lt_65_cnt", "aligned", "", "0.1", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C079", "bene_age_65_74_cnt", "aligned", "", "0.4", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C080", "bene_age_75_84_cnt", "aligned", "", "0.3", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C081", "bene_age_gt_84_cnt", "aligned", "", "0.2", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C082", "bene_feml_cnt", "aligned", "", "0.55", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C083", "bene_dual_cnt", "aligned", "", "0.25", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C084", "bene_race_api_cnt", "aligned", "", "0.03", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C084", "bene_race_black_cnt", "aligned", "", "0.2", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C084", "bene_race_hspnc_cnt", "aligned", "", "0.05", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C084", "bene_race_othr_cnt", "aligned", "", "0.02", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C084", "bene_race_wht_cnt", "aligned", "", "0.7", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C085", "tot_benes", "aligned", "", "900.0", "2024-12-31", "", "1", "1"),
+        ("010001", "2025", "medicare_inpatient", "C086", "tot_dschrgs", "aligned", "", "1.5", "2024-12-31", "", "1", "1"),
+        ("010001", "2025", "medicare_inpatient", "C087", "tot_dschrgs", "aligned", "", "1350.0", "2024-12-31", "", "1", "1"),
+        ("010001", "2025", "medicare_inpatient", "C088", "tot_cvrd_days", "aligned", "", "7400.0", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C089", "bene_cc_ph_diabetes_v2_pct", "aligned", "", "0.35", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C090", "bene_cc_ph_ckd_v2_pct", "aligned", "", "0.4", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C109", "bene_cc_bh_depress_v1_pct", "aligned", "", "0.3", "2023-12-31", "", "13", "1"),
+        ("010001", "2025", "medicare_inpatient", "C117", "tot_dschrgs", "aligned", "", "0.06", "2023-12-31", "", "13", "1"),
+        ("010005", "2021", "occupational_mix", "C030", "rnhr", "aligned", "", "100.0", "2016-12-31", "", "49", "1"),
+        ("010005", "2021", "occupational_mix", "C031", "rn_paid_hour_share", "aligned", "", "1.0", "2016-12-31", "", "49", "1"),
+        ("010005", "2021", "occupational_mix", "C032", "lpnst_paid_hour_share", "aligned", "", "0.0", "2016-12-31", "", "49", "1"),
+        ("010005", "2021", "occupational_mix", "C033", "naorat_paid_hour_share", "aligned", "", "0.0", "2016-12-31", "", "49", "1"),
+        ("010005", "2021", "occupational_mix", "C034", "rn_paid_hour_wage", "aligned", "", "30.0", "2016-12-31", "", "49", "1"),
+    ]
+    # [582] [583] One row per spine row and control-field (12 x 98), unique keys, and the counts per status.
+    checks["hospital_measure_counts_match_expected"] = base.get("hospital_measure_counts") == [
+        ("aligned", "81"),
+        ("held_in_staging", "6"),
+        ("keys", "1176"),
+        ("no_period_before_start", "118"),
+        ("not_in_source", "971"),
+        ("rows", "1176"),
+        ("spine", "12"),
+    ]
     return checks
 
 
@@ -5630,6 +5751,7 @@ def fixture_scenarios() -> dict[str, bool]:
     checks.update(program_checks(base))
     checks.update(outcome_checks(base))
     checks.update(care_compare_checks(base))
+    checks.update(hospital_measure_checks(base))
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -6259,6 +6381,48 @@ def care_compare_real(database: str) -> dict[str, Any]:
     return {"checks": checks, "counts": counts}
 
 
+# AL3a reconciliation [576] to [583]: rows against the spine and the four seeds, and per source the hospital-windows and
+# control-fields with a period before the start, counted independently from the staged tables.
+HOSPITAL_REAL_SQL = """WITH spine AS (SELECT spine_key, ccn, window_year, make_date(window_year, 1, 1) AS start FROM int_hospital_spine),
+controls AS (
+    SELECT count(*) AS n FROM (
+        SELECT measure_control FROM cost_report_measures UNION ALL SELECT measure_control FROM impact_measures
+        UNION ALL SELECT DISTINCT measure_control || coalesce(field, 'none') FROM mup_measures UNION ALL SELECT measure_control FROM occmix_measures
+    )
+),
+model AS (SELECT measure_source, count(*) FILTER (WHERE period_end IS NOT NULL) AS n FROM int_spine_hospital_measures GROUP BY 1)
+SELECT 'rows', (SELECT count(*) FROM int_spine_hospital_measures)::VARCHAR, ((SELECT count(*) FROM spine) * (SELECT n FROM controls))::VARCHAR
+UNION ALL SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_hospital_measures)::VARCHAR,
+    ((SELECT count(*) FROM spine) * (SELECT n FROM controls))::VARCHAR
+UNION ALL SELECT 'cost_report_periods', (SELECT n FROM model WHERE measure_source = 'cost_report')::VARCHAR,
+    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, m.measure_control FROM spine JOIN int_cost_report_measures AS m ON m.ccn = spine.ccn
+        JOIN int_cost_reports AS r ON r.rpt_rec_num = m.rpt_rec_num WHERE r.period_end < spine.start))::VARCHAR
+UNION ALL SELECT 'ipps_impact_periods', (SELECT n FROM model WHERE measure_source = 'ipps_impact')::VARCHAR,
+    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, m.measure_control, m.field FROM spine JOIN int_impact_measures AS m
+        ON m.ccn = spine.ccn WHERE m.rule_fiscal_year <= spine.window_year - 1))::VARCHAR
+UNION ALL SELECT 'medicare_inpatient_periods', (SELECT n FROM model WHERE measure_source = 'medicare_inpatient')::VARCHAR,
+    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, m.measure_control, m.field FROM spine JOIN int_mup_measures AS m
+        ON m.ccn = spine.ccn WHERE m.data_year < spine.window_year))::VARCHAR
+UNION ALL SELECT 'occupational_mix_periods', (SELECT n FROM model WHERE measure_source = 'occupational_mix')::VARCHAR,
+    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, m.measure_control FROM spine JOIN int_occmix_measures AS m ON m.ccn = spine.ccn
+        WHERE m.survey_end_date < spine.start AND m.hold_reason IS NULL AND m.value_number IS NOT NULL))::VARCHAR
+UNION ALL SELECT 'periods_on_or_after_start', (SELECT count(*) FROM int_spine_hospital_measures
+    WHERE alignment_status = 'aligned' AND period_end >= window_start)::VARCHAR, '0';"""
+HOSPITAL_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_hospital_measures AS t;"
+
+
+def hospital_measures_real(database: str) -> dict[str, Any]:
+    """Reconcile the real AL3a rows with the spine and the staged sources; count statuses per source."""
+    checks: dict[str, bool] = {}
+    counts: dict[str, Any] = {}
+    for name, model, independent in duckdb_csv(database, HOSPITAL_REAL_SQL):
+        counts[name] = {"model": int(model), "independent": int(independent)}
+        checks[f"hospital_measures_{name}_reconcile"] = model == independent
+    status_sql = "SELECT measure_source || ' ' || alignment_status, count(*)::VARCHAR FROM int_spine_hospital_measures GROUP BY 1 ORDER BY 1;"
+    counts["alignment_status"] = dict(duckdb_csv(database, status_sql))
+    return {"checks": checks, "counts": counts}
+
+
 def validation_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real D1 windows with their staging views' window keys; count rows per control [511] [513]."""
     checks: dict[str, bool] = {}
@@ -6380,6 +6544,7 @@ def real_stage() -> dict[str, Any]:
         outcome[f"{run}_geography_fingerprints"] = {model: fingerprint(database, query) for model, query in GEOGRAPHY_FINGERPRINTS.items()}
         outcome[f"{run}_outcome_fingerprint"] = fingerprint(database, OUTCOME_FINGERPRINT_SQL)
         outcome[f"{run}_care_compare_fingerprint"] = fingerprint(database, CARE_FINGERPRINT_SQL)
+        outcome[f"{run}_hospital_measures_fingerprint"] = fingerprint(database, HOSPITAL_FINGERPRINT_SQL)
         if run == "real":
             # Free the memory the first build left in Docker's VM before the second build; the catalog starts again [545] [547].
             outcome["docker_release"] = [catalog.release()]
@@ -6411,6 +6576,12 @@ def real_stage() -> dict[str, Any]:
     care_compare = care_compare_real(database)
     outcome["checks"].update(care_compare["checks"])
     outcome["al2_care_compare_counts"] = care_compare["counts"]
+    outcome["checks"]["hospital_measures_real_rebuild_identical"] = (
+        outcome["real_hospital_measures_fingerprint"] == outcome["real_again_hospital_measures_fingerprint"]
+    )
+    hospital = hospital_measures_real(database)
+    outcome["checks"].update(hospital["checks"])
+    outcome["al3a_hospital_measure_counts"] = hospital["counts"]
     validation = validation_real(database, init)
     outcome["checks"].update(validation["checks"])
     outcome["validation_counts"] = validation["counts"]

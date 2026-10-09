@@ -325,6 +325,12 @@ published with their age in months and no age limit. C141's spellings (for examp
 category. A test fails on any new spelling. A control that starts after a window (for example C161 to C173 from
 2024) is kept with the status `no_period_before_start`; the other statuses are aligned, held_in_staging and
 not_in_source.
+`int_spine_hospital_measures` (step AL3a) does the same for the hospital finance and operations controls, by source and
+field: the latest cost report whose period ends before the start (several reports ending that day are compared), the
+IPPS impact value of the latest rule fiscal year that ends before the start (October to September, the most final stage
+first), the latest Medicare inpatient data year and the latest occupational-mix survey. Values that disagree for one
+period are held and counted. Occupational-mix copies of one survey (text and workbook twins in several rule-year files)
+within 0.0001 of each other count as one value.
 
 Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
 visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the
