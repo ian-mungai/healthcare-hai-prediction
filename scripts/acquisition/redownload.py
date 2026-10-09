@@ -108,12 +108,15 @@ def load_queue(run: Run) -> list[dict]:
 
 
 def runtime_controls(run: Run) -> dict:
-    """Freeze operational inputs separately from the plan's append-only status notes and code approvals."""
+    """Freeze operational inputs, including the reviewed code-version lists the collectors read, apart from status notes.
+
+    The code-version lists are bound too (failure mode S16): a collector reads them while it runs, so a change after
+    the review must invalidate it. New versions are therefore listed before the controls are frozen and reviewed.
+    """
     queue = load_queue(run)
     code_paths = sorted((REPO_ROOT / "scripts/acquisition").rglob("*.py"))
     code_paths += [REPO_ROOT / "scripts/infrastructure/render_project_config.py", REPO_ROOT / "scripts/process.py", REPO_ROOT / "requirements.txt"]
     inputs = set((run.base / "config/acquisition").rglob("*.json"))
-    inputs = {path for path in inputs if "code_versions" not in path.name}
     from scripts.acquisition.collect_mmd_api import TEMPLATE
 
     template = run.base / TEMPLATE

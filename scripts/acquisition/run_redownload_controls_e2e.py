@@ -65,6 +65,16 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
 
     scenario("changed_execution_controls_refuse_before_dispatch", stale, "Execution controls changed")
 
+    def code_versions_bound() -> None:
+        # Failure mode S16: a code-version list changed after the review invalidates it, like any other input.
+        run, _unit, _web = build("code_versions_bound")
+        listed = run.base / "config/acquisition/fixture_code_versions.json"
+        listed.parent.mkdir(parents=True, exist_ok=True)
+        listed.write_bytes(encoded_json({"versions": [{"code_sha256": {"scripts/x.py": "0" * 64}}]}))
+        harness.execute(run)
+
+    scenario("changed_code_version_list_refuses_before_dispatch", code_versions_bound, "Execution controls changed")
+
     def isolation() -> None:
         run, _unit, web = build("isolation")
         run.state_root = run.base / "stored"

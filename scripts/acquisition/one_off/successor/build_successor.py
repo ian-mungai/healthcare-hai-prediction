@@ -115,9 +115,14 @@ def build() -> tuple[dict[str, bytes], dict[str, bytes], dict]:
     # The HCAI plan binds its access-release record by file SHA-256.
     release = successors["hcai_util_2018_2025_plan.json"]["access_release"]
     release["sha256"] = hashlib.sha256(encode(successors[Path(release["path"]).name], Path(release["path"]).name)).hexdigest()
+    for name in CODE_VERSIONS:
+        # Versions listed after the archive was taken are kept as they are; only the archived ones get current wording.
+        listed = json.loads((CONFIG / name).read_bytes())["versions"]
+        successors[name]["versions"].extend(listed[len(parsed[name]["versions"]) :])
     for name in names:
         # Only string wording and the rebound hashes may differ (failure mode S1).
-        before, after = leaves(parsed[name]), leaves(successors[name])
+        before = leaves(parsed[name])
+        after = {key: value for key, value in leaves(successors[name]).items() if key in before or not name.endswith("_code_versions.json")}
         require(before.keys() == after.keys(), f"{name}: structure changed")
         for path in before:
             if before[path] != after[path]:

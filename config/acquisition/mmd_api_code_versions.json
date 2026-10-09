@@ -540,6 +540,39 @@
       "review_sha256": "f872bbc4080d4706061ab02d7def5175df9e074020daa968bb017fcad39ab90f",
       "reviewed_on": "2026-10-01",
       "version": 16
+    },
+    {
+      "version": 17,
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/code_versions.py",
+          "sha256": "56faf9600a418868f5fcaf2ff7b9cc9396b626323825f7eb47d60fadc9fad687"
+        },
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "b8fae8aa20489404f4614f011e79e56525c61c4f3b38db26d36f1fa18dd1ec20"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "9c88dd608a40d1ea9836c39a77cd852d9227f31806fcebaac6f72db16a2651c6"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "e83a6ad77e46bf211d8ed2e56e391c9576687214de6bed68d3282f1f05a1350a"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "587735aad5325b294459974a95d65d65d461c2141c3f34a85de35775c38a327f"
+        }
+      ],
+      "reason": "Successor revision: locked plans and records state the current rule and stored captures verify through archived predecessors (legacy_versions.py); recorded paths from before the dataset move go through the path map; the redownload controls bind the code-version lists. Acquisition gate passed twice; every collector's offline recheck passes. The run 3 independent review covers this entry through the frozen controls. Prior versions retained. No model-use approval.",
+      "evidence": [
+        "data/e2e/acquisition_successor_20261009/gate_run4.log",
+        "data/e2e/acquisition_successor_20261009/gate_run5.log",
+        "data/e2e/acquisition_successor_20261009/rechecks_run2/results.jsonl"
+      ],
+      "review": "data/redownload_checks/20261004/independent_review.json",
+      "reviewed_on": "2026-10-09"
     }
   ]
 }
