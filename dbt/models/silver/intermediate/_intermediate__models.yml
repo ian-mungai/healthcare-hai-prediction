@@ -1346,6 +1346,26 @@ models:
           - accepted_values:
               arguments:
                 values: [aligned, no_period_before_start, held_in_staging, not_in_source]
+  - name: int_spine_validation_measures
+    description: >
+      AL5: one row per spine hospital-window and validation control and measure (validation_measures). Validation outcomes
+      are compared with the HAI window, never used to predict it, so each takes the published period that matches the
+      window itself: the equal calendar-year window first, otherwise the largest overlap, then the latest end. HAC and VBP
+      program years are placed by the HAI measure period HAC publishes for each fiscal year. No predictor model reads
+      this table.
+    columns:
+      - name: alignment_key
+        description: Spine key, registry control and measure.
+        data_tests: [unique, not_null]
+      - name: overlap_days
+        description: Days the chosen period shares with the HAI window.
+      - name: alignment_status
+        description: aligned, no_matching_period, held_in_staging or not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, no_matching_period, held_in_staging, not_in_source]
   - name: int_hai_outcome_values
     description: >
       HAI registry controls (main-hai-pdc and C283's children) per outcome row and field with a published value, from the

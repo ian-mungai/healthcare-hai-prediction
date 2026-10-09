@@ -2741,6 +2741,33 @@ GROUP_D2 = (
     Stored("cms_cc_hvbp_tps", "tp9", "2020-01-04", "hvbp_tps_12_09_2019.csv", sha("tp9"), 1, records=(tps_row("24.083333333333(23)", facility_id="010001"),)),
 )
 
+
+# AL5 [597] [598]: an OP_32 window equal to 2021 beside a longer one that also covers 2021 (the equal one wins), and a HAC
+# FY 2023 row whose HAI measure period is calendar 2021, which places it against the 2021 window.
+GROUP_AL5 = (
+    Stored(
+        "cms_cc_unplanned_hospital_visits_hospital",
+        "vi_al5",
+        "2022-07-01",
+        "Unplanned_Hospital_Visits-Hospital_al5.csv",
+        sha("r9"),
+        2,
+        records=(
+            cc(facility_id="010001", measure_id="OP_32", score="11.0", start_date="01/01/2021", end_date="12/31/2021"),
+            cc(facility_id="010001", measure_id="OP_32", score="11.5", start_date="07/01/2020", end_date="06/30/2022"),
+        ),
+    ),
+    Stored(
+        "cms_cc_hac_reduction_program_hospital",
+        "ha_al5",
+        "2022-12-01",
+        "FY_2023_HAC_Reduction_Program_Hospital.csv",
+        sha("q6"),
+        1,
+        records=(hac_row("010001", "2023", "4.0", "No", hai_measures_start_date="01/01/2021", hai_measures_end_date="12/31/2021"),),
+    ),
+)
+
 ALZHEIMERS = "Alzheimer's Disease, Related Disorders, or Senile Dementia"
 AMI = "Acute Myocardial Infarction"
 
@@ -3166,6 +3193,7 @@ BASE = (
     *GROUP_AL1,
     *GROUP_AL2,
     *GROUP_AL3B,
+    *GROUP_AL5,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -4329,6 +4357,16 @@ OUTCOME_VALUE_ROWS_SQL = (
     "SELECT measure_control, outcome_key, field, value_text, coalesce(value_number::VARCHAR, ''), coalesce(review_decision, '') "
     "FROM int_hai_outcome_values WHERE outcome_key = '070001:2021:HAI_2' OR outcome_key = '070001:2021:HAI_3' ORDER BY ALL;"
 )
+VALIDATION_ALIGNED_SQL = (
+    "SELECT ccn, window_year::VARCHAR, measure_control, measure, alignment_status, coalesce(value_text, ''), coalesce(value_number::VARCHAR, ''), "
+    "coalesce(period_start::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(fiscal_year::VARCHAR, ''), coalesce(overlap_days::VARCHAR, '') "
+    "FROM int_spine_validation_measures WHERE alignment_status IN ('aligned', 'held_in_staging', 'no_matching_period') ORDER BY ALL;"
+)
+VALIDATION_ALIGNED_COUNT_SQL = (
+    "SELECT 'rows', (SELECT count(*) FROM int_spine_validation_measures)::VARCHAR UNION ALL "
+    "SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_validation_measures)::VARCHAR UNION ALL "
+    "SELECT alignment_status, count(*)::VARCHAR FROM int_spine_validation_measures GROUP BY 1 ORDER BY 1;"
+)
 OPERATIONS_SQL = (
     "SELECT ccn, window_year::VARCHAR, measure_source, measure_control, alignment_status, coalesce(value_text, ''), "
     "coalesce(value_number::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(age_months::VARCHAR, ''), coalesce(unit_count::VARCHAR, ''), "
@@ -4594,6 +4632,8 @@ def read_models(case: str) -> dict[str, Any]:
         "care_compare": [tuple(row) for row in duckdb_csv(database, CARE_SQL)],
         "hospital_measures": [tuple(row) for row in duckdb_csv(database, HOSPITAL_SQL)],
         "operations_measures": [tuple(row) for row in duckdb_csv(database, OPERATIONS_SQL)],
+        "validation_aligned": [tuple(row) for row in duckdb_csv(database, VALIDATION_ALIGNED_SQL)],
+        "validation_aligned_counts": [tuple(row) for row in duckdb_csv(database, VALIDATION_ALIGNED_COUNT_SQL)],
         "operations_measure_counts": [tuple(row) for row in duckdb_csv(database, OPERATIONS_COUNT_SQL)],
         "hospital_measure_counts": [tuple(row) for row in duckdb_csv(database, HOSPITAL_COUNT_SQL)],
         "care_compare_counts": [tuple(row) for row in duckdb_csv(database, CARE_COUNT_SQL)],
@@ -4955,6 +4995,8 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
     # measure_name; the repeated MORT_30_HF window is held, not kept; the 5-digit ID is padded and the malformed one held.
     checks["d1_windows_match_expected"] = base.get("d1_windows") == sorted(
         [
+            ("visits", "010001", "OP_32", "2020-07-01", "11.5", "r9r"),
+            ("visits", "010001", "OP_32", "2021-01-01", "11.0", "r9r"),
             ("visits", "010001", "OP_32", "2022-01-01", "12.5", "vi1"),
             ("visits", "010001", "OP-32", "2022-01-01", "13.0", "vi1"),
             ("visits", "010001", "READM_30_HF", "2022-01-01", "20.1", "vi1"),
@@ -4971,6 +5013,10 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
     # [508] [509] [510] Exact IDs only (OP-32, READM_30_HF and the PSI IDs stay unmapped); parents and children both; tokens stay text.
     checks["validation_matches_expected"] = base.get("validation") == sorted(
         [
+            ("C290", "010001", "OP_32", "2020-07-01", "11.5", "11.5"),
+            ("C290", "010001", "OP_32", "2021-01-01", "11.0", "11.0"),
+            ("C290.01", "010001", "OP_32", "2020-07-01", "11.5", "11.5"),
+            ("C290.01", "010001", "OP_32", "2021-01-01", "11.0", "11.0"),
             ("C289", "010001", "READM-30-HF-HRRP", "2020-07-01", "1.0123", "1.0123"),
             ("C289", "010003", "READM-30-AMI-HRRP", "2020-07-01", "N/A", ""),
             ("C289.01", "010003", "READM-30-AMI-HRRP", "2020-07-01", "N/A", ""),
@@ -4992,6 +5038,56 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("cms_cc_unplanned_hospital_visits_hospital", "", "", "no_key", "1"),
     ]
     checks["validation_seed_matches_registry"] = validation_seed_matches()
+    return checks
+
+
+def validation_aligned_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's AL5 rows with their expected values [597] to [601]."""
+    checks: dict[str, bool] = {}
+    # [597] The OP_32 window equal to 2021 beats the longer one that covers it; [598] HAC FY 2023 placed by its HAI period
+    # (calendar 2021); HRRP's three-year window overlaps 2021 fully; hospitals whose periods miss a window are
+    # no_matching_period. Reviewed row by row.
+    checks["validation_aligned_match_expected"] = base.get("validation_aligned") == [
+        ("010001", "2019", "C285", "payment_reduction", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2019", "C286", "total_hac_score", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2019", "C289", "READM-30-HF-HRRP", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2019", "C289.04", "READM-30-HF-HRRP", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2019", "C290", "OP_32", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2019", "C290", "OP_36", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2019", "C290.01", "OP_32", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2019", "C290.04", "OP_36", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2019", "C291", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2019", "C291.01", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2021", "C285", "payment_reduction", "aligned", "No", "", "2021-01-01", "2021-12-31", "2023", "365"),
+        ("010001", "2021", "C286", "total_hac_score", "aligned", "4.0", "4.0", "2021-01-01", "2021-12-31", "2023", "365"),
+        ("010001", "2021", "C289", "READM-30-HF-HRRP", "aligned", "1.0123", "1.0123", "2020-07-01", "2023-06-30", "", "365"),
+        ("010001", "2021", "C289.04", "READM-30-HF-HRRP", "aligned", "1.0123", "1.0123", "2020-07-01", "2023-06-30", "", "365"),
+        ("010001", "2021", "C290", "OP_32", "aligned", "11.0", "11.0", "2021-01-01", "2021-12-31", "", "365"),
+        ("010001", "2021", "C290", "OP_36", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2021", "C290.01", "OP_32", "aligned", "11.0", "11.0", "2021-01-01", "2021-12-31", "", "365"),
+        ("010001", "2021", "C290.04", "OP_36", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2021", "C291", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2021", "C291.01", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2025", "C285", "payment_reduction", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2025", "C286", "total_hac_score", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2025", "C289", "READM-30-HF-HRRP", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2025", "C289.04", "READM-30-HF-HRRP", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2025", "C290", "OP_32", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2025", "C290", "OP_36", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2025", "C290.01", "OP_32", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2025", "C290.04", "OP_36", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2025", "C291", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2025", "C291.01", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
+    ]
+    # [600] One row per spine row and seed row (12 x 41), unique keys; [599] no model reads the validation table.
+    checks["validation_aligned_counts_match_expected"] = base.get("validation_aligned_counts") == [
+        ("aligned", "6"),
+        ("keys", "492"),
+        ("no_matching_period", "24"),
+        ("not_in_source", "462"),
+        ("rows", "492"),
+    ]
+    checks["validation_table_kept_apart"] = validation_kept_apart()
     return checks
 
 
@@ -5349,6 +5445,7 @@ def program_checks(base: dict[str, Any]) -> dict[str, bool]:
     # held; the 5-digit TPS ID is padded.
     checks["program_years_match_expected"] = base.get("program_years") == sorted(
         [
+            ("hac", "010001", "2023", "4.0", "false", "", "q6q"),
             ("hac", "010001", "2021", "5.7", "false", "", "ha2"),
             ("hac", "010003", "2021", "N/A", "", "", "ha1"),
             ("hac", "010001", "2024", "6.1", "true", "1.02", "ha3"),
@@ -5370,6 +5467,8 @@ def program_checks(base: dict[str, Any]) -> dict[str, bool]:
     # [519] [520] Named fields only; the reviewed odd value and tokens stay text; C288.payment_adjustment has no rows.
     checks["program_values_match_expected"] = base.get("program_values") == sorted(
         [
+            ("C285", "010001", "2023", "payment_reduction", "No", ""),
+            ("C286", "010001", "2023", "total_hac_score", "4.0", "4.0"),
             ("C285", "010001", "2021", "payment_reduction", "No", ""),
             ("C285", "010003", "2021", "payment_reduction", "N/A", ""),
             ("C285", "010001", "2024", "payment_reduction", "Yes", ""),
@@ -5924,6 +6023,7 @@ def fixture_scenarios() -> dict[str, bool]:
     checks.update(care_compare_checks(base))
     checks.update(hospital_measure_checks(base))
     checks.update(operations_measure_checks(base))
+    checks.update(validation_aligned_checks(base))
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -6628,6 +6728,48 @@ def operations_measures_real(database: str) -> dict[str, Any]:
     return {"checks": checks, "counts": counts}
 
 
+# AL5 reconciliation [597] to [601]: rows against the spine and the seed; aligned rows counted independently as the
+# control-measures with a published period overlapping the HAI window; no aligned period outside the window.
+VALIDATION_ALIGNED_REAL_SQL = """WITH spine AS (SELECT spine_key, ccn, make_date(window_year, 1, 1) AS start, make_date(window_year, 12, 31) AS finish
+    FROM int_hospital_spine),
+programs AS (
+    SELECT fiscal_year, min(try_strptime(hai_measures_start_date, '%m/%d/%Y'))::DATE AS s, max(try_strptime(hai_measures_end_date, '%m/%d/%Y'))::DATE AS e
+    FROM int_hac_program_years GROUP BY 1
+)
+SELECT 'rows', (SELECT count(*) FROM int_spine_validation_measures)::VARCHAR,
+    ((SELECT count(*) FROM spine) * (SELECT count(*) FROM validation_measures))::VARCHAR
+UNION ALL SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_validation_measures)::VARCHAR,
+    ((SELECT count(*) FROM spine) * (SELECT count(*) FROM validation_measures))::VARCHAR
+UNION ALL SELECT 'aligned_windows', (SELECT count(*) FROM int_spine_validation_measures WHERE alignment_status = 'aligned' AND fiscal_year IS NULL)::VARCHAR,
+    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, w.measure_control, w.measure_id FROM spine JOIN int_validation_measure_windows AS w
+        ON w.entity_id = spine.ccn AND w.window_start <= spine.finish AND w.window_end >= spine.start))::VARCHAR
+UNION ALL SELECT 'aligned_program_years', (SELECT count(*) FROM int_spine_validation_measures
+    WHERE alignment_status = 'aligned' AND fiscal_year IS NOT NULL)::VARCHAR,
+    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, v.measure_control, v.field FROM spine JOIN int_validation_program_values AS v ON v.ccn = spine.ccn
+        JOIN programs ON programs.fiscal_year = v.fiscal_year AND programs.s <= spine.finish AND programs.e >= spine.start))::VARCHAR
+UNION ALL SELECT 'periods_outside_window', (SELECT count(*) FROM int_spine_validation_measures
+    WHERE alignment_status = 'aligned' AND (period_end < window_start OR period_start > make_date(window_year, 12, 31)))::VARCHAR, '0';"""
+VALIDATION_ALIGNED_FINGERPRINT_SQL = (
+    "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_validation_measures AS t;"
+)
+
+
+def validation_aligned_real(database: str) -> dict[str, Any]:
+    """Reconcile the real AL5 rows with the spine, the seed and the staged validation tables; count statuses."""
+    checks: dict[str, bool] = {}
+    counts: dict[str, Any] = {}
+    for name, model, independent in duckdb_csv(database, VALIDATION_ALIGNED_REAL_SQL):
+        counts[name] = {"model": int(model), "independent": int(independent)}
+        checks[f"validation_aligned_{name}_reconcile"] = model == independent
+    counts["alignment_status"] = dict(duckdb_csv(database, VALIDATION_ALIGNED_COUNT_SQL))
+    return {"checks": checks, "counts": counts}
+
+
+def validation_kept_apart() -> bool:
+    """[599] No model reads the validation table: it is compared with the HAI windows, never joined to predictors."""
+    return not any("ref('int_spine_validation_measures')" in path.read_text() for path in (REPO_ROOT / "dbt/models").rglob("*.sql"))
+
+
 def validation_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real D1 windows with their staging views' window keys; count rows per control [511] [513]."""
     checks: dict[str, bool] = {}
@@ -6751,6 +6893,7 @@ def real_stage() -> dict[str, Any]:
         outcome[f"{run}_care_compare_fingerprint"] = fingerprint(database, CARE_FINGERPRINT_SQL)
         outcome[f"{run}_hospital_measures_fingerprint"] = fingerprint(database, HOSPITAL_FINGERPRINT_SQL)
         outcome[f"{run}_operations_measures_fingerprint"] = fingerprint(database, OPERATIONS_FINGERPRINT_SQL)
+        outcome[f"{run}_validation_aligned_fingerprint"] = fingerprint(database, VALIDATION_ALIGNED_FINGERPRINT_SQL)
         if run == "real":
             # Free the memory the first build left in Docker's VM before the second build; the catalog starts again [545] [547].
             outcome["docker_release"] = [catalog.release()]
@@ -6794,6 +6937,12 @@ def real_stage() -> dict[str, Any]:
     operations = operations_measures_real(database)
     outcome["checks"].update(operations["checks"])
     outcome["al3b_operations_measure_counts"] = operations["counts"]
+    outcome["checks"]["validation_aligned_real_rebuild_identical"] = (
+        outcome["real_validation_aligned_fingerprint"] == outcome["real_again_validation_aligned_fingerprint"]
+    )
+    validation_aligned = validation_aligned_real(database)
+    outcome["checks"].update(validation_aligned["checks"])
+    outcome["al5_validation_counts"] = validation_aligned["counts"]
     validation = validation_real(database, init)
     outcome["checks"].update(validation["checks"])
     outcome["validation_counts"] = validation["counts"]

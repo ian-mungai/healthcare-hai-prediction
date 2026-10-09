@@ -337,6 +337,11 @@ from the weeks of the calendar year before the window (a ratio of sums for two f
 and product count from the latest performance period, private-equity and REIT ownership from the latest owner release
 before the start (direct, indirect and partnership owners only; a blank is `not_reported`, never no). Changes of
 ownership count those in the year before the start, with the completed months since the latest one.
+`int_spine_validation_measures` (step AL5) places the validation outcomes (HAC and VBP program years, HRRP, unplanned
+visits and 30-day mortality) against each HAI window's own period, because they are compared with the window, never used
+to predict it: the published window equal to the calendar year first, otherwise the one with the largest overlap. HAC
+and VBP years are placed by the HAI measure period HAC publishes for each fiscal year. No model reads this table; an E2E
+check fails if one does.
 
 Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
 visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the
