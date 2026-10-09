@@ -13,6 +13,7 @@ from pathlib import Path
 from scripts.acquisition.bls_api_contract import code_hashes, digest
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.data_paths import current
+from scripts.acquisition.legacy_versions import with_predecessors
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 ENDPOINT = "https://api.census.gov/data/2009/acs/acs5/profile"
@@ -134,7 +135,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     from scripts.acquisition.capture import receipt_validator
 
     require(not evidence_only and source["source_id"] == "ACS", "Census storage source differs")
-    plans = {canonical_hash(p): p for p in load_plans()}
+    plans = with_predecessors({canonical_hash(p): p for p in load_plans()})
     require(lineage["plan_sha256"] in plans, "Census capture plan differs")
     plan = plans[lineage["plan_sha256"]]
     require(lineage["registry_sha256"] == canonical_hash(load_registry(expected_sha256=lineage["registry_sha256"])), "Census registry differs")
@@ -158,7 +159,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     derived, statistics = validate_response(raw, batch, plan["county_ids"])
     require((root / roles["data"]["storage_path"]).read_bytes() == derived, "Census derived CSV differs")
     require(digest((root / roles["dictionary"]["storage_path"]).read_bytes()) == batch["metadata"]["sha256"], "Census stored dictionary differs")
-    require(read_json(root / roles["layout"]["storage_path"]) == plan, "Census stored scope differs")
+    require(canonical_hash(read_json(root / roles["layout"]["storage_path"])) == lineage["plan_sha256"], "Census stored scope differs")
     proof = read_json(root / roles["export_receipt"]["storage_path"])
     require(proof["statistics"] == statistics and proof["request"] == request_for(batch), "Census proof differs")
     require(proof["response_sha256"] == digest(raw) and proof["endpoint"] == ENDPOINT, "Census response proof differs")

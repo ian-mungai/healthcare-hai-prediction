@@ -18,6 +18,7 @@ from scripts.acquisition.collect_hud_api import TERMS_URL, runtime, verify_stora
 from scripts.acquisition.collect_mmd_api import artifact
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.hud_api_transport import collection_lock
+from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 from scripts.infrastructure.render_project_config import load_configuration
@@ -160,7 +161,7 @@ def make_receipt(plan: dict, batch: dict, cached: Path, branch: Path) -> Path:
             f"Residential ratio sums: {residential['zips_with_zero_weight']} ZIPs with zero weight, {residential['zips_outside_tolerance']} outside tolerance.",
             *(
                 [
-                    f"{statistics['exact_repeat_rows_dropped']} exact repeated rows were dropped from the derived CSV only (user decision 2026-09-28); "
+                    f"{statistics['exact_repeat_rows_dropped']} exact repeated rows were dropped from the derived CSV only; "
                     "the stored original workbook keeps them."
                 ]
                 if "exact_repeat_rows_dropped" in statistics
@@ -221,7 +222,7 @@ def execute(plan: dict, batch: dict, root: Path, downloads: Path, upload: bool, 
         require(done["receipt_sha256"] == fingerprint(receipt_path)[0] and done["batch_id"] == batch["id"], "HUD completion receipt differs")
         reconciliation = receipt_path.parent / "s3_collections_reconciliation.json"
         require(done["reconciliation_sha256"] == fingerprint(reconciliation)[0], "HUD completion storage evidence differs")
-        require(done["model_eligible"] is False and done["status"] == "stored" and done["plan_sha256"] == canonical_hash(plan), "HUD completion hold differs")
+        require(done["model_eligible"] is False and done["status"] == "stored" and plan_matches(plan, done["plan_sha256"]), "HUD completion hold differs")
         require(done["rows"] == receipt["schema_profile"]["row_count"], "HUD completion row count differs")
         settings = client.configuration if client is not None else load_configuration(REPO_ROOT / ".env")[0]
         verify_storage(receipt_path, receipt, settings)

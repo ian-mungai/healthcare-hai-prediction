@@ -40,7 +40,7 @@ def main() -> None:
 
     result = {
         "kind": "run3_scope_match",
-        "basis": "Owner decision, Oct 4 2026: run 3 covers only the files bronze uses.",
+        "basis": "Run 3 covers only the files bronze uses.",
         "bronze_loaded_files": len({row["sha256"] for row in rows if row["loaded"] == "true"}),
         "queue_active_units": len(active),
         "units_with_loaded_files": len(used),

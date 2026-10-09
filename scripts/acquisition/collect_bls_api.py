@@ -13,6 +13,7 @@ from scripts.acquisition.bls_api_transport import QuotaPause, collection_lock, f
 from scripts.acquisition.capture import base_receipt, receipt_validator, validate_receipt
 from scripts.acquisition.collect_mmd_api import artifact
 from scripts.acquisition.collection_layout import load_routes, object_prefix
+from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.process import run_command
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
@@ -212,7 +213,7 @@ def execute(plan: dict, batch: dict, root: Path, allow_network: bool, upload: bo
         reconciliation = receipt_path.parent / "s3_collections_reconciliation.json"
         require(done["reconciliation_sha256"] == fingerprint(reconciliation)[0], "BLS completion storage evidence differs")
         require(done["model_eligible"] is False and done["status"] == "stored", "BLS completion hold differs")
-        require(done["plan_sha256"] == canonical_hash(plan), "BLS completion plan differs")
+        require(plan_matches(plan, done["plan_sha256"]), "BLS completion plan differs")
         require(done["rows"] == receipt["schema_profile"]["row_count"], "BLS completion row count differs")
         settings = client.configuration if client is not None else load_configuration(REPO_ROOT / ".env")[0]
         verify_storage(receipt_path, receipt, settings)

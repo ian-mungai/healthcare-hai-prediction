@@ -12,5 +12,6 @@ The acquisition stage's source code and dependencies are tracked in the reposito
 | `datasets_move` | The move of the local dataset folders into `data/datasets/` (`move.py`) | `data/lakehouse_planning/datasets_move_20261004/` |
 | `cms_admin` | CMS administrative batch build, local capture and screen | `data/acquisition_planning/cms_admin_20260929/` |
 | `closeout` | Clean-checkout gate and replay checks | `data/acquisition_planning/closeout_*/` |
+| `successor` | Builds the current-state locked plans and records and their legacy catalog from the private archive (`build_successor.py`; a rerun changes nothing) | `data/acquisition_planning/acquisition_legacy_20261009/` |
 
 The acquisition gate lints and type-checks these tools but leaves them out of its coverage target (`config/acquisition/coverage.ini`). Their run records show what they did.

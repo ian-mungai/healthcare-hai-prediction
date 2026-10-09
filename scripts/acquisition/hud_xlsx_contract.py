@@ -17,11 +17,12 @@ from pathlib import Path
 
 from scripts.acquisition import hud_api_contract as api
 from scripts.acquisition.data_paths import current
+from scripts.acquisition.legacy_versions import plan_matches, record_matches
 from scripts.acquisition.process import run_command
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/hud_xlsx_plan_2010q1_2020q4.json"
-# User decision 2026-09-28: 2014 Q2 repeats 49,140 rows exactly; store the original, drop exact repeats from the CSV only.
+# 2014 Q2 repeats 49,140 rows exactly; store the original, drop exact repeats from the CSV only.
 DECISION_PATH = REPO_ROOT / "config/acquisition/hud_xlsx_exact_repeats_2014q2.json"
 ROUTE_URL = "https://www.huduser.gov/apps/public/uspscrosswalk/home"
 ORIGIN = "https://www.huduser.gov/"
@@ -260,7 +261,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
 
     require(not evidence_only and source["source_id"] == "HUD", "HUD storage source differs")
     plan = load_plan()
-    require(lineage["plan_sha256"] == canonical_hash(plan), "HUD capture plan differs")
+    require(plan_matches(plan, lineage["plan_sha256"]), "HUD capture plan differs")
     require(lineage["registry_sha256"] == canonical_hash(load_registry(expected_sha256=lineage["registry_sha256"])), "HUD registry differs")
     require(lineage["schema_sha256"] == canonical_hash(receipt_validator().schema), "HUD schema differs")
     require(lineage["terms_sha256"] == plan["terms"]["sha256"], "HUD terms binding differs")
@@ -271,8 +272,9 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     batch = matches[0]
     require(lineage["county_geography"] == batch["county_geography"], "HUD county geography era differs")
     decided = batch["id"] in load_repeat_decisions(plan)
-    bound = canonical_hash(read_json(DECISION_PATH)) if decided else None
-    require(lineage.get("exact_repeat_decision_sha256") == bound, "HUD repeat decision binding differs")
+    recorded = lineage.get("exact_repeat_decision_sha256")
+    bound = record_matches(DECISION_PATH, recorded) if decided and recorded is not None else not decided and recorded is None
+    require(bound, "HUD repeat decision binding differs")
     acq = receipt["acquisition"]
     require(acq["requested_url"] == ROUTE_URL and acq["request_method"] == "manual_download" and acq["http_status"] is None, "HUD download route differs")
     require(acq["export_selections"] == selections(batch), "HUD download selections differ")
@@ -283,7 +285,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(api.digest(raw) == lineage["expected_sha256"] == batch["sha256"] and len(raw) == batch["bytes"], "HUD raw hash differs")
     derived, statistics = validate_workbook(raw, batch, plan)
     require((root / "derived/crosswalk.csv").read_bytes() == derived, "HUD derived CSV differs")
-    require(read_json(root / "references/scope.json") == plan, "HUD stored scope differs")
+    require(canonical_hash(read_json(root / "references/scope.json")) == lineage["plan_sha256"], "HUD stored scope differs")
     proof = read_json(root / "evidence/download_proof.json")
     require(proof["origin_urls"] == [ORIGIN] and proof["file_name"] == batch["file_name"], "HUD download proof differs")
     require(proof["sha256"] == batch["sha256"] and proof["bytes"] == batch["bytes"] and proof["statistics"] == statistics, "HUD download proof differs")

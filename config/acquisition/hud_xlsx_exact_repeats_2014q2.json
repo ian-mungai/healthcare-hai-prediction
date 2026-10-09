@@ -1,6 +1,6 @@
 {
-  "decision": "User decision 2026-09-28: keep the original workbook unchanged; drop exact repeated rows from the derived CSV only and record the count",
-  "plan_sha256": "0be6a6a9947420f2bf10e9669a1dd74cbbe2e589850ce85991fdf7c3ba4317b6",
+  "decision": "Keep the original workbook unchanged; drop exact repeated rows from the derived CSV only and record the count",
+  "plan_sha256": "d62b7e758752d4c6deda376cd5d45edc443d284e3851a2113ad67a99dd093668",
   "quarters": [
     {
       "batch_id": "3f4c19435b6824a869860955961fe82ab7b3bffb6515d46ad1808e4b9086ba33",

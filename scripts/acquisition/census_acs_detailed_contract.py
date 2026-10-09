@@ -1,9 +1,9 @@
 """Locked scope, validation and derivation for ACS detailed tables used to fill S1701 and C16001 history.
 
-User decision 2026-09-29: derive poverty % (C175) for 2010-2011 from B17001 and the "speaks English less than very
+Derive poverty % (C175) for 2010-2011 from B17001 and the "speaks English less than very
 well" total (C183.02) for 2009-2015 from B16001, after exact checks against the stored S1701 (2012-2016) and C16001
 (2016-2017) county files; after B16001 proved null for counties from 2016, limited English is checked against B16004 in
-the same years (user decision 2026-09-29). Failure modes: data/acquisition_planning/acs_derived_history_failure_modes.md.
+the same years. Failure modes: data/acquisition_planning/acs_derived_history_failure_modes.md.
 """
 
 import csv
@@ -16,6 +16,7 @@ from pathlib import Path
 from scripts.acquisition.bls_api_contract import code_hashes, digest
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.data_paths import current
+from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/census_acs_detailed_plan.json"
@@ -251,7 +252,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
 
     require(not evidence_only and source["source_id"] == "ACS", "Census detailed storage source differs")
     plan = load_plan()
-    require(lineage["plan_sha256"] == canonical_hash(plan), "Census detailed capture plan differs")
+    require(plan_matches(plan, lineage["plan_sha256"]), "Census detailed capture plan differs")
     require(lineage["registry_sha256"] == canonical_hash(load_registry(expected_sha256=lineage["registry_sha256"])), "Census detailed registry differs")
     require(lineage["schema_sha256"] == canonical_hash(receipt_validator().schema), "Census detailed schema differs")
     require(lineage["model_eligible"] is False and receipt["snapshot_status"] == "acquired_unvalidated", "Census detailed modeling hold differs")
@@ -270,7 +271,10 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
         require(paths == {*files, "evidence/checks.json", "references/scope.json"}, "Census derived artifact set differs")
         for name, body in files.items():
             require((root / name).read_bytes() == body, "Census derived CSV differs")
-        require(read_json(root / "evidence/checks.json") == report and read_json(root / "references/scope.json") == plan, "Census derived evidence differs")
+        require(
+            read_json(root / "evidence/checks.json") == report and canonical_hash(read_json(root / "references/scope.json")) == lineage["plan_sha256"],
+            "Census derived evidence differs",
+        )
         return
     matches = [b for b in plan["batches"] if b["id"] == lineage["batch_id"]]
     require(len(matches) == 1, "Census detailed capture batch not in its plan")
@@ -287,7 +291,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     derived, statistics = validate_response(raw, batch)
     require((root / roles["data"]["storage_path"]).read_bytes() == derived, "Census detailed CSV differs")
     require(digest((root / roles["dictionary"]["storage_path"]).read_bytes()) == batch["metadata"]["sha256"], "Census detailed dictionary differs")
-    require(read_json(root / roles["layout"]["storage_path"]) == plan, "Census detailed stored scope differs")
+    require(canonical_hash(read_json(root / roles["layout"]["storage_path"])) == lineage["plan_sha256"], "Census detailed stored scope differs")
     proof = read_json(root / roles["export_receipt"]["storage_path"])
     require(proof["statistics"] == statistics and proof["sha256"] == digest(raw) and proof["request"] == request_for(batch), "Census detailed proof differs")
     require(receipt["schema_profile"]["row_count"] == statistics["rows"], "Census detailed schema profile differs")

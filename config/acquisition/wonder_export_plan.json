@@ -163,7 +163,7 @@
     "55",
     "56"
   ],
-  "scope": "User decisions 2026-09-28: county-year deaths, population and crude rate per 100,000 with 95% limits and standard error; two pilot exports and full exports of 1999-2020 (D76) and 2018-2024 (D158), saved by hand",
+  "scope": "County-year deaths, population and crude rate per 100,000 with 95% limits and standard error; two pilot exports and full exports of 1999-2020 (D76) and 2018-2024 (D158), saved by hand",
   "source_id": "WONDER",
   "terms": {
     "path": "config/acquisition/terms_acceptance_20260928.json",

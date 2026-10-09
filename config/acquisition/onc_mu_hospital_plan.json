@@ -37,7 +37,7 @@
   },
   "model_eligible": false,
   "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
-  "scope": "User decisions 2026-09-29: collect hospital rows only as a separate Medicare meaningful-use 2011-2017 series; the original stays on this Mac.",
+  "scope": "Collect hospital rows only as a separate Medicare meaningful-use 2011-2017 series; the original stays on this Mac.",
   "series": "Medicare meaningful use 2011-2017 (not Promoting Interoperability; C071-C074 holds kept)",
   "sha256": "772f8c0140d606e880dbf8a8a64964826d0489560a809d2d5bc4ac225069a831",
   "source_id": "ONC_PI",

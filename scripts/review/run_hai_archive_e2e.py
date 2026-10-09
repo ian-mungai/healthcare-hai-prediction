@@ -321,7 +321,7 @@ def main() -> int:
             "Offline local bytes only: no S3 or publisher request. Two artifacts held only in S3 are covered through identical local checksums.",
             "Synthetic scenarios use generated values; they prove rejection, counting and redaction paths, not publisher behavior.",
             "Row-count agreement with the earlier audit covers the two releases that audit recorded, not all 33.",
-            "Review code is uncommitted and outside CI by user decision. No clean-checkout rebuild is claimed.",
+            "Review code runs outside CI. No clean-checkout rebuild is claimed.",
             "No hold is cleared; outputs stay local and need the whole-project privacy review before publication.",
         ],
         "cleanup": "Synthetic inputs and the rebuilt inventory stay under data/e2e/hai_archive_review/; each run replaces them. No process is left running.",

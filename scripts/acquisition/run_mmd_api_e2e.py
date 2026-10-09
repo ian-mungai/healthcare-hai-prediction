@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.acquisition.cli_tools import run_argv
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.mmd_api_contract import (
     CURRENT_CODE_FILES,
     PLAN_PATH,
@@ -193,7 +194,8 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     ready = read_json(PLAN_PATH.parent / "c258_07/2023/capture_ready.json")
-    source = Path(ready["receipt_path"])
+    # The record keeps the path it was written with; the path map gives where it lives now.
+    source = Path(current(ready["receipt_path"]))
     before = {str(p): fingerprint(p) for p in source.parent.rglob("*") if p.is_file()}
     scenarios = []
     baseline = ["--measure-id", "C258.07", "--year", "2023"]

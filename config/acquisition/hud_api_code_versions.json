@@ -214,7 +214,7 @@
       "evidence": [
         "data/e2e/hud_api/20260928/before_gate_run1.json"
       ],
-      "reason": "HUD 2021Q1 ZIP-to-county pilot capture path (user decision 2026-09-28). Local capture only; S3 storage blocked by registry access_hold until a reviewed gate change.",
+      "reason": "HUD 2021Q1 ZIP-to-county pilot capture path. Local capture only; S3 storage blocked by registry access_hold until a reviewed gate change.",
       "review": "data/e2e/hud_api/20260928/capture_self_review.json",
       "reviewed_on": "2026-09-28",
       "version": 1
@@ -1111,7 +1111,7 @@
         "data/e2e/hud_api/20260928/layout_mmd_regression_run1.json",
         "data/e2e/hud_api/20260928/layout_mmd_regression_run2.json"
       ],
-      "reason": "Accept 2022Q1+ layout without city/state (user decision); stored captures unchanged; earlier versions retained.",
+      "reason": "Accept 2022Q1+ layout without city/state; stored captures unchanged; earlier versions retained.",
       "review": "data/e2e/hud_api/20260928/layout_self_review.json",
       "reviewed_on": "2026-09-28",
       "version": 5
@@ -1337,7 +1337,7 @@
         "data/e2e/hud_api/20260928/territory_mmd_regression_run1.json",
         "data/e2e/hud_api/20260928/territory_mmd_regression_run2.json"
       ],
-      "reason": "Accept four approved territory-level area codes (user decision); stored captures unchanged; earlier versions retained.",
+      "reason": "Accept four approved territory-level area codes; stored captures unchanged; earlier versions retained.",
       "review": "data/e2e/hud_api/20260928/territory_self_review.json",
       "reviewed_on": "2026-09-28",
       "version": 6
@@ -4753,7 +4753,7 @@
         "data/e2e/storage_schema_review_20261001/after_fix_run2_artifact.json",
         ".enjoy-logs/storage-schema-review-gate-20261001.log"
       ],
-      "reason": "Independent review passed with one minor, non-blocking finding (documentation and test coverage, addressed): the storage check treats data/schema_review/ as non-storage evidence (owner decision Oct 1 2026). Prior versions retained. No live run or model-use approval.",
+      "reason": "Independent review passed with one minor, non-blocking finding (documentation and test coverage, addressed): the storage check treats data/schema_review/ as non-storage evidence. Prior versions retained. No live run or model-use approval.",
       "review": "data/e2e/storage_schema_review_20261001/independent_review_storage_schema_review.json",
       "review_sha256": "a076f41c3ab3616cdc98c4d5c6b45ab0d116429eeb60031054aecfd539c9ed3a",
       "reviewed_on": "2026-10-01",

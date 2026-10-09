@@ -1,7 +1,7 @@
 """Frozen scope and privacy checks for ONC's meaningful-use attestation file (2011-2017), hospital rows only.
 
 The file mixes eligible-professional rows (individual clinicians) with eligible-hospital rows, so the original stays
-on this Mac only (user decision 2026-09-29) and S3 receives hospital rows without the clinician-only Specialty column.
+on this Mac only and S3 receives hospital rows without the clinician-only Specialty column.
 It is a separate "Medicare meaningful use" series, not the 2023-2024 Promoting Interoperability file.
 Failure modes: data/acquisition_planning/onc_mu_hospital_failure_modes.md.
 """
@@ -14,6 +14,7 @@ from pathlib import Path
 
 from scripts.acquisition.bls_api_contract import code_hashes
 from scripts.acquisition.code_versions import read_code_versions
+from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.s3_store import fingerprint
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
@@ -112,7 +113,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
 
     require(not evidence_only and source["source_id"] == SOURCE_ID, "ONC meaningful-use storage source differs")
     plan = load_plan()
-    require(lineage["plan_sha256"] == canonical_hash(plan) and lineage["file_id"] == plan["id"], "ONC meaningful-use capture plan differs")
+    require(plan_matches(plan, lineage["plan_sha256"]) and lineage["file_id"] == plan["id"], "ONC meaningful-use capture plan differs")
     require(lineage["registry_sha256"] == canonical_hash(load_registry(expected_sha256=lineage["registry_sha256"])), "ONC meaningful-use registry differs")
     require(lineage["schema_sha256"] == canonical_hash(receipt_validator().schema), "ONC meaningful-use schema differs")
     require(lineage["model_eligible"] is False and receipt["snapshot_status"] == "acquired_unvalidated", "ONC meaningful-use modeling hold differs")
@@ -128,7 +129,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     derived, statistics = derive(original, plan)
     require((root / "derived/hospital_attestations.csv").read_bytes() == derived, "ONC meaningful-use derived CSV differs")
     require(proof["statistics"] == statistics and proof["requested_url"] == plan["url"], "ONC meaningful-use download proof differs")
-    require(read_json(root / "references/scope.json") == plan, "ONC meaningful-use stored scope differs")
+    require(canonical_hash(read_json(root / "references/scope.json")) == lineage["plan_sha256"], "ONC meaningful-use stored scope differs")
     acq = receipt["acquisition"]
     require(acq["requested_url"] == plan["url"] and acq["http_status"] == 200, "ONC meaningful-use route differs")
     require(receipt["governance"]["contains_pii"] is False, "ONC meaningful-use governance differs")

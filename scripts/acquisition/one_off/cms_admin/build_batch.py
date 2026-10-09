@@ -19,7 +19,7 @@ from scripts.acquisition.transport import Limits
 
 HERE = REPO_ROOT / "data/acquisition_planning/cms_admin_20260929"
 LICENCE = "https://www.usa.gov/government-works"
-APPROVAL = "User approval 2026-09-29 UTC: all 62 CSV releases; privacy and terms review in data/acquisition_planning/route_recheck_20260929/findings.md."
+APPROVAL = "All 62 CSV releases; privacy and terms review in data/acquisition_planning/route_recheck_20260929/findings.md."
 
 
 def catalogue_periods() -> dict[str, tuple[str, str]]:

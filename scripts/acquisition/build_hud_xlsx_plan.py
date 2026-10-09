@@ -30,7 +30,7 @@ def build(manifest: dict) -> dict:
     return {
         "version": 3,
         "source_id": "HUD",
-        "scope": "User decision 2026-09-28: ZIP-COUNTY workbooks, 2010 Q1 through 2020 Q4, downloaded by hand from the HUD crosswalk files site",
+        "scope": "ZIP-COUNTY workbooks, 2010 Q1 through 2020 Q4, downloaded by hand from the HUD crosswalk files site",
         "route_url": contract.ROUTE_URL,
         "origin": contract.ORIGIN,
         "vintage": "2010Q1_2020Q4_xlsx",
@@ -50,7 +50,7 @@ def build_repeat_decision(plan: dict, year: int, quarter: int, repeats: int) -> 
     return {
         "version": 1,
         "source_id": "HUD",
-        "decision": "User decision 2026-09-28: keep the original workbook unchanged; drop exact repeated rows from the derived CSV only and record the count",
+        "decision": "Keep the original workbook unchanged; drop exact repeated rows from the derived CSV only and record the count",
         "plan_sha256": canonical_hash(plan),
         "quarters": [{"batch_id": batch["id"], "year": year, "quarter": quarter, "sha256": batch["sha256"], "exact_repeat_rows": repeats}],
     }

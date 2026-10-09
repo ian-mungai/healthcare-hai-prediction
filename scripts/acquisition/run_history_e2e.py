@@ -203,7 +203,7 @@ def route_scenarios(scenario: Any, root: Path) -> None:
         lambda: extend([candidate("e2e-review", source_id=review_held, role="data")]),
         "access, privacy or large-file hold",
     )
-    scenario("user_excluded_source_rejected", lambda: extend([candidate("e2e-excluded", source_id="S26_CLH")]), "excluded by current user decision")
+    scenario("user_excluded_source_rejected", lambda: extend([candidate("e2e-excluded", source_id="S26_CLH")]), "excluded from collection")
 
     def budget() -> None:
         jobs = extend([one, candidate("e2e-history-two")])

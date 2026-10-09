@@ -1,6 +1,6 @@
 """Frozen scope and privacy checks for CMS Hospital All Owners releases (C067, C068).
 
-Each original names individual owners, so it stays on this Mac only (user decision 2026-09-29). S3 receives a
+Each original names individual owners, so it stays on this Mac only. S3 receives a
 derived CSV of organisation owner rows, without name, title or street-address columns; kept cells are unchanged
 except owner organisation or DBA names that contain an individual owner's whole name, which are redacted.
 Failure modes: data/acquisition_planning/cms_owners_failure_modes.md.
@@ -14,6 +14,7 @@ from pathlib import Path
 
 from scripts.acquisition.bls_api_contract import code_hashes, digest
 from scripts.acquisition.code_versions import read_code_versions
+from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/cms_owners_plan.json"
@@ -208,7 +209,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
 
     require(not evidence_only and source["source_id"] == SOURCE_ID, "CMS owners storage source differs")
     plan = load_plan()
-    require(lineage["plan_sha256"] == canonical_hash(plan), "CMS owners capture plan differs")
+    require(plan_matches(plan, lineage["plan_sha256"]), "CMS owners capture plan differs")
     require(lineage["registry_sha256"] == canonical_hash(load_registry(expected_sha256=lineage["registry_sha256"])), "CMS owners registry differs")
     require(lineage["schema_sha256"] == canonical_hash(receipt_validator().schema), "CMS owners schema differs")
     require(lineage["model_eligible"] is False and receipt["snapshot_status"] == "acquired_unvalidated", "CMS owners modeling hold differs")
@@ -231,7 +232,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     derived, statistics = derive(raw, release)
     require((root / "derived/organisation_owners.csv").read_bytes() == derived, "CMS owners derived CSV differs")
     require(proof["statistics"] == statistics and proof["requested_url"] == release["url"], "CMS owners download proof differs")
-    require(read_json(root / "references/scope.json") == plan, "CMS owners stored scope differs")
+    require(canonical_hash(read_json(root / "references/scope.json")) == lineage["plan_sha256"], "CMS owners stored scope differs")
     acq = receipt["acquisition"]
     require(
         acq["requested_url"] == release["url"] and acq["http_status"] == 200 and acq["retrieved_at_utc"] == proof["retrieved_at_utc"],

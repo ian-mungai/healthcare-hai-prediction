@@ -12,7 +12,7 @@ from scripts.acquisition.transport import SIGNED_REDIRECT_ROUTES
 
 DOWNLOADS_PATH = "data/acquisition_planning/hcai_util_2018_2025_downloads.json"
 APPROVAL = (
-    "User decisions 2026-09-29: extend the 2012-2017 public-business-data exception to the 2018-2025 annual files; collect 2018-2024 "
+    "Extend the 2012-2017 public-business-data exception to the 2018-2025 annual files; collect 2018-2024 "
     "and the 2025 preliminary file; originals on this Mac only; abstracted sheet CSVs only in S3; columns checked on capture."
 )
 

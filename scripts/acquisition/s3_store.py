@@ -20,7 +20,8 @@ from scripts.acquisition.capture import receipt_validator, validate_receipt
 from scripts.acquisition.cli_tools import executable, run_argv
 from scripts.acquisition.collection_layout import load_routes, object_prefix
 from scripts.acquisition.dataset_layout import CATEGORIES, dataset_id, group_entries
-from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json, require_collection_scope
+from scripts.acquisition.legacy_versions import bound_record
+from scripts.acquisition.source_registry import RegistryError, canonical_hash, load_registry, read_json, require_collection_scope
 from scripts.acquisition.storage_controls import reuse_identity, verify_route
 from scripts.acquisition.transport import CaptureError, inspect_payload, validate_request
 from scripts.infrastructure.render_project_config import REPO_ROOT, load_configuration
@@ -288,34 +289,34 @@ ACCESS_RELEASE_PATH = ACCESS_RELEASE_PATHS[-1]
 
 
 def access_released(source: dict, lineage: dict) -> bool:
-    """Return True only when a dated user decision releases this source's registry access_hold.
+    """Return True only when a recorded release frees this source's registry access_hold.
 
     The base registry stays immutable until collection closeout, so a held source can be
-    stored only when its receipt lineage binds the exact terms acceptance record.
+    stored only when its receipt lineage binds the exact terms acceptance record (current or archived).
     """
     try:
-        body = TERMS_ACCEPTANCE_PATH.read_bytes()
-        records = [d for d in json.loads(body)["datasets"] if d["source_id"] == source["source_id"]]
-        bound = lineage["terms_sha256"] == hashlib.sha256(body).hexdigest()
-    except (OSError, KeyError, TypeError, ValueError):
+        body = bound_record(TERMS_ACCEPTANCE_PATH, lineage["terms_sha256"])
+        bound = body is not None
+        records = [d for d in json.loads(body)["datasets"] if d["source_id"] == source["source_id"]] if body is not None else []
+    except (OSError, KeyError, TypeError, ValueError, RegistryError):
         return released_by_record(source, lineage)
     return (bound and len(records) == 1 and records[0].get("terms_accepted") is True) or released_by_record(source, lineage)
 
 
 def released_by_record(source: dict, lineage: dict) -> bool:
-    """Return True only when the receipt binds the exact dated access-release record naming this source.
+    """Return True only when the receipt binds the exact access-release record naming this source.
 
-    For holds that are not about terms (for example a privacy exception the user approved), the release is a
-    dated record rather than a terms acceptance, bound by its SHA-256 in the receipt lineage. The bound record
-    is looked up among the listed records, so receipts that bind an earlier record keep verifying.
+    For holds that are not about terms (for example a privacy exception), the release is a record rather than a
+    terms acceptance, bound by its SHA-256 in the receipt lineage. The bound record is looked up among the listed
+    records and their archived predecessors, so receipts that bind an earlier record keep verifying.
     """
     for path in ACCESS_RELEASE_PATHS:
         try:
-            body = path.read_bytes()
-            if lineage["access_release_sha256"] != hashlib.sha256(body).hexdigest():
+            body = bound_record(path, lineage["access_release_sha256"])
+            if body is None:
                 continue
             records = [r for r in json.loads(body)["releases"] if r["source_id"] == source["source_id"]]
-        except (OSError, KeyError, TypeError, ValueError):
+        except (OSError, KeyError, TypeError, ValueError, RegistryError):
             return False
         return len(records) == 1 and records[0].get("released") is True
     return False

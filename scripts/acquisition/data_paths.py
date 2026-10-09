@@ -1,6 +1,6 @@
 """Read paths that records written before the dataset move still name (failure modes 224 to 229).
 
-The local dataset folders moved into data/datasets/ on Oct 4 2026. Records are evidence and keep the paths they were
+The local dataset folders live under data/datasets/. Records are evidence and keep the paths they were
 written with; code that follows a recorded path asks this map where it lives now.
 """
 

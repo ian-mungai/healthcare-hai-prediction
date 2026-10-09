@@ -1,6 +1,6 @@
 """Frozen scope, workbook reading and privacy abstraction for the HCAI annual utilization workbooks, 2018-2025.
 
-The public-business-data exception for 2012-2017 was extended to these years (user decision 2026-09-29). Each
+The public-business-data exception for 2012-2017 was extended to these years. Each
 original names administrators and report preparers, so it stays on this Mac only; S3 receives one abstracted CSV
 per sheet. Failure modes: data/acquisition_planning/hcai_util_2018_2025_failure_modes.md.
 """
@@ -15,6 +15,7 @@ from pathlib import Path
 
 from scripts.acquisition.bls_api_contract import code_hashes, digest
 from scripts.acquisition.code_versions import read_code_versions
+from scripts.acquisition.legacy_versions import bound_record, plan_matches
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/hcai_util_2018_2025_plan.json"
@@ -317,10 +318,12 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
 
     require(not evidence_only and source["source_id"] == SOURCE_ID, "HCAI utilization storage source differs")
     plan = load_plan()
-    require(lineage["plan_sha256"] == canonical_hash(plan), "HCAI utilization capture plan differs")
+    require(plan_matches(plan, lineage["plan_sha256"]), "HCAI utilization capture plan differs")
     require(lineage["registry_sha256"] == canonical_hash(load_registry(expected_sha256=lineage["registry_sha256"])), "HCAI utilization registry differs")
     require(lineage["schema_sha256"] == canonical_hash(receipt_validator().schema), "HCAI utilization schema differs")
-    require(lineage["access_release_sha256"] == plan["access_release"]["sha256"], "HCAI utilization access release binding differs")
+    # The receipt binds the release record current at capture; an archived predecessor still counts (failure mode S5).
+    bound = bound_record(REPO_ROOT / plan["access_release"]["path"], lineage["access_release_sha256"])
+    require(bound is not None, "HCAI utilization access release binding differs")
     require(lineage["model_eligible"] is False and receipt["snapshot_status"] == "acquired_unvalidated", "HCAI utilization modeling hold differs")
     require_code(lineage["code_sha256"])
     matches = [y for y in plan["years"] if y["id"] == lineage["year_id"]]
@@ -341,7 +344,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     for name, body in files.items():
         require((root / name).read_bytes() == body, "HCAI utilization derived sheet differs")
     require(proof["statistics"] == statistics and proof["requested_url"] == entry["url"], "HCAI utilization download proof differs")
-    require(read_json(root / "references/scope.json") == plan, "HCAI utilization stored scope differs")
+    require(canonical_hash(read_json(root / "references/scope.json")) == lineage["plan_sha256"], "HCAI utilization stored scope differs")
     acq = receipt["acquisition"]
     require(acq["requested_url"] == entry["url"] and acq["http_status"] == 200, "HCAI utilization route differs")
     require(

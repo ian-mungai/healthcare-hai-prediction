@@ -1,5 +1,5 @@
 {
- "note": "Dated user decisions that release a registry access_hold which is not about publisher terms. Receipts bind this file by SHA-256; the base registry is updated at collection closeout.",
+ "note": "Records that release a registry access_hold which is not about publisher terms. Receipts bind this file by SHA-256; the base registry is updated at collection closeout.",
  "recorded_at_utc": "2026-09-29T15:59:52.624587+00:00",
  "releases": [
   {
@@ -8,8 +8,8 @@
     "data/acquisition_planning/hcai_util_2018_2025_plan.md"
    ],
    "decisions": [
-    "2026-09-24: public-business-data exception for resource 78622c04-a158-4c95-8ea3-7660725e9526 (2012-2017); abstracted file only in S3",
-    "2026-09-29: exception extended to the 2018-2025 annual workbooks; collection approved with column checks on capture"
+    "Public-business-data exception for resource 78622c04-a158-4c95-8ea3-7660725e9526 (2012-2017); abstracted file only in S3",
+    "Exception extended to the 2018-2025 annual workbooks; collection approved with column checks on capture"
    ],
    "hold": "privacy: administrator, report-preparer and contact details in the published files",
    "released": true,

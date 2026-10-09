@@ -15,6 +15,7 @@ from pathlib import Path
 from scripts.acquisition.bls_api_contract import code_hashes, digest
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.data_paths import current
+from scripts.acquisition.legacy_versions import with_predecessors
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 ENDPOINT = "https://www.huduser.gov/hudapi/public/usps"
@@ -31,10 +32,10 @@ STATE_FIPS = sorted(
     + [37, 38, 39, 40, 41, 42, 44, 45, 46, 47, 48, 49, 50, 51, 53, 54, 55, 56]
 )
 SUM_TOLERANCE = Decimal("0.01")
-# User decision 2026-09-28: HUD omits these descriptive fields from 2022 Q1; accept their
+# HUD omits these descriptive fields from 2022 Q1; accept their
 # absence as a whole-response layout, never fill them in. All other fields stay required.
 OPTIONAL_FIELDS = ("city", "state")
-# User decision 2026-09-28: from 2024 Q2 HUD lists some Pacific ZIPs under a two-digit area code
+# From 2024 Q2 HUD lists some Pacific ZIPs under a two-digit area code
 # with no county (American Samoa, Micronesia, Marshall Islands, Palau). Keep them as published.
 TERRITORY_GEOIDS = frozenset({"60", "64", "68", "70"})
 ATTRIBUTION = "This product uses the HUD User Data API but is not endorsed or certified by HUD User."
@@ -184,7 +185,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     from scripts.acquisition.capture import receipt_validator
 
     require(not evidence_only and source["source_id"] == "HUD", "HUD storage source differs")
-    plans = {canonical_hash(p): p for p in load_plans()}
+    plans = with_predecessors({canonical_hash(p): p for p in load_plans()})
     require(lineage["plan_sha256"] in plans, "HUD capture plan differs")
     plan = plans[lineage["plan_sha256"]]
     require(lineage["registry_sha256"] == canonical_hash(load_registry(expected_sha256=lineage["registry_sha256"])), "HUD registry differs")
@@ -205,7 +206,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(digest(raw) == lineage["expected_sha256"], "HUD raw hash differs")
     derived, statistics = validate_response(raw, batch, plan)
     require((root / roles["data"]["storage_path"]).read_bytes() == derived, "HUD derived CSV differs")
-    require(read_json(root / roles["layout"]["storage_path"]) == plan, "HUD stored scope differs")
+    require(canonical_hash(read_json(root / roles["layout"]["storage_path"])) == lineage["plan_sha256"], "HUD stored scope differs")
     proof = read_json(root / roles["export_receipt"]["storage_path"])
     require(proof["statistics"] == statistics and proof["request"] == request_for(batch), "HUD proof differs")
     require(proof["sha256"] == digest(raw) and proof["bytes"] == len(raw) and proof["http_status"] == 200, "HUD transport proof differs")

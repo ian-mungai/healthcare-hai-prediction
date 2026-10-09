@@ -105,7 +105,7 @@ def require_reviewed_code() -> dict[str, str]:
 
 def reuse_capture(branch: Path) -> Path:
     """Return a year's verified existing capture; a rerun never writes a second snapshot."""
-    receipt_path = Path(read_json(branch / "capture_ready.json")["receipt_path"])
+    receipt_path = Path(current(read_json(branch / "capture_ready.json")["receipt_path"]))
     receipt = read_json(receipt_path)
     validate_receipt(receipt, receipt_validator(), receipt_path.parent)
     lineage = json.loads(receipt["lineage"]["extraction_or_query"])
@@ -256,7 +256,7 @@ def execute(measure_id: str, year: int, allow_network: bool, upload: bool, root:
     completed = path.parents[2] / "completed.json"
     if completed.exists():
         done = read_json(completed)
-        require(done["receipt_path"] == str(path), "Completed capture differs from the ready capture")
+        require(current(done["receipt_path"]) == str(path), "Completed capture differs from the ready capture")
         return done
     receipt = read_json(path)
     result = {"measure_id": measure_id, "year": year, "receipt_path": str(path), "rows": receipt["schema_profile"]["row_count"], "model_eligible": False}

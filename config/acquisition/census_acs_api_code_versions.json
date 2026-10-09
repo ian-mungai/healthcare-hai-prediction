@@ -403,7 +403,7 @@
         "data/e2e/census_acs_api/20260926/dp02pr_mmd_regression_run1.json",
         "data/e2e/census_acs_api/20260926/dp02pr_mmd_regression_run2.json"
       ],
-      "reason": "Adds locked plan 2 (DP02PR, 78 Puerto Rico municipios) beside unchanged plan 1; captures verify against their recorded plan. User decision September 26 2026.",
+      "reason": "Adds locked plan 2 (DP02PR, 78 Puerto Rico municipios) beside unchanged plan 1; captures verify against their recorded plan.",
       "review": "data/e2e/census_acs_api/20260926/dp02pr_self_review.json",
       "reviewed_on": "2026-09-26",
       "version": 2
@@ -4723,7 +4723,7 @@
         "data/e2e/storage_schema_review_20261001/after_fix_run2_artifact.json",
         ".enjoy-logs/storage-schema-review-gate-20261001.log"
       ],
-      "reason": "Independent review passed with one minor, non-blocking finding (documentation and test coverage, addressed): the storage check treats data/schema_review/ as non-storage evidence (owner decision Oct 1 2026). Prior versions retained. No live run or model-use approval.",
+      "reason": "Independent review passed with one minor, non-blocking finding (documentation and test coverage, addressed): the storage check treats data/schema_review/ as non-storage evidence. Prior versions retained. No live run or model-use approval.",
       "review": "data/e2e/storage_schema_review_20261001/independent_review_storage_schema_review.json",
       "review_sha256": "a076f41c3ab3616cdc98c4d5c6b45ab0d116429eeb60031054aecfd539c9ed3a",
       "reviewed_on": "2026-10-01",

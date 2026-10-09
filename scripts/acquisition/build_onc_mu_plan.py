@@ -7,7 +7,7 @@ from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json
 
 DOWNLOADS_PATH = "data/acquisition_planning/onc_mu_downloads.json"
-APPROVAL = "User decisions 2026-09-29: collect hospital rows only as a separate Medicare meaningful-use 2011-2017 series; the original stays on this Mac."
+APPROVAL = "Collect hospital rows only as a separate Medicare meaningful-use 2011-2017 series; the original stays on this Mac."
 
 
 def build(record: dict) -> dict:

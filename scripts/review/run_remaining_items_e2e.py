@@ -1,4 +1,4 @@
-"""E2E evidence for review items 1 to 5 of Oct 1 2026: documents, reference layouts, SAIPE, HAI archive members, deep archives.
+"""E2E evidence for review items 1 to 5: documents, reference layouts, SAIPE, HAI archive members, deep archives.
 
 Each step's two real runs were started separately. This runner checks that each pair used the current code and
 inventory and is byte-identical, and reconciles selected counts: every SAIPE file has one national and 51 state
@@ -77,7 +77,7 @@ def main() -> int:
     write_json(
         E2E / "report.json",
         {
-            "feature": "Review items 1 to 5 (Oct 1 2026)",
+            "feature": "Review items 1 to 5",
             "created_utc": datetime.now(UTC).isoformat(),
             "environment": {"python": platform.python_version()},
             "code_revision": run_command("git", ["rev-parse", "HEAD"], cwd=ROOT, check=True).stdout.strip(),

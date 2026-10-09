@@ -83,7 +83,7 @@
     "tot_ratio",
     "zip"
   ],
-  "scope": "User decision 2026-09-28: pilot ZIP-to-county, 2021 Q1, nationwide, one request",
+  "scope": "Pilot ZIP-to-county, 2021 Q1, nationwide, one request",
   "source_id": "HUD",
   "terms": {
     "path": "config/acquisition/terms_acceptance_20260928.json",

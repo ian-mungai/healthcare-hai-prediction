@@ -16,6 +16,8 @@ REGISTRY_PATH = REPO_ROOT / "config" / "acquisition" / "source_registry.json"
 LOCK_PATH = REGISTRY_PATH.with_name("source_registry_lock.json")
 VERSION_CATALOG_PATH = REGISTRY_PATH.with_name("registry_versions.json")
 VERSION_CATALOG_LOCK_PATH = REGISTRY_PATH.with_name("registry_versions.lock.json")
+# Private, Git-ignored archives of exact earlier registries (revision 1, then revision 2).
+LEGACY_ARCHIVES = ("data/acquisition_planning/registry_legacy_20260929", "data/acquisition_planning/acquisition_legacy_20261009")
 ROUTE_RULES = {
     "file_download": ("approved_file_first_with_checks", "conditional_route"),
     "web_export": ("approved_permitted_export_with_checks", "conditional_route"),
@@ -172,7 +174,7 @@ def require_collection_scope(source_id: str) -> None:
         excluded = _verified_exclusions(REGISTRY_PATH.read_bytes(), LOCK_PATH.read_bytes())
     except OSError as error:
         raise RegistryError("Current collection scope is unavailable") from error
-    require(source_id not in excluded, "Source excluded by current user decision")
+    require(source_id not in excluded, "Source excluded from collection")
 
 
 def registry_version_paths(expected_sha256: str) -> dict[str, Path]:
@@ -186,7 +188,7 @@ def registry_version_paths(expected_sha256: str) -> dict[str, Path]:
     for key, relative in versions[0]["files"].items():
         path = REPO_ROOT / relative["path"]
         require(
-            path.resolve().is_relative_to((REPO_ROOT / "data/acquisition_planning/registry_legacy_20260929").resolve()),
+            any(path.resolve().is_relative_to((REPO_ROOT / archive).resolve()) for archive in LEGACY_ARCHIVES),
             "Legacy registry path escapes its archive",
         )
         require(path.is_file() and not path.is_symlink(), "Legacy registry file is missing or symlinked")

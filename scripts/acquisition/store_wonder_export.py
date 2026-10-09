@@ -20,6 +20,7 @@ from scripts.acquisition.collection_layout import load_routes, object_prefix
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.dataset_layout import source_folder
 from scripts.acquisition.hud_api_transport import collection_lock
+from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 from scripts.infrastructure.render_project_config import load_configuration
@@ -148,7 +149,7 @@ def make_receipt(plan: dict, batch: dict, cached: Path, branch: Path) -> Path:
         checks_passed=["recorded_download_hash_and_origin", "exact_query_record", "exact_header", "planned_years_and_county_floor", "unique_county_years"],
         warnings=[
             "Acquisition checks only. Definitions, geography changes, joins and model eligibility remain unreviewed.",
-            "Crude rates per 100,000 by county of residence; WONDER offers no county age-adjusted rates (user decision 2026-09-28).",
+            "Crude rates per 100,000 by county of residence; WONDER offers no county age-adjusted rates.",
             "Never publish statistics based on nine or fewer deaths, including rates; never reconstruct suppressed values.",
             f"Published flags kept as text: {json.dumps(statistics['flags'], sort_keys=True)}.",
             "Saved by hand in Chrome from the WONDER query form; retrieval time is the file creation time; session identifier removed from the origin.",
@@ -241,9 +242,7 @@ def execute(plan: dict, batch: dict, root: Path, downloads: Path, upload: bool, 
         require(done["receipt_sha256"] == fingerprint(receipt_path)[0] and done["batch_id"] == batch["id"], "WONDER completion receipt differs")
         reconciliation = receipt_path.parent / "s3_collections_reconciliation.json"
         require(done["reconciliation_sha256"] == fingerprint(reconciliation)[0], "WONDER completion storage evidence differs")
-        require(
-            done["model_eligible"] is False and done["status"] == "stored" and done["plan_sha256"] == canonical_hash(plan), "WONDER completion hold differs"
-        )
+        require(done["model_eligible"] is False and done["status"] == "stored" and plan_matches(plan, done["plan_sha256"]), "WONDER completion hold differs")
         require(done["rows"] == receipt["schema_profile"]["row_count"], "WONDER completion row count differs")
         settings = client.configuration if client is not None else load_configuration(REPO_ROOT / ".env")[0]
         verify_storage(receipt_path, receipt, settings)

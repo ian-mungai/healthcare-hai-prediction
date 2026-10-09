@@ -98,7 +98,7 @@ def build() -> dict:
         "classification": "Public aggregate data; Restricted runtime-only API credential",
         "csv_null_marker": contract.NULL_MARKER,
         "review_status": "All definition, geography, precision and modeling holds retained",
-        "approval": "User proceed September 26 2026; separate Census collector, pilot, verification and S3 acquisition",
+        "approval": "Separate Census collector, pilot, verification and S3 acquisition",
         "county_enumeration": "Native 05000US identifiers from hash-verified stored 2009 ACS summary-file geography; no later geography substituted",
     }
 
@@ -136,7 +136,7 @@ def build_pr(base_plan: dict) -> dict:
         "classification": base_plan["classification"],
         "csv_null_marker": contract.NULL_MARKER,
         "review_status": "All definition, geography, precision and modeling holds retained",
-        "approval": "User decision September 26 2026: add DP02PR after DP02 was found to publish no Puerto Rico values",
+        "approval": "Add DP02PR after DP02 was found to publish no Puerto Rico values",
         "county_enumeration": "Puerto Rico subset of the plan 1 native 2009 summary-file geography; no later geography substituted",
     }
 

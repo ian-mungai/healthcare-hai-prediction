@@ -8,7 +8,7 @@ from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_
 
 CATALOGUE_PATH = "data/acquisition_planning/cms_owners_20260929/cms_catalogue_entries_20260929.json"
 HEADER_LINES_PATH = "data/acquisition_planning/cms_owners_20260929/release_header_lines.json"
-APPROVAL = "User decisions 2026-09-29: all 44 releases; organisation owner rows only to S3; each original stays on this Mac only."
+APPROVAL = "All 44 releases; organisation owner rows only to S3; each original stays on this Mac only."
 
 
 def releases(catalogue: dict, registry: dict, header_lines: dict | None = None) -> list[dict]:

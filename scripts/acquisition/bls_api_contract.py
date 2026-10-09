@@ -9,6 +9,7 @@ from pathlib import Path
 
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.data_paths import current
+from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, read_json, require
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/bls_api_plan.json"
@@ -152,7 +153,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
 
     require(not evidence_only and source["source_id"] == "BLS", "BLS source or storage mode differs")
     plan = load_plan()
-    require(lineage["plan_sha256"] == canonical_hash(plan), "BLS capture plan differs")
+    require(plan_matches(plan, lineage["plan_sha256"]), "BLS capture plan differs")
     require(lineage["registry_sha256"] == canonical_hash(load_registry(expected_sha256=lineage["registry_sha256"])), "BLS registry differs")
     require(lineage["schema_sha256"] == canonical_hash(receipt_validator().schema), "BLS schema differs")
     require(lineage["model_eligible"] is False and receipt["snapshot_status"] == "acquired_unvalidated", "BLS modeling hold differs")

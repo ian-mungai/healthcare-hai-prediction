@@ -18,7 +18,7 @@ DEFINITIONS = {
     "poverty": "C175: B17001_002E / B17001_001E x 100 (below poverty / population for whom poverty status is determined); not a published S1701 value",
     "english": "C183.02 total: B16001 'less than very well' lines / B16001_001E x 100 (age 5+); checked against B16004; not a published C16001 value",
 }
-APPROVAL = "User approvals 2026-09-29: poverty 2010-2011 from B17001 (checked vs S1701 2012-2016); limited English 2009-2015 from B16001 (vs B16004)."
+APPROVAL = "Poverty 2010-2011 from B17001 (checked vs S1701 2012-2016); limited English 2009-2015 from B16001 (vs B16004)."
 
 
 def reference(path: Path, url: str) -> dict:

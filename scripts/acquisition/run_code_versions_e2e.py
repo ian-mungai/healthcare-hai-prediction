@@ -12,13 +12,25 @@ from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, canoni
 def exercise() -> list[dict]:
     """Exercise real metadata through legacy and typed representations plus malformed copies."""
     from scripts.acquisition.code_versions import read_code_versions
+    from scripts.acquisition.legacy_versions import catalog, predecessor_bytes
 
     cases = []
     manifest = read_json(REPO_ROOT / "config/acquisition/code_version_migration.json")
+    records = catalog().get("records", {})
     for row in manifest["files"]:
-        normalized = read_code_versions(REPO_ROOT / "config/acquisition" / row["file"])
+        tracked = REPO_ROOT / "config/acquisition" / row["file"]
+        entries = records.get(f"config/acquisition/{row['file']}", [])
+        # A list with current-state wording is checked through its archived original (failure mode S7).
+        source = REPO_ROOT / entries[0]["archive_path"] if entries else tracked
+        if entries:
+            predecessor_bytes(entries[0])
+        normalized = read_code_versions(source)
         normalized["versions"] = normalized["versions"][: row["versions"]]
         cases.append({"name": "historical_equivalence_" + row["file"], "passed": canonical_hash(normalized) == row["original_normalized_sha256"]})
+        if entries:
+            kept = [{k: v for k, v in version.items() if k != "reason"} for version in read_code_versions(source)["versions"]]
+            now = [{k: v for k, v in version.items() if k != "reason"} for version in read_code_versions(tracked)["versions"]]
+            cases.append({"name": "successor_keeps_every_version_" + row["file"], "passed": now[: len(kept)] == kept})
     with tempfile.TemporaryDirectory(prefix="code_fingerprints_") as directory:
         path = Path(directory) / "versions.json"
         for source in sorted((REPO_ROOT / "config/acquisition").glob("*_code_versions.json")):

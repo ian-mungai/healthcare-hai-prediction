@@ -463,7 +463,7 @@
     "56"
   ],
   "route_url": "https://www.huduser.gov/apps/public/uspscrosswalk/home",
-  "scope": "User decision 2026-09-28: ZIP-COUNTY workbooks, 2010 Q1 through 2020 Q4, downloaded by hand from the HUD crosswalk files site",
+  "scope": "ZIP-COUNTY workbooks, 2010 Q1 through 2020 Q4, downloaded by hand from the HUD crosswalk files site",
   "source_id": "HUD",
   "terms": {
     "path": "config/acquisition/terms_acceptance_20260928.json",

@@ -27,7 +27,7 @@ def build(manifest: dict, min_counties_per_year: int = 3100) -> dict:
     return {
         "version": 1,
         "source_id": "WONDER",
-        "scope": "User decisions 2026-09-28: county-year deaths, population and crude rate per 100,000 with 95% limits and standard error; "
+        "scope": "County-year deaths, population and crude rate per 100,000 with 95% limits and standard error; "
         "two pilot exports and full exports of 1999-2020 (D76) and 2018-2024 (D158), saved by hand",
         "databases": contract.DATABASES,
         "header": contract.HEADER,

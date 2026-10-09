@@ -57,7 +57,7 @@ def main() -> None:
     retired = retired_snapshots()
     entries = []
     for candidate in inventory["candidates"] + amendment["added_candidates"]:
-        # Receipts recorded before the dataset move (Oct 4 2026) are read through the path map; the queue keeps the recorded path.
+        # Receipts recorded before the dataset move are read through the path map; the queue keeps the recorded path.
         path = ROOT / current(candidate["receipt"])
         if sha(path) != candidate["receipt_sha256"]:
             sys.exit(f"Receipt changed since the inventory: {candidate['receipt']}")

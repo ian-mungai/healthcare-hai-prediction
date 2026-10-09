@@ -130,7 +130,7 @@ def main() -> int:
         if result.returncode != 2:
             raise AssertionError("nested_same_name_not_excluded")
         nested.unlink()
-        # Schema-review outputs are derived review evidence, not upload records (owner decision Oct 1 2026).
+        # Schema-review outputs are derived review evidence, not upload records.
         review = evidence / "schema_review" / "final_pass"
         write_once(review / "broken_review.json", b"{intentional invalid review output")
         with (review / "oversized_keysets.json").open("wb") as handle:

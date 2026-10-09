@@ -23,6 +23,7 @@ from scripts.acquisition.collect_census_acs_api import runtime
 from scripts.acquisition.collect_mmd_api import artifact
 from scripts.acquisition.collection_layout import load_routes, object_prefix
 from scripts.acquisition.data_paths import current
+from scripts.acquisition.legacy_versions import plan_hashes, plan_matches
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 from scripts.infrastructure.render_project_config import load_configuration
@@ -319,7 +320,7 @@ def store(plan: dict, identity: str, receipt_path: Path, upload: bool, client: A
         reconciliation = receipt_path.parent / "s3_collections_reconciliation.json"
         require(done["reconciliation_sha256"] == fingerprint(reconciliation)[0], "Census detailed completion storage evidence differs")
         require(
-            done["status"] == "stored" and done["model_eligible"] is False and done["plan_sha256"] == canonical_hash(plan),
+            done["status"] == "stored" and done["model_eligible"] is False and plan_matches(plan, done["plan_sha256"]),
             "Census detailed completion hold differs",
         )
         settings = client.configuration if client is not None else load_configuration(REPO_ROOT / ".env")[0]
@@ -358,11 +359,14 @@ def execute(plan: dict, batch: dict, root: Path, allow_network: bool, upload: bo
 def execute_derived(plan: dict, root: Path, upload: bool, client: AwsCli | None, outputs: dict) -> dict:
     """Build and store the derived snapshot once every input capture exists and every check passes."""
     require(canonical_hash(plan) == canonical_hash(contract.load_plan()), "Census detailed selected plan differs")
-    receipt_path = root / "batches" / derived_id(plan) / "capture/receipt.json"
+    # A derived snapshot made under an earlier plan keeps that plan's identity (failure mode S2).
+    identities = [canonical_hash({"derived": recorded}) for recorded in plan_hashes(plan)]
+    identity = next((item for item in identities if (root / "batches" / item / "capture/receipt.json").exists()), identities[0])
+    receipt_path = root / "batches" / identity / "capture/receipt.json"
     if not receipt_path.exists():
         contract.require_code()
         receipt_path = make_derived(plan, root)
-    return store(plan, derived_id(plan), receipt_path, upload, client, outputs) | {"table": "derived", "year": None}
+    return store(plan, identity, receipt_path, upload, client, outputs) | {"table": "derived", "year": None}
 
 
 def run_all(

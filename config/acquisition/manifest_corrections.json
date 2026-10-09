@@ -33,7 +33,7 @@
       "reason": "MUA_DET.csv holds the MUA designation records themselves, not a description of them; the publisher's data workbooks carry the data role."
     }
   ],
-  "decision": "Owner decision, Oct 4 2026: write corrected versions to S3, load them into bronze, then prepare redownload run 3.",
+  "decision": "Write corrected versions to S3, load them into bronze, then prepare redownload run 3.",
   "issue": "BRZ-011",
   "kind": "storage_manifest_corrections"
 }

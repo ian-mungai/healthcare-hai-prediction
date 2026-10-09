@@ -20,6 +20,7 @@ from scripts.acquisition.collect_hud_api import runtime
 from scripts.acquisition.collect_mmd_api import artifact
 from scripts.acquisition.collection_layout import load_routes, object_prefix
 from scripts.acquisition.dataset_layout import source_folder
+from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 from scripts.infrastructure.render_project_config import load_configuration
@@ -196,9 +197,7 @@ def execute(plan: dict, entry: dict, root: Path, downloads: Path, upload: bool, 
         require(done["receipt_sha256"] == fingerprint(receipt_path)[0] and done["file_id"] == entry["id"], "Reference completion receipt differs")
         reconciliation = receipt_path.parent / "s3_collections_reconciliation.json"
         require(done["reconciliation_sha256"] == fingerprint(reconciliation)[0], "Reference completion storage evidence differs")
-        require(
-            done["model_eligible"] is False and done["status"] == "stored" and done["plan_sha256"] == canonical_hash(plan), "Reference completion hold differs"
-        )
+        require(done["model_eligible"] is False and done["status"] == "stored" and plan_matches(plan, done["plan_sha256"]), "Reference completion hold differs")
         settings = client.configuration if client is not None else load_configuration(REPO_ROOT / ".env")[0]
         verify_storage(receipt_path, receipt, settings)
         return done

@@ -307,7 +307,7 @@
         "data/e2e/acquisition_checks/20261002T204712Z_71478",
         "data/e2e/reference_download_gate_20261002/gate.log"
       ],
-      "reason": "New collector for publisher reference documents saved in a browser (failure modes 1 to 18, data/acquisition_planning/reference_documents_failure_modes.md). Recorded on the passing acquisition gate by owner decision (2026-10-02), without a separate independent review; the next redownload run's settings get their own Codex review. Stores reference documents only; no model-use approval.",
+      "reason": "New collector for publisher reference documents saved in a browser (failure modes 1 to 18, data/acquisition_planning/reference_documents_failure_modes.md). Recorded on the passing acquisition gate (2026-10-02), without a separate independent review; the next redownload run's settings get their own Codex review. Stores reference documents only; no model-use approval.",
       "review": null,
       "reviewed_on": "2026-10-02",
       "version": 1

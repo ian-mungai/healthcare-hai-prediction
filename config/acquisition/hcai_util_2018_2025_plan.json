@@ -1,7 +1,7 @@
 {
   "access_release": {
     "path": "config/acquisition/access_releases_20260929.json",
-    "sha256": "61a2faa99dacbe954a2e60a49319cc9f2ab77dde8d04b693b095ad8407e43aea"
+    "sha256": "d15851bb7c686cb360de0bc8549aaaf8d96803a67d91c566771247366dd54b4d"
   },
   "downloads": "data/acquisition_planning/hcai_util_2018_2025_downloads.json",
   "individual_owner_redact": [
@@ -26,7 +26,7 @@
   ],
   "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
   "replacement": "[REDACTED]",
-  "scope": "User decisions 2026-09-29: extend the 2012-2017 public-business-data exception to the 2018-2025 annual files; collect 2018-2024 and the 2025 preliminary file; originals on this Mac only; abstracted sheet CSVs only in S3; columns checked on capture.",
+  "scope": "Extend the 2012-2017 public-business-data exception to the 2018-2025 annual files; collect 2018-2024 and the 2025 preliminary file; originals on this Mac only; abstracted sheet CSVs only in S3; columns checked on capture.",
   "source_id": "HCAI_UTIL",
   "version": 1,
   "years": [

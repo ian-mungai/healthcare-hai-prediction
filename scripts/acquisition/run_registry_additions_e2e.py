@@ -1,4 +1,4 @@
-"""Real-process checks for user-approved registry additions; no network or AWS calls."""
+"""Real-process checks for approved registry additions; no network or AWS calls."""
 
 from __future__ import annotations
 
@@ -191,7 +191,7 @@ def main() -> None:
             "runner_sha256": fingerprint(Path(__file__))[0],
             "implementation_sha256": fingerprint(implementation)[0] if implementation.exists() else None,
             "inputs": {name: fingerprint(CONFIG / name)[0] if (CONFIG / name).exists() else None for name in FILES},
-            "code_revision_note": "Acquisition code and configuration are git-ignored by user decision; file hashes above identify the tested revision.",
+            "code_revision_note": "File hashes above identify the tested revision.",
             "cases": cases,
             "files": [{"path": str(p.relative_to(root)), "sha256": fingerprint(p)[0]} for p in sorted(root.rglob("*")) if p.is_file()],
             "reproduce": [sys.executable, "-m", "scripts.acquisition.run_registry_additions_e2e", "--output", "<new_directory>"],

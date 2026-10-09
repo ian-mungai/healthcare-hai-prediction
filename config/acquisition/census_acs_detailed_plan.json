@@ -7987,7 +7987,7 @@
   ],
   "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
   "request_spacing_seconds": 1,
-  "scope": "User approvals 2026-09-29: poverty 2010-2011 from B17001 (checked vs S1701 2012-2016); limited English 2009-2015 from B16001 (vs B16004).",
+  "scope": "Poverty 2010-2011 from B17001 (checked vs S1701 2012-2016); limited English 2009-2015 from B16001 (vs B16004).",
   "source_id": "ACS",
   "version": 1
 }

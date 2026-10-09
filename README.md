@@ -446,7 +446,7 @@ acceptance, API accounts and the browser downloads (CMS Mapping Medicare
 Disparities exports, Census table exports, CDC WONDER county mortality exports
 and the 2010–2020 HUD ZIP-to-county workbooks). Its commands need the acquisition code in `scripts/acquisition/`
 and `config/acquisition/`, both tracked in Git. Registry revision 2 preserves exact legacy fingerprints for historic replay;
-its private legacy archive stays outside Git. The bounded publisher redownload (run 3) remains the final verification.
+`config/acquisition/legacy_versions.json` does the same for earlier plans and records; both private archives stay outside Git. The bounded publisher redownload (run 3) remains the final verification.
 
 ## Quality Checks
 

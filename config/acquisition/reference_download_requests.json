@@ -1,5 +1,5 @@
 {
- "note": "Reviewed request list for store_reference_download --build-plan (owner decisions, Oct 2 2026). Each file was saved by the owner in a browser; the plan binds its origin, SHA-256 and size.",
+ "note": "Reviewed request list for store_reference_download --build-plan. Each file was saved by the owner in a browser; the plan binds its origin, SHA-256 and size.",
  "files": [
   {
    "source_id": "BLS",

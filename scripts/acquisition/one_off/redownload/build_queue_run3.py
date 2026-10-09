@@ -1,7 +1,7 @@
 """Freeze the run 3 redownload queue offline: the files bronze uses, plus the documents stored after the run 1 freeze.
 
-Owner decisions, Oct 4 2026: run 3 runs now; it covers only the files bronze uses; the publisher dictionaries and
-reference documents stored on Oct 2 2026 join the queue (amendment 2). No network or AWS request is made.
+Run 3 covers only the files bronze uses; the stored publisher dictionaries and reference documents join the queue
+(amendment 2). No network or AWS request is made.
 
 Inputs: the run 2 queue (checked against its lock), bronze's copies list exported from ``bronze.stored_copies``
 (data/acquisition_planning/run3_scope_20261004/bronze_copies.csv) and capture_inventory_amendment2.json.

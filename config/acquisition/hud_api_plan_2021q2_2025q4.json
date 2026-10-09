@@ -228,9 +228,9 @@
     "tot_ratio",
     "zip"
   ],
-  "scope": "User decision 2026-09-28: ZIP-to-county, 2021 Q2 through 2025 Q4, nationwide, 19 requests",
+  "scope": "ZIP-to-county, 2021 Q2 through 2025 Q4, nationwide, 19 requests",
   "source_id": "HUD",
-  "supplements_plan_sha256": "153522f0e59bcaa0d42eb9fd75dc7599878b26fdbd4b03001e73d0711e1c5e54",
+  "supplements_plan_sha256": "aead13b4dee39d121c01c662fe7a4606aa3114b84a24d8747c27ad4468691a36",
   "terms": {
     "path": "config/acquisition/terms_acceptance_20260928.json",
     "sha256": "96435f8cb6d23a1809040b6251f3bd835fa7bcacdfd67f77b255fc55f6b7f5cf"

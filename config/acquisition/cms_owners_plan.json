@@ -489,7 +489,7 @@
     }
   ],
   "replacement": "[REDACTED]",
-  "scope": "User decisions 2026-09-29: all 44 releases; organisation owner rows only to S3; each original stays on this Mac only.",
+  "scope": "All 44 releases; organisation owner rows only to S3; each original stays on this Mac only.",
   "source_id": "CMS_OWNERS",
   "version": 1
 }

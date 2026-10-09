@@ -200,8 +200,8 @@ def reconstruct(plan: dict, condition: dict, year: int, rows: list[dict]) -> tup
     urban, _ = lookup(root, "urban.tsv")
     headers = [h for h in HEADERS if condition["geography"] == "c" or h not in {"county", "urban"}]
     selections = selections_for(plan, condition, year)
-    baseline = next(r for r in read_json(Path(plan["comparison_report"]))["years"] if r["year"] == year)
-    original = Path(baseline["original_path"]).read_bytes()
+    baseline = next(r for r in read_json(Path(current(plan["comparison_report"])))["years"] if r["year"] == year)
+    original = Path(current(baseline["original_path"])).read_bytes()
     require(digest(original) == baseline["original_sha256"], "AMI geography baseline changed")
     baseline_blanks = {int(r["fips"]) for r in csv.DictReader(io.StringIO(original.decode())) if r["county"] == ""}
     lines = [",".join(headers)]

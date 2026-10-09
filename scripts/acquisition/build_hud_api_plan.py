@@ -15,7 +15,7 @@ def build() -> dict:
     return {
         "version": 1,
         "source_id": "HUD",
-        "scope": "User decision 2026-09-28: pilot ZIP-to-county, 2021 Q1, nationwide, one request",
+        "scope": "Pilot ZIP-to-county, 2021 Q1, nationwide, one request",
         "endpoint": contract.ENDPOINT,
         "credential_reference": contract.CREDENTIAL,
         "vintage": "2021Q1",
@@ -31,7 +31,7 @@ def build() -> dict:
 
 
 def build_range(pilot: dict) -> dict:
-    """User decision 2026-09-28: 2021 Q2 through 2025 Q4, bound to the unchanged pilot plan."""
+    """2021 Q2 through 2025 Q4, bound to the unchanged pilot plan."""
     quarters = [(y, q) for y in range(2021, 2026) for q in range(1, 5) if (2021, 2) <= (y, q) <= (2025, 4)]
     batches = []
     for year, quarter in quarters:
@@ -39,7 +39,7 @@ def build_range(pilot: dict) -> dict:
         batches.append(batch | {"county_geography": contract.county_geography(batch), "id": contract.batch_id(batch)})
     return pilot | {
         "version": 2,
-        "scope": "User decision 2026-09-28: ZIP-to-county, 2021 Q2 through 2025 Q4, nationwide, 19 requests",
+        "scope": "ZIP-to-county, 2021 Q2 through 2025 Q4, nationwide, 19 requests",
         "vintage": "2021Q2_2025Q4",
         "supplements_plan_sha256": canonical_hash(pilot),
         "batches": batches,

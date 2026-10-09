@@ -14,6 +14,7 @@ from pathlib import Path
 from scripts.acquisition.bls_api_contract import code_hashes, digest
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.data_paths import current
+from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/wonder_export_plan.json"
@@ -216,7 +217,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
 
     require(not evidence_only and source["source_id"] == "WONDER", "WONDER storage source differs")
     plan = load_plan()
-    require(lineage["plan_sha256"] == canonical_hash(plan), "WONDER capture plan differs")
+    require(plan_matches(plan, lineage["plan_sha256"]), "WONDER capture plan differs")
     require(lineage["registry_sha256"] == canonical_hash(load_registry(expected_sha256=lineage["registry_sha256"])), "WONDER registry differs")
     require(lineage["schema_sha256"] == canonical_hash(receipt_validator().schema), "WONDER schema differs")
     require(lineage["terms_sha256"] == plan["terms"]["sha256"], "WONDER terms binding differs")
@@ -235,7 +236,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(digest(raw) == lineage["expected_sha256"] == batch["sha256"] and len(raw) == batch["bytes"], "WONDER raw hash differs")
     derived, statistics = validate_export(raw, batch, plan)
     require((root / "derived/county_year.csv").read_bytes() == derived, "WONDER derived CSV differs")
-    require(read_json(root / "references/scope.json") == plan, "WONDER stored scope differs")
+    require(canonical_hash(read_json(root / "references/scope.json")) == lineage["plan_sha256"], "WONDER stored scope differs")
     proof = read_json(root / "evidence/download_proof.json")
     require(proof["origin_urls"] == [ORIGIN + batch["database"]] and proof["file_name"] == batch["file_name"], "WONDER download proof differs")
     require(proof["sha256"] == batch["sha256"] and proof["statistics"] == statistics and proof["query"] == statistics["query"], "WONDER download proof differs")

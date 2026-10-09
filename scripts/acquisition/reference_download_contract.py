@@ -13,6 +13,7 @@ from scripts.acquisition import hud_xlsx_contract as download_metadata
 from scripts.acquisition.bls_api_contract import code_hashes, digest
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.history_routes import lineage_bindings
+from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require, require_collection_scope
 from scripts.acquisition.transport import CaptureError
 
@@ -118,7 +119,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
 
     require(not evidence_only, "Reference downloads are stored complete or not at all")
     plan = load_plan()
-    require(lineage["plan_sha256"] == canonical_hash(plan), "Reference capture plan differs")
+    require(plan_matches(plan, lineage["plan_sha256"]), "Reference capture plan differs")
     require(lineage["registry_sha256"] == plan["registry_sha256"], "Reference registry differs")
     require(lineage["schema_sha256"] == canonical_hash(receipt_validator().schema), "Reference schema differs")
     require(lineage["model_eligible"] is False and receipt["snapshot_status"] == "acquired_unvalidated", "Reference modeling hold differs")

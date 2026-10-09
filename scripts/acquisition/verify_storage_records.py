@@ -30,14 +30,14 @@ from scripts.acquisition.s3_store import AwsCli, encoded_json, write_once
 from scripts.acquisition.transport import CaptureError
 from scripts.infrastructure.render_project_config import REPO_ROOT, load_configuration, verify_project_identity
 
-# Retirements: the privacy deletion and the removal of byte-identical duplicates (Oct 4 2026).
+# Retirements: the privacy deletion and the removal of byte-identical duplicates.
 RETIREMENTS = ("data/privacy_review/*/retired_objects*.json", "data/lakehouse_planning/dedup_*/retired_objects*.json")
 REPLACEMENTS = "data/privacy_review/*/replacements*.json"
 SKIPPED_FOLDERS = {"private_original", "storage_checks", "redacted_copies"}
 NON_STORAGE_ROOTS = {
     "e2e": "Synthetic test inputs and deliberately malformed fixtures, not live acquisition evidence.",
     "conformance": "Repository policy audit evidence, not live acquisition evidence.",
-    "schema_review": "Derived schema-review outputs, not upload records (owner decision Oct 1 2026).",
+    "schema_review": "Derived schema-review outputs, not upload records.",
 }
 MAX_RECORD_FILE = 50 * 1024**2
 # Failure modes 237 to 240: only the exact first path segment matches; recorded versions there are still checked.

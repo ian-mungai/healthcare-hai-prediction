@@ -1,5 +1,5 @@
 {
-  "approval": "User decision September 26 2026: add DP02PR after DP02 was found to publish no Puerto Rico values",
+  "approval": "Add DP02PR after DP02 was found to publish no Puerto Rico values",
   "batches": [
     {
       "headers": [
@@ -1322,7 +1322,7 @@
   "review_status": "All definition, geography, precision and modeling holds retained",
   "scope": "All published DP02PR variables; all 78 2009 Puerto Rico municipios",
   "source_id": "ACS",
-  "supplements_plan_sha256": "142b246e4f0a2e1656d5a2454dc44f7069fe529bfd021e9dccdc4c401ea6c5f3",
+  "supplements_plan_sha256": "ac4951f94a5f236bc0776a781cc434924477cabb120a0af46ee84a5414cfff3e",
   "version": 2,
   "vintage": "20260926",
   "window": [
