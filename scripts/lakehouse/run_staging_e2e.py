@@ -1689,6 +1689,65 @@ GROUP_B4 = (
 )
 
 
+# AL2 [564] to [575]: windows that end before the 2019 and 2021 HAI windows start (two for OP_18b, so the later one wins),
+# a C141 spelling in another case, two files on one release date that disagree on 010005's 2020 OP_18b window (held in
+# staging), an overall rating released before the 2021 window and two files on one later date that disagree for 010005.
+DATES_2018 = {"start_date": "01/01/2018", "end_date": "12/31/2018"}
+DATES_2020 = {"start_date": "01/01/2020", "end_date": "12/31/2020"}
+GROUP_AL2 = (
+    Stored(
+        "cms_cc_timely_and_effective_care_hospital",
+        "te_al2a",
+        "2021-03-31",
+        "Timely_and_Effective_Care-Hospital_al2.csv",
+        sha("z6"),
+        4,
+        records=(
+            cc(facility_id="010001", measure_id="OP_18b", score="130", **DATES_2018),
+            cc(facility_id="010001", measure_id="OP_18b", score="145", **DATES_2020),
+            cc(facility_id="010001", measure_id="EDV", score="Low", **DATES_2020),
+            cc(facility_id="010005", measure_id="OP_18b", score="120", **DATES_2020),
+        ),
+    ),
+    Stored(
+        "cms_cc_timely_and_effective_care_hospital",
+        "te_al2b",
+        "2021-03-31",
+        "Timely_and_Effective_Care-Hospital_al2_supplement.csv",
+        sha("z7"),
+        1,
+        records=(cc(facility_id="010005", measure_id="OP_18b", score="125", **DATES_2020),),
+    ),
+    Stored(
+        "cms_cc_hospital_general_information",
+        "g_al2a",
+        "2020-07-01",
+        "Hospital_General_Information_2020-07.csv",
+        sha("z8"),
+        1,
+        records=((("facility_id", "010001"), ("state", "AL"), ("hospital_type", "Acute Care Hospitals"), ("hospital_overall_rating", "2")),),
+    ),
+    Stored(
+        "cms_cc_hospital_general_information",
+        "g_al2b",
+        "2020-10-01",
+        "Hospital_General_Information_2020-10.csv",
+        sha("z9"),
+        1,
+        records=((("facility_id", "010005"), ("state", "AL"), ("hospital_type", "Acute Care Hospitals"), ("hospital_overall_rating", "3")),),
+    ),
+    Stored(
+        "cms_cc_hospital_general_information",
+        "g_al2c",
+        "2020-10-01",
+        "Hospital_General_Information_2020-10_supplement.csv",
+        sha("r6"),
+        1,
+        records=((("facility_id", "010005"), ("state", "AL"), ("hospital_type", "Acute Care Hospitals"), ("hospital_overall_rating", "5")),),
+    ),
+)
+
+
 def owner(enrollment: str, owner_id: str, role: str, **fields: str) -> tuple[tuple[str, str], ...]:
     """Return one organisation owner row: the hospital enrollment, the owner, the role and any other bronze columns."""
     return (("enrollment_id", enrollment), ("associate_id_owner", owner_id), ("type_owner", "O"), ("role_code_owner", role), *fields.items())
@@ -3037,6 +3096,7 @@ BASE = (
     *GROUP_D1,
     *GROUP_D2,
     *GROUP_AL1,
+    *GROUP_AL2,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -3401,6 +3461,12 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
         frozenset(),
     ),
     # [550] A calendar-year HAI measure ID outside the 36 known parts.
+    # [569] A C141 spelling outside the accepted list must fail, never fold into a category.
+    "care_compare_edv_unknown": (
+        "assert_care_compare_edv_known",
+        tuple(with_record(item, cc(facility_id="010001", measure_id="EDV", score="LOW", **DATES_2022)) if item.key == "te_al2a" else item for item in BASE),
+        frozenset(),
+    ),
     "outcome_measure_unknown": (
         "assert_hai_outcome_measures_known",
         (*BASE, Stored("cms_hai_hospital", "hx4", "2022-06-01", "HAI_Bad_Measure.csv", sha("ax4"), 1, content=("990001|HAI_7_SIR|01/01/2021|12/31/2021|0.5",))),
@@ -4194,6 +4260,16 @@ OUTCOME_VALUE_ROWS_SQL = (
     "SELECT measure_control, outcome_key, field, value_text, coalesce(value_number::VARCHAR, ''), coalesce(review_decision, '') "
     "FROM int_hai_outcome_values WHERE outcome_key = '070001:2021:HAI_2' OR outcome_key = '070001:2021:HAI_3' ORDER BY ALL;"
 )
+CARE_SQL = (
+    "SELECT ccn, window_year::VARCHAR, measure_control, alignment_status, coalesce(value_text, ''), coalesce(value_number::VARCHAR, ''), "
+    "coalesce(value_category, ''), coalesce(period_end::VARCHAR, ''), coalesce(age_months::VARCHAR, ''), coalesce(release_file_count::VARCHAR, '') "
+    "FROM int_spine_care_compare_measures WHERE alignment_status <> 'not_in_source' ORDER BY ALL;"
+)
+CARE_COUNT_SQL = (
+    "SELECT (SELECT count(*) FROM int_spine_care_compare_measures)::VARCHAR, "
+    "(SELECT count(*) FROM int_hospital_spine)::VARCHAR || ' x ' || (SELECT count(*) FROM registry_measure_sources)::VARCHAR, "
+    "(SELECT count(DISTINCT alignment_key) FROM int_spine_care_compare_measures)::VARCHAR;"
+)
 OUTCOME_COUNT_SQL = (
     "SELECT (SELECT count(*) FROM int_spine_hai_outcomes)::VARCHAR, (SELECT 6 * count(*) FROM int_hospital_spine)::VARCHAR, "
     "(SELECT count(DISTINCT outcome_key) FROM int_spine_hai_outcomes)::VARCHAR;"
@@ -4425,6 +4501,8 @@ def read_models(case: str) -> dict[str, Any]:
         "vbp_domains": [tuple(row) for row in duckdb_csv(database, VBP_DOMAINS_SQL)],
         "program_holds": [tuple(row) for row in duckdb_csv(database, PROGRAM_HOLDS_SQL)],
         "hai_outcomes": [tuple(row) for row in duckdb_csv(database, OUTCOME_SQL)],
+        "care_compare": [tuple(row) for row in duckdb_csv(database, CARE_SQL)],
+        "care_compare_counts": [tuple(row) for row in duckdb_csv(database, CARE_COUNT_SQL)],
         "hai_outcome_counts": [tuple(row) for row in duckdb_csv(database, OUTCOME_COUNT_SQL)],
         "hai_outcome_status": [tuple(row) for row in duckdb_csv(database, OUTCOME_STATUS_SQL)],
         "hai_outcome_status_counts": [tuple(row) for row in duckdb_csv(database, OUTCOME_STATUS_COUNT_SQL)],
@@ -4823,6 +4901,47 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
     return checks
 
 
+def care_compare_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's AL2 rows with their expected values [564] to [575]."""
+    checks: dict[str, bool] = {}
+    blank = ("", "", "", "", "", "")
+
+    def none_before(ccn: str, year: str, *controls: str) -> list[tuple[str, ...]]:
+        return [(ccn, year, control, "no_period_before_start", *blank) for control in controls]
+
+    # [564] [565] The latest period that ends before the start, its age in calendar months; [567] the status says why a
+    # value is missing; [569] C141's spelling maps to one category; [571] [572] the rating from the release before the start,
+    # held when two files on that date disagree; hospitals with no Care Compare row are not_in_source and not listed.
+    checks["care_compare_match_expected"] = base.get("care_compare") == sorted(
+        [
+            ("010001", "2019", "C143", "aligned", "130", "130.0", "", "2018-12-31", "1", "1"),
+            *none_before("010001", "2019", "C119", "C139", "C140", "C141", "C167", "C168", "C284"),
+            ("010001", "2021", "C141", "aligned", "Low", "", "low", "2020-12-31", "1", "1"),
+            ("010001", "2021", "C143", "aligned", "145", "145.0", "", "2020-12-31", "1", "1"),
+            ("010001", "2021", "C284", "aligned", "2", "2.0", "", "2020-07-01", "6", "1"),
+            *none_before("010001", "2021", "C119", "C139", "C140", "C167", "C168"),
+            ("010001", "2025", "C119", "aligned", "80", "80.0", "", "2022-12-31", "25", "1"),
+            ("010001", "2025", "C139", "aligned", "21", "21.0", "", "2022-12-31", "25", "1"),
+            ("010001", "2025", "C140", "aligned", "507", "507.0", "", "2022-12-31", "25", "1"),
+            ("010001", "2025", "C141", "aligned", "Low", "", "low", "2020-12-31", "49", "1"),
+            ("010001", "2025", "C143", "aligned", "152", "152.0", "", "2022-12-31", "25", "1"),
+            ("010001", "2025", "C149", "held_in_staging", "", "", "", "", "", ""),
+            ("010001", "2025", "C167", "aligned", "Yes", "", "", "2023-12-31", "13", "1"),
+            ("010001", "2025", "C168", "aligned", "30", "30.0", "", "2023-12-31", "13", "1"),
+            ("010001", "2025", "C284", "held_in_staging", "", "", "", "2024-01-31", "12", "2"),
+            *none_before("010002", "2019", "C141"),
+            ("010005", "2021", "C143", "held_in_staging", "", "", "", "", "", ""),
+            ("010005", "2021", "C284", "held_in_staging", "", "", "", "2020-10-01", "3", "2"),
+        ]
+    )
+    # [566] Every spine row has one row per control, and the key is unique.
+    counts = base.get("care_compare_counts")
+    row = counts[0] if isinstance(counts, list) and counts else ("", "", "")
+    spine, controls = row[1].split(" x ") if " x " in row[1] else ("0", "0")
+    checks["care_compare_one_row_per_control"] = row[0] == str(int(spine) * int(controls)) == row[2] and int(spine) > 0
+    return checks
+
+
 def outcome_checks(base: dict[str, Any]) -> dict[str, bool]:
     """Compare the base fixture's AL1 outcome rows with their expected values [549] to [556]."""
     checks: dict[str, bool] = {}
@@ -5214,6 +5333,9 @@ def fixture_scenarios() -> dict[str, bool]:
     )
     # [318] to [322] Care Compare windows as for HAI: the latest release wins, conflicts and unparsed dates are held.
     checks["timely_windows_match_expected"] = base.get("timely") == [
+        ("010001", "EDV", "2020-01-01", "2020-12-31", "Low", "", "z6"),
+        ("010001", "OP_18b", "2018-01-01", "2018-12-31", "130", "", "z6"),
+        ("010001", "OP_18b", "2020-01-01", "2020-12-31", "145", "", "z6"),
         ("010001", "OP_18b", "2022-01-01", "2022-12-31", "152", "310", "w2"),
         ("010002", "EDV", "2022-01-01", "2022-12-31", "high", "", "w1"),
     ]
@@ -5228,21 +5350,28 @@ def fixture_scenarios() -> dict[str, bool]:
     checks["cc_holds_match_expected"] = base.get("cc_holds") == [
         ("cms_cc_timely_and_effective_care_hospital", "010001", "SEP_1", "same_date_conflict", "2"),
         ("cms_cc_timely_and_effective_care_hospital", "010003", "SEP_1", "unparsed_date", "1"),
+        ("cms_cc_timely_and_effective_care_hospital", "010005", "OP_18b", "same_date_conflict", "2"),
     ]
     # [323] [325] [326] [327] Registry controls get exactly their named measure; numbers only for plain numbers.
     checks["registry_windows_match_expected"] = base.get("registry") == [
         ("C119", "010001", "2022-01-01", "80", "80.0", ""),
         ("C139", "010001", "2022-01-01", "21", "21.0", ""),
         ("C140", "010001", "2022-01-01", "507", "507.0", ""),
+        ("C141", "010001", "2020-01-01", "Low", "", ""),
         ("C141", "010002", "2022-01-01", "high", "", ""),
+        ("C143", "010001", "2018-01-01", "130", "130.0", ""),
+        ("C143", "010001", "2020-01-01", "145", "145.0", ""),
         ("C143", "010001", "2022-01-01", "152", "152.0", ""),
         ("C167", "010001", "2023-01-01", "Yes", "", ""),
         ("C168", "010001", "2023-01-01", "30", "30.0", ""),
     ]
     # [328] [329] One Hospital General Information row per CCN and file; two files on one release date are both kept.
     checks["hgi_releases_match_expected"] = base.get("hgi") == [
+        ("010001", "2020-07-01", "1", "Acute Care Hospitals", "", "2", "2", "", "z8"),
         ("010001", "2024-01-31", "2", "Acute Care Hospitals", "true", "3", "3", "", "u5"),
         ("010001", "2024-01-31", "2", "Acute Care Hospitals", "true", "4", "4", "", "u1"),
+        ("010005", "2020-10-01", "2", "Acute Care Hospitals", "", "3", "3", "", "z9"),
+        ("010005", "2020-10-01", "2", "Acute Care Hospitals", "", "5", "5", "", "r6"),
         ("010005", "2024-01-31", "2", "Critical Access Hospitals", "false", "", "Not Available", "16", "u1"),
     ]
     # [331] to [338] One row per cost report: fiscal year by the period start, inclusive days, full years by the anniversary,
@@ -5500,6 +5629,7 @@ def fixture_scenarios() -> dict[str, bool]:
     checks.update(validation_checks(base))
     checks.update(program_checks(base))
     checks.update(outcome_checks(base))
+    checks.update(care_compare_checks(base))
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -6072,6 +6202,63 @@ def outcome_real(database: str) -> dict[str, Any]:
     return {"checks": checks, "counts": counts}
 
 
+# AL2 reconciliation [564] to [572]: rows against the spine and the registry, aligned windows and ratings counted
+# independently from the staged windows and releases, and no period on or after the window start.
+CARE_REAL_SQL = """WITH spine AS (SELECT spine_key, ccn, make_date(window_year, 1, 1) AS start FROM int_hospital_spine),
+dated AS (
+    SELECT ccn, release_date, count(DISTINCT coalesce(overall_rating_text, '') || '|' || coalesce(overall_rating_footnote, '')) AS versions
+    FROM int_hgi_hospital_releases WHERE ccn IS NOT NULL GROUP BY ALL
+),
+latest AS (SELECT spine.spine_key, spine.ccn, max(dated.release_date) AS release_date FROM spine JOIN dated
+    ON dated.ccn = spine.ccn AND dated.release_date < spine.start GROUP BY ALL)
+SELECT 'rows', (SELECT count(*) FROM int_spine_care_compare_measures)::VARCHAR,
+    ((SELECT count(*) FROM int_hospital_spine) * (SELECT count(*) FROM registry_measure_sources))::VARCHAR
+UNION ALL SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_care_compare_measures)::VARCHAR,
+    ((SELECT count(*) FROM int_hospital_spine) * (SELECT count(*) FROM registry_measure_sources))::VARCHAR
+UNION ALL SELECT 'aligned_windows', (SELECT count(*) FROM int_spine_care_compare_measures
+    WHERE alignment_status = 'aligned' AND measure_control <> 'C284')::VARCHAR,
+    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, windows.measure_control FROM spine JOIN int_registry_measure_windows AS windows
+        ON windows.entity_id = spine.ccn AND windows.window_end < spine.start))::VARCHAR
+UNION ALL SELECT 'aligned_ratings', (SELECT count(*) FROM int_spine_care_compare_measures
+    WHERE alignment_status = 'aligned' AND measure_control = 'C284')::VARCHAR,
+    (SELECT count(*) FROM latest JOIN dated USING (ccn, release_date) WHERE dated.versions = 1)::VARCHAR
+UNION ALL SELECT 'held_ratings', (SELECT count(*) FROM int_spine_care_compare_measures
+    WHERE alignment_status = 'held_in_staging' AND measure_control = 'C284')::VARCHAR,
+    (SELECT count(*) FROM latest JOIN dated USING (ccn, release_date) WHERE dated.versions > 1)::VARCHAR
+UNION ALL SELECT 'periods_on_or_after_start', (SELECT count(*) FROM int_spine_care_compare_measures
+    WHERE alignment_status = 'aligned' AND period_end >= window_start)::VARCHAR, '0'
+UNION ALL SELECT 'c141_unmapped', (SELECT count(*) FROM int_spine_care_compare_measures WHERE measure_control = 'C141'
+    AND value_text IS NOT NULL AND value_text <> 'Not Available' AND value_category IS NULL)::VARCHAR, '0';"""
+CARE_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_care_compare_measures AS t;"
+
+
+def care_compare_real(database: str) -> dict[str, Any]:
+    """Reconcile the real AL2 rows with the spine, the registry windows and the rating releases; count statuses."""
+    checks: dict[str, bool] = {}
+    counts: dict[str, Any] = {}
+    for name, model, independent in duckdb_csv(database, CARE_REAL_SQL):
+        counts[name] = {"model": int(model), "independent": int(independent)}
+        checks[f"care_compare_{name}_reconcile"] = model == independent
+    counts["alignment_status"] = dict(
+        duckdb_csv(database, "SELECT alignment_status, count(*)::VARCHAR FROM int_spine_care_compare_measures GROUP BY 1 ORDER BY 1;")
+    )
+    counts["aligned_per_year"] = dict(
+        duckdb_csv(
+            database,
+            "SELECT window_year::VARCHAR, count(*) FILTER (WHERE alignment_status = 'aligned')::VARCHAR "
+            "FROM int_spine_care_compare_measures GROUP BY 1 ORDER BY 1;",
+        )
+    )
+    counts["c141_categories"] = dict(
+        duckdb_csv(
+            database,
+            "SELECT coalesce(value_category, coalesce(value_text, 'none')), count(*)::VARCHAR FROM int_spine_care_compare_measures "
+            "WHERE measure_control = 'C141' AND alignment_status = 'aligned' GROUP BY 1 ORDER BY 1;",
+        )
+    )
+    return {"checks": checks, "counts": counts}
+
+
 def validation_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real D1 windows with their staging views' window keys; count rows per control [511] [513]."""
     checks: dict[str, bool] = {}
@@ -6192,6 +6379,7 @@ def real_stage() -> dict[str, Any]:
         )
         outcome[f"{run}_geography_fingerprints"] = {model: fingerprint(database, query) for model, query in GEOGRAPHY_FINGERPRINTS.items()}
         outcome[f"{run}_outcome_fingerprint"] = fingerprint(database, OUTCOME_FINGERPRINT_SQL)
+        outcome[f"{run}_care_compare_fingerprint"] = fingerprint(database, CARE_FINGERPRINT_SQL)
         if run == "real":
             # Free the memory the first build left in Docker's VM before the second build; the catalog starts again [545] [547].
             outcome["docker_release"] = [catalog.release()]
@@ -6219,6 +6407,10 @@ def real_stage() -> dict[str, Any]:
     hai_outcome = outcome_real(database)
     outcome["checks"].update(hai_outcome["checks"])
     outcome["outcome_counts"] = hai_outcome["counts"]
+    outcome["checks"]["care_compare_real_rebuild_identical"] = outcome["real_care_compare_fingerprint"] == outcome["real_again_care_compare_fingerprint"]
+    care_compare = care_compare_real(database)
+    outcome["checks"].update(care_compare["checks"])
+    outcome["al2_care_compare_counts"] = care_compare["counts"]
     validation = validation_real(database, init)
     outcome["checks"].update(validation["checks"])
     outcome["validation_counts"] = validation["counts"]

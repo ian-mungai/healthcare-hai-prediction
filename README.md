@@ -317,6 +317,14 @@ footnote and the SIR's national benchmark category, which `int_hai_hospital_wind
 stays separate; the model target is chosen before training. `int_hai_outcome_values` carries the registry's HAI controls
 (C269 to C283 and C283's children) by the part `dbt/seeds/hai_outcome_measures.csv` names: C269 to C274 as target
 candidates and C275 to C280, the same SIRs, as earlier-outcome forecasting candidates.
+`int_spine_care_compare_measures` (step AL2) has one row per spine hospital-window and Care Compare process or structure
+control in `dbt/seeds/registry_measure_sources.csv` (families S13 to S16). Each control takes the latest measure window
+that ends before the HAI window starts; the overall rating (C284, excluded from the primary predictors) takes the latest
+Hospital General Information release dated before the start, held when two files on that date disagree. Values stay as
+published with their age in months and no age limit. C141's spellings (for example `low` and `Low`) each map to one
+category. A test fails on any new spelling. A control that starts after a window (for example C161 to C173 from
+2024) is kept with the status `no_period_before_start`; the other statuses are aligned, held_in_staging and
+not_in_source.
 
 Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
 visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the

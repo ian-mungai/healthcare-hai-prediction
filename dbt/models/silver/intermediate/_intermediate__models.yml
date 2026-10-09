@@ -1255,6 +1255,40 @@ models:
           - accepted_values:
               arguments:
                 values: [aligned, held_in_staging, not_in_source]
+  - name: int_spine_care_compare_measures
+    description: >
+      AL2: one row per spine hospital-window and Care Compare process or structure control (registry_measure_sources,
+      families S13 to S16). Each control takes the latest measure window that ends before the HAI window starts; the
+      overall rating (C284) takes the latest Hospital General Information release dated before the start, and two files
+      on one date that disagree are held. Values stay as published with each row's age in months; C141's spellings map to
+      one category each. No age limit and no eligibility choice.
+    columns:
+      - name: alignment_key
+        description: Spine key and registry control.
+        data_tests: [unique, not_null]
+      - name: spine_key
+        description: Hospital and window year, as in int_hospital_spine.
+        data_tests: [not_null]
+      - name: measure_control
+        description: Registry control identifier from registry_measure_sources.
+        data_tests: [not_null]
+      - name: value_category
+        description: C141 only; low, medium, high or very high, null for the Not Available token.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [low, medium, high, very high]
+      - name: age_months
+        description: Calendar months from the period end to the window start; kept without a limit.
+      - name: alignment_status
+        description: >
+          aligned; no_period_before_start (the hospital has periods for the control, none ending before the start);
+          held_in_staging (a held window before the start, or two release files that disagree); not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, no_period_before_start, held_in_staging, not_in_source]
   - name: int_hai_outcome_values
     description: >
       HAI registry controls (main-hai-pdc and C283's children) per outcome row and field with a published value, from the
