@@ -1,6 +1,6 @@
 -- One row per primary-care HPSA component as published: designation type, status, score and dates typed (MM/DD/YYYY), the
 -- county code with XXXXX and XXX kept as a token (failure modes 477 to 479). A row identical in every published column to
--- an earlier row of the same file is held as exact_repeat (475, owner decision Oct 7 2026). A reused ID keeps each
+-- an earlier row of the same file is held as exact_repeat (475). A reused ID keeps each
 -- designation apart by its date (476). Status and dates are as published at the capture; nothing builds history here (480).
 {{ config(materialized='table') }}
 

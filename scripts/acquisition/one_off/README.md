@@ -2,7 +2,7 @@
 
 Tools that ran once (or once per run) during the acquisition stage. They read and write records under `data/`, which stays out of Git; the records are the evidence of each run. Run them from the repository root as the usage line in each file says, usually `.venv/bin/python -m scripts.acquisition.one_off.<folder>.<tool>`.
 
-Owner decision, Oct 4 2026: the acquisition stage's source code and dependencies are tracked in the repository; run outputs and datasets stay out. The tools moved here from their `data/` folders on that date. Each file kept its content except path anchors, usage lines and the fixes the repository checks require, such as type hints and reading the owner's address from local Git settings. `data/acquisition_planning/code_moved_20261004.json` maps each old path to its new one.
+The acquisition stage's source code and dependencies are tracked in the repository; run outputs and datasets stay out. The tools came here from their `data/` folders. Each file keeps its run-time content except path anchors, usage lines and the fixes the repository checks require, such as type hints and reading the owner's address from local Git settings. `data/acquisition_planning/code_moved_20261004.json` maps each old path to its new one.
 
 | Folder | Tools | Records |
 | --- | --- | --- |

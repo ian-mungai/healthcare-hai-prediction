@@ -1,4 +1,4 @@
-# Schema-review tool dependencies (scripts/review/), pinned to the wheels verified against PyPI on Oct 1 2026
+# Schema-review tool dependencies (scripts/review/), pinned to the wheels verified against PyPI
 # (.review_dependencies/download_verification.json). Install them into the ignored local folder, exactly this set:
 #   .venv/bin/python -m pip install --no-deps --require-hashes --only-binary=:all: --target .review_dependencies -r requirements-review.txt
 # Then run a review tool with PYTHONPATH=.review_dependencies. cffi, cryptography, pillow and pypdfium2 are pinned to their

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "basis": "Local dataset folders moved into data/datasets/ (owner decision, Oct 4 2026). Records written before the move still name the old paths; read them through this map.",
+  "basis": "Local dataset folders are under data/datasets/. Records written before the move still name the old paths; read them through this map.",
   "moved": {
     "data/historical_acquisition": "data/datasets/historical_acquisition",
     "data/acquisition_batches": "data/datasets/acquisition_batches",

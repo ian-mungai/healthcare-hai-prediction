@@ -1,6 +1,6 @@
 -- One row per HUD ZIP-to-county pair and USPS quarter, with the four address ratios typed. The quarter is the one the
--- capture receipt records. Codes outside the states, DC and territories go to int_hud_zip_county_holds instead (approved
--- Oct 1 2026). Connecticut is kept and flagged. Each ratio type keeps its own denominator; has_residential_addresses is
+-- capture receipt records. Codes outside the states, DC and territories go to int_hud_zip_county_holds instead.
+-- Connecticut is kept and flagged. Each ratio type keeps its own denominator; has_residential_addresses is
 -- false for a ZIP whose residential ratios are all 0, which gets no residential county (failure modes 400 to 407).
 {{ config(materialized='table') }}
 

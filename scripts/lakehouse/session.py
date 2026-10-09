@@ -16,7 +16,7 @@ def job_memory() -> str:
     """Return the heap the host computed for this job from the running containers; there is no default [488].
 
     ``scripts/lakehouse/catalog.py`` computes it with ``scripts/lakehouse/memory_budget.py`` before the container starts
-    (owner decision, Oct 7 2026: memory is shared by every project's containers and never hardcoded).
+    (memory is shared by every project's containers and never hardcoded).
     """
     value = os.environ.get("SPARK_JOB_MEMORY", "")
     if not HEAP.fullmatch(value):

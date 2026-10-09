@@ -54,11 +54,11 @@ NAMED_YEAR_TABLES = ("saipe_text_lines", "sahie", "cms_mmd_csv")
 NAMED_YEAR_FILES = {"saipe_text_lines": SAIPE_FILE, "sahie": SAHIE_FILE, "cms_mmd_csv": MMD_FILE}
 CAPTURE_TABLES = ("bls_laus", "hrsa_hpsa_detail", "hrsa_mua_detail")
 TEMPORAL = re.compile(r'"catalog_temporal": "(\d{4}-\d{2}-\d{2})/(\d{4}-\d{2}-\d{2})"')
-# Reviewed Oct 6 2026 against each file's published name and, where present, its year-bearing headers (RUCC_2013,
+# Reviewed against each file's published name and, where present, its year-bearing headers (RUCC_2013,
 # Primary RUCA Code 2010, countyfips20). Two vintages in one workbook are listed together.
 REVIEWED_VINTAGES: dict[tuple[str, str], str] = {
     ("county_adjacency", "county_adjacency2023.txt"): "2023",
-    # Its only rows are 2023 data (inspection of Oct 7 2026); the name carries no year.
+    # Its only rows are 2023 data (by inspection); the name carries no year.
     ("cms_mmd_csv", "mmd_data.csv"): "2023",
     ("county_adjacency", "county_adjacency2024.txt"): "2024",
     ("county_adjacency", "county_adjacency2025.txt"): "2025",

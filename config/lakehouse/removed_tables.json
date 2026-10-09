@@ -4,17 +4,17 @@
     {
       "table": "hrsa_shortage_documents_csv",
       "reason": "It held BCD_HPSA_FCT_DET_PC.csv and MUA_DET.csv as document rows while their manifests named them dictionaries. Corrected manifests give both files the data role, so they load into hrsa_hpsa_detail and hrsa_mua_detail, and no file selects this table (BRZ-011).",
-      "decision": "Owner decision, Oct 4 2026: remove it, take it out of the table list and drop it, test first."
+      "decision": "Remove it, take it out of the table list and drop it, test first."
     },
     {
       "table": "cms_hai_columns",
       "reason": "Left by the first HAI loader, before the manifest-driven loader (BRZ-001) moved the HAI headers into column_map. It is not in the table map and no code reads it. It held column headers, no data values, for 105 HAI objects, 20 of them deleted from S3.",
-      "decision": "Owner decision, Oct 5 2026: drop it, test first."
+      "decision": "Drop it, test first."
     },
     {
       "table": "hcai_finance_documents_sheets",
       "reason": "All 4 of its inputs (HCAI label workbooks) were deleted from S3 on Sep 28, so the table was never created and no stored file selects it.",
-      "decision": "Owner decision, Oct 5 2026: take it out of the table map, test first."
+      "decision": "Take it out of the table map, test first."
     }
   ]
 }

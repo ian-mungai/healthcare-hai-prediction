@@ -26,7 +26,7 @@ from scripts.lakehouse.bronze import RETIRED, BronzeError
 from scripts.lakehouse.catalog import deployment
 
 # The deletion runs that removed objects from S3, kept locally with their verification results: the privacy deletion
-# and the duplicate removal of Oct 4 2026 (failure mode 212).
+# and the duplicate removal (failure mode 212).
 DELETION_RECORDS = ("data/privacy_review/*/deletion_run_*_execute.json", "data/lakehouse_planning/dedup_*/deletion_run_*_execute.json")
 
 
@@ -82,8 +82,8 @@ def main() -> int:
     document = {
         "version": 1,
         "basis": (
-            "Objects removed from S3 that storage manifests still list: the Sep 28 2026 privacy deletion (BRZ-012) and the "
-            "Oct 4 2026 removal of byte-identical duplicates (failure mode 212)."
+            "Objects removed from S3 that storage manifests still list: the privacy deletion (BRZ-012) and the "
+            "removal of byte-identical duplicates (failure mode 212)."
         ),
         "collections": sorted(set(args.collection)),
         "objects": entries,

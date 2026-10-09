@@ -23,9 +23,9 @@ htmlcov/
 .enjoy-logs/
 # The issue register is local-only and never enters Git.
 /docs/issue_register.md
-# The local copy of the project guide is local-only; the agent-instructions bundle holds the source.
+# The project guide is local-only.
 /docs/project_guide.md
-# Plans (analysis, implementation and gap plans) stay local and are never committed (agent-instructions v8.18.0).
+# Plans (analysis, implementation and gap plans) stay local and are never committed.
 /plans/
 
 # macOS
@@ -44,9 +44,8 @@ mlruns/
 !dbt/seeds/*.csv
 *.jsonl
 
-# Data collection code, configuration and tests were ignored until the end of the data collection
-# stage (user decision, Sep 26 2026). They are no longer ignored so CI can run the acquisition
-# checks (user decision, Sep 29 2026); collected data stays under the ignored data/ folder.
+# Data collection code, configuration and tests are tracked so CI can run the acquisition checks;
+# collected data stays under the ignored data/ folder.
 
 # Terraform: state and plans stay local; the .terraform.lock.hcl files are committed
 .terraform/

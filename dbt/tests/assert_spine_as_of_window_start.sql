@@ -1,5 +1,5 @@
 -- Fails for each spine row whose POS snapshot does not end in the 12 months before the window or whose CMI is not for the
--- fiscal year before the window year: every predictor is as of the window start (owner decision, Oct 5 2026) [308] to [310].
+-- fiscal year before the window year: every predictor is as of the window start [308] to [310].
 select
     ccn,
     window_year,

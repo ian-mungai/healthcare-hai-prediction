@@ -1,5 +1,5 @@
 -- One row per county, SVI edition and published field, long: every field the edition publishes except the place and
--- shape identifiers, under its published name. -999 is null with the token kept (approved Oct 1 2026). The edition comes
+-- shape identifiers, under its published name. -999 is null with the token kept. The edition comes
 -- from the capture receipt. The 2000 edition's second header row, which names each field, has no county code and is left
 -- out (failure modes 427 to 431).
 {{ config(materialized='table') }}

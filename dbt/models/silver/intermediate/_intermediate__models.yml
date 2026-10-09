@@ -182,13 +182,13 @@ models:
       - name: is_active
         description: True when the termination code is 00.
       - name: is_state_or_dc
-        description: True for the 50 states and DC, the approved universe.
+        description: True for the 50 states and DC, the project universe.
         data_tests: [not_null]
       - name: is_connecticut
-        description: True for Connecticut, which stays out of county-level joins (Oct 1 2026).
+        description: True for Connecticut, which stays out of county-level joins.
         data_tests: [not_null]
       - name: is_critical_access_by_ccn
-        description: True when CCN positions 3 and 4 are 13 (approved addition to Decision 4).
+        description: True when CCN positions 3 and 4 are 13 (part of Decision 4).
         data_tests: [not_null]
       - name: is_veterans_affairs
         description: True when the CCN ends in F, a Veterans Health Administration hospital, excluded from the primary model.
@@ -300,10 +300,10 @@ models:
   - name: int_hospital_spine
     description: >
       One row per hospital (CCN) and calendar-year HAI window (2018, 2019 and 2021 to 2024 in the stored releases), as of
-      the window start (owner decision, Oct 5 2026): the POS snapshot that ends in the 12 months before the window, the CMI
+      the window start: the POS snapshot that ends in the 12 months before the window, the CMI
       of the fiscal year that ends before it and the population flags (failure modes 306 to 317). Primary population:
       a CMI, a POS state in the 50 states and DC, no Veterans Health Administration, no critical access and no Maryland
-      hospital (Maryland is paid under its own all-payer model; owner decision, Oct 5 2026). The sensitivity population
+      hospital (Maryland is paid under its own all-payer model). The sensitivity population
       adds critical access and Maryland hospitals. Connecticut stays in both and is flagged for county joins.
     columns:
       - name: spine_key
@@ -403,7 +403,7 @@ models:
   - name: int_cost_reports
     description: >
       One row per hospital cost report (HCRIS public use file, registry family S01), assigned to the federal fiscal year in
-      which the report period starts (Decision 2, approved Oct 1 2026; failure modes 331 to 338). Every report stays, with the
+      which the report period starts (Decision 2; failure modes 331 to 338). Every report stays, with the
       number of reports of its CCN in that fiscal year; the alignment step chooses between them. Amounts are typed and never
       scaled to 365 days. ZIP is the first 5 digits of a 5-digit ZIP, a ZIP with one trailing hyphen or a hyphenated ZIP+4,
       else null with zip_code_raw kept; rural_urban is urban for U, rural for R, else null with the raw code kept.
@@ -743,7 +743,7 @@ models:
   - name: int_hud_zip_county_holds
     description: >
       HUD rows removed from int_hud_zip_county_quarters because their code is not a county (two-digit island codes and
-      99999), approved Oct 1 2026. Kept so typed plus held rows equal the bronze rows.
+      99999). Kept so typed plus held rows equal the bronze rows.
     columns:
       - name: hud_row_key
         description: File checksum and source row number.
@@ -990,7 +990,7 @@ models:
   - name: int_places_county_values
     description: >
       PLACES county values per release, data year, measure and value type, 2020 to 2025 releases. is_all_states marks the
-      measure-years that cover all 50 states and DC, the only ones the approved rule allows. Rows without a county code
+      measure-years that cover all 50 states and DC, the only ones the project uses. Rows without a county code
       are not typed. PLACES controls C203 to C243, conditional; C242.02 held for definition.
     columns:
       - name: places_row_key
@@ -1076,7 +1076,7 @@ models:
       - name: value_unit
         description: percent, or per_100000 for C258.78.
       - name: is_possible_suppression
-        description: The published value is zero, which MMD may use for a suppressed small numerator (approved Oct 1 2026).
+        description: The published value is zero, which MMD may use for a suppressed small numerator.
         data_tests: [not_null]
       - name: is_unknown_county
         description: A county row without a county name (codes ending 990).

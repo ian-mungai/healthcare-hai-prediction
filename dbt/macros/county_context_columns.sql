@@ -1,5 +1,5 @@
 {% macro acs_tables() %}
-{#- The ACS export and summary tables C2 types (owner decision Oct 7 2026: vintages 2010 to 2024) [420]. -#}
+{#- The ACS export and summary tables C2 types (vintages 2010 to 2024) [420]. -#}
 {{ return(['acs_dp02', 'acs_dp03', 'acs_dp04', 'acs_dp05', 'acs_s0101', 'acs_s0601', 'acs_s1701', 'acs_s2503', 'acs_s2701',
     'acs_b16005', 'acs_b19013', 'acs_b25070', 'acs_b25091', 'acs_b26001', 'acs_c16001', 'acs_summary_b16005',
     'acs_summary_b19013', 'acs_summary_b25070', 'acs_summary_b25091', 'acs_summary_b26001', 'acs_summary_c16001']) }}

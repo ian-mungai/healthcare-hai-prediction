@@ -4,7 +4,7 @@
 {% endmacro %}
 
 {% macro validation_reviewed_values() %}
-{#- Published values reviewed by the owner that stay text with no number (Oct 8 2026) [519]. -#}
+{#- Published values reviewed by the owner that stay text with no number [519]. -#}
 ('24.083333333333(23)')
 {% endmacro %}
 

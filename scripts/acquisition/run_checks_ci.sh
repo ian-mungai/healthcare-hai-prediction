@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GitHub CI entry for the acquisition checks (user decision, Oct 5 2026): they run only when the pushed range changes a
+# GitHub CI entry for the acquisition checks: they run only when the pushed range changes a
 # path the local acquisition-checks hook watches. pre-commit applies that hook's own files pattern, so CI and the local
 # hook share one path list. Without a usable range (manual run, first push of a branch, rewritten history), every check
 # runs. E2E: bash scripts/acquisition/run_checks_ci_e2e.sh

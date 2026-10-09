@@ -1,5 +1,5 @@
 -- Fails for each published SIR outside its published bounds, or more than 0.0015 from observed / predicted when both
--- counts are published (every real calendar-year SIR agrees, Oct 8 2026) [553].
+-- counts are published (every real calendar-year SIR agrees) [553].
 select
     outcome_key,
     sir,

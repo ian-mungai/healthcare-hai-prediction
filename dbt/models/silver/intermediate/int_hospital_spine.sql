@@ -1,4 +1,4 @@
--- One row per hospital (CCN) and calendar-year HAI window, as of the window start (owner decision, Oct 5 2026): the POS
+-- One row per hospital (CCN) and calendar-year HAI window, as of the window start: the POS
 -- snapshot that ends in the 12 months before the window, the CMI of the fiscal year that ends before it and the model
 -- population flags (failure modes 306 to 316).
 {{ config(materialized='table') }}
@@ -126,7 +126,7 @@ joined as (
 )
 
 -- Primary: IPPS hospitals with a CMI in the 50 states and DC, without Veterans Health Administration or critical access
--- hospitals (Oct 1 2026) and without Maryland, which is paid under its own all-payer model (Oct 5 2026). The sensitivity
+-- hospitals and without Maryland, which is paid under its own all-payer model. The sensitivity
 -- run adds critical access and Maryland hospitals [313] [317]. Connecticut stays in both [316].
 select
     *,

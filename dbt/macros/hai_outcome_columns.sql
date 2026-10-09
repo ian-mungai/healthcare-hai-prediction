@@ -16,12 +16,12 @@
 {% endmacro %}
 
 {% macro hai_outcome_tokens() %}
-{#- The published marks for an HAI value that is not given (real calendar-year windows, Oct 8 2026) [551]. -#}
+{#- The published marks for an HAI value that is not given (all marks in the real calendar-year windows) [551]. -#}
 ('Not Available', '--', 'N/A')
 {% endmacro %}
 
 {% macro hai_baseline_reviewed_through() %}
-{#- The last release reviewed as 2015-baseline (schema review, Oct 1 2026; latest stored release Aug 13 2026). A later
+{#- The last release reviewed as 2015-baseline (schema review; the latest stored release is Aug 13 2026). A later
     release is held until it is reviewed, so 2022-baseline SIRs never join the series [554]. -#}
 date '2026-08-13'
 {% endmacro %}

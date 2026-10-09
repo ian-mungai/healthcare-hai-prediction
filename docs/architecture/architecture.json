@@ -452,7 +452,7 @@
         "Ruff, MyPy, SQLFluff, secret scan, repository and cleanup checks",
         "Terraform plans are tested with a mock provider; tflint, checkov, trivy",
         "E2E runs leave repeatable artifacts under data/e2e",
-        "Diagram checked against commit e4e7aae; every component cites its source lines"
+        "Every component cites the source lines it was checked against"
       ]
     },
     {

@@ -5,8 +5,7 @@ Predicting hospital healthcare-associated infection rates from public CMS, Censu
 Hospital-acquired infection prediction research for a data engineer. This fresh
 repository builds on the capstone concept, not its implementation. Same-period
 prediction is primary: a hospital's infection score for a window is predicted from
-measures whose measured period ends before that window starts (owner decision,
-October 8 2026). Forecasting later windows is a later extension. Acquisition and S3
+measures whose measured period ends before that window starts. Forecasting later windows is a later extension. Acquisition and S3
 storage precede comprehensive schema review and tutorial drafting. Availability
 does not establish clinical validity or model eligibility.
 
@@ -38,8 +37,8 @@ secret or personal value in this repository to the repository owner privately.
 
 The project asks whether a hospital's infection score can be predicted from
 public measures known as of the window start and why a simpler earlier model explained little
-of the variation. Approved collection is complete and its code is committed
-(`3af1abb`); acquisition closeout is pending the final publisher redownload (run 3)
+of the variation. Collection is complete and its code is in this repository;
+acquisition closeout is pending the final publisher redownload (run 3)
 and confirmed disposal of personal originals. Public sources are collected
 through publisher APIs first, then download URLs, into private versioned S3
 storage with a receipt, hash and version readback for every object. The bronze
@@ -62,8 +61,7 @@ diagram shows what is built and what is planned.
 Prerequisites: macOS on Apple silicon or Linux AMD64, Python 3.12, Git,
 Terraform 1.16.1 and AWS CLI v2. Node.js 18 or later and Google Chrome render the
 architecture diagram.
-The lakehouse runs in Docker Desktop (32 GiB of memory on the development Mac in
-October 2026). Every job launch computes one resource plan after the catalog services
+The lakehouse runs in Docker Desktop (32 GiB of memory on the development Mac). Every job launch computes one resource plan after the catalog services
 start. Its container limit is the smaller of Docker's total minus running containers'
 use minus 8 GiB headroom and the Mac's free, file-backed and purgeable memory minus
 2 GiB, plus the memory Docker's VM already holds that no running container uses, less a
@@ -291,8 +289,8 @@ capture date as the revision vintage. `.` and `-` stay as missing marks. `dbt/se
 SAIPE, SAHIE and BLS registry controls.
 
 PLACES county values keep their release, data year, measure and crude or age-adjusted type (`int_places_county_values`);
-`is_all_states` marks the measure-years whose county rows cover all 50 states and DC, the only ones the approved rule
-allows. The 2020 release has no county codes and is not typed. Medicare Geographic Variation county values are staged
+`is_all_states` marks the measure-years whose county rows cover all 50 states and DC, the only ones the project
+uses. The 2020 release has no county codes and is not typed. Medicare Geographic Variation county values are staged
 long for the All age level with `*` kept as a token (`int_gv_county_values`). WONDER deaths and crude rates keep their
 database, bridged race (1999 to 2020) or single race (2018 to 2024), with their Suppressed, Unreliable, Missing and Not
 Available marks (`int_wonder_county_deaths`); the 2024 rows repeated identically in the shorter single-race export are
@@ -315,7 +313,7 @@ C. difficile): the published SIR, its bounds, the observed and predicted counts 
 with tokens kept as text and the SIR footnote codes. No SIR is computed from the counts. A part from a release after the
 last 2015-baseline review (August 13 2026) is held and counted, so 2022-baseline SIRs never join the series; a part
 held in staging is counted too. Each row has an alignment status (aligned, held_in_staging, not_in_source), every part's
-footnote and the SIR's national benchmark category, which `int_hai_hospital_windows` now keeps as published. Each type
+footnote and the SIR's national benchmark category, which `int_hai_hospital_windows` keeps as published. Each type
 stays separate; the model target is chosen before training. `int_hai_outcome_values` carries the registry's HAI controls
 (C269 to C283 and C283's children) by the part `dbt/seeds/hai_outcome_measures.csv` names: C269 to C274 as target
 candidates and C275 to C280, the same SIRs, as earlier-outcome forecasting candidates.
@@ -368,8 +366,7 @@ retain the ignored local documentation review record (see [Quality Checks](#qual
 
 The diagram source is `docs/architecture/architecture.json`, drawn with
 [Archify](https://github.com/tt-a1i/archify) v3.0.1. Each component cites the
-lines of code or configuration it was checked against, at the commit named in
-the JSON. Its `finalize` command validates the JSON, writes
+lines of code or configuration it was checked against. Its `finalize` command validates the JSON, writes
 `docs/architecture/architecture.html` and checks it in Chrome; the PNG is
 rendered from the HTML with headless Chrome. Planned components are listed in
 the "Planned (not built)" card. With Archify unpacked at `<archify>`:
@@ -388,37 +385,36 @@ ARCHIFY_UPDATE_CHECK_DISABLED=1 node <archify>/bin/archify.mjs finalize architec
 
 Published hospital-level datasets are public reference data subject to their
 source terms. Public availability does not remove personal-data safeguards.
-Any specifically approved source containing personal names or contact details
+Any source containing personal names or contact details
 is classified as Confidential and requires a documented ingestion exception.
 
-For the approved HCAI exception, the untouched download stays local with
+For the HCAI exception, the untouched download stays local with
 owner-only access. Only the privacy-filtered derivative and non-personal
 references or provenance may enter the project's private S3 storage. The
 derivative remains under privacy and modeling review; redaction does not
 establish formal anonymization or clinical validity. Raw retention duration
-remains unresolved. FileVault was verified at commit `a1b758a`; that host check
+remains unresolved. The development Mac uses FileVault; that host check
 does not establish compliance or resolve retention requirements.
 
-The data bucket carries its own `DataClassification` tag of Confidential
-(project decision, commit `c143cbc`). Redacted derivatives are not formally
+The data bucket carries its own `DataClassification` tag of Confidential.
+Redacted derivatives are not formally
 anonymized. Hospital chief executives in HCAI annual financial files and state
 officials' work contacts in a CMS contacts table are treated as Confidential:
-originals stay local and only redacted copies belong in S3. The initial 218
-Excel/contact versions were removed before commit `f9ef312`. Redacted replacements for
-75 further versions are stored; those originals were deleted and verified before
-that commit. Retirement records cover all 293 removed versions, storage
-reconciliation passed and the temporary deletion grant was removed.
+originals stay local and only redacted copies belong in S3. S3 holds no
+Excel or contact originals: 293 such versions were removed, 75 of them replaced by
+redacted copies. Retirement records cover all 293, storage reconciliation passes
+and no deletion grant remains.
 Operational evidence stays in ignored local
 folders; this status does not clear privacy or modeling holds. The project no
 longer uses the HRSA Area Health Resources Files: their license limits sharing
 the data with third parties, so the five measures built on them were dropped and
-all 399 stored versions were deleted and verified before commit `f9ef312`.
+all 399 stored versions were deleted and verified.
 
 Tests use generic synthetic data. Real personal values must never appear in
 fixtures, logs, tutorials, published artifacts or commits. Acquisition inputs,
 operational evidence and the detailed exception record remain untracked.
 
-The explicitly approved live S3 verification tool is the sole opt-in exception
+The live S3 verification tool is the sole opt-in exception
 to synthetic-only verification. Normal CI does not run it or contact AWS.
 
 **Bronze lakehouse.** Bronze loads one copy of every stored data file as published, every value as text:
@@ -434,7 +430,7 @@ columns with counts and the publisher's description or published type where a st
 Compare dictionaries give types only. Bronze does not load:
 
 - objects removed from S3, which the manifests still list (`config/lakehouse/retired_objects.json`, keys, versions and
-  checksums only): the privacy deletion and, on Oct 4 2026, 2,193 byte-identical duplicate versions, each with a kept
+  checksums only): the privacy deletion and 2,193 byte-identical duplicate versions, each with a kept
   twin verified first;
 - other copies of a file already loaded, which `bronze.stored_copies` lists;
 - a Care Compare contacts file that names state staff;
@@ -449,7 +445,7 @@ collected and how to recheck it, including the named manual data steps: terms
 acceptance, API accounts and the browser downloads (CMS Mapping Medicare
 Disparities exports, Census table exports, CDC WONDER county mortality exports
 and the 2010–2020 HUD ZIP-to-county workbooks). Its commands need the acquisition code in `scripts/acquisition/`
-and `config/acquisition/`, tracked in Git since commit `3af1abb`. Registry revision 2 preserves exact legacy fingerprints for historic replay;
+and `config/acquisition/`, both tracked in Git. Registry revision 2 preserves exact legacy fingerprints for historic replay;
 its private legacy archive stays outside Git. The bounded publisher redownload (run 3) remains the final verification.
 
 ## Quality Checks
@@ -621,37 +617,34 @@ bash scripts/infrastructure/terraform.sh --iam --admin-profile <administrator_pr
 ```
 
 Terraform state stays local in each stack folder and is never committed.
-Remote state protection remains deferred until the end of the project as
-requested.
+Remote state protection is deferred until the end of the project.
 
 **Teardown.** The data bucket is the project's persistent store of immutable
-source data, not a demo stack, so it has no destructive teardown switch
-(project exception, commit `c143cbc`). `force_destroy` is false and
+source data, not a demo stack, so it has no destructive teardown switch.
+`force_destroy` is false and
 `prevent_destroy` is set; removing the bucket would need a separately reviewed
 change that lifts both protections first. The bucket keeps its established name
 rather than the `<project>-<component>-<environment>` pattern, because renaming
-it would mean moving all stored data (project exception, commit `c143cbc`).
+it would mean moving all stored data.
 
 **Environments.** Both stacks tag resources with `Environment = dev`. A `prod`
 environment and an `infra/modules/` layout are deferred until the next
-infrastructure component is added (project decision, commit `c143cbc`).
+infrastructure component is added.
 
-**Lifecycle rules.** The bucket-wide rule, applied and read back from S3 at
-commit `a1b758a`, aborts incomplete multipart uploads seven days after
+**Lifecycle rules.** The bucket-wide rule, applied and read back from S3, aborts incomplete multipart uploads seven days after
 initiation, with no expiration or transition of completed objects, historical
 versions or delete markers. One exception covers only `lakehouse/`, where
 Iceberg replaces and deletes its own table files: replaced versions there expire
 30 days after they are replaced and orphaned delete markers are removed; current
-lakehouse files and everything outside `lakehouse/` never expire (owner decision). Local mock-plan tests, source-shape checks and live
+lakehouse files and everything outside `lakehouse/` never expire. Local mock-plan tests, source-shape checks and live
 configuration readback pass. The seven-day scheduler itself has not been
 observed in a timed test and no deliberately incomplete upload was created for
 verification.
 
-Pre-deployment inspection confirmed no existing lifecycle configuration. The
-separately approved IAM plan added only bucket-scoped
-`s3:PutLifecycleConfiguration`; the approved storage plan created only the
-cleanup rule. IAM administration was used only for the policy update, while
-storage deployment used the project profile. This permission can change the
+The project's IAM policy grants only bucket-scoped
+`s3:PutLifecycleConfiguration` for lifecycle changes; the storage stack
+holds only the rules above. IAM administration is used only for policy updates;
+storage deployment uses the project profile. This permission can change the
 bucket's entire lifecycle configuration, so future changes still require full
 plan review and preservation of existing rules. Private plans and live
 verification evidence remain untracked under
@@ -660,7 +653,7 @@ verification evidence remain untracked under
 **Deferred controls.** Apply the project's engineering requirements when
 development reaches the relevant stage. Future requirements guide later work;
 deferral does not mean a control is implemented. The following
-acquisition-stage deferrals are approved for `aws_s3_bucket.data` only. Checkov
+acquisition-stage deferrals apply to `aws_s3_bucket.data` only. Checkov
 and trivy evidence retain each exception, resource and reason.
 
 | Deferred control | Reason | Review trigger |
@@ -668,9 +661,9 @@ and trivy evidence retain each exception, resource and reason.
 | Event notifications (`CKV2_AWS_62`) | No event consumer exists. | Implementing an event consumer. |
 | Cross-region replication (`CKV_AWS_144`) | Recovery objectives and a destination are not established. | Recovery design, before production. |
 | KMS (`CKV_AWS_145`, trivy `AWS-0132`) | Acquisition uses SSE-S3/AES256. | Coordinated ingestion and IAM migration, before production. |
-| Access logging (`CKV_AWS_18`, trivy `AWS-0089`) | Approved acquisition-stage deferral of a separate logging destination; request-audit gap accepted for this stage. | Before additional user or service access, production or newly approved sensitive-data use. |
+| Access logging (`CKV_AWS_18`, trivy `AWS-0089`) | Acquisition-stage deferral of a separate logging destination; the request-audit gap is accepted for this stage. | Before additional user or service access, production or new sensitive-data use. |
 
-Access logging was explicitly deferred at commit `a1b758a`. Acquisition
+Acquisition
 receipts establish pipeline provenance, not an independent record of every
 bucket request. Review CloudTrail data events alongside server access logging
 when a review trigger is reached. Server access logs are best-effort, not a
@@ -705,10 +698,9 @@ No AWS changes implementing these four deferred controls have been applied.
   runner and the bronze and staging E2E; the table map, the retired and removed lists and the reviewed label overrides.
 - `services/`, `docker-compose.yaml`: the Polaris catalog, Spark job and DuckDB analytics containers.
 - `scripts/acquisition/`, `config/acquisition/`: collectors, storage checks, E2E suites and their locked plans and
-  registry. Committed at commit `3af1abb` with full documentation of the collection process
-  at the end of the data collection stage; collected data and audit evidence stay in the ignored `data/` folder.
+  registry, documented in `docs/data_collection.md`; collected data and audit evidence stay in the ignored `data/` folder.
   `scripts/acquisition/one_off/` holds tools that ran once, such as queue builders and the privacy and duplicate
-  deletions, moved there from `data/` on Oct 4 2026; their run records stay in `data/`.
+  deletions; their run records stay in `data/`.
   No tutorial files are added to this repository.
 
 ## Limitations

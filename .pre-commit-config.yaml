@@ -148,9 +148,8 @@ repos:
         files: ^(scripts/(process|quality/(documentation_review|run_documentation_review_e2e|run_checks_e2e))\.py|\.pre-commit-config\.yaml)$
       - id: acquisition-checks
         # 12-14 minutes, so it runs only when acquisition code, configuration or their dependencies change
-        # (user decision, Sep 29 2026). GitHub CI runs it in its own job, so it stays out of the full set (user
-        # decision, Oct 1 2026); that job reads this files pattern through scripts/acquisition/run_checks_ci.sh, so
-        # it runs for the same paths, plus the CI workflow that runs it (user decision, Oct 5 2026). Run it directly
+        # GitHub CI runs it in its own job, so it stays out of the full set; that job reads this files pattern through
+        # scripts/acquisition/run_checks_ci.sh, so it runs for the same paths, plus the CI workflow that runs it. Run it directly
         # before a release: bash scripts/acquisition/run_checks.sh
         name: Acquisition lint, types, registry and offline E2E suites with the 90% coverage gate
         entry: bash scripts/acquisition/run_checks.sh

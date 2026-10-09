@@ -97,7 +97,7 @@ run "private_versioned_storage" {
 
 # Preparation only: mocked plans cannot verify AWS scheduling, permissions or existing remote rules.
 # Guard missing/duplicate/disabled rules, wrong bucket/delay/filter and accidental object expiry or transition.
-# Owner decision, Oct 2 2026: replaced Iceberg file versions under lakehouse/ expire after 30 days; nothing else ever does.
+# Replaced Iceberg file versions under lakehouse/ expire after 30 days; nothing else ever does.
 # The provider computes the bucket-wide filter prefix and the expiration days and date only at apply, so a mocked plan
 # cannot read them; the saved real plan is checked for them before any apply.
 run "lifecycle_cleanup_rules" {

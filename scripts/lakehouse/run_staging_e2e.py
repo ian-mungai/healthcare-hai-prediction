@@ -5205,7 +5205,7 @@ def fixture_scenarios() -> dict[str, bool]:
             ("070001", "2021", "2020-12-31", "CT", "09001", "1.5", "2020", "2023", "proposed")
             + ("true", "true", "false", "false", "false", "true", "true", "true", "true"),
             ("990001", "2021", "2020-12-31", "CN", "") + no_cmi + ("true", "false", "false", "false", "false", "false", "false", "false", "false"),
-            # Maryland: a CMI, but out of the primary population and in the sensitivity run (owner decision, Oct 5 2026) [317].
+            # Maryland: a CMI, but out of the primary population and in the sensitivity run [317].
             ("210001", "2021", "2020-12-31", "MD", "24005", "1.8", "2020", "2023", "proposed")
             + ("true", "true", "false", "false", "false", "true", "false", "false", "true"),
             ("010001", "2025") + no_pos[:3] + no_cmi + ("false", "false", "false", "false", "false", "false", "false", "false", "false"),
@@ -5768,7 +5768,7 @@ def mup_seed_matches() -> bool:
 
 
 # Ordered fingerprints of every C1 model, compared between the two real builds [418]. Each row is hashed before the ordered
-# aggregate, so an 11.9 million-row model needs about 0.4 GB, not one string of every row (Oct 8 2026, failure mode 544).
+# aggregate, so an 11.9 million-row model needs about 0.4 GB, not one string of every row (failure mode 544).
 GEOGRAPHY_FINGERPRINTS = {
     "int_hud_zip_county_quarters": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY hud_row_key)) FROM int_hud_zip_county_quarters AS t;",
     "int_hud_zip_county_holds": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY hud_row_key)) FROM int_hud_zip_county_holds AS t;",

@@ -8,12 +8,12 @@ Run from the repository root with Docker running:
     .venv/bin/python -m scripts.lakehouse.memory_budget --launch  # container bytes, DuckDB, Spark, CPU count
     .venv/bin/python -m scripts.lakehouse.memory_budget --launch-json  # the same plan with its evidence
 
-Owner decision (Oct 7 2026): memory is shared across every project's containers, so no limit is hardcoded. The limit is
+Memory is shared across every project's containers, so no limit is hardcoded. The limit is
 the smaller of Docker's total memory minus what every running container uses at that moment minus a fixed headroom, and
 the memory the Mac can give without swapping (vm_stat free, file-backed and purgeable pages) minus its own headroom; the
-Mac cap is skipped once the Docker VM already holds all of Docker's memory (bundle v8.18.0, infrastructure.md item 3).
-Memory the VM already holds and no running container uses counts toward the Mac figure, less a VM base (owner, Oct 8
-2026): a build that follows another can reuse it without the Mac swapping.
+Mac cap is skipped once the Docker VM already holds all of Docker's memory.
+Memory the VM already holds and no running container uses counts toward the Mac figure, less a VM base:
+a build that follows another can reuse it without the Mac swapping.
 The container gets that budget. DuckDB gets 80%, rounded down to whole gigabytes (GB). Spark gets whole gibibytes (g),
 leaving its existing JVM overhead. The 4 GiB floor applies to the container, not the smaller engine budget.
 A budget below the floor, an unreadable Docker or an
@@ -33,20 +33,20 @@ from dataclasses import dataclass
 from scripts.process import run_command
 
 GIB = 1024**3
-# Room for the dbt process itself, DuckDB's overshoot of its limit and the Docker VM [463]. Measured Oct 7 2026: a 30 GB
+# Room for the dbt process itself, DuckDB's overshoot of its limit and the Docker VM [463]. Measured: a 30 GB
 # limit beside 5 GB of other containers was killed on a 37.8 GB VM, so the build overshot its limit by more than 2.7 GB.
 HEADROOM = 8 * GIB
-# Room left for macOS when the Mac's own free memory caps the limit (owner, Oct 8 2026) [493].
+# Room left for macOS when the Mac's own free memory caps the limit [493].
 MAC_HEADROOM = 2 * GIB
-# The Docker VM's own resident memory with no container running: 1.9 GiB after a restart, Oct 8 2026 [543].
+# The Docker VM's own resident memory with no container running: 1.9 GiB after a restart [543].
 VM_BASE = 2 * GIB
 # Container floor; the engine receives less because some allocations bypass its memory setting [466] [497] [527].
 FLOOR = 4 * GIB
 VM_PROCESS = "com.apple.Virtualization.VirtualMachine"
 VM_STAT_PAGE = re.compile(r"page size of (\d+) bytes")
 VM_STAT_COUNTED = ("Pages free", "File-backed pages", "Pages purgeable")
-# Spark's documented driver overhead outside the heap: the larger of 10% of the heap or 384 MiB (owner fix for LKH-001,
-# Oct 7 2026: the heap is the budget minus the JVM's own overhead) [492].
+# Spark's documented driver overhead outside the heap: the larger of 10% of the heap or 384 MiB (fix for LKH-001;
+# the heap is the budget minus the JVM's own overhead) [492].
 SPARK_OVERHEAD_FACTOR = 0.10
 SPARK_MIN_OVERHEAD = 384 * 1024**2
 UNITS = {"B": 1, "KB": 1000, "KIB": 1024, "MB": 1000**2, "MIB": 1024**2, "GB": 1000**3, "GIB": 1024**3, "TB": 1000**4, "TIB": 1024**4}
@@ -181,7 +181,7 @@ def compute(total: int, usages: list[int], mac_available: int | None = None, vm_
 
 def service_limit(budget: Budget, share: float, minimum: int) -> int:
     """Return a long-running service's memory limit: its share of the plan's free memory, at least the minimum, in whole
-    MiB (owner, Oct 8 2026: Polaris 25% and at least 1 GiB, its database 10% and at least 256 MiB) [498] [503]."""
+    MiB (Polaris 25% and at least 1 GiB, its database 10% and at least 256 MiB) [498] [503]."""
     mib = 1024**2
     return max(minimum, int(budget.free * share)) // mib * mib
 

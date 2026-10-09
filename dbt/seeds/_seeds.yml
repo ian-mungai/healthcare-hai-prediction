@@ -716,7 +716,7 @@ seeds:
   - name: vbp_file_fiscal_years
     description: >
       The reviewed program fiscal year of each Hospital VBP Total Performance Score file that publishes no fiscal_year, by
-      its published file name, with the evidence (owner decision Oct 8 2026; failure mode 515).
+      its published file name, with the evidence (failure mode 515).
     config:
       column_types:
         file_name: varchar

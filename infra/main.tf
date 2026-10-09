@@ -86,7 +86,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
   }
 
-  # Owner decision, Oct 2 2026: Iceberg replaces and deletes its own files, so replaced versions under lakehouse/
+  # Iceberg replaces and deletes its own files, so replaced versions under lakehouse/
   # expire after 30 days. Current lakehouse files and everything outside lakehouse/ never expire.
   rule {
     id     = "expire_replaced_lakehouse_versions"

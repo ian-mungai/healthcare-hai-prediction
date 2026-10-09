@@ -11,7 +11,7 @@ hai:
       settings:
         autoinstall_known_extensions: false
         # Computed before each build from the containers running at that moment (scripts/lakehouse/memory_budget.py;
-        # owner decision Oct 7 2026: memory is shared across projects, never hardcoded). No default: a build without a
+        # memory is shared across projects, never hardcoded). No default: a build without a
         # budget stops instead of using a fixed limit.
         memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT') }}"
         threads: "{{ env_var('JOB_THREADS') | int }}"

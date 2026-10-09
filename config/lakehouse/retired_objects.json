@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "basis": "Objects removed from S3 that storage manifests still list: the Sep 28 2026 privacy deletion (BRZ-012) and the Oct 4 2026 removal of byte-identical duplicates (failure mode 212).",
+  "basis": "Objects removed from S3 that storage manifests still list: the privacy deletion (BRZ-012) and the removal of byte-identical duplicates (failure mode 212).",
   "collections": [
     "california_hcai/hospital_finance",
     "california_hcai/hospital_utilization",

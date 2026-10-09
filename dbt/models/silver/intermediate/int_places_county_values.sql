@@ -1,7 +1,7 @@
 -- One row per county, PLACES release, data year, measure and value type (crude or age-adjusted): the value, its 95%
 -- limits, footnote symbol and population. Rows without a 5-digit county code (the 2020 release, national rows) are not
 -- typed. is_all_states is true only where the release's county rows for that measure, value type and year cover all 50
--- states and DC (approved Oct 1 2026). Releases and value types are never mixed (failure modes 449 to 452).
+-- states and DC. Releases and value types are never mixed (failure modes 449 to 452).
 {{ config(materialized='table') }}
 
 with

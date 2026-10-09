@@ -1,7 +1,7 @@
 -- One row per MUA or MUP component as published: designation type, status, IMU score and dates typed (YYYY-MM-DD), the
 -- county code with XXXXX kept as a token; a tract component's number is its component name (failure modes 477 to 479). A
--- row identical in every published column to an earlier row of the same file is held as exact_repeat (475, owner decision
--- Oct 7 2026). A reused ID keeps each designation apart by its type and date (476). Status and dates are as published at
+-- row identical in every published column to an earlier row of the same file is held as exact_repeat (475).
+-- A reused ID keeps each designation apart by its type and date (476). Status and dates are as published at
 -- the capture (480).
 {{ config(materialized='table') }}
 

@@ -19,7 +19,7 @@ jobs:
   infrastructure:
     name: Terraform and IAM Checks
     runs-on: ubuntu-latest
-    # Raised from 15 by owner decision (Oct 7 2026): the full hook run took 14.5 minutes and then hit the limit.
+    # The full hook run takes about 14.5 minutes, so 15 is too tight.
     timeout-minutes: 30
     steps:
       - name: Checkout
