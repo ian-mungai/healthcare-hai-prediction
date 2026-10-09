@@ -342,6 +342,10 @@ visits and 30-day mortality) against each HAI window's own period, because they 
 to predict it: the published window equal to the calendar year first, otherwise the one with the largest overlap. HAC
 and VBP years are placed by the HAI measure period HAC publishes for each fiscal year. No model reads this table; an E2E
 check fails if one does.
+`int_spine_county_measures` (step AL4a) adds the county context from PLACES, Medicare Geographic Variation, CDC WONDER,
+Mapping Medicare Disparities and RUCC through the hospital's POS county: the latest data year (RUCC vintage) that ends
+before the window starts. PLACES counts only all-state measure-years and takes the latest release of each data year;
+WONDER 2018 to 2020 come from the single-race database. Connecticut's rows stay, flagged out of the primary county join.
 
 Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
 visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the

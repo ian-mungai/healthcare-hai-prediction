@@ -2564,6 +2564,16 @@ GROUP_C4 = (
             gv_row("2023", "National", "", ma_prtcptn_rate="0.48"),
         ),
     ),
+    # AL4a [604]: a 2020 county value for 010001's county (01073) before its 2021 window.
+    Stored(
+        "cms_geographic_variation_csv",
+        "gv_al4",
+        "CMS_GV__al4",
+        "2014-2024_Original_Medicare_Geographic_Variation_Public_Use_File.csv",
+        sha("q8"),
+        1,
+        records=(gv_row("2020", "County", "01073", ma_prtcptn_rate="0.3"),),
+    ),
     Stored(
         "wonder_county_mortality",
         "wd1",
@@ -2843,6 +2853,16 @@ GROUP_C5 = (
             mmd_row("2023", ALZHEIMERS, "9001", "Fairfield County", "CONNECTICUT", "Urban", "10,000+", "10.1"),
             mmd_row("2023", ALZHEIMERS, "9990", "", "CONNECTICUT", "", "11-499", "3.0"),
         ),
+    ),
+    # AL4a [604]: a 2020 county value for 010001's county (01073) before its 2021 window.
+    Stored(
+        "cms_mmd_csv",
+        "mm02_al4",
+        "MMD_API_C258_02_2020__x",
+        "mmd_ffs_county_c258_02_prevalence_2020.csv",
+        sha("q7"),
+        1,
+        records=(mmd_row("2020", ALZHEIMERS, "1073", "Jefferson County", "ALABAMA", "Urban", "10,000+", "11.0"),),
     ),
     Stored(
         "cms_mmd_csv",
@@ -4367,6 +4387,16 @@ VALIDATION_ALIGNED_COUNT_SQL = (
     "SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_validation_measures)::VARCHAR UNION ALL "
     "SELECT alignment_status, count(*)::VARCHAR FROM int_spine_validation_measures GROUP BY 1 ORDER BY 1;"
 )
+COUNTY_SQL = (
+    "SELECT ccn, window_year::VARCHAR, measure_source, measure_control, field, alignment_status, coalesce(value_text, ''), "
+    "coalesce(value_number::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(age_months::VARCHAR, ''), is_primary_county_join::VARCHAR "
+    "FROM int_spine_county_measures WHERE alignment_status IN ('aligned', 'held_in_staging') ORDER BY ALL;"
+)
+COUNTY_COUNT_SQL = (
+    "SELECT 'rows', (SELECT count(*) FROM int_spine_county_measures)::VARCHAR UNION ALL "
+    "SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_county_measures)::VARCHAR UNION ALL "
+    "SELECT measure_source || ' ' || alignment_status, count(*)::VARCHAR FROM int_spine_county_measures GROUP BY 1 ORDER BY 1;"
+)
 OPERATIONS_SQL = (
     "SELECT ccn, window_year::VARCHAR, measure_source, measure_control, alignment_status, coalesce(value_text, ''), "
     "coalesce(value_number::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(age_months::VARCHAR, ''), coalesce(unit_count::VARCHAR, ''), "
@@ -4633,6 +4663,8 @@ def read_models(case: str) -> dict[str, Any]:
         "hospital_measures": [tuple(row) for row in duckdb_csv(database, HOSPITAL_SQL)],
         "operations_measures": [tuple(row) for row in duckdb_csv(database, OPERATIONS_SQL)],
         "validation_aligned": [tuple(row) for row in duckdb_csv(database, VALIDATION_ALIGNED_SQL)],
+        "county_measures": [tuple(row) for row in duckdb_csv(database, COUNTY_SQL)],
+        "county_measure_counts": [tuple(row) for row in duckdb_csv(database, COUNTY_COUNT_SQL)],
         "validation_aligned_counts": [tuple(row) for row in duckdb_csv(database, VALIDATION_ALIGNED_COUNT_SQL)],
         "operations_measure_counts": [tuple(row) for row in duckdb_csv(database, OPERATIONS_COUNT_SQL)],
         "hospital_measure_counts": [tuple(row) for row in duckdb_csv(database, HOSPITAL_COUNT_SQL)],
@@ -4898,6 +4930,7 @@ def county_health_checks(base: dict[str, Any]) -> dict[str, bool]:
     )
     checks["gv_matches_expected"] = base.get("gv") == sorted(
         [
+            ("2020", "01073", "ma_prtcptn_rate", "0.3", ""),
             ("2023", "01001", "bene_dual_pct", "", "*"),
             ("2023", "01001", "benes_total_cnt", "9000.0", ""),
             ("2023", "01001", "ma_prtcptn_rate", "0.45", ""),
@@ -4931,6 +4964,7 @@ def shortage_checks(base: dict[str, Any]) -> dict[str, bool]:
     # flagged; the unknown county and Connecticut flagged; the per-100,000 unit only for C258.78.
     checks["mmd_matches_expected"] = base.get("mmd") == sorted(
         [
+            ("C258.02", "C258.02", "2020", "county", "01073", "01", "11.0", "percent", "10,000+", "false", "false", "false"),
             ("C258.01", "", "2022", "county", "01001", "01", "0.8", "percent", "1,000-4,999", "false", "false", "false"),
             ("C258.02", "C258.02", "2023", "county", "01001", "01", "12.5", "percent", "1,000-4,999", "false", "false", "false"),
             ("C258.02", "C258.02", "2023", "county", "01003", "01", "0.0", "percent", "11-499", "true", "false", "false"),
@@ -5038,6 +5072,41 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("cms_cc_unplanned_hospital_visits_hospital", "", "", "no_key", "1"),
     ]
     checks["validation_seed_matches_registry"] = validation_seed_matches()
+    return checks
+
+
+def county_measure_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's AL4a rows with their expected values [604] to [611]."""
+    checks: dict[str, bool] = {}
+    # [604] The latest data year before the start through the POS county: 2020 GV and MMD values for 010001's county; WONDER
+    # 2018 from the single-race export (907.4, not the bridged 909.1); RUCC 2013. Reviewed row by row.
+    checks["county_measures_match_expected"] = base.get("county_measures") == [
+        ("010001", "2021", "geographic_variation", "C252", "ma_prtcptn_rate", "aligned", "0.3", "0.3", "2020-12-31", "1", "true"),
+        ("010001", "2021", "mmd", "C258.02", "prevalence", "aligned", "11.0", "11.0", "2020-12-31", "1", "true"),
+        ("01001F", "2021", "rucc", "C198", "rucc_code", "aligned", "2", "", "2013-12-31", "85", "true"),
+        ("01001F", "2021", "wonder", "C259", "crude_rate", "aligned", "907.4", "907.4", "2018-12-31", "25", "true"),
+        ("01001F", "2021", "wonder", "C259", "deaths", "aligned", "500.0", "500.0", "2018-12-31", "25", "true"),
+        ("01001F", "2021", "wonder", "C259", "population", "aligned", "55100.0", "55100.0", "2018-12-31", "25", "true"),
+    ]
+    # [611] One row per spine row and control-field (12 x 195), unique keys, and the counts per source and status.
+    checks["county_measure_counts_match_expected"] = base.get("county_measure_counts") == [
+        ("geographic_variation aligned", "1"),
+        ("geographic_variation no_period_before_start", "3"),
+        ("geographic_variation not_in_source", "236"),
+        ("keys", "2340"),
+        ("mmd aligned", "1"),
+        ("mmd no_period_before_start", "5"),
+        ("mmd not_in_source", "954"),
+        ("places no_period_before_start", "2"),
+        ("places not_in_source", "1030"),
+        ("rows", "2340"),
+        ("rucc aligned", "1"),
+        ("rucc no_period_before_start", "1"),
+        ("rucc not_in_source", "10"),
+        ("wonder aligned", "3"),
+        ("wonder no_period_before_start", "1"),
+        ("wonder not_in_source", "92"),
+    ]
     return checks
 
 
@@ -6024,6 +6093,7 @@ def fixture_scenarios() -> dict[str, bool]:
     checks.update(hospital_measure_checks(base))
     checks.update(operations_measure_checks(base))
     checks.update(validation_aligned_checks(base))
+    checks.update(county_measure_checks(base))
     code, _ = run_fixture("base_again", BASE)
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
@@ -6770,6 +6840,39 @@ def validation_kept_apart() -> bool:
     return not any("ref('int_spine_validation_measures')" in path.read_text() for path in (REPO_ROOT / "dbt/models").rglob("*.sql"))
 
 
+# AL4a reconciliation [604] to [611]: rows against the spine and the seeds; per source the hospital-windows and
+# control-fields with a data year before the start through the POS county, counted from the staged tables.
+COUNTY_REAL_SQL = """WITH spine AS (SELECT spine_key, county_fips, window_year FROM int_hospital_spine),
+model AS (SELECT measure_source, count(*) FILTER (WHERE period_end IS NOT NULL) AS n FROM int_spine_county_measures GROUP BY 1)
+SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_county_measures)::VARCHAR, (SELECT count(*) FROM int_spine_county_measures)::VARCHAR
+UNION ALL SELECT 'rows_per_spine_row', (SELECT count(*) FROM int_spine_county_measures)::VARCHAR,
+    ((SELECT count(*) FROM spine) * (SELECT count(DISTINCT measure_control || ':' || field) FROM int_spine_county_measures))::VARCHAR
+UNION ALL SELECT 'mmd_periods', (SELECT n FROM model WHERE measure_source = 'mmd')::VARCHAR,
+    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, m.measure_control FROM spine JOIN int_mmd_prevalence AS m
+        ON m.county_fips = spine.county_fips AND m.geography_level = 'county' AND m.data_year < spine.window_year))::VARCHAR
+UNION ALL SELECT 'rucc_periods', (SELECT n FROM model WHERE measure_source = 'rucc')::VARCHAR,
+    (SELECT count(DISTINCT spine.spine_key) FROM spine JOIN int_rucc_county_codes AS r
+        ON r.county_fips = spine.county_fips AND r.vintage::INTEGER < spine.window_year)::VARCHAR
+UNION ALL SELECT 'places_periods', (SELECT n FROM model WHERE measure_source = 'places')::VARCHAR,
+    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, p.measureid, p.datavaluetypeid FROM spine JOIN int_places_county_values AS p
+        ON p.county_fips = spine.county_fips AND p.is_all_states AND p.data_year < spine.window_year
+        JOIN county_health_measures AS c ON c.source_model = 'int_places_county_values' AND c.components = p.measureid))::VARCHAR
+UNION ALL SELECT 'periods_on_or_after_start', (SELECT count(*) FROM int_spine_county_measures
+    WHERE alignment_status = 'aligned' AND period_end >= window_start)::VARCHAR, '0';"""
+COUNTY_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_county_measures AS t;"
+
+
+def county_measures_real(database: str) -> dict[str, Any]:
+    """Reconcile the real AL4a rows with the spine and the staged county sources; count statuses per source."""
+    checks: dict[str, bool] = {}
+    counts: dict[str, Any] = {}
+    for name, model, independent in duckdb_csv(database, COUNTY_REAL_SQL):
+        counts[name] = {"model": int(model), "independent": int(independent)}
+        checks[f"county_measures_{name}_reconcile"] = model == independent
+    counts["alignment_status"] = dict(duckdb_csv(database, COUNTY_COUNT_SQL))
+    return {"checks": checks, "counts": counts}
+
+
 def validation_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real D1 windows with their staging views' window keys; count rows per control [511] [513]."""
     checks: dict[str, bool] = {}
@@ -6894,6 +6997,7 @@ def real_stage() -> dict[str, Any]:
         outcome[f"{run}_hospital_measures_fingerprint"] = fingerprint(database, HOSPITAL_FINGERPRINT_SQL)
         outcome[f"{run}_operations_measures_fingerprint"] = fingerprint(database, OPERATIONS_FINGERPRINT_SQL)
         outcome[f"{run}_validation_aligned_fingerprint"] = fingerprint(database, VALIDATION_ALIGNED_FINGERPRINT_SQL)
+        outcome[f"{run}_county_measures_fingerprint"] = fingerprint(database, COUNTY_FINGERPRINT_SQL)
         if run == "real":
             # Free the memory the first build left in Docker's VM before the second build; the catalog starts again [545] [547].
             outcome["docker_release"] = [catalog.release()]
@@ -6943,6 +7047,12 @@ def real_stage() -> dict[str, Any]:
     validation_aligned = validation_aligned_real(database)
     outcome["checks"].update(validation_aligned["checks"])
     outcome["al5_validation_counts"] = validation_aligned["counts"]
+    outcome["checks"]["county_measures_real_rebuild_identical"] = (
+        outcome["real_county_measures_fingerprint"] == outcome["real_again_county_measures_fingerprint"]
+    )
+    county = county_measures_real(database)
+    outcome["checks"].update(county["checks"])
+    outcome["al4a_county_measure_counts"] = county["counts"]
     validation = validation_real(database, init)
     outcome["checks"].update(validation["checks"])
     outcome["validation_counts"] = validation["counts"]
