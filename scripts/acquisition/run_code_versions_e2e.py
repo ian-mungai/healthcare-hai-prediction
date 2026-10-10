@@ -12,7 +12,7 @@ from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, canoni
 def exercise() -> list[dict]:
     """Exercise real metadata through legacy and typed representations plus malformed copies."""
     from scripts.acquisition.code_versions import read_code_versions
-    from scripts.acquisition.legacy_versions import catalog, predecessor_bytes
+    from scripts.acquisition.legacy_versions import ARCHIVE, catalog, predecessor_bytes
 
     cases = []
     manifest = read_json(REPO_ROOT / "config/acquisition/code_version_migration.json")
@@ -21,6 +21,12 @@ def exercise() -> list[dict]:
         tracked = REPO_ROOT / "config/acquisition" / row["file"]
         entries = records.get(f"config/acquisition/{row['file']}", [])
         # A list with current-state wording is checked through its archived original (failure mode S7).
+        if entries and not ARCHIVE.is_dir():
+            # The archive is private and never in Git, so a clean checkout (CI) records these checks as skipped [S55].
+            skipped = {"passed": True, "skipped": "private legacy archive absent"}
+            cases.append({"name": "historical_equivalence_" + row["file"], **skipped})
+            cases.append({"name": "successor_keeps_every_version_" + row["file"], **skipped})
+            continue
         source = REPO_ROOT / entries[0]["archive_path"] if entries else tracked
         if entries:
             predecessor_bytes(entries[0])
