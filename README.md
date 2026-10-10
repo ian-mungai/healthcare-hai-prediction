@@ -740,6 +740,7 @@ No AWS changes implementing these four deferred controls have been applied.
   packages) and its SQL style.
 - `scripts/review/`, `requirements-review.txt`: the schema-review tools and their hash-pinned packages.
 - `docs/data_collection.md`: how the source data was collected and how to recheck it.
+- `docs/acquisition_design.md`: what each collector and shared acquisition mechanism checks and which failure each check prevents.
 - `docs/issue_register.md`: the project's single issue register, kept local-only (Git-ignored).
 - `docs/project_guide.md`: the project's target design with each section's build status, kept local-only (Git-ignored).
 - `.github/`: the CI workflow and the pull request template.
