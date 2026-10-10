@@ -360,6 +360,14 @@ the score as published at the capture; an undated withdrawal holds the window) a
 `int_spine_linkage` keeps the HUD residential share of the hospital ZIP and the hospital's service-area ZIPs and cases
 apart as linkage, never predictors.
 
+History for the gold dimensions is type 2 (SCD2) and dated by the publishers' own dates, so a clean checkout rebuilds the
+same versions: `int_hospital_pos_history` (Provider of Services attributes per snapshot), `int_hospital_hgi_history`
+(Hospital General Information descriptions per release; the overall rating stays a measure) and
+`int_hospital_ownership_history` (organization owners only, by enrollment, owner and role, per release). The macro
+`dbt/macros/scd2.sql` starts a version when a tracked value changes or when a hospital or owner returns after a release
+without it; that release closes the earlier version. A release that lists one key twice with different values is held
+for that release. `assert_history_versions_valid` fails on overlapping windows or a second current version.
+
 Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
 visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the
 Hospital Readmissions Reduction Program by condition (`int_cc_hrrp_windows`). Every published measure ID is kept;

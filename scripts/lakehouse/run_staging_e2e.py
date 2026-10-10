@@ -4249,6 +4249,16 @@ CMI_DATA_YEARS_SQL = (
     "SELECT ccn, data_fiscal_year::VARCHAR, rule_fiscal_year::VARCHAR, rule_stage, cmi::VARCHAR, left(member_sha256, 2) "
     "FROM int_cmi_hospital_data_years ORDER BY ALL;"
 )
+# Silver step 7.3: SCD2 history, versions dated by source dates only [670] to [677].
+POS_HISTORY_SQL = (
+    "SELECT ccn, valid_from::VARCHAR, coalesce(valid_to::VARCHAR, ''), is_current::VARCHAR, is_after_gap::VARCHAR, "
+    "release_count::VARCHAR, coalesce(control_type_code, '') FROM int_hospital_pos_history ORDER BY ALL;"
+)
+OWNER_HISTORY_SQL = (
+    "SELECT enrollment_id, associate_id_owner, role_code, valid_from::VARCHAR, coalesce(valid_to::VARCHAR, ''), is_current::VARCHAR, "
+    "is_after_gap::VARCHAR, release_count::VARCHAR FROM int_hospital_ownership_history ORDER BY ALL;"
+)
+HGI_HISTORY_SQL = "SELECT count(*)::VARCHAR, count(DISTINCT ccn)::VARCHAR, count(*) FILTER (WHERE is_current)::VARCHAR FROM int_hospital_hgi_history;"
 SPINE_SQL = (
     "SELECT ccn, window_year::VARCHAR, coalesce(pos_period_end::VARCHAR, ''), coalesce(state_code, ''), coalesce(county_fips, ''), "
     "coalesce(cmi::VARCHAR, ''), coalesce(cmi_data_fiscal_year::VARCHAR, ''), coalesce(cmi_rule_fiscal_year::VARCHAR, ''), "
@@ -4857,6 +4867,9 @@ def read_models(case: str) -> dict[str, Any]:
         "cmi_holds": [tuple(row) for row in duckdb_csv(database, CMI_HOLDS_SQL)],
         "cmi_data_years": [tuple(row) for row in duckdb_csv(database, CMI_DATA_YEARS_SQL)],
         "spine": [tuple(row) for row in duckdb_csv(database, SPINE_SQL)],
+        "pos_history": [tuple(row) for row in duckdb_csv(database, POS_HISTORY_SQL)],
+        "owner_history": [tuple(row) for row in duckdb_csv(database, OWNER_HISTORY_SQL)],
+        "hgi_history": [tuple(row) for row in duckdb_csv(database, HGI_HISTORY_SQL)],
         "timely": [tuple(row) for row in duckdb_csv(database, TE_SQL)],
         "maternal": [tuple(row) for row in duckdb_csv(database, MATERNAL_SQL)],
         "hcahps": [tuple(row) for row in duckdb_csv(database, HCAHPS_SQL)],
@@ -5957,6 +5970,47 @@ def refuses_condition(action: Any, fragment: str) -> bool:
     return False
 
 
+# POS snapshots end 2018-12-31 (a), 2019-03-31 (b) and 2020-12-31 (c). 010001 changes in b and in c, so three versions;
+# 010002 leaves after b, which closes its version at c; 01001F, 011301, 070001 and 990001 miss b, so their c rows open a
+# version after a gap; 010005, 010006 and 210001 appear only in c [672] [673].
+POS_HISTORY_EXPECTED = [
+    ("010001", "2018-12-31", "2019-03-31", "false", "false", "1", "04"),
+    ("010001", "2019-03-31", "2020-12-31", "false", "false", "1", ""),
+    ("010001", "2020-12-31", "", "true", "false", "1", ""),
+    ("010002", "2018-12-31", "2019-03-31", "false", "false", "1", ""),
+    ("010002", "2019-03-31", "2020-12-31", "false", "false", "1", ""),
+    ("010005", "2020-12-31", "", "true", "false", "1", ""),
+    ("010006", "2020-12-31", "", "true", "false", "1", ""),
+    ("01001F", "2018-12-31", "2019-03-31", "false", "false", "1", "10"),
+    ("01001F", "2020-12-31", "", "true", "true", "1", ""),
+    ("011301", "2018-12-31", "2019-03-31", "false", "false", "1", ""),
+    ("011301", "2020-12-31", "", "true", "true", "1", ""),
+    ("070001", "2018-12-31", "2019-03-31", "false", "false", "1", ""),
+    ("070001", "2020-12-31", "", "true", "true", "1", ""),
+    ("210001", "2020-12-31", "", "true", "false", "1", ""),
+    ("990001", "2018-12-31", "2019-03-31", "false", "false", "1", ""),
+    ("990001", "2020-12-31", "", "true", "true", "1", ""),
+]
+# Owner releases end 2020-07-31 (ow0), 2022-11-30 (ow1), 2025-04-30 (ow2) and 2025-05-31 (o1, which lists no owner with an
+# ID and role). 5555555555 is unchanged from ow1 to ow2, so one version over two releases [672]; 9876543210's share
+# changes, so two; every owner absent from the next release closes there [673]; individual owners never enter [676].
+OWNER_HISTORY_EXPECTED = [
+    ("O20000000001", "1111111111", "34", "2020-07-31", "2022-11-30", "false", "false", "1"),
+    ("O20000000001", "2222222222", "43", "2020-07-31", "2022-11-30", "false", "false", "1"),
+    ("O20000000002", "1111111111", "35", "2025-04-30", "2025-05-31", "false", "false", "1"),
+    ("O20000000002", "5555555555", "43", "2022-11-30", "2025-05-31", "false", "false", "2"),
+    ("O20000000002", "9876543210", "34", "2022-11-30", "2025-04-30", "false", "false", "1"),
+    ("O20000000002", "9876543210", "34", "2025-04-30", "2025-05-31", "false", "false", "1"),
+]
+# A publisher correction of snapshot b (010001's control type) rewrites exactly that version [677].
+POS_REVISED_MIDDLE = tuple(
+    replace(item, records=tuple(row + (("gnrl_cntl_type_cd", "2"),) if dict(row)["prvdr_num"] == "010001" else row for row in item.records))
+    if item.key == "pb"
+    else item
+    for item in BASE
+)
+
+
 def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     """Build every fixture case (in parallel when asked), then run each check in order and return its outcome."""
     checks: dict[str, bool] = {}
@@ -5965,6 +6019,7 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("base", BASE, frozenset()),
         ("base_again", BASE, frozenset()),
         ("reversed_order", tuple(reversed(BASE)), frozenset()),
+        ("pos_revised_middle", POS_REVISED_MIDDLE, frozenset()),
     ]
     jobs += [(case, objects, unlabelled) for case, (_test, objects, unlabelled) in FAILING.items()]
     results = build_cases(jobs, workers)
@@ -6196,6 +6251,17 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     # [306] to [316] One row per hospital and calendar-year window, as of the window start: the POS snapshot that ends in the
     # 12 months before the window, the CMI of the fiscal year before it, and the population flags; [612] to [618], [631],
     # [698] and [701] the fills, each with its source. Reviewed row by row.
+    # Silver step 7.3: SCD2 history from source dates only [670] to [677].
+    checks["pos_history_matches_expected"] = base.get("pos_history") == POS_HISTORY_EXPECTED
+    checks["ownership_history_matches_expected"] = base.get("owner_history") == OWNER_HISTORY_EXPECTED
+    checks["hgi_history_built"] = bool(base.get("hgi_history")) and base["hgi_history"][0][0] != "0"
+    code, statuses = built(results, "pos_revised_middle")
+    revised = model_outputs("pos_revised_middle").get("pos_history", [])
+    changed = set(revised) ^ set(base.get("pos_history", []))
+    checks["pos_correction_rewrites_one_version"] = code == 0 and changed == {
+        ("010001", "2019-03-31", "2020-12-31", "false", "false", "1", ""),
+        ("010001", "2019-03-31", "2020-12-31", "false", "false", "1", "02"),
+    }
     checks["spine_matches_expected"] = base.get("spine") == sorted(
         [
             # [701] The only snapshot ends 36 months after the window starts: nothing is carried; the state comes from the CCN.

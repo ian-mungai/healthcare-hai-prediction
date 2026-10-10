@@ -1558,3 +1558,55 @@ models:
       - name: duckdb_version
         description: version() of the DuckDB that wrote the file.
         data_tests: [not_null]
+  - name: int_hospital_pos_history
+    description: >
+      SCD2 history of each hospital's Provider of Services attributes: one row per CCN and version, dated by snapshot
+      period ends only (valid_from inclusive, valid_to exclusive, null while current). A change in a tracked attribute,
+      compared null-safely, or a return after a snapshot without the CCN starts a version; an absent snapshot closes it.
+      A snapshot that lists one CCN with disagreeing values is held for that snapshot. Values as published; fills stay on
+      the spine (silver step 7.3, failure modes 670 to 677).
+    columns:
+      - name: history_key
+        description: CCN and valid_from.
+        data_tests: [unique, not_null]
+      - name: ccn
+        data_tests: [not_null]
+      - name: valid_from
+        description: Period end of the version's first snapshot.
+        data_tests: [not_null]
+      - name: valid_to
+        description: Period end of the first later snapshot that differs or lacks the CCN; null while current.
+      - name: is_current
+        description: True when the version reaches the latest snapshot.
+      - name: is_after_gap
+        description: True when the version starts after a snapshot without the CCN.
+      - name: release_count
+        description: Snapshots in the version.
+      - name: first_member_sha256
+        description: SHA-256 of the version's first POS file.
+  - name: int_hospital_hgi_history
+    description: >
+      SCD2 history of each hospital's Hospital General Information description (state, county name, ZIP, hospital type,
+      ownership text, emergency services), dated by release dates only. The overall rating is a measure that AL2 aligns
+      and is not tracked. Two files on one release date that disagree for a CCN are held for that date (silver step 7.3).
+    columns:
+      - name: history_key
+        description: CCN and valid_from.
+        data_tests: [unique, not_null]
+      - name: ccn
+        data_tests: [not_null]
+      - name: valid_from
+        data_tests: [not_null]
+  - name: int_hospital_ownership_history
+    description: >
+      SCD2 history of each hospital enrollment's organization owners by owner ID and role: share, owner name and the
+      private-equity and REIT flags, dated by release period ends only. Organization owners only, so no individual's name
+      enters history (failure mode 676); a release that lists an owner twice with different terms is held (silver step 7.3).
+    columns:
+      - name: history_key
+        description: Enrollment ID, owner ID, role code and valid_from.
+        data_tests: [unique, not_null]
+      - name: enrollment_id
+        data_tests: [not_null]
+      - name: valid_from
+        data_tests: [not_null]
