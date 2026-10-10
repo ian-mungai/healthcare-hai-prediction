@@ -11,6 +11,9 @@
 -- depends_on: {{ ref('int_spine_county_context') }}
 -- depends_on: {{ ref('int_spine_linkage') }}
 -- depends_on: {{ ref('int_county_adjacency_edges') }}
+-- depends_on: {{ ref('int_hospital_pos_history') }}
+-- depends_on: {{ ref('int_hospital_hgi_history') }}
+-- depends_on: {{ ref('int_hospital_ownership_history') }}
 {{ config(materialized='table') }}
 
 select

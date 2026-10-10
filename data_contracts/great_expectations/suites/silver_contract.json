@@ -47,6 +47,140 @@
       "severity": "structural"
     },
     {
+      "id": "int_hospital_hgi_history.columns",
+      "table": "int_hospital_hgi_history",
+      "type": "ExpectTableColumnsToMatchOrderedList",
+      "kwargs": {
+        "column_list": [
+          "ccn",
+          "version_number",
+          "valid_from",
+          "release_count",
+          "first_member_sha256",
+          "is_after_gap",
+          "state_code",
+          "county_name",
+          "zip_code",
+          "hospital_type",
+          "hospital_ownership",
+          "has_emergency_services",
+          "valid_to",
+          "is_current",
+          "history_key"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_hgi_history.has_rows",
+      "table": "int_hospital_hgi_history",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_hgi_history.types",
+      "table": "int_hospital_hgi_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT * FROM {batch} LIMIT 1) WHERE typeof(ccn) <> 'VARCHAR' OR typeof(version_number) <> 'BIGINT' OR typeof(valid_from) <> 'DATE' OR typeof(release_count) <> 'BIGINT' OR typeof(first_member_sha256) <> 'VARCHAR' OR typeof(is_after_gap) <> 'BOOLEAN' OR typeof(state_code) <> 'VARCHAR' OR typeof(county_name) <> 'VARCHAR' OR typeof(zip_code) <> 'VARCHAR' OR typeof(hospital_type) <> 'VARCHAR' OR typeof(hospital_ownership) <> 'VARCHAR' OR typeof(has_emergency_services) <> 'BOOLEAN' OR typeof(valid_to) <> 'DATE' OR typeof(is_current) <> 'BOOLEAN' OR typeof(history_key) <> 'VARCHAR'"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_ownership_history.columns",
+      "table": "int_hospital_ownership_history",
+      "type": "ExpectTableColumnsToMatchOrderedList",
+      "kwargs": {
+        "column_list": [
+          "enrollment_id",
+          "associate_id_owner",
+          "role_code",
+          "version_number",
+          "valid_from",
+          "release_count",
+          "bridged_releases",
+          "first_member_sha256",
+          "is_after_gap",
+          "percentage_ownership",
+          "organization_name_owner",
+          "private_equity_company_owner",
+          "reit_owner",
+          "valid_to",
+          "is_current",
+          "history_key"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_ownership_history.has_rows",
+      "table": "int_hospital_ownership_history",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_ownership_history.types",
+      "table": "int_hospital_ownership_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT * FROM {batch} LIMIT 1) WHERE typeof(enrollment_id) <> 'VARCHAR' OR typeof(associate_id_owner) <> 'VARCHAR' OR typeof(role_code) <> 'VARCHAR' OR typeof(version_number) <> 'BIGINT' OR typeof(valid_from) <> 'DATE' OR typeof(release_count) <> 'BIGINT' OR typeof(bridged_releases) <> 'BIGINT' OR typeof(first_member_sha256) <> 'VARCHAR' OR typeof(is_after_gap) <> 'BOOLEAN' OR typeof(percentage_ownership) <> 'DOUBLE' OR typeof(organization_name_owner) <> 'VARCHAR' OR typeof(private_equity_company_owner) <> 'BOOLEAN' OR typeof(reit_owner) <> 'BOOLEAN' OR typeof(valid_to) <> 'DATE' OR typeof(is_current) <> 'BOOLEAN' OR typeof(history_key) <> 'VARCHAR'"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_pos_history.columns",
+      "table": "int_hospital_pos_history",
+      "type": "ExpectTableColumnsToMatchOrderedList",
+      "kwargs": {
+        "column_list": [
+          "ccn",
+          "version_number",
+          "valid_from",
+          "release_count",
+          "first_member_sha256",
+          "is_after_gap",
+          "state_code",
+          "county_fips",
+          "ssa_county_code",
+          "zip_code",
+          "provider_subtype_code",
+          "control_type_code",
+          "termination_code",
+          "cbsa_urban_rural_code",
+          "bed_count",
+          "certified_bed_count",
+          "valid_to",
+          "is_current",
+          "history_key"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_pos_history.has_rows",
+      "table": "int_hospital_pos_history",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_pos_history.types",
+      "table": "int_hospital_pos_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT * FROM {batch} LIMIT 1) WHERE typeof(ccn) <> 'VARCHAR' OR typeof(version_number) <> 'BIGINT' OR typeof(valid_from) <> 'DATE' OR typeof(release_count) <> 'BIGINT' OR typeof(first_member_sha256) <> 'VARCHAR' OR typeof(is_after_gap) <> 'BOOLEAN' OR typeof(state_code) <> 'VARCHAR' OR typeof(county_fips) <> 'VARCHAR' OR typeof(ssa_county_code) <> 'VARCHAR' OR typeof(zip_code) <> 'VARCHAR' OR typeof(provider_subtype_code) <> 'VARCHAR' OR typeof(control_type_code) <> 'VARCHAR' OR typeof(termination_code) <> 'VARCHAR' OR typeof(cbsa_urban_rural_code) <> 'VARCHAR' OR typeof(bed_count) <> 'INTEGER' OR typeof(certified_bed_count) <> 'INTEGER' OR typeof(valid_to) <> 'DATE' OR typeof(is_current) <> 'BOOLEAN' OR typeof(history_key) <> 'VARCHAR'"
+      },
+      "severity": "structural"
+    },
+    {
       "id": "int_hospital_spine.columns",
       "table": "int_hospital_spine",
       "type": "ExpectTableColumnsToMatchOrderedList",

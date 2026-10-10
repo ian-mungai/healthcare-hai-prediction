@@ -1,0 +1,141 @@
+{
+  "name": "silver_history",
+  "description": "SCD2 history: version flags agree with the dates and every direct successor changes a value [671] to [673] [714] [715]",
+  "expectations": [
+    {
+      "id": "pos_history.current_when_open",
+      "table": "int_hospital_pos_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE is_current <> (valid_to IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "pos_history.release_count_positive",
+      "table": "int_hospital_pos_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE release_count < 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "pos_history.gap_flag_matches_dates",
+      "table": "int_hospital_pos_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT *, lag(valid_to) OVER by_key AS previous_to, lag(state_code) OVER by_key AS previous_state_code, lag(county_fips) OVER by_key AS previous_county_fips, lag(ssa_county_code) OVER by_key AS previous_ssa_county_code, lag(zip_code) OVER by_key AS previous_zip_code, lag(provider_subtype_code) OVER by_key AS previous_provider_subtype_code, lag(control_type_code) OVER by_key AS previous_control_type_code, lag(termination_code) OVER by_key AS previous_termination_code, lag(cbsa_urban_rural_code) OVER by_key AS previous_cbsa_urban_rural_code, lag(bed_count) OVER by_key AS previous_bed_count, lag(certified_bed_count) OVER by_key AS previous_certified_bed_count FROM {batch} WINDOW by_key AS (PARTITION BY ccn ORDER BY valid_from)) WHERE CASE WHEN previous_to IS NULL THEN is_after_gap WHEN is_after_gap THEN previous_to >= valid_from ELSE previous_to <> valid_from END"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "pos_history.version_changes_values",
+      "table": "int_hospital_pos_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT *, lag(valid_to) OVER by_key AS previous_to, lag(state_code) OVER by_key AS previous_state_code, lag(county_fips) OVER by_key AS previous_county_fips, lag(ssa_county_code) OVER by_key AS previous_ssa_county_code, lag(zip_code) OVER by_key AS previous_zip_code, lag(provider_subtype_code) OVER by_key AS previous_provider_subtype_code, lag(control_type_code) OVER by_key AS previous_control_type_code, lag(termination_code) OVER by_key AS previous_termination_code, lag(cbsa_urban_rural_code) OVER by_key AS previous_cbsa_urban_rural_code, lag(bed_count) OVER by_key AS previous_bed_count, lag(certified_bed_count) OVER by_key AS previous_certified_bed_count FROM {batch} WINDOW by_key AS (PARTITION BY ccn ORDER BY valid_from)) WHERE NOT is_after_gap AND previous_to = valid_from AND previous_state_code IS NOT DISTINCT FROM state_code AND previous_county_fips IS NOT DISTINCT FROM county_fips AND previous_ssa_county_code IS NOT DISTINCT FROM ssa_county_code AND previous_zip_code IS NOT DISTINCT FROM zip_code AND previous_provider_subtype_code IS NOT DISTINCT FROM provider_subtype_code AND previous_control_type_code IS NOT DISTINCT FROM control_type_code AND previous_termination_code IS NOT DISTINCT FROM termination_code AND previous_cbsa_urban_rural_code IS NOT DISTINCT FROM cbsa_urban_rural_code AND previous_bed_count IS NOT DISTINCT FROM bed_count AND previous_certified_bed_count IS NOT DISTINCT FROM certified_bed_count"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "hgi_history.current_when_open",
+      "table": "int_hospital_hgi_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE is_current <> (valid_to IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "hgi_history.release_count_positive",
+      "table": "int_hospital_hgi_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE release_count < 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "hgi_history.gap_flag_matches_dates",
+      "table": "int_hospital_hgi_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT *, lag(valid_to) OVER by_key AS previous_to, lag(state_code) OVER by_key AS previous_state_code, lag(county_name) OVER by_key AS previous_county_name, lag(zip_code) OVER by_key AS previous_zip_code, lag(hospital_type) OVER by_key AS previous_hospital_type, lag(hospital_ownership) OVER by_key AS previous_hospital_ownership, lag(has_emergency_services) OVER by_key AS previous_has_emergency_services FROM {batch} WINDOW by_key AS (PARTITION BY ccn ORDER BY valid_from)) WHERE CASE WHEN previous_to IS NULL THEN is_after_gap WHEN is_after_gap THEN previous_to >= valid_from ELSE previous_to <> valid_from END"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "hgi_history.version_changes_values",
+      "table": "int_hospital_hgi_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT *, lag(valid_to) OVER by_key AS previous_to, lag(state_code) OVER by_key AS previous_state_code, lag(county_name) OVER by_key AS previous_county_name, lag(zip_code) OVER by_key AS previous_zip_code, lag(hospital_type) OVER by_key AS previous_hospital_type, lag(hospital_ownership) OVER by_key AS previous_hospital_ownership, lag(has_emergency_services) OVER by_key AS previous_has_emergency_services FROM {batch} WINDOW by_key AS (PARTITION BY ccn ORDER BY valid_from)) WHERE NOT is_after_gap AND previous_to = valid_from AND previous_state_code IS NOT DISTINCT FROM state_code AND previous_county_name IS NOT DISTINCT FROM county_name AND previous_zip_code IS NOT DISTINCT FROM zip_code AND previous_hospital_type IS NOT DISTINCT FROM hospital_type AND previous_hospital_ownership IS NOT DISTINCT FROM hospital_ownership AND previous_has_emergency_services IS NOT DISTINCT FROM has_emergency_services"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "ownership_history.current_when_open",
+      "table": "int_hospital_ownership_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE is_current <> (valid_to IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "ownership_history.release_count_positive",
+      "table": "int_hospital_ownership_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE release_count < 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "ownership_history.gap_flag_matches_dates",
+      "table": "int_hospital_ownership_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT *, lag(valid_to) OVER by_key AS previous_to, lag(percentage_ownership) OVER by_key AS previous_percentage_ownership, lag(organization_name_owner) OVER by_key AS previous_organization_name_owner, lag(private_equity_company_owner) OVER by_key AS previous_private_equity_company_owner, lag(reit_owner) OVER by_key AS previous_reit_owner FROM {batch} WINDOW by_key AS (PARTITION BY enrollment_id, associate_id_owner, role_code ORDER BY valid_from)) WHERE CASE WHEN previous_to IS NULL THEN is_after_gap WHEN is_after_gap THEN previous_to >= valid_from ELSE previous_to <> valid_from END"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "ownership_history.version_changes_values",
+      "table": "int_hospital_ownership_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT *, lag(valid_to) OVER by_key AS previous_to, lag(percentage_ownership) OVER by_key AS previous_percentage_ownership, lag(organization_name_owner) OVER by_key AS previous_organization_name_owner, lag(private_equity_company_owner) OVER by_key AS previous_private_equity_company_owner, lag(reit_owner) OVER by_key AS previous_reit_owner FROM {batch} WINDOW by_key AS (PARTITION BY enrollment_id, associate_id_owner, role_code ORDER BY valid_from)) WHERE NOT is_after_gap AND previous_to = valid_from AND previous_percentage_ownership IS NOT DISTINCT FROM percentage_ownership AND previous_organization_name_owner IS NOT DISTINCT FROM organization_name_owner AND previous_private_equity_company_owner IS NOT DISTINCT FROM private_equity_company_owner AND previous_reit_owner IS NOT DISTINCT FROM reit_owner"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "ownership_history.owner_ids_ten_digits",
+      "table": "int_hospital_ownership_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE length(associate_id_owner) <> 10 OR NOT regexp_full_match(associate_id_owner, '[0-9]+')"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "ownership_history.keys_from_organization_owners",
+      "table": "int_hospital_ownership_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE enrollment_id || ':' || associate_id_owner || ':' || role_code NOT IN (SELECT enrollment_id || ':' || associate_id_owner || ':' || role_code FROM int_hospital_owner_rows WHERE type_owner = 'O' AND enrollment_id IS NOT NULL AND associate_id_owner IS NOT NULL AND role_code IS NOT NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "ownership_history.bridged_within_releases",
+      "table": "int_hospital_ownership_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE bridged_releases < 0 OR bridged_releases > release_count"
+      },
+      "severity": "structural"
+    }
+  ]
+}

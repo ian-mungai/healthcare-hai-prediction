@@ -416,15 +416,19 @@ read-only and stops when an `analytics-dbt` container is running, when `int_silv
 marker's DuckDB version differs from the reader's. The suites in `data_contracts/great_expectations/suites/` are JSON
 lists of Great Expectations classes and arguments:
 
-- the exact ordered columns and types and a row count for each of the 10 tables;
+- the exact ordered columns and types and a row count for each of the 13 tables;
 - the spine's fill sources and populations;
 - six outcome rows per spine row, with the SIR inside its interval and equal to observed over predicted;
 - the fixed rows per spine row of each alignment table, with no negative age and no publisher token turned into a number;
 - no validation or linkage control in a predictor table;
-- five-digit county codes in the adjacency graph.
+- five-digit county codes in the adjacency graph;
+- in the three history tables, a current flag on every open version and only there, gap flags that agree with the dates
+  and a changed value in every version that directly follows another; ownership history also needs 10-digit owner IDs
+  that exist among the organization owner rows and no more bridged releases than listed ones.
 
 Bands (windows per year, aligned shares) come from `data_contracts/great_expectations/baselines.json`. The owner
-approved them on October 10 2026, so a band outside its range fails the run (an unapproved file only warns). No expectation repeats a dbt test on the same column; the run fails if one does.
+approved them on October 10 2026, so a band outside its range fails the run (an unapproved file only warns). No
+expectation repeats a dbt test on the same column; the run fails if one does.
 Results keep counts only. Great Expectations keeps no open connection for DuckDB, so every metric came back empty. The
 validator registers DuckDB with it as a single-connection dialect, only for the pinned version.
 

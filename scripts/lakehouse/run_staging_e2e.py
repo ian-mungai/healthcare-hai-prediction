@@ -4259,7 +4259,10 @@ OWNER_HISTORY_SQL = (
     "is_after_gap::VARCHAR, release_count::VARCHAR, bridged_releases::VARCHAR FROM int_hospital_ownership_history ORDER BY ALL;"
 )
 OWNER_PADDED_SQL = "SELECT associate_id_owner, period_end::VARCHAR FROM int_hospital_owner_rows WHERE associate_ids_padded ORDER BY ALL;"
-HGI_HISTORY_SQL = "SELECT count(*)::VARCHAR, count(DISTINCT ccn)::VARCHAR, count(*) FILTER (WHERE is_current)::VARCHAR FROM int_hospital_hgi_history;"
+HGI_HISTORY_SQL = (
+    "SELECT ccn, valid_from::VARCHAR, coalesce(valid_to::VARCHAR, ''), is_current::VARCHAR, is_after_gap::VARCHAR, release_count::VARCHAR "
+    "FROM int_hospital_hgi_history ORDER BY ALL;"
+)
 SPINE_SQL = (
     "SELECT ccn, window_year::VARCHAR, coalesce(pos_period_end::VARCHAR, ''), coalesce(state_code, ''), coalesce(county_fips, ''), "
     "coalesce(cmi::VARCHAR, ''), coalesce(cmi_data_fiscal_year::VARCHAR, ''), coalesce(cmi_rule_fiscal_year::VARCHAR, ''), "
@@ -5993,6 +5996,13 @@ POS_HISTORY_EXPECTED = [
     ("990001", "2018-12-31", "2019-03-31", "false", "false", "1", ""),
     ("990001", "2020-12-31", "", "true", "true", "1", ""),
 ]
+# HGI releases 2020-07-01, 2020-10-01 and 2024-01-31. 010005's two files on 2020-10-01 agree, so one version; 010001's two
+# files on 2024-01-31 disagree, so that date is held and its 2020-07-01 version closes at the next release [674].
+HGI_HISTORY_EXPECTED = [
+    ("010001", "2020-07-01", "2020-10-01", "false", "false", "1"),
+    ("010005", "2020-10-01", "2024-01-31", "false", "false", "1"),
+    ("010005", "2024-01-31", "", "true", "false", "1"),
+]
 # Owner releases end 2020-07-31 (ow0), 2022-11-30 (ow1), 2025-04-30 (ow2) and 2025-05-31 (o1, which lists no owner with an
 # ID and role). 5555555555 is unchanged from ow1 to ow2, so one version over two releases [672]; 9876543210's share
 # changes, so two; every owner absent from the next release closes there [673]; individual owners never enter [676].
@@ -6308,7 +6318,7 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         and bridged.get("owner_padded") == [("0042633786", "2022-11-30")]
     )
     checks["base_owner_ids_not_padded"] = base.get("owner_padded") == []
-    checks["hgi_history_built"] = bool(base.get("hgi_history")) and base["hgi_history"][0][0] != "0"
+    checks["hgi_history_matches_expected"] = base.get("hgi_history") == HGI_HISTORY_EXPECTED
     code, statuses = built(results, "pos_revised_middle")
     revised = model_outputs("pos_revised_middle").get("pos_history", [])
     changed = set(revised) ^ set(base.get("pos_history", []))

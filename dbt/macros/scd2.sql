@@ -70,7 +70,8 @@ starts as (
 numbered as (
     select
         *,
-        sum(case when is_version_start then 1 else 0 end) over (partition by {{ key_list }} order by release_number) as version_number
+        -- sum() gives HUGEINT, which Iceberg cannot store, so the counters are cast to BIGINT.
+        sum(case when is_version_start then 1 else 0 end) over (partition by {{ key_list }} order by release_number)::bigint as version_number
     from starts
 ),
 
@@ -82,7 +83,7 @@ versions as (
         max(release_number + bridged_after) as last_release_number,
         count(*) as release_count,
         {%- if bridge > 0 %}
-        sum(bridged_after) as bridged_releases,
+        sum(bridged_after)::bigint as bridged_releases,
         {%- endif %}
         arg_min(member_sha256, release_number) as first_member_sha256,
         bool_or(is_after_gap and is_version_start) as is_after_gap,

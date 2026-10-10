@@ -1,9 +1,9 @@
-"""E2E for silver step 6: Great Expectations validation through the real entry point (scripts/lakehouse/silver.py).
+"""E2E for silver steps 6 and 7.4: Great Expectations validation through the real entry point (scripts/lakehouse/silver.py).
 
 The fixture build is the staging E2E's ``base`` case (every silver table, built by dbt from synthetic bronze). Each case
 copies it, adds the build marker and applies one SQL change; the validation must fail exactly the named expectations
-and pass every other one. Failure modes 639 to 651 and 713 (plans/silver_processed_zone_20261009/plan.md). Report:
-data/e2e/silver_quality/fixture_<UTC>/report.json.
+and pass every other one. Failure modes 639 to 651, 671 to 673 and 713 to 715
+(plans/silver_processed_zone_20261009/plan.md). Report: data/e2e/silver_quality/fixture_<UTC>/report.json.
 
     .venv/bin/python -m scripts.lakehouse.run_silver_e2e
 """
@@ -90,6 +90,41 @@ CASES: list[tuple[str, str, set[str]]] = [
         "self_link_unflagged",
         "UPDATE int_county_adjacency_edges SET is_self_link = NOT is_self_link WHERE edge_key = (SELECT min(edge_key) FROM int_county_adjacency_edges);",
         {"adjacency.self_link_flagged"},
+    ),
+    # Silver step 7.4: the history suite [671] to [673] [714] [715].
+    (
+        "history_current_flag_wrong",
+        "UPDATE int_hospital_pos_history SET is_current = NOT is_current WHERE history_key = (SELECT min(history_key) FROM int_hospital_pos_history);",
+        {"pos_history.current_when_open"},
+    ),
+    (
+        "history_zero_releases",
+        "UPDATE int_hospital_pos_history SET release_count = 0 WHERE history_key = (SELECT min(history_key) FROM int_hospital_pos_history);",
+        {"pos_history.release_count_positive"},
+    ),
+    (
+        "history_first_version_after_gap",
+        "UPDATE int_hospital_hgi_history SET is_after_gap = true WHERE history_key = (SELECT min(history_key) FROM int_hospital_hgi_history);",
+        {"hgi_history.gap_flag_matches_dates"},
+    ),
+    (
+        "history_unchanged_successor",
+        "UPDATE int_hospital_ownership_history AS h SET percentage_ownership = p.percentage_ownership, "
+        "organization_name_owner = p.organization_name_owner, private_equity_company_owner = p.private_equity_company_owner, "
+        "reit_owner = p.reit_owner FROM int_hospital_ownership_history AS p "
+        "WHERE h.associate_id_owner = '9876543210' AND p.associate_id_owner = '9876543210' AND p.valid_to = h.valid_from;",
+        {"ownership_history.version_changes_values"},
+    ),
+    (
+        "history_owner_id_unpadded",
+        "UPDATE int_hospital_ownership_history SET associate_id_owner = '55555555' WHERE associate_id_owner = '5555555555';",
+        {"ownership_history.owner_ids_ten_digits", "ownership_history.keys_from_organization_owners"},
+    ),
+    (
+        "history_bridged_beyond_releases",
+        "UPDATE int_hospital_ownership_history SET bridged_releases = release_count + 1 "
+        "WHERE history_key = (SELECT min(history_key) FROM int_hospital_ownership_history);",
+        {"ownership_history.bridged_within_releases"},
     ),
 ]
 # Cases that stop before any expectation runs, with the text the stop must name [646] [647].
