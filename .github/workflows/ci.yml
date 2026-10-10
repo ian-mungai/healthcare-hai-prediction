@@ -3,14 +3,13 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 # A pull request run checks the whole base..head range, so a newer push may cancel it. A push run checks only its
-# pushed range, so each push to main gets its own group and is never cancelled: a cancelled range would go unchecked.
+# pushed range, so each push gets its own group and is never cancelled: a cancelled range would go unchecked.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true

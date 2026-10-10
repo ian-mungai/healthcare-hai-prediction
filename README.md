@@ -629,12 +629,16 @@ Checks" job (30-minute limit, LFS checkout, pinned Terraform). The CI job uses t
 hook's own path pattern through `scripts/acquisition/run_checks_ci.sh`, which also
 matches the CI workflow; a manual run, the first push of a branch or rewritten
 history runs every check. `bash scripts/acquisition/run_checks_ci_e2e.sh` tests
-that gate. Each push to `main` gets its own CI run, so a newer push never cancels
-the check of an earlier range. They need no AWS credentials and no
+that gate. CI runs on every push to any branch and on every pull request; each push gets its own run, so a newer
+push never cancels the check of an earlier range. They need no AWS credentials and no
 collected `data/`. Off macOS, the HUD workbook and WONDER suites substitute only the
 macOS browser-download metadata (the "downloaded from" attribute and file creation
 time); on a Mac the real reads run. When the private archive is absent (as in CI), the
-registry-additions suite skips its single legacy-archive check and records the skip. The coverage gate leaves out
+registry-additions suite skips its single legacy-archive check and the code-version suite its archived-original
+checks; both record the skips. Each gate run writes `run.json` beside the suite outcomes in `data/e2e/acquisition_checks/`
+with the seconds of every suite and a hash of the acquisition code and configuration; a change during the run fails it.
+`ACQUISITION_E2E_MODE=iteration` runs each offline suite once instead of twice for a faster loop and marks the run
+"not commit evidence"; the hook and CI always run the full mode. The coverage gate leaves out
 the tools in `scripts/acquisition/one_off/`, which ran once and are evidenced by their run records; a
 gate test loads every committed collector plan through its contract; it needs the collected `data/`, so CI
 skips it.
