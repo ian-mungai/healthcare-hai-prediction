@@ -1,0 +1,312 @@
+{
+  "name": "silver_alignment",
+  "description": "Alignment tables: rows per spine row, statuses, ages and tokens [648] [650]",
+  "expectations": [
+    {
+      "id": "care_compare.rows_per_spine_row",
+      "table": "int_spine_care_compare_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM {batch} GROUP BY spine_key HAVING count(*) <> <<rows_per_spine_row.care_compare>>"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "care_compare.every_spine_row",
+      "table": "int_spine_care_compare_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM int_hospital_spine EXCEPT SELECT spine_key FROM {batch}"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "care_compare.aligned_share",
+      "table": "int_spine_care_compare_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT 1 FROM {batch} HAVING avg(CASE WHEN alignment_status = 'aligned' THEN 1 ELSE 0 END) NOT BETWEEN <<aligned_share.care_compare.min>> AND <<aligned_share.care_compare.max>>"
+      },
+      "severity": "distribution"
+    },
+    {
+      "id": "care_compare.age_not_negative",
+      "table": "int_spine_care_compare_measures",
+      "type": "ExpectColumnValuesToBeBetween",
+      "kwargs": {
+        "column": "age_months",
+        "min_value": 0,
+        "row_condition": "col(\"alignment_status\")==\"aligned\"",
+        "condition_parser": "great_expectations"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "care_compare.token_not_filled",
+      "table": "int_spine_care_compare_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE value_number IS NOT NULL AND value_text IS NOT NULL AND TRY_CAST(value_text AS DOUBLE) IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "hospital_measures.rows_per_spine_row",
+      "table": "int_spine_hospital_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM {batch} GROUP BY spine_key HAVING count(*) <> <<rows_per_spine_row.hospital_measures>>"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "hospital_measures.every_spine_row",
+      "table": "int_spine_hospital_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM int_hospital_spine EXCEPT SELECT spine_key FROM {batch}"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "hospital_measures.aligned_share",
+      "table": "int_spine_hospital_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT 1 FROM {batch} HAVING avg(CASE WHEN alignment_status = 'aligned' THEN 1 ELSE 0 END) NOT BETWEEN <<aligned_share.hospital_measures.min>> AND <<aligned_share.hospital_measures.max>>"
+      },
+      "severity": "distribution"
+    },
+    {
+      "id": "hospital_measures.age_not_negative",
+      "table": "int_spine_hospital_measures",
+      "type": "ExpectColumnValuesToBeBetween",
+      "kwargs": {
+        "column": "age_months",
+        "min_value": 0,
+        "row_condition": "col(\"alignment_status\")==\"aligned\"",
+        "condition_parser": "great_expectations"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "operations_measures.rows_per_spine_row",
+      "table": "int_spine_operations_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM {batch} GROUP BY spine_key HAVING count(*) <> <<rows_per_spine_row.operations_measures>>"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "operations_measures.every_spine_row",
+      "table": "int_spine_operations_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM int_hospital_spine EXCEPT SELECT spine_key FROM {batch}"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "operations_measures.aligned_share",
+      "table": "int_spine_operations_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT 1 FROM {batch} HAVING avg(CASE WHEN alignment_status = 'aligned' THEN 1 ELSE 0 END) NOT BETWEEN <<aligned_share.operations_measures.min>> AND <<aligned_share.operations_measures.max>>"
+      },
+      "severity": "distribution"
+    },
+    {
+      "id": "operations_measures.age_not_negative",
+      "table": "int_spine_operations_measures",
+      "type": "ExpectColumnValuesToBeBetween",
+      "kwargs": {
+        "column": "age_months",
+        "min_value": 0,
+        "row_condition": "col(\"alignment_status\")==\"aligned\"",
+        "condition_parser": "great_expectations"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "county_measures.rows_per_spine_row",
+      "table": "int_spine_county_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM {batch} GROUP BY spine_key HAVING count(*) <> <<rows_per_spine_row.county_measures>>"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "county_measures.every_spine_row",
+      "table": "int_spine_county_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM int_hospital_spine EXCEPT SELECT spine_key FROM {batch}"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "county_measures.aligned_share",
+      "table": "int_spine_county_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT 1 FROM {batch} HAVING avg(CASE WHEN alignment_status = 'aligned' THEN 1 ELSE 0 END) NOT BETWEEN <<aligned_share.county_measures.min>> AND <<aligned_share.county_measures.max>>"
+      },
+      "severity": "distribution"
+    },
+    {
+      "id": "county_measures.age_not_negative",
+      "table": "int_spine_county_measures",
+      "type": "ExpectColumnValuesToBeBetween",
+      "kwargs": {
+        "column": "age_months",
+        "min_value": 0,
+        "row_condition": "col(\"alignment_status\")==\"aligned\"",
+        "condition_parser": "great_expectations"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "county_measures.token_not_filled",
+      "table": "int_spine_county_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE value_number IS NOT NULL AND value_text IS NOT NULL AND TRY_CAST(value_text AS DOUBLE) IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "county_context.rows_per_spine_row",
+      "table": "int_spine_county_context",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM {batch} GROUP BY spine_key HAVING count(*) <> <<rows_per_spine_row.county_context>>"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "county_context.every_spine_row",
+      "table": "int_spine_county_context",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM int_hospital_spine EXCEPT SELECT spine_key FROM {batch}"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "county_context.aligned_share",
+      "table": "int_spine_county_context",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT 1 FROM {batch} HAVING avg(CASE WHEN alignment_status = 'aligned' THEN 1 ELSE 0 END) NOT BETWEEN <<aligned_share.county_context.min>> AND <<aligned_share.county_context.max>>"
+      },
+      "severity": "distribution"
+    },
+    {
+      "id": "county_context.age_not_negative",
+      "table": "int_spine_county_context",
+      "type": "ExpectColumnValuesToBeBetween",
+      "kwargs": {
+        "column": "age_months",
+        "min_value": 0,
+        "row_condition": "col(\"alignment_status\")==\"aligned\"",
+        "condition_parser": "great_expectations"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "county_context.token_not_filled",
+      "table": "int_spine_county_context",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE value_number IS NOT NULL AND value_text IS NOT NULL AND TRY_CAST(value_text AS DOUBLE) IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "linkage.rows_per_spine_row",
+      "table": "int_spine_linkage",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM {batch} GROUP BY spine_key HAVING count(*) <> <<rows_per_spine_row.linkage>>"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "linkage.every_spine_row",
+      "table": "int_spine_linkage",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM int_hospital_spine EXCEPT SELECT spine_key FROM {batch}"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "linkage.aligned_share",
+      "table": "int_spine_linkage",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT 1 FROM {batch} HAVING avg(CASE WHEN alignment_status = 'aligned' THEN 1 ELSE 0 END) NOT BETWEEN <<aligned_share.linkage.min>> AND <<aligned_share.linkage.max>>"
+      },
+      "severity": "distribution"
+    },
+    {
+      "id": "linkage.age_not_negative",
+      "table": "int_spine_linkage",
+      "type": "ExpectColumnValuesToBeBetween",
+      "kwargs": {
+        "column": "age_months",
+        "min_value": 0,
+        "row_condition": "col(\"alignment_status\")==\"aligned\"",
+        "condition_parser": "great_expectations"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "linkage.token_not_filled",
+      "table": "int_spine_linkage",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE value_number IS NOT NULL AND value_text IS NOT NULL AND TRY_CAST(value_text AS DOUBLE) IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "validation.rows_per_spine_row",
+      "table": "int_spine_validation_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM {batch} GROUP BY spine_key HAVING count(*) <> <<rows_per_spine_row.validation>>"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "validation.every_spine_row",
+      "table": "int_spine_validation_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM int_hospital_spine EXCEPT SELECT spine_key FROM {batch}"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "validation.aligned_share",
+      "table": "int_spine_validation_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT 1 FROM {batch} HAVING avg(CASE WHEN alignment_status = 'aligned' THEN 1 ELSE 0 END) NOT BETWEEN <<aligned_share.validation.min>> AND <<aligned_share.validation.max>>"
+      },
+      "severity": "distribution"
+    },
+    {
+      "id": "validation.token_not_filled",
+      "table": "int_spine_validation_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE value_number IS NOT NULL AND value_text IS NOT NULL AND TRY_CAST(value_text AS DOUBLE) IS NULL"
+      },
+      "severity": "structural"
+    }
+  ]
+}

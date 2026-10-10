@@ -1543,3 +1543,18 @@ models:
       - name: measure_control
         description: Registry control identifier.
         data_tests: [not_null]
+  - name: int_silver_build_marker
+    description: >
+      One row naming the dbt run that wrote the build file and the DuckDB version that wrote it, built after every table
+      gold reads. Great Expectations validation (scripts/lakehouse/silver.py validate) refuses a build file without it
+      and binds its result to this row (silver step 6, failure modes 639, 646 and 647).
+    columns:
+      - name: dbt_invocation_id
+        description: The dbt invocation that built this file.
+        data_tests: [unique, not_null]
+      - name: git_revision
+        description: The git revision passed as the dbt variable git_revision, or unrecorded.
+        data_tests: [not_null]
+      - name: duckdb_version
+        description: version() of the DuckDB that wrote the file.
+        data_tests: [not_null]

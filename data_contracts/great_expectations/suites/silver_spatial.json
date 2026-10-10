@@ -1,0 +1,42 @@
+{
+  "name": "silver_spatial",
+  "description": "County adjacency for Moran's I",
+  "expectations": [
+    {
+      "id": "adjacency.county_five_digits",
+      "table": "int_county_adjacency_edges",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE NOT regexp_full_match(county_fips, '[0-9][0-9][0-9][0-9][0-9]')"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "adjacency.neighbor_five_digits",
+      "table": "int_county_adjacency_edges",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE NOT regexp_full_match(neighbor_fips, '[0-9][0-9][0-9][0-9][0-9]')"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "adjacency.self_link_flagged",
+      "table": "int_county_adjacency_edges",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE (county_fips = neighbor_fips) <> is_self_link"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "adjacency.spine_counties_in_graph",
+      "table": "int_county_adjacency_edges",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT 1 FROM int_hospital_spine WHERE is_state_or_dc AND county_fips IS NOT NULL AND county_fips NOT IN (SELECT county_fips FROM {batch}) HAVING count(DISTINCT county_fips) > <<adjacency.missing_spine_counties.max>>"
+      },
+      "severity": "distribution"
+    }
+  ]
+}

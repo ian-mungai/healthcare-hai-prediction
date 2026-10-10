@@ -397,6 +397,30 @@ scripts/lakehouse/dbt.sh build                                      # dbt on the
 .venv/bin/python -m scripts.lakehouse.mmd_conditions --check             # MMD condition map matches the pinned plans
 ```
 
+**Silver validation (Great Expectations).** After a build, Great Expectations 1.23.2 checks the tables gold reads, as a
+second gate independent of the dbt tests. `scripts/lakehouse/silver.py validate` runs `scripts/lakehouse/silver_quality.py`
+in the `quality` image (`services/quality/`, no network, memory limit from the launch plan). It opens the build file
+read-only and stops when an `analytics-dbt` container is running, when `int_silver_build_marker` is missing or when the
+marker's DuckDB version differs from the reader's. The suites in `data_contracts/great_expectations/suites/` are JSON
+lists of Great Expectations classes and arguments:
+
+- the exact ordered columns and types and a row count for each of the 10 tables;
+- the spine's fill sources and populations;
+- six outcome rows per spine row, with the SIR inside its interval and equal to observed over predicted;
+- the fixed rows per spine row of each alignment table, with no negative age and no publisher token turned into a number;
+- no validation or linkage control in a predictor table;
+- five-digit county codes in the adjacency graph.
+
+Bands (windows per year, aligned shares) come from `data_contracts/great_expectations/baselines.json`. They only warn
+until the owner approves that file. No expectation repeats a dbt test on the same column; the run fails if one does.
+Results keep counts only. Great Expectations keeps no open connection for DuckDB, so every metric came back empty. The
+validator registers DuckDB with it as a single-connection dialect, only for the pinned version.
+
+```sh
+.venv/bin/python -m scripts.lakehouse.silver validate              # the last build; record: data/e2e/silver_quality/<UTC>/run.json
+.venv/bin/python -m scripts.lakehouse.run_silver_e2e               # fixture cases on the staging E2E base build; report alongside
+```
+
 Load large groups in batches of about 20 to 40 tables: each job stops after 1 hour (`COMPOSE_TIMEOUT` in
 `scripts/lakehouse/catalog.py`). A rerun of the same tables ends in the same state.
 
@@ -746,8 +770,10 @@ No AWS changes implementing these four deferred controls have been applied.
 - `.github/`: the CI workflow and the pull request template.
 - `scripts/lakehouse/`, `config/lakehouse/`: the catalog script, the bronze loader, file readers, dictionary and
   checksum jobs, the Care Compare, retired-object and IPPS label generators, the dbt runner, the dbt-project-evaluator
-  runner and the bronze and staging E2E; the table map, the retired and removed lists and the reviewed label overrides.
-- `services/`, `docker-compose.yaml`: the Polaris catalog, Spark job and DuckDB analytics containers.
+  runner, the bronze and staging E2E and the silver validation launcher, validator and its E2E; the table map, the
+  retired and removed lists and the reviewed label overrides.
+- `services/`, `docker-compose.yaml`: the Polaris catalog, Spark job, DuckDB analytics and Great Expectations quality containers.
+- `data_contracts/great_expectations/`: the silver validation suites and their reviewed baselines.
 - `scripts/acquisition/`, `config/acquisition/`: collectors, storage checks, E2E suites and their locked plans and
   registry, documented in `docs/data_collection.md`; collected data and audit evidence stay in the ignored `data/` folder.
   `scripts/acquisition/one_off/` holds tools that ran once, such as queue builders and the privacy and duplicate

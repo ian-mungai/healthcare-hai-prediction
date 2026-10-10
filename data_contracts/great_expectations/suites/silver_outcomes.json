@@ -1,0 +1,52 @@
+{
+  "name": "silver_outcomes",
+  "description": "HAI outcomes: six rows per spine row, SIR range and recomputation [651]",
+  "expectations": [
+    {
+      "id": "outcomes.six_per_spine_row",
+      "table": "int_spine_hai_outcomes",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM {batch} GROUP BY spine_key HAVING count(*) <> 6"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "outcomes.every_spine_row",
+      "table": "int_spine_hai_outcomes",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT spine_key FROM int_hospital_spine EXCEPT SELECT spine_key FROM {batch}"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "outcomes.sir_not_negative",
+      "table": "int_spine_hai_outcomes",
+      "type": "ExpectColumnValuesToBeBetween",
+      "kwargs": {
+        "column": "sir",
+        "min_value": 0
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "outcomes.sir_inside_interval",
+      "table": "int_spine_hai_outcomes",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE sir < ci_lower OR sir > ci_upper"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "outcomes.sir_recomputed",
+      "table": "int_spine_hai_outcomes",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE sir IS NOT NULL AND observed IS NOT NULL AND predicted > 0 AND abs(sir - observed / predicted) > 0.0006"
+      },
+      "severity": "structural"
+    }
+  ]
+}

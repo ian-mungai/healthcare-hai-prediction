@@ -1,0 +1,524 @@
+{
+  "name": "silver_contract",
+  "description": "Every published table exists with rows and its exact ordered columns and types [640]",
+  "expectations": [
+    {
+      "id": "int_county_adjacency_edges.columns",
+      "table": "int_county_adjacency_edges",
+      "type": "ExpectTableColumnsToMatchOrderedList",
+      "kwargs": {
+        "column_list": [
+          "member_sha256",
+          "source_row_number",
+          "vintage",
+          "county_fips",
+          "county_name",
+          "county_published",
+          "neighbor_fips",
+          "neighbor_name",
+          "neighbor_published",
+          "shared_border_length_m",
+          "length_published",
+          "county_scope",
+          "edge_key",
+          "is_self_link",
+          "is_isolated",
+          "is_connecticut"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_county_adjacency_edges.has_rows",
+      "table": "int_county_adjacency_edges",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_county_adjacency_edges.types",
+      "table": "int_county_adjacency_edges",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT * FROM {batch} LIMIT 1) WHERE typeof(member_sha256) <> 'VARCHAR' OR typeof(source_row_number) <> 'BIGINT' OR typeof(vintage) <> 'VARCHAR' OR typeof(county_fips) <> 'VARCHAR' OR typeof(county_name) <> 'VARCHAR' OR typeof(county_published) <> 'VARCHAR' OR typeof(neighbor_fips) <> 'VARCHAR' OR typeof(neighbor_name) <> 'VARCHAR' OR typeof(neighbor_published) <> 'VARCHAR' OR typeof(shared_border_length_m) <> 'DOUBLE' OR typeof(length_published) <> 'VARCHAR' OR typeof(county_scope) <> 'VARCHAR' OR typeof(edge_key) <> 'VARCHAR' OR typeof(is_self_link) <> 'BOOLEAN' OR typeof(is_isolated) <> 'BOOLEAN' OR typeof(is_connecticut) <> 'BOOLEAN'"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_spine.columns",
+      "table": "int_hospital_spine",
+      "type": "ExpectTableColumnsToMatchOrderedList",
+      "kwargs": {
+        "column_list": [
+          "ccn",
+          "window_year",
+          "window_start",
+          "hai_measure_count",
+          "pos_period_end",
+          "state_code",
+          "state_source",
+          "zip_code",
+          "county_fips",
+          "county_source",
+          "planning_region_fips",
+          "planning_region_source",
+          "provider_subtype_code",
+          "control_type_code",
+          "classification_source",
+          "bed_count",
+          "certified_bed_count",
+          "is_active",
+          "cmi",
+          "cmi_data_fiscal_year",
+          "cmi_rule_fiscal_year",
+          "cmi_rule_stage",
+          "cmi_cases",
+          "has_pos_snapshot",
+          "has_cmi",
+          "is_cmi_held",
+          "is_critical_access",
+          "is_veterans_affairs",
+          "is_state_or_dc",
+          "is_connecticut",
+          "is_maryland",
+          "spine_key",
+          "is_primary_population",
+          "is_sensitivity_population"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_spine.has_rows",
+      "table": "int_hospital_spine",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_spine.types",
+      "table": "int_hospital_spine",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT * FROM {batch} LIMIT 1) WHERE typeof(ccn) <> 'VARCHAR' OR typeof(window_year) <> 'BIGINT' OR typeof(window_start) <> 'DATE' OR typeof(hai_measure_count) <> 'BIGINT' OR typeof(pos_period_end) <> 'DATE' OR typeof(state_code) <> 'VARCHAR' OR typeof(state_source) <> 'VARCHAR' OR typeof(zip_code) <> 'VARCHAR' OR typeof(county_fips) <> 'VARCHAR' OR typeof(county_source) <> 'VARCHAR' OR typeof(planning_region_fips) <> 'VARCHAR' OR typeof(planning_region_source) <> 'VARCHAR' OR typeof(provider_subtype_code) <> 'VARCHAR' OR typeof(control_type_code) <> 'VARCHAR' OR typeof(classification_source) <> 'VARCHAR' OR typeof(bed_count) <> 'INTEGER' OR typeof(certified_bed_count) <> 'INTEGER' OR typeof(is_active) <> 'BOOLEAN' OR typeof(cmi) <> 'DOUBLE' OR typeof(cmi_data_fiscal_year) <> 'INTEGER' OR typeof(cmi_rule_fiscal_year) <> 'INTEGER' OR typeof(cmi_rule_stage) <> 'VARCHAR' OR typeof(cmi_cases) <> 'DOUBLE' OR typeof(has_pos_snapshot) <> 'BOOLEAN' OR typeof(has_cmi) <> 'BOOLEAN' OR typeof(is_cmi_held) <> 'BOOLEAN' OR typeof(is_critical_access) <> 'BOOLEAN' OR typeof(is_veterans_affairs) <> 'BOOLEAN' OR typeof(is_state_or_dc) <> 'BOOLEAN' OR typeof(is_connecticut) <> 'BOOLEAN' OR typeof(is_maryland) <> 'BOOLEAN' OR typeof(spine_key) <> 'VARCHAR' OR typeof(is_primary_population) <> 'BOOLEAN' OR typeof(is_sensitivity_population) <> 'BOOLEAN'"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_care_compare_measures.columns",
+      "table": "int_spine_care_compare_measures",
+      "type": "ExpectTableColumnsToMatchOrderedList",
+      "kwargs": {
+        "column_list": [
+          "spine_key",
+          "ccn",
+          "window_year",
+          "window_start",
+          "measure_control",
+          "family",
+          "source_model",
+          "review_decision",
+          "measure_id",
+          "value_text",
+          "value_number",
+          "value_category",
+          "footnote_text",
+          "sample_text",
+          "period_start",
+          "period_end",
+          "release_date",
+          "release_file_count",
+          "age_months",
+          "alignment_status",
+          "is_primary_population",
+          "is_sensitivity_population",
+          "is_connecticut",
+          "is_maryland",
+          "alignment_key"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_care_compare_measures.has_rows",
+      "table": "int_spine_care_compare_measures",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_care_compare_measures.types",
+      "table": "int_spine_care_compare_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT * FROM {batch} LIMIT 1) WHERE typeof(spine_key) <> 'VARCHAR' OR typeof(ccn) <> 'VARCHAR' OR typeof(window_year) <> 'BIGINT' OR typeof(window_start) <> 'DATE' OR typeof(measure_control) <> 'VARCHAR' OR typeof(family) <> 'VARCHAR' OR typeof(source_model) <> 'VARCHAR' OR typeof(review_decision) <> 'VARCHAR' OR typeof(measure_id) <> 'VARCHAR' OR typeof(value_text) <> 'VARCHAR' OR typeof(value_number) <> 'DOUBLE' OR typeof(value_category) <> 'VARCHAR' OR typeof(footnote_text) <> 'VARCHAR' OR typeof(sample_text) <> 'VARCHAR' OR typeof(period_start) <> 'DATE' OR typeof(period_end) <> 'DATE' OR typeof(release_date) <> 'DATE' OR typeof(release_file_count) <> 'BIGINT' OR typeof(age_months) <> 'BIGINT' OR typeof(alignment_status) <> 'VARCHAR' OR typeof(is_primary_population) <> 'BOOLEAN' OR typeof(is_sensitivity_population) <> 'BOOLEAN' OR typeof(is_connecticut) <> 'BOOLEAN' OR typeof(is_maryland) <> 'BOOLEAN' OR typeof(alignment_key) <> 'VARCHAR'"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_county_context.columns",
+      "table": "int_spine_county_context",
+      "type": "ExpectTableColumnsToMatchOrderedList",
+      "kwargs": {
+        "column_list": [
+          "spine_key",
+          "ccn",
+          "window_year",
+          "window_start",
+          "county_fips",
+          "planning_region_fips",
+          "measure_source",
+          "measure_control",
+          "field",
+          "review_decision",
+          "period_end",
+          "value_text",
+          "value_number",
+          "value_note",
+          "alignment_status",
+          "is_primary_population",
+          "is_sensitivity_population",
+          "is_connecticut",
+          "is_maryland",
+          "age_months",
+          "alignment_key"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_county_context.has_rows",
+      "table": "int_spine_county_context",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_county_context.types",
+      "table": "int_spine_county_context",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT * FROM {batch} LIMIT 1) WHERE typeof(spine_key) <> 'VARCHAR' OR typeof(ccn) <> 'VARCHAR' OR typeof(window_year) <> 'BIGINT' OR typeof(window_start) <> 'DATE' OR typeof(county_fips) <> 'VARCHAR' OR typeof(planning_region_fips) <> 'VARCHAR' OR typeof(measure_source) <> 'VARCHAR' OR typeof(measure_control) <> 'VARCHAR' OR typeof(field) <> 'VARCHAR' OR typeof(review_decision) <> 'VARCHAR' OR typeof(period_end) <> 'DATE' OR typeof(value_text) <> 'VARCHAR' OR typeof(value_number) <> 'DOUBLE' OR typeof(value_note) <> 'VARCHAR' OR typeof(alignment_status) <> 'VARCHAR' OR typeof(is_primary_population) <> 'BOOLEAN' OR typeof(is_sensitivity_population) <> 'BOOLEAN' OR typeof(is_connecticut) <> 'BOOLEAN' OR typeof(is_maryland) <> 'BOOLEAN' OR typeof(age_months) <> 'BIGINT' OR typeof(alignment_key) <> 'VARCHAR'"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_county_measures.columns",
+      "table": "int_spine_county_measures",
+      "type": "ExpectTableColumnsToMatchOrderedList",
+      "kwargs": {
+        "column_list": [
+          "spine_key",
+          "ccn",
+          "window_year",
+          "window_start",
+          "county_fips",
+          "measure_source",
+          "measure_control",
+          "field",
+          "review_decision",
+          "period_end",
+          "is_primary_population",
+          "is_sensitivity_population",
+          "is_connecticut",
+          "is_maryland",
+          "value_text",
+          "value_number",
+          "age_months",
+          "is_primary_county_join",
+          "alignment_status",
+          "alignment_key"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_county_measures.has_rows",
+      "table": "int_spine_county_measures",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_county_measures.types",
+      "table": "int_spine_county_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT * FROM {batch} LIMIT 1) WHERE typeof(spine_key) <> 'VARCHAR' OR typeof(ccn) <> 'VARCHAR' OR typeof(window_year) <> 'BIGINT' OR typeof(window_start) <> 'DATE' OR typeof(county_fips) <> 'VARCHAR' OR typeof(measure_source) <> 'VARCHAR' OR typeof(measure_control) <> 'VARCHAR' OR typeof(field) <> 'VARCHAR' OR typeof(review_decision) <> 'VARCHAR' OR typeof(period_end) <> 'DATE' OR typeof(is_primary_population) <> 'BOOLEAN' OR typeof(is_sensitivity_population) <> 'BOOLEAN' OR typeof(is_connecticut) <> 'BOOLEAN' OR typeof(is_maryland) <> 'BOOLEAN' OR typeof(value_text) <> 'VARCHAR' OR typeof(value_number) <> 'DOUBLE' OR typeof(age_months) <> 'BIGINT' OR typeof(is_primary_county_join) <> 'BOOLEAN' OR typeof(alignment_status) <> 'VARCHAR' OR typeof(alignment_key) <> 'VARCHAR'"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_hai_outcomes.columns",
+      "table": "int_spine_hai_outcomes",
+      "type": "ExpectTableColumnsToMatchOrderedList",
+      "kwargs": {
+        "column_list": [
+          "ccn",
+          "window_year",
+          "window_start",
+          "hai_type",
+          "measure_name",
+          "sir_text",
+          "sir",
+          "sir_footnote",
+          "ci_lower_text",
+          "ci_lower",
+          "ci_lower_footnote",
+          "ci_upper_text",
+          "ci_upper",
+          "ci_upper_footnote",
+          "observed_text",
+          "observed",
+          "observed_footnote",
+          "predicted_text",
+          "predicted",
+          "predicted_footnote",
+          "exposure_text",
+          "exposure",
+          "exposure_footnote",
+          "sir_compared_to_national",
+          "sir_footnote_codes",
+          "release_date",
+          "published_parts",
+          "baseline_held_parts",
+          "staging_held_parts",
+          "has_sir",
+          "spine_key",
+          "is_primary_population",
+          "is_sensitivity_population",
+          "is_connecticut",
+          "is_maryland",
+          "outcome_key",
+          "alignment_status"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_hai_outcomes.has_rows",
+      "table": "int_spine_hai_outcomes",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_hai_outcomes.types",
+      "table": "int_spine_hai_outcomes",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT * FROM {batch} LIMIT 1) WHERE typeof(ccn) <> 'VARCHAR' OR typeof(window_year) <> 'BIGINT' OR typeof(window_start) <> 'DATE' OR typeof(hai_type) <> 'VARCHAR' OR typeof(measure_name) <> 'VARCHAR' OR typeof(sir_text) <> 'VARCHAR' OR typeof(sir) <> 'DOUBLE' OR typeof(sir_footnote) <> 'VARCHAR' OR typeof(ci_lower_text) <> 'VARCHAR' OR typeof(ci_lower) <> 'DOUBLE' OR typeof(ci_lower_footnote) <> 'VARCHAR' OR typeof(ci_upper_text) <> 'VARCHAR' OR typeof(ci_upper) <> 'DOUBLE' OR typeof(ci_upper_footnote) <> 'VARCHAR' OR typeof(observed_text) <> 'VARCHAR' OR typeof(observed) <> 'DOUBLE' OR typeof(observed_footnote) <> 'VARCHAR' OR typeof(predicted_text) <> 'VARCHAR' OR typeof(predicted) <> 'DOUBLE' OR typeof(predicted_footnote) <> 'VARCHAR' OR typeof(exposure_text) <> 'VARCHAR' OR typeof(exposure) <> 'DOUBLE' OR typeof(exposure_footnote) <> 'VARCHAR' OR typeof(sir_compared_to_national) <> 'VARCHAR' OR typeof(sir_footnote_codes) <> 'VARCHAR' OR typeof(release_date) <> 'DATE' OR typeof(published_parts) <> 'BIGINT' OR typeof(baseline_held_parts) <> 'BIGINT' OR typeof(staging_held_parts) <> 'BIGINT' OR typeof(has_sir) <> 'BOOLEAN' OR typeof(spine_key) <> 'VARCHAR' OR typeof(is_primary_population) <> 'BOOLEAN' OR typeof(is_sensitivity_population) <> 'BOOLEAN' OR typeof(is_connecticut) <> 'BOOLEAN' OR typeof(is_maryland) <> 'BOOLEAN' OR typeof(outcome_key) <> 'VARCHAR' OR typeof(alignment_status) <> 'VARCHAR'"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_hospital_measures.columns",
+      "table": "int_spine_hospital_measures",
+      "type": "ExpectTableColumnsToMatchOrderedList",
+      "kwargs": {
+        "column_list": [
+          "spine_key",
+          "ccn",
+          "window_year",
+          "window_start",
+          "measure_source",
+          "measure_control",
+          "field",
+          "review_decision",
+          "period_start",
+          "period_end",
+          "rule_fiscal_year",
+          "rule_stage",
+          "period_copy_count",
+          "is_primary_population",
+          "is_sensitivity_population",
+          "is_connecticut",
+          "is_maryland",
+          "value_code",
+          "value_number",
+          "age_months",
+          "alignment_status",
+          "alignment_key"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_hospital_measures.has_rows",
+      "table": "int_spine_hospital_measures",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_hospital_measures.types",
+      "table": "int_spine_hospital_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT * FROM {batch} LIMIT 1) WHERE typeof(spine_key) <> 'VARCHAR' OR typeof(ccn) <> 'VARCHAR' OR typeof(window_year) <> 'BIGINT' OR typeof(window_start) <> 'DATE' OR typeof(measure_source) <> 'VARCHAR' OR typeof(measure_control) <> 'VARCHAR' OR typeof(field) <> 'VARCHAR' OR typeof(review_decision) <> 'VARCHAR' OR typeof(period_start) <> 'DATE' OR typeof(period_end) <> 'DATE' OR typeof(rule_fiscal_year) <> 'INTEGER' OR typeof(rule_stage) <> 'VARCHAR' OR typeof(period_copy_count) <> 'BIGINT' OR typeof(is_primary_population) <> 'BOOLEAN' OR typeof(is_sensitivity_population) <> 'BOOLEAN' OR typeof(is_connecticut) <> 'BOOLEAN' OR typeof(is_maryland) <> 'BOOLEAN' OR typeof(value_code) <> 'VARCHAR' OR typeof(value_number) <> 'DOUBLE' OR typeof(age_months) <> 'BIGINT' OR typeof(alignment_status) <> 'VARCHAR' OR typeof(alignment_key) <> 'VARCHAR'"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_linkage.columns",
+      "table": "int_spine_linkage",
+      "type": "ExpectTableColumnsToMatchOrderedList",
+      "kwargs": {
+        "column_list": [
+          "spine_key",
+          "ccn",
+          "window_year",
+          "window_start",
+          "county_fips",
+          "planning_region_fips",
+          "measure_source",
+          "measure_control",
+          "field",
+          "review_decision",
+          "period_end",
+          "value_text",
+          "value_number",
+          "value_note",
+          "alignment_status",
+          "is_primary_population",
+          "is_sensitivity_population",
+          "is_connecticut",
+          "is_maryland",
+          "age_months",
+          "alignment_key"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_linkage.has_rows",
+      "table": "int_spine_linkage",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_linkage.types",
+      "table": "int_spine_linkage",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT * FROM {batch} LIMIT 1) WHERE typeof(spine_key) <> 'VARCHAR' OR typeof(ccn) <> 'VARCHAR' OR typeof(window_year) <> 'BIGINT' OR typeof(window_start) <> 'DATE' OR typeof(county_fips) <> 'VARCHAR' OR typeof(planning_region_fips) <> 'VARCHAR' OR typeof(measure_source) <> 'VARCHAR' OR typeof(measure_control) <> 'VARCHAR' OR typeof(field) <> 'VARCHAR' OR typeof(review_decision) <> 'VARCHAR' OR typeof(period_end) <> 'DATE' OR typeof(value_text) <> 'VARCHAR' OR typeof(value_number) <> 'DOUBLE' OR typeof(value_note) <> 'VARCHAR' OR typeof(alignment_status) <> 'VARCHAR' OR typeof(is_primary_population) <> 'BOOLEAN' OR typeof(is_sensitivity_population) <> 'BOOLEAN' OR typeof(is_connecticut) <> 'BOOLEAN' OR typeof(is_maryland) <> 'BOOLEAN' OR typeof(age_months) <> 'BIGINT' OR typeof(alignment_key) <> 'VARCHAR'"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_operations_measures.columns",
+      "table": "int_spine_operations_measures",
+      "type": "ExpectTableColumnsToMatchOrderedList",
+      "kwargs": {
+        "column_list": [
+          "spine_key",
+          "ccn",
+          "window_year",
+          "window_start",
+          "measure_source",
+          "measure_control",
+          "review_decision",
+          "period_start",
+          "period_end",
+          "unit_count",
+          "skipped_count",
+          "is_primary_population",
+          "is_sensitivity_population",
+          "is_connecticut",
+          "is_maryland",
+          "value_text",
+          "value_number",
+          "age_months",
+          "alignment_status",
+          "alignment_key"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_operations_measures.has_rows",
+      "table": "int_spine_operations_measures",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_operations_measures.types",
+      "table": "int_spine_operations_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT * FROM {batch} LIMIT 1) WHERE typeof(spine_key) <> 'VARCHAR' OR typeof(ccn) <> 'VARCHAR' OR typeof(window_year) <> 'BIGINT' OR typeof(window_start) <> 'DATE' OR typeof(measure_source) <> 'VARCHAR' OR typeof(measure_control) <> 'VARCHAR' OR typeof(review_decision) <> 'VARCHAR' OR typeof(period_start) <> 'DATE' OR typeof(period_end) <> 'DATE' OR typeof(unit_count) <> 'BIGINT' OR typeof(skipped_count) <> 'BIGINT' OR typeof(is_primary_population) <> 'BOOLEAN' OR typeof(is_sensitivity_population) <> 'BOOLEAN' OR typeof(is_connecticut) <> 'BOOLEAN' OR typeof(is_maryland) <> 'BOOLEAN' OR typeof(value_text) <> 'VARCHAR' OR typeof(value_number) <> 'DOUBLE' OR typeof(age_months) <> 'BIGINT' OR typeof(alignment_status) <> 'VARCHAR' OR typeof(alignment_key) <> 'VARCHAR'"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_validation_measures.columns",
+      "table": "int_spine_validation_measures",
+      "type": "ExpectTableColumnsToMatchOrderedList",
+      "kwargs": {
+        "column_list": [
+          "spine_key",
+          "ccn",
+          "window_year",
+          "window_start",
+          "measure_control",
+          "measure",
+          "source_model",
+          "review_decision",
+          "value_text",
+          "value_number",
+          "footnote_text",
+          "period_start",
+          "period_end",
+          "fiscal_year",
+          "release_date",
+          "overlap_days",
+          "is_primary_population",
+          "is_sensitivity_population",
+          "is_connecticut",
+          "is_maryland",
+          "alignment_status",
+          "alignment_key"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_validation_measures.has_rows",
+      "table": "int_spine_validation_measures",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_spine_validation_measures.types",
+      "table": "int_spine_validation_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM (SELECT * FROM {batch} LIMIT 1) WHERE typeof(spine_key) <> 'VARCHAR' OR typeof(ccn) <> 'VARCHAR' OR typeof(window_year) <> 'BIGINT' OR typeof(window_start) <> 'DATE' OR typeof(measure_control) <> 'VARCHAR' OR typeof(measure) <> 'VARCHAR' OR typeof(source_model) <> 'VARCHAR' OR typeof(review_decision) <> 'VARCHAR' OR typeof(value_text) <> 'VARCHAR' OR typeof(value_number) <> 'DOUBLE' OR typeof(footnote_text) <> 'VARCHAR' OR typeof(period_start) <> 'DATE' OR typeof(period_end) <> 'DATE' OR typeof(fiscal_year) <> 'INTEGER' OR typeof(release_date) <> 'DATE' OR typeof(overlap_days) <> 'BIGINT' OR typeof(is_primary_population) <> 'BOOLEAN' OR typeof(is_sensitivity_population) <> 'BOOLEAN' OR typeof(is_connecticut) <> 'BOOLEAN' OR typeof(is_maryland) <> 'BOOLEAN' OR typeof(alignment_status) <> 'VARCHAR' OR typeof(alignment_key) <> 'VARCHAR'"
+      },
+      "severity": "structural"
+    }
+  ]
+}

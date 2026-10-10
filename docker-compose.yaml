@@ -157,6 +157,23 @@ services:
       polaris:
         condition: service_healthy
 
+  quality:
+    image: hai-quality:gx1.23.2-duckdb1.5.6
+    build: ./services/quality
+    profiles: [query]
+    mem_limit: ${JOB_MEMORY_LIMIT:?run through a lakehouse launch script}
+    # Validation reads one local file; it needs no network, AWS profile or catalog.
+    network_mode: none
+    entrypoint: ["python", "-m", "scripts.lakehouse.silver_quality"]
+    working_dir: /workspace
+    environment:
+      DUCKDB_MEMORY_LIMIT: ${DUCKDB_MEMORY_LIMIT:-}
+      JOB_THREADS: ${JOB_THREADS:-}
+    volumes:
+      # Code and the build file are read-only; scripts/lakehouse/silver.py mounts the suites, baselines and output folder.
+      - ./scripts:/workspace/scripts:ro
+      - ./data/analytics/dbt:/workspace/build:ro
+
   analytics-ui:
     image: hai-analytics:duckdb1.5.6-dbt1.11.15
     profiles: [query]

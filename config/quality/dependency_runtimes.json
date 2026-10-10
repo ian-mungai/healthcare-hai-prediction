@@ -33,6 +33,11 @@
       "requirements": ["services/analytics/requirements.txt"],
       "code": ["services/analytics/*.py"]
     },
+    "quality": {
+      "reason": "Great Expectations validation of the silver build file runs in the quality image (scripts/lakehouse/silver.py validate starts it).",
+      "requirements": ["services/quality/requirements.txt"],
+      "code": ["scripts/lakehouse/silver_quality.py"]
+    },
     "sqlfluff": {
       "reason": "A tool environment (.tools/sqlfluff) with no project code.",
       "requirements": ["scripts/quality/sqlfluff/requirements.txt"],
