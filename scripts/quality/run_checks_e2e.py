@@ -656,26 +656,33 @@ def run_verbose_case() -> tuple[bool, str]:
 
 
 def run_privacy_scope_case() -> tuple[bool, str]:
-    """Ignored files are skipped by default and scanned with --all; --warn reports findings but exits 0; values never print."""
+    """Ignored files are never scanned, with or without --all; a hidden untracked file is; --warn exits 0; values never print."""
     with tempfile.TemporaryDirectory(prefix="hai_privacy_scope_") as scratch:
         repo = scratch_repo(Path(scratch), Case("privacy setup", "privacy-scan", True))
         (repo / ".git" / "info" / "exclude").write_text(".venv\n.tools\n__pycache__/\nlocal_notes.md\n")
         write(repo, {"local_notes.md": f"Log at {HOME_PATH}\n"})
         command = ["-m", "scripts.quality.repo_checks", "privacy-scan"]
         default = run_command(str(ROOT / ".venv/bin/python"), command, cwd=repo)
+        ignored = run_command(str(ROOT / ".venv/bin/python"), [*command, "--all"], cwd=repo)
+        write(repo, {".scratch/notes.md": f"Log at {HOME_PATH}\n"})
         full = run_command(str(ROOT / ".venv/bin/python"), [*command, "--all"], cwd=repo)
         warned = run_command(str(ROOT / ".venv/bin/python"), [*command, "--all", "--warn"], cwd=repo)
-        marker = "local_notes.md:1: home-directory path with a user name"
-        leaked = HOME_PATH in default.stdout + default.stderr + full.stdout + full.stderr + warned.stdout + warned.stderr
+        skipped = "local_notes.md"
+        marker = ".scratch/notes.md:1: home-directory path with a user name"
+        outputs = [result.stdout + result.stderr for result in (default, ignored, full, warned)]
+        leaked = any(HOME_PATH in output for output in outputs)
         ok = (
             default.returncode == 0
+            and ignored.returncode == 0
             and full.returncode == 1
             and marker in full.stderr
+            and not any(skipped in output for output in outputs)
             and warned.returncode == 0
             and f"WARN {marker}" in warned.stderr
             and not leaked
         )
-        return ok, f"default exit={default.returncode}; --all exit={full.returncode}; --warn exit={warned.returncode}; value leaked={leaked}\n" + full.stderr
+        codes = f"default exit={default.returncode}; --all on ignored exit={ignored.returncode}; --all exit={full.returncode}; --warn exit={warned.returncode}"
+        return ok, f"{codes}; value leaked={leaked}\n" + full.stderr
 
 
 # Each sample runs the check directly, without --warn: (name, files, articles, expected exit, marker in the output).

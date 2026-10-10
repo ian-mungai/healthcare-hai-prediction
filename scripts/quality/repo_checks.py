@@ -159,7 +159,6 @@ WRITING_PATTERNS = {
     "em-dash": ("em dash in article text", re.compile("\u2014"), "use a colon, comma, parentheses or a new sentence"),
 }
 ARTICLE_ONLY = {"em-dash"}
-SKIPPED_DIRS = {".git", ".venv", ".tools", "node_modules", "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache", ".terraform"}
 
 
 @dataclass
@@ -740,15 +739,9 @@ def commit_range(start: str, end: str) -> list[Finding]:
     return findings
 
 
-def privacy_files(everything: bool) -> list[str]:
-    """Tracked and untracked non-ignored files; with ``everything``, ignored and hidden files too (not tool folders)."""
-    if not everything:
-        return sorted(set(git("ls-files", "--cached", "--others", "--exclude-standard").splitlines()))
-    found = []
-    for folder, subfolders, names in os.walk("."):
-        subfolders[:] = sorted(name for name in subfolders if name not in SKIPPED_DIRS and not os.path.islink(os.path.join(folder, name)))
-        found += [os.path.normpath(os.path.join(folder, name)) for name in names if name not in SKIPPED_DIRS]  # A worktree's .git is a file.
-    return sorted(found)
+def privacy_files() -> list[str]:
+    """Every file Git does not ignore, tracked and untracked, hidden files included: the files that can reach GitHub."""
+    return sorted(set(git("ls-files", "--cached", "--others", "--exclude-standard").splitlines()))
 
 
 def read_allowlist(name: str, kinds: list[str], rule: str, reason: str) -> tuple[list[tuple[str, str]], list[Finding]]:
@@ -822,13 +815,13 @@ def line_privacy(line: str, values: list[str]) -> list[str]:
     return kinds
 
 
-def privacy_scan(everything: bool) -> tuple[list[Finding], list[str]]:
+def privacy_scan() -> tuple[list[Finding], list[str]]:
     """Scan whole files, not the diff, for personal data and environment-specific values; never report the value."""
     allowed, findings = privacy_allowlist()
     values = env_values()
     unreviewed = []
     descriptions = {kind: description for kind, (description, _) in PRIVACY_PATTERNS.items()} | {"env-value": "value declared in .env"}
-    for path in privacy_files(everything):
+    for path in privacy_files():
         if path == ".env" or os.path.islink(path) or not os.path.isfile(path):
             continue
         data = Path(path).read_bytes()
@@ -986,7 +979,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("check", choices=[*checks, "commit-msg", "commit-range", "privacy-scan", "writing-check", "front-matter"])
     parser.add_argument("paths", nargs="*")
-    parser.add_argument("--all", action="store_true", help="privacy-scan: include ignored and hidden files (before publishing)")
+    parser.add_argument("--all", action="store_true", help="privacy-scan: every file Git does not ignore, the default scope; ignored files are never scanned")
     parser.add_argument("--warn", action="store_true", help="report findings without failing: a check's warn period before it blocks")
     parser.add_argument("--articles", action="append", default=[], metavar="GLOB", help="writing-check: files that hold article text (em dashes)")
     args = parser.parse_args()
@@ -994,7 +987,7 @@ def main() -> int:
         findings = writing_check(args.articles)
         return warn(findings) if args.warn else report(findings)
     if args.check == "privacy-scan":
-        findings, unreviewed = privacy_scan(args.all)
+        findings, unreviewed = privacy_scan()
         for line in unreviewed:
             sys.stderr.write(f"{line}\n")
         return warn(findings) if args.warn else report(findings)

@@ -594,9 +594,11 @@ with `bash scripts/acquisition/run_checks.sh`.
   values go in `.privacy_allowlist` as `<type> <path glob> -- <reason>`,
   matched by type and path only; an entry without a reason is itself a finding.
   The synthetic account IDs in the Terraform, infrastructure and configuration
-  tests are listed there. Before publishing, also scan ignored and hidden files
-  with `.venv/bin/python -m scripts.quality.repo_checks privacy-scan --all`
-  (`--warn` reports without failing).
+  tests are listed there. The hook runs
+  `.venv/bin/python -m scripts.quality.repo_checks privacy-scan --all`, where
+  `--all` means the same scope: hidden files are scanned when Git does not
+  ignore them. Ignored files (such as the local `data/` folder) are never
+  scanned, because they cannot reach GitHub (`--warn` reports without failing).
 - **Writing check:** the prose of every tracked or untracked non-ignored
   Markdown file (front matter, code spans and blocks, URLs and `tests/fixtures/`
   excluded) is checked for a comma before a final "and", "or" or "nor" and for

@@ -73,7 +73,7 @@ repos:
         always_run: true
       - id: privacy-scan
         name: No personal data or environment-specific values in project files
-        entry: .venv/bin/python -m scripts.quality.repo_checks privacy-scan
+        entry: .venv/bin/python -m scripts.quality.repo_checks privacy-scan --all
         language: system
         pass_filenames: false
         always_run: true
