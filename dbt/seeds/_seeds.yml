@@ -680,13 +680,59 @@ seeds:
         description: Registry decision, preserved without approving model use.
         data_tests: [not_null]
 
+  - name: hhs_reviewed_ccn_matches
+    description: >
+      HHS capacity facilities that publish no CCN, matched to a CCN only after the owner reviewed the name, ZIP and HHS
+      reporting evidence. A match is listed only when the CCN reports no HHS rows under its own CCN (failure modes 681
+      to 683).
+    config:
+      column_types:
+        hospital_pk: varchar
+        ccn: varchar
+        evidence: varchar
+    columns:
+      - name: hospital_pk
+        description: The HHS facility key as published.
+        data_tests: [not_null, unique]
+      - name: ccn
+        description: The CCN the owner confirmed.
+        data_tests: [not_null, unique]
+      - name: evidence
+        description: Why the facility is that hospital.
+        data_tests: [not_null]
+
+  - name: measure_id_aliases
+    description: >
+      Reviewed renames of a published measure ID to the registry's exact ID, each with its evidence. An alias row enters a
+      window model only where the same hospital and window have no row under the exact ID. The PSI renames are not listed:
+      they wait for a CMS release note (failure modes 629 and 630).
+    config:
+      column_types:
+        source_model: varchar
+        published_measure_id: varchar
+        measure_id: varchar
+        evidence: varchar
+    columns:
+      - name: source_model
+        description: The window model whose published ID is renamed.
+        data_tests: [not_null]
+      - name: published_measure_id
+        description: The measure ID as published.
+        data_tests: [not_null, unique]
+      - name: measure_id
+        description: The registry's exact measure ID it stands for.
+        data_tests: [not_null]
+      - name: evidence
+        description: Why the two IDs publish the same measure.
+        data_tests: [not_null]
+
   - name: validation_measures
     description: >
       The registry controls of the group D validation sources: S32 Hospital Readmissions Reduction Program, S33 unplanned
       hospital visits and S34 complications and deaths, each parent once per component, and E038 (PSI-90) and E039 (PSI-13),
       which name no published measure ID and stay unmapped. Each row names the window model, the exact measure ID the registry
-      gives and the value column; renamed IDs (OP-32, PSI_90_SAFETY, PSI_13_POST_SEPSIS) are never mapped (failure modes 508,
-      509 and 511). The HAC Reduction (C285, C286) and VBP (C287, C288) controls name their program-year columns;
+      gives and the value column. A renamed ID reaches its control only through measure_id_aliases; PSI_90_SAFETY and
+      PSI_13_POST_SEPSIS are not aliased (failure modes 508, 509, 511, 629 and 630). The HAC Reduction (C285, C286) and VBP (C287, C288) controls name their program-year columns;
       C288.total_performance takes its parent's field and C288.payment_adjustment stays unmapped (failure mode 520). All are
       comparison_only or exclude_primary; staging approves no use.
     config:

@@ -224,7 +224,11 @@ models read the unadjusted CMI by exact header name (`dbt/seeds/cmi_layout_colum
 own column and choose one CMI per hospital and rule year from the year's best rule stage; disagreeing files are held in
 `int_cmi_holds`. `int_hospital_spine` has one row per hospital and calendar-year HAI window, as of the window start: the
 Provider of Services snapshot that ends in the 12 months before the window and the CMI of the fiscal year that ends before
-it (`int_cmi_hospital_data_years`), with the primary and sensitivity population flags. The Care Compare timely and effective
+it (`int_cmi_hospital_data_years`), with the primary and sensitivity population flags. A window missing its own snapshot
+takes its state and county from the same hospital's other snapshots within 24 months, then the enrollment file, then the
+CCN's state code. A county can also come from the hospital ZIP when the HUD crosswalk places that ZIP in one county only; a
+ZIP split across counties gives none. Classification is filled only when the neighboring snapshots agree. Each filled field
+names its source. Connecticut windows also carry their planning region when the ZIP lies in one region. The Care Compare timely and effective
 care, maternal health and HCAHPS tables get the same window models as HAI (`int_cc_*_windows`, holds in
 `int_cc_window_holds`); `int_registry_measure_windows` carries each registry measure of those families by the exact measure ID
 in `dbt/seeds/registry_measure_sources.csv`. `int_hgi_hospital_releases` types Hospital General Information per file.
@@ -290,7 +294,8 @@ SAIPE, SAHIE and BLS registry controls.
 
 PLACES county values keep their release, data year, measure and crude or age-adjusted type (`int_places_county_values`);
 `is_all_states` marks the measure-years whose county rows cover all 50 states and DC, the only ones the project
-uses. The 2020 release has no county codes and is not typed. Medicare Geographic Variation county values are staged
+uses. The 2020 release has no county codes; its rows take the code PLACES publishes for the same state and county name
+in its other releases (`county_source`). Medicare Geographic Variation county values are staged
 long for the All age level with `*` kept as a token (`int_gv_county_values`). WONDER deaths and crude rates keep their
 database, bridged race (1999 to 2020) or single race (2018 to 2024), with their Suppressed, Unreliable, Missing and Not
 Available marks (`int_wonder_county_deaths`); the 2024 rows repeated identically in the shorter single-race export are
@@ -303,6 +308,8 @@ are mapped too. Zeros keep a possible-suppression flag and county rows without a
 C258.78 is a state rate per 100,000. All 82 MMD controls stay held for definition. HRSA primary-care HPSA components
 (`int_hpsa_components`) and MUA and MUP components (`int_mua_components`) keep each designation's type, status, score and
 dates as published at the capture, with `XXXXX` county codes kept as tokens; rows repeated identically in the file are held.
+An HPSA tract, subdivision or county ID gives the county a token hides. A facility's postal code gives one through HUD
+when that ZIP lies in one county only (`county_source`).
 The period seed dates each MMD file by the year in its name and the HPSA and MUA files by their capture date, which the
 models carry as `capture_date`. The Federal Register HPSA workbooks stay in bronze. `dbt/seeds/shortage_measures.csv`
 maps the 85 registry controls of these sources.
@@ -343,16 +350,23 @@ to predict it: the published window equal to the calendar year first, otherwise 
 and VBP years are placed by the HAI measure period HAC publishes for each fiscal year. No model reads this table; an E2E
 check fails if one does.
 `int_spine_county_measures` (step AL4a) adds the county context from PLACES, Medicare Geographic Variation, CDC WONDER,
-Mapping Medicare Disparities and RUCC through the hospital's POS county: the latest data year (RUCC vintage) that ends
+Mapping Medicare Disparities and RUCC through the spine's county: the latest data year (RUCC vintage) that ends
 before the window starts. PLACES counts only all-state measure-years and takes the latest release of each data year;
-WONDER 2018 to 2020 come from the single-race database. Connecticut's rows stay, flagged out of the primary county join.
+WONDER 2018 to 2020 come from the single-race database. Connecticut matches a source on its old county or its planning
+region.
+`int_spine_county_context` (step AL4b) adds ACS, SVI, SAIPE, SAHIE (all-group rows) and BLS (annual averages) by the same
+rule, HPSA and MUA designations in force at the window start (rebuilt from their designation and withdrawal dates, with
+the score as published at the capture; an undated withdrawal holds the window) and RUCA codes for the hospital ZIP.
+`int_spine_linkage` keeps the HUD residential share of the hospital ZIP and the hospital's service-area ZIPs and cases
+apart as linkage, never predictors.
 
 Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
 visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the
 Hospital Readmissions Reduction Program by condition (`int_cc_hrrp_windows`). Every published measure ID is kept;
-`dbt/seeds/validation_measures.csv` maps only the exact IDs the registry names (C289 to C291 and their children), so
-renamed IDs such as `OP-32` and the PSI-90 and PSI-13 controls (E038, E039), which name no published ID, stay unmapped
-(`int_validation_measure_windows`). `Not Available`, `Not Applicable`, `N/A` and `Too Few to Report` stay text. In every
+`dbt/seeds/validation_measures.csv` maps the exact IDs the registry names (C289 to C291 and their children); a renamed
+ID reaches its control only through the reviewed aliases in `dbt/seeds/measure_id_aliases.csv` (`OP-32`) and only where
+the exact ID has no row for that hospital and window. The PSI-90 and PSI-13 controls (E038, E039), which name no
+published ID, stay unmapped (`int_validation_measure_windows`). `Not Available`, `Not Applicable`, `N/A` and `Too Few to Report` stay text. In every
 group D model a 5-digit hospital ID is padded to 6 characters; any other ID that is not 6 digits or capital letters is
 held. These tables are for validation only; none is a predictor.
 
@@ -752,10 +766,13 @@ deaths, readmissions reduction) and HAC Reduction and VBP program years, the occ
 index. The Medicare sepsis share counts only published DRG cells (11 discharges or more), so it can be low for small
 hospitals; the Medicare chronic-condition shares start with data year 2017. Each change-of-ownership release lists
 events back to 2016, so one event appears once per release until the alignment step chooses one. An enrollment or
-change-of-ownership value with a suffix after the CCN is kept as published, with no CCN. Registry controls C001 and C040
+change-of-ownership value with a location suffix, a lost leading zero or a unit letter maps to its parent CCN when POS
+lists exactly one such parent in the row's state (`ccn_source`); any other value keeps no CCN. An HHS facility without a
+CCN gets one only from the reviewed matches in `dbt/seeds/hhs_reviewed_ccn_matches.csv`. Registry controls C001 and C040
 name no HHS field, so the HHS columns are staged but not mapped to them. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables exist. The bronze and staging E2E runs use
 Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
-offline. It has not run: its controls, independent review and the owner's approval are still to come.
+offline. Its first part finished 43 sources; the second (ACS, BLS, HUD and WONDER) waits on its independent review and
+the owner's browser downloads.
 
 ## Contributing
 

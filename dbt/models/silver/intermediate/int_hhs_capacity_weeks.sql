@@ -1,6 +1,7 @@
 -- One row per HHS hospital (hospital_pk) and collection week, with every weekly number typed. A count of 1 to 3 is published
 -- as -999999: it is null and its column is listed in suppressed_fields. The CCN follows the B5a rule; a hospital without
--- one keeps its hospital_pk. Any other negative value, which a count or occupancy cannot be, is null and its column is
+-- one keeps its hospital_pk and gets a CCN only from the reviewed matches seed (ccn_source, failure modes 681 to 683).
+-- Any other negative value, which a count or occupancy cannot be, is null and its column is
 -- listed in negative_fields. is_corrected and the coverage counts are kept; nothing is filtered (failure modes 375 to 379).
 -- The geocoded point is left out; the ZIP and county code give the place.
 {{ config(materialized='table') }}
@@ -42,6 +43,15 @@ weeks as (
 )
 
 select
-    *,
-    hospital_pk || ':' || collection_week::varchar as week_key
+    weeks.* exclude (ccn),
+    coalesce(weeks.ccn, matches.ccn) as ccn,
+    case
+        when weeks.ccn is not null then 'published'
+        when matches.ccn is not null then 'reviewed_match'
+    end as ccn_source,
+    weeks.hospital_pk || ':' || weeks.collection_week::varchar as week_key
 from weeks
+left join {{ ref('hhs_reviewed_ccn_matches') }} as matches
+    on
+        weeks.ccn is null
+        and weeks.hospital_pk = matches.hospital_pk

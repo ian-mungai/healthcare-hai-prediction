@@ -1,0 +1,2 @@
+source_model,published_measure_id,measure_id,evidence
+int_cc_unplanned_visits_windows,OP-32,OP_32,"Same published measure name as OP_32: Rate of unplanned hospital visits after colonoscopy (per 1,000 colonoscopies)"

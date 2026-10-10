@@ -61,3 +61,20 @@ case
     when regexp_full_match({{ value }}, '[0-9A-Z]{6}') then {{ value }}
 end
 {%- endmacro %}
+
+{% macro ccn_parent_candidates(column) %}
+{#- The parent CCNs a suffixed or unit identifier can stand for, each with its route [619]; empty for any other shape. -#}
+{%- set value = "upper(nullif(trim(" ~ column ~ "), ''))" -%}
+case
+    when regexp_full_match({{ value }}, '[0-9]{7}')
+        then [
+            {'ccn': left(lpad({{ value }}, 8, '0'), 6), 'route': 'leading_zero'},
+            {'ccn': left({{ value }}, 6), 'route': 'location_suffix'}
+        ]
+    when regexp_full_match({{ value }}, '[0-9A-Z]{2}[0-9]{4}([0-9]{2,3}|[A-Z])')
+        then [{'ccn': left({{ value }}, 6), 'route': 'location_suffix'}]
+    when regexp_full_match({{ value }}, '[0-9]{2}[STU][0-9]{3}([0-9]{2,3}|[A-Z])?')
+        then [{'ccn': left({{ value }}, 2) || '0' || substr({{ value }}, 4, 3), 'route': 'unit_parent'}]
+    else []::struct(ccn varchar, route varchar)[]
+end
+{%- endmacro %}

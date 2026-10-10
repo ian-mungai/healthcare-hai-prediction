@@ -1,7 +1,8 @@
 -- One row per hospital enrollment and stored enrollment file (release), with the release label and catalog period from the
--- ownership_release_periods seed. The CCN is the published 6-character CCN or a 5-digit CCN padded to 6; any other value
--- gives a null CCN, and the published value is kept. A flag is true for Y and false for N; dates are typed (failure modes
--- 365, 366 and 369 to 371).
+-- ownership_release_periods seed. The CCN is the published 6-character CCN or a 5-digit CCN padded to 6. A location
+-- suffix, a lost leading zero or a unit letter maps to the parent CCN when POS lists exactly one such parent in the row's
+-- state; any other value gives a null CCN. The published value is kept and ccn_source names the route. A flag is true
+-- for Y and false for N; dates are typed (failure modes 365, 366, 369 to 371 and 619 to 622).
 {{ config(materialized='table') }}
 
 with
@@ -50,14 +51,69 @@ enrollments as (
         {{ month_day_year('reh_conversion_date') }} as reh_conversion_date,
         nullif(trim(cah_or_hospital_ccn), '') as cah_or_hospital_ccn
     from {{ ref('stg_cms_hospital_enrollments') }}
+),
+
+pos_states as (
+    select distinct
+        ccn,
+        state_code
+    from {{ ref('int_pos_hospital_snapshots') }}
+    where ccn is not null
+),
+
+candidates as (
+    select
+        member_sha256,
+        source_row_number,
+        state,
+        unnest({{ ccn_parent_candidates('ccn_published') }}) as candidate
+    from enrollments
+    where ccn is null
+),
+
+candidate_ccns as (
+    select
+        member_sha256,
+        source_row_number,
+        state,
+        struct_extract(candidate, 'ccn') as ccn,
+        struct_extract(candidate, 'route') as route
+    from candidates
+),
+
+parents as (
+    -- Exactly one parent that POS lists in the row's own state [619].
+    select
+        candidate_ccns.member_sha256,
+        candidate_ccns.source_row_number,
+        min(candidate_ccns.ccn) as ccn,
+        min(candidate_ccns.route) as route
+    from candidate_ccns
+    inner join pos_states
+        on
+            candidate_ccns.ccn = pos_states.ccn
+            and candidate_ccns.state = pos_states.state_code
+    group by
+        candidate_ccns.member_sha256,
+        candidate_ccns.source_row_number
+    having count(distinct candidate_ccns.ccn) = 1
 )
 
 select
-    enrollments.*,
+    enrollments.* exclude (ccn),
     periods.release_id,
     periods.release_label,
     periods.period_start,
     periods.period_end,
+    coalesce(enrollments.ccn, parents.ccn) as ccn,
+    case
+        when enrollments.ccn is not null then 'published'
+        else parents.route
+    end as ccn_source,
     enrollments.member_sha256 || ':' || enrollments.enrollment_id as enrollment_key
 from enrollments
 left join periods on enrollments.member_sha256 = periods.member_sha256
+left join parents
+    on
+        enrollments.member_sha256 = parents.member_sha256
+        and enrollments.source_row_number = parents.source_row_number

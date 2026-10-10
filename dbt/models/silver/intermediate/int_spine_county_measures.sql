@@ -1,8 +1,9 @@
 -- One row per spine hospital-window and county control-field from PLACES, Medicare Geographic Variation, CDC WONDER, CMS
--- Mapping Medicare Disparities and the Rural-Urban Continuum Codes, through the hospital's POS county: the latest data
+-- Mapping Medicare Disparities and the Rural-Urban Continuum Codes, through the spine's county (POS or filled): the latest data
 -- year (or RUCC vintage) that ends before the HAI window starts. A PLACES data year published twice takes the latest
 -- release; only all-state PLACES measure-years count; WONDER 2018 to 2020 come from the single-race database. Connecticut
--- rows are kept and flagged (alignment step AL4a, failure modes 604 to 611, plans/alignment_20261008/failure_modes_al4.md).
+-- hospitals match a source on their old county or their planning region (alignment step AL4a, failure modes 604 to 611 and
+-- 631 to 633, plans/alignment_20261008/failure_modes_al4.md and failure_modes_fill.md).
 {{ config(materialized='table') }}
 
 with
@@ -14,11 +15,29 @@ spine as (
         window_start,
         spine_key,
         county_fips,
+        planning_region_fips,
         is_primary_population,
         is_sensitivity_population,
         is_connecticut,
         is_maryland
     from {{ ref('int_hospital_spine') }}
+),
+
+spine_geos as (
+    -- Each window's county and, for Connecticut, its planning region, so the county joins stay equality joins [632].
+    select
+        spine_key,
+        window_start,
+        county_fips as geo_fips
+    from spine
+    where county_fips is not null
+    union
+    select
+        spine_key,
+        window_start,
+        planning_region_fips as geo_fips
+    from spine
+    where planning_region_fips is not null
 ),
 
 health_controls as (
@@ -203,10 +222,10 @@ candidates as (
             partition by spine.spine_key, control_periods.measure_control, control_periods.field
             order by control_periods.period_end desc
         ) as recency
-    from spine
+    from spine_geos as spine
     inner join control_periods
         on
-            spine.county_fips = control_periods.county_fips
+            spine.geo_fips = control_periods.county_fips
             and spine.window_start > control_periods.period_end
     group by
         spine.spine_key,
@@ -222,11 +241,13 @@ chosen as (
 ),
 
 any_period as (
+    -- One row per window, control and field with any period for its county or region, so Connecticut never doubles [632].
     select distinct
-        county_fips,
-        measure_control,
-        field
-    from control_periods
+        spine.spine_key,
+        control_periods.measure_control,
+        control_periods.field
+    from spine_geos as spine
+    inner join control_periods on spine.geo_fips = control_periods.county_fips
 )
 
 select
@@ -247,12 +268,12 @@ select
     case when not chosen.is_conflict then chosen.value_text end as value_text,
     case when not chosen.is_conflict then chosen.value_number end as value_number,
     case when chosen.period_end is not null then datediff('month', chosen.period_end, spine.window_start) end as age_months,
-    -- Connecticut stays out of the primary model's county joins until a relationship file is captured [606].
-    not spine.is_connecticut and spine.county_fips is not null as is_primary_county_join,
+    -- Connecticut joins through its old county or its planning region [633].
+    coalesce(spine.county_fips, spine.planning_region_fips) is not null as is_primary_county_join,
     case
         when chosen.is_conflict then 'held_in_staging'
         when chosen.spine_key is not null then 'aligned'
-        when any_period.county_fips is not null then 'no_period_before_start'
+        when any_period.spine_key is not null then 'no_period_before_start'
         else 'not_in_source'
     end as alignment_status,
     spine.spine_key || ':' || controls.measure_source || ':' || controls.measure_control || ':' || controls.field as alignment_key
@@ -265,6 +286,6 @@ left join chosen
         and controls.field = chosen.field
 left join any_period
     on
-        spine.county_fips = any_period.county_fips
+        spine.spine_key = any_period.spine_key
         and controls.measure_control = any_period.measure_control
         and controls.field = any_period.field

@@ -304,7 +304,11 @@ models:
       of the fiscal year that ends before it and the population flags (failure modes 306 to 317). Primary population:
       a CMI, a POS state in the 50 states and DC, no Veterans Health Administration, no critical access and no Maryland
       hospital (Maryland is paid under its own all-payer model). The sensitivity population
-      adds critical access and Maryland hospitals. Connecticut stays in both and is flagged for county joins.
+      adds critical access and Maryland hospitals. Connecticut stays in both. A missing state, county or classification is
+      filled where it can be derived: the same CCN's other POS snapshots within 24 months of the window start, the
+      enrollment file, the CCN's SSA state code or a ZIP that HUD places in one county only, each named in a source
+      column. Connecticut windows also get their planning region when the ZIP lies in one region. A ZIP split across
+      counties or regions gives none (failure modes 612 to 618, 631, 698 and 701).
     columns:
       - name: spine_key
         description: CCN and window year.
@@ -317,6 +321,38 @@ models:
         data_tests: [not_null]
       - name: pos_period_end
         description: End of the POS snapshot used; null when the hospital is not in the snapshot before the window.
+      - name: zip_code
+        description: >
+          The hospital's 5-digit ZIP from its own POS snapshot, else its other snapshots, else the enrollment file; used
+          for the county and planning-region fills and the ZIP-based linkage.
+      - name: state_source
+        description: Where the state comes from; null when no source has it.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [pos, pos_other_snapshot, enrollment, ccn_state_code]
+      - name: county_source
+        description: Where the county comes from; null when no source has it.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [pos, pos_other_snapshot, hud_zip_single_county]
+      - name: classification_source
+        description: >
+          Where the provider subtype and control type come from; null when the window has no snapshot and its neighbours
+          within 24 months disagree or only an earlier one exists.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [pos, pos_other_snapshot]
+      - name: planning_region_fips
+        description: A Connecticut hospital's planning region from its ZIP; null elsewhere.
+      - name: planning_region_source
+        description: hud_zip_single_county when the ZIP lies in one planning region; null otherwise.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [hud_zip_single_county]
       - name: cmi
         description: The unadjusted CMI of the fiscal year that ends before the window; null when absent or held.
       - name: cmi_data_fiscal_year
@@ -564,9 +600,10 @@ models:
   - name: int_hospital_enrollment_rows
     description: >
       One row per hospital enrollment and enrollment file (release), with the release label and catalog period. The CCN
-      is the published 6-character CCN or a 5-digit CCN padded to 6; any other value gives a null CCN, and ccn_published
-      keeps the published value. A flag is true for Y and false for N; dates are typed (failure modes 365, 366 and 369 to
-      371).
+      is the published 6-character CCN or a 5-digit CCN padded to 6. A location suffix, a lost leading zero or a unit letter
+      maps to the parent CCN when POS lists exactly one such parent in the row's state; any other value gives a null CCN.
+      ccn_published keeps the published value and ccn_source names the route. A flag is true for Y and false for N; dates
+      are typed (failure modes 365, 366, 369 to 371 and 619 to 622).
     columns:
       - name: enrollment_key
         description: File checksum and enrollment ID.
@@ -575,14 +612,21 @@ models:
         description: Last day of the release's catalog period.
         data_tests: [not_null]
       - name: ccn
-        description: The CCN, 6 characters; null when the published value is not a CCN.
+        description: The CCN, 6 characters; null when the published value is neither a CCN nor a mappable suffixed form.
+      - name: ccn_source
+        description: published, location_suffix, leading_zero or unit_parent; null when the CCN is null.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [published, location_suffix, leading_zero, unit_parent]
 
   - name: int_change_of_ownership_rows
     description: >
       One row per change of ownership and change-of-ownership file (release), with the release label and catalog period.
       Each release lists events back to 2016, so one event appears in several files under one event_key; the alignment
-      step chooses the release. CCNs follow the enrollment rule, the published values kept (failure modes 365 and 369 to
-      372).
+      step chooses the release. CCNs follow the enrollment rule, including parent CCNs for suffixed identifiers in the
+      party's enrollment state; the published values are kept and ccn_buyer_source and ccn_seller_source name the route
+      (failure modes 365, 369 to 372 and 619 to 622).
     columns:
       - name: chow_row_key
         description: File checksum and source row number.
@@ -590,6 +634,18 @@ models:
       - name: event_key
         description: Buyer enrollment ID, seller enrollment ID, effective date and type, joined by |.
         data_tests: [not_null]
+      - name: ccn_buyer_source
+        description: published, location_suffix, leading_zero or unit_parent for the buyer CCN.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [published, location_suffix, leading_zero, unit_parent]
+      - name: ccn_seller_source
+        description: published, location_suffix, leading_zero or unit_parent for the seller CCN.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [published, location_suffix, leading_zero, unit_parent]
       - name: period_end
         description: Last day of the release's catalog period.
         data_tests: [not_null]
@@ -599,7 +655,8 @@ models:
       One row per HHS hospital (hospital_pk) and collection week, 2019-12-29 to 2024-04-21, with every weekly number typed.
       A count of 1 to 3 is published as -999999: it is null and its column is listed in suppressed_fields; any other
       negative value is null and listed in negative_fields. The CCN follows the B5a rule; a hospital without one keeps its
-      hospital_pk. is_corrected and the coverage counts are kept (failure modes 375 to 379).
+      hospital_pk and gets a CCN only from hhs_reviewed_ccn_matches. is_corrected and the coverage counts are kept
+      (failure modes 375 to 379 and 681 to 683).
     columns:
       - name: week_key
         description: hospital_pk and collection week.
@@ -611,6 +668,12 @@ models:
         description: The numeric columns published as -999999 (a count of 1 to 3) in this row, sorted.
       - name: negative_fields
         description: The numeric columns published with another negative value in this row, sorted; their values are null.
+      - name: ccn_source
+        description: published, or reviewed_match for a facility in hhs_reviewed_ccn_matches; null without a CCN.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [published, reviewed_match]
 
   - name: int_onc_chpl_linkage_rows
     description: >
@@ -990,8 +1053,9 @@ models:
   - name: int_places_county_values
     description: >
       PLACES county values per release, data year, measure and value type, 2020 to 2025 releases. is_all_states marks the
-      measure-years that cover all 50 states and DC, the only ones the project uses. Rows without a county code
-      are not typed. PLACES controls C203 to C243, conditional; C242.02 held for definition.
+      measure-years that cover all 50 states and DC, the only ones the project uses. The 2020 release's rows take the code
+      PLACES publishes for the same state and county name in its other releases; rows with neither are not typed
+      (failure modes 623 to 625). PLACES controls C203 to C243, conditional; C242.02 held for definition.
     columns:
       - name: places_row_key
         description: File checksum and source row number.
@@ -1002,6 +1066,13 @@ models:
       - name: county_fips
         description: County code as 5-character text.
         data_tests: [not_null]
+      - name: county_source
+        description: published, or places_name_crosswalk for the 2020 release.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [published, places_name_crosswalk]
       - name: datavaluetypeid
         description: CrdPrv (crude) or AgeAdjPrv (age-adjusted).
         data_tests:
@@ -1085,7 +1156,9 @@ models:
   - name: int_hpsa_components
     description: >
       HRSA primary-care HPSA components as published at the capture, with score and dates typed and XXXXX county codes kept
-      as tokens. Exact repeat rows are held as exact_repeat. C249 and C250, conditional.
+      as tokens. Exact repeat rows are held as exact_repeat. Where the county is a token, a tract, subdivision or
+      single-county ID in the published state gives its county, and a facility's postal code gives one through HUD
+      (failure modes 626 to 628). C249 and C250, conditional.
     columns:
       - name: hpsa_row_key
         description: File checksum and source row number.
@@ -1097,7 +1170,13 @@ models:
         description: HPSA ID; one ID can hold successive designations, told apart by designation date.
         data_tests: [not_null]
       - name: county_fips
-        description: County code as 5-character text; null where the publisher prints XXXXX or XXX.
+        description: County code as 5-character text; filled where the publisher prints XXXXX or XXX and a route applies.
+      - name: county_source
+        description: published, geography_id or hud_zip_single_county; null without a county.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [published, geography_id, hud_zip_single_county]
       - name: county_token
         description: The published XXXXX or XXX mark where there is no county code.
       - name: hold_reason
@@ -1176,14 +1255,18 @@ models:
 
   - name: int_validation_measure_windows
     description: >
-      Group D registry controls per component measure, hospital and window, from the exact IDs validation_measures names;
-      tokens stay text with a null number. Controls C289, C290, C291 and children, comparison_only.
+      Group D registry controls per component measure, hospital and window, from the exact IDs validation_measures names
+      and the reviewed renames in measure_id_aliases where the exact ID has no row for that hospital and window; tokens
+      stay text with a null number (failure modes 629 and 630). Controls C289, C290, C291 and children, comparison_only.
     columns:
       - name: validation_key
         description: Control, measure, hospital and window.
         data_tests: [unique, not_null]
       - name: measure_control
         description: Registry control identifier.
+        data_tests: [not_null]
+      - name: published_measure_id
+        description: The measure ID as published; differs from measure_id only for an aliased rename.
         data_tests: [not_null]
 
   - name: int_hac_program_years
@@ -1371,13 +1454,13 @@ models:
       AL4a: one row per spine hospital-window and county control-field from PLACES, Medicare Geographic Variation, CDC
       WONDER, Mapping Medicare Disparities and RUCC, through the hospital's POS county: the latest data year (RUCC vintage)
       that ends before the HAI window starts. PLACES: all-state measure-years only, the latest release of each data year.
-      WONDER 2018 to 2020 from the single-race database. Connecticut kept and flagged out of the primary county join.
+      WONDER 2018 to 2020 from the single-race database. Connecticut matches on its old county or its planning region.
     columns:
       - name: alignment_key
         description: Spine key, source, registry control and field.
         data_tests: [unique, not_null]
       - name: is_primary_county_join
-        description: False for Connecticut and for hospitals without a POS county.
+        description: False only for hospitals with neither a county nor a planning region.
       - name: alignment_status
         description: aligned, no_period_before_start, held_in_staging or not_in_source.
         data_tests:
@@ -1385,6 +1468,70 @@ models:
           - accepted_values:
               arguments:
                 values: [aligned, no_period_before_start, held_in_staging, not_in_source]
+  - name: int_spine_county_context
+    description: >
+      AL4b: one row per spine hospital-window and county context control-field. ACS and SVI (the vintage or edition whose
+      period ends before the window), SAIPE, SAHIE (all-group rows, latest file) and BLS (annual averages): the latest
+      period that ends before the start. HPSA and MUA: designations in force at the start, rebuilt from the designation and
+      withdrawal dates, with the highest score as published at the capture; undated withdrawals and the 1970 date hold
+      the window. RUCA from the hospital ZIP's code. HUD shares and the hospital service area are in int_spine_linkage.
+      Counties come from the filled spine; Connecticut matches on its old county or its planning region (failure modes
+      604 to 611 and 634 to 637).
+    columns:
+      - name: alignment_key
+        description: Spine key, source, registry control and field.
+        data_tests: [unique, not_null]
+      - name: measure_source
+        description: acs, svi, saipe, sahie, bls, hpsa, mua or ruca.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [acs, svi, saipe, sahie, bls, hpsa, mua, ruca]
+      - name: value_note
+        description: >
+          score_as_published_at_capture for HPSA and MUA scores (none_in_force when no designation is in force),
+          zip_code_approximation for RUCA; null otherwise.
+      - name: alignment_status
+        description: aligned, no_period_before_start, held_in_staging or not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, no_period_before_start, held_in_staging, not_in_source]
+  - name: int_spine_linkage
+    description: >
+      AL4b linkage: one row per spine hospital-window and linkage field. L002: the share of the hospital ZIP's residential
+      addresses in its county or planning region, from the latest HUD quarter that ends before the start. L001: the
+      hospital's service-area ZIPs and cases in the latest data year before the window, suppressed rows left out.
+      Linkage only, never a predictor (failure mode 638).
+    columns:
+      - name: alignment_key
+        description: Spine key, source, registry control and field.
+        data_tests: [unique, not_null]
+      - name: measure_source
+        description: hud or hsa.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [hud, hsa]
+      - name: review_decision
+        description: Always linkage_only.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [linkage_only]
+      - name: value_note
+        description: published_counts_only for the service area; null otherwise.
+      - name: alignment_status
+        description: aligned, no_period_before_start or not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, no_period_before_start, not_in_source]
   - name: int_hai_outcome_values
     description: >
       HAI registry controls (main-hai-pdc and C283's children) per outcome row and field with a published value, from the

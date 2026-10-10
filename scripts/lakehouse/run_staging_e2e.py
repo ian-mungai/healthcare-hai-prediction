@@ -33,12 +33,17 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import io
 import json
+import os
 import re
 import shutil
 import sys
+import threading
+import time
 from collections.abc import Iterable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -830,6 +835,8 @@ HPSA_COLUMNS = (
     "common_state_county_fips_code",
     "state_fips_code",
     "rural_status",
+    "hpsa_postal_code",
+    "primary_state_abbreviation",
 )
 MUA_COLUMNS = (
     "mua_p_id",
@@ -1103,7 +1110,8 @@ POS_DEC18 = (
     pos("010100", category="02", state_cd="AL", pgm_trmntn_cd="00"),
     pos("990001", state_cd="CN", fips_state_cd="", fips_cnty_cd="", pgm_trmntn_cd="00"),
     pos("070001", state_cd="CT", fips_state_cd="09", fips_cnty_cd="001", pgm_trmntn_cd="00"),
-    pos("010002", state_cd="AL", pgm_trmntn_cd="00", bed_cnt=" "),
+    # [616] No county but a ZIP that HUD splits between two counties.
+    pos("010002", state_cd="DC", zip_cd="20001", pgm_trmntn_cd="00", bed_cnt=" "),
 )
 POS_MAR19 = (
     pos(
@@ -1127,9 +1135,13 @@ POS_DEC20 = (
     pos("010005", prvdr_ctgry_sbtyp_cd="01", state_cd="AL", fips_state_cd="01", fips_cnty_cd="089", pgm_trmntn_cd="00", bed_cnt="120"),
     pos("011301", prvdr_ctgry_sbtyp_cd="11", state_cd="AL", fips_state_cd="01", fips_cnty_cd="003", pgm_trmntn_cd="00", bed_cnt="25"),
     pos("01001F", state_cd="AL", fips_state_cd="01", fips_cnty_cd="001", pgm_trmntn_cd="00", bed_cnt="100"),
-    pos("070001", prvdr_ctgry_sbtyp_cd="01", state_cd="CT", fips_state_cd="09", fips_cnty_cd="001", pgm_trmntn_cd="00", bed_cnt="300"),
-    pos("990001", state_cd="CN", pgm_trmntn_cd="00"),
+    # [631] A Connecticut ZIP that HUD places in a planning region.
+    pos("070001", prvdr_ctgry_sbtyp_cd="01", state_cd="CT", fips_state_cd="09", fips_cnty_cd="001", zip_cd="06001", pgm_trmntn_cd="00", bed_cnt="300"),
+    # [616] A ZIP whose HUD rows are in another state stays without a county.
+    pos("990001", state_cd="CN", zip_cd="35004", pgm_trmntn_cd="00"),
     pos("210001", prvdr_ctgry_sbtyp_cd="01", state_cd="MD", fips_state_cd="24", fips_cnty_cd="005", pgm_trmntn_cd="00", bed_cnt="200"),
+    # [701] 010006's only snapshot ends 36 months after its 2018 window starts: too far to carry.
+    pos("010006", prvdr_ctgry_sbtyp_cd="01", state_cd="AL", fips_state_cd="01", fips_cnty_cd="089", pgm_trmntn_cd="00", bed_cnt="80"),
 )
 # HAI rows for the 2021 calendar-year window, and one rolling window that is not a spine year [306].
 HAI_SPINE = (
@@ -1142,6 +1154,10 @@ HAI_SPINE = (
     "990001|HAI_1_SIR|01/01/2021|12/31/2021|1.0",
     "010009|HAI_1_SIR|01/01/2021|12/31/2021|1.1",
     "210001|HAI_1_SIR|01/01/2021|12/31/2021|0.8",
+    # [613] [614] 010005's 2019 window comes before its first snapshot; 011301's 2020 window falls between two snapshots.
+    "010005|HAI_1_SIR|01/01/2019|12/31/2019|0.6",
+    "011301|HAI_1_SIR|01/01/2020|12/31/2020|0.5",
+    "010006|HAI_1_SIR|01/01/2018|12/31/2018|0.6",
 )
 # AL1 [549] to [556]: 070001's 2021 window with every HAI_1 part, HAI_2 published as counts without a SIR (a footnote with
 # its text), HAI_3 and HAI_6 as other tokens; 210001's HAI_5 SIR from a release after the last 2015-baseline review is held.
@@ -1346,8 +1362,8 @@ GROUP_A = (
     # The spine: a POS snapshot before the 2021 window, its HAI rows, the FY 2020 data year published only in a proposed rule
     # (where 010005 is listed twice with different CMIs, so it is held) and the FY 2021 data year of the same rule's final file;
     # a data year in two rules takes the later rule [311] [312] [315].
-    Stored("cms_provider_of_services", "pc", "CMS_POS__fixture_c", "POS_OTHER_DEC20.csv", sha("t3"), 7, "CMS_POS__fixture_c", records=POS_DEC20),
-    Stored("cms_hai_hospital", "h08", "2022-06-01", "HAI_Spine_Fixture.csv", sha("a6"), 9, content=HAI_SPINE),
+    Stored("cms_provider_of_services", "pc", "CMS_POS__fixture_c", "POS_OTHER_DEC20.csv", sha("t3"), len(POS_DEC20), "CMS_POS__fixture_c", records=POS_DEC20),
+    Stored("cms_hai_hospital", "h08", "2022-06-01", "HAI_Spine_Fixture.csv", sha("a6"), len(HAI_SPINE), content=HAI_SPINE),
     Stored(
         "cms_ipps_text_lines",
         "s1",
@@ -1885,7 +1901,7 @@ GROUP_B5A = (
         "ENROLL__fixture_b",
         "Hospital_Enrollments_2022.11.01.csv",
         sha("v1"),
-        2,
+        7,
         records=(
             cc(
                 enrollment_id="O20000000002",
@@ -1898,6 +1914,13 @@ GROUP_B5A = (
                 reh_conversion_flag="N",
             ),
             cc(enrollment_id="O20000000003", ccn="01T001", subgroup_acute_care="N"),
+            # [619] to [621] A location suffix, a lost leading zero and a unit letter map to the parent POS lists in the
+            # row's state; the same suffix in another state and an unknown shape stay without a CCN.
+            cc(enrollment_id="O20000000010", ccn="01000101", state="AL"),
+            cc(enrollment_id="O20000000011", ccn="1000101", state="AL"),
+            cc(enrollment_id="O20000000012", ccn="01S001A", state="AL"),
+            cc(enrollment_id="O20000000013", ccn="01000101", state="GA"),
+            cc(enrollment_id="O20000000014", ccn="78A005BP", state="IL"),
         ),
     ),
     Stored("cms_change_of_ownership", "xw1", "CMS_CHOW__fixture_q", "Hospital_CHOW_2022Q1.csv", sha("y1"), 1, records=(CHOW_EVENT,)),
@@ -1949,11 +1972,18 @@ GROUP_B5B = (
         "HHS_CAPACITY__fixture",
         "rows.csv",
         sha("z1"),
-        3,
+        4,
         records=(
             HHS_WEEK,
             cc(hospital_pk="010001", collection_week="2021/01/10", ccn="010001", state="AL", is_corrected="true", total_beds_7_day_avg="251"),
             cc(hospital_pk="3f" * 32, collection_week="2021/01/03", state="AL", total_beds_7_day_avg="40"),
+            # [681] [682] The facility in the reviewed matches seed gets its CCN; the one above stays without.
+            cc(
+                hospital_pk="ee04edd185865c38c839812cb2eb5ae5d3f8922e3b629ee98c7d9424a37826c4",
+                collection_week="2021/01/03",
+                state="LA",
+                total_beds_7_day_avg="30",
+            ),
         ),
     ),
     Stored(
@@ -2539,17 +2569,34 @@ GROUP_C4 = (
         "PLACES__e25",
         "rows.csv",
         sha("pl25"),
-        56,
+        58,
         records=(
-            places_row("2023", "AL", "01001", "DIABETES", "12.1", low_confidence_limit="11.0", high_confidence_limit="13.2"),
+            places_row("2023", "AL", "01001", "DIABETES", "12.1", low_confidence_limit="11.0", high_confidence_limit="13.2", locationname="Autauga"),
             places_row("2023", "AL", "01001", "DIABETES", "10.5", "AgeAdjPrv"),
             places_row("2023", "US", "59", "DIABETES", "11.0"),
             places_row("2023", "AL", "01003", "DIABETES", "", data_value_footnote_symbol="*"),
             places_row("2022", "CT", "09120", "LONELINESS", "30.2"),
             *(places_row("2022", "XX", state + "001", "OBESITY", "33.0") for state in STATE_FIPS),
+            # [623] One name published with two codes.
+            places_row("2023", "AL", "01005", "ARTHRITIS", "20.0", locationname="Twin"),
+            places_row("2023", "AL", "01007", "ARTHRITIS", "21.0", locationname="Twin"),
         ),
     ),
-    Stored("places", "pl20", "PLACES__e20", "rows.csv", sha("pl20"), 1, records=(places_row("2018", "AL", "", "DIABETES", "11.0", locationname="Autauga"),)),
+    # [623] [624] The 2020 layout without county codes: a known name is typed from the other release; an unknown name and
+    # the name with two codes stay untyped.
+    Stored(
+        "places",
+        "pl20",
+        "PLACES__e20",
+        "rows.csv",
+        sha("pl20"),
+        3,
+        records=(
+            places_row("2018", "AL", "", "DIABETES", "11.0", locationname="Autauga"),
+            places_row("2018", "AL", "", "DIABETES", "9.0", locationname="Nowhere"),
+            places_row("2018", "AL", "", "ARTHRITIS", "19.0", locationname="Twin"),
+        ),
+    ),
     Stored(
         "cms_geographic_variation_csv",
         "gv1",
@@ -2614,7 +2661,7 @@ GROUP_D1 = (
         "2025-07-01",
         "Unplanned_Hospital_Visits-Hospital.csv",
         sha("vi1"),
-        6,
+        7,
         records=(
             cc(
                 facility_id="010001",
@@ -2629,6 +2676,8 @@ GROUP_D1 = (
             cc(facility_id="010003", measure_id="OP_35_ED", score="Not Available", **DATES_2022),
             cc(facility_id="10003", measure_id="OP_36", score="7.0", **DATES_2022),
             cc(facility_id="01-003", measure_id="OP_32", score="5.0", **DATES_2022),
+            # [629] A renamed OP-32 with no OP_32 row for its hospital and window enters as OP_32.
+            cc(facility_id="010003", measure_id="OP-32", score="4.0", **DATES_2022),
         ),
     ),
     Stored(
@@ -2888,7 +2937,7 @@ GROUP_C5 = (
         "HPSA__20260924T060817Z__fixture",
         "BCD_HPSA_FCT_DET_PC.csv",
         sha("hp1"),
-        6,
+        9,
         records=(
             HPSA_REPEATED,
             HPSA_REPEATED,
@@ -2906,6 +2955,26 @@ GROUP_C5 = (
                 hpsa_component_type_description="Census Tract",
             ),
             hpsa_row("104", "3", "Withdrawn", "02/01/2000", "02/01/2010", "", "01005", "01005"),
+            # [636] A withdrawal without a date in 010001's county holds that county's HPSA values.
+            hpsa_row("108", "9", "Withdrawn", "05/01/2015", "05/01/2015", "", "01073", "01073"),
+            # [626] A tract ID from another state than the published one stays without a county.
+            hpsa_row("106", "12", "Designated", "01/05/2022", "01/05/2022", "", "25025000100", "XXXXX", hpsa_component_type_description="Census Tract"),
+            # [627] A facility with a point and a postal code: the county through HUD in its own state.
+            hpsa_row(
+                "107",
+                "18",
+                "Designated",
+                "01/05/2022",
+                "01/05/2022",
+                "",
+                "POINT (-86.8 33.5)",
+                "XXX",
+                designation_type="Rural Health Clinic",
+                hpsa_component_type_description="Unknown",
+                state_fips_code="25",
+                hpsa_postal_code="01001",
+                primary_state_abbreviation="MA",
+            ),
         ),
     ),
     Stored(
@@ -4185,7 +4254,9 @@ SPINE_SQL = (
     "coalesce(cmi::VARCHAR, ''), coalesce(cmi_data_fiscal_year::VARCHAR, ''), coalesce(cmi_rule_fiscal_year::VARCHAR, ''), "
     "coalesce(cmi_rule_stage, ''), has_pos_snapshot::VARCHAR, has_cmi::VARCHAR, is_cmi_held::VARCHAR, is_critical_access::VARCHAR, "
     "is_veterans_affairs::VARCHAR, is_state_or_dc::VARCHAR, is_connecticut::VARCHAR, is_primary_population::VARCHAR, "
-    "is_sensitivity_population::VARCHAR FROM int_hospital_spine ORDER BY ALL;"
+    "is_sensitivity_population::VARCHAR, coalesce(state_source, ''), coalesce(county_source, ''), "
+    "coalesce(classification_source, ''), coalesce(provider_subtype_code, ''), coalesce(planning_region_fips, ''), "
+    "coalesce(planning_region_source, '') FROM int_hospital_spine ORDER BY ALL;"
 )
 TE_SQL = (
     "SELECT entity_id, measure_id, window_start::VARCHAR, window_end::VARCHAR, coalesce(score, ''), coalesce(sample, ''), left(member_sha256, 2) "
@@ -4241,6 +4312,10 @@ HHS_SQL = (
     "coalesce(inpatient_beds_used_7_day_avg::VARCHAR, ''), coalesce(total_beds_7_day_coverage::VARCHAR, ''), "
     "array_to_string(suppressed_fields, '|'), array_to_string(negative_fields, '|') FROM int_hhs_capacity_weeks ORDER BY ALL;"
 )
+HHS_SOURCES_SQL = (
+    "SELECT left(hospital_pk, 6), coalesce(ccn, ''), coalesce(ccn_source, '') FROM int_hhs_capacity_weeks "
+    "WHERE coalesce(ccn_source, '') <> 'published' ORDER BY ALL;"
+)
 ONC_CHPL_SQL = (
     "SELECT ccn, coalesce(meets_criteria_for_promoting_interoperability_of_ehrs::VARCHAR, ''), coalesce(start_date::VARCHAR, ''), "
     "coalesce(end_date::VARCHAR, ''), coalesce(program_year::VARCHAR, ''), coalesce(chpl_id, ''), coalesce(developer_name, '') "
@@ -4258,6 +4333,10 @@ OWNERS_SQL = (
     "coalesce(association_date::VARCHAR, ''), coalesce(percentage_ownership::VARCHAR, ''), flags_published::VARCHAR, "
     "coalesce(private_equity_company_owner::VARCHAR, ''), coalesce(reit_owner::VARCHAR, ''), coalesce(owned_by_another_org_or_ind_owner::VARCHAR, ''), "
     "coalesce(for_profit_owner::VARCHAR, '') FROM int_hospital_owner_rows ORDER BY ALL;"
+)
+ENROLLMENT_SOURCES_SQL = (
+    "SELECT enrollment_id, coalesce(ccn, ''), coalesce(ccn_source, '') FROM int_hospital_enrollment_rows "
+    "WHERE coalesce(ccn_source, '') <> 'published' ORDER BY ALL;"
 )
 ENROLLMENTS_SQL = (
     "SELECT left(member_sha256, 2), period_end::VARCHAR, enrollment_id, coalesce(ccn, ''), coalesce(ccn_published, ''), "
@@ -4356,6 +4435,9 @@ VALIDATION_SQL = (
     "SELECT measure_control, entity_id, measure_id, window_start::VARCHAR, coalesce(value_text, ''), coalesce(value_number::VARCHAR, '') "
     "FROM int_validation_measure_windows ORDER BY ALL;"
 )
+VALIDATION_ALIASES_SQL = (
+    "SELECT DISTINCT entity_id, measure_id, published_measure_id FROM int_validation_measure_windows WHERE measure_id <> published_measure_id ORDER BY ALL;"
+)
 VALIDATION_HOLDS_SQL = (
     "SELECT bronze_table, coalesce(entity_id, ''), coalesce(measure_id, ''), hold_reason, row_count::VARCHAR FROM int_validation_window_holds ORDER BY ALL;"
 )
@@ -4391,6 +4473,20 @@ COUNTY_SQL = (
     "SELECT ccn, window_year::VARCHAR, measure_source, measure_control, field, alignment_status, coalesce(value_text, ''), "
     "coalesce(value_number::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(age_months::VARCHAR, ''), is_primary_county_join::VARCHAR "
     "FROM int_spine_county_measures WHERE alignment_status IN ('aligned', 'held_in_staging') ORDER BY ALL;"
+)
+AL4B_SQL = (
+    "SELECT ccn, window_year::VARCHAR, measure_source, measure_control, field, alignment_status, coalesce(value_text, ''), "
+    "coalesce(value_number::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(value_note, '') "
+    "FROM (SELECT * FROM int_spine_county_context UNION ALL SELECT * FROM int_spine_linkage) "
+    "WHERE alignment_status IN ('aligned', 'held_in_staging') ORDER BY ALL;"
+)
+AL4B_COUNT_SQL = (
+    "SELECT 'context rows', (SELECT count(*) FROM int_spine_county_context)::VARCHAR UNION ALL "
+    "SELECT 'context keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_county_context)::VARCHAR UNION ALL "
+    "SELECT 'linkage rows', (SELECT count(*) FROM int_spine_linkage)::VARCHAR UNION ALL "
+    "SELECT 'linkage keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_linkage)::VARCHAR UNION ALL "
+    "SELECT measure_source || ' ' || alignment_status, count(*)::VARCHAR "
+    "FROM (SELECT * FROM int_spine_county_context UNION ALL SELECT * FROM int_spine_linkage) GROUP BY 1 ORDER BY 1;"
 )
 COUNTY_COUNT_SQL = (
     "SELECT 'rows', (SELECT count(*) FROM int_spine_county_measures)::VARCHAR UNION ALL "
@@ -4456,6 +4552,8 @@ MMD_SQL = (
     "coalesce(value_number::VARCHAR, ''), value_unit, denominator_band, is_possible_suppression::VARCHAR, is_unknown_county::VARCHAR, "
     "is_connecticut::VARCHAR FROM int_mmd_prevalence ORDER BY ALL;"
 )
+HPSA_SOURCES_SQL = "SELECT hpsa_id, county_source FROM int_hpsa_components WHERE county_source <> 'published' ORDER BY ALL;"
+PLACES_SOURCES_SQL = "SELECT county_source, count(*)::VARCHAR FROM int_places_county_values GROUP BY 1 ORDER BY 1;"
 HPSA_SQL = (
     "SELECT hpsa_id, capture_date::VARCHAR, coalesce(designation_date::VARCHAR, ''), coalesce(geography_id, ''), "
     "coalesce(county_fips, ''), coalesce(county_token, ''), "
@@ -4479,16 +4577,162 @@ def unprefixed(rows: list[list[str]], prefix: str) -> dict[str, list[str]]:
     return {row[0].removeprefix(prefix): row[1:] for row in rows}
 
 
+class CasePool:
+    """Parallel fixture builds: one memory and CPU reading split into equal shares, and admission per launch [687] [688].
+
+    Every pooled container is capped at its share (Compose mem_limit), and a launch waits while the memory Docker and
+    the Mac can give, plus what this pool's running containers use, is below one share for each running container and
+    the new one; containers other projects start during the run are therefore counted [687].
+    """
+
+    def __init__(self, workers: int, plan: memory_budget.LaunchPlan) -> None:
+        self.workers = workers
+        self.share = plan.budget.free // workers
+        self.threads = max(1, plan.threads // workers)
+        self.prefix = f"hai-staging-e2e-{os.getpid()}"
+        self.lock = threading.Lock()
+        self.running = 0
+        self.launches = 0
+        self.environment = {
+            **plan.environment(),
+            "JOB_MEMORY_LIMIT": str(self.share),
+            "DUCKDB_MEMORY_LIMIT": f"{(self.share * 4 // 5) // 1000**3}GB",
+            "JOB_THREADS": str(self.threads),
+        }
+
+    def own_usage(self) -> int:
+        """Return the memory this pool's running containers use now."""
+        lines = memory_budget.docker("stats", "--no-stream", "--format", "{{.Name}} {{.MemUsage}}").splitlines()
+        return sum(memory_budget.parse_size(line.split(" ", 1)[1].split("/")[0]) for line in lines if line.startswith(self.prefix))
+
+    def admit(self) -> tuple[str, dict[str, Any]]:
+        """Wait until one more share fits, then reserve it and return the container name and the launch record."""
+        while True:
+            with self.lock:
+                try:
+                    free = memory_budget.current().free
+                except memory_budget.BudgetError:
+                    if self.running == 0:
+                        raise
+                    free = 0
+                if free + self.own_usage() - self.running * self.share >= self.share or self.running == 0 and free >= self.share:
+                    self.running += 1
+                    self.launches += 1
+                    record = {"launch": self.launches, "share": self.share, "threads": self.threads, "free_at_launch": free}
+                    return f"{self.prefix}-{self.launches}", record
+            time.sleep(5)
+
+    def release(self) -> None:
+        with self.lock:
+            self.running -= 1
+
+    def stop_containers(self) -> list[str]:
+        """Stop this pool's containers only, never another project's or another run's [692]."""
+        names = [name for name in memory_budget.docker("ps", "--format", "{{.Names}}").split() if name.startswith(self.prefix)]
+        for name in names:
+            run_command("docker", ["stop", name], timeout=120)
+        return names
+
+
+POOL: CasePool | None = None
+# Seconds each fixture case took to build, for the report [694].
+CASE_SECONDS: dict[str, float] = {}
+
+
 def compose_run(service_args: list[str], extra_env: dict[str, str]) -> tuple[int, str, str]:
-    """Run one container of the analytics-dbt service and return its exit code and output."""
-    plan = memory_budget.launch_plan()
-    extra_env = {**extra_env, **plan.environment()}
-    BUDGETS.append({"case": extra_env.get("STAGING_E2E_CASE", "query_or_setup"), **plan.record()})
-    env_flags = [flag for name, value in extra_env.items() for flag in ("-e", f"{name}={value}")]
+    """Run one container of the analytics-dbt service and return its exit code and output; inside the case pool, with its share."""
+    case = extra_env.get("STAGING_E2E_CASE", "query_or_setup")
+    pool = POOL
+    if pool is None:
+        plan = memory_budget.launch_plan()
+        environment, name, record = plan.environment(), None, plan.record()
+    else:
+        name, record = pool.admit()
+        environment = pool.environment
+    extra_env = {**extra_env, **environment}
+    BUDGETS.append({"case": case, **record})
+    env_flags = [flag for item, value in extra_env.items() for flag in ("-e", f"{item}={value}")]
     args = ["compose", "--project-directory", str(REPO_ROOT), "-f", str(REPO_ROOT / "docker-compose.yaml"), "--env-file", str(catalog.COMPOSE_ENV)]
-    args += ["--profile", "query", "run", "--rm", "--no-deps", "-T", "--quiet-pull", *env_flags, *service_args]
-    result = run_command("docker", args, cwd=REPO_ROOT, env={**catalog.system_environment(), **plan.environment()}, timeout=TIMEOUT)
+    args += ["--profile", "query", "run", "--rm", "--no-deps", "-T", "--quiet-pull", *(["--name", name] if name else []), *env_flags, *service_args]
+    try:
+        result = run_command("docker", args, cwd=REPO_ROOT, env={**catalog.system_environment(), **environment}, timeout=TIMEOUT)
+    finally:
+        if pool is not None:
+            pool.release()
     return result.returncode, result.stdout, result.stderr
+
+
+DBT_SNAPSHOT = CASES / "_dbt_snapshot"
+# Folders dbt writes or installs into; they are not the code under test [693].
+DBT_GENERATED = ("target", "dbt_packages", "logs")
+
+
+def dbt_tree_sha256() -> str:
+    """Return one hash of every file in dbt/ except the generated folders, by path and content [693]."""
+    digest = hashlib.sha256()
+    root = REPO_ROOT / "dbt"
+    for path in sorted(item for item in root.rglob("*") if item.is_file() and item.relative_to(root).parts[0] not in DBT_GENERATED):
+        digest.update(str(path.relative_to(root)).encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
+def snapshot_dbt() -> None:
+    """Copy dbt/ once; every fixture case copies this snapshot, so an edit during the run never reaches a case [693]."""
+    if DBT_SNAPSHOT.exists():
+        shutil.rmtree(DBT_SNAPSHOT)
+    shutil.copytree(REPO_ROOT / "dbt", DBT_SNAPSHOT)
+
+
+def build_cases(jobs: list[tuple[str, tuple[Stored, ...], frozenset[str]]], workers: int) -> dict[str, tuple[int, dict[str, str]] | BaseException]:
+    """Build every fixture case, in a pool when there is room for two or more workers, and return each result or error.
+
+    The checks run afterwards, in their own order, so the outcome does not depend on which build ends first [690]. One
+    failed case is recorded against itself and the others continue [691]; an interrupt stops this pool's containers [692].
+    """
+    global POOL
+    names = [case for case, _objects, _unlabelled in jobs]
+    if len(set(names)) != len(names):
+        raise ValueError(f"fixture case names repeat: {sorted(name for name in names if names.count(name) > 1)}")
+
+    def one(job: tuple[str, tuple[Stored, ...], frozenset[str]]) -> tuple[int, dict[str, str]]:
+        case, objects, unlabelled = job
+        started = time.monotonic()
+        try:
+            return run_fixture(case, objects, unlabelled)
+        finally:
+            CASE_SECONDS[case] = round(time.monotonic() - started, 1)
+
+    def outcome(future: Future[tuple[int, dict[str, str]]]) -> tuple[int, dict[str, str]] | BaseException:
+        # A case's error is recorded against that case and the other cases continue [691].
+        error = future.exception()
+        return error if error is not None else future.result()
+
+    plan = memory_budget.launch_plan()
+    count = min(workers, plan.threads, plan.budget.free // memory_budget.FLOOR)
+    if count < 2:
+        with ThreadPoolExecutor(max_workers=1) as serial:
+            futures = {job[0]: serial.submit(one, job) for job in jobs}
+            return {case: outcome(future) for case, future in futures.items()}
+    POOL = CasePool(count, plan)
+    executor = ThreadPoolExecutor(max_workers=count)
+    try:
+        futures = {job[0]: executor.submit(one, job) for job in jobs}
+        return {case: outcome(future) for case, future in futures.items()}
+    except BaseException:
+        executor.shutdown(wait=False, cancel_futures=True)
+        POOL.stop_containers()
+        raise
+    finally:
+        executor.shutdown(wait=True)
+        POOL = None
+
+
+def built(results: dict[str, tuple[int, dict[str, str]] | BaseException], case: str) -> tuple[int, dict[str, str]]:
+    """Return a case's build result; a case that raised stops the run here, with its error [691]."""
+    result = results[case]
+    if isinstance(result, BaseException):
+        raise RuntimeError(f"fixture {case} failed: {result}") from result
+    return result
 
 
 def duckdb_csv(database: str, sql: str, init: str | None = None) -> list[list[str]]:
@@ -4534,7 +4778,7 @@ def generator_objects(objects: Iterable[Stored]) -> list[ipps_file_labels.Stored
 def fixture_project(case_dir: Path, objects: tuple[Stored, ...], unlabelled: frozenset[str]) -> None:
     """Copy the dbt project into the case and write its label and twin seeds with the real generator functions."""
     project = case_dir / "project"
-    shutil.copytree(REPO_ROOT / "dbt", project)
+    shutil.copytree(DBT_SNAPSHOT if DBT_SNAPSHOT.exists() else REPO_ROOT / "dbt", project)
     stored = generator_objects(objects)
     rows = [row for row in ipps_file_labels.labels(stored, {}) if row["object_key"] not in unlabelled]
     (project / "seeds/ipps_occmix_copy_labels.csv").write_text(ipps_file_labels.as_csv(rows, ipps_file_labels.LABEL_COLUMNS))
@@ -4629,8 +4873,10 @@ def read_models(case: str) -> dict[str, Any]:
         "mup_measures": [tuple(row) for row in duckdb_csv(database, MUP_MEASURES_SQL)],
         "owners": [tuple(row) for row in duckdb_csv(database, OWNERS_SQL)],
         "enrollments": [tuple(row) for row in duckdb_csv(database, ENROLLMENTS_SQL)],
+        "enrollment_ccn_sources": [tuple(row) for row in duckdb_csv(database, ENROLLMENT_SOURCES_SQL)],
         "chow": [tuple(row) for row in duckdb_csv(database, CHOW_SQL)],
         "hhs": [tuple(row) for row in duckdb_csv(database, HHS_SQL)],
+        "hhs_sources": [tuple(row) for row in duckdb_csv(database, HHS_SOURCES_SQL)],
         "onc_chpl": [tuple(row) for row in duckdb_csv(database, ONC_CHPL_SQL)],
         "onc_attestations": [tuple(row) for row in duckdb_csv(database, ONC_ATTESTATIONS_SQL)],
         "phone_columns": [tuple(row) for row in duckdb_csv(database, PHONE_COLUMNS_SQL)],
@@ -4653,6 +4899,7 @@ def read_models(case: str) -> dict[str, Any]:
         "mmd": [tuple(row) for row in duckdb_csv(database, MMD_SQL)],
         "d1_windows": [tuple(row) for row in duckdb_csv(database, D1_WINDOWS_SQL)],
         "validation": [tuple(row) for row in duckdb_csv(database, VALIDATION_SQL)],
+        "validation_aliases": [tuple(row) for row in duckdb_csv(database, VALIDATION_ALIASES_SQL)],
         "validation_holds": [tuple(row) for row in duckdb_csv(database, VALIDATION_HOLDS_SQL)],
         "program_years": [tuple(row) for row in duckdb_csv(database, PROGRAM_YEARS_SQL)],
         "program_values": [tuple(row) for row in duckdb_csv(database, PROGRAM_VALUES_SQL)],
@@ -4665,6 +4912,8 @@ def read_models(case: str) -> dict[str, Any]:
         "validation_aligned": [tuple(row) for row in duckdb_csv(database, VALIDATION_ALIGNED_SQL)],
         "county_measures": [tuple(row) for row in duckdb_csv(database, COUNTY_SQL)],
         "county_measure_counts": [tuple(row) for row in duckdb_csv(database, COUNTY_COUNT_SQL)],
+        "al4b_context": [tuple(row) for row in duckdb_csv(database, AL4B_SQL)],
+        "al4b_context_counts": [tuple(row) for row in duckdb_csv(database, AL4B_COUNT_SQL)],
         "validation_aligned_counts": [tuple(row) for row in duckdb_csv(database, VALIDATION_ALIGNED_COUNT_SQL)],
         "operations_measure_counts": [tuple(row) for row in duckdb_csv(database, OPERATIONS_COUNT_SQL)],
         "hospital_measure_counts": [tuple(row) for row in duckdb_csv(database, HOSPITAL_COUNT_SQL)],
@@ -4675,6 +4924,8 @@ def read_models(case: str) -> dict[str, Any]:
         "hai_outcome_values": [tuple(row) for row in duckdb_csv(database, OUTCOME_VALUES_SQL)],
         "hai_outcome_value_rows": [tuple(row) for row in duckdb_csv(database, OUTCOME_VALUE_ROWS_SQL)],
         "hpsa": [tuple(row) for row in duckdb_csv(database, HPSA_SQL)],
+        "hpsa_sources": [tuple(row) for row in duckdb_csv(database, HPSA_SOURCES_SQL)],
+        "places_sources": [tuple(row) for row in duckdb_csv(database, PLACES_SOURCES_SQL)],
         "mua": [tuple(row) for row in duckdb_csv(database, MUA_SQL)],
         "occmix_holds": [
             tuple(row)
@@ -4912,22 +5163,25 @@ def county_health_checks(base: dict[str, Any]) -> dict[str, bool]:
     checks: dict[str, bool] = {}
     # [449] to [459] County rows only; the all-state flag only where all 51 are covered; geographic variation long with *
     # kept; WONDER databases apart, the shorter export's identical 2024 row held, marks kept as tokens.
-    checks["places_matches_expected"] = base.get("places") == sorted(
-        [
-            ("2025", "2023", "DIABETES", "CrdPrv", "2", "1", "false"),
-            ("2025", "2023", "DIABETES", "AgeAdjPrv", "1", "1", "false"),
-            ("2025", "2022", "LONELINESS", "CrdPrv", "1", "1", "false"),
-            ("2025", "2022", "OBESITY", "CrdPrv", "51", "51", "true"),
-        ]
-    )
-    checks["places_detail_matches_expected"] = base.get("places_detail") == sorted(
-        [
-            ("01001", "DIABETES", "CrdPrv", "12.1", "11.0", "", "false"),
-            ("01001", "DIABETES", "AgeAdjPrv", "10.5", "", "", "false"),
-            ("01003", "DIABETES", "CrdPrv", "", "", "*", "false"),
-            ("09120", "LONELINESS", "CrdPrv", "30.2", "", "", "true"),
-        ]
-    )
+    checks["places_matches_expected"] = base.get("places") == [
+        ("2020", "2018", "DIABETES", "CrdPrv", "1", "1", "false"),
+        ("2025", "2022", "LONELINESS", "CrdPrv", "1", "1", "false"),
+        ("2025", "2022", "OBESITY", "CrdPrv", "51", "51", "true"),
+        ("2025", "2023", "ARTHRITIS", "CrdPrv", "2", "2", "false"),
+        ("2025", "2023", "DIABETES", "AgeAdjPrv", "1", "1", "false"),
+        ("2025", "2023", "DIABETES", "CrdPrv", "2", "1", "false"),
+    ]
+    # [623] [624] One 2020-layout row typed through the name crosswalk; the unknown and two-code names stay untyped.
+    checks["places_sources_match_expected"] = base.get("places_sources") == [("places_name_crosswalk", "1"), ("published", "57")]
+    checks["places_detail_matches_expected"] = base.get("places_detail") == [
+        ("01001", "DIABETES", "AgeAdjPrv", "10.5", "", "", "false"),
+        ("01001", "DIABETES", "CrdPrv", "11.0", "", "", "false"),
+        ("01001", "DIABETES", "CrdPrv", "12.1", "11.0", "", "false"),
+        ("01003", "DIABETES", "CrdPrv", "", "", "*", "false"),
+        ("01005", "ARTHRITIS", "CrdPrv", "20.0", "", "", "false"),
+        ("01007", "ARTHRITIS", "CrdPrv", "21.0", "", "", "false"),
+        ("09120", "LONELINESS", "CrdPrv", "30.2", "", "", "true"),
+    ]
     checks["gv_matches_expected"] = base.get("gv") == sorted(
         [
             ("2020", "01073", "ma_prtcptn_rate", "0.3", ""),
@@ -4974,14 +5228,20 @@ def shortage_checks(base: dict[str, Any]) -> dict[str, bool]:
         ]
     )
     # [475] to [479] The exact repeat held; both designations of a reused ID kept; XXXXX kept as a token; dates and scores typed.
+    # [626] [627] The routes that filled a county.
+    checks["hpsa_sources_match_expected"] = base.get("hpsa_sources") == [("103", "geography_id"), ("107", "hud_zip_single_county")]
     checks["hpsa_matches_expected"] = base.get("hpsa") == sorted(
         [
             ("101", "2026-09-24", "2013-08-13", "01001", "01001", "", "15", "Designated", "", "false", ""),
             ("101", "2026-09-24", "2013-08-13", "01001", "01001", "", "15", "Designated", "", "false", "exact_repeat"),
             ("102", "2026-09-24", "2008-10-08", "01003", "01003", "", "7", "Withdrawn", "2013-06-27", "false", ""),
             ("102", "2026-09-24", "2013-08-13", "01003", "01003", "", "14", "Withdrawn", "2018-07-02", "false", ""),
-            ("103", "2026-09-24", "2022-01-05", "09110010100", "", "XXXXX", "20", "Designated", "", "true", ""),
+            # [626] A Connecticut tract ID gives its county; [626] a tract ID from another state and [627] a facility postal code.
+            ("103", "2026-09-24", "2022-01-05", "09110010100", "09110", "XXXXX", "20", "Designated", "", "true", ""),
+            ("106", "2026-09-24", "2022-01-05", "25025000100", "", "XXXXX", "12", "Designated", "", "true", ""),
+            ("107", "2026-09-24", "2022-01-05", "POINT (-86.8 33.5)", "25013", "XXX", "18", "Designated", "", "false", ""),
             ("104", "2026-09-24", "2000-02-01", "01005", "01005", "", "3", "Withdrawn", "", "false", ""),
+            ("108", "2026-09-24", "2015-05-01", "01073", "01073", "", "9", "Withdrawn", "", "false", ""),
         ]
     )
     checks["mua_matches_expected"] = base.get("mua") == sorted(
@@ -5033,6 +5293,7 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("visits", "010001", "OP_32", "2021-01-01", "11.0", "r9r"),
             ("visits", "010001", "OP_32", "2022-01-01", "12.5", "vi1"),
             ("visits", "010001", "OP-32", "2022-01-01", "13.0", "vi1"),
+            ("visits", "010003", "OP-32", "2022-01-01", "4.0", "vi1"),
             ("visits", "010001", "READM_30_HF", "2022-01-01", "20.1", "vi1"),
             ("visits", "010003", "OP_35_ED", "2022-01-01", "Not Available", "vi1"),
             ("visits", "010003", "OP_36", "2022-01-01", "7.0", "vi1"),
@@ -5044,7 +5305,8 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("hrrp", "010003", "READM-30-AMI-HRRP", "2020-07-01", "N/A", "hr1"),
         ]
     )
-    # [508] [509] [510] Exact IDs only (OP-32, READM_30_HF and the PSI IDs stay unmapped); parents and children both; tokens stay text.
+    # [508] [509] [510] [629] Exact IDs, plus OP-32 where its hospital and window have no OP_32 row (010003); OP-32 beside OP_32
+    # (010001), READM_30_HF and the PSI IDs stay out; parents and children both; tokens stay text.
     checks["validation_matches_expected"] = base.get("validation") == sorted(
         [
             ("C290", "010001", "OP_32", "2020-07-01", "11.5", "11.5"),
@@ -5065,8 +5327,11 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("C290.04", "010003", "OP_36", "2022-01-01", "7.0", "7.0"),
             ("C291", "010001", "MORT_30_AMI", "2022-01-01", "12.3", "12.3"),
             ("C291.01", "010001", "MORT_30_AMI", "2022-01-01", "12.3", "12.3"),
+            ("C290", "010003", "OP_32", "2022-01-01", "4.0", "4.0"),
+            ("C290.01", "010003", "OP_32", "2022-01-01", "4.0", "4.0"),
         ]
     )
+    checks["validation_aliases_match_expected"] = base.get("validation_aliases") == [("010003", "OP_32", "OP-32")]
     checks["validation_holds_match_expected"] = base.get("validation_holds") == [
         ("cms_cc_complications_and_deaths_hospital", "010001", "MORT_30_HF", "repeated_in_file", "2"),
         ("cms_cc_unplanned_hospital_visits_hospital", "", "", "no_key", "1"),
@@ -5092,21 +5357,124 @@ def county_measure_checks(base: dict[str, Any]) -> dict[str, bool]:
     checks["county_measure_counts_match_expected"] = base.get("county_measure_counts") == [
         ("geographic_variation aligned", "1"),
         ("geographic_variation no_period_before_start", "3"),
-        ("geographic_variation not_in_source", "236"),
-        ("keys", "2340"),
+        ("geographic_variation not_in_source", "296"),
+        ("keys", "2925"),
         ("mmd aligned", "1"),
-        ("mmd no_period_before_start", "5"),
-        ("mmd not_in_source", "954"),
+        ("mmd no_period_before_start", "6"),
+        ("mmd not_in_source", "1193"),
         ("places no_period_before_start", "2"),
-        ("places not_in_source", "1030"),
-        ("rows", "2340"),
+        ("places not_in_source", "1288"),
+        ("rows", "2925"),
         ("rucc aligned", "1"),
         ("rucc no_period_before_start", "1"),
-        ("rucc not_in_source", "10"),
+        ("rucc not_in_source", "13"),
         ("wonder aligned", "3"),
         ("wonder no_period_before_start", "1"),
-        ("wonder not_in_source", "92"),
+        ("wonder not_in_source", "116"),
     ]
+    return checks
+
+
+# AL4b, reviewed row by row: [634] ACS vintage 2018 and 2014 and SAIPE 1999 before the start; [636] HPSA and MUA in force
+# for 01001F (score as published at the capture), 0 elsewhere with none in force, and 010001's county held by an undated
+# withdrawal; [638] the service area from 2015, the latest year with unsuppressed rows (2016's cases are suppressed).
+AL4B_EXPECTED: list[tuple[str, ...]] = [
+    ("010001", "2019", "hpsa", "C249", "designations_in_force", "held_in_staging", "", "", "2018-12-31", ""),
+    ("010001", "2019", "hpsa", "C250", "highest_score", "held_in_staging", "", "", "2018-12-31", ""),
+    ("010001", "2019", "hsa", "L001", "service_area_cases", "aligned", "23.0", "23.0", "2015-12-31", "published_counts_only"),
+    ("010001", "2019", "hsa", "L001", "service_area_zips", "aligned", "1.0", "1.0", "2015-12-31", "published_counts_only"),
+    ("010001", "2019", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2018-12-31", ""),
+    ("010001", "2019", "mua", "C251", "highest_score", "aligned", "", "", "2018-12-31", "none_in_force"),
+    ("010001", "2021", "hpsa", "C249", "designations_in_force", "held_in_staging", "", "", "2020-12-31", ""),
+    ("010001", "2021", "hpsa", "C250", "highest_score", "held_in_staging", "", "", "2020-12-31", ""),
+    ("010001", "2021", "hsa", "L001", "service_area_cases", "aligned", "23.0", "23.0", "2015-12-31", "published_counts_only"),
+    ("010001", "2021", "hsa", "L001", "service_area_zips", "aligned", "1.0", "1.0", "2015-12-31", "published_counts_only"),
+    ("010001", "2021", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
+    ("010001", "2021", "mua", "C251", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
+    ("010001", "2025", "hsa", "L001", "service_area_cases", "aligned", "23.0", "23.0", "2015-12-31", "published_counts_only"),
+    ("010001", "2025", "hsa", "L001", "service_area_zips", "aligned", "1.0", "1.0", "2015-12-31", "published_counts_only"),
+    ("010005", "2019", "hpsa", "C249", "designations_in_force", "aligned", "0", "0.0", "2018-12-31", ""),
+    ("010005", "2019", "hpsa", "C250", "highest_score", "aligned", "", "", "2018-12-31", "none_in_force"),
+    ("010005", "2019", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2018-12-31", ""),
+    ("010005", "2019", "mua", "C251", "highest_score", "aligned", "", "", "2018-12-31", "none_in_force"),
+    ("010005", "2021", "hpsa", "C249", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
+    ("010005", "2021", "hpsa", "C250", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
+    ("010005", "2021", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
+    ("010005", "2021", "mua", "C251", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
+    ("01001F", "2021", "acs", "C176", "B19013_001E", "aligned", "58000", "58000.0", "2018-12-31", ""),
+    ("01001F", "2021", "acs", "C176", "B19013_001M", "aligned", "1200", "1200.0", "2018-12-31", ""),
+    ("01001F", "2021", "acs", "C181", "DP04_0078PE", "aligned", "2.9", "2.9", "2014-12-31", ""),
+    ("01001F", "2021", "hpsa", "C249", "designations_in_force", "aligned", "1", "1.0", "2020-12-31", ""),
+    ("01001F", "2021", "hpsa", "C250", "highest_score", "aligned", "15.0", "15.0", "2020-12-31", "score_as_published_at_capture"),
+    ("01001F", "2021", "mua", "C251", "designations_in_force", "aligned", "1", "1.0", "2020-12-31", ""),
+    ("01001F", "2021", "mua", "C251", "highest_score", "aligned", "52.9", "52.9", "2020-12-31", "score_as_published_at_capture"),
+    ("01001F", "2021", "saipe", "C200", "poverty_all_count", "aligned", "4991.0", "4991.0", "1999-12-31", ""),
+    ("01001F", "2021", "saipe", "C200", "poverty_all_pct", "aligned", "11.4", "11.4", "1999-12-31", ""),
+    ("01001F", "2021", "saipe", "C200", "poverty_all_pct_lb90", "aligned", "8.9", "8.9", "1999-12-31", ""),
+    ("01001F", "2021", "saipe", "C200", "poverty_all_pct_ub90", "aligned", "14.0", "14.0", "1999-12-31", ""),
+    ("01001F", "2021", "saipe", "C201", "median_household_income", "aligned", "39702.0", "39702.0", "1999-12-31", ""),
+    ("01001F", "2021", "saipe", "C201", "median_household_income_lb90", "aligned", "37226.0", "37226.0", "1999-12-31", ""),
+    ("01001F", "2021", "saipe", "C201", "median_household_income_ub90", "aligned", "42342.0", "42342.0", "1999-12-31", ""),
+    ("011301", "2020", "hpsa", "C249", "designations_in_force", "aligned", "0", "0.0", "2019-12-31", ""),
+    ("011301", "2020", "hpsa", "C250", "highest_score", "aligned", "", "", "2019-12-31", "none_in_force"),
+    ("011301", "2020", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2019-12-31", ""),
+    ("011301", "2020", "mua", "C251", "highest_score", "aligned", "", "", "2019-12-31", "none_in_force"),
+    ("011301", "2020", "saipe", "C200", "poverty_all_count", "aligned", "12000.0", "12000.0", "1999-12-31", ""),
+    ("011301", "2020", "saipe", "C200", "poverty_all_pct", "aligned", "10.1", "10.1", "1999-12-31", ""),
+    ("011301", "2020", "saipe", "C200", "poverty_all_pct_lb90", "aligned", "8.5", "8.5", "1999-12-31", ""),
+    ("011301", "2020", "saipe", "C200", "poverty_all_pct_ub90", "aligned", "11.7", "11.7", "1999-12-31", ""),
+    ("011301", "2021", "hpsa", "C249", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
+    ("011301", "2021", "hpsa", "C250", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
+    ("011301", "2021", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
+    ("011301", "2021", "mua", "C251", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
+    ("011301", "2021", "saipe", "C200", "poverty_all_count", "aligned", "12000.0", "12000.0", "1999-12-31", ""),
+    ("011301", "2021", "saipe", "C200", "poverty_all_pct", "aligned", "10.1", "10.1", "1999-12-31", ""),
+    ("011301", "2021", "saipe", "C200", "poverty_all_pct_lb90", "aligned", "8.5", "8.5", "1999-12-31", ""),
+    ("011301", "2021", "saipe", "C200", "poverty_all_pct_ub90", "aligned", "11.7", "11.7", "1999-12-31", ""),
+    ("070001", "2021", "hpsa", "C249", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
+    ("070001", "2021", "hpsa", "C250", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
+    ("070001", "2021", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
+    ("070001", "2021", "mua", "C251", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
+    ("210001", "2021", "hpsa", "C249", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
+    ("210001", "2021", "hpsa", "C250", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
+    ("210001", "2021", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
+    ("210001", "2021", "mua", "C251", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
+]
+# [611] Context 14 spine rows x 155 control-fields, linkage 14 x 3, unique keys, and the counts per source and status.
+AL4B_COUNTS_EXPECTED: list[tuple[str, ...]] = [
+    ("acs aligned", "3"),
+    ("acs no_period_before_start", "7"),
+    ("acs not_in_source", "1145"),
+    ("bls no_period_before_start", "2"),
+    ("bls not_in_source", "118"),
+    ("context keys", "2325"),
+    ("context rows", "2325"),
+    ("hpsa aligned", "14"),
+    ("hpsa held_in_staging", "4"),
+    ("hpsa not_in_source", "12"),
+    ("hsa aligned", "6"),
+    ("hsa not_in_source", "24"),
+    ("hud no_period_before_start", "1"),
+    ("hud not_in_source", "14"),
+    ("linkage keys", "45"),
+    ("linkage rows", "45"),
+    ("mua aligned", "18"),
+    ("mua not_in_source", "12"),
+    ("ruca not_in_source", "90"),
+    ("sahie no_period_before_start", "4"),
+    ("sahie not_in_source", "56"),
+    ("saipe aligned", "15"),
+    ("saipe not_in_source", "90"),
+    ("svi no_period_before_start", "6"),
+    ("svi not_in_source", "729"),
+]
+
+
+def al4b_context_checks(base: dict[str, Any]) -> dict[str, bool]:
+    """Compare the base fixture's AL4b rows with their expected values [604] to [611] and [634] to [638]."""
+    checks: dict[str, bool] = {}
+    checks["al4b_context_match_expected"] = base.get("al4b_context") == AL4B_EXPECTED
+    checks["al4b_context_counts_match_expected"] = base.get("al4b_context_counts") == AL4B_COUNTS_EXPECTED
     return checks
 
 
@@ -5151,10 +5519,10 @@ def validation_aligned_checks(base: dict[str, Any]) -> dict[str, bool]:
     # [600] One row per spine row and seed row (12 x 41), unique keys; [599] no model reads the validation table.
     checks["validation_aligned_counts_match_expected"] = base.get("validation_aligned_counts") == [
         ("aligned", "6"),
-        ("keys", "492"),
+        ("keys", "615"),
         ("no_matching_period", "24"),
-        ("not_in_source", "462"),
-        ("rows", "492"),
+        ("not_in_source", "585"),
+        ("rows", "615"),
     ]
     checks["validation_table_kept_apart"] = validation_kept_apart()
     return checks
@@ -5235,10 +5603,10 @@ def operations_measure_checks(base: dict[str, Any]) -> dict[str, bool]:
     checks["operations_measure_counts_match_expected"] = base.get("operations_measure_counts") == [
         ("aligned", "14"),
         ("held_in_staging", "41"),
-        ("keys", "624"),
-        ("no_period_before_start", "109"),
-        ("not_in_source", "460"),
-        ("rows", "624"),
+        ("keys", "780"),
+        ("no_period_before_start", "156"),
+        ("not_in_source", "569"),
+        ("rows", "780"),
     ]
     return checks
 
@@ -5332,6 +5700,11 @@ def hospital_measure_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("010001", "2025", "medicare_inpatient", "C090", "bene_cc_ph_ckd_v2_pct", "aligned", "", "0.4", "2023-12-31", "", "13", "1"),
         ("010001", "2025", "medicare_inpatient", "C109", "bene_cc_bh_depress_v1_pct", "aligned", "", "0.3", "2023-12-31", "", "13", "1"),
         ("010001", "2025", "medicare_inpatient", "C117", "tot_dschrgs", "aligned", "", "0.06", "2023-12-31", "", "13", "1"),
+        ("010005", "2019", "occupational_mix", "C030", "rnhr", "aligned", "", "100.0", "2016-12-31", "", "25", "1"),
+        ("010005", "2019", "occupational_mix", "C031", "rn_paid_hour_share", "aligned", "", "1.0", "2016-12-31", "", "25", "1"),
+        ("010005", "2019", "occupational_mix", "C032", "lpnst_paid_hour_share", "aligned", "", "0.0", "2016-12-31", "", "25", "1"),
+        ("010005", "2019", "occupational_mix", "C033", "naorat_paid_hour_share", "aligned", "", "0.0", "2016-12-31", "", "25", "1"),
+        ("010005", "2019", "occupational_mix", "C034", "rn_paid_hour_wage", "aligned", "", "30.0", "2016-12-31", "", "25", "1"),
         ("010005", "2021", "occupational_mix", "C030", "rnhr", "aligned", "", "100.0", "2016-12-31", "", "49", "1"),
         ("010005", "2021", "occupational_mix", "C031", "rn_paid_hour_share", "aligned", "", "1.0", "2016-12-31", "", "49", "1"),
         ("010005", "2021", "occupational_mix", "C032", "lpnst_paid_hour_share", "aligned", "", "0.0", "2016-12-31", "", "49", "1"),
@@ -5340,13 +5713,13 @@ def hospital_measure_checks(base: dict[str, Any]) -> dict[str, bool]:
     ]
     # [582] [583] One row per spine row and control-field (12 x 98), unique keys, and the counts per status.
     checks["hospital_measure_counts_match_expected"] = base.get("hospital_measure_counts") == [
-        ("aligned", "81"),
+        ("aligned", "86"),
         ("held_in_staging", "6"),
-        ("keys", "1176"),
-        ("no_period_before_start", "118"),
-        ("not_in_source", "971"),
-        ("rows", "1176"),
-        ("spine", "12"),
+        ("keys", "1470"),
+        ("no_period_before_start", "130"),
+        ("not_in_source", "1248"),
+        ("rows", "1470"),
+        ("spine", "15"),
     ]
     return checks
 
@@ -5382,6 +5755,7 @@ def care_compare_checks(base: dict[str, Any]) -> dict[str, bool]:
             *none_before("010002", "2019", "C141"),
             ("010005", "2021", "C143", "held_in_staging", "", "", "", "", "", ""),
             ("010005", "2021", "C284", "held_in_staging", "", "", "", "2020-10-01", "3", "2"),
+            ("010005", "2019", "C284", "no_period_before_start", "", "", "", "", "", ""),
         ]
     )
     # [566] Every spine row has one row per control, and the key is unique.
@@ -5406,7 +5780,8 @@ def outcome_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("010001", "2025", "HAI_1", "1.2", "1.2", *blank, "0", "false"),
             ("010002", "2019", "HAI_1", "0.9", "0.9", *blank, "0", "false"),
             ("010005", "2021", "HAI_1", "0.6", "0.6", *blank, "0", "false"),
-            ("010009", "2021", "HAI_1", "1.1", "1.1", *blank, "0", "false"),
+            # [617] In the primary population now that its state comes from the CCN.
+            ("010009", "2021", "HAI_1", "1.1", "1.1", *blank, "0", "true"),
             ("01000F", "2025", "HAI_1", "0.3", "0.3", *blank, "0", "false"),
             ("01001F", "2021", "HAI_1", "0.3", "0.3", *blank, "0", "false"),
             ("011301", "2021", "HAI_1", "0.5", "0.5", *blank, "0", "false"),
@@ -5417,10 +5792,15 @@ def outcome_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("210001", "2021", "HAI_1", "0.8", "0.8", *blank, "0", "false"),
             ("210001", "2021", "HAI_5", "", "", *blank, "1", "false"),
             ("990001", "2021", "HAI_1", "1.0", "1.0", *blank, "0", "false"),
+            ("010005", "2019", "HAI_1", "0.6", "0.6", "", "", "", "", "", "", "0", "true"),
+            ("010006", "2018", "HAI_1", "0.6", "0.6", "", "", "", "", "", "", "0", "false"),
+            ("011301", "2020", "HAI_1", "0.5", "0.5", "", "", "", "", "", "", "0", "false"),
         ]
     )
     # [550] [556] Six types for every spine hospital-window, each once.
-    checks["hai_outcomes_six_per_spine_row"] = base.get("hai_outcome_counts") == [("72", "72", "72")]
+    checks["hai_outcomes_six_per_spine_row"] = base.get("hai_outcome_counts") == [
+        ("90", "90", "90"),
+    ]
     # [560] to [563] Statuses: the baseline-held and staging-held parts are held, not missing; each part keeps its footnote;
     # the SIR's national comparison as published.
     checks["hai_outcome_status_match_expected"] = base.get("hai_outcome_status") == sorted(
@@ -5432,15 +5812,19 @@ def outcome_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("990001", "2021", "HAI_4", "held_in_staging", "1", "", "", ""),
         ]
     )
-    checks["hai_outcome_status_counts_match"] = base.get("hai_outcome_status_counts") == [("aligned", "16"), ("held_in_staging", "2"), ("not_in_source", "54")]
+    checks["hai_outcome_status_counts_match"] = base.get("hai_outcome_status_counts") == [
+        ("aligned", "19"),
+        ("held_in_staging", "2"),
+        ("not_in_source", "69"),
+    ]
     # [559] Each registry control from its exact part: the SIR twice (target and earlier-outcome candidates), the counts, the
     # bounds and the benchmark category under C283 and its children; only published values.
     checks["hai_outcome_values_per_control"] = base.get("hai_outcome_values") == [
-        ("C269", "12"),
+        ("C269", "15"),
         ("C270", "2"),
         ("C271", "1"),
         ("C274", "1"),
-        ("C275", "12"),
+        ("C275", "15"),
         ("C276", "2"),
         ("C277", "1"),
         ("C280", "1"),
@@ -5573,11 +5957,18 @@ def refuses_condition(action: Any, fragment: str) -> bool:
     return False
 
 
-def fixture_scenarios() -> dict[str, bool]:
-    """Run every fixture case and return each check's outcome."""
+def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
+    """Build every fixture case (in parallel when asked), then run each check in order and return its outcome."""
     checks: dict[str, bool] = {}
     want = expected(BASE)
-    code, statuses = run_fixture("base", BASE)
+    jobs: list[tuple[str, tuple[Stored, ...], frozenset[str]]] = [
+        ("base", BASE, frozenset()),
+        ("base_again", BASE, frozenset()),
+        ("reversed_order", tuple(reversed(BASE)), frozenset()),
+    ]
+    jobs += [(case, objects, unlabelled) for case, (_test, objects, unlabelled) in FAILING.items()]
+    results = build_cases(jobs, workers)
+    code, statuses = built(results, "base")
     checks["base_build_passes"] = code == 0 and bool(statuses) and all(status in ("pass", "success") for status in statuses.values())
     base = model_outputs("base")
     checks["copies_match_expected"] = [tuple(row) for row in want["copies"]] == base.get("copies")
@@ -5640,9 +6031,12 @@ def fixture_scenarios() -> dict[str, bool]:
     checks["hai_windows_match_expected"] = base.get("windows") == sorted(
         [
             ("hospital", "010001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.4", "a6"),
+            ("hospital", "010005", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.6", "a6"),
+            ("hospital", "010006", "HAI_1_SIR", "2018-01-01", "2018-12-31", "0.6", "a6"),
             ("hospital", "010005", "HAI_1_SIR", "2020-04-01", "2021-03-31", "0.7", "a6"),
             ("hospital", "010005", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.6", "a6"),
             ("hospital", "010009", "HAI_1_SIR", "2021-01-01", "2021-12-31", "1.1", "a6"),
+            ("hospital", "011301", "HAI_1_SIR", "2020-01-01", "2020-12-31", "0.5", "a6"),
             ("hospital", "011301", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.5", "a6"),
             ("hospital", "01001F", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.3", "a6"),
             ("hospital", "070001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.9", "a6"),
@@ -5668,27 +6062,70 @@ def fixture_scenarios() -> dict[str, bool]:
     ]
     # [280] to [292] Hospital rows only, one per CCN and period; padded codes, 5-character counties, typed counts and
     # switches, dates, and the population flags.
-    checks["pos_snapshots_match_expected"] = base.get("pos") == sorted(
-        [
-            ("010001", "2018-12-31", "AL", "01073", "01360", "01", "04", "00", "true", "250", "240", "100.5", "true", "false", "1", "1966-07-01")
-            + ("", "35233", "true", "false", "false", "false"),
-            ("010001", "2019-03-31", "AL", "01073", "", "01", "", "00", "true", "255", "", "101.0", "true", "false", "", "")
-            + ("", "", "true", "false", "false", "false"),
-            ("010002", "2018-12-31", "AL", "", "", "", "", "00", "true", "", "", "", "", "", "", "") + ("", "", "true", "false", "false", "false"),
-            ("010002", "2019-03-31", "AL", "", "", "", "", "01", "false", "50", "", "", "", "", "", "") + ("2019-01-15", "", "true", "false", "false", "false"),
-            ("01001F", "2018-12-31", "AL", "01001", "", "", "10", "00", "true", "100", "", "", "", "", "", "") + ("", "", "true", "false", "false", "true"),
-            ("011301", "2018-12-31", "AL", "01003", "", "11", "", "00", "true", "25", "", "", "", "", "", "") + ("", "", "true", "false", "true", "false"),
-            ("070001", "2018-12-31", "CT", "09001", "", "", "", "00", "true", "", "", "", "", "", "", "") + ("", "", "true", "true", "false", "false"),
-            ("990001", "2018-12-31", "CN", "", "", "", "", "00", "true", "", "", "", "", "", "", "") + ("", "", "false", "false", "false", "false"),
-            ("010001", "2020-12-31", "AL", "01073", "", "01", "", "00", "true", "260", "", "", "", "", "", "") + ("", "", "true", "false", "false", "false"),
-            ("010005", "2020-12-31", "AL", "01089", "", "01", "", "00", "true", "120", "", "", "", "", "", "") + ("", "", "true", "false", "false", "false"),
-            ("011301", "2020-12-31", "AL", "01003", "", "11", "", "00", "true", "25", "", "", "", "", "", "") + ("", "", "true", "false", "true", "false"),
-            ("01001F", "2020-12-31", "AL", "01001", "", "", "", "00", "true", "100", "", "", "", "", "", "") + ("", "", "true", "false", "false", "true"),
-            ("070001", "2020-12-31", "CT", "09001", "", "01", "", "00", "true", "300", "", "", "", "", "", "") + ("", "", "true", "true", "false", "false"),
-            ("990001", "2020-12-31", "CN", "", "", "", "", "00", "true", "", "", "", "", "", "", "") + ("", "", "false", "false", "false", "false"),
-            ("210001", "2020-12-31", "MD", "24005", "", "01", "", "00", "true", "200", "", "", "", "", "", "") + ("", "", "true", "false", "false", "false"),
-        ]
-    )
+    checks["pos_snapshots_match_expected"] = base.get("pos") == [
+        (
+            "010001",
+            "2018-12-31",
+            "AL",
+            "01073",
+            "01360",
+            "01",
+            "04",
+            "00",
+            "true",
+            "250",
+            "240",
+            "100.5",
+            "true",
+            "false",
+            "1",
+            "1966-07-01",
+            "",
+            "35233",
+            "true",
+            "false",
+            "false",
+            "false",
+        ),
+        (
+            "010001",
+            "2019-03-31",
+            "AL",
+            "01073",
+            "",
+            "01",
+            "",
+            "00",
+            "true",
+            "255",
+            "",
+            "101.0",
+            "true",
+            "false",
+            "",
+            "",
+            "",
+            "",
+            "true",
+            "false",
+            "false",
+            "false",
+        ),
+        ("010001", "2020-12-31", "AL", "01073", "", "01", "", "00", "true", "260", "", "", "", "", "", "", "", "", "true", "false", "false", "false"),
+        ("010002", "2018-12-31", "DC", "", "", "", "", "00", "true", "", "", "", "", "", "", "", "", "20001", "true", "false", "false", "false"),
+        ("010002", "2019-03-31", "AL", "", "", "", "", "01", "false", "50", "", "", "", "", "", "", "2019-01-15", "", "true", "false", "false", "false"),
+        ("010005", "2020-12-31", "AL", "01089", "", "01", "", "00", "true", "120", "", "", "", "", "", "", "", "", "true", "false", "false", "false"),
+        ("010006", "2020-12-31", "AL", "01089", "", "01", "", "00", "true", "80", "", "", "", "", "", "", "", "", "true", "false", "false", "false"),
+        ("01001F", "2018-12-31", "AL", "01001", "", "", "10", "00", "true", "100", "", "", "", "", "", "", "", "", "true", "false", "false", "true"),
+        ("01001F", "2020-12-31", "AL", "01001", "", "", "", "00", "true", "100", "", "", "", "", "", "", "", "", "true", "false", "false", "true"),
+        ("011301", "2018-12-31", "AL", "01003", "", "11", "", "00", "true", "25", "", "", "", "", "", "", "", "", "true", "false", "true", "false"),
+        ("011301", "2020-12-31", "AL", "01003", "", "11", "", "00", "true", "25", "", "", "", "", "", "", "", "", "true", "false", "true", "false"),
+        ("070001", "2018-12-31", "CT", "09001", "", "", "", "00", "true", "", "", "", "", "", "", "", "", "", "true", "true", "false", "false"),
+        ("070001", "2020-12-31", "CT", "09001", "", "01", "", "00", "true", "300", "", "", "", "", "", "", "", "06001", "true", "true", "false", "false"),
+        ("210001", "2020-12-31", "MD", "24005", "", "01", "", "00", "true", "200", "", "", "", "", "", "", "", "", "true", "false", "false", "false"),
+        ("990001", "2018-12-31", "CN", "", "", "", "", "00", "true", "", "", "", "", "", "", "", "", "", "false", "false", "false", "false"),
+        ("990001", "2020-12-31", "CN", "", "", "", "", "00", "true", "", "", "", "", "", "", "", "", "35004", "false", "false", "false", "false"),
+    ]
     # [293] to [304] Every row of the selected CMI files, unadjusted CMI beside the transfer-adjusted one; the occupational-mix
     # file in a CMI snapshot is not read.
     checks["cmi_rows_match_expected"] = base.get("cmi_rows") == sorted(
@@ -5757,31 +6194,408 @@ def fixture_scenarios() -> dict[str, bool]:
         ]
     )
     # [306] to [316] One row per hospital and calendar-year window, as of the window start: the POS snapshot that ends in the
-    # 12 months before the window, the CMI of the fiscal year before it, and the population flags.
-    no_pos = ("", "", "", "")
-    no_cmi = ("", "", "", "")
+    # 12 months before the window, the CMI of the fiscal year before it, and the population flags; [612] to [618], [631],
+    # [698] and [701] the fills, each with its source. Reviewed row by row.
     checks["spine_matches_expected"] = base.get("spine") == sorted(
         [
-            ("010001", "2019", "2018-12-31", "AL", "01073", "1.9186", "2018", "2020", "final")
-            + ("true", "true", "false", "false", "false", "true", "false", "true", "true"),
-            ("010002", "2019", "2018-12-31", "AL", "") + no_cmi + ("true", "false", "false", "false", "false", "true", "false", "false", "false"),
-            ("010001", "2021", "2020-12-31", "AL", "01073", "2.0352", "2020", "2023", "proposed")
-            + ("true", "true", "false", "false", "false", "true", "false", "true", "true"),
-            ("010005", "2021", "2020-12-31", "AL", "01089") + no_cmi + ("true", "false", "true", "false", "false", "true", "false", "false", "false"),
-            ("010009", "2021")
-            + no_pos[:3]
-            + ("1.2", "2020", "2023", "proposed")
-            + ("false", "true", "false", "false", "false", "false", "false", "false", "false"),
-            ("011301", "2021", "2020-12-31", "AL", "01003") + no_cmi + ("true", "false", "false", "true", "false", "true", "false", "false", "true"),
-            ("01001F", "2021", "2020-12-31", "AL", "01001") + no_cmi + ("true", "false", "false", "false", "true", "true", "false", "false", "false"),
-            ("070001", "2021", "2020-12-31", "CT", "09001", "1.5", "2020", "2023", "proposed")
-            + ("true", "true", "false", "false", "false", "true", "true", "true", "true"),
-            ("990001", "2021", "2020-12-31", "CN", "") + no_cmi + ("true", "false", "false", "false", "false", "false", "false", "false", "false"),
-            # Maryland: a CMI, but out of the primary population and in the sensitivity run [317].
-            ("210001", "2021", "2020-12-31", "MD", "24005", "1.8", "2020", "2023", "proposed")
-            + ("true", "true", "false", "false", "false", "true", "false", "false", "true"),
-            ("010001", "2025") + no_pos[:3] + no_cmi + ("false", "false", "false", "false", "false", "false", "false", "false", "false"),
-            ("01000F", "2025") + no_pos[:3] + no_cmi + ("false", "false", "false", "false", "true", "false", "false", "false", "false"),
+            # [701] The only snapshot ends 36 months after the window starts: nothing is carried; the state comes from the CCN.
+            (
+                "010006",
+                "2018",
+                "",
+                "AL",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "false",
+                "false",
+                "false",
+                "false",
+                "false",
+                "true",
+                "false",
+                "false",
+                "false",
+                "ccn_state_code",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ),
+            (
+                "010001",
+                "2019",
+                "2018-12-31",
+                "AL",
+                "01073",
+                "1.9186",
+                "2018",
+                "2020",
+                "final",
+                "true",
+                "true",
+                "false",
+                "false",
+                "false",
+                "true",
+                "false",
+                "true",
+                "true",
+                "pos",
+                "pos",
+                "pos",
+                "01",
+                "",
+                "",
+            ),
+            (
+                "010001",
+                "2021",
+                "2020-12-31",
+                "AL",
+                "01073",
+                "2.0352",
+                "2020",
+                "2023",
+                "proposed",
+                "true",
+                "true",
+                "false",
+                "false",
+                "false",
+                "true",
+                "false",
+                "true",
+                "true",
+                "pos",
+                "pos",
+                "pos",
+                "01",
+                "",
+                "",
+            ),
+            # [613] [614] [701] 49 months after the last snapshot: too far to carry; the state comes from the CCN, no county.
+            (
+                "010001",
+                "2025",
+                "",
+                "AL",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "false",
+                "false",
+                "false",
+                "false",
+                "false",
+                "true",
+                "false",
+                "false",
+                "false",
+                "ccn_state_code",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ),
+            # [616] [698] No county in its snapshot and HUD splits the ZIP: no county, since a majority share is not exact.
+            (
+                "010002",
+                "2019",
+                "2018-12-31",
+                "DC",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "true",
+                "false",
+                "false",
+                "false",
+                "false",
+                "true",
+                "false",
+                "false",
+                "false",
+                "pos",
+                "",
+                "pos",
+                "",
+                "",
+                "",
+            ),
+            # [613] [614] [617] Before the first snapshot: location and classification from the first later one; a CMI, so primary.
+            (
+                "010005",
+                "2019",
+                "",
+                "AL",
+                "01089",
+                "1.381",
+                "2018",
+                "2020",
+                "final",
+                "false",
+                "true",
+                "false",
+                "false",
+                "false",
+                "true",
+                "false",
+                "true",
+                "true",
+                "pos_other_snapshot",
+                "pos_other_snapshot",
+                "pos_other_snapshot",
+                "01",
+                "",
+                "",
+            ),
+            (
+                "010005",
+                "2021",
+                "2020-12-31",
+                "AL",
+                "01089",
+                "",
+                "",
+                "",
+                "",
+                "true",
+                "false",
+                "true",
+                "false",
+                "false",
+                "true",
+                "false",
+                "false",
+                "false",
+                "pos",
+                "pos",
+                "pos",
+                "01",
+                "",
+                "",
+            ),
+            # [615] [617] In no POS file and no enrollment: the state from the CCN's SSA code; a CMI, so primary.
+            (
+                "010009",
+                "2021",
+                "",
+                "AL",
+                "",
+                "1.2",
+                "2020",
+                "2023",
+                "proposed",
+                "false",
+                "true",
+                "false",
+                "false",
+                "false",
+                "true",
+                "false",
+                "true",
+                "true",
+                "ccn_state_code",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ),
+            (
+                "01000F",
+                "2025",
+                "",
+                "AL",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "false",
+                "false",
+                "false",
+                "false",
+                "true",
+                "true",
+                "false",
+                "false",
+                "false",
+                "ccn_state_code",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ),
+            (
+                "01001F",
+                "2021",
+                "2020-12-31",
+                "AL",
+                "01001",
+                "",
+                "",
+                "",
+                "",
+                "true",
+                "false",
+                "false",
+                "false",
+                "true",
+                "true",
+                "false",
+                "false",
+                "false",
+                "pos",
+                "pos",
+                "pos",
+                "",
+                "",
+                "",
+            ),
+            # [614] Between two snapshots that agree: classification filled.
+            (
+                "011301",
+                "2020",
+                "",
+                "AL",
+                "01003",
+                "",
+                "",
+                "",
+                "",
+                "false",
+                "false",
+                "false",
+                "true",
+                "false",
+                "true",
+                "false",
+                "false",
+                "true",
+                "pos_other_snapshot",
+                "pos_other_snapshot",
+                "pos_other_snapshot",
+                "11",
+                "",
+                "",
+            ),
+            (
+                "011301",
+                "2021",
+                "2020-12-31",
+                "AL",
+                "01003",
+                "",
+                "",
+                "",
+                "",
+                "true",
+                "false",
+                "false",
+                "true",
+                "false",
+                "true",
+                "false",
+                "false",
+                "true",
+                "pos",
+                "pos",
+                "pos",
+                "11",
+                "",
+                "",
+            ),
+            # [631] Connecticut: the planning region from its ZIP.
+            (
+                "070001",
+                "2021",
+                "2020-12-31",
+                "CT",
+                "09001",
+                "1.5",
+                "2020",
+                "2023",
+                "proposed",
+                "true",
+                "true",
+                "false",
+                "false",
+                "false",
+                "true",
+                "true",
+                "true",
+                "true",
+                "pos",
+                "pos",
+                "pos",
+                "01",
+                "09110",
+                "hud_zip_single_county",
+            ),
+            (
+                "210001",
+                "2021",
+                "2020-12-31",
+                "MD",
+                "24005",
+                "1.8",
+                "2020",
+                "2023",
+                "proposed",
+                "true",
+                "true",
+                "false",
+                "false",
+                "false",
+                "true",
+                "false",
+                "false",
+                "true",
+                "pos",
+                "pos",
+                "pos",
+                "01",
+                "",
+                "",
+            ),
+            # [616] A ZIP whose HUD rows are in another state: no county.
+            (
+                "990001",
+                "2021",
+                "2020-12-31",
+                "CN",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "true",
+                "false",
+                "false",
+                "false",
+                "false",
+                "false",
+                "false",
+                "false",
+                "false",
+                "pos",
+                "",
+                "pos",
+                "",
+                "",
+                "",
+            ),
         ]
     )
     # [318] to [322] Care Compare windows as for HAI: the latest release wins, conflicts and unparsed dates are held.
@@ -5999,6 +6813,19 @@ def fixture_scenarios() -> dict[str, bool]:
         ("u2", "2024-01-31", "O20000000001", "010001", "010001", "", "", "", ""),
         ("v1", "2022-11-30", "O20000000002", "013025", "13025", "P", "1990-01-05", "true", "false"),
         ("v1", "2022-11-30", "O20000000003", "01T001", "01T001", "", "", "false", ""),
+        ("v1", "2022-11-30", "O20000000010", "010001", "01000101", "", "", "", ""),
+        ("v1", "2022-11-30", "O20000000011", "010001", "1000101", "", "", "", ""),
+        ("v1", "2022-11-30", "O20000000012", "010001", "01S001A", "", "", "", ""),
+        ("v1", "2022-11-30", "O20000000013", "", "01000101", "", "", "", ""),
+        ("v1", "2022-11-30", "O20000000014", "", "78A005BP", "", "", "", ""),
+    ]
+    # [619] [620] The route of each mapped CCN.
+    checks["enrollment_ccn_sources_match_expected"] = base.get("enrollment_ccn_sources") == [
+        ("O20000000010", "010001", "location_suffix"),
+        ("O20000000011", "010001", "leading_zero"),
+        ("O20000000012", "010001", "unit_parent"),
+        ("O20000000013", "", ""),
+        ("O20000000014", "", ""),
     ]
     checks["chow_match_expected"] = base.get("chow") == [
         ("u4", "2023-12-31", "010001", "010001", "010001", "", "2023-01-01", "||2023-01-01|"),
@@ -6026,6 +6853,8 @@ def fixture_scenarios() -> dict[str, bool]:
     )
     # [375] to [383] HHS and ONC: a suppressed count and a negative value null and listed, a corrected week kept, a hospital without a CCN kept by
     # its key; the blank criterion null, M/D/YYYY dates, no telephone column; the older attestations typed apart.
+    # [681] [682] Only the reviewed facility gets a CCN.
+    checks["hhs_sources_match_expected"] = base.get("hhs_sources") == [("3f3f3f", "", ""), ("ee04ed", "190319", "reviewed_match")]
     checks["hhs_match_expected"] = base.get("hhs") == [
         ("010001", "2019-12-29", "010001", "", "", "", "", "", "", ""),
         ("010001", "2020-01-05", "010001", "", "", "", "", "", "", ""),
@@ -6046,6 +6875,7 @@ def fixture_scenarios() -> dict[str, bool]:
         ("010005", "2020-01-05", "010005", "", "", "", "", "", "", ""),
         ("010005", "2020-01-05", "010005", "", "", "", "", "", "", ""),
         ("3f3f3f", "2021-01-03", "", "", "40.0", "", "", "", "", ""),
+        ("ee04ed", "2021-01-03", "190319", "", "30.0", "", "", "", "", ""),
     ]
     checks["onc_chpl_match_expected"] = base.get("onc_chpl") == [
         ("010001", "true", "2023-01-01", "2023-12-31", "2023", "15.04.04.1234.Epic.AM.01.1.220101", "Fixture Developer A"),
@@ -6094,14 +6924,21 @@ def fixture_scenarios() -> dict[str, bool]:
     checks.update(operations_measure_checks(base))
     checks.update(validation_aligned_checks(base))
     checks.update(county_measure_checks(base))
-    code, _ = run_fixture("base_again", BASE)
+    checks.update(al4b_context_checks(base))
+    code, _ = built(results, "base_again")
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
-    code, _ = run_fixture("reversed_order", tuple(reversed(BASE)))
+    code, _ = built(results, "reversed_order")
     checks["load_order_independent"] = code == 0 and "error" not in base and model_outputs("reversed_order") == base
-    for case, (test, objects, unlabelled) in FAILING.items():
-        code, statuses = run_fixture(case, objects, unlabelled)
-        checks[f"{case}_fails_{test}"] = code != 0 and statuses.get(test) == "fail"
+    for case, (test, _objects, _unlabelled) in FAILING.items():
+        result = results[case]
+        checks[f"{case}_fails_{test}"] = not isinstance(result, BaseException) and result[0] != 0 and result[1].get(test) == "fail"
+    # The base outputs' hash lets a serial and a parallel run on the same code be compared [690].
+    FIXTURE_EVIDENCE["base_outputs_sha256"] = hashlib.sha256(json.dumps(base, sort_keys=True, default=str).encode()).hexdigest()
+    FIXTURE_EVIDENCE["case_errors"] = {case: str(result) for case, result in sorted(results.items()) if isinstance(result, BaseException)}
     return checks
+
+
+FIXTURE_EVIDENCE: dict[str, Any] = {}
 
 
 REAL_ATTACH = """.output /dev/null
@@ -6531,12 +7368,23 @@ SELECT (SELECT count(*) FROM state_lines)::VARCHAR, (SELECT count(*) FROM full_l
     (SELECT count(*) FROM (SELECT line FROM state_lines EXCEPT ALL SELECT line FROM full_lines))::VARCHAR;"""
 
 
-# Staged rows counted from the staging views without the models: PLACES rows with and without a county code, WONDER rows,
-# and the repeated rows held; geographic variation county rows at the All level [449] [457] [462].
-COUNTY_HEALTH_SQL = """SELECT 'places', (SELECT count(*) FROM stg_places WHERE regexp_full_match(trim(locationid), '[0-9]{5}'))::VARCHAR,
+# Staged rows counted from the staging views without the models: PLACES rows with a county code or a name the other releases
+# code one way, the name-crosswalk rows on their own, rows with neither, WONDER rows and the repeated rows held; geographic
+# variation county rows at the All level [449] [457] [462] [623] [624].
+COUNTY_HEALTH_SQL = """WITH names AS (
+    SELECT trim(stateabbr) AS st, trim(locationname) AS nm FROM stg_places WHERE regexp_full_match(trim(locationid), '[0-9]{5}')
+    GROUP BY 1, 2 HAVING count(DISTINCT trim(locationid)) = 1
+),
+crosswalk AS (
+    SELECT count(*) AS n FROM stg_places AS s JOIN names ON trim(s.stateabbr) = names.st AND trim(s.locationname) = names.nm
+    WHERE nullif(trim(s.locationid), '') IS NULL
+)
+SELECT 'places', ((SELECT count(*) FROM stg_places WHERE regexp_full_match(trim(locationid), '[0-9]{5}')) + (SELECT n FROM crosswalk))::VARCHAR,
     (SELECT count(*) FROM int_places_county_values)::VARCHAR
+UNION ALL SELECT 'places_name_crosswalk', (SELECT n FROM crosswalk)::VARCHAR,
+    (SELECT count(*) FROM int_places_county_values WHERE county_source = 'places_name_crosswalk')::VARCHAR
 UNION ALL SELECT 'places_without_county',
-    (SELECT count(*) FROM stg_places WHERE NOT coalesce(regexp_full_match(trim(locationid), '[0-9]{5}'), false))::VARCHAR, '0'
+    ((SELECT count(*) FROM stg_places WHERE NOT coalesce(regexp_full_match(trim(locationid), '[0-9]{5}'), false)) - (SELECT n FROM crosswalk))::VARCHAR, '0'
 UNION ALL SELECT 'wonder', (SELECT count(*) FROM stg_wonder_county_mortality)::VARCHAR, (SELECT count(*) FROM int_wonder_county_deaths)::VARCHAR
 UNION ALL SELECT 'wonder_held', '3142', (SELECT count(*) FROM int_wonder_county_deaths WHERE hold_reason IS NOT NULL)::VARCHAR
 UNION ALL SELECT 'gv_county_rows',
@@ -6842,24 +7690,66 @@ def validation_kept_apart() -> bool:
 
 # AL4a reconciliation [604] to [611]: rows against the spine and the seeds; per source the hospital-windows and
 # control-fields with a data year before the start through the POS county, counted from the staged tables.
-COUNTY_REAL_SQL = """WITH spine AS (SELECT spine_key, county_fips, window_year FROM int_hospital_spine),
+COUNTY_REAL_SQL = """WITH spine AS (SELECT spine_key, county_fips, planning_region_fips, window_year FROM int_hospital_spine),
 model AS (SELECT measure_source, count(*) FILTER (WHERE period_end IS NOT NULL) AS n FROM int_spine_county_measures GROUP BY 1)
 SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_county_measures)::VARCHAR, (SELECT count(*) FROM int_spine_county_measures)::VARCHAR
 UNION ALL SELECT 'rows_per_spine_row', (SELECT count(*) FROM int_spine_county_measures)::VARCHAR,
     ((SELECT count(*) FROM spine) * (SELECT count(DISTINCT measure_control || ':' || field) FROM int_spine_county_measures))::VARCHAR
 UNION ALL SELECT 'mmd_periods', (SELECT n FROM model WHERE measure_source = 'mmd')::VARCHAR,
     (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, m.measure_control FROM spine JOIN int_mmd_prevalence AS m
-        ON m.county_fips = spine.county_fips AND m.geography_level = 'county' AND m.data_year < spine.window_year))::VARCHAR
+        ON m.county_fips IN (spine.county_fips, spine.planning_region_fips) AND m.geography_level = 'county' AND m.data_year < spine.window_year))::VARCHAR
 UNION ALL SELECT 'rucc_periods', (SELECT n FROM model WHERE measure_source = 'rucc')::VARCHAR,
     (SELECT count(DISTINCT spine.spine_key) FROM spine JOIN int_rucc_county_codes AS r
-        ON r.county_fips = spine.county_fips AND r.vintage::INTEGER < spine.window_year)::VARCHAR
+        ON r.county_fips IN (spine.county_fips, spine.planning_region_fips) AND r.vintage::INTEGER < spine.window_year)::VARCHAR
 UNION ALL SELECT 'places_periods', (SELECT n FROM model WHERE measure_source = 'places')::VARCHAR,
     (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, p.measureid, p.datavaluetypeid FROM spine JOIN int_places_county_values AS p
-        ON p.county_fips = spine.county_fips AND p.is_all_states AND p.data_year < spine.window_year
+        ON p.county_fips IN (spine.county_fips, spine.planning_region_fips) AND p.is_all_states AND p.data_year < spine.window_year
         JOIN county_health_measures AS c ON c.source_model = 'int_places_county_values' AND c.components = p.measureid))::VARCHAR
 UNION ALL SELECT 'periods_on_or_after_start', (SELECT count(*) FROM int_spine_county_measures
     WHERE alignment_status = 'aligned' AND period_end >= window_start)::VARCHAR, '0';"""
 COUNTY_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_county_measures AS t;"
+# AL4b: each value source's eligible periods recounted from the staged tables, and the shape of the table [611] [634] [636].
+AL4B_REAL_SQL = """WITH spine AS (SELECT spine_key, county_fips, planning_region_fips, window_year, window_start FROM int_hospital_spine),
+model AS (SELECT measure_source, count(*) FILTER (WHERE period_end IS NOT NULL) AS n FROM int_spine_county_context
+    WHERE measure_source IN ('acs', 'svi') GROUP BY 1),
+acs_fields AS (SELECT DISTINCT measure_control, unnest(string_split(components, ' ')) AS field FROM acs_svi_measures WHERE source = 'acs'),
+svi_fields AS (SELECT DISTINCT measure_control, unnest(string_split(components, ' ')) AS field FROM acs_svi_measures WHERE source = 'svi')
+SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_county_context)::VARCHAR, (SELECT count(*) FROM int_spine_county_context)::VARCHAR
+UNION ALL SELECT 'rows_per_spine_row', (SELECT count(*) FROM int_spine_county_context)::VARCHAR,
+    ((SELECT count(*) FROM spine) * (SELECT count(DISTINCT measure_source || ':' || measure_control || ':' || field) FROM int_spine_county_context))::VARCHAR
+UNION ALL SELECT 'acs_periods', (SELECT n FROM model WHERE measure_source = 'acs')::VARCHAR,
+    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, f.measure_control, f.field FROM spine JOIN int_acs_county_values AS a
+        ON a.county_fips IN (spine.county_fips, spine.planning_region_fips) AND a.vintage::INTEGER < spine.window_year
+        JOIN acs_fields AS f ON f.field = a.concept_id))::VARCHAR
+UNION ALL SELECT 'svi_periods', (SELECT n FROM model WHERE measure_source = 'svi')::VARCHAR,
+    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, f.measure_control, f.field FROM spine JOIN int_svi_county_values AS s
+        ON s.county_fips IN (spine.county_fips, spine.planning_region_fips) AND s.edition::INTEGER < spine.window_year
+        JOIN svi_fields AS f ON f.field = s.field))::VARCHAR
+UNION ALL SELECT 'hpsa_windows_in_force', (SELECT count(*) FROM int_spine_county_context
+        WHERE measure_source = 'hpsa' AND field = 'designations_in_force' AND value_number > 0)::VARCHAR,
+    (SELECT count(DISTINCT spine.spine_key) FROM spine JOIN int_hpsa_components AS h
+        ON h.county_fips IN (spine.county_fips, spine.planning_region_fips) AND h.designation_date < spine.window_start
+        AND (h.withdrawn_date IS NULL OR h.withdrawn_date > spine.window_start) AND NOT (h.hpsa_status = 'Withdrawn' AND h.withdrawn_date IS NULL)
+        AND h.designation_date <> DATE '1970-01-01' AND h.hold_reason IS NULL
+        WHERE spine.spine_key NOT IN (SELECT spine_key FROM int_spine_county_context
+            WHERE measure_source = 'hpsa' AND alignment_status = 'held_in_staging'))::VARCHAR
+UNION ALL SELECT 'linkage_rows_per_spine_row', (SELECT count(*) FROM int_spine_linkage)::VARCHAR, ((SELECT count(*) FROM spine) * 3)::VARCHAR
+UNION ALL SELECT 'periods_on_or_after_start', ((SELECT count(*) FROM int_spine_county_context
+    WHERE alignment_status = 'aligned' AND period_end >= window_start)
+    + (SELECT count(*) FROM int_spine_linkage WHERE alignment_status = 'aligned' AND period_end >= window_start))::VARCHAR, '0';"""
+AL4B_LINKAGE_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_linkage AS t;"
+AL4B_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_county_context AS t;"
+
+
+def al4b_context_real(database: str) -> dict[str, Any]:
+    """Reconcile the real AL4b rows with the spine and the staged sources; count statuses per source."""
+    checks: dict[str, bool] = {}
+    counts: dict[str, Any] = {}
+    for name, model, independent in duckdb_csv(database, AL4B_REAL_SQL):
+        counts[name] = {"model": int(model), "independent": int(independent)}
+        checks[f"al4b_context_{name}_reconcile"] = model == independent
+    counts["alignment_status"] = dict(duckdb_csv(database, AL4B_COUNT_SQL))
+    return {"checks": checks, "counts": counts}
 
 
 def county_measures_real(database: str) -> dict[str, Any]:
@@ -6966,9 +7856,17 @@ def fingerprint(database: str, query: str) -> list[list[str]]:
         return [["missing", str(error)[-200:]]]
 
 
-def real_stage() -> dict[str, Any]:
-    """Build the models from the catalog twice and reconcile them with bronze."""
-    outcome: dict[str, Any] = {"checks": {}, "counts": {}}
+def real_stage(once: bool = False) -> dict[str, Any]:
+    """Build the models from the catalog twice (once in an iteration run) and reconcile them with bronze [695] [696]."""
+    outcome: dict[str, Any] = {"checks": {}, "counts": {}, "rebuild_checks_skipped": [], "docker_release": []}
+
+    def rebuilt(name: str, *keys: str) -> None:
+        """Compare the two builds' fingerprints; an iteration run names the check as skipped instead [695]."""
+        if once:
+            outcome["rebuild_checks_skipped"].append(name)
+        else:
+            outcome["checks"][name] = all(outcome[f"real_{key}"] == outcome[f"real_again_{key}"] for key in keys)
+
     stored = ipps_file_labels.collect()
     rebuilt_labels = ipps_file_labels.as_csv(ipps_file_labels.labels(stored, ipps_file_labels.load_overrides()), ipps_file_labels.LABEL_COLUMNS)
     rebuilt_twins = ipps_file_labels.as_csv(ipps_file_labels.twins(stored, ipps_file_labels.load_renamed()), ipps_file_labels.TWIN_COLUMNS)
@@ -6980,7 +7878,10 @@ def real_stage() -> dict[str, Any]:
     (OUT / "real_attach.sql").write_text(REAL_ATTACH)
     init = f"{CONTAINER_OUT}/real_attach.sql"
     builds = []
-    for run in ("real", "real_again"):
+    if once:
+        # No check reads a second build in an iteration run, and none is left over from an earlier run [696].
+        shutil.rmtree(CASES / "real_again", ignore_errors=True)
+    for run in ("real",) if once else ("real", "real_again"):
         (CASES / run).mkdir(parents=True, exist_ok=True)
         code, statuses = dbt_build(run, "lakehouse")
         failed = sorted(name for name, status in statuses.items() if status not in ("pass", "success"))
@@ -6998,14 +7899,19 @@ def real_stage() -> dict[str, Any]:
         outcome[f"{run}_operations_measures_fingerprint"] = fingerprint(database, OPERATIONS_FINGERPRINT_SQL)
         outcome[f"{run}_validation_aligned_fingerprint"] = fingerprint(database, VALIDATION_ALIGNED_FINGERPRINT_SQL)
         outcome[f"{run}_county_measures_fingerprint"] = fingerprint(database, COUNTY_FINGERPRINT_SQL)
-        if run == "real":
+        outcome[f"{run}_al4b_context_fingerprint"] = fingerprint(database, AL4B_FINGERPRINT_SQL)
+        outcome[f"{run}_al4b_linkage_fingerprint"] = fingerprint(database, AL4B_LINKAGE_FINGERPRINT_SQL)
+        if run == "real" and not once:
             # Free the memory the first build left in Docker's VM before the second build; the catalog starts again [545] [547].
-            outcome["docker_release"] = [catalog.release()]
+            outcome["docker_release"].append(catalog.release())
             catalog.up()
-    outcome["checks"]["real_rebuild_identical"] = builds[0] == builds[1]
+    if once:
+        outcome["rebuild_checks_skipped"].append("real_rebuild_identical")
+    else:
+        outcome["checks"]["real_rebuild_identical"] = builds[0] == builds[1]
     outcome["memory_budgets"] = BUDGETS
-    outcome["checks"]["occmix_real_rebuild_identical"] = outcome["real_occmix_fingerprint"] == outcome["real_again_occmix_fingerprint"]
-    outcome["checks"]["geography_real_rebuild_identical"] = outcome["real_geography_fingerprints"] == outcome["real_again_geography_fingerprints"]
+    rebuilt("occmix_real_rebuild_identical", "occmix_fingerprint")
+    rebuilt("geography_real_rebuild_identical", "geography_fingerprints")
     geography = geography_real(database, init)
     outcome["checks"].update(geography["checks"])
     outcome["geography_counts"] = geography["counts"]
@@ -7021,38 +7927,34 @@ def real_stage() -> dict[str, Any]:
     shortage = shortage_real(database, init)
     outcome["checks"].update(shortage["checks"])
     outcome["shortage_counts"] = shortage["counts"]
-    outcome["checks"]["outcome_real_rebuild_identical"] = outcome["real_outcome_fingerprint"] == outcome["real_again_outcome_fingerprint"]
+    rebuilt("outcome_real_rebuild_identical", "outcome_fingerprint")
     hai_outcome = outcome_real(database)
     outcome["checks"].update(hai_outcome["checks"])
     outcome["outcome_counts"] = hai_outcome["counts"]
-    outcome["checks"]["care_compare_real_rebuild_identical"] = outcome["real_care_compare_fingerprint"] == outcome["real_again_care_compare_fingerprint"]
+    rebuilt("care_compare_real_rebuild_identical", "care_compare_fingerprint")
     care_compare = care_compare_real(database)
     outcome["checks"].update(care_compare["checks"])
     outcome["al2_care_compare_counts"] = care_compare["counts"]
-    outcome["checks"]["hospital_measures_real_rebuild_identical"] = (
-        outcome["real_hospital_measures_fingerprint"] == outcome["real_again_hospital_measures_fingerprint"]
-    )
+    rebuilt("hospital_measures_real_rebuild_identical", "hospital_measures_fingerprint")
     hospital = hospital_measures_real(database)
     outcome["checks"].update(hospital["checks"])
     outcome["al3a_hospital_measure_counts"] = hospital["counts"]
-    outcome["checks"]["operations_measures_real_rebuild_identical"] = (
-        outcome["real_operations_measures_fingerprint"] == outcome["real_again_operations_measures_fingerprint"]
-    )
+    rebuilt("operations_measures_real_rebuild_identical", "operations_measures_fingerprint")
     operations = operations_measures_real(database)
     outcome["checks"].update(operations["checks"])
     outcome["al3b_operations_measure_counts"] = operations["counts"]
-    outcome["checks"]["validation_aligned_real_rebuild_identical"] = (
-        outcome["real_validation_aligned_fingerprint"] == outcome["real_again_validation_aligned_fingerprint"]
-    )
+    rebuilt("validation_aligned_real_rebuild_identical", "validation_aligned_fingerprint")
     validation_aligned = validation_aligned_real(database)
     outcome["checks"].update(validation_aligned["checks"])
     outcome["al5_validation_counts"] = validation_aligned["counts"]
-    outcome["checks"]["county_measures_real_rebuild_identical"] = (
-        outcome["real_county_measures_fingerprint"] == outcome["real_again_county_measures_fingerprint"]
-    )
+    rebuilt("county_measures_real_rebuild_identical", "county_measures_fingerprint")
     county = county_measures_real(database)
     outcome["checks"].update(county["checks"])
     outcome["al4a_county_measure_counts"] = county["counts"]
+    rebuilt("al4b_context_real_rebuild_identical", "al4b_context_fingerprint", "al4b_linkage_fingerprint")
+    al4b = al4b_context_real(database)
+    outcome["checks"].update(al4b["checks"])
+    outcome["al4b_county_context_counts"] = al4b["counts"]
     validation = validation_real(database, init)
     outcome["checks"].update(validation["checks"])
     outcome["validation_counts"] = validation["counts"]
@@ -7269,19 +8171,32 @@ def main() -> int:
     parser.add_argument(
         "--real-only", action="store_true", help="only the real builds and their checks; use when no fixture input or expectation changed [548]"
     )
+    parser.add_argument(
+        "--real-once", action="store_true", help="one real build, no rebuild comparison: an iteration run, not commit evidence; implies --real [695] [697]"
+    )
+    parser.add_argument("--workers", type=int, default=4, help="fixture cases built at once; 1 is serial; capped by memory and cores [687] [688]")
     args = parser.parse_args()
-    real = args.real or args.real_only
+    real = args.real or args.real_only or args.real_once
+    mode = "iteration" if args.real_once or args.real_only else ("full" if args.real else "fixture_only")
+    dbt_at_start = dbt_tree_sha256()
+    snapshot_dbt()
     catalog.up()
     install_packages()
     report: dict[str, Any] = {"started_at": datetime.now(UTC).isoformat(timespec="seconds"), "image": "hai-analytics:duckdb1.5.6-dbt1.11.15"}
-    report["fixture"] = {} if args.real_only else fixture_scenarios()
+    report["mode"] = mode
+    report["fixture"] = {} if args.real_only else fixture_scenarios(max(1, args.workers))
+    report["fixture_evidence"] = {**FIXTURE_EVIDENCE, "workers_requested": args.workers, "case_seconds": dict(sorted(CASE_SECONDS.items()))}
     if args.real_only:
         report["fixture_skipped"] = "--real-only: the fixture cases did not run; cite the last full pass for them"
     if real:
-        report["real"] = real_stage()
+        report["real"] = real_stage(once=args.real_once)
         # The heavy run is over: free Docker's VM memory for the next one, unless another project's containers run [545] [546].
         report["real"]["docker_release"].append(catalog.release())
-    checks = dict(report["fixture"]) | (report["real"]["checks"] if real else {})
+    # The code under test must be the code at the start: an edit during the run fails it [693].
+    report["dbt_tree_sha256"] = dbt_at_start
+    checks = dict(report["fixture"]) | (report["real"]["checks"] if real else {}) | {"dbt_unchanged_during_run": dbt_tree_sha256() == dbt_at_start}
+    # Launch records in a fixed order: case, then launch order [694].
+    BUDGETS.sort(key=lambda item: (str(item.get("case")), int(item.get("launch", 0))))
     report["passed"] = sum(checks.values())
     report["total"] = len(checks)
     results = CASES / "base/target/run_results.json"
@@ -7292,7 +8207,8 @@ def main() -> int:
     path.write_text(json.dumps(report, indent=2) + "\n")
     for name, ok in checks.items():
         sys.stdout.write(f"{'PASS' if ok else 'FAIL'} {name}\n")
-    sys.stdout.write(f"staging e2e: {report['passed']} of {report['total']} passed; report {path.relative_to(REPO_ROOT)}\n")
+    note = "; iteration run: not commit evidence" if mode == "iteration" else ""
+    sys.stdout.write(f"staging e2e ({mode}): {report['passed']} of {report['total']} passed; report {path.relative_to(REPO_ROOT)}{note}\n")
     return 0 if report["passed"] == report["total"] else 1
 
 
