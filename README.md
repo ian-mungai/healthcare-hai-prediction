@@ -419,8 +419,8 @@ lists of Great Expectations classes and arguments:
 - no validation or linkage control in a predictor table;
 - five-digit county codes in the adjacency graph.
 
-Bands (windows per year, aligned shares) come from `data_contracts/great_expectations/baselines.json`. They only warn
-until the owner approves that file. No expectation repeats a dbt test on the same column; the run fails if one does.
+Bands (windows per year, aligned shares) come from `data_contracts/great_expectations/baselines.json`. The owner
+approved them on October 10 2026, so a band outside its range fails the run (an unapproved file only warns). No expectation repeats a dbt test on the same column; the run fails if one does.
 Results keep counts only. Great Expectations keeps no open connection for DuckDB, so every metric came back empty. The
 validator registers DuckDB with it as a single-connection dialect, only for the pinned version.
 

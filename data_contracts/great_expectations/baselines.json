@@ -2,7 +2,8 @@
   "revision": "0836993",
   "source": "real silver build of the full silver E2E data/e2e/staging/report_20261009T235041Z.json (363 of 363)",
   "rule": "windows per year and spine rows: 95% of the smallest to 105% of the largest; aligned shares: the measured share plus or minus 0.05; spine county share: at least 0.99; rows per spine row: the control count of each table (structural); spine counties without adjacency edges (state and DC windows): at most the 7 retired Alaska codes of the reviewed build",
-  "approved": false,
+  "approved": true,
+  "approval": "owner, Oct 10 2026: the recommended values are accepted for now; review them again when a new release changes the build",
   "values": {
     "spine.windows_per_year.min": 4519,
     "spine.windows_per_year.max": 5183,
