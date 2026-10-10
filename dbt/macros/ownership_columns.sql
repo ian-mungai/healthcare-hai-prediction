@@ -62,6 +62,21 @@ case
 end
 {%- endmacro %}
 
+{% macro associate_id(column) %}
+{#- A 10-digit PECOS associate ID; some releases drop its leading zeros, so 1 to 9 digits are padded to 10. Anything
+    else stays as published [714]. -#}
+{%- set value = "nullif(trim(" ~ column ~ "), '')" -%}
+case
+    when regexp_full_match({{ value }}, '[0-9]{1,9}') then lpad({{ value }}, 10, '0')
+    else {{ value }}
+end
+{%- endmacro %}
+
+{% macro associate_id_padded(column) %}
+{#- True when associate_id() padded the published value [714]. -#}
+coalesce(regexp_full_match(nullif(trim({{ column }}), ''), '[0-9]{1,9}'), false)
+{%- endmacro %}
+
 {% macro ccn_parent_candidates(column) %}
 {#- The parent CCNs a suffixed or unit identifier can stand for, each with its route [619]; empty for any other shape. -#}
 {%- set value = "upper(nullif(trim(" ~ column ~ "), ''))" -%}

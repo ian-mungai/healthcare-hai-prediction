@@ -1,7 +1,8 @@
 -- One row per hospital enrollment, organization owner and role, per version of the ownership terms, dated by release
 -- period ends only (SCD2 for the ownership group of RQ2, silver step 7.3, failure modes 670 to 677). Organization owners
 -- only (type O): no individual's name enters history [676]. A release that lists the owner twice with different terms
--- is held for that release [674]; a release without the owner closes its version [673].
+-- is held for that release [674]; a release without the owner closes its version [673], except that one missing release
+-- is bridged and counted in bridged_releases (owner decision Oct 10 2026 [715]). Owner IDs come padded to 10 digits [714].
 {{ config(materialized='table') }}
 
 with
@@ -48,8 +49,19 @@ agreeing as (
     where distinct_sets = 1
 ),
 
+held as (
+    select
+        enrollment_id,
+        associate_id_owner,
+        role_code,
+        release_number
+    from per_release
+    where distinct_sets > 1
+),
+
 {{ scd2_versions('agreeing', 'releases', ['enrollment_id', 'associate_id_owner', 'role_code'],
-    ['percentage_ownership', 'organization_name_owner', 'private_equity_company_owner', 'reit_owner']) }}
+    ['percentage_ownership', 'organization_name_owner', 'private_equity_company_owner', 'reit_owner'],
+    bridge=1, held='held') }}
 
 select
     *,

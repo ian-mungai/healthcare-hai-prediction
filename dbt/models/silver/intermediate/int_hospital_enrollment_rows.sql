@@ -2,7 +2,8 @@
 -- ownership_release_periods seed. The CCN is the published 6-character CCN or a 5-digit CCN padded to 6. A location
 -- suffix, a lost leading zero or a unit letter maps to the parent CCN when POS lists exactly one such parent in the row's
 -- state; any other value gives a null CCN. The published value is kept and ccn_source names the route. A flag is true
--- for Y and false for N; dates are typed (failure modes 365, 366, 369 to 371 and 619 to 622).
+-- for Y and false for N; dates are typed; associate IDs that lost leading zeros are padded to 10 digits (failure modes 365,
+-- 366, 369 to 371, 619 to 622 and 714).
 {{ config(materialized='table') }}
 
 with
@@ -29,7 +30,8 @@ enrollments as (
         nullif(trim(npi), '') as npi,
         {{ published_ccn('ccn') }} as ccn,
         upper(nullif(trim(ccn), '')) as ccn_published,
-        nullif(trim(associate_id), '') as associate_id,
+        {{ associate_id('associate_id') }} as associate_id,
+        {{ associate_id_padded('associate_id') }} as associate_ids_padded,
         nullif(trim(organization_name), '') as organization_name,
         nullif(trim(doing_business_as_name), '') as doing_business_as_name,
         {{ month_day_year('incorporation_date') }} as incorporation_date,

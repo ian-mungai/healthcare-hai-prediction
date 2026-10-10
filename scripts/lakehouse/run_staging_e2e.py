@@ -4256,8 +4256,9 @@ POS_HISTORY_SQL = (
 )
 OWNER_HISTORY_SQL = (
     "SELECT enrollment_id, associate_id_owner, role_code, valid_from::VARCHAR, coalesce(valid_to::VARCHAR, ''), is_current::VARCHAR, "
-    "is_after_gap::VARCHAR, release_count::VARCHAR FROM int_hospital_ownership_history ORDER BY ALL;"
+    "is_after_gap::VARCHAR, release_count::VARCHAR, bridged_releases::VARCHAR FROM int_hospital_ownership_history ORDER BY ALL;"
 )
+OWNER_PADDED_SQL = "SELECT associate_id_owner, period_end::VARCHAR FROM int_hospital_owner_rows WHERE associate_ids_padded ORDER BY ALL;"
 HGI_HISTORY_SQL = "SELECT count(*)::VARCHAR, count(DISTINCT ccn)::VARCHAR, count(*) FILTER (WHERE is_current)::VARCHAR FROM int_hospital_hgi_history;"
 SPINE_SQL = (
     "SELECT ccn, window_year::VARCHAR, coalesce(pos_period_end::VARCHAR, ''), coalesce(state_code, ''), coalesce(county_fips, ''), "
@@ -4869,6 +4870,7 @@ def read_models(case: str) -> dict[str, Any]:
         "spine": [tuple(row) for row in duckdb_csv(database, SPINE_SQL)],
         "pos_history": [tuple(row) for row in duckdb_csv(database, POS_HISTORY_SQL)],
         "owner_history": [tuple(row) for row in duckdb_csv(database, OWNER_HISTORY_SQL)],
+        "owner_padded": [tuple(row) for row in duckdb_csv(database, OWNER_PADDED_SQL)],
         "hgi_history": [tuple(row) for row in duckdb_csv(database, HGI_HISTORY_SQL)],
         "timely": [tuple(row) for row in duckdb_csv(database, TE_SQL)],
         "maternal": [tuple(row) for row in duckdb_csv(database, MATERNAL_SQL)],
@@ -5995,12 +5997,12 @@ POS_HISTORY_EXPECTED = [
 # ID and role). 5555555555 is unchanged from ow1 to ow2, so one version over two releases [672]; 9876543210's share
 # changes, so two; every owner absent from the next release closes there [673]; individual owners never enter [676].
 OWNER_HISTORY_EXPECTED = [
-    ("O20000000001", "1111111111", "34", "2020-07-31", "2022-11-30", "false", "false", "1"),
-    ("O20000000001", "2222222222", "43", "2020-07-31", "2022-11-30", "false", "false", "1"),
-    ("O20000000002", "1111111111", "35", "2025-04-30", "2025-05-31", "false", "false", "1"),
-    ("O20000000002", "5555555555", "43", "2022-11-30", "2025-05-31", "false", "false", "2"),
-    ("O20000000002", "9876543210", "34", "2022-11-30", "2025-04-30", "false", "false", "1"),
-    ("O20000000002", "9876543210", "34", "2025-04-30", "2025-05-31", "false", "false", "1"),
+    ("O20000000001", "1111111111", "34", "2020-07-31", "2022-11-30", "false", "false", "1", "0"),
+    ("O20000000001", "2222222222", "43", "2020-07-31", "2022-11-30", "false", "false", "1", "0"),
+    ("O20000000002", "1111111111", "35", "2025-04-30", "2025-05-31", "false", "false", "1", "0"),
+    ("O20000000002", "5555555555", "43", "2022-11-30", "2025-05-31", "false", "false", "2", "0"),
+    ("O20000000002", "9876543210", "34", "2022-11-30", "2025-04-30", "false", "false", "1", "0"),
+    ("O20000000002", "9876543210", "34", "2025-04-30", "2025-05-31", "false", "false", "1", "0"),
 ]
 # A publisher correction of snapshot b (010001's control type) rewrites exactly that version [677].
 POS_REVISED_MIDDLE = tuple(
@@ -6009,6 +6011,47 @@ POS_REVISED_MIDDLE = tuple(
     else item
     for item in BASE
 )
+
+# Owner releases ow0, ow1, ow2 and o1 with five more owners of enrollment O20000000009 [714] [715]: 0042633786 lost its
+# leading zeros in ow1; 7777777771 is missing from ow1 with equal terms; 7777777772 is missing from ow1 and its share
+# changes on return; 7777777773 is missing from ow1 and ow2; 7777777774 is held in ow1 (two different shares).
+OWNER_BRIDGE_ROWS = {
+    "ow0": (
+        owner("O20000000009", "0042633786", "34", percentage_ownership="10"),
+        owner("O20000000009", "7777777771", "34", percentage_ownership="20"),
+        owner("O20000000009", "7777777772", "34", percentage_ownership="30"),
+        owner("O20000000009", "7777777773", "34", percentage_ownership="40"),
+        owner("O20000000009", "7777777774", "34", percentage_ownership="50"),
+    ),
+    "ow1": (
+        owner("O20000000009", "42633786", "34", percentage_ownership="10"),
+        owner("O20000000009", "7777777774", "34", percentage_ownership="50"),
+        owner("O20000000009", "7777777774", "34", percentage_ownership="51"),
+    ),
+    "ow2": (
+        owner("O20000000009", "0042633786", "34", percentage_ownership="10", private_equity_company_owner="", reit_owner=""),
+        owner("O20000000009", "7777777771", "34", percentage_ownership="20", private_equity_company_owner="", reit_owner=""),
+        owner("O20000000009", "7777777772", "34", percentage_ownership="35", private_equity_company_owner="", reit_owner=""),
+        owner("O20000000009", "7777777774", "34", percentage_ownership="50", private_equity_company_owner="", reit_owner=""),
+    ),
+    "o1": (owner("O20000000009", "7777777773", "34", percentage_ownership="40"),),
+}
+OWNER_BRIDGE = tuple(
+    replace(item, rows=item.rows + len(OWNER_BRIDGE_ROWS[item.key]), records=item.records + OWNER_BRIDGE_ROWS[item.key])
+    if item.table == "cms_hospital_owners" and item.key in OWNER_BRIDGE_ROWS
+    else item
+    for item in BASE
+)
+OWNER_BRIDGE_EXPECTED = [
+    ("O20000000009", "0042633786", "34", "2020-07-31", "2025-05-31", "false", "false", "3", "0"),
+    ("O20000000009", "7777777771", "34", "2020-07-31", "2025-05-31", "false", "false", "2", "1"),
+    ("O20000000009", "7777777772", "34", "2020-07-31", "2025-04-30", "false", "false", "1", "1"),
+    ("O20000000009", "7777777772", "34", "2025-04-30", "2025-05-31", "false", "false", "1", "0"),
+    ("O20000000009", "7777777773", "34", "2020-07-31", "2022-11-30", "false", "false", "1", "0"),
+    ("O20000000009", "7777777773", "34", "2025-05-31", "", "true", "true", "1", "0"),
+    ("O20000000009", "7777777774", "34", "2020-07-31", "2022-11-30", "false", "false", "1", "0"),
+    ("O20000000009", "7777777774", "34", "2025-04-30", "2025-05-31", "false", "true", "1", "0"),
+]
 
 
 def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
@@ -6020,6 +6063,7 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("base_again", BASE, frozenset()),
         ("reversed_order", tuple(reversed(BASE)), frozenset()),
         ("pos_revised_middle", POS_REVISED_MIDDLE, frozenset()),
+        ("owner_bridge", OWNER_BRIDGE, frozenset()),
     ]
     jobs += [(case, objects, unlabelled) for case, (_test, objects, unlabelled) in FAILING.items()]
     results = build_cases(jobs, workers)
@@ -6254,6 +6298,16 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     # Silver step 7.3: SCD2 history from source dates only [670] to [677].
     checks["pos_history_matches_expected"] = base.get("pos_history") == POS_HISTORY_EXPECTED
     checks["ownership_history_matches_expected"] = base.get("owner_history") == OWNER_HISTORY_EXPECTED
+    # [714] [715] Padded owner IDs and one-release bridges; base owners are unchanged.
+    code, statuses = built(results, "owner_bridge")
+    bridged = model_outputs("owner_bridge")
+    checks["ownership_bridge_matches_expected"] = (
+        code == 0
+        and [row for row in bridged.get("owner_history", []) if row[0] == "O20000000009"] == OWNER_BRIDGE_EXPECTED
+        and [row for row in bridged.get("owner_history", []) if row[0] != "O20000000009"] == OWNER_HISTORY_EXPECTED
+        and bridged.get("owner_padded") == [("0042633786", "2022-11-30")]
+    )
+    checks["base_owner_ids_not_padded"] = base.get("owner_padded") == []
     checks["hgi_history_built"] = bool(base.get("hgi_history")) and base["hgi_history"][0][0] != "0"
     code, statuses = built(results, "pos_revised_middle")
     revised = model_outputs("pos_revised_middle").get("pos_history", [])

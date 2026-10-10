@@ -366,7 +366,11 @@ same versions: `int_hospital_pos_history` (Provider of Services attributes per s
 `int_hospital_ownership_history` (organization owners only, by enrollment, owner and role, per release). The macro
 `dbt/macros/scd2.sql` starts a version when a tracked value changes or when a hospital or owner returns after a release
 without it; that release closes the earlier version. A release that lists one key twice with different values is held
-for that release. `assert_history_versions_valid` fails on overlapping windows or a second current version.
+for that release. Some CMS owner and enrollment releases drop the leading zeros of the 10-digit associate IDs, so the
+row models pad them back and mark the row (`associate_ids_padded`). Ownership history bridges an owner missing from one
+release and counts it in `bridged_releases` (owner decision, October 10 2026). A held release is never bridged; POS and
+Hospital General Information history do not bridge. `assert_history_versions_valid` fails on overlapping windows or a
+second current version.
 
 Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
 visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the

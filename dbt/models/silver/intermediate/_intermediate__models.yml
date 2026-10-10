@@ -581,7 +581,8 @@ models:
       One row per organisation owner row and owner file (release), with the release label and catalog period from the
       ownership_release_periods seed. A flag is true for Y and false for N; a blank flag, and every flag of a file in the
       layout before April 2025, is null; flags_published says whether the file has the private-equity column. Dates and
-      shares are typed (failure modes 365 to 371). Choosing a release for a hospital-year waits for the alignment step.
+      shares are typed (failure modes 365 to 371). Associate IDs that lost leading zeros are padded to 10 digits (failure
+      mode 714). Choosing a release for a hospital-year waits for the alignment step.
     columns:
       - name: owner_row_key
         description: File checksum and source row number.
@@ -596,6 +597,9 @@ models:
         description: True when the file has the private-equity column (the April 2025 layout and later).
       - name: percentage_ownership
         description: The published share, 0 to 100; null when blank.
+      - name: associate_ids_padded
+        description: True when the enrollment's or the owner's associate ID lost leading zeros in the published file and was padded to 10 digits (failure mode 714).
+        data_tests: [not_null]
 
   - name: int_hospital_enrollment_rows
     description: >
@@ -603,7 +607,8 @@ models:
       is the published 6-character CCN or a 5-digit CCN padded to 6. A location suffix, a lost leading zero or a unit letter
       maps to the parent CCN when POS lists exactly one such parent in the row's state; any other value gives a null CCN.
       ccn_published keeps the published value and ccn_source names the route. A flag is true for Y and false for N; dates
-      are typed (failure modes 365, 366, 369 to 371 and 619 to 622).
+      are typed; associate IDs that lost leading zeros are padded to 10 digits (failure modes 365, 366, 369 to 371, 619 to
+      622 and 714).
     columns:
       - name: enrollment_key
         description: File checksum and enrollment ID.
@@ -619,6 +624,9 @@ models:
           - accepted_values:
               arguments:
                 values: [published, location_suffix, leading_zero, unit_parent]
+      - name: associate_ids_padded
+        description: True when the associate ID lost leading zeros in the published file and was padded to 10 digits (failure mode 714).
+        data_tests: [not_null]
 
   - name: int_change_of_ownership_rows
     description: >
@@ -626,7 +634,8 @@ models:
       Each release lists events back to 2016, so one event appears in several files under one event_key; the alignment
       step chooses the release. CCNs follow the enrollment rule, including parent CCNs for suffixed identifiers in the
       party's enrollment state; the published values are kept and ccn_buyer_source and ccn_seller_source name the route
-      (failure modes 365, 369 to 372 and 619 to 622).
+      (failure modes 365, 369 to 372 and 619 to 622). Associate IDs that lost leading zeros are padded to 10 digits (failure
+      mode 714).
     columns:
       - name: chow_row_key
         description: File checksum and source row number.
@@ -646,6 +655,9 @@ models:
           - accepted_values:
               arguments:
                 values: [published, location_suffix, leading_zero, unit_parent]
+      - name: associate_ids_padded
+        description: True when the buyer's or the seller's associate ID lost leading zeros in the published file and was padded to 10 digits (failure mode 714).
+        data_tests: [not_null]
       - name: period_end
         description: Last day of the release's catalog period.
         data_tests: [not_null]
@@ -1602,6 +1614,8 @@ models:
       SCD2 history of each hospital enrollment's organization owners by owner ID and role: share, owner name and the
       private-equity and REIT flags, dated by release period ends only. Organization owners only, so no individual's name
       enters history (failure mode 676); a release that lists an owner twice with different terms is held (silver step 7.3).
+      Owner IDs are padded to 10 digits (failure mode 714). One missing release is bridged, never a held one, and counted
+      in bridged_releases (owner decision Oct 10 2026, failure mode 715).
     columns:
       - name: history_key
         description: Enrollment ID, owner ID, role code and valid_from.
@@ -1609,4 +1623,7 @@ models:
       - name: enrollment_id
         data_tests: [not_null]
       - name: valid_from
+        data_tests: [not_null]
+      - name: bridged_releases
+        description: Releases without the owner that this version covers (a fill); 0 when the owner is in every release.
         data_tests: [not_null]

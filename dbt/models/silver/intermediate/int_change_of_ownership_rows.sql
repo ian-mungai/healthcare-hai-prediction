@@ -3,7 +3,7 @@
 -- several files under one event_key (buyer enrollment, seller enrollment, effective date, type); the alignment step chooses
 -- the release. CCNs follow the enrollment rule, including parent CCNs for suffixed identifiers in the party's enrollment
 -- state; the published values are kept and ccn_buyer_source and ccn_seller_source name the route (failure modes 365,
--- 369 to 372 and 619 to 622).
+-- 369 to 372, 619 to 622 and 714; associate IDs that lost leading zeros are padded to 10 digits).
 {{ config(materialized='table') }}
 
 with
@@ -31,7 +31,7 @@ changes as (
         {{ yes_no('multiple_npi_flag_buyer') }} as multiple_npi_flag_buyer,
         {{ published_ccn('ccn_buyer') }} as ccn_buyer,
         upper(nullif(trim(ccn_buyer), '')) as ccn_buyer_published,
-        nullif(trim(associate_id_buyer), '') as associate_id_buyer,
+        {{ associate_id('associate_id_buyer') }} as associate_id_buyer,
         nullif(trim(organization_name_buyer), '') as organization_name_buyer,
         nullif(trim(doing_business_as_name_buyer), '') as doing_business_as_name_buyer,
         upper(nullif(trim(chow_type_code), '')) as chow_type_code,
@@ -45,7 +45,8 @@ changes as (
         {{ yes_no('multiple_npi_flag_seller') }} as multiple_npi_flag_seller,
         {{ published_ccn('ccn_seller') }} as ccn_seller,
         upper(nullif(trim(ccn_seller), '')) as ccn_seller_published,
-        nullif(trim(associate_id_seller), '') as associate_id_seller,
+        {{ associate_id('associate_id_seller') }} as associate_id_seller,
+        {{ associate_id_padded('associate_id_buyer') }} or {{ associate_id_padded('associate_id_seller') }} as associate_ids_padded,
         nullif(trim(organization_name_seller), '') as organization_name_seller,
         nullif(trim(doing_business_as_name_seller), '') as doing_business_as_name_seller
     from {{ ref('stg_cms_change_of_ownership') }}
