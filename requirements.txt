@@ -12,3 +12,6 @@ deptry==0.25.1  # tool: unused-dependencies check
 # Host scripts read S3 with boto3 (scripts/lakehouse/retired_objects.py and the one-off deletion tool); checkov pins this boto3.
 boto3==1.35.49
 botocore==1.35.99
+# The redownload comparison parses an Office file's core properties with defusedxml (no entity expansion); the
+# same version checkov already installs through py-serializable.
+defusedxml==0.7.1

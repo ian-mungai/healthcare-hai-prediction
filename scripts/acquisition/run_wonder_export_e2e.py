@@ -61,10 +61,12 @@ def export_text(
     title = dataset or contract.DATABASES[database]["title"]
     notes = ['"---"', f'"Dataset: {title}"', '"Query Parameters:"', *[f'"{k}: {v}"' for k, v in params.items() if v is not None], '"---"']
     notes += [
+        '"Help: See http://wonder.cdc.gov/wonder/help/ucd.html for more information."',
+        '"---"',
         '"Query Date: Jan 1, 2026 12:00:00 AM"',
         '"---"',
         '"Suggested Citation: Synthetic citation line one"',
-        '"continued citation."',
+        '"Program. Accessed at http://wonder.cdc.gov/ucd-icd10-expanded.html on Jan 1, 2026 12:00:00 AM"',
         '"---"',
         "Caveats:",
         '"1. Synthetic caveat."',
@@ -246,6 +248,10 @@ def staging_scenarios(scenario: Any, plan: dict, batches: dict, root: Path, clie
             set_origin(target, ["https://wonder.cdc.gov/controller/datarequest/D76"])
         elif kind == "other_site":
             set_origin(target, ["https://example.org/controller/datarequest/D158"])
+        elif kind == "foreign_host_before_session":
+            set_origin(target, ["https://evil.example.org;jsessionid=@wonder.cdc.gov/controller/datarequest/D158"])
+        elif kind == "session_then_other_path":
+            set_origin(target, [SESSION.format(db="D158") + "/other-resource;v=2"])
         elif kind != "missing_origin":
             set_origin(target, [SESSION.format(db="D158")])
         if kind == "symlink":
@@ -257,6 +263,8 @@ def staging_scenarios(scenario: Any, plan: dict, batches: dict, root: Path, clie
     for kind, error in [
         ("other_database", "origin differs"),
         ("other_site", "origin differs"),
+        ("session_then_other_path", "origin differs"),
+        ("foreign_host_before_session", "origin differs"),
         ("missing_origin", "origin missing"),
         ("other_file", "differs from the recorded download"),
         ("symlink", "missing or not a regular file"),

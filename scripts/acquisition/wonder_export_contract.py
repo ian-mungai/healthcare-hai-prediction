@@ -9,6 +9,7 @@ published, including suppression and reliability flags; nothing is reconstructed
 import csv
 import io
 import re
+import urllib.parse
 from pathlib import Path
 
 from scripts.acquisition.bls_api_contract import code_hashes, digest
@@ -74,9 +75,20 @@ def stored_name(batch: dict) -> str:
 
 
 def sanitize_origins(origins: list[str], database: str) -> list[str]:
-    """Drop the session identifier Chrome records, and require the planned database's query page."""
-    cleaned = sorted({re.sub(r";jsessionid=[^?#]*", "", url) for url in origins})
-    require(bool(cleaned) and all(re.fullmatch(re.escape(ORIGIN + database) + r"(\?.*)?", url) for url in cleaned), "WONDER download origin differs")
+    """Drop only the session identifier Chrome records, and require the planned database's query page [S38] [S42].
+
+    Each origin is parsed first: the scheme and host must be the query page's exactly, with no user information or
+    port, and only a ``;jsessionid=`` segment is removed from the path.
+    """
+    page = urllib.parse.urlsplit(ORIGIN + database)
+    require(bool(origins), "WONDER download origin differs")
+    for url in origins:
+        parts = urllib.parse.urlsplit(url)
+        path = re.sub(r";jsessionid=[^/;]*", "", parts.path, flags=re.IGNORECASE)
+        require(
+            parts.scheme == page.scheme and parts.netloc == page.netloc and path == page.path and not parts.fragment,
+            "WONDER download origin differs",
+        )
     return [ORIGIN + database]
 
 

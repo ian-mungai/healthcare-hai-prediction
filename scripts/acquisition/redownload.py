@@ -12,6 +12,7 @@ import argparse
 import fcntl
 import hashlib
 import importlib
+import io
 import json
 import os
 import re
@@ -28,8 +29,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
-from scripts.acquisition import bls_api_transport
+from defusedxml import ElementTree as SafeElementTree
+
+from scripts.acquisition import bls_api_transport, data_paths
 from scripts.acquisition import hud_xlsx_contract as download_metadata
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition.data_paths import current
@@ -144,6 +148,8 @@ def runtime_controls(run: Run) -> dict:
         "state_root": root_label(run),
         "code_sha256": {str(path.relative_to(REPO_ROOT)): digest(path.read_bytes()) for path in code_paths},
         "operational_sha256": {str(path.relative_to(run.base)): digest(path.read_bytes()) for path in sorted(inputs)},
+        # The harness and the collectors resolve recorded paths through this map while they run (failure mode S46).
+        "path_map_sha256": digest(data_paths.MAP_PATH.read_bytes()),
         "limits": {"byte_cap": BYTE_CAP, "bls_rolling_24h": BLS_LIMIT, "attempts_per_primary_page_probe": MAX_ATTEMPTS},
     }
 
@@ -235,6 +241,13 @@ def review_gate(run: Run) -> str:
     require(run.byte_cap <= BYTE_CAP, "Byte cap exceeds approved limit")
     run.cache["controls"] = actual
     return sha
+
+
+def verify_path_map(run: Run) -> None:
+    """Refuse a path map changed since the gate, at each point where a recorded path is resolved (failure mode S46)."""
+    expected = run.cache.get("controls", {}).get("path_map_sha256")
+    if expected is not None:
+        require(digest(data_paths.MAP_PATH.read_bytes()) == expected, "Path map changed")
 
 
 def verify_input(path: Path, run: Run) -> None:
@@ -341,6 +354,7 @@ def require_bls_budget(roots: list[Path], now: datetime, limit: int = BLS_LIMIT)
 
 def receipt_file(unit: dict, run: Run) -> Path:
     """The stored capture's receipt; queues frozen before the dataset move name its old folder [226]."""
+    verify_path_map(run)
     return run.base / current(unit["receipt"])
 
 
@@ -397,13 +411,16 @@ def fetch(url: str, name: str, expected_format: str, role: str, size: int, folde
     raise ValueError("No download attempt was made")
 
 
-def compare_download(result: Any, attempts: int, stored_sha256: str, run: Run) -> dict:
+def compare_download(result: Any, attempts: int, stored_sha256: str, run: Run, stored: Path | None = None) -> dict:
     fields = {"attempts": attempts, "stored_sha256": stored_sha256, "fresh_sha256": result.sha256, "fresh_bytes": result.byte_count}
     fields["fresh_path"] = str(result.path.relative_to(run.state_root))
     if not result.complete:
         blocked = result.failure in {"size_limit", "html_instead_of_data", "unexpected_signed_response_media_type"}
         return fields | {"outcome": "blocked" if blocked else "unavailable", "reason": known_failure(result.failure)}
-    return fields | {"outcome": "exact_match" if result.sha256 == stored_sha256 else "changed_needs_review"}
+    if result.sha256 == stored_sha256 or stored is None or not stored.is_file():
+        return fields | {"outcome": "exact_match" if result.sha256 == stored_sha256 else "changed_needs_review", "excluded_parts": []}
+    differing, excluded = compare_files(stored, result.path, stored.name, stored_sha256)
+    return fields | {"outcome": "changed_needs_review" if differing else "exact_match", "differing_data_files": differing, "excluded_parts": excluded}
 
 
 def file_unit(unit: dict, run: Run) -> dict:
@@ -425,7 +442,7 @@ def file_unit(unit: dict, run: Run) -> dict:
     finally:
         if private:
             record_private(run, str(folder.relative_to(run.state_root)))
-    return compare_download(result, attempts, artifact["sha256"], run)
+    return compare_download(result, attempts, artifact["sha256"], run, receipt_file(unit, run).parent / artifact["storage_path"])
 
 
 def page_unit(unit: dict, run: Run) -> dict:
@@ -465,8 +482,6 @@ def archive_members(path: Path, expanded_cap: int = 2**30) -> dict[str, str] | N
         )
         members = {}
         for info in infos:
-            if info.is_dir():
-                continue
             sha, count = hashlib.sha256(), 0
             with archive.open(info) as handle:
                 while block := handle.read(min(2**20, expanded_cap - count + 1)):
@@ -477,46 +492,209 @@ def archive_members(path: Path, expanded_cap: int = 2**30) -> dict[str, str] | N
         return members
 
 
-def manual_file_unit(unit: dict, run: Run, started: datetime) -> dict:
-    """Accept a browser download only when it is new and from the unit's publisher, then compare its content.
+# Parts of a download that change with the download date, never with the published content [S17, S18]. One fixed format
+# compares by content: an Office file's core properties. Every other file compares by bytes, saved web pages, Census
+# table notes and WONDER exports included; a difference is flagged for review [S35] [S53].
+# A file that starts with a byte-order mark compares by bytes, so the mark is never dropped [S52].
+BYTE_ORDER_MARK = b"\xef\xbb\xbf"
+# An Office file's core properties record when the publisher's generator built it: only the member path exactly
+# docProps/core.xml, parsed, and only its root's own created and modified elements [S39] [S43].
+OFFICE_CORE = "docProps/core.xml"
+DCTERMS = "{http://purl.org/dc/terms/}"
+# Only the Office core-properties root, with the prefixes the build-time elements use bound to their Office
+# namespaces everywhere in the file; any other root or binding compares by bytes [S54].
+CORE_PROPERTIES = "{http://schemas.openxmlformats.org/package/2006/metadata/core-properties}coreProperties"
+OFFICE_BINDINGS = {
+    "cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
+    "dcterms": "http://purl.org/dc/terms/",
+    "xsi": "http://www.w3.org/2001/XMLSchema-instance",
+}
+XSI_TYPE = "{http://www.w3.org/2001/XMLSchema-instance}type"
+STAMP_UTC = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
+BUILD_ELEMENT = re.compile(rf'<dcterms:(?P<kind>created|modified) xsi:type="dcterms:W3CDTF">(?P<stamp>{STAMP_UTC})</dcterms:(?P=kind)>')
+# A stored copy that no longer has its receipt's bytes is never compared by content [S45].
+STORED_DIFFERS = "(stored copy differs from its receipt)"
+OFFICE_CORE_CAP = 2**20
+# Larger files, and anything that is not strict UTF-8 text, compare by bytes [S22].
+CONTENT_CAP = 256 * 2**20
 
-    A publisher may rebuild an export archive on every request, so archives are matched by their member
-    names and compared member by member; any other file must be byte-identical.
+
+def office_core_view(text: str, parts: set[str]) -> str | None:
+    """The raw core properties with only the root's own created and modified times masked; ``None`` compares by bytes.
+
+    Parsing (defusedxml) only confirms which elements carry the build time; the comparison keeps the raw text, so
+    comments, processing instructions and namespace declarations still count [S43] [S44].
+    """
+    try:
+        # defusedxml refuses entity declarations and external references before parsing.
+        root = SafeElementTree.fromstring(text)
+        bindings = [binding for _event, binding in SafeElementTree.iterparse(io.BytesIO(text.encode()), events=("start-ns",))]
+    except (ElementTree.ParseError, ValueError):
+        return None
+    # Every declaration of the three prefixes, at any depth, must bind its Office namespace [S54].
+    if root.tag != CORE_PROPERTIES or any(prefix in OFFICE_BINDINGS and uri != OFFICE_BINDINGS[prefix] for prefix, uri in bindings):
+        return None
+    if not set(OFFICE_BINDINGS) <= {prefix for prefix, _uri in bindings}:
+        return None
+    parsed = {}
+    for kind in ("created", "modified"):
+        found = [child for child in root if child.tag == f"{DCTERMS}{kind}"]
+        if len(found) != 1 or len(found[0]) or not found[0].text or not re.fullmatch(STAMP_UTC, found[0].text):
+            return None
+        if found[0].attrib != {XSI_TYPE: "dcterms:W3CDTF"}:
+            return None
+        try:
+            # A digit-shaped value that is not a real UTC time is content, not a build time [S53].
+            datetime.strptime(found[0].text, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            return None
+        parsed[kind] = found[0].text
+    matches = list(BUILD_ELEMENT.finditer(text))
+    # Each element's exact text must occur once, so the masked span is the parsed element and nothing else.
+    if sorted(match["kind"] for match in matches) != ["created", "modified"] or any(match["stamp"] != parsed[match["kind"]] for match in matches):
+        return None
+    pieces, last = [], 0
+    for match in matches:
+        pieces += [text[last : match.start("stamp")], "<excluded>"]
+        last = match.end("stamp")
+    parts.add("document_build_time")
+    return "".join(pieces) + text[last:]
+
+
+def content_view(body: bytes | None, name: str) -> tuple[str, set[str]] | None:
+    """The comparable content of an Office file's core properties and the named parts masked in it.
+
+    ``None`` compares by bytes: every other file, saved web pages, Census table notes and WONDER exports included [S35] [S53].
+    """
+    if body is None or name != OFFICE_CORE or len(body) > OFFICE_CORE_CAP or body.startswith(BYTE_ORDER_MARK):
+        return None
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    parts: set[str] = set()
+    view = office_core_view(text, parts)
+    return None if view is None else (view, parts)
+
+
+def same_content(stored: bytes | None, fresh: bytes | None, name: str) -> tuple[bool, list[str]]:
+    """Whether two downloads of one file publish the same content, and the named parts left out to decide it [S19]."""
+    if stored is not None and stored == fresh:
+        return True, []
+    old, new = content_view(stored, name), content_view(fresh, name)
+    if old is None or new is None or old[0] != new[0]:
+        return False, []
+    return True, sorted(old[1] | new[1])
+
+
+def capped_body(path: Path) -> bytes | None:
+    return path.read_bytes() if path.stat().st_size <= CONTENT_CAP else None
+
+
+def member_body(path: Path, member: str) -> bytes | None:
+    with zipfile.ZipFile(path) as archive:
+        info = archive.getinfo(member)
+        return archive.read(info) if info.file_size <= CONTENT_CAP else None
+
+
+def archive_comments(path: Path) -> dict[str, bytes]:
+    """The archive comment and each member's comment, which can carry notes or footnotes [S28]."""
+    with zipfile.ZipFile(path) as archive:
+        # Every entry, directories included [S36].
+        members = {f"{info.filename} (comment)": info.comment for info in archive.infolist()}
+        return {"(archive comment)": archive.comment} | members
+
+
+ARCHIVE_SUFFIXES = frozenset({".zip", ".xlsx", ".docx"})
+
+
+def is_archive(path: Path, name: str) -> bool:
+    """Only a file named as a zip, workbook or document that begins with a zip local-file header is an archive [S41]."""
+    with path.open("rb") as handle:
+        return Path(name).suffix.lower() in ARCHIVE_SUFFIXES and handle.read(4) == b"PK\x03\x04"
+
+
+def compare_files(stored: Path, fresh: Path, name: str, stored_sha256: str) -> tuple[list[str], list[str]]:
+    """The differing file, member or comment names and the named parts left out, for two downloads of one file [S17].
+
+    Archives compare member by member, since a publisher may rebuild an export archive on every request; their
+    comments compare by bytes.
+    """
+    if fingerprint(stored)[0] != stored_sha256:
+        return [STORED_DIFFERS], []
+    if fingerprint(fresh)[0] == stored_sha256:
+        return [], []
+    old, new = (archive_members(path) if is_archive(path, name) else None for path in (stored, fresh))
+    if old is None or new is None:
+        same, excluded = same_content(capped_body(stored), capped_body(fresh), name)
+        return ([] if same else [name]), excluded
+    differing, parts = sorted(set(old) ^ set(new)), set()
+    for member in sorted(set(old) & set(new)):
+        if old[member] == new[member]:
+            continue
+        same, excluded = same_content(member_body(stored, member), member_body(fresh, member), member)
+        if same:
+            parts.update(excluded)
+        else:
+            differing.append(member)
+    old_comments, new_comments = archive_comments(stored), archive_comments(fresh)
+    differing += [key for key in sorted(set(old_comments) | set(new_comments)) if old_comments.get(key, b"") != new_comments.get(key, b"")]
+    return sorted(differing), sorted(parts)
+
+
+def same_address(origin: str, url: str) -> bool:
+    """A recorded download origin is the unit's own address; only the fragment and a ``;jsessionid=`` segment are left out [S32]."""
+
+    def key(value: str) -> tuple[str, str | None, int | None, str, str]:
+        parts = urllib.parse.urlsplit(value)
+        # Only an absent port takes the scheme default; an explicit port, 0 included, compares as written [S37].
+        port = parts.port if parts.port is not None else {"http": 80, "https": 443}.get(parts.scheme.lower())
+        return parts.scheme.lower(), parts.hostname, port, re.sub(r";jsessionid=[^/?#;]*", "", parts.path, flags=re.IGNORECASE), parts.query
+
+    return key(origin) == key(url)
+
+
+def manual_file_unit(unit: dict, run: Run, started: datetime) -> dict:
+    """Accept a browser download only when it is new and its recorded origin is the unit's own address [S29].
+
+    A file with the same content wins, whatever its download date [S17]; otherwise the first changed file from the
+    unit's address is kept and recorded as changed for review [S20].
     """
     receipt_path = receipt_file(unit, run)
     artifact = read_json(receipt_path)["artifacts"][0]
-    stored_members = archive_members(receipt_path.parent / artifact["storage_path"])
-    host = urllib.parse.urlsplit(unit["url"]).hostname
+    stored = receipt_path.parent / artifact["storage_path"]
     folder = run.manual_folder
     if folder is None:
         raise ValueError("Manual units need the manual downloads folder")
-    for path in sorted(item for item in folder.iterdir() if item.is_file() and not item.is_symlink()) if folder.is_dir() else []:
-        if datetime.fromisoformat(download_metadata.download_created_at(path)) < started:
-            continue
-        require(path.stat().st_size <= min(run.byte_cap, 4 * 2**30), "Manual file exceeds byte budget")
-        body_sha256 = fingerprint(path)[0]
-        if stored_members is None:
-            if body_sha256 != artifact["sha256"]:
-                continue
-            differing: list[str] = []
-        else:
-            members = archive_members(path)
-            if members is None or set(members) != set(stored_members):
-                continue
-            differing = sorted(name for name in members if members[name] != stored_members[name])
-        try:
-            origins = download_metadata.read_origin(path)
-        except ValueError:
-            continue
-        if not any(urllib.parse.urlsplit(origin).hostname == host for origin in origins):
-            continue
+
+    def keep(path: Path, fields: dict) -> dict:
         target = run.state_root / "files" / unit["snapshot_id"] / path.name
         controls.writing(target, path.stat().st_size)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
-        fields = {"attempts": 1, "stored_sha256": artifact["sha256"], "fresh_sha256": body_sha256, "fresh_bytes": path.stat().st_size}
-        fields |= {"fresh_path": str(target.relative_to(run.state_root)), "differing_data_files": differing}
-        return fields | {"outcome": "changed_needs_review" if differing else "exact_match"}
+        return fields | {"fresh_path": str(target.relative_to(run.state_root))}
+
+    changed: tuple[Path, dict] | None = None
+    for path in sorted(item for item in folder.iterdir() if item.is_file() and not item.is_symlink()) if folder.is_dir() else []:
+        if datetime.fromisoformat(download_metadata.download_created_at(path)) < started:
+            continue
+        require(path.stat().st_size <= min(run.byte_cap, 4 * 2**30), "Manual file exceeds byte budget")
+        try:
+            origins = download_metadata.read_origin(path)
+        except ValueError:
+            continue
+        if not any(same_address(origin, unit["url"]) for origin in origins):
+            continue
+        differing, excluded = compare_files(stored, path, artifact["stored_file_name"], artifact["sha256"])
+        if differing and changed is not None:
+            continue
+        fields = {"attempts": 1, "stored_sha256": artifact["sha256"], "fresh_sha256": fingerprint(path)[0], "fresh_bytes": path.stat().st_size}
+        fields |= {"differing_data_files": differing, "excluded_parts": excluded}
+        if not differing:
+            return keep(path, fields | {"outcome": "exact_match"})
+        changed = (path, fields | {"outcome": "changed_needs_review"})
+    if changed is not None:
+        return keep(*changed)
     raise Pending("Manual download not in the folder yet")
 
 
@@ -547,6 +725,7 @@ PLANNED = {
 def planned(unit: dict, run: Run) -> tuple[dict, dict]:
     """Return the locked plan and the single planned item that produced a stored capture."""
     module_name, loader, group, key = PLANNED[unit["mode"]]
+    verify_path_map(run)
     for relative in run.cache.get("controls", {}).get("operational_sha256", {}):
         if relative.startswith("config/acquisition/"):
             verify_input(run.base / relative, run)
@@ -645,10 +824,26 @@ def adapt_hud_xlsx(unit: dict, run: Run) -> Path:
 
 def adapt_wonder(unit: dict, run: Run) -> Path:
     from scripts.acquisition import store_wonder_export as collector
+    from scripts.acquisition import wonder_export_contract as contract
 
     plan, batch = planned(unit, run)
-    downloads = manual_file(run.manual_folder, batch["file_name"], run.cache["started_at"]).parent
-    return Path(collector.execute(plan, batch, fresh_root(unit, run), downloads, False, None, {})["receipt_path"])
+    original = manual_file(run.manual_folder, batch["file_name"], run.cache["started_at"])
+    if fingerprint(original) == (batch["sha256"], batch["bytes"]):
+        return Path(collector.execute(plan, batch, fresh_root(unit, run), original.parent, False, None, {})["receipt_path"])
+    # Every WONDER export records its own query time, so a fresh export never has the planned bytes. The collector's
+    # origin and export checks run on it here, and the comparison with the stored export decides the outcome [S21].
+    contract.sanitize_origins(download_metadata.read_origin(original), batch["database"])
+    raw = original.read_bytes()
+    derived, _ = contract.validate_export(raw, batch, plan)
+    folder = fresh_root(unit, run) / "batches" / batch["id"] / "comparison"
+    files = {f"raw/{contract.stored_name(batch)}": raw, "derived/county_year.csv": derived}
+    for relative, body in files.items():
+        controls.writing(folder / relative, len(body))
+        write_once(folder / relative, body)
+    artifacts = [{"role": "data", "stored_file_name": Path(name).name, "storage_path": name, "sha256": digest(body)} for name, body in files.items()]
+    record = folder / "receipt.json"
+    write_once(record, encoded_json({"kind": "redownload_comparison_record", "artifacts": artifacts}))
+    return record
 
 
 def adapt_cms_owners(unit: dict, run: Run) -> Path:
@@ -751,8 +946,10 @@ def record_diagnostic(run: Run, identity: str, error: Exception) -> None:
 
 def collector_unit(unit: dict, run: Run, adapter: Callable[[dict, Run], Path]) -> dict:
     """Run a collector's capture path in the fresh root and compare its derived data with the stored data."""
-    original = [item for item in stored_receipt(unit, run)["artifacts"] if item["role"] == "data"]
+    receipt = receipt_file(unit, run)
+    original = [item for item in read_json(receipt)["artifacts"] if item["role"] == "data"]
     stored = {(item["role"], item["stored_file_name"]): item["sha256"] for item in original}
+    stored_paths = {(item["role"], item["stored_file_name"]): receipt.parent / item["storage_path"] for item in original if "storage_path" in item}
     require(len(stored) == len(original) and bool(stored), "Stored data artifact identities are empty or duplicated")
     if any(flag.startswith(MMD_API_FLAG) for flag in unit["flags"]):
         measure, year = mmd_selection(unit, run)
@@ -765,6 +962,7 @@ def collector_unit(unit: dict, run: Run, adapter: Callable[[dict, Run], Path]) -
                 approved_names.add(f"mmd_ffs_county_ami_prevalence_{year}.csv")
         require(len(original) == 1 and original[0]["stored_file_name"] in approved_names, "MMD browser artifact differs from the reviewed mapping")
         stored = {("data", name): original[0]["sha256"]}
+        stored_paths = {("data", name): receipt.parent / original[0]["storage_path"]} if "storage_path" in original[0] else {}
     try:
         receipt_path = adapter(unit, run)
     except (Pause, Pending, controls.BudgetExceeded):
@@ -779,10 +977,22 @@ def collector_unit(unit: dict, run: Run, adapter: Callable[[dict, Run], Path]) -
     controls.validate_path(receipt_path, run.state_root)
     fresh = [item for item in read_json(receipt_path)["artifacts"] if item["role"] == "data"]
     identities = {(item["role"], item["stored_file_name"]): item["sha256"] for item in fresh}
-    differing = sorted(name for role, name in set(stored) | set(identities) if stored.get((role, name)) != identities.get((role, name)))
-    same = identities == stored and len(identities) == len(fresh) and bool(stored)
+    fresh_paths = {(item["role"], item["stored_file_name"]): receipt_path.parent / item["storage_path"] for item in fresh if "storage_path" in item}
+    differing, excluded = [], set()
+    for key in sorted(set(stored) | set(identities)):
+        if stored.get(key) == identities.get(key):
+            continue
+        # A data file present on both sides may differ only in its download date [S17].
+        if key in stored_paths and key in fresh_paths and stored_paths[key].is_file() and fresh_paths[key].is_file():
+            controls.validate_path(fresh_paths[key], run.state_root)
+            names, parts = compare_files(stored_paths[key], fresh_paths[key], key[1], stored[key])
+            if not names:
+                excluded.update(parts)
+                continue
+        differing.append(key[1])
+    same = not differing and set(identities) == set(stored) and len(identities) == len(fresh) and bool(stored)
     fields = {"attempts": 1, "fresh_receipt": str(receipt_path.absolute().relative_to(run.state_root.absolute())), "differing_data_files": differing}
-    return fields | {"outcome": "exact_match" if same else "changed_needs_review"}
+    return fields | {"outcome": "exact_match" if same else "changed_needs_review", "excluded_parts": sorted(excluded)}
 
 
 def handle(unit: dict, run: Run) -> dict:
@@ -997,6 +1207,9 @@ def report(run: Run) -> dict:
         "outcomes": dict(sorted(Counter(item["outcome"] for item in results.values() if item is not None).items())),
         "not_exact": sorted(
             f"{item['source_id']}:{item['snapshot_id']}:{item['outcome']}" for item in results.values() if item and item["outcome"] != "exact_match"
+        ),
+        "matched_with_excluded_parts": dict(
+            sorted(Counter(part for item in results.values() if item and item["outcome"] == "exact_match" for part in item.get("excluded_parts", [])).items())
         ),
         "not_attempted": sorted(unit["snapshot_id"] for unit in missing),
         "pending_manual": sorted(unit["snapshot_id"] for unit in missing if unit["disposition"] == "approved_manual"),

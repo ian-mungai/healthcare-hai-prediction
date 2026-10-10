@@ -1090,3 +1090,40 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
         raise ValueError("Changed runtime settings were accepted")
 
     scenario("runtime_settings_change_invalidates_review_without_logging_values", environment_change)
+
+    def path_map_change(after_gate: bool) -> None:
+        # Failure mode S46 (R3P2-CONTROLS-015): the map that resolves recorded receipt paths is bound to the review.
+        run, unit, web = build(f"path_map_{'after_gate' if after_gate else 'before_gate'}")
+        web.serve(unit["url"], (200, b"a\n1\n"))
+        original_read = Path.read_bytes
+        map_path = harness.data_paths.MAP_PATH
+        changed = {"on": not after_gate}
+        original_gate = harness.review_gate
+
+        def read_changed(path: Path) -> bytes:
+            body = original_read(path)
+            if path == map_path and changed["on"]:
+                document = json.loads(body)
+                document["moved"] = {**document["moved"], "data/synthetic_old": "data/synthetic_new"}
+                return json.dumps(document).encode()
+            return body
+
+        def gate_then_change(run_: Any) -> str:
+            sha = original_gate(run_)
+            changed["on"] = True
+            return sha
+
+        with patch.object(Path, "read_bytes", read_changed), patch.object(harness, "review_gate", gate_then_change):
+            try:
+                harness.execute(run)
+            except ValueError as error:
+                expected = "Path map changed" if after_gate else "Execution controls changed"
+                require(expected in str(error), f"Unexpected refusal: {error}")
+                require(not web.requests, "Changed path map was used for a request")
+                if not after_gate:
+                    require(not run.state_root.exists(), "Changed path map created state")
+                return
+        raise ValueError("Changed path map was accepted")
+
+    scenario("path_map_changed_before_the_gate_invalidates_review", lambda: path_map_change(False))
+    scenario("path_map_changed_after_the_gate_stops_before_dispatch", lambda: path_map_change(True))
