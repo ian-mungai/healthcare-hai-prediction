@@ -282,8 +282,8 @@ seeds:
       Each registry measure control of sources CMS-MUP-PROVIDER and CMS_MEDICARE_PROVIDER (family S08) and how it is
       computed from the typed Medicare inpatient provider summary: value (the published field), ratio (field /
       denominator_field), drg_share (the published discharges of the listed DRG codes over the provider total) or hold (no
-      value: held or closed in the registry). C084 has one row per published race field; its child controls are not
-      assigned (failure modes 360 to 363). The staging E2E checks the controls against the registry.
+      value: held or closed in the registry). C084 has one row per published race field; its six child controls are
+      retired (registry revision 3, STG-009; failure modes 360 to 363). The staging E2E checks the controls against the registry.
     config:
       column_types:
         measure_control: varchar
@@ -385,7 +385,8 @@ seeds:
       Each registry measure control of sources HHS_CAPACITY, HHS and ONC_PI (families S09 and S10), or each child control
       where the registry names fields per child, and the staged model columns that carry it at source grain. Mapping is
       exact (the registry's field names), api_field_name (a name the source truncated, resolved through the stored
-      columns.json) or unnamed (C001 and C040 name no HHS field: no columns). A test checks every named column exists; the
+      columns.json) or closed (C001 and C040: their HHS part is closed in registry revision 3, STG-008; no columns). A test
+      checks every named column exists; the
       staging E2E checks the controls and the child mappings against the registry and columns.json (failure modes 378
       and 384).
     config:
@@ -406,19 +407,21 @@ seeds:
         description: The staged model that carries the control's columns.
         data_tests: [not_null]
       - name: fields
-        description: The model's columns the control uses, separated by spaces; empty when unnamed.
+        description: The model's columns the control uses, separated by spaces; empty when closed.
       - name: mapping
-        description: exact, api_field_name or unnamed.
+        description: exact, api_field_name or closed.
         data_tests:
           - not_null
           - accepted_values:
               arguments:
-                values: [exact, api_field_name, unnamed]
+                values: [exact, api_field_name, closed]
       - name: review_decision
         description: The registry's review decision (of the parent, for a child), for reading only.
 
   - name: occmix_measures
-    description: Six S03 controls with the registry's exact definitions and review decisions. C043 has no occupational-mix substitute.
+    description: >
+      Six S03 controls with the registry's exact definitions and review decisions. C043 has no occupational-mix substitute and
+      is closed as unavailable from public sources (registry revision 3, STG-007).
     config:
       column_types:
         measure_control: varchar
@@ -730,10 +733,11 @@ seeds:
     description: >
       The registry controls of the group D validation sources: S32 Hospital Readmissions Reduction Program, S33 unplanned
       hospital visits and S34 complications and deaths, each parent once per component, and E038 (PSI-90) and E039 (PSI-13),
-      which name no published measure ID and stay unmapped. Each row names the window model, the exact measure ID the registry
+      which read PSI_90 and PSI_13 (registry revision 3, STG-014). Each row names the window model, the exact measure ID the registry
       gives and the value column. A renamed ID reaches its control only through measure_id_aliases; PSI_90_SAFETY and
       PSI_13_POST_SEPSIS are not aliased (failure modes 508, 509, 511, 629 and 630). The HAC Reduction (C285, C286) and VBP (C287, C288) controls name their program-year columns;
-      C288.total_performance takes its parent's field and C288.payment_adjustment stays unmapped (failure mode 520). All are
+      C288.total_performance takes its parent's field and decision, and C288.payment_adjustment is retired (STG-016, failure
+      mode 520). All are
       comparison_only or exclude_primary; staging approves no use.
     config:
       column_types:
@@ -751,13 +755,12 @@ seeds:
         description: The window model that carries the control.
         data_tests: [not_null]
       - name: source_measure_id
-        description: The published measure ID or HRRP measure name; empty for E038 and E039.
+        description: The published measure ID or HRRP measure name; empty for C288.payment_adjustment.
       - name: value_column
         description: The column holding the value; empty for C288.payment_adjustment, which has no published column.
       - name: review_decision
         description: >
-          Registry decision, preserved without approving model use; empty for the C288 children, which have none in the
-          registry.
+          Registry decision, preserved without approving model use; retired for C288.payment_adjustment.
 
   - name: vbp_file_fiscal_years
     description: >

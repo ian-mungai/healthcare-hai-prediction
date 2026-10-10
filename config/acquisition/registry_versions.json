@@ -1,6 +1,6 @@
 {
   "catalog_version": 1,
-  "current_registry_sha256": "dbd6fa964a6001861f9701f6d2c785eccabb3ba314e586f860a462ab651bcad3",
+  "current_registry_sha256": "60b89b7ac6d1913e8f8ba0d305d02ba7ab023d0165ef78927631cb3c10303a25",
   "legacy_versions": [
     {
       "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
@@ -22,6 +22,29 @@
         "additions_lock": {
           "path": "data/acquisition_planning/registry_legacy_20260929/registry_additions_lock.json",
           "sha256": "878a8022255494cfd988370bce16945db8938c8bac6ea2dd8d05c6e9970c2686"
+        }
+      }
+    },
+    {
+      "registry_sha256": "dbd6fa964a6001861f9701f6d2c785eccabb3ba314e586f860a462ab651bcad3",
+      "registry_path": "data/acquisition_planning/acquisition_legacy_20261009/registry_rev2/source_registry.json",
+      "lock_path": "data/acquisition_planning/acquisition_legacy_20261009/registry_rev2/source_registry_lock.json",
+      "files": {
+        "registry": {
+          "path": "data/acquisition_planning/acquisition_legacy_20261009/registry_rev2/source_registry.json",
+          "sha256": "f1056edfea509b12f939fe94c3903e2f596ceeaf647c73c6be55fac4915cc9ac"
+        },
+        "lock": {
+          "path": "data/acquisition_planning/acquisition_legacy_20261009/registry_rev2/source_registry_lock.json",
+          "sha256": "555d266b8f6eb92310f89b76e4194e9e86f80cb1768f1f2f72715bd7c1f3b4ce"
+        },
+        "additions": {
+          "path": "data/acquisition_planning/acquisition_legacy_20261009/registry_rev2/registry_additions.json",
+          "sha256": "34fb0313cfe59440f2ef1bc28742a2970d237389e4720c75947344da2c06557e"
+        },
+        "additions_lock": {
+          "path": "data/acquisition_planning/acquisition_legacy_20261009/registry_rev2/registry_additions_lock.json",
+          "sha256": "eb739787d59c5c599e3971e051a24ec89bad98c424c7d712c877288bab360966"
         }
       }
     }

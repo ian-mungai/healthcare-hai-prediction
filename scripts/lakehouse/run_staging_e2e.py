@@ -2698,11 +2698,12 @@ GROUP_D1 = (
         "2025-07-01",
         "Complications_and_Deaths-Hospital.csv",
         sha("de1"),
-        5,
+        6,
         records=(
             cc(facility_id="010001", measure_id="MORT_30_AMI", score="12.3", lower_estimate="10.9", higher_estimate="13.8", **DATES_2022),
             cc(facility_id="010001", measure_id="PSI_90", score="1.01", denominator="Not Applicable", **DATES_2022),
             cc(facility_id="010001", measure_id="PSI_90_SAFETY", score="0.99", **DATES_2022),
+            cc(facility_id="010001", measure_id="PSI_13", score="4.52", **DATES_2022),
             cc(facility_id="010001", measure_id="MORT_30_HF", score="10.0", **DATES_2022),
             cc(facility_id="010001", measure_id="MORT_30_HF", score="10.4", **DATES_2022),
         ),
@@ -5319,12 +5320,14 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("deaths", "010001", "MORT_30_AMI", "2022-01-01", "12.3", "de1"),
             ("deaths", "010001", "PSI_90", "2022-01-01", "1.01", "de1"),
             ("deaths", "010001", "PSI_90_SAFETY", "2022-01-01", "0.99", "de1"),
+            ("deaths", "010001", "PSI_13", "2022-01-01", "4.52", "de1"),
             ("hrrp", "010001", "READM-30-HF-HRRP", "2020-07-01", "1.0123", "hr1"),
             ("hrrp", "010003", "READM-30-AMI-HRRP", "2020-07-01", "N/A", "hr1"),
         ]
     )
     # [508] [509] [510] [629] Exact IDs, plus OP-32 where its hospital and window have no OP_32 row (010003); OP-32 beside OP_32
-    # (010001), READM_30_HF and the PSI IDs stay out; parents and children both; tokens stay text.
+    # (010001) and READM_30_HF stay out; E038 and E039 read PSI_90 and PSI_13 (registry revision 3, STG-014) and the older
+    # PSI_90_SAFETY stays out (no alias, STG-013); parents and children both; tokens stay text.
     checks["validation_matches_expected"] = base.get("validation") == sorted(
         [
             ("C290", "010001", "OP_32", "2020-07-01", "11.5", "11.5"),
@@ -5347,6 +5350,8 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("C291.01", "010001", "MORT_30_AMI", "2022-01-01", "12.3", "12.3"),
             ("C290", "010003", "OP_32", "2022-01-01", "4.0", "4.0"),
             ("C290.01", "010003", "OP_32", "2022-01-01", "4.0", "4.0"),
+            ("E038", "010001", "PSI_90", "2022-01-01", "1.01", "1.01"),
+            ("E039", "010001", "PSI_13", "2022-01-01", "4.52", "4.52"),
         ]
     )
     checks["validation_aliases_match_expected"] = base.get("validation_aliases") == [("010003", "OP_32", "OP-32")]
@@ -5501,7 +5506,7 @@ def validation_aligned_checks(base: dict[str, Any]) -> dict[str, bool]:
     checks: dict[str, bool] = {}
     # [597] The OP_32 window equal to 2021 beats the longer one that covers it; [598] HAC FY 2023 placed by its HAI period
     # (calendar 2021); HRRP's three-year window overlaps 2021 fully; hospitals whose periods miss a window are
-    # no_matching_period. Reviewed row by row.
+    # no_matching_period, including E038 and E039 (PSI_90, PSI_13 from 2022, registry revision 3). Reviewed row by row.
     checks["validation_aligned_match_expected"] = base.get("validation_aligned") == [
         ("010001", "2019", "C285", "payment_reduction", "no_matching_period", "", "", "", "", "", ""),
         ("010001", "2019", "C286", "total_hac_score", "no_matching_period", "", "", "", "", "", ""),
@@ -5513,6 +5518,8 @@ def validation_aligned_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("010001", "2019", "C290.04", "OP_36", "no_matching_period", "", "", "", "", "", ""),
         ("010001", "2019", "C291", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
         ("010001", "2019", "C291.01", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2019", "E038", "PSI_90", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2019", "E039", "PSI_13", "no_matching_period", "", "", "", "", "", ""),
         ("010001", "2021", "C285", "payment_reduction", "aligned", "No", "", "2021-01-01", "2021-12-31", "2023", "365"),
         ("010001", "2021", "C286", "total_hac_score", "aligned", "4.0", "4.0", "2021-01-01", "2021-12-31", "2023", "365"),
         ("010001", "2021", "C289", "READM-30-HF-HRRP", "aligned", "1.0123", "1.0123", "2020-07-01", "2023-06-30", "", "365"),
@@ -5523,6 +5530,8 @@ def validation_aligned_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("010001", "2021", "C290.04", "OP_36", "no_matching_period", "", "", "", "", "", ""),
         ("010001", "2021", "C291", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
         ("010001", "2021", "C291.01", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2021", "E038", "PSI_90", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2021", "E039", "PSI_13", "no_matching_period", "", "", "", "", "", ""),
         ("010001", "2025", "C285", "payment_reduction", "no_matching_period", "", "", "", "", "", ""),
         ("010001", "2025", "C286", "total_hac_score", "no_matching_period", "", "", "", "", "", ""),
         ("010001", "2025", "C289", "READM-30-HF-HRRP", "no_matching_period", "", "", "", "", "", ""),
@@ -5533,13 +5542,15 @@ def validation_aligned_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("010001", "2025", "C290.04", "OP_36", "no_matching_period", "", "", "", "", "", ""),
         ("010001", "2025", "C291", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
         ("010001", "2025", "C291.01", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2025", "E038", "PSI_90", "no_matching_period", "", "", "", "", "", ""),
+        ("010001", "2025", "E039", "PSI_13", "no_matching_period", "", "", "", "", "", ""),
     ]
     # [600] One row per spine row and seed row (12 x 41), unique keys; [599] no model reads the validation table.
     checks["validation_aligned_counts_match_expected"] = base.get("validation_aligned_counts") == [
         ("aligned", "6"),
         ("keys", "615"),
-        ("no_matching_period", "24"),
-        ("not_in_source", "585"),
+        ("no_matching_period", "30"),
+        ("not_in_source", "579"),
         ("rows", "615"),
     ]
     checks["validation_table_kept_apart"] = validation_kept_apart()
@@ -7148,6 +7159,14 @@ def hhs_onc_seed_matches(field_names: dict[str, str]) -> bool:
     children = {control_id for control_id, control in controls.items() if control.get("parent_id") in linked}
     if {row["measure_control"] for row in seed if row["parent_control"]} != children:
         return False
+    # Registry revision 3 (STG-008): C001 and C040 keep their rows with mapping closed and no fields; nothing is unnamed [720].
+    for row in seed:
+        if not row["parent_control"] and row["mapping"] == "closed":
+            decision = controls[row["measure_control"]].get("effective_closeout_decision") or {}
+            if decision.get("issue") != "STG-008" or row["fields"]:
+                return False
+    if any(row["mapping"] not in ("exact", "api_field_name", "closed") for row in seed):
+        return False
     columns = set(field_names.values())
     for row in seed:
         if not row["parent_control"]:
@@ -7264,7 +7283,7 @@ def county_health_seed_matches() -> bool:
 
 def validation_seed_matches() -> bool:
     """Check the validation measure seed against the registry: every control of the D1 sources and their children, each named
-    ID found in its control's exact field, E038 and E039 unmapped [508] [511]."""
+    ID found in its control's exact field, only C288.payment_adjustment unmapped (registry revision 3) [508] [511] [720]."""
     registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
     sources = {source["source_id"]: source for source in registry["sources"]}
     controls = {control["id"]: control for control in registry["measure_controls"]}
@@ -7294,7 +7313,7 @@ def validation_seed_matches() -> bool:
         for row in rows
         if row["source_measure_id"]
     )
-    unmapped = {row["measure_control"] for row in rows if not row["source_measure_id"]} == {"E038", "E039", "C288.payment_adjustment"}
+    unmapped = {row["measure_control"] for row in rows if not row["source_measure_id"]} == {"C288.payment_adjustment"}
     decisions = all(row["review_decision"] == (controls[row["measure_control"]]["preserved_controls"]["current_review_decision"] or "") for row in rows)
     return {row["measure_control"] for row in rows} == expected and named and unmapped and decisions
 

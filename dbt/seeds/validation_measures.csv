@@ -4,8 +4,8 @@ C286,care-hac-cms,int_hac_program_years,total_hac_score,total_hac_score,exclude_
 C287,care-vbp-cms,int_vbp_program_years,unweighted_normalized_safety_domain_score,unweighted_normalized_safety_domain_score,exclude_primary
 C287,care-vbp-cms,int_vbp_program_years,weighted_safety_domain_score,weighted_safety_domain_score,exclude_primary
 C288,care-vbp-cms,int_vbp_program_years,total_performance_score,total_performance_score,exclude_primary
-C288.payment_adjustment,care-vbp-cms,int_vbp_program_years,,,
-C288.total_performance,care-vbp-cms,int_vbp_program_years,total_performance_score,total_performance_score,
+C288.payment_adjustment,care-vbp-cms,int_vbp_program_years,,,retired
+C288.total_performance,care-vbp-cms,int_vbp_program_years,total_performance_score,total_performance_score,exclude_primary
 C289,S32,int_cc_hrrp_windows,READM-30-AMI-HRRP,excess_readmission_ratio,comparison_only
 C289,S32,int_cc_hrrp_windows,READM-30-CABG-HRRP,excess_readmission_ratio,comparison_only
 C289,S32,int_cc_hrrp_windows,READM-30-COPD-HRRP,excess_readmission_ratio,comparison_only
@@ -38,5 +38,5 @@ C291.03,S34,int_cc_complications_deaths_windows,MORT_30_COPD,score,comparison_on
 C291.04,S34,int_cc_complications_deaths_windows,MORT_30_HF,score,comparison_only
 C291.05,S34,int_cc_complications_deaths_windows,MORT_30_PN,score,comparison_only
 C291.06,S34,int_cc_complications_deaths_windows,MORT_30_STK,score,comparison_only
-E038,PSI90,int_cc_complications_deaths_windows,,score,comparison_only
-E039,PSI13,int_cc_complications_deaths_windows,,score,comparison_only
+E038,PSI90,int_cc_complications_deaths_windows,PSI_90,score,comparison_only
+E039,PSI13,int_cc_complications_deaths_windows,PSI_13,score,comparison_only

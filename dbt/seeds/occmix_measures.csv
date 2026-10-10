@@ -4,4 +4,4 @@ C031,S03,rn_paid_hour_share,RNHR / nursehr,Reviewed; Candidate; conditional on v
 C032,S03,lpnst_paid_hour_share,LPNSTHR / nursehr; combined LPN/LVN + surgical technologist hours,Reviewed; Candidate; conditional on valid scope and timing; [B06](notes kept outside the repository),available_conditional
 C033,S03,naorat_paid_hour_share,NAORATHR / nursehr,Reviewed; Candidate; conditional on valid scope and timing; [B06](notes kept outside the repository),available_conditional
 C034,S03,rn_paid_hour_wage,"CMS FY26 Final Rule OccMix Data PUF: rnahw = RNSAL/RNHR; PROV, FROM, TO identify provider and survey period.",retain_conditional,available_conditional
-C043,S03,,Compatible direct-care RN worked hours / same-unit patient-days; national OM paid-hour substitute prohibited,Reviewed; Candidate; conditional on valid scope and timing; [B06](notes kept outside the repository),unavailable_source_definition
+C043,S03,,Compatible direct-care RN worked hours / same-unit patient-days; national OM paid-hour substitute prohibited,closed_unavailable_public_sources,unavailable_source_definition

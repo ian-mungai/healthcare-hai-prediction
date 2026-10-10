@@ -258,7 +258,8 @@ from FROM and TO, including workbook ISO dates. Payment-rule years stay separate
 identifiers or periods and duplicate provider-period rows remain visible with a hold and no derived values.
 `dbt/seeds/occmix_measures.csv` maps all six S03 registry controls: RN paid hours, the RN, combined LPN/LVN plus
 surgical-technologist and NAORAT paid-hour shares and RN salary per paid hour. Missing values and nonpositive
-denominators give null. C043 stays unavailable: paid hours cannot substitute for direct-care worked hours per patient-day.
+denominators give null. C043 stays unavailable: paid hours cannot substitute for direct-care worked hours per patient-day;
+registry revision 3 closes it as unavailable from public sources.
 Comma-grouped numbers are parsed only when their grouping is valid. Dots, dashes and blanks remain null.
 Source revisions remain separate; hospital-window alignment, publication timing and model eligibility are pending.
 
@@ -377,8 +378,9 @@ visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_co
 Hospital Readmissions Reduction Program by condition (`int_cc_hrrp_windows`). Every published measure ID is kept;
 `dbt/seeds/validation_measures.csv` maps the exact IDs the registry names (C289 to C291 and their children); a renamed
 ID reaches its control only through the reviewed aliases in `dbt/seeds/measure_id_aliases.csv` (`OP-32`) and only where
-the exact ID has no row for that hospital and window. The PSI-90 and PSI-13 controls (E038, E039), which name no
-published ID, stay unmapped (`int_validation_measure_windows`). `Not Available`, `Not Applicable`, `N/A` and `Too Few to Report` stay text. In every
+the exact ID has no row for that hospital and window. The PSI-90 and PSI-13 controls (E038, E039) read the
+published IDs `PSI_90` and `PSI_13` (registry revision 3); the older `PSI_90_SAFETY` and `PSI_13_POST_SEPSIS` are not
+aliased (`int_validation_measure_windows`). `Not Available`, `Not Applicable`, `N/A` and `Too Few to Report` stay text. In every
 group D model a 5-digit hospital ID is padded to 6 characters; any other ID that is not 6 digits or capital letters is
 held. These tables are for validation only; none is a predictor.
 
@@ -528,7 +530,8 @@ collected and how to recheck it, including the named manual data steps: terms
 acceptance, API accounts and the browser downloads (CMS Mapping Medicare
 Disparities exports, Census table exports, CDC WONDER county mortality exports
 and the 2010–2020 HUD ZIP-to-county workbooks). Its commands need the acquisition code in `scripts/acquisition/`
-and `config/acquisition/`, both tracked in Git. Registry revision 2 preserves exact legacy fingerprints for historic replay;
+and `config/acquisition/`, both tracked in Git. Registry revision 3 records the owner's six registry decisions of October 8 2026; revisions 1 and 2 keep their exact
+legacy fingerprints for historic replay;
 `config/acquisition/legacy_versions.json` does the same for earlier plans and records; both private archives stay outside Git. The bounded publisher redownload (run 3) remains the final verification.
 
 ## Quality Checks
@@ -818,8 +821,8 @@ hospitals; the Medicare chronic-condition shares start with data year 2017. Each
 events back to 2016, so one event appears once per release until the alignment step chooses one. An enrollment or
 change-of-ownership value with a location suffix, a lost leading zero or a unit letter maps to its parent CCN when POS
 lists exactly one such parent in the row's state (`ccn_source`); any other value keeps no CCN. An HHS facility without a
-CCN gets one only from the reviewed matches in `dbt/seeds/hhs_reviewed_ccn_matches.csv`. Registry controls C001 and C040
-name no HHS field, so the HHS columns are staged but not mapped to them. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables exist. The bronze and staging E2E runs use
+CCN gets one only from the reviewed matches in `dbt/seeds/hhs_reviewed_ccn_matches.csv`. Registry revision 3 closes the HHS
+part of controls C001 and C040, so the HHS columns are staged but not mapped to them. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables exist. The bronze and staging E2E runs use
 Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
 offline. Its first part finished 43 sources; the second (ACS, BLS, HUD and WONDER) waits on its independent review and
 the owner's browser downloads.

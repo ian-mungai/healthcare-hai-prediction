@@ -1,6 +1,7 @@
 -- One row per group D registry control, component measure, hospital and window: the published value of exactly the measure
 -- ID the registry names, and a number only when the value is a plain number; tokens stay text. A parent control appears
--- once per component. E038 and E039 name no published ID and get no rows (failure modes 508 to 510). A reviewed renamed
+-- once per component. E038 and E039 read PSI_90 and PSI_13 (registry revision 3); PSI_90_SAFETY and PSI_13_POST_SEPSIS are
+-- not aliased (failure modes 508 to 510). A reviewed renamed
 -- ID enters under the exact ID only where the hospital and window have no exact-ID row (failure modes 629 and 630).
 {{ config(materialized='table') }}
 

@@ -761,7 +761,8 @@ models:
   - name: int_occmix_measures
     description: >
       Six S03 registry controls per survey row. C030 to C034 retain conditional definitions and review decisions.
-      C043 is unavailable from this source and always null. Staging does not approve model use or resolve source timing.
+      C043 is unavailable from this source and always null; registry revision 3 closes it as unavailable from public sources
+      (STG-007). Staging does not approve model use or resolve source timing.
     columns:
       - name: measure_key
         description: Survey row key and measure control.
