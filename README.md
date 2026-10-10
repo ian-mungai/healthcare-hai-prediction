@@ -42,8 +42,8 @@ acquisition closeout is pending the final publisher redownload (run 3)
 and confirmed disposal of personal originals. Public sources are collected
 through publisher APIs first, then download URLs, into private versioned S3
 storage with a receipt, hash and version readback for every object. The bronze
-layer of a local Apache Iceberg lakehouse then holds one copy of every stored data
-file as published, with each row traced to its S3 object version and checksum. It
+layer of a local Apache Iceberg lakehouse then holds one copy of each data file that
+the committed table map selects, as published, with each row traced to its S3 object version and checksum. It
 also lists every other stored copy. All 330 mapped tables are loaded and checked; a
 table whose files were all removed for privacy left the map. A dbt staging layer in DuckDB
 reads the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital General
@@ -53,7 +53,9 @@ per HAI and Care Compare measurement window, one row per hospital cost report, o
 Services row per hospital and snapshot and one case-mix index per hospital and payment-rule year.
 A hospital-year spine lines each hospital and calendar-year HAI window up with the Provider of
 Services snapshot and the case-mix index from before the window. It also flags the model population.
-Modeling and serving come later. The [Architecture](#architecture)
+Under the layer design approved on October 10 2026 (the refactor is pending), silver does only the standard cleansing
+steps at each source's atomic grain and is not stored. Gold stores atomic facts and dimensions; the hospital-window
+spine and alignment move to the feature phase. Modeling and serving come later. The [Architecture](#architecture)
 diagram shows what is built and what is planned.
 
 ## Install
@@ -213,8 +215,8 @@ scripts/lakehouse/ui.sh                                             # DuckDB UI 
 ```
 
 The dbt staging layer (`dbt/`, dbt-core with dbt-duckdb in the analytics image) reads bronze read-only. Its E2E builds
-the models on synthetic fixtures, including cases that must fail one named test, then on the real bronze tables twice,
-and reconciles each staging table with bronze. Where a text file and a workbook hold the same IPPS or occupational-mix
+the models on synthetic fixtures, including cases that must fail one named test, then on the real bronze tables twice;
+it reconciles each staging table with bronze. Where a text file and a workbook hold the same IPPS or occupational-mix
 table, staging reads the text file and drops only the workbook sheets that a selected text file of the same release
 matches row for row; every other sheet stays selected (`stg_bronze__sheet_selection`). `scripts.lakehouse.ipps_file_labels` regenerates the IPPS and
 occupational-mix label and twin seeds from the S3 manifests; `--check` confirms the committed seeds. `int_pos_hospital_snapshots`
@@ -315,7 +317,8 @@ The period seed dates each MMD file by the year in its name and the HPSA and MUA
 models carry as `capture_date`. The Federal Register HPSA workbooks stay in bronze. `dbt/seeds/shortage_measures.csv`
 maps the 85 registry controls of these sources.
 
-The alignment stage lines each staged source up with the hospital-year spine as of the HAI window start.
+The alignment stage lines each staged source up with the hospital-year spine as of the HAI window start. It is built
+in silver at commit `e71779d` and moves to the feature phase under the October 10 2026 layer design (see [Architecture](#architecture)).
 `int_spine_hai_outcomes` (step AL1) has one row per spine hospital-window and infection type (HAI_1 CLABSI to HAI_6
 C. difficile): the published SIR, its bounds, the observed and predicted counts and the exposure, by exact measure ID,
 with tokens kept as text and the SIR footnote codes. No SIR is computed from the counts. A part from a release after the
@@ -361,7 +364,8 @@ the score as published at the capture; an undated withdrawal holds the window) a
 `int_spine_linkage` keeps the HUD residential share of the hospital ZIP and the hospital's service-area ZIPs and cases
 apart as linkage, never predictors.
 
-History for the gold dimensions is type 2 (SCD2) and dated by the publishers' own dates, so a clean checkout rebuilds the
+History is type 2 (SCD2), built in silver (under the October 10 2026 layer design the history method moves to the
+Feast phase and gold keeps the snapshot and release rows) and dated by the publishers' own dates, so a clean checkout rebuilds the
 same versions: `int_hospital_pos_history` (Provider of Services attributes per snapshot), `int_hospital_hgi_history`
 (Hospital General Information descriptions per release; the overall rating stays a measure) and
 `int_hospital_ownership_history` (organization owners only, by enrollment, owner and role, per release). The macro
@@ -411,8 +415,10 @@ scripts/lakehouse/dbt.sh build                                      # dbt on the
 .venv/bin/python -m scripts.lakehouse.mmd_conditions --check             # MMD condition map matches the pinned plans
 ```
 
-**Silver validation (Great Expectations).** After a build, Great Expectations 1.23.2 checks the tables gold reads, as a
-second gate independent of the dbt tests. `scripts/lakehouse/silver.py validate` runs `scripts/lakehouse/silver_quality.py`
+**Silver validation (Great Expectations).** After a build, Great Expectations 1.23.2 checks 13 silver tables (the spine,
+the alignment tables, county adjacency and the three history tables), as a second gate independent of the dbt tests.
+These were gold's planned inputs before the October 10 2026 layer design; the refactor replaces the suites with atomic
+silver, gold and feature-phase checks. `scripts/lakehouse/silver.py validate` runs `scripts/lakehouse/silver_quality.py`
 in the `quality` image (`services/quality/`, no network, memory limit from the launch plan). It opens the build file
 read-only and stops when an `analytics-dbt` container is running, when `int_silver_build_marker` is missing or when the
 marker's DuckDB version differs from the reader's. The suites in `data_contracts/great_expectations/suites/` are JSON
@@ -465,6 +471,19 @@ ARCHIFY_UPDATE_CHECK_DISABLED=1 node <archify>/bin/archify.mjs finalize architec
 ```
 
 `finalize` also writes receipt files beside the HTML; keep them out of Git.
+
+**Layer design (owner decision, October 10 2026; the code refactor is pending).** The diagram shows the flow as built.
+
+| Layer | Holds | Stored |
+| --- | --- | --- |
+| Bronze | One copy of each mapped publisher data file and its dictionaries, as published | Iceberg namespace `bronze` |
+| Silver | `stg_` and `int_` models: deduplication, data quality checks, cleansing, schema enforcement, type casting and missing-value handling at each source's atomic grain, with only the joins gold tables need | No: built, validated by Great Expectations, used to build gold, then deleted |
+| Gold | `dim_` and `fct_` models: one fact per source process at its atomic grain and the conformed dimensions | Iceberg namespace `gold` |
+| Feature phase | The hospital-window entity and populations, the as-of alignment of each source and the ratios derived per registry control, computed from gold for Feast and training | Not stored in gold |
+
+The alignment models and the hospital-year spine described under Usage are built in silver; the refactor moves
+them and their checks to the feature phase. The HCRIS cost reports are the CMS public use files for fiscal years 2011 to
+2023, all on form CMS-2552-10, so no form-version reconciliation is needed.
 
 ## Data
 
@@ -822,7 +841,8 @@ events back to 2016, so one event appears once per release until the alignment s
 change-of-ownership value with a location suffix, a lost leading zero or a unit letter maps to its parent CCN when POS
 lists exactly one such parent in the row's state (`ccn_source`); any other value keeps no CCN. An HHS facility without a
 CCN gets one only from the reviewed matches in `dbt/seeds/hhs_reviewed_ccn_matches.csv`. Registry revision 3 closes the HHS
-part of controls C001 and C040, so the HHS columns are staged but not mapped to them. It also builds the hospital-year spine; the other tables pass through as published. No gold or model tables exist. The bronze and staging E2E runs use
+part of controls C001 and C040, so the HHS columns are staged but not mapped to them. It also builds the hospital-year spine. Some typed tables also carry derived values or registry mappings (for example
+the occupational-mix shares and the MMD and ACS control maps); the layer refactor moves those out of silver. No gold or model tables exist. The bronze and staging E2E runs use
 Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
 offline. Its first part finished 43 sources; the second (ACS, BLS, HUD and WONDER) waits on its independent review and
 the owner's browser downloads.

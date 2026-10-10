@@ -460,7 +460,7 @@
       "title": "Planned (not built)",
       "items": [
         "Orchestration with scheduled DAGs",
-        "Gold marts for modeling (dbt dim_ and fact_)",
+        "Gold star schema at atomic grain (dbt dim_ and fct_); silver refactor to standard cleansing",
         "Feature store, MLflow model comparison and external validation"
       ]
     }
