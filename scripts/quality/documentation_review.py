@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 import tempfile
 from datetime import datetime
@@ -125,8 +126,8 @@ def extras(value: object) -> list[str]:
     return paths
 
 
-def validate(record: dict[str, object], files: dict[str, tuple[str, str]]) -> int:
-    """Check staged evidence coverage, freshness and resolved per-document outcomes."""
+def check_header(record: dict[str, object]) -> None:
+    """Check the record's six fields, integer schema 1, reviewer and review time; shared by check and carry-forward."""
     expected_keys = {"schema_version", "reviewer", "reviewed_at_utc", "snapshot_sha256", "extra_documents", "documents"}
     if set(record) != expected_keys or type(record.get("schema_version")) is not int or record.get("schema_version") != 1:
         raise ReviewError("schema_version must be 1 and all six documented fields must be present, with no unknown fields")
@@ -134,6 +135,12 @@ def validate(record: dict[str, object], files: dict[str, tuple[str, str]]) -> in
     if not isinstance(reviewer, str) or not reviewer.strip():
         raise ReviewError("reviewer must identify the person or agent that performed the review")
     utc_time(record["reviewed_at_utc"])
+    extras(record["extra_documents"])
+
+
+def validate(record: dict[str, object], files: dict[str, tuple[str, str]]) -> int:
+    """Check staged evidence coverage, freshness and resolved per-document outcomes."""
+    check_header(record)
     paths = document_paths(files, extras(record["extra_documents"]))
     if record["snapshot_sha256"] != snapshot(files):
         raise ReviewError("staged files changed since review; review the changes and refresh the evidence")
@@ -160,7 +167,33 @@ def validate(record: dict[str, object], files: dict[str, tuple[str, str]]) -> in
     return len(paths)
 
 
-def prepare(files: dict[str, tuple[str, str]], reviewer: str, reviewed_at: str, extra: list[str], refresh: bool) -> None:
+CARRIED = re.compile(r"^(?:Carried forward from the review at [^ ]+ \(blob unchanged\): )+")  # one or more provenance prefixes
+
+
+def carried(old: dict[str, object], path: str, blob: str) -> dict[str, str] | None:
+    """Return the old entry for an unchanged document, its notes prefixed with provenance, or None [702] to [705].
+
+    Only valid prior evidence carries: a record that passes the same header checks as ``check`` and an entry with exactly
+    the four documented fields, a resolved outcome and nonblank notes of its own once every provenance prefix is removed.
+    The old snapshot may differ. Anything else stays pending.
+    """
+    try:
+        check_header(old)
+    except ReviewError:
+        return None
+    items = old.get("documents")
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict) or set(item) != {"path", "blob", "outcome", "notes"} or item["path"] != path:
+            continue
+        notes = item["notes"]
+        if item["blob"] != blob or item["outcome"] not in OUTCOMES or not isinstance(notes, str) or not CARRIED.sub("", notes).strip():
+            return None
+        prefix = f"Carried forward from the review at {old['reviewed_at_utc']} (blob unchanged): "
+        return {"path": path, "blob": blob, "outcome": str(item["outcome"]), "notes": notes if CARRIED.match(notes) else prefix + notes}
+    return None
+
+
+def prepare(files: dict[str, tuple[str, str]], reviewer: str, reviewed_at: str, extra: list[str], refresh: bool, carry: bool = False) -> None:
     """Draft pending evidence atomically; retries preserve an existing review for the same snapshot.
 
     Parameters
@@ -175,6 +208,9 @@ def prepare(files: dict[str, tuple[str, str]], reviewer: str, reviewed_at: str, 
         Other project documentation not found by conventional path/extension discovery.
     refresh : bool
         Explicit permission to replace a stale record with a pending draft. This never marks a document reviewed.
+    carry : bool
+        With ``refresh``, keep the old outcome and notes of each document whose staged blob is unchanged, with
+        provenance (change-based review). Changed and new documents are pending.
     """
     utc_time(reviewed_at)
     if not reviewer.strip():
@@ -182,6 +218,7 @@ def prepare(files: dict[str, tuple[str, str]], reviewer: str, reviewed_at: str, 
     paths = document_paths(files, extras(extra))
     current_snapshot = snapshot(files)
     target = Path(RECORD)
+    old: dict[str, object] = {}
     if target.exists():
         old = parse_record(target.read_text())
         if old.get("snapshot_sha256") == current_snapshot and old.get("extra_documents") == extra:
@@ -195,13 +232,19 @@ def prepare(files: dict[str, tuple[str, str]], reviewer: str, reviewed_at: str, 
         "reviewed_at_utc": reviewed_at,
         "snapshot_sha256": current_snapshot,
         "extra_documents": extra,
-        "documents": [{"path": path, "blob": files[path][1], "outcome": "pending", "notes": ""} for path in paths],
+        "documents": [
+            (carried(old, path, files[path][1]) if carry else None) or {"path": path, "blob": files[path][1], "outcome": "pending", "notes": ""}
+            for path in paths
+        ],
     }
     with tempfile.NamedTemporaryFile(mode="w", dir=".", prefix=".documentation_review_", suffix=".tmp", delete=False) as handle:
         temporary = Path(handle.name)
         handle.write(json.dumps(record, indent=2, ensure_ascii=True) + "\n")
     temporary.replace(target)
-    sys.stdout.write(f"Drafted {len(paths)} pending document reviews in {RECORD}; no review has been attested.\n")
+    documents = cast(list[dict[str, str]], record["documents"])
+    pending = sum(1 for item in documents if item["outcome"] == "pending")
+    kept = len(paths) - pending
+    sys.stdout.write(f"Drafted {pending} pending document reviews in {RECORD}; carried forward {kept} unchanged outcomes; no new review has been attested.\n")
 
 
 def main() -> int:
@@ -215,6 +258,7 @@ def main() -> int:
     draft.add_argument("--reviewed-at", required=True)
     draft.add_argument("--extra-document", action="append", default=[])
     draft.add_argument("--refresh", action="store_true")
+    draft.add_argument("--carry-forward", action="store_true", help="with --refresh, keep outcomes of documents whose blob is unchanged")
     args = parser.parse_args()
     try:
         if Path.cwd().resolve() != Path(git("rev-parse", "--show-toplevel").strip()).resolve():
@@ -222,10 +266,17 @@ def main() -> int:
         files = inventory()
         if git("ls-files", "--", RECORD).strip():
             raise ReviewError("review evidence must stay local; remove it from the index with git rm --cached -- .documentation_review.json")
+        if run_command("git", ["check-ignore", "-q", "--", RECORD]).returncode:
+            # An ignored record cannot be staged by git add . [708].
+            raise ReviewError(f"review evidence must be ignored; add /{RECORD} to .gitignore")
         if args.command == "check-untracked":
-            sys.stdout.write("documentation review: local-only storage verified; substantive review is checked locally, not in hosted CI\n")
+            sys.stdout.write(
+                "documentation review: local-only storage verified (untracked and ignored); substantive review is checked locally, not in hosted CI\n"
+            )
         elif args.command == "prepare":
-            prepare(files, args.reviewer, args.reviewed_at, args.extra_document, args.refresh)
+            if args.carry_forward and not args.refresh:
+                raise ReviewError("--carry-forward needs --refresh")
+            prepare(files, args.reviewer, args.reviewed_at, args.extra_document, args.refresh, args.carry_forward)
         else:
             if not Path(RECORD).is_file():
                 raise ReviewError("no local review record; prepare and complete the ignored evidence")

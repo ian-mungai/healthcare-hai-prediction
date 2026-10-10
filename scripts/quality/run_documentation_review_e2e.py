@@ -17,6 +17,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import cast
 
 from scripts.process import clear_git_environment, run_command
 
@@ -58,8 +59,25 @@ SCENARIOS = (
     "prepare_refresh",
     "folder_document_missing",
     "conventional_document_missing",
+    "carry_forward_kept",
+    "carry_forward_changed_document",
+    "carry_forward_invalid_prior",
+    "carry_forward_prefix_only_notes",
+    "carry_forward_needs_refresh",
+    "record_not_ignored",
 )
-GOOD = {"valid", "updated", "historical", "unstaged_document_edit", "extra_format", "prepare_retry", "nothing_staged", "empty_document_inventory"}
+GOOD = {
+    "valid",
+    "updated",
+    "historical",
+    "unstaged_document_edit",
+    "extra_format",
+    "prepare_retry",
+    "nothing_staged",
+    "empty_document_inventory",
+    "carry_forward_kept",
+}
+PROVENANCE = "Carried forward from the review at 2026-09-26T00:00:00Z (blob unchanged): "
 
 
 def git(repo: Path, *args: str) -> str:
@@ -225,6 +243,13 @@ def run_case(scenario: str) -> tuple[bool, str]:
             if any(item["outcome"] != "pending" or item["notes"] for item in draft["documents"]):
                 return False, "prepare must draft pending outcomes, never attest a completed review"
 
+        if scenario.startswith("carry_forward") or scenario == "record_not_ignored":
+            failure = carry_forward_case(repo, scenario, record)
+            if failure is not None:
+                return False, failure
+            if scenario in {"carry_forward_needs_refresh", "record_not_ignored"}:
+                return True, ""
+
         if scenario == "unmerged_index":
             base = git(repo, "write-tree").strip()
             (repo / "app.py").write_text("VALUE = 2\n")
@@ -247,6 +272,45 @@ def run_case(scenario: str) -> tuple[bool, str]:
         valid_pass = result.returncode == 0 and "documentation review: PASS" in output
         valid_rejection = result.returncode != 0 and "documentation review: BLOCK" in output and "Traceback" not in output
         return (valid_pass if expected else valid_rejection), output
+
+
+def carry_forward_case(repo: Path, scenario: str, record: dict[str, object]) -> str | None:
+    """Draft with --refresh --carry-forward after a staged change; return a failure description or None [702] to [708]."""
+    python = str(repo / ".venv/bin/python")
+    module = ["-m", "scripts.quality.documentation_review"]
+    if scenario == "record_not_ignored":
+        (repo / ".git" / "info" / "exclude").write_text(".venv\n__pycache__/\n")
+        result = run_command(python, [*module, "check-untracked"], cwd=repo)
+        output = result.stdout + result.stderr
+        return (
+            None if result.returncode != 0 and "ignored" in output and "Traceback" not in output else "a record that is not ignored must be refused\n" + output
+        )
+    documents = cast(list[dict[str, str]], record["documents"])
+    if scenario == "carry_forward_invalid_prior":
+        record["reviewer"] = ""
+    if scenario == "carry_forward_prefix_only_notes":
+        documents[0]["notes"] = PROVENANCE
+    prior = json.dumps(record, indent=2) + "\n"
+    (repo / RECORD).write_text(prior)
+    if scenario == "carry_forward_changed_document":
+        (repo / "README.md").write_text("# Example\n\nThe command returns two.\n")
+        git(repo, "add", "README.md")
+    (repo / "app.py").write_text("VALUE = 2\n")
+    git(repo, "add", "app.py")
+    args = [*module, "prepare", "--reviewer", "synthetic E2E reviewer", "--reviewed-at", "2026-09-27T00:00:00Z", "--carry-forward"]
+    if scenario == "carry_forward_needs_refresh":
+        result = run_command(python, args, cwd=repo)
+        output = result.stdout + result.stderr
+        unchanged = (repo / RECORD).read_text() == prior
+        return None if result.returncode != 0 and "--refresh" in output and unchanged else "--carry-forward without --refresh must be refused\n" + output
+    result = run_command(python, [*args, "--refresh"], cwd=repo)
+    if result.returncode:
+        return result.stdout + result.stderr
+    readme = next(item for item in json.loads((repo / RECORD).read_text())["documents"] if item["path"] == "README.md")
+    if scenario == "carry_forward_kept":
+        expected = PROVENANCE + "Compared the synthetic document with VALUE = 1."
+        return None if readme["outcome"] == "current" and readme["notes"] == expected else f"unchanged README must carry with provenance once: {readme}"
+    return None if readme["outcome"] == "pending" and not readme["notes"] else f"{scenario}: README must stay pending: {readme}"
 
 
 def commit_hook_case() -> tuple[bool, str]:

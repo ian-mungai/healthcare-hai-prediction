@@ -568,9 +568,12 @@ with `bash scripts/acquisition/run_checks.sh`.
   a workflow or a template. Local commits require an ignored `.documentation_review.json`, a per-document
   review outcome bound to the staged snapshot. Draft it with
   `.venv/bin/python -m scripts.quality.documentation_review prepare --reviewer <name> --reviewed-at <UTC>`
-  after staging, review every document and fill each outcome and note locally. Never stage
+  after staging, then fill each outcome and note locally. Read in full every changed or new document and every
+  unchanged one that the staged change affects. After a staged change, `prepare --refresh --carry-forward` keeps the
+  outcome of each document whose staged content is unchanged and whose earlier entry is valid, with the earlier
+  review time in its note; set it back to `pending` if the change affects it. Never stage
   this record. The local hook validates its freshness against the index and rejects
-  tracked evidence. GitHub Actions checks that the record is untracked and runs
+  tracked or unignored evidence. GitHub Actions checks that the record is untracked and ignored and runs
   synthetic hook tests; it cannot verify the private local review itself.
 - **Removed names:** a name the staged change removes is no longer referenced:
   a deleted script, a command-line flag, an environment variable, a top-level
