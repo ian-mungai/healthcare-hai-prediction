@@ -1,6 +1,7 @@
 -- One row per hospital Medicare and Medicaid EHR incentive attestation, program years 2011 to 2017: a series apart from the
 -- 2023 and 2024 CHPL linkage, with no registry control (failure mode 383). Years and months are typed; the CCN follows the
--- B5a rule.
+-- B5a rule. payment_year is the program's payment-year number (1, 2, 3 and so on), the integer of any digits-only published
+-- text in the INTEGER range, kept in payment_year_text (failure mode 795).
 {{ config(materialized='table') }}
 
 with
@@ -19,7 +20,9 @@ attestations as (
         nullif(trim(program_type), '') as program_type,
         {{ year_number('program_year') }} as program_year,
         nullif(trim(provider_stage_number), '') as provider_stage_number,
-        nullif(trim(payment_year), '') as payment_year,
+        -- Any digits-only text, leading zeros included (00003 is 3); a value outside the INTEGER range is null by try_cast,
+        -- never an error, and fails assert_onc_payment_year_cast [795].
+        case when regexp_full_match(trim(payment_year), '[0-9]+') then try_cast(trim(payment_year) as integer) end as payment_year,
         {{ month_number('attestation_month') }} as attestation_month,
         {{ year_number('attestation_year') }} as attestation_year,
         nullif(trim(mu_definition_year), '') as mu_definition_year,
@@ -31,11 +34,19 @@ attestations as (
         nullif(trim(ehr_product_version), '') as ehr_product_version,
         nullif(trim(product_classification), '') as product_classification,
         nullif(trim(product_setting), '') as product_setting,
-        nullif(trim(product_certification_edition_yr), '') as product_certification_edition_yr
+        nullif(trim(product_certification_edition_yr), '') as product_certification_edition_yr,
+        nullif(trim(payment_year), '') as payment_year_text
     from {{ ref('stg_onc_pi_attestations_csv') }}
+),
+
+keyed as (
+    select
+        *,
+        member_sha256 || ':' || source_row_number as attestation_key
+    from attestations
 )
 
 select
-    *,
-    member_sha256 || ':' || source_row_number as attestation_key
-from attestations
+    * exclude (payment_year_text),
+    payment_year_text
+from keyed

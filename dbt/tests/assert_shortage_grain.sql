@@ -1,11 +1,11 @@
--- Fails for a repeated grain among kept rows: an MMD file with two values for one control, year and county or state; an
+-- Fails for a repeated grain among kept rows: an MMD file with two values for one condition label, year and county or state; an
 -- HPSA file with two rows for one ID, designation date and geography; an MUA file with two rows for one component of one
 -- designation [476].
 select
     'mmd' as checked_source,
-    member_sha256 || ':' || measure_control || ':' || data_year || ':' || coalesce(county_fips, state_fips) as grain
+    member_sha256 || ':' || coalesce(condition_label, '') || ':' || data_year || ':' || coalesce(county_fips, state_fips) as grain
 from {{ ref('int_mmd_prevalence') }}
-group by member_sha256, measure_control, data_year, geography_level, coalesce(county_fips, state_fips)
+group by member_sha256, condition_label, data_year, geography_level, coalesce(county_fips, state_fips)
 having count(*) > 1
 union all
 select

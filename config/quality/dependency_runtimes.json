@@ -20,6 +20,8 @@
         "scripts/lakehouse/checksums.py",
         "scripts/lakehouse/dictionary.py",
         "scripts/lakehouse/file_readers.py",
+        "scripts/lakehouse/pins.py",
+        "scripts/lakehouse/run_pins_e2e.py",
         "scripts/lakehouse/run_bronze_e2e.py",
         "scripts/lakehouse/session.py",
         "scripts/lakehouse/smoke.py"

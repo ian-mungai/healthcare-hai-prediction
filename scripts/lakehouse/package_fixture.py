@@ -57,8 +57,16 @@ SUBSET_SQL = (
     "SELECT count(*), coalesce(sum(md5_number_lower(CAST(struct_pack({pack}) AS VARCHAR))::HUGEINT), 0)::VARCHAR, "
     'coalesce(bit_xor(md5_number(CAST(struct_pack({pack}) AS VARCHAR))), 0)::VARCHAR FROM main."{name}";'
 )
+# The same over the rows whose grain key the baseline build (attached as base) also has.
+KEYED_SUBSET_SQL = SUBSET_SQL.removesuffix(";").replace('FROM main."{name}"', 'FROM main."{name}" WHERE "{key}" IN (SELECT "{key}" FROM base.main."{name}");')
+# The grain key of every row the baseline does not have, one line per row so duplicates show; a null key is never a
+# baseline key, so it is listed as an added row instead of escaping both comparisons.
+ADDED_KEYS_SQL = (
+    'SELECT CASE WHEN m."{key}" IS NULL THEN \'(null key)\' ELSE CAST(m."{key}" AS VARCHAR) END AS added FROM main."{name}" AS m '
+    'WHERE m."{key}" IS NULL OR NOT EXISTS (SELECT 1 FROM base.main."{name}" AS b WHERE b."{key}" = m."{key}");'
+)
 # The wave 0 contracts and the beab859 fixture base build the baseline was taken from (in the main checkout).
-CONTRACTS = ROOT / "plans" / "parallel_work_20261010" / "contracts"
+CONTRACTS = ROOT / "data_contracts" / "lakehouse"
 BASE_BUILD = Path("data/analytics/dbt/e2e/base/staging.duckdb")
 
 
@@ -97,13 +105,13 @@ def docker_run(args: list[str], mounts: list[tuple[Path, str, bool]], environmen
     return result.returncode, result.stdout, result.stderr
 
 
-def duckdb_query(database: Path, sql: str, plan: dict[str, Any], attach: Path | None = None) -> list[list[str]]:
-    """Run SQL against a database file opened read-only in the pinned image and return CSV rows."""
+def duckdb_query(database: Path, sql: str, plan: dict[str, Any], attach: Path | None = None, alias: str = "lakehouse") -> list[list[str]]:
+    """Run SQL against a database file opened read-only in the pinned image, with one more file attached read-only."""
     mounts = [(database.parent.resolve(), "/workspace/in", True), (ROOT / "services/analytics/resources.sql", "/opt/analytics/resources.sql", True)]
     prefix = ""
     if attach is not None:
         mounts.append((attach.parent.resolve(), "/workspace/attach", True))
-        prefix = f"ATTACH '/workspace/attach/{attach.name}' AS lakehouse (READ_ONLY);\n"
+        prefix = f"ATTACH '/workspace/attach/{attach.name}' AS {alias} (READ_ONLY);\n"
     environment = {key: plan["environment"][key] for key in ("JOB_MEMORY_LIMIT", "DUCKDB_MEMORY_LIMIT", "JOB_THREADS")}
     args = ["-readonly", f"/workspace/in/{database.name}", "-cmd", ".read /opt/analytics/resources.sql", "-csv", "-noheader", "-c", prefix + sql]
     code, stdout, stderr = docker_run(args, mounts, environment, "duckdb")
@@ -205,9 +213,12 @@ def make_case(name: str, plan: dict[str, Any], patches: list[Path]) -> Case:
     staging.DBT_SNAPSHOT = ROOT / "dbt"
     staging.fixture_project(folder, staging.BASE, frozenset())
     for patch in patches:
-        applied = run_command("git", ["apply", "-p2", str(patch.resolve())], cwd=folder / "project", timeout=60)
-        if applied.returncode:
-            raise FixtureError(f"patch {patch.name} does not apply to dbt/: {applied.stderr.strip()[-300:]}")
+        # The case folder sits inside the repository's ignored data/ folder; without the ceiling, git apply resolves the
+        # patch's paths from the repository root and skips every file outside the case project without an error.
+        environment = {**os.environ, "GIT_CEILING_DIRECTORIES": str(folder.resolve())}
+        applied = run_command("git", ["apply", "-p2", "--verbose", str(patch.resolve())], cwd=folder / "project", env=environment, timeout=60)
+        if applied.returncode or "Applied patch" not in applied.stderr:
+            raise FixtureError(f"patch {patch.name} does not apply to dbt/: {(applied.stderr or 'no file was patched').strip()[-300:]}")
     objects = staging.BASE
     (folder / "bronze.csv").write_text(staging.fixture_csv(objects))
     (folder / "copies.csv").write_text(staging.copies_csv(objects))
@@ -279,11 +290,14 @@ def manifest_sha256(case: Case) -> str:
     return hashlib.sha256(json.dumps(nodes).encode()).hexdigest()
 
 
-def subset_fingerprint(database: Path, model: str, columns: list[str], plan: dict[str, Any]) -> list[str]:
-    """Rows and content of one model over the named columns, read-only [737]."""
+def subset_fingerprint(database: Path, model: str, columns: list[str], plan: dict[str, Any], baseline_keys: tuple[Path, str] | None = None) -> list[str]:
+    """Rows and content of one model over the named columns, read-only; with ``baseline_keys`` (the baseline build and
+    the grain key), only the rows whose key the baseline has, so documented added fixture rows are left out [737]."""
     pack = ", ".join(f'"{column}" := "{column}"' for column in columns)
-    sql = SUBSET_SQL.format(pack=pack, name=model)
-    return duckdb_query(database, sql, plan)[0]
+    if baseline_keys is None:
+        return duckdb_query(database, SUBSET_SQL.format(pack=pack, name=model), plan)[0]
+    base_build, key = baseline_keys
+    return duckdb_query(database, KEYED_SUBSET_SQL.format(pack=pack, name=model, key=key), plan, attach=base_build, alias="base")[0]
 
 
 def compare(case: Case, selector: dict[str, Any], plan: dict[str, Any]) -> dict[str, str]:
@@ -292,11 +306,35 @@ def compare(case: Case, selector: dict[str, Any], plan: dict[str, Any]) -> dict[
     contract = json.loads(CONTRACTS.joinpath("silver_columns.json").read_text())["models"]
     base_build = run_lock.main_checkout(ROOT) / BASE_BUILD
     built = case.folder / "staging.duckdb"
+    added = added_rows(selector)
     outcome = {}
+
+    def ours(model: str, columns: list[str]) -> list[str]:
+        """The case's fingerprint, on the baseline's keys when the selector documents added fixture rows."""
+        return subset_fingerprint(built, model, columns, plan, (base_build, added[model][0]) if model in added else None)
+
+    def extra(model: str) -> str | None:
+        """None when the rows beyond the baseline's keys are exactly the documented ones, else what differs [737]."""
+        if model not in added:
+            return None
+        key, documented = added[model]
+        found = sorted(row[0] for row in duckdb_query(built, ADDED_KEYS_SQL.format(name=model, key=key), plan, attach=base_build, alias="base"))
+        if found == documented:
+            return None
+        return f"added rows {found} against documented {documented}"
+
+    def verdict(model: str, same: str, mine: list[str], theirs: list[str]) -> str:
+        """The comparison's verdict; documented added rows must all be present and nothing else added."""
+        if mine != theirs:
+            return f"{same.replace('equal', 'differs')}: rows {mine[0]} against {theirs[0]}"
+        problem = extra(model)
+        if problem:
+            return f"{same.replace('equal', 'differs')}: {problem}"
+        return same + (f" ({len(added[model][1])} documented fixture rows added)" if model in added else "")
+
     for model in selector["compare_unchanged_with_baseline"]:
         columns = [column for column, _ in baseline[model]["columns"]]
-        ours, theirs = subset_fingerprint(built, model, columns, plan), subset_fingerprint(base_build, model, columns, plan)
-        outcome[model] = "equal" if ours == theirs else f"differs: rows {ours[0]} against {theirs[0]}"
+        outcome[model] = verdict(model, "equal", ours(model, columns), subset_fingerprint(base_build, model, columns, plan))
     for model in selector["documented_changes"]:
         changes = contract[model]["changes"]
         if "grain" in changes:
@@ -304,9 +342,21 @@ def compare(case: Case, selector: dict[str, Any], plan: dict[str, Any]) -> dict[
             continue
         skip = set(changes.get("drop", [])) | {column for column, _, _ in changes.get("retype", [])}
         columns = [column for column, _ in baseline[model]["columns"] if column not in skip]
-        ours, theirs = subset_fingerprint(built, model, columns, plan), subset_fingerprint(base_build, model, columns, plan)
-        outcome[model] = "equal on unchanged columns" if ours == theirs else f"differs on unchanged columns: rows {ours[0]} against {theirs[0]}"
+        outcome[model] = verdict(model, "equal on unchanged columns", ours(model, columns), subset_fingerprint(base_build, model, columns, plan))
     return outcome
+
+
+def added_rows(selector: dict[str, Any]) -> dict[str, tuple[str, list[str]]]:
+    """Each model's grain key and sorted documented added keys; any other form is refused before a build [737]."""
+    added = {}
+    for model, entry in (selector.get("fixture_rows_added") or {}).items():
+        rows = entry.get("rows") if isinstance(entry, dict) else None
+        if not isinstance(entry.get("key") if isinstance(entry, dict) else None, str) or not isinstance(rows, list) or not rows:
+            raise FixtureError(f"fixture_rows_added.{model} must be {{key: <grain key column>, rows: [<each added key>]}}")
+        if not all(isinstance(row, str) and row for row in rows):
+            raise FixtureError(f"fixture_rows_added.{model}.rows must list each added key as a non-empty string")
+        added[model] = (entry["key"], sorted(rows))
+    return added
 
 
 def check(package: str, selector_path: Path, patches: list[Path], record: bool, approved: Path | None, expected_failures: list[str]) -> dict[str, Any]:
@@ -316,13 +366,17 @@ def check(package: str, selector_path: Path, patches: list[Path], record: bool, 
     if selector["package"] != package:
         raise FixtureError(f"{selector_path.name} is the selector of {selector['package']}, not {package}")
     selector_sha256 = hashlib.sha256(selector_path.read_bytes()).hexdigest()
+    added_rows(selector)
     expression = [f"+{test}" for test in selector["required_tests"]]
+    # Tests the disposition list gives to another owner would join through cautious selection when their parents are
+    # selected; they are excluded, never deleted, so the project under test stays the package's own.
+    exclusion = ["--exclude", *selector["exclude_tests"]] if selector.get("exclude_tests") else []
     # Records live outside the case folder, which every check rebuilds, so a recorded selection survives [889].
     folder = OUT / "records" / package.lower()
     folder.mkdir(parents=True, exist_ok=True)
     with reservation() as plan:
         case = make_case(f"check_{package.lower()}", plan, patches)
-        nodes = selection(case, expression)
+        nodes = selection(case, [*expression, *exclusion])
         missing = sorted(set(selector["required_tests"]) - {node_name(node) for node in nodes})
         effective = {"package": package, "selector_sha256": selector_sha256, "manifest_sha256": manifest_sha256(case), "nodes": nodes}
         artifact = folder / "effective_selection.json"
@@ -338,7 +392,7 @@ def check(package: str, selector_path: Path, patches: list[Path], record: bool, 
             problems += [
                 f"{key} differs from the approved selection" for key in ("selector_sha256", "manifest_sha256", "nodes") if accepted[key] != effective[key]
             ]
-        code, tail, statuses = dbt(case, ["build", "--select", *expression, "--indirect-selection", "cautious"])
+        code, tail, statuses = dbt(case, ["build", "--select", *expression, *exclusion, "--indirect-selection", "cautious"])
         not_passed = sorted(node for node, status in statuses.items() if status not in ("success", "pass"))
         problems += [f"node {node} {statuses[node]}" for node in not_passed]
         problems += [
@@ -352,7 +406,7 @@ def check(package: str, selector_path: Path, patches: list[Path], record: bool, 
         for item in expected_failures:
             name, patch, test = item.split(":", 2)
             mutant = make_case(f"check_{package.lower()}_{name}", plan, [*patches, Path(patch)])
-            _, _, mutant_statuses = dbt(mutant, ["build", "--select", f"+{test}", "--indirect-selection", "cautious"])
+            _, _, mutant_statuses = dbt(mutant, ["build", "--select", f"+{test}", *exclusion, "--indirect-selection", "cautious"])
             if not mutant_statuses:
                 problems.append(f"expected failure {name}: the mutated build wrote no results")
             failed = sorted(node_name(node) for node, status in mutant_statuses.items() if status in ("fail", "error"))
@@ -382,9 +436,9 @@ def node_name(unique_id: str) -> str:
     return unique_id.split(".")[2]
 
 
-def selection(case: Case, expression: list[str]) -> list[str]:
-    """The node IDs dbt selects for the expression with cautious indirect selection, sorted."""
-    args = ["ls", "--select", *expression, "--indirect-selection", "cautious", "--output", "json", "--output-keys", "unique_id", "--quiet"]
+def selection(case: Case, arguments: list[str]) -> list[str]:
+    """The node IDs dbt selects for the selection arguments (with any --exclude) and cautious indirect selection, sorted."""
+    args = ["ls", "--select", *arguments, "--indirect-selection", "cautious", "--output", "json", "--output-keys", "unique_id", "--quiet"]
     code, stdout, stderr = docker_run([*args, "--target", "fixture", *case.project_flags], case.mounts, case.dbt_environment, "dbt")
     if code:
         raise FixtureError(f"dbt ls failed: {(stdout + stderr).strip()[-500:]}")

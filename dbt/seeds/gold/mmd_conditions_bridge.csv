@@ -1,0 +1,83 @@
+fact,measure_key,value_column,vintage_start,vintage_end,measure_control,review_decision,source_seed,source_row
+fct_mmd_prevalence,Acute Myocardial Infarction,value_number,,,C258.01,hold_definition,mmd_conditions,1
+fct_mmd_prevalence,"Alzheimer's Disease, Related Disorders, or Senile Dementia",value_number,,,C258.02,hold_definition,mmd_conditions,2
+fct_mmd_prevalence,Anemia,value_number,,,C258.03,hold_definition,mmd_conditions,3
+fct_mmd_prevalence,Asthma,value_number,,,C258.04,hold_definition,mmd_conditions,4
+fct_mmd_prevalence,Atrial Fibrillation,value_number,,,C258.05,hold_definition,mmd_conditions,5
+fct_mmd_prevalence,Benign Prostatic Hyperplasia,value_number,,,C258.06,hold_definition,mmd_conditions,6
+fct_mmd_prevalence,"Cancer, Colorectal, Breast, Prostate, Lung",value_number,,,C258.07,hold_definition,mmd_conditions,7
+fct_mmd_prevalence,Cancer - Breast,value_number,,,C258.08,hold_definition,mmd_conditions,8
+fct_mmd_prevalence,Cancer - Colorectal,value_number,,,C258.09,hold_definition,mmd_conditions,9
+fct_mmd_prevalence,Cancer - Endometrial,value_number,,,C258.10,hold_definition,mmd_conditions,10
+fct_mmd_prevalence,Cancer - Lung,value_number,,,C258.11,hold_definition,mmd_conditions,11
+fct_mmd_prevalence,Cancer - Prostate,value_number,,,C258.12,hold_definition,mmd_conditions,12
+fct_mmd_prevalence,Cancer - Urologic,value_number,,,C258.13,hold_definition,mmd_conditions,13
+fct_mmd_prevalence,Cataract,value_number,,,C258.14,hold_definition,mmd_conditions,14
+fct_mmd_prevalence,Chronic Kidney Disease,value_number,,,C258.15,hold_definition,mmd_conditions,15
+fct_mmd_prevalence,Chronic Obstructive Pulmonary Disease,value_number,,,C258.16,hold_definition,mmd_conditions,16
+fct_mmd_prevalence,Depression,value_number,,,C258.17,hold_definition,mmd_conditions,17
+fct_mmd_prevalence,Diabetes,value_number,,,C258.18,hold_definition,mmd_conditions,18
+fct_mmd_prevalence,Disability (reason for Medicare eligibility),value_number,,,C258.19,hold_definition,mmd_conditions,19
+fct_mmd_prevalence,End-stage renal disease (reason for Medicare eligibility),value_number,,,C258.20,hold_definition,mmd_conditions,20
+fct_mmd_prevalence,Glaucoma,value_number,,,C258.21,hold_definition,mmd_conditions,21
+fct_mmd_prevalence,Heart Failure and Non-Ischemic Heart Disease,value_number,,,C258.22,hold_definition,mmd_conditions,22
+fct_mmd_prevalence,Hip/Pelvic Fracture,value_number,,,C258.23,hold_definition,mmd_conditions,23
+fct_mmd_prevalence,Hyperlipidemia,value_number,,,C258.24,hold_definition,mmd_conditions,24
+fct_mmd_prevalence,Hypertension,value_number,,,C258.25,hold_definition,mmd_conditions,25
+fct_mmd_prevalence,Hypothyroidism,value_number,,,C258.26,hold_definition,mmd_conditions,26
+fct_mmd_prevalence,Ischemic Heart Disease,value_number,,,C258.27,hold_definition,mmd_conditions,27
+fct_mmd_prevalence,Obesity,value_number,,,C258.28,hold_definition,mmd_conditions,28
+fct_mmd_prevalence,Osteoporosis With or Without Pathological Fracture,value_number,,,C258.29,hold_definition,mmd_conditions,29
+fct_mmd_prevalence,Parkinson's Diseases and Secondary Parkinsonism,value_number,,,C258.30,hold_definition,mmd_conditions,30
+fct_mmd_prevalence,"Pneumonia, All-cause",value_number,,,C258.31,hold_definition,mmd_conditions,31
+fct_mmd_prevalence,Rheumatoid Arthritis/Osteoarthritis,value_number,,,C258.32,hold_definition,mmd_conditions,32
+fct_mmd_prevalence,Schizophrenia and Other Psychotic Disorders,value_number,,,C258.33,hold_definition,mmd_conditions,33
+fct_mmd_prevalence,Stroke/Transient Ischemic Attack,value_number,,,C258.34,hold_definition,mmd_conditions,34
+fct_mmd_prevalence,0 of the claims-based conditions,value_number,,,C258.35,hold_definition,mmd_conditions,35
+fct_mmd_prevalence,1 of the claims-based conditions,value_number,,,C258.36,hold_definition,mmd_conditions,36
+fct_mmd_prevalence,2 of the claims-based conditions,value_number,,,C258.37,hold_definition,mmd_conditions,37
+fct_mmd_prevalence,3+ of the claims-based conditions,value_number,,,C258.38,hold_definition,mmd_conditions,38
+fct_mmd_prevalence,Congenital and Developmental Conditions,value_number,,,C258.39,hold_definition,mmd_conditions,39
+fct_mmd_prevalence,"ADHD, Conduct Disorders, and Hyperkinetic Syndrome",value_number,,,C258.40,hold_definition,mmd_conditions,40
+fct_mmd_prevalence,Autism Spectrum Disorders,value_number,,,C258.41,hold_definition,mmd_conditions,41
+fct_mmd_prevalence,Cerebral Palsy,value_number,,,C258.42,hold_definition,mmd_conditions,42
+fct_mmd_prevalence,Cystic Fibrosis and Other Metabolic Developmental Disorders,value_number,,,C258.43,hold_definition,mmd_conditions,43
+fct_mmd_prevalence,Intellectual Disabilities and Related Conditions,value_number,,,C258.44,hold_definition,mmd_conditions,44
+fct_mmd_prevalence,Learning Disabilities,value_number,,,C258.45,hold_definition,mmd_conditions,45
+fct_mmd_prevalence,Liver Conditions,value_number,,,C258.46,hold_definition,mmd_conditions,46
+fct_mmd_prevalence,"Liver Disease, Cirrhosis and Other Liver Conditions (except Viral Hepatitis)",value_number,,,C258.47,hold_definition,mmd_conditions,47
+fct_mmd_prevalence,Viral Hepatitis (General),value_number,,,C258.48,hold_definition,mmd_conditions,48
+fct_mmd_prevalence,Anxiety Disorders,value_number,,,C258.49,hold_definition,mmd_conditions,49
+fct_mmd_prevalence,Bipolar Disorder,value_number,,,C258.50,hold_definition,mmd_conditions,50
+fct_mmd_prevalence,Depressive Disorders,value_number,,,C258.51,hold_definition,mmd_conditions,51
+fct_mmd_prevalence,Personality Disorders,value_number,,,C258.52,hold_definition,mmd_conditions,52
+fct_mmd_prevalence,Post-Traumatic Stress Disorder (PTSD),value_number,,,C258.53,hold_definition,mmd_conditions,53
+fct_mmd_prevalence,Schizophrenia,value_number,,,C258.54,hold_definition,mmd_conditions,54
+fct_mmd_prevalence,Tobacco Use Disorders,value_number,,,C258.55,hold_definition,mmd_conditions,55
+fct_mmd_prevalence,Overarching Opioid Use Disorder,value_number,,,C258.56,hold_definition,mmd_conditions,56
+fct_mmd_prevalence,Diagnosis- and Procedure-code basis for OUD,value_number,,,C258.57,hold_definition,mmd_conditions,57
+fct_mmd_prevalence,Opioid-related Hospitalizations/ED Visits,value_number,,,C258.58,hold_definition,mmd_conditions,58
+fct_mmd_prevalence,Utilization of Medication-Assisted Therapy (MAT),value_number,,,C258.59,hold_definition,mmd_conditions,59
+fct_mmd_prevalence,Mobility Limitations and Chronic Pain Conditions,value_number,,,C258.60,hold_definition,mmd_conditions,60
+fct_mmd_prevalence,"Fibromyalgia, Chronic Pain and Fatigue",value_number,,,C258.61,hold_definition,mmd_conditions,61
+fct_mmd_prevalence,Mobility Impairments,value_number,,,C258.62,hold_definition,mmd_conditions,62
+fct_mmd_prevalence,Multiple Sclerosis and Transverse Myelitis,value_number,,,C258.63,hold_definition,mmd_conditions,63
+fct_mmd_prevalence,Muscular Dystrophy,value_number,,,C258.64,hold_definition,mmd_conditions,64
+fct_mmd_prevalence,Neurological Conditions,value_number,,,C258.65,hold_definition,mmd_conditions,65
+fct_mmd_prevalence,Epilepsy,value_number,,,C258.66,hold_definition,mmd_conditions,66
+fct_mmd_prevalence,Migraine and Other Chronic Headache,value_number,,,C258.67,hold_definition,mmd_conditions,67
+fct_mmd_prevalence,Spina Bifida and Other Congenital Anomalies of the Nervous System,value_number,,,C258.68,hold_definition,mmd_conditions,68
+fct_mmd_prevalence,Spinal Cord Injury,value_number,,,C258.69,hold_definition,mmd_conditions,69
+fct_mmd_prevalence,Traumatic Brain Injury and Nonpsychotic Mental Disorders due to Brain Damage,value_number,,,C258.70,hold_definition,mmd_conditions,70
+fct_mmd_prevalence,Other Chronic or Disabling Conditions,value_number,,,C258.71,hold_definition,mmd_conditions,71
+fct_mmd_prevalence,Human Immunodeficiency Virus and/or Acquired Immunodeficiency Syndrome (HIV/AIDS),value_number,,,C258.72,hold_definition,mmd_conditions,72
+fct_mmd_prevalence,Leukemias and Lymphomas,value_number,,,C258.73,hold_definition,mmd_conditions,73
+fct_mmd_prevalence,Peripheral Vascular Disease (PVD),value_number,,,C258.74,hold_definition,mmd_conditions,74
+fct_mmd_prevalence,Pressure Ulcers and Chronic Ulcers,value_number,,,C258.75,hold_definition,mmd_conditions,75
+fct_mmd_prevalence,Sensory - Blindness and Visual Impairment,value_number,,,C258.76,hold_definition,mmd_conditions,76
+fct_mmd_prevalence,Sensory - Deafness and Hearing Impairment,value_number,,,C258.77,hold_definition,mmd_conditions,77
+fct_mmd_prevalence,Sickle Cell Disease,value_number,,,C258.78,hold_definition,mmd_conditions,78
+fct_mmd_prevalence,Other Developmental Delays,value_number,,,C258.79,hold_definition,mmd_conditions,79
+fct_mmd_prevalence,Alcohol Use Disorders,value_number,,,C258.80,hold_definition,mmd_conditions,80
+fct_mmd_prevalence,Drug Use Disorders,value_number,,,C258.81,hold_definition,mmd_conditions,81
+fct_mmd_prevalence,,,,,C258,hold_definition,shortage_measures,4

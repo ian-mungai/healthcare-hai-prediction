@@ -1,16 +1,20 @@
-"""Write the MMD condition map seed from the reviewed MMD collection plans (failure modes 468 and 472).
+"""Write the MMD condition units seed and check the gold MMD bridge against the reviewed MMD collection plans (failure modes
+468, 472 and 895 to 899).
 
 Run from the repository root:
 
-    .venv/bin/python -m scripts.lakehouse.mmd_conditions            # write dbt/seeds/mmd_conditions.csv
-    .venv/bin/python -m scripts.lakehouse.mmd_conditions --check    # compare with the committed seed
+    .venv/bin/python -m scripts.lakehouse.mmd_conditions            # write dbt/seeds/mmd_condition_units.csv
+    .venv/bin/python -m scripts.lakehouse.mmd_conditions --check    # compare the units seed and the gold MMD bridge with the plans
 
 Each MMD file carries one condition label. The two collection plans that authorized the MMD captures record the control,
 condition code, menu label and geography of every condition: 79 in the first plan and the user additions C258.80 and
-C258.81 in the second. Each plan must match the SHA-256 the acquisition code pins. A control's unit is a rate per 100,000
+C258.81 in the second. Each plan must match the SHA-256 the acquisition code pins; the plans are read from the main
+checkout's ignored data folder, so the command also runs in a linked worktree. A control's unit is a rate per 100,000
 where the registry's exact field says so, otherwise a percentage. A label in two controls, a control twice or a control
-missing from the registry and its additions stops the run. Failure modes:
-plans/group_c_20261006/failure_modes_c5.md.
+missing from the registry and its additions stops the run. The bridge (`dbt/seeds/gold/mmd_conditions_bridge.csv`) is
+only checked, never written: each plan label maps to its control exactly once, and the one other row is the C258 parent
+with no label. Failure modes: plans/group_c_20261006/failure_modes_c5.md and
+plans/wave1_20261011/gate/mmd_conditions_failure_modes.md.
 """
 
 from __future__ import annotations
@@ -25,12 +29,16 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from scripts.acquisition.mmd_api_contract import PLANS
+from scripts.lakehouse.run_lock import main_checkout
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SEED = REPO_ROOT / "dbt/seeds/mmd_conditions.csv"
+UNITS = REPO_ROOT / "dbt/seeds/mmd_condition_units.csv"
+BRIDGE = REPO_ROOT / "dbt/seeds/gold/mmd_conditions_bridge.csv"
+BRIDGE_FACT = "fct_mmd_prevalence"
+PARENT = "C258"
 REGISTRY = REPO_ROOT / "config/acquisition/source_registry.json"
 ADDITIONS = REPO_ROOT / "config/acquisition/registry_additions.json"
-COLUMNS = ("measure_control", "condition_code", "condition_label", "geography_level", "value_unit")
+UNIT_COLUMNS = ("condition_label", "value_unit")
 GEOGRAPHY = {"c": "county", "s": "state"}
 RATE_MARK = "rate per 100000"
 
@@ -43,7 +51,7 @@ def plan_conditions(plans: Mapping[str, Path] = PLANS) -> list[dict[str, str]]:
     """Return every condition of the pinned plans; a plan whose content changed stops the run."""
     conditions: list[dict[str, str]] = []
     for pinned, path in sorted(plans.items(), key=lambda item: str(item[1])):
-        raw = (REPO_ROOT / path).read_bytes()
+        raw = (main_checkout(REPO_ROOT) / path).read_bytes()
         if hashlib.sha256(raw).hexdigest() != pinned:
             raise ConditionError(f"collection plan {path} does not match its pinned SHA-256")
         conditions.extend(json.loads(raw)["conditions"])
@@ -83,36 +91,67 @@ def rows_for(conditions: Iterable[Mapping[str, str]], fields: Mapping[str, str])
 
 
 def build() -> list[dict[str, str]]:
-    """Return the seed rows from the pinned plans and the registry."""
+    """Return one row per control from the pinned plans and the registry."""
     return rows_for(plan_conditions(), registry_fields())
 
 
-def as_csv(rows: Iterable[Mapping[str, str]]) -> str:
-    """Return the rows as the seed's CSV text."""
+def units_csv(rows: Iterable[Mapping[str, str]]) -> str:
+    """Return the units seed's CSV text: each label and its unit, in control order [895]."""
     buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=COLUMNS, lineterminator="\n")
+    writer = csv.DictWriter(buffer, fieldnames=UNIT_COLUMNS, lineterminator="\n", extrasaction="ignore")
     writer.writeheader()
     writer.writerows(rows)
     return buffer.getvalue()
 
 
+def bridge_problems(rows: Iterable[Mapping[str, str]], bridge: Path = BRIDGE) -> list[str]:
+    """Each way the bridge's MMD rows differ from the plans' label-to-control pairs [896] [898]."""
+    if not bridge.exists():
+        return [f"{bridge.relative_to(REPO_ROOT)} is missing"]
+    expected = {row["condition_label"]: row["measure_control"] for row in rows}
+    seen: dict[str, int] = {}
+    problems = []
+    with bridge.open(newline="") as handle:
+        for number, line in enumerate(csv.DictReader(handle), start=2):
+            if line["fact"] != BRIDGE_FACT:
+                continue
+            label, control = line["measure_key"], line["measure_control"]
+            if not label:
+                if control != PARENT:
+                    problems.append(f"bridge line {number}: a row with no label must be the {PARENT} parent, not {control}")
+                continue
+            seen[label] = seen.get(label, 0) + 1
+            if label not in expected:
+                problems.append(f"bridge line {number}: label {label!r} is not in the collection plans")
+            elif control != expected[label]:
+                problems.append(f"bridge line {number}: label {label!r} maps to {control}, the plans say {expected[label]}")
+    problems += [f"bridge: label {label!r} appears {count} times" for label, count in sorted(seen.items()) if count > 1]
+    problems += [f"bridge: plan label {label!r} ({expected[label]}) is missing" for label in sorted(expected.keys() - seen.keys())]
+    return problems
+
+
 def main() -> int:
-    """Rebuild the MMD condition map and write or check the committed seed."""
+    """Write the units seed, or check it and the bridge against the plans; the bridge is never written [899]."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--check", action="store_true", help="compare with the committed seed instead of writing it")
+    parser.add_argument("--check", action="store_true", help="compare the units seed and the bridge with the plans instead of writing the seed")
     args = parser.parse_args()
     try:
-        text = as_csv(build())
+        rows = build()
     except ConditionError as error:
         sys.stderr.write(f"mmd conditions: {error}\n")
         return 1
-    if args.check:
-        same = SEED.exists() and SEED.read_text() == text
-        sys.stdout.write(f"mmd conditions: {'committed seed reproduced' if same else 'committed seed differs from the plans'}\n")
-        return 0 if same else 1
-    SEED.write_text(text)
-    sys.stdout.write(f"mmd conditions: {text.count(chr(10)) - 1} controls\n")
-    return 0
+    text = units_csv(rows)
+    if not args.check:
+        UNITS.write_text(text)
+        sys.stdout.write(f"mmd conditions: {len(rows)} labels written to {UNITS.relative_to(REPO_ROOT)}\n")
+        return 0
+    problems = [] if UNITS.exists() and UNITS.read_text() == text else [f"{UNITS.relative_to(REPO_ROOT)} differs from the plans or is missing"]
+    problems += bridge_problems(rows)
+    for problem in problems:
+        sys.stderr.write(f"mmd conditions: {problem}\n")
+    if not problems:
+        sys.stdout.write(f"mmd conditions: units seed reproduced; bridge matches {len(rows)} plan labels\n")
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":

@@ -1,18 +1,18 @@
--- One row per MMD file row: the control from the reviewed condition label map (failure mode 468), so C258.01's earlier
--- captures, whose names carry no control, are mapped too; the control in the file name is kept to check it. County codes
--- are left-padded and state rows keep a 2-character state code (469); county rows without a name (codes ending 990) are
--- unknown counties (470); every zero keeps a possible-suppression flag (471); the unit comes from the map (472); the
--- denominator band stays as published (473).
+-- One row per MMD file row, by the published condition label; the control in the file name stays as file_control (it is
+-- null for C258.01's earlier captures, whose names carry no control). County codes are left-padded and state rows keep a
+-- 2-character state code (469); county rows without a name (codes ending 990) are unknown counties (470); every zero keeps
+-- a possible-suppression flag (471); the unit comes from the reviewed mmd_condition_units seed by the published label
+-- (472), and a label without a unit is left null for assert_mmd_labels_have_unit to fail; the denominator band stays as
+-- published (473). The control map is a gold bridge.
 {{ config(materialized='table') }}
 
 with
 
-conditions as (
+units as (
     select
-        measure_control,
         condition_label,
         value_unit
-    from {{ ref('mmd_conditions') }}
+    from {{ ref('mmd_condition_units') }}
 ),
 
 typed as (
@@ -42,7 +42,6 @@ coded as (
 select
     coded.member_sha256,
     coded.source_row_number,
-    conditions.measure_control,
     coded.file_control,
     coded.condition_label,
     coded.data_year,
@@ -57,11 +56,11 @@ select
     coded.denominator_band,
     coded.value_published,
     coded.value_number,
-    conditions.value_unit,
+    units.value_unit,
     coalesce(coded.value_number = 0, false) as is_possible_suppression,
     coded.geography_level = 'county' and coded.county_name is null as is_unknown_county,
     {{ county_scope('coded.county_fips') }} as county_scope,
     coalesce(left(coded.county_fips, 2), lpad(trim(coded.fips_published), 2, '0')) = '09' as is_connecticut,
     coded.member_sha256 || ':' || coded.source_row_number as mmd_row_key
 from coded
-left join conditions on coded.condition_label = conditions.condition_label
+left join units on coded.condition_label = units.condition_label

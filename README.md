@@ -51,11 +51,12 @@ Information, ownership, Medicare inpatient, HHS hospital capacity, ONC Promoting
 process and patient-experience tables. It keeps one row
 per HAI and Care Compare measurement window, one row per hospital cost report, one Provider of
 Services row per hospital and snapshot and one case-mix index per hospital and payment-rule year.
-A hospital-year spine lines each hospital and calendar-year HAI window up with the Provider of
-Services snapshot and the case-mix index from before the window. It also flags the model population.
-Under the layer design approved on October 10 2026 (the refactor is pending), silver does only the standard cleansing
-steps at each source's atomic grain and is not stored. Gold stores atomic facts and dimensions; the hospital-window
-spine and alignment move to the feature phase. Modeling and serving come later. The [Architecture](#architecture)
+A hospital-year spine, which lines each hospital and calendar-year HAI window up with the Provider of
+Services snapshot and the case-mix index from before the window and flags the model population, is saved in
+`features/` for the feature phase. Under the layer design approved on October 10 2026, silver does only the standard
+cleansing steps at each source's atomic grain and is not stored. Gold will store atomic facts and dimensions; gold
+control bridge seeds already map each published key to its registry control. The hospital-window spine and the as-of
+alignment are computed in the feature phase. Modeling and serving come later. The [Architecture](#architecture)
 diagram shows what is built and what is planned.
 
 ## Install
@@ -216,49 +217,63 @@ scripts/lakehouse/ui.sh                                             # DuckDB UI 
 
 The dbt staging layer (`dbt/`, dbt-core with dbt-duckdb in the analytics image) reads bronze read-only. Its E2E builds
 the models on synthetic fixtures, including cases that must fail one named test, then on the real bronze tables twice;
-it reconciles each staging table with bronze. Where a text file and a workbook hold the same IPPS or occupational-mix
+it reconciles each staging table with bronze. Before each real build it pins the current snapshot of every mapped
+bronze table in a new run folder and verifies after the build that none moved (`scripts/lakehouse/pins.py`, run in the
+Spark container as `catalog job pins`); a moved table fails the run. Where a text file and a workbook hold the same IPPS or occupational-mix
 table, staging reads the text file and drops only the workbook sheets that a selected text file of the same release
 matches row for row; every other sheet stays selected (`stg_bronze__sheet_selection`). `scripts.lakehouse.ipps_file_labels` regenerates the IPPS and
 occupational-mix label and twin seeds from the S3 manifests; `--check` confirms the committed seeds. `int_pos_hospital_snapshots`
 types the Provider of Services hospital rows; each file is dated by the catalog coverage in `dbt/seeds/pos_file_periods.csv`,
-which `scripts.lakehouse.pos_file_periods` rebuilds from the S3 manifests and the local acquisition job plans. The case-mix index
-models read the unadjusted CMI by exact header name (`dbt/seeds/cmi_layout_columns.csv`), keep the transfer-adjusted CMI in its
-own column and choose one CMI per hospital and rule year from the year's best rule stage; disagreeing files are held in
-`int_cmi_holds`. `int_hospital_spine` has one row per hospital and calendar-year HAI window, as of the window start: the
-Provider of Services snapshot that ends in the 12 months before the window and the CMI of the fiscal year that ends before
-it (`int_cmi_hospital_data_years`), with the primary and sensitivity population flags. A window missing its own snapshot
-takes its state and county from the same hospital's other snapshots within 24 months, then the enrollment file, then the
-CCN's state code. A county can also come from the hospital ZIP when the HUD crosswalk places that ZIP in one county only; a
-ZIP split across counties gives none. Classification is filled only when the neighboring snapshots agree. Each filled field
-names its source. Connecticut windows also carry their planning region when the ZIP lies in one region. The Care Compare timely and effective
+which `scripts.lakehouse.pos_file_periods` rebuilds from the S3 manifests and the local acquisition job plans. A valid
+published county is kept (`county_source` pos). A county that is missing or outside the snapshot's state takes the county of
+the snapshot's ZIP when the HUD quarter in force on the snapshot's period end lists that ZIP, with a residential ratio
+above 0, in exactly one county under the snapshot's state (`county_source` hud_zip_crosswalk). Connecticut fills only from
+090xx county codes and keeps a published 091xx county. Otherwise the county stays null and `county_fill_reason` says why;
+`county_fips_published` keeps the published value. The case-mix index
+models read the unadjusted CMI by exact header name (`dbt/seeds/cmi_layout_columns.csv`) and keep the transfer-adjusted CMI in its
+own column, with one row per CCN in each selected file and each rule year and stage (`int_cmi_hospital_rows`). Choosing one CMI
+per hospital and rule year is saved for the feature phase (see [Saved for the Feature Phase](#saved-for-the-feature-phase)).
+The Care Compare timely and effective
 care, maternal health and HCAHPS tables get the same window models as HAI (`int_cc_*_windows`, holds in
-`int_cc_window_holds`); `int_registry_measure_windows` carries each registry measure of those families by the exact measure ID
-in `dbt/seeds/registry_measure_sources.csv`. `int_hgi_hospital_releases` types Hospital General Information per file.
+`int_cc_window_holds`). `int_hgi_hospital_releases` types Hospital General Information per file.
 `int_cost_reports` has one row per hospital cost report, in the federal fiscal year in which its period starts, with the
-number of reports of its CCN in that year; `int_cost_report_measures` computes each registry cost-report measure by the
-columns and rule in `dbt/seeds/cost_report_measures.csv` and gives null for a zero or missing denominator. The IPPS
+number of reports of its CCN in that year. The IPPS
 impact files from FY 2001 are read by exact header name (`dbt/seeds/impact_layout_columns.csv`): `int_impact_hospital_values`
-has one row per release, hospital and field. `int_impact_measures` carries the registry measures of source CMS_IPPS. The
+has one row per release, hospital and field. The
 Medicare inpatient provider and DRG summaries are typed per file, with the data and release years from the file name
-(`int_mup_providers`, `int_mup_drg_discharges`); a blank, suppressed cell is null. `int_mup_measures` computes the registry
-measures of sources CMS-MUP-PROVIDER and CMS_MEDICARE_PROVIDER by the fields and rule in `dbt/seeds/mup_measures.csv`. The
+(`int_mup_providers`, `int_mup_drg_discharges`); a blank, suppressed cell is null. The registry control mappings are the gold
+control bridge seeds `dbt/seeds/gold/<name>_bridge.csv`: the registry-map seeds that sat beside the staging seeds in
+`dbt/seeds/` are retired. Each bridge keeps the stem of its retired seed plus `_bridge`.
+`scripts/lakehouse/bridge_references.py --check` checks the bridges against `data_contracts/lakehouse/gold_contract.json`. The
+formula rules are in `features/recipes/<name>_recipe.csv`, for the cost report, IPPS impact, Medicare inpatient provider,
+occupational-mix, HHS and ONC, MMD and shortage families; the other families have no recipe. The Care Compare measures
+of the window models above map by exact measure ID in `registry_measure_sources_bridge.csv` and the registry's HAI controls
+(C269 to C283 and C283's children) map to the published HAI parts in `hai_outcome_measures_bridge.csv`. The cost-report
+measures map in `cost_report_measures_bridge.csv`, the registry measures of source CMS_IPPS in `impact_measures_bridge.csv`
+and those of sources CMS-MUP-PROVIDER and CMS_MEDICARE_PROVIDER in `mup_measures_bridge.csv`. The
 owner, enrollment and change-of-ownership files are typed per release (`int_hospital_owner_rows`,
 `int_hospital_enrollment_rows`, `int_change_of_ownership_rows`). Each file is dated by the publisher's catalog period in
 `dbt/seeds/ownership_release_periods.csv`, which `scripts.lakehouse.ownership_release_periods` rebuilds from the S3
-manifests and the local capture receipts. An owner flag a release's layout lacks (private equity and REIT before
-April 2025) is null; `dbt/seeds/ownership_measures.csv` names the columns each registry control uses. The HHS weekly
+manifests and the local capture receipts. A change of ownership listed in several releases is kept once, from the latest
+release (the latest catalog period end, then the highest release ID, then the lower source row and checksum). Another
+release whose published values differ is held in `int_change_of_ownership_holds`, as is a repeated row of the event in the
+kept release; values are compared as published, so associate IDs 123 and 0123 differ. Associate IDs
+that lost leading zeros are padded to 10 digits and the row is marked. An owner flag a release's layout lacks (private equity and REIT before
+April 2025) is null; `dbt/seeds/gold/ownership_measures_bridge.csv` names the columns each registry control uses. The HHS weekly
 hospital capacity rows are typed per hospital and week (`int_hhs_capacity_weeks`): a count of 1 to 3, published as
 -999999, is null and listed in `suppressed_fields`; any other negative value is null and listed in `negative_fields`.
 The ONC Promoting Interoperability to certified-product linkage and
 the older 2011 to 2017 EHR incentive attestations are typed apart (`int_onc_chpl_linkage_rows`,
-`int_onc_attestation_rows`). `dbt/seeds/hhs_onc_measures.csv` maps the registry controls; the HHS field names the
+`int_onc_attestation_rows`). `dbt/seeds/gold/hhs_onc_measures_bridge.csv` maps the registry controls, with the formula rules in
+`features/recipes/hhs_onc_measures_recipe.csv`; the HHS field names the
 source truncates are resolved through the stored `columns.json`.
 
 Occupational-mix surveys are typed per file, sheet and source row (`int_occmix_survey_rows`). Exact headers distinguish
 survey records from CBSA and S-3 tables; the layout inventory retains every selected file and sheet. Survey dates come
 from FROM and TO, including workbook ISO dates. Payment-rule years stay separate. Deleted records, invalid
 identifiers or periods and duplicate provider-period rows remain visible with a hold and no derived values.
-`dbt/seeds/occmix_measures.csv` maps all six S03 registry controls: RN paid hours, the RN, combined LPN/LVN plus
+`dbt/seeds/gold/occmix_measures_bridge.csv` maps all six S03 registry controls (rules in
+`features/recipes/occmix_measures_recipe.csv`): RN paid hours, the RN, combined LPN/LVN plus
 surgical-technologist and NAORAT paid-hour shares and RN salary per paid hour. Missing values and nonpositive
 denominators give null. C043 stays unavailable: paid hours cannot substitute for direct-care worked hours per patient-day;
 registry revision 3 closes it as unavailable from public sources.
@@ -274,7 +289,7 @@ Commuting Area codes (2010, 2020; tracts and ZIP codes) stay text categories (`i
 codes are 5-character text; Connecticut is flagged, not removed. `dbt/seeds/geography_file_periods.csv`, generated by
 `scripts/lakehouse/geography_file_periods.py`, dates every file: HUD and service-area files from their acquisition
 records, RUCC, RUCA and adjacency files by a reviewed vintage that is not a publication date.
-`dbt/seeds/geography_measures.csv` maps the eight registry controls of these families. Weights, graph rules and
+`dbt/seeds/gold/geography_measures_bridge.csv` maps the eight registry controls of these families. Weights, graph rules and
 hospital-window alignment are pending.
 
 ACS 5-year values for 2010 to 2024 come from the data.census.gov exports and, for the detailed tables from 2018, the
@@ -284,107 +299,52 @@ a test fails when a file's label differs. A wording change of meaning holds the 
 the subject-table units that changed from percents to counts in 2017. Missing marks and sentinels stay as tokens; a capped
 median keeps its cap and a flag. SVI's seven editions are staged long under each edition's own field names
 (`int_svi_county_values`), with -999 kept as a token. The ACS file vintage and the SVI edition come from
-`dbt/seeds/geography_file_periods.csv`. `dbt/seeds/acs_svi_measures.csv` maps the 44 S18 and S19 controls to ACS concepts
-and SVI fields; staging picks no source between them.
+`dbt/seeds/geography_file_periods.csv`. `dbt/seeds/gold/acs_svi_measures_bridge.csv` maps 43 of the 44 S18 and S19 controls to ACS concepts
+and SVI fields (C177.02 is in `dbt/seeds/gold/income_labor_measures_bridge.csv`); staging picks no source between them.
 
 SAIPE county estimates for 1989 to 2024 are cut from the fixed-width files at the positions every year's layout documents
 (`int_saipe_county_estimates`): poverty counts and percents with 90% bounds and median household income in nominal dollars.
 SAHIE county rows for 2006 to 2024 keep their published age, race, sex and income groups (`int_sahie_county_rows`); a test
 checks that each file's preamble defines code 0 as under 65, all races, both sexes and all incomes, the group the registry
 names. BLS LAUS county series (`int_bls_county_series`) keep months and annual averages apart, with footnote codes and the
-capture date as the revision vintage. `.` and `-` stay as missing marks. `dbt/seeds/income_labor_measures.csv` maps the
+capture date as the revision vintage. `.` and `-` stay as missing marks. `dbt/seeds/gold/income_labor_measures_bridge.csv` maps the
 SAIPE, SAHIE and BLS registry controls.
 
 PLACES county values keep their release, data year, measure and crude or age-adjusted type (`int_places_county_values`);
 `is_all_states` marks the measure-years whose county rows cover all 50 states and DC, the only ones the project
 uses. The 2020 release has no county codes; its rows take the code PLACES publishes for the same state and county name
 in its other releases (`county_source`). Medicare Geographic Variation county values are staged
-long for the All age level with `*` kept as a token (`int_gv_county_values`). WONDER deaths and crude rates keep their
+long for every published age level with `*` and `NA` kept as tokens (`int_gv_county_values`). WONDER deaths and crude rates keep their
 database, bridged race (1999 to 2020) or single race (2018 to 2024), with their Suppressed, Unreliable, Missing and Not
 Available marks (`int_wonder_county_deaths`); the 2024 rows repeated identically in the shorter single-race export are
-held. `dbt/seeds/county_health_measures.csv` maps the 56 registry controls of these sources.
+held. `dbt/seeds/gold/county_health_measures_bridge.csv` maps the 56 registry controls of these sources.
 
-CMS Mapping Medicare Disparities prevalence (`int_mmd_prevalence`) is staged per control, year and county or state for its
-one filter set. Each row takes its control from the reviewed condition label map (`dbt/seeds/mmd_conditions.csv`, written by
-`scripts/lakehouse/mmd_conditions.py` from the pinned collection plans), so the earlier acute myocardial infarction captures
-are mapped too. Zeros keep a possible-suppression flag and county rows without a name are flagged as unknown counties.
+CMS Mapping Medicare Disparities prevalence (`int_mmd_prevalence`) has one row per published file row (condition label, year
+and county or state) for its one filter set. Each row keeps the published `condition_label`, the optional `file_control` (the control the file name
+carries) and its source lineage. Each row takes its unit from the reviewed units seed (`dbt/seeds/mmd_condition_units.csv`). A
+silver row carries no registry control: the gold MMD bridge (`dbt/seeds/gold/mmd_conditions_bridge.csv`) maps each label to
+its control. `scripts/lakehouse/mmd_conditions.py` writes the units seed from the pinned collection plans and checks that the
+bridge maps every plan label to its control exactly once, so the earlier acute myocardial infarction captures are mapped too. Zeros keep a possible-suppression flag and county rows without a name are flagged as unknown counties.
 C258.78 is a state rate per 100,000. All 82 MMD controls stay held for definition. HRSA primary-care HPSA components
 (`int_hpsa_components`) and MUA and MUP components (`int_mua_components`) keep each designation's type, status, score and
 dates as published at the capture, with `XXXXX` county codes kept as tokens; rows repeated identically in the file are held.
 An HPSA tract, subdivision or county ID gives the county a token hides. A facility's postal code gives one through HUD
 when that ZIP lies in one county only (`county_source`).
 The period seed dates each MMD file by the year in its name and the HPSA and MUA files by their capture date, which the
-models carry as `capture_date`. The Federal Register HPSA workbooks stay in bronze. `dbt/seeds/shortage_measures.csv`
-maps the 85 registry controls of these sources.
-
-The alignment stage lines each staged source up with the hospital-year spine as of the HAI window start. It is built
-in silver at commit `e71779d` and moves to the feature phase under the October 10 2026 layer design (see [Architecture](#architecture)).
-`int_spine_hai_outcomes` (step AL1) has one row per spine hospital-window and infection type (HAI_1 CLABSI to HAI_6
-C. difficile): the published SIR, its bounds, the observed and predicted counts and the exposure, by exact measure ID,
-with tokens kept as text and the SIR footnote codes. No SIR is computed from the counts. A part from a release after the
-last 2015-baseline review (August 13 2026) is held and counted, so 2022-baseline SIRs never join the series; a part
-held in staging is counted too. Each row has an alignment status (aligned, held_in_staging, not_in_source), every part's
-footnote and the SIR's national benchmark category, which `int_hai_hospital_windows` keeps as published. Each type
-stays separate; the model target is chosen before training. `int_hai_outcome_values` carries the registry's HAI controls
-(C269 to C283 and C283's children) by the part `dbt/seeds/hai_outcome_measures.csv` names: C269 to C274 as target
-candidates and C275 to C280, the same SIRs, as earlier-outcome forecasting candidates.
-`int_spine_care_compare_measures` (step AL2) has one row per spine hospital-window and Care Compare process or structure
-control in `dbt/seeds/registry_measure_sources.csv` (families S13 to S16). Each control takes the latest measure window
-that ends before the HAI window starts; the overall rating (C284, excluded from the primary predictors) takes the latest
-Hospital General Information release dated before the start, held when two files on that date disagree. Values stay as
-published with their age in months and no age limit. C141's spellings (for example `low` and `Low`) each map to one
-category. A test fails on any new spelling. A control that starts after a window (for example C161 to C173 from
-2024) is kept with the status `no_period_before_start`; the other statuses are aligned, held_in_staging and
-not_in_source.
-`int_spine_hospital_measures` (step AL3a) does the same for the hospital finance and operations controls, by source and
-field: the latest cost report whose period ends before the start (several reports ending that day are compared), the
-IPPS impact value of the latest rule fiscal year that ends before the start (October to September, the most final stage
-first), the latest Medicare inpatient data year and the latest occupational-mix survey. Values that disagree for one
-period are held and counted. Occupational-mix copies of one survey (text and workbook twins in several rule-year files)
-within 0.0001 of each other count as one value.
-`int_spine_operations_measures` (step AL3b) adds the operations controls as each registry field defines them: HHS capacity
-from the weeks of the calendar year before the window (a ratio of sums for two fields, a sum of 7-day sums or a mean of
-7-day averages; a week where two HHS hospitals share a CCN is skipped and counted), ONC certified-EHR status, developers
-and product count from the latest performance period, private-equity and REIT ownership from the latest owner release
-before the start (direct, indirect and partnership owners only; a blank is `not_reported`, never no). Changes of
-ownership count those in the year before the start, with the completed months since the latest one.
-`int_spine_validation_measures` (step AL5) places the validation outcomes (HAC and VBP program years, HRRP, unplanned
-visits and 30-day mortality) against each HAI window's own period, because they are compared with the window, never used
-to predict it: the published window equal to the calendar year first, otherwise the one with the largest overlap. HAC
-and VBP years are placed by the HAI measure period HAC publishes for each fiscal year. No model reads this table; an E2E
-check fails if one does.
-`int_spine_county_measures` (step AL4a) adds the county context from PLACES, Medicare Geographic Variation, CDC WONDER,
-Mapping Medicare Disparities and RUCC through the spine's county: the latest data year (RUCC vintage) that ends
-before the window starts. PLACES counts only all-state measure-years and takes the latest release of each data year;
-WONDER 2018 to 2020 come from the single-race database. Connecticut matches a source on its old county or its planning
-region.
-`int_spine_county_context` (step AL4b) adds ACS, SVI, SAIPE, SAHIE (all-group rows) and BLS (annual averages) by the same
-rule, HPSA and MUA designations in force at the window start (rebuilt from their designation and withdrawal dates, with
-the score as published at the capture; an undated withdrawal holds the window) and RUCA codes for the hospital ZIP.
-`int_spine_linkage` keeps the HUD residential share of the hospital ZIP and the hospital's service-area ZIPs and cases
-apart as linkage, never predictors.
-
-History is type 2 (SCD2), built in silver (under the October 10 2026 layer design the history method moves to the
-Feast phase and gold keeps the snapshot and release rows) and dated by the publishers' own dates, so a clean checkout rebuilds the
-same versions: `int_hospital_pos_history` (Provider of Services attributes per snapshot), `int_hospital_hgi_history`
-(Hospital General Information descriptions per release; the overall rating stays a measure) and
-`int_hospital_ownership_history` (organization owners only, by enrollment, owner and role, per release). The macro
-`dbt/macros/scd2.sql` starts a version when a tracked value changes or when a hospital or owner returns after a release
-without it; that release closes the earlier version. A release that lists one key twice with different values is held
-for that release. Some CMS owner and enrollment releases drop the leading zeros of the 10-digit associate IDs, so the
-row models pad them back and mark the row (`associate_ids_padded`). Ownership history bridges an owner missing from one
-release and counts it in `bridged_releases` (owner decision, October 10 2026). A held release is never bridged; POS and
-Hospital General Information history do not bridge. `assert_history_versions_valid` fails on overlapping windows or a
-second current version.
+models carry as `capture_date`. The Federal Register HPSA workbooks stay in bronze. `dbt/seeds/gold/shortage_measures_bridge.csv`
+maps the HPSA and MUA controls (C249 to C251) and the MMD bridge the 82 MMD controls, 85 registry controls in all
+(rules in `features/recipes/shortage_measures_recipe.csv`).
 
 Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
 visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the
-Hospital Readmissions Reduction Program by condition (`int_cc_hrrp_windows`). Every published measure ID is kept;
-`dbt/seeds/validation_measures.csv` maps the exact IDs the registry names (C289 to C291 and their children); a renamed
-ID reaches its control only through the reviewed aliases in `dbt/seeds/measure_id_aliases.csv` (`OP-32`) and only where
-the exact ID has no row for that hospital and window. The PSI-90 and PSI-13 controls (E038, E039) read the
+Hospital Readmissions Reduction Program by condition (`int_cc_hrrp_windows`); their holds are in
+`int_validation_window_holds`, apart from `int_cc_window_holds`. Every published measure ID is kept;
+the gold bridge `dbt/seeds/gold/validation_measures_bridge.csv` maps the exact IDs the registry names (C289 to C291 and
+their children). A renamed ID enters under its exact ID only through the reviewed aliases in `dbt/seeds/measure_id_aliases.csv`
+(`OP-32`) and only where the exact ID has no row for that hospital and window; `published_measure_id` keeps the published
+ID. The PSI-90 and PSI-13 controls (E038, E039) read the
 published IDs `PSI_90` and `PSI_13` (registry revision 3); the older `PSI_90_SAFETY` and `PSI_13_POST_SEPSIS` are not
-aliased (`int_validation_measure_windows`). `Not Available`, `Not Applicable`, `N/A` and `Too Few to Report` stay text. In every
+aliased (`int_cc_complications_deaths_windows`). `Not Available`, `Not Applicable`, `N/A` and `Too Few to Report` stay text. In every
 group D model a 5-digit hospital ID is padded to 6 characters; any other ID that is not 6 digits or capital letters is
 held. These tables are for validation only; none is a predictor.
 
@@ -394,7 +354,9 @@ HAC model keeps the payment reduction, Total HAC Score, PSI-90 and domain z-scor
 are not staged, so the outcome comes only from the HAI windows. The VBP model keeps every published domain score as
 published; clinical care (older files) and clinical outcomes (later files) stay separate columns. Three older VBP files
 publish no fiscal year and take a reviewed year from `dbt/seeds/vbp_file_fiscal_years.csv`, whose evidence is the
-published national average score. The registry controls (C285 to C288) are in `int_validation_program_values`; all are
+published national average score. Rows the program-year models leave out are held in `int_validation_program_holds` with a reason (no_key,
+no_fiscal_year, label_held, undated_release, same_date_conflict or repeated_in_file). The gold bridge
+`dbt/seeds/gold/validation_measures_bridge.csv` maps the registry controls (C285 to C288); all are
 comparison_only or exclude_primary.
 
 The dbt packages
@@ -412,11 +374,18 @@ scripts/lakehouse/dbt.sh build                                      # dbt on the
 .venv/bin/python -m scripts.lakehouse.pos_file_periods --check      # POS periods match the manifests and job plans
 .venv/bin/python -m scripts.lakehouse.ownership_release_periods --check   # ownership periods match the manifests and receipts
 .venv/bin/python -m scripts.lakehouse.geography_file_periods --check      # geography periods match the manifests and records
-.venv/bin/python -m scripts.lakehouse.mmd_conditions --check             # MMD condition map matches the pinned plans
+.venv/bin/python -m scripts.lakehouse.mmd_conditions --check             # MMD units seed and bridge match the pinned plans
+.venv/bin/python -m scripts.lakehouse.run_mmd_conditions_e2e           # the check catches drift; report: data/e2e/mmd_conditions/
+.venv/bin/python -m scripts.lakehouse.bridge_references --check          # bridges and recipes match the gold contract and the registry
+.venv/bin/python -m scripts.lakehouse.catalog job pins -- pin --run <run_id>      # pin bronze in data/analytics/dbt/runs/<run_id>/pins.json
+.venv/bin/python -m scripts.lakehouse.catalog job pins -- verify --run <run_id>   # fails when a pinned table moved
+.venv/bin/python -m scripts.lakehouse.catalog job pins_e2e                # the pin's scenarios on a throwaway catalog; report: data/e2e/pins/
 ```
 
 **Silver validation (Great Expectations).** After a build, Great Expectations 1.23.2 checks 13 silver tables (the spine,
 the alignment tables, county adjacency and the three history tables), as a second gate independent of the dbt tests.
+The spine, alignment and history tables are now saved in `features/` and no longer built by dbt, so these suites do not
+pass on the current silver build until a later stage replaces them with atomic-grain suites.
 These were gold's planned inputs before the October 10 2026 layer design; the refactor replaces the suites with atomic
 silver, gold and feature-phase checks. `scripts/lakehouse/silver.py validate` runs `scripts/lakehouse/silver_quality.py`
 in the `quality` image (`services/quality/`, no network, memory limit from the launch plan). It opens the build file
@@ -458,8 +427,9 @@ prefix a transform run pinned. Readers reserve a publish run, then register its 
 it (`protected-sets`). Resource admission uses the same registry: `memory_budget --admit job` (or `pool` for an E2E
 pool) reserves the machine for one heavy launch at a time and prints the launch plan with its reservation ID; a child
 launch that carries `HAI_RESERVATION` reuses it. Each registered service's unused limit is held back as a growth
-reserve. A reservation whose process ended is cleared at the next admission. No launcher uses the lock or the
-admission until the launcher wiring stage of the bronze-to-gold refactor.
+reserve. A reservation whose process ended is cleared at the next admission. Only the package fixture kit uses the
+admission today; no launcher uses the lock or the admission until the launcher wiring stage of the bronze-to-gold
+refactor.
 
 **Package fixture kit.** `scripts/lakehouse/package_fixture.py` builds the synthetic fixture with the pinned analytics
 image and no network, AWS profile or secret (`prepare`), fingerprints a build file read-only (`baseline`) and checks a
@@ -476,6 +446,95 @@ approved effective selection, the `beab859` baseline and expected-failure mutati
 
 Before every commit, stage the intended files by name, then draft, complete and
 retain the ignored local documentation review record (see [Quality Checks](#quality-checks)).
+
+### Saved for the Feature Phase
+
+These models are saved copies in `features/` (`features/models/`, `features/tests/` and `features/macros/`) that dbt does
+not build. Their descriptions stay here as written when they were silver models.
+
+The case-mix index models choose one CMI per hospital and rule year from the year's best rule stage; disagreeing files are held in
+`int_cmi_holds`. `int_hospital_spine` has one row per hospital and calendar-year HAI window, as of the window start: the
+Provider of Services snapshot that ends in the 12 months before the window and the CMI of the fiscal year that ends before
+it (`int_cmi_hospital_data_years`), with the primary and sensitivity population flags. A window missing its own snapshot
+takes its state and county from the same hospital's other snapshots within 24 months, then the enrollment file, then the
+CCN's state code. A county can also come from the hospital ZIP when the HUD crosswalk places that ZIP in one county only; a
+ZIP split across counties gives none. Classification is filled only when the neighboring snapshots agree. Each filled field
+names its source. Connecticut windows also carry their planning region when the ZIP lies in one region.
+
+These saved models still read the retired registry-map seeds of commit `e918ed7`; the same mappings now live in the gold
+control bridges and recipes named below, which a feature-phase rewrite reads instead.
+`int_registry_measure_windows` carried each registry measure of the Care Compare timely and effective care, maternal health and
+HCAHPS families by the exact measure ID in `dbt/seeds/registry_measure_sources.csv` (now
+`dbt/seeds/gold/registry_measure_sources_bridge.csv`).
+`int_cost_report_measures` computed each registry cost-report measure by the
+columns and rule in `dbt/seeds/cost_report_measures.csv` (now `dbt/seeds/gold/cost_report_measures_bridge.csv` and
+`features/recipes/cost_report_measures_recipe.csv`) and gave null for a zero or missing denominator. `int_impact_measures` carried the registry measures of source CMS_IPPS (`dbt/seeds/impact_measures.csv`, now
+`dbt/seeds/gold/impact_measures_bridge.csv`). `int_mup_measures` computed the registry
+measures of sources CMS-MUP-PROVIDER and CMS_MEDICARE_PROVIDER by the fields and rule in `dbt/seeds/mup_measures.csv` (now
+`dbt/seeds/gold/mup_measures_bridge.csv` and `features/recipes/mup_measures_recipe.csv`). `int_validation_program_values` carried the registry controls (C285 to C288); all
+are comparison_only or exclude_primary. `int_validation_measure_windows` carried the PSI-90 and PSI-13 controls (E038, E039): they read the
+published IDs `PSI_90` and `PSI_13` (registry revision 3); the older `PSI_90_SAFETY` and `PSI_13_POST_SEPSIS` are not
+aliased.
+
+The alignment stage lines each staged source up with the hospital-year spine as of the HAI window start. It was built
+in silver at commit `e71779d` and moves to the feature phase under the October 10 2026 layer design (see [Architecture](#architecture)).
+`int_spine_hai_outcomes` (step AL1) has one row per spine hospital-window and infection type (HAI_1 CLABSI to HAI_6
+C. difficile): the published SIR, its bounds, the observed and predicted counts and the exposure, by exact measure ID,
+with tokens kept as text and the SIR footnote codes. No SIR is computed from the counts. A part from a release after the
+last 2015-baseline review (August 13 2026) is held and counted, so 2022-baseline SIRs never join the series; a part
+held in staging is counted too. Each row has an alignment status (aligned, held_in_staging, not_in_source), every part's
+footnote and the SIR's national benchmark category, which `int_hai_hospital_windows` keeps as published. Each type
+stays separate; the model target is chosen before training. `int_hai_outcome_values` carries the registry's HAI controls
+(C269 to C283 and C283's children) by the part `dbt/seeds/hai_outcome_measures.csv` (now `dbt/seeds/gold/hai_outcome_measures_bridge.csv`) names: C269 to C274 as target
+candidates and C275 to C280, the same SIRs, as earlier-outcome forecasting candidates.
+`int_spine_care_compare_measures` (step AL2) has one row per spine hospital-window and Care Compare process or structure
+control in `dbt/seeds/registry_measure_sources.csv` (now `dbt/seeds/gold/registry_measure_sources_bridge.csv`) (families S13 to S16). Each control takes the latest measure window
+that ends before the HAI window starts; the overall rating (C284, excluded from the primary predictors) takes the latest
+Hospital General Information release dated before the start, held when two files on that date disagree. Values stay as
+published with their age in months and no age limit. C141's spellings (for example `low` and `Low`) each map to one
+category. A test fails on any new spelling. A control that starts after a window (for example C161 to C173 from
+2024) is kept with the status `no_period_before_start`; the other statuses are aligned, held_in_staging and
+not_in_source.
+`int_spine_hospital_measures` (step AL3a) does the same for the hospital finance and operations controls, by source and
+field: the latest cost report whose period ends before the start (several reports ending that day are compared), the
+IPPS impact value of the latest rule fiscal year that ends before the start (October to September, the most final stage
+first), the latest Medicare inpatient data year and the latest occupational-mix survey. Values that disagree for one
+period are held and counted. Occupational-mix copies of one survey (text and workbook twins in several rule-year files)
+within 0.0001 of each other count as one value.
+`int_spine_operations_measures` (step AL3b) adds the operations controls as each registry field defines them: HHS capacity
+from the weeks of the calendar year before the window (a ratio of sums for two fields, a sum of 7-day sums or a mean of
+7-day averages; a week where two HHS hospitals share a CCN is skipped and counted), ONC certified-EHR status, developers
+and product count from the latest performance period, private-equity and REIT ownership from the latest owner release
+before the start (direct, indirect and partnership owners only; a blank is `not_reported`, never no). Changes of
+ownership count those in the year before the start, with the completed months since the latest one.
+`int_spine_validation_measures` (step AL5) places the validation outcomes (HAC and VBP program years, HRRP, unplanned
+visits and 30-day mortality) against each HAI window's own period, because they are compared with the window, never used
+to predict it: the published window equal to the calendar year first, otherwise the one with the largest overlap. HAC
+and VBP years are placed by the HAI measure period HAC publishes for each fiscal year. No model reads this table; an E2E
+check fails if one does.
+`int_spine_county_measures` (step AL4a) adds the county context from PLACES, Medicare Geographic Variation, CDC WONDER,
+Mapping Medicare Disparities and RUCC through the spine's county: the latest data year (RUCC vintage) that ends
+before the window starts. PLACES counts only all-state measure-years and takes the latest release of each data year;
+WONDER 2018 to 2020 come from the single-race database. Connecticut matches a source on its old county or its planning
+region.
+`int_spine_county_context` (step AL4b) adds ACS, SVI, SAIPE, SAHIE (all-group rows) and BLS (annual averages) by the same
+rule, HPSA and MUA designations in force at the window start (rebuilt from their designation and withdrawal dates, with
+the score as published at the capture; an undated withdrawal holds the window) and RUCA codes for the hospital ZIP.
+`int_spine_linkage` keeps the HUD residential share of the hospital ZIP and the hospital's service-area ZIPs and cases
+apart as linkage, never predictors.
+
+History is type 2 (SCD2), built in silver (under the October 10 2026 layer design the history method moves to the
+Feast phase and gold keeps the snapshot and release rows) and dated by the publishers' own dates, so a clean checkout rebuilds the
+same versions: `int_hospital_pos_history` (Provider of Services attributes per snapshot), `int_hospital_hgi_history`
+(Hospital General Information descriptions per release; the overall rating stays a measure) and
+`int_hospital_ownership_history` (organization owners only, by enrollment, owner and role, per release). The macro
+`features/macros/scd2.sql` starts a version when a tracked value changes or when a hospital or owner returns after a release
+without it; that release closes the earlier version. A release that lists one key twice with different values is held
+for that release. Some CMS owner and enrollment releases drop the leading zeros of the 10-digit associate IDs, so the
+row models pad them back and mark the row (`associate_ids_padded`). Ownership history bridges an owner missing from one
+release and counts it in `bridged_releases` (owner decision, October 10 2026). A held release is never bridged; POS and
+Hospital General Information history do not bridge. `features/tests/assert_history_versions_valid.sql` fails on overlapping windows or a
+second current version.
 
 ## Architecture
 
@@ -498,7 +557,7 @@ ARCHIFY_UPDATE_CHECK_DISABLED=1 node <archify>/bin/archify.mjs finalize architec
 
 `finalize` also writes receipt files beside the HTML; keep them out of Git.
 
-**Layer design (owner decision, October 10 2026; the code refactor is pending).** The diagram shows the flow as built.
+**Layer design (owner decision, October 10 2026; silver follows it, gold is not built yet).** The diagram shows the flow as built.
 
 | Layer | Holds | Stored |
 | --- | --- | --- |
@@ -507,8 +566,8 @@ ARCHIFY_UPDATE_CHECK_DISABLED=1 node <archify>/bin/archify.mjs finalize architec
 | Gold | `dim_` and `fct_` models: one fact per source process at its atomic grain and the conformed dimensions | Iceberg namespace `gold` |
 | Feature phase | The hospital-window entity and populations, the as-of alignment of each source and the ratios derived per registry control, computed from gold for Feast and training | Not stored in gold |
 
-The alignment models and the hospital-year spine described under Usage are built in silver; the refactor moves
-them and their checks to the feature phase. The HCRIS cost reports are the CMS public use files for fiscal years 2011 to
+The alignment models and the hospital-year spine described under Usage were built in silver; they and their checks
+are saved in `features/` for the feature phase. The HCRIS cost reports are the CMS public use files for fiscal years 2011 to
 2023, all on form CMS-2552-10, so no form-version reconciliation is needed.
 
 ## Data
@@ -837,16 +896,21 @@ No AWS changes implementing these four deferred controls have been applied.
 - `scripts/lakehouse/`, `config/lakehouse/`: the catalog script, the bronze loader, file readers, dictionary and
   checksum jobs, the Care Compare, retired-object and IPPS label generators, the dbt runner, the dbt-project-evaluator
   runner, the bronze and staging E2E, the silver validation launcher, validator and its E2E, the run lock and its E2E,
-  the package fixture kit and its E2E and the archive tool; the table map, the retired and removed lists and the
-  reviewed label overrides.
+  the package fixture kit and its E2E, the archive tool, the bronze snapshot pin and its E2E, the gold bridge reference
+  check and its E2E, the measure-ID domain generator and the MMD units writer; the table map, the retired and removed
+  lists and the reviewed label overrides.
 - `services/`, `docker-compose.yaml`: the Polaris catalog, Spark job, DuckDB analytics and Great Expectations quality containers.
 - `data_contracts/great_expectations/`: the silver validation suites and their reviewed baselines.
+- `data_contracts/lakehouse/`: the silver column contract the package fixture kit reads and the gold contract the bridge
+  reference check reads.
+- `dbt/seeds/gold/`: the gold control bridge seeds and the reference seeds their tests read.
 - `features/`: the silver models that leave silver under the October 10 2026 layer design (the hospital-window spine,
   alignment steps AL1 to AL5, HAI outcome values, CMI year choices, the SCD2 histories and the seven emptied formula
   and control-map models), copied from commit `beab859` with their YAML, macros, singular tests and Great Expectations
   suites, for the Feast phase. dbt does not read this folder. `features/archive_manifest.json` records every file's
   hash and the reference outputs exported to the ignored `data/features/reference/`;
-  `.venv/bin/python -m scripts.lakehouse.archive_saved_models check` verifies them.
+  `.venv/bin/python -m scripts.lakehouse.archive_saved_models check` verifies them. `features/recipes/` holds the formula
+  recipes the gold control bridges reference.
 - `data_contracts/orchestration/`, `orchestration/`, `scripts/orchestration/`: the orchestration contracts (launch
   specifications, submission requests, ledger lines and their examples), the submission interface with an in-memory fake
   and the contracts check.
@@ -875,12 +939,14 @@ and MMD values, the HPSA and MUA designations, the group D validation windows (u
 deaths, readmissions reduction) and HAC Reduction and VBP program years, the occupational-mix surveys, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
 index. The Medicare sepsis share counts only published DRG cells (11 discharges or more), so it can be low for small
 hospitals; the Medicare chronic-condition shares start with data year 2017. Each change-of-ownership release lists
-events back to 2016, so one event appears once per release until the alignment step chooses one. An enrollment or
+events back to 2016; silver keeps each event once from its latest release and holds the other releases' rows that
+differ or repeat (`int_change_of_ownership_holds`). An enrollment or
 change-of-ownership value with a location suffix, a lost leading zero or a unit letter maps to its parent CCN when POS
 lists exactly one such parent in the row's state (`ccn_source`); any other value keeps no CCN. An HHS facility without a
 CCN gets one only from the reviewed matches in `dbt/seeds/hhs_reviewed_ccn_matches.csv`. Registry revision 3 closes the HHS
-part of controls C001 and C040, so the HHS columns are staged but not mapped to them. It also builds the hospital-year spine. Some typed tables also carry derived values or registry mappings (for example
-the occupational-mix shares and the MMD and ACS control maps); the layer refactor moves those out of silver. No gold or model tables exist. The bronze and staging E2E runs use
+part of controls C001 and C040, so the HHS columns are staged but not mapped to them. The derived values and registry
+mappings that silver used to carry (for example the occupational-mix shares and the MMD and ACS control maps) have left
+silver: the formulas are saved in `features/` and the control maps are gold bridge seeds. No gold or model tables exist. The bronze and staging E2E runs use
 Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
 offline. Its first part finished 43 sources; the second (ACS, BLS, HUD and WONDER) waits on its independent review and
 the owner's browser downloads.

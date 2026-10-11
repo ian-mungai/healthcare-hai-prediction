@@ -1,5 +1,6 @@
 -- Public survey rows at file, sheet and source-row grain. Survey periods are independent of payment rule years.
--- Deleted rows and ambiguous provider-period rows remain visible but yield no derived measure values.
+-- Deleted rows and ambiguous provider-period rows stay visible with their hold reason; the wage and share formulas are
+-- saved in features/.
 {{ config(materialized='table') }}
 
 with
@@ -63,10 +64,4 @@ held as (
     from counted
 )
 
-select
-    *,
-    case when hold_reason is null and rnhr > 0 and rnsal >= 0 then rnsal / rnhr end as rn_paid_hour_wage,
-    case when hold_reason is null and nursehr > 0 and rnhr >= 0 then rnhr / nursehr end as rn_paid_hour_share,
-    case when hold_reason is null and nursehr > 0 and lpnsthr >= 0 then lpnsthr / nursehr end as lpnst_paid_hour_share,
-    case when hold_reason is null and nursehr > 0 and naorathr >= 0 then naorathr / nursehr end as naorat_paid_hour_share
-from held
+select * from held

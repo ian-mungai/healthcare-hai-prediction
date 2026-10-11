@@ -3,6 +3,8 @@
 -- one keeps its hospital_pk and gets a CCN only from the reviewed matches seed (ccn_source, failure modes 681 to 683).
 -- Any other negative value, which a count or occupancy cannot be, is null and its column is
 -- listed in negative_fields. is_corrected and the coverage counts are kept; nothing is filtered (failure modes 375 to 379).
+-- nulled_values_published keeps the published text of every value hhs_number makes null other than -999999, as a JSON
+-- object from field name to text ('{}' when none), so no rejected value is lost (failure mode 793).
 -- The geocoded point is left out; the ZIP and county code give the place.
 {{ config(materialized='table') }}
 
@@ -38,20 +40,38 @@ weeks as (
             {%- for column in hhs_numeric_columns() %}
             case when trim({{ column }}) <> '-999999' and ({{ strict_number(column) }}) < 0 then '{{ column }}' end{% if not loop.last %},{% endif %}
             {%- endfor %}
-        ])) as negative_fields
+        ])) as negative_fields,
+        to_json(map_from_entries(list_filter([
+            {%- for column in hhs_numeric_columns() %}
+            {
+                'field': '{{ column }}',
+                'published': case
+                    when nullif(trim({{ column }}), '') is not null and trim({{ column }}) <> '-999999' and ({{ hhs_number(column) }}) is null
+                        then {{ column }}
+                end
+            }{% if not loop.last %},{% endif %}
+            {%- endfor %}
+        ], entry -> entry.published is not null)))::varchar as nulled_values_published
     from {{ ref('stg_hhs_capacity_csv') }}
+),
+
+joined as (
+    select
+        weeks.* exclude (ccn),
+        coalesce(weeks.ccn, matches.ccn) as ccn,
+        case
+            when weeks.ccn is not null then 'published'
+            when matches.ccn is not null then 'reviewed_match'
+        end as ccn_source,
+        weeks.hospital_pk || ':' || weeks.collection_week::varchar as week_key
+    from weeks
+    left join {{ ref('hhs_reviewed_ccn_matches') }} as matches
+        on
+            weeks.ccn is null
+            and weeks.hospital_pk = matches.hospital_pk
 )
 
 select
-    weeks.* exclude (ccn),
-    coalesce(weeks.ccn, matches.ccn) as ccn,
-    case
-        when weeks.ccn is not null then 'published'
-        when matches.ccn is not null then 'reviewed_match'
-    end as ccn_source,
-    weeks.hospital_pk || ':' || weeks.collection_week::varchar as week_key
-from weeks
-left join {{ ref('hhs_reviewed_ccn_matches') }} as matches
-    on
-        weeks.ccn is null
-        and weeks.hospital_pk = matches.hospital_pk
+    * exclude (nulled_values_published),
+    nulled_values_published
+from joined

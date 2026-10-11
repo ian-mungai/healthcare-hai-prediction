@@ -113,7 +113,8 @@ where latest_row_count = 1
     end_column='coalesce(end_date, measure_end_date)',
     columns=none
 ) %}
-{#- The rows a window model leaves out, with the reason and row count [232] to [235]. -#}
+{#- The rows a window model leaves out, with the reason, row count, the sorted checksums of the files they come from and a
+    null-safe hold key [232] to [235] [791] [792]. A row hold keeps its window dates null; hold_reason says why. -#}
 with
 
 window_rows as (
@@ -133,6 +134,7 @@ reasons as (
         window_rows.bronze_table,
         window_rows.entity_id,
         window_rows.measure_id,
+        window_rows.member_sha256,
         case
             when window_rows.entity_id is null or window_rows.measure_id is null then 'no_key'
             when window_rows.window_start is null or window_rows.window_end is null then 'unparsed_date'
@@ -151,7 +153,8 @@ row_holds as (
         case when hold_reason = 'no_key' then null else measure_id end as measure_id,
         cast(null as date) as window_start,
         cast(null as date) as window_end,
-        count(*) as row_count
+        count(*) as row_count,
+        list_sort(list_distinct(array_agg(member_sha256))) as member_sha256s
     from reasons
     where hold_reason is not null
     group by all
@@ -169,7 +172,8 @@ window_holds as (
         measure_id,
         window_start,
         window_end,
-        count(*) as row_count
+        count(*) as row_count,
+        list_sort(list_distinct(array_agg(member_sha256))) as member_sha256s
     from candidates
     where latest_row_count > 1
     group by
@@ -178,9 +182,31 @@ window_holds as (
         measure_id,
         window_start,
         window_end
+),
+
+holds as (
+    select * from row_holds
+    union all by name
+    select * from window_holds
 )
 
-select * from row_holds
-union all by name
-select * from window_holds
+select
+    bronze_table,
+    hold_reason,
+    entity_id,
+    measure_id,
+    window_start,
+    window_end,
+    row_count,
+    md5(concat_ws(
+        '|',
+        bronze_table,
+        hold_reason,
+        coalesce(entity_id, '<null>'),
+        coalesce(measure_id, '<null>'),
+        coalesce(cast(window_start as varchar), '<null>'),
+        coalesce(cast(window_end as varchar), '<null>')
+    )) as hold_key,
+    member_sha256s
+from holds
 {% endmacro %}

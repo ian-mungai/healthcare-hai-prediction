@@ -13,13 +13,16 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import os
 import shutil
 import sys
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from scripts.lakehouse import memory_budget, run_lock
 from scripts.process import CompletedProcess, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,7 +40,28 @@ def patch(folder: Path, name: str, path: str, change: Callable[[str], str]) -> P
     return target
 
 
-def selector(folder: Path, package: str, tests: list[str]) -> Path:
+def git_format(path: Path) -> Path:
+    """The same patch with the headers git diff writes, which git apply once skipped silently inside the repository."""
+    text = path.read_text()
+    first = text.splitlines()[0].removeprefix("--- a/")
+    target = path.with_name(path.stem + "_git.patch")
+    target.write_text(f"diff --git a/{first} b/{first}\nindex 0000000..1111111 100644\n" + text)
+    return target
+
+
+# A model wrapped so it returns its rows plus one copy of its first row under a new key; {body} is the model's own SQL.
+ADDED_ROW_MODEL = (
+    "{{{{ config(materialized='table') }}}}\nselect * from (\n{body}\n) as kept\nunion all\n"
+    "select * from (select * replace ('added-fixture-row' as survey_row_key) from (\n{body}\n) as copied limit 1)\n"
+)
+
+
+def add_row(text: str) -> str:
+    """The model plus one copy of its first row under a new survey_row_key, as a fixture with an added row gives."""
+    return ADDED_ROW_MODEL.format(body="\n".join(line for line in text.splitlines() if "config(" not in line))
+
+
+def selector(folder: Path, package: str, tests: list[str], exclude: list[str] | None = None, added: dict[str, Any] | None = None) -> Path:
     """A synthetic selector contract in the selectors' format, owning the occupational-mix survey model."""
     document = {
         "package": package,
@@ -46,11 +70,13 @@ def selector(folder: Path, package: str, tests: list[str]) -> Path:
         "required_tests": tests,
         "required_test_count": len(tests),
         "retired_tests": [],
+        "exclude_tests": exclude or [],
         "documented_changes": [],
         "compare_unchanged_with_baseline": ["int_occmix_survey_rows"],
         "baseline": BASELINE,
         "rule": "test selector for the kit's E2E",
         "note": "synthetic",
+        **({"fixture_rows_added": added} if added else {}),
     }
     path = folder / f"{package.lower()}.yml"
     path.write_text(json.dumps(document, indent=2))  # JSON is valid YAML
@@ -58,16 +84,42 @@ def selector(folder: Path, package: str, tests: list[str]) -> Path:
 
 
 CALLS: list[dict[str, Any]] = []
+# The reservation this run holds for all its kit calls, so a package's kit job cannot take the machine between them.
+HELD: dict[str, str] = {}
+ADMISSION_WAIT_SECONDS = 3600
+
+
+def hold_machine() -> str:
+    """Take one job reservation for the whole run, waiting while another job holds the machine [759]."""
+    registry = run_lock.resolve(None, ROOT)
+    deadline = time.monotonic() + ADMISSION_WAIT_SECONDS
+    while True:
+        try:
+            return memory_budget.admit(registry, "job", os.getpid(), None)["reservation_id"]
+        except run_lock.Refused as refusal:
+            if "holds the machine" not in str(refusal) or time.monotonic() > deadline:
+                raise
+            time.sleep(30)
 
 
 def kit(*args: str, cwd: Path = ROOT) -> CompletedProcess[str]:
-    """Run the kit's CLI and keep its exit code and the tail of its error output for the report."""
-    result = run_command(sys.executable, ["-m", "scripts.lakehouse.package_fixture", *args], cwd=cwd, timeout=3600)
+    """Run the kit's CLI under the run's reservation and keep its exit code and the tail of its error output for the report."""
+    environment = {**os.environ, "HAI_RESERVATION": HELD["reservation_id"]}
+    result = run_command(sys.executable, ["-m", "scripts.lakehouse.package_fixture", *args], cwd=cwd, env=environment, timeout=3600)
     CALLS.append({"args": [arg.replace(str(ROOT), ".") for arg in args], "exit": result.returncode, "stderr": result.stderr[-600:]})
     return result
 
 
 def main() -> int:
+    """Hold the machine for the whole run, run every scenario and free the reservation however the run ends."""
+    HELD["reservation_id"] = hold_machine()
+    try:
+        return scenarios()
+    finally:
+        memory_budget.release(run_lock.resolve(None, ROOT), HELD["reservation_id"])
+
+
+def scenarios() -> int:
     """Run every scenario, write the report and return 1 when any check fails."""
     started = datetime.now(UTC)
     folder = ROOT / "data" / "e2e" / "package_fixture" / started.strftime("%Y%m%dT%H%M%SZ")
@@ -117,6 +169,39 @@ def main() -> int:
     emptied = patch(folder, "empty_model", MODEL, lambda text: text.rstrip("\n") + "\nwhere false\n")
     changed = kit("check", "--package", "W0", "--selector", str(w0), "--patch", str(emptied), "--approved", str(approved))
     checks["a changed kept model fails the baseline comparison"] = changed.returncode == 1 and "int_occmix_survey_rows differs" in changed.stderr
+    in_git_format = kit("check", "--package", "W0", "--selector", str(w0), "--patch", str(git_format(emptied)), "--approved", str(approved))
+    checks["a patch in git diff format is applied, not skipped"] = in_git_format.returncode == 1 and "int_occmix_survey_rows differs" in in_git_format.stderr
+    w2 = selector(folder, "W2", ["assert_occmix_values_cast"], exclude=["assert_occmix_holds_exclude_values"])
+    (ROOT / "data/package_fixture/records/w2/effective_selection.json").unlink(missing_ok=True)
+    excluded = kit("check", "--package", "W2", "--selector", str(w2), "--record")
+    w2_nodes = json.loads((ROOT / "data/package_fixture/records/w2/effective_selection.json").read_text())["nodes"] if excluded.returncode == 0 else []
+    w0_nodes = json.loads(approved.read_text())["nodes"] if approved.exists() else []
+    checks["an excluded test leaves the selection"] = (
+        excluded.returncode == 0
+        and any(n.endswith(".assert_occmix_holds_exclude_values") for n in w0_nodes)
+        and not any(n.endswith(".assert_occmix_holds_exclude_values") for n in w2_nodes)
+    )
+
+    # 737: a documented added fixture row is left out of the comparison by its grain key; without the key it fails.
+    extra = patch(folder, "added_row", MODEL, add_row)
+    plain = kit("check", "--package", "W0", "--selector", str(w0), "--patch", str(extra), "--approved", str(approved))
+    checks["an added row without a documented key fails the comparison"] = plain.returncode == 1 and "int_occmix_survey_rows differs" in plain.stderr
+    documented = {"int_occmix_survey_rows": {"key": "survey_row_key", "rows": ["added-fixture-row"]}}
+    w3 = selector(folder, "W3", ["assert_occmix_values_cast"], added=documented)
+    (ROOT / "data/package_fixture/records/w3/effective_selection.json").unlink(missing_ok=True)
+    keyed = kit("check", "--package", "W3", "--selector", str(w3), "--patch", str(extra), "--record")
+    keyed_report = ROOT / "data/package_fixture/records/w3/check.json"
+    verdict = json.loads(keyed_report.read_text())["comparisons"].get("int_occmix_survey_rows", "") if keyed_report.exists() else ""
+    checks["a documented added row is compared on the baseline's keys"] = keyed.returncode == 0 and verdict == "equal (1 documented fixture rows added)"
+    # 737: a documented added row that the build lacks fails; so does a selector that names only the key column.
+    w3_record = ROOT / "data/package_fixture/records/w3/effective_selection.json"
+    dropped = kit("check", "--package", "W3", "--selector", str(w3), "--approved", str(w3_record))
+    checks["a documented added row that is missing fails the comparison"] = (
+        dropped.returncode == 1 and "added rows [] against documented ['added-fixture-row']" in dropped.stderr
+    )
+    w4 = selector(folder, "W4", ["assert_occmix_values_cast"], added={"int_occmix_survey_rows": "survey_row_key"})
+    key_only = kit("check", "--package", "W4", "--selector", str(w4), "--patch", str(extra), "--approved", str(approved))
+    checks["an added-rows entry without its keys is refused before a build"] = key_only.returncode == 1 and "rows: [<each added key>]" in key_only.stderr
 
     # 889: an expected failure passes only when exactly its named test fails.
     broken = patch(folder, "break_cast_test", TEST, lambda _text: "select 1 as failure\n")
