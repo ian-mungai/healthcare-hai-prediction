@@ -83,7 +83,10 @@ where latest_row_count = 1
 {% endmacro %}
 
 {% macro care_program_holds(table, ccn, fiscal_year, columns) %}
-{#- The rows a program-year model leaves out, with the reason and row count [514] [523]. -#}
+{#- The rows a program-year model leaves out, with the reason, row count, hold key and the sorted checksums of the files they
+    come from. The hold key hashes the table, reason, ccn and fiscal year with every null written as '<null>' (the
+    hold-key encoding of the silver contract, where ccn takes the entity slot and the fiscal year the window-start slot)
+    [514] [523] [788]. -#}
 with
 
 program_rows as (
@@ -103,6 +106,7 @@ reasons as (
         program_rows.bronze_table,
         program_rows.ccn,
         program_rows.fiscal_year,
+        program_rows.member_sha256,
         case
             when program_rows.ccn is null then 'no_key'
             when program_rows.fiscal_year is null then 'no_fiscal_year'
@@ -119,7 +123,8 @@ row_holds as (
         hold_reason,
         case when hold_reason = 'no_key' then null else ccn end as ccn,
         cast(null as integer) as fiscal_year,
-        count(*) as row_count
+        count(*) as row_count,
+        list_sort(list(distinct member_sha256)) as member_sha256s
     from reasons
     where hold_reason is not null
     group by all
@@ -135,28 +140,51 @@ year_holds as (
         case when max(latest_file_count) > 1 then 'same_date_conflict' else 'repeated_in_file' end as hold_reason,
         ccn,
         fiscal_year,
-        count(*) as row_count
+        count(*) as row_count,
+        list_sort(list(distinct member_sha256)) as member_sha256s
     from candidates
     where latest_row_count > 1
     group by
         bronze_table,
         ccn,
         fiscal_year
+),
+
+all_holds as (
+    select * from row_holds
+    union all by name
+    select * from year_holds
 )
 
-select * from row_holds
-union all by name
-select * from year_holds
+select
+    bronze_table,
+    hold_reason,
+    ccn,
+    fiscal_year,
+    row_count,
+    md5(concat_ws(
+        '|',
+        bronze_table,
+        hold_reason,
+        coalesce(ccn, '<null>'),
+        '<null>',
+        coalesce(cast(fiscal_year as varchar), '<null>'),
+        '<null>'
+    )) as hold_key,
+    member_sha256s
+from all_holds
 {% endmacro %}
 
 {% macro hac_program_columns() %}
-{#- The HAC columns staged: payment reduction, Total HAC Score, PSI-90 under either name and the domain z-scores; the
-    republished HAI SIRs stay in bronze [516] [517] [518]. -#}
+{#- The HAC columns staged: payment reduction, Total HAC Score with its number, PSI-90 under either name, the domain z-scores
+    and the four measurement dates as dates beside their published text; the republished HAI SIRs stay in bronze [516] [517]
+    [518] [787]. -#}
 {{ return([
     ['payment_reduction_published', 'stg.payment_reduction'],
     ['is_payment_reduced', "case trim(stg.payment_reduction) when 'Yes' then true when 'No' then false end"],
     ['payment_reduction_footnote', 'stg.payment_reduction_footnote'],
     ['total_hac_score', 'stg.total_hac_score'],
+    ['total_hac_score_number', strict_number('stg.total_hac_score')],
     ['total_hac_score_footnote', 'coalesce(stg.total_hac_score_footnote, stg.total_hac_footnote)'],
     ['psi_90_value', 'coalesce(stg.psi_90_composite_value, stg.psi_90_composite)'],
     ['psi_90_w_z_score', 'stg.psi_90_w_z_score'],
@@ -165,16 +193,21 @@ select * from year_holds
     ['ssi_w_z_score', 'stg.ssi_w_z_score'],
     ['cdi_w_z_score', 'stg.cdi_w_z_score'],
     ['mrsa_w_z_score', 'stg.mrsa_w_z_score'],
-    ['psi_90_start_date', 'stg.psi_90_start_date'],
-    ['psi_90_end_date', 'stg.psi_90_end_date'],
-    ['hai_measures_start_date', 'stg.hai_measures_start_date'],
-    ['hai_measures_end_date', 'stg.hai_measures_end_date']
+    ['psi_90_start_date', validation_date('stg.psi_90_start_date')],
+    ['psi_90_end_date', validation_date('stg.psi_90_end_date')],
+    ['hai_measures_start_date', validation_date('stg.hai_measures_start_date')],
+    ['hai_measures_end_date', validation_date('stg.hai_measures_end_date')],
+    ['psi_90_start_date_text', 'stg.psi_90_start_date'],
+    ['psi_90_end_date_text', 'stg.psi_90_end_date'],
+    ['hai_measures_start_date_text', 'stg.hai_measures_start_date'],
+    ['hai_measures_end_date_text', 'stg.hai_measures_end_date']
 ]) }}
 {% endmacro %}
 
 {% macro vbp_program_columns() %}
-{#- Every published TPS domain score and the Total Performance Score, as published; clinical care and clinical outcomes stay
-    separate columns. The registry names the safety domain and the total only [520] [525]. -#}
+{#- Every published TPS domain score and the Total Performance Score, as published, each with its number when it is a plain
+    number; clinical care and clinical outcomes stay separate columns. The registry names the safety domain and the total
+    only, but every score column is cast [520] [525] [786]. -#}
 {{ return([
     ['unweighted_normalized_clinical_care_domain_score', 'stg.unweighted_normalized_clinical_care_domain_score'],
     ['weighted_normalized_clinical_care_domain_score', 'stg.weighted_normalized_clinical_care_domain_score'],
@@ -186,7 +219,18 @@ select * from year_holds
     ['weighted_safety_domain_score', 'stg.weighted_safety_domain_score'],
     ['unweighted_normalized_efficiency_and_cost_reduction_domain_score', 'stg.unweighted_normalized_efficiency_and_cost_reduction_domain_score'],
     ['weighted_efficiency_and_cost_reduction_domain_score', 'stg.weighted_efficiency_and_cost_reduction_domain_score'],
-    ['total_performance_score', 'stg.total_performance_score']
+    ['total_performance_score', 'stg.total_performance_score'],
+    ['unweighted_normalized_clinical_care_domain_score_number', strict_number('stg.unweighted_normalized_clinical_care_domain_score')],
+    ['weighted_normalized_clinical_care_domain_score_number', strict_number('stg.weighted_normalized_clinical_care_domain_score')],
+    ['unweighted_normalized_clinical_outcomes_domain_score_number', strict_number('stg.unweighted_normalized_clinical_outcomes_domain_score')],
+    ['weighted_normalized_clinical_outcomes_domain_score_number', strict_number('stg.weighted_normalized_clinical_outcomes_domain_score')],
+    ['unweighted_person_and_community_engagement_domain_score_number', strict_number('stg.unweighted_person_and_community_engagement_domain_score')],
+    ['weighted_person_and_community_engagement_domain_score_number', strict_number('stg.weighted_person_and_community_engagement_domain_score')],
+    ['unweighted_normalized_safety_domain_score_number', strict_number('stg.unweighted_normalized_safety_domain_score')],
+    ['weighted_safety_domain_score_number', strict_number('stg.weighted_safety_domain_score')],
+    ['unweighted_normalized_efficiency_and_cost_reduction_domain_score_number', strict_number('stg.unweighted_normalized_efficiency_and_cost_reduction_domain_score')],
+    ['weighted_efficiency_and_cost_reduction_domain_score_number', strict_number('stg.weighted_efficiency_and_cost_reduction_domain_score')],
+    ['total_performance_score_number', strict_number('stg.total_performance_score')]
 ]) }}
 {% endmacro %}
 

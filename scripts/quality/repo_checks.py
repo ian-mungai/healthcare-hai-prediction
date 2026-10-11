@@ -30,9 +30,9 @@ ASK = "if the rule seems wrong here, stop and ask the repository owner; there ar
 
 CREDENTIAL_NAMES = ("*.tfstate", "*.tfstate.backup", "*.tfplan", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ecdsa", "id_ed25519", "credentials")
 DATA_EXTENSIONS = {".csv", ".tsv", ".parquet", ".xlsx", ".xls", ".jsonl", ".ndjson", ".avro", ".db", ".sqlite"}
-# Folders declared for data files: synthetic test fixtures and the reviewed dbt seeds, which hold file labels and
-# checksums from the S3 manifests, never source data values.
-DATA_FOLDERS = ("tests/fixtures/", "dbt/seeds/")
+# Folders declared for data files: synthetic test fixtures, the reviewed dbt seeds and the formula recipes, which hold file
+# labels and checksums from the S3 manifests and rule definitions, never source data values.
+DATA_FOLDERS = ("tests/fixtures/", "dbt/seeds/", "features/recipes/")
 MAX_BYTES = 5 * 1024 * 1024
 
 NOQA = re.compile(r"#\s*" + "no" + r"qa\b(?::\s*(?P<codes>[A-Z]+\d+(?:\s*,\s*[A-Z]+\d+)*))?(?P<rest>.*)", re.IGNORECASE)

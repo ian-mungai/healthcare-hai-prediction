@@ -5477,6 +5477,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <li>One copy per stored file; bronze.stored_copies lists every copy</li>
           <li>Each row traces to its S3 key, version and SHA-256</li>
           <li>dbt staging keeps one row per HAI measurement window</li>
+          <li>Silver keeps each source&#39;s atomic grain; gold control bridge seeds map published keys to registry controls</li>
         </ul>
       </div>
 
@@ -5501,7 +5502,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         </div>
         <ul>
           <li>Orchestration with scheduled DAGs</li>
-          <li>Gold star schema at atomic grain (dbt dim_ and fct_); silver refactor to standard cleansing</li>
+          <li>Gold star schema at atomic grain (dbt dim_ and fct_)</li>
           <li>Feature store, MLflow model comparison and external validation</li>
         </ul>
       </div>

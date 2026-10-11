@@ -32,17 +32,19 @@ outcomes and counts, never data values or credentials.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import hashlib
 import io
 import json
 import os
 import re
+import secrets
 import shutil
 import sys
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -1112,6 +1114,13 @@ POS_DEC18 = (
     pos("070001", state_cd="CT", fips_state_cd="09", fips_cnty_cd="001", pgm_trmntn_cd="00"),
     # [616] No county but a ZIP that HUD splits between two counties.
     pos("010002", state_cd="DC", zip_cd="20001", pgm_trmntn_cd="00", bed_cnt=" "),
+    # [796] County fill in the 2018Q4 HUD quarter: a published county of another state (GA 13121) is invalid and filled from
+    # ZIP 36003 (01001); a missing county filled from the same ZIP; a Connecticut ZIP that maps only to a planning region.
+    pos("010021", state_cd="AL", fips_state_cd="13", fips_cnty_cd="121", zip_cd="36003", pgm_trmntn_cd="00"),
+    pos("010024", state_cd="AL", zip_cd="36003", pgm_trmntn_cd="00"),
+    pos("070021", state_cd="CT", zip_cd="06002", pgm_trmntn_cd="00"),
+    # [796] A ZIP the 2018Q4 quarter lists only with residential ratio 0: no residential county.
+    pos("010025", state_cd="AL", zip_cd="36005", pgm_trmntn_cd="00"),
 )
 POS_MAR19 = (
     pos(
@@ -1127,6 +1136,8 @@ POS_MAR19 = (
         rsdnt_pgm_dntl_sw="false",
     ),
     pos("010002", state_cd="AL", pgm_trmntn_cd="01", trmntn_exprtn_dt="20190115", bed_cnt="50"),
+    # [796] No HUD quarter is in force on 2019-03-31: the county stays null.
+    pos("010023", state_cd="AL", zip_cd="36003", pgm_trmntn_cd="00"),
 )
 # The snapshot before the 2021 window: a critical access, a Veterans Health Administration, a Connecticut, a Canadian and a
 # Maryland row; 010009 has HAI rows and a CMI but no POS row [309] [313] [314] [316] [317].
@@ -1142,6 +1153,9 @@ POS_DEC20 = (
     pos("210001", prvdr_ctgry_sbtyp_cd="01", state_cd="MD", fips_state_cd="24", fips_cnty_cd="005", pgm_trmntn_cd="00", bed_cnt="200"),
     # [701] 010006's only snapshot ends 36 months after its 2018 window starts: too far to carry.
     pos("010006", prvdr_ctgry_sbtyp_cd="01", state_cd="AL", fips_state_cd="01", fips_cnty_cd="089", pgm_trmntn_cd="00", bed_cnt="80"),
+    # [796] Quarter boundary: the 2020Q4 quarter in force does not list ZIP 35005, so the 2021Q1 county (01009) that starts
+    # the next day is not used and the county stays null (no residential county).
+    pos("010022", state_cd="AL", zip_cd="35005", pgm_trmntn_cd="00"),
 )
 # HAI rows for the 2021 calendar-year window, and one rolling window that is not a spine year [306].
 HAI_SPINE = (
@@ -1196,13 +1210,14 @@ OWNERSHIP_PERIODS = {
     "en1": ("Hospital Enrollments : 2022-11-01", "2022-11-01", "2022-11-30"),
     "xw1": ("Hospital Change of Ownership : 2022-03-31", "2022-01-01", "2022-03-31"),
     "xw2": ("Hospital Change of Ownership : 2022-09-30", "2022-07-01", "2022-09-30"),
+    "xw3": ("Hospital Change of Ownership : 2022-12-31", "2022-10-01", "2022-12-31"),
 }
 CMI_HEADER = "Provider No.\tCase Mix Index (CMI)\tTotal Cases\tTotal Relative Weights"
 CMI_HEADER_2007 = "Provider Number\tSum of Relative Weights\tTransfer Adjusted Cases\tTransfer Adjusted CMI\tUnadjusted Cases\tUnadjusted CMI"
 CMI_HEADER_2011 = "Provider ID\tCases\tTotal Case Mix\tCMI\tTransfer Adjusted Cases\tTransfer Adjusted Case Mix\tTransfer Adjusted CMI"
 GROUP_A = (
-    Stored("cms_provider_of_services", "pa", "CMS_POS__fixture_a", "POS_OTHER_DEC18.csv", sha("t1"), 7, "CMS_POS__fixture_a", records=POS_DEC18),
-    Stored("cms_provider_of_services", "pb", "CMS_POS__fixture_b", "POS_OTHER_MAR19.csv", sha("t2"), 2, "CMS_POS__fixture_b", records=POS_MAR19),
+    Stored("cms_provider_of_services", "pa", "CMS_POS__fixture_a", "POS_OTHER_DEC18.csv", sha("t1"), len(POS_DEC18), "CMS_POS__fixture_a", records=POS_DEC18),
+    Stored("cms_provider_of_services", "pb", "CMS_POS__fixture_b", "POS_OTHER_MAR19.csv", sha("t2"), len(POS_MAR19), "CMS_POS__fixture_b", records=POS_MAR19),
     Stored(
         "cms_cc_hospital_general_information",
         "g1",
@@ -1779,6 +1794,29 @@ CHOW_EVENT = cc(
     chow_type_text="CHANGE OF OWNERSHIP",
     effective_date="03/01/2021",
 )
+CHOW_MERGER = cc(
+    enrollment_id_buyer="O20000000006",
+    ccn_buyer="13025",
+    enrollment_id_seller="O20000000007",
+    ccn_seller="01T001",
+    chow_type_code="AM",
+    chow_type_text="ACQUISITION/MERGER",
+    effective_date="7/1/2022",
+)
+CHOW_RENAMED = cc(
+    enrollment_id_buyer="O20000000021",
+    enrollment_id_seller="O20000000022",
+    chow_type_code="CH",
+    chow_type_text="CHANGE OF OWNERSHIP",
+    effective_date="8/1/2022",
+)
+CHOW_REPEATED = cc(
+    enrollment_id_buyer="O20000000023",
+    enrollment_id_seller="O20000000024",
+    chow_type_code="CH",
+    chow_type_text="CHANGE OF OWNERSHIP",
+    effective_date="9/1/2022",
+)
 # AL3b [587] to [594]: HHS weeks of 2020 for 010001 (a ratio of sums and a sum; a December 2019 week outside the year) and
 # a 2020 week where two HHS hospitals share 010005's CCN (skipped); an owner release before the 2021 window where a direct
 # owner reports private equity and a managing organisation reports a REIT (a role that does not count).
@@ -1923,25 +1961,48 @@ GROUP_B5A = (
             cc(enrollment_id="O20000000014", ccn="78A005BP", state="IL"),
         ),
     ),
-    Stored("cms_change_of_ownership", "xw1", "CMS_CHOW__fixture_q", "Hospital_CHOW_2022Q1.csv", sha("y1"), 1, records=(CHOW_EVENT,)),
+    # [799] Change-of-ownership releases. A corrected event: the earlier release misspells the buyer's name. A merger whose
+    # seller associate ID is 123 in the earlier release and 0123 in the later one: both pad to 0000000123, but the published
+    # values differ, so the earlier release is held.
+    Stored(
+        "cms_change_of_ownership",
+        "xw1",
+        "CMS_CHOW__fixture_q",
+        "Hospital_CHOW_2022Q1.csv",
+        sha("y1"),
+        2,
+        records=(
+            (*CHOW_EVENT, ("organization_name_buyer", "FIXTUER BUYER HOSPITAL")),
+            (*CHOW_MERGER, ("associate_id_seller", "123")),
+        ),
+    ),
     Stored(
         "cms_change_of_ownership",
         "xw2",
         "CMS_CHOW__fixture_r",
         "Hospital_CHOW_2022.09.30.csv",
         sha("y2"),
-        2,
+        3,
         records=(
-            CHOW_EVENT,
-            cc(
-                enrollment_id_buyer="O20000000006",
-                ccn_buyer="13025",
-                enrollment_id_seller="O20000000007",
-                ccn_seller="01T001",
-                chow_type_code="AM",
-                chow_type_text="ACQUISITION/MERGER",
-                effective_date="7/1/2022",
-            ),
+            (*CHOW_EVENT, ("organization_name_buyer", "FIXTURE BUYER HOSPITAL")),
+            (*CHOW_MERGER, ("associate_id_seller", "0123")),
+            (*CHOW_RENAMED, ("organization_name_buyer", "RENAMED BUYER OLD NAME")),
+        ),
+    ),
+    # [798] [799] A later release: its row of the renamed event is kept and the earlier release's row is held. A repeated
+    # event inside this latest release: the lower source row is kept and the other is held as repeated_in_release. Two
+    # releases with one period are not in the fixture: assert_ownership_files_have_periods [365] rejects them.
+    Stored(
+        "cms_change_of_ownership",
+        "xw3",
+        "CMS_CHOW__fixture_s",
+        "Hospital_CHOW_2022.12.31.csv",
+        sha("y3"),
+        3,
+        records=(
+            (*CHOW_RENAMED, ("organization_name_buyer", "RENAMED BUYER NEW NAME")),
+            (*CHOW_REPEATED, ("npi_buyer", "1111111111")),
+            (*CHOW_REPEATED, ("npi_buyer", "2222222222")),
         ),
     ),
 )
@@ -2031,7 +2092,8 @@ GROUP_B5B = (
                 ccn="010001",
                 program_type="Medicare/Medicaid",
                 program_year="2014",
-                payment_year="3",
+                # [795] Leading zeros past four characters: the payment year is 3.
+                payment_year="00003",
                 attestation_month="7",
                 attestation_year="2014",
                 vendor_name="Fixture Developer A",
@@ -2063,7 +2125,11 @@ def hsa(ccn: str, zip_code: str, cases: str, days: str, charges: str) -> tuple[t
 
 
 # HUD quarters and service-area years as their receipts and job plans record them, keyed by release [403] [416].
-GEOGRAPHY_QUARTERS = {"HUD_API__q1": ("2021Q1", "2021-01-01", "2021-03-31"), "HUD_XLSX__q2": ("2020Q4", "2020-10-01", "2020-12-31")}
+GEOGRAPHY_QUARTERS = {
+    "HUD_API__q1": ("2021Q1", "2021-01-01", "2021-03-31"),
+    "HUD_XLSX__q2": ("2020Q4", "2020-10-01", "2020-12-31"),
+    "HUD_API__q3": ("2018Q4", "2018-10-01", "2018-12-31"),
+}
 GEOGRAPHY_COVERAGE = {"HSA__y15": ("2015-01-01", "2015-12-31"), "HSA__y16": ("2016-01-01", "2016-12-31")}
 RUCC_2013_HEADER = "FIPS|State|County_Name|Population_2010|RUCC_2013|Description"
 RUCA_2010_HEADER = (
@@ -2081,7 +2147,7 @@ GROUP_C1 = (
         "HUD_API__q1",
         "crosswalk.csv",
         sha("hz1"),
-        9,
+        10,
         records=(
             hud("00501", "36103", "0", "1", "NY"),
             hud("01001", "25013", "1", "1", "MA"),
@@ -2092,6 +2158,27 @@ GROUP_C1 = (
             hud("20001", "11001", "0.75", "0.75", "DC"),
             hud("20001", "24031", "2.5E-1", "0.25", "DC"),
             hud("00601", "72001", "1", "1", "PR"),
+            # [796] The quarter after 2020Q4 places ZIP 35005 in 01009; a 2020-12-31 snapshot must not use it.
+            hud("35005", "01009", "1", "1", "AL"),
+        ),
+    ),
+    # [796] The 2018Q4 quarter for the POS county fill: ZIP 20001 split between two counties (ambiguous), ZIP 35233 in
+    # 01009 (010001's published 01073 wins), ZIP 36003 in one county (fills), ZIP 06002 only in a Connecticut planning region,
+    # ZIP 36005 only with residential ratio 0.
+    Stored(
+        "hud_zip_county",
+        "hz3",
+        "HUD_API__q3",
+        "crosswalk.csv",
+        sha("hz3"),
+        6,
+        records=(
+            hud("20001", "11001", "0.75", "0.75", "DC"),
+            hud("20001", "24031", "0.25", "0.25", "DC"),
+            hud("35233", "01009", "1", "1", "AL"),
+            hud("36003", "01001", "1", "1", "AL"),
+            hud("06002", "09110", "1", "1", "CT"),
+            hud("36005", "01001", "0", "1", "AL"),
         ),
     ),
     Stored("hud_zip_county", "hz2", "HUD_XLSX__q2", "crosswalk.csv", sha("hz2"), 2, records=(hud("01001", "25013", "1", "1"), hud("35004", "01073", "1", "1"))),
@@ -2543,9 +2630,9 @@ def places_row(year: str, state: str, location: str, measure: str, value: str, k
     return tuple((base | fields).items())
 
 
-def gv_row(year: str, level: str, code: str, **values: str) -> tuple[tuple[str, str], ...]:
-    """Return one geographic variation row at the All age level."""
-    return tuple(({"year": year, "bene_geo_lvl": level, "bene_geo_cd": code, "bene_age_lvl": "All"} | values).items())
+def gv_row(year: str, level: str, code: str, age: str = "All", **values: str) -> tuple[tuple[str, str], ...]:
+    """Return one geographic variation row at an age level (All unless given)."""
+    return tuple(({"year": year, "bene_geo_lvl": level, "bene_geo_cd": code, "bene_age_lvl": age} | values).items())
 
 
 def wonder_row(county: str, year: str, deaths: str, rate: str, population: str = "55000") -> tuple[tuple[str, str], ...]:
@@ -2603,12 +2690,14 @@ GROUP_C4 = (
         "CMS_GV__x",
         "2014-2024_Original_Medicare_Geographic_Variation_Public_Use_File.csv",
         sha("gv1"),
-        4,
+        5,
         records=(
             gv_row("2023", "County", "01001", benes_total_cnt="9000", ma_prtcptn_rate="0.45", bene_dual_pct="*", pqi03_dbts_age_65_74="NA"),
             gv_row("2022", "County", "01001", ma_prtcptn_rate="0.44"),
             gv_row("2023", "State", "01", ma_prtcptn_rate="0.5"),
             gv_row("2023", "National", "", ma_prtcptn_rate="0.48"),
+            # A second age level for one county, year and field: the age level is part of the grain.
+            gv_row("2022", "County", "01001", age="65+", ma_prtcptn_rate="0.52"),
         ),
     ),
     # AL4a [604]: a 2020 county value for 010001's county (01073) before its 2021 window.
@@ -2763,7 +2852,17 @@ GROUP_D2 = (
         sha("ha3"),
         4,
         records=(
-            hac_row("010001", "2024", "6.1", "Yes", psi_90_composite_value="1.02", psi_90_w_z_score="0.4", clabsi_sir="0.8"),
+            hac_row(
+                "010001",
+                "2024",
+                "6.1",
+                "Yes",
+                psi_90_composite_value="1.02",
+                psi_90_w_z_score="0.4",
+                clabsi_sir="0.8",
+                psi_90_start_date="07/01/2021",
+                psi_90_end_date="06/30/2023",
+            ),
             hac_row("010005", "2024", "4.0", "No"),
             hac_row("010005", "2024", "4.2", "No"),
             hac_row("01-005", "2024", "3.0", "No"),
@@ -2775,7 +2874,7 @@ GROUP_D2 = (
         "2025-02-19",
         "hvbp_tps.csv",
         sha("tp1"),
-        2,
+        4,
         records=(
             tps_row(
                 "23.5",
@@ -2787,6 +2886,30 @@ GROUP_D2 = (
                 weighted_safety_domain_score="2.5",
             ),
             tps_row("Not Available", fiscal_year="2025", facility_id="010003"),
+            # Every score column published as a number (a negative value, exponents, a leading and a trailing dot) and a row of marks,
+            # so each _number column is checked against a value.
+            tps_row(
+                "41.25",
+                fiscal_year="2025",
+                facility_id="010005",
+                unweighted_normalized_clinical_care_domain_score="8.5",
+                weighted_normalized_clinical_care_domain_score="6.5",
+                unweighted_normalized_clinical_outcomes_domain_score="-14",
+                weighted_normalized_clinical_outcomes_domain_score="7.75",
+                unweighted_person_and_community_engagement_domain_score="1.5e1",
+                weighted_person_and_community_engagement_domain_score=".5",
+                unweighted_normalized_safety_domain_score="10.25",
+                weighted_safety_domain_score="2.5E-1",
+                unweighted_normalized_efficiency_and_cost_reduction_domain_score="11.",
+                weighted_efficiency_and_cost_reduction_domain_score="3.25",
+            ),
+            tps_row(
+                "Too Few to Report",
+                fiscal_year="2025",
+                facility_id="010007",
+                unweighted_normalized_clinical_care_domain_score="Not Available",
+                weighted_efficiency_and_cost_reduction_domain_score="N/A",
+            ),
         ),
     ),
     Stored(
@@ -3603,57 +3726,6 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
         (*BASE, Stored("cms_cc_hvbp_tps", "tpx", "2018-01-04", "hvbp_tps_12_01_2017.csv", sha("tpx"), 1, records=(tps_row("37.0", facility_id="010001"),))),
         frozenset(),
     ),
-    # [551] An outcome value that is neither a number nor a published token.
-    "outcome_value_uncast": (
-        "assert_hai_outcome_values_cast",
-        (*BASE, Stored("cms_hai_hospital", "hx1", "2022-06-01", "HAI_Bad_Value.csv", sha("ax1"), 1, content=("990001|HAI_2_SIR|01/01/2021|12/31/2021|1.2a",))),
-        frozenset(),
-    ),
-    # [553] A SIR that is not observed / predicted.
-    "outcome_ratio_mismatch": (
-        "assert_hai_outcome_consistent",
-        (
-            *BASE,
-            Stored(
-                "cms_hai_hospital",
-                "hx2",
-                "2022-06-01",
-                "HAI_Bad_Ratio.csv",
-                sha("ax2"),
-                3,
-                content=(
-                    "990001|HAI_3_SIR|01/01/2021|12/31/2021|2.000",
-                    "990001|HAI_3_NUMERATOR|01/01/2021|12/31/2021|3",
-                    "990001|HAI_3_ELIGCASES|01/01/2021|12/31/2021|2.000",
-                ),
-            ),
-        ),
-        frozenset(),
-    ),
-    # [553] A SIR outside its published bounds.
-    "outcome_outside_bounds": (
-        "assert_hai_outcome_consistent",
-        (
-            *BASE,
-            Stored(
-                "cms_hai_hospital",
-                "hx3",
-                "2022-06-01",
-                "HAI_Bad_Bounds.csv",
-                sha("ax3"),
-                2,
-                content=("990001|HAI_5_SIR|01/01/2021|12/31/2021|1.000", "990001|HAI_5_CILOWER|01/01/2021|12/31/2021|1.200"),
-            ),
-        ),
-        frozenset(),
-    ),
-    # [550] A calendar-year HAI measure ID outside the 36 known parts.
-    # [569] A C141 spelling outside the accepted list must fail, never fold into a category.
-    "care_compare_edv_unknown": (
-        "assert_care_compare_edv_known",
-        tuple(with_record(item, cc(facility_id="010001", measure_id="EDV", score="LOW", **DATES_2022)) if item.key == "te_al2a" else item for item in BASE),
-        frozenset(),
-    ),
     "outcome_measure_unknown": (
         "assert_hai_outcome_measures_known",
         (*BASE, Stored("cms_hai_hospital", "hx4", "2022-06-01", "HAI_Bad_Measure.csv", sha("ax4"), 1, content=("990001|HAI_7_SIR|01/01/2021|12/31/2021|0.5",))),
@@ -3679,7 +3751,7 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
     ),
     # [468] An MMD label the reviewed map does not name.
     "mmd_label_unmapped": (
-        "assert_mmd_controls_match_labels",
+        "assert_mmd_labels_have_unit",
         tuple(
             with_record(item, mmd_row("2023", "Unreviewed Condition", "1005", "Barbour County", "ALABAMA", "Rural", "500-999", "4.2"))
             if item.key == "mm02"
@@ -4241,38 +4313,7 @@ CMI_ROWS_SQL = (
     "coalesce(cases::VARCHAR, ''), coalesce(relative_weights::VARCHAR, ''), coalesce(transfer_adjusted_cmi::VARCHAR, ''), has_header::VARCHAR "
     "FROM int_cmi_hospital_rows ORDER BY ALL;"
 )
-CMI_YEARS_SQL = (
-    "SELECT ccn, rule_fiscal_year::VARCHAR, coalesce(data_fiscal_year::VARCHAR, ''), rule_stage, cmi::VARCHAR, left(member_sha256, 2) "
-    "FROM int_cmi_hospital_years ORDER BY ALL;"
-)
-CMI_HOLDS_SQL = "SELECT year_basis, ccn, fiscal_year::VARCHAR, hold_reason, file_count::VARCHAR FROM int_cmi_holds ORDER BY ALL;"
-CMI_DATA_YEARS_SQL = (
-    "SELECT ccn, data_fiscal_year::VARCHAR, rule_fiscal_year::VARCHAR, rule_stage, cmi::VARCHAR, left(member_sha256, 2) "
-    "FROM int_cmi_hospital_data_years ORDER BY ALL;"
-)
-# Silver step 7.3: SCD2 history, versions dated by source dates only [670] to [677].
-POS_HISTORY_SQL = (
-    "SELECT ccn, valid_from::VARCHAR, coalesce(valid_to::VARCHAR, ''), is_current::VARCHAR, is_after_gap::VARCHAR, "
-    "release_count::VARCHAR, coalesce(control_type_code, '') FROM int_hospital_pos_history ORDER BY ALL;"
-)
-OWNER_HISTORY_SQL = (
-    "SELECT enrollment_id, associate_id_owner, role_code, valid_from::VARCHAR, coalesce(valid_to::VARCHAR, ''), is_current::VARCHAR, "
-    "is_after_gap::VARCHAR, release_count::VARCHAR, bridged_releases::VARCHAR FROM int_hospital_ownership_history ORDER BY ALL;"
-)
 OWNER_PADDED_SQL = "SELECT associate_id_owner, period_end::VARCHAR FROM int_hospital_owner_rows WHERE associate_ids_padded ORDER BY ALL;"
-HGI_HISTORY_SQL = (
-    "SELECT ccn, valid_from::VARCHAR, coalesce(valid_to::VARCHAR, ''), is_current::VARCHAR, is_after_gap::VARCHAR, release_count::VARCHAR "
-    "FROM int_hospital_hgi_history ORDER BY ALL;"
-)
-SPINE_SQL = (
-    "SELECT ccn, window_year::VARCHAR, coalesce(pos_period_end::VARCHAR, ''), coalesce(state_code, ''), coalesce(county_fips, ''), "
-    "coalesce(cmi::VARCHAR, ''), coalesce(cmi_data_fiscal_year::VARCHAR, ''), coalesce(cmi_rule_fiscal_year::VARCHAR, ''), "
-    "coalesce(cmi_rule_stage, ''), has_pos_snapshot::VARCHAR, has_cmi::VARCHAR, is_cmi_held::VARCHAR, is_critical_access::VARCHAR, "
-    "is_veterans_affairs::VARCHAR, is_state_or_dc::VARCHAR, is_connecticut::VARCHAR, is_primary_population::VARCHAR, "
-    "is_sensitivity_population::VARCHAR, coalesce(state_source, ''), coalesce(county_source, ''), "
-    "coalesce(classification_source, ''), coalesce(provider_subtype_code, ''), coalesce(planning_region_fips, ''), "
-    "coalesce(planning_region_source, '') FROM int_hospital_spine ORDER BY ALL;"
-)
 TE_SQL = (
     "SELECT entity_id, measure_id, window_start::VARCHAR, window_end::VARCHAR, coalesce(score, ''), coalesce(sample, ''), left(member_sha256, 2) "
     "FROM int_cc_timely_effective_windows ORDER BY ALL;"
@@ -4287,10 +4328,6 @@ HCAHPS_SQL = (
     "left(member_sha256, 2) FROM int_cc_hcahps_windows ORDER BY ALL;"
 )
 CC_HOLDS_SQL = "SELECT bronze_table, coalesce(entity_id, ''), coalesce(measure_id, ''), hold_reason, row_count::VARCHAR FROM int_cc_window_holds ORDER BY ALL;"
-REGISTRY_SQL = (
-    "SELECT measure_control, entity_id, window_start::VARCHAR, coalesce(value_text, ''), coalesce(value_number::VARCHAR, ''), "
-    "coalesce(footnote_text, '') FROM int_registry_measure_windows ORDER BY ALL;"
-)
 HGI_SQL = (
     "SELECT ccn, release_date::VARCHAR, release_file_count::VARCHAR, coalesce(hospital_type, ''), coalesce(has_emergency_services::VARCHAR, ''), "
     "coalesce(overall_rating::VARCHAR, ''), coalesce(overall_rating_text, ''), coalesce(overall_rating_footnote, ''), left(member_sha256, 2) "
@@ -4302,25 +4339,16 @@ COST_REPORTS_SQL = (
     "coalesce(number_of_beds::VARCHAR, ''), coalesce(cost_to_charge_ratio::VARCHAR, ''), coalesce(total_bad_debt_expense::VARCHAR, '') "
     "FROM int_cost_reports ORDER BY ALL;"
 )
-COST_MEASURES_SQL = (
-    "SELECT rpt_rec_num, measure_control, coalesce(value_number::VARCHAR, ''), coalesce(value_code, '') FROM int_cost_report_measures "
-    "WHERE rpt_rec_num IN ('100001', '100002') ORDER BY ALL;"
-)
 IMPACT_VALUES_SQL = (
     "SELECT rule_fiscal_year::VARCHAR, rule_stage, sheet_name, ccn, field, coalesce(value_text, ''), coalesce(value_number::VARCHAR, '') "
     "FROM int_impact_hospital_values ORDER BY ALL;"
 )
 IMPACT_HOLDS_SQL = "SELECT rule_fiscal_year::VARCHAR, sheet_name, ccn, hold_reason, hold_rows::VARCHAR FROM int_impact_holds ORDER BY ALL;"
-IMPACT_MEASURES_SQL = (
-    "SELECT ccn, measure_control, field, coalesce(value_number::VARCHAR, ''), coalesce(value_code, '') FROM int_impact_measures "
-    "WHERE rule_fiscal_year = 2026 ORDER BY ALL;"
-)
 MUP_PROVIDERS_SQL = (
     "SELECT data_year::VARCHAR, release_year::VARCHAR, ccn, coalesce(tot_benes::VARCHAR, ''), coalesce(tot_dschrgs::VARCHAR, ''), "
     "coalesce(bene_race_natind_cnt::VARCHAR, ''), coalesce(bene_cc_ph_ckd_v2_pct::VARCHAR, '') FROM int_mup_providers ORDER BY ALL;"
 )
 MUP_DRG_SQL = "SELECT data_year::VARCHAR, ccn, drg_cd, tot_dschrgs::VARCHAR FROM int_mup_drg_discharges ORDER BY ALL;"
-MUP_MEASURES_SQL = "SELECT ccn, measure_control, field, coalesce(value_number::VARCHAR, '') FROM int_mup_measures WHERE data_year = 2023 ORDER BY ALL;"
 HHS_SQL = (
     "SELECT left(hospital_pk, 6), collection_week::VARCHAR, coalesce(ccn, ''), coalesce(is_corrected::VARCHAR, ''), "
     "coalesce(total_beds_7_day_avg::VARCHAR, ''), coalesce(inpatient_beds_used_covid_7_day_avg::VARCHAR, ''), "
@@ -4372,10 +4400,7 @@ BRONZE_COUNTS_SQL = (
 
 OCCMIX_SQL = (
     "SELECT ccn_published, survey_start_date::VARCHAR, survey_end_date::VARCHAR, is_deleted::VARCHAR, "
-    "coalesce(rnhr::VARCHAR, ''), coalesce(rn_paid_hour_wage::VARCHAR, ''), "
-    "coalesce(round(rn_paid_hour_share, 4)::VARCHAR, ''), "
-    "coalesce(round(lpnst_paid_hour_share, 4)::VARCHAR, ''), coalesce(round(naorat_paid_hour_share, 4)::VARCHAR, '') "
-    "FROM int_occmix_survey_rows ORDER BY ALL;"
+    "coalesce(rnhr::VARCHAR, '') FROM int_occmix_survey_rows ORDER BY ALL;"
 )
 
 HUD_SQL = (
@@ -4432,7 +4457,8 @@ PLACES_DETAIL_SQL = (
     "coalesce(footnote_symbol, ''), is_connecticut::VARCHAR FROM int_places_county_values WHERE measureid <> 'OBESITY' ORDER BY ALL;"
 )
 GV_SQL = (
-    "SELECT data_year::VARCHAR, county_fips, field, coalesce(value_number::VARCHAR, ''), coalesce(missing_token, '') FROM int_gv_county_values ORDER BY ALL;"
+    "SELECT data_year::VARCHAR, county_fips, field, bene_age_lvl, coalesce(value_number::VARCHAR, ''), coalesce(missing_token, '') "
+    "FROM int_gv_county_values ORDER BY ALL;"
 )
 WONDER_SQL = (
     "SELECT wonder_database, county_fips, data_year::VARCHAR, coalesce(deaths::VARCHAR, ''), coalesce(crude_rate::VARCHAR, ''), "
@@ -4446,102 +4472,20 @@ D1_WINDOWS_SQL = (
     "UNION ALL SELECT 'hrrp', entity_id, measure_id, window_start::VARCHAR, coalesce(excess_readmission_ratio, ''), left(member_sha256, 3) "
     "FROM int_cc_hrrp_windows ORDER BY ALL;"
 )
+# The validation window models carry the reviewed ID, the published ID and the number (moved from the archived control map).
 VALIDATION_SQL = (
-    "SELECT measure_control, entity_id, measure_id, window_start::VARCHAR, coalesce(value_text, ''), coalesce(value_number::VARCHAR, '') "
-    "FROM int_validation_measure_windows ORDER BY ALL;"
+    "SELECT 'visits', entity_id, measure_id, published_measure_id, window_start::VARCHAR, coalesce(score_number::VARCHAR, '') "
+    "FROM int_cc_unplanned_visits_windows "
+    "UNION ALL SELECT 'deaths', entity_id, measure_id, published_measure_id, window_start::VARCHAR, coalesce(score_number::VARCHAR, '') "
+    "FROM int_cc_complications_deaths_windows "
+    "UNION ALL SELECT 'hrrp', entity_id, measure_id, published_measure_id, window_start::VARCHAR, "
+    "coalesce(excess_readmission_ratio_number::VARCHAR, '') FROM int_cc_hrrp_windows ORDER BY ALL;"
 )
 VALIDATION_ALIASES_SQL = (
-    "SELECT DISTINCT entity_id, measure_id, published_measure_id FROM int_validation_measure_windows WHERE measure_id <> published_measure_id ORDER BY ALL;"
+    "SELECT DISTINCT entity_id, measure_id, published_measure_id FROM int_cc_unplanned_visits_windows WHERE measure_id <> published_measure_id ORDER BY ALL;"
 )
 VALIDATION_HOLDS_SQL = (
     "SELECT bronze_table, coalesce(entity_id, ''), coalesce(measure_id, ''), hold_reason, row_count::VARCHAR FROM int_validation_window_holds ORDER BY ALL;"
-)
-OUTCOME_SQL = (
-    "SELECT ccn, window_year::VARCHAR, hai_type, coalesce(sir_text, ''), coalesce(sir::VARCHAR, ''), coalesce(ci_lower::VARCHAR, ''), "
-    "coalesce(ci_upper::VARCHAR, ''), coalesce(observed::VARCHAR, ''), coalesce(predicted::VARCHAR, ''), coalesce(exposure::VARCHAR, ''), "
-    "coalesce(sir_footnote_codes, ''), baseline_held_parts::VARCHAR, is_primary_population::VARCHAR FROM int_spine_hai_outcomes "
-    "WHERE published_parts > 0 OR baseline_held_parts > 0 ORDER BY ALL;"
-)
-OUTCOME_STATUS_SQL = (
-    "SELECT ccn, window_year::VARCHAR, hai_type, alignment_status, staging_held_parts::VARCHAR, coalesce(sir_compared_to_national, ''), "
-    "coalesce(observed_footnote, ''), coalesce(ci_lower_footnote, '') FROM int_spine_hai_outcomes "
-    "WHERE alignment_status <> 'aligned' AND alignment_status <> 'not_in_source' OR sir_compared_to_national IS NOT NULL "
-    "OR observed_footnote IS NOT NULL OR ci_lower_footnote IS NOT NULL ORDER BY ALL;"
-)
-OUTCOME_STATUS_COUNT_SQL = "SELECT alignment_status, count(*)::VARCHAR FROM int_spine_hai_outcomes GROUP BY 1 ORDER BY 1;"
-OUTCOME_VALUES_SQL = "SELECT measure_control, count(*)::VARCHAR FROM int_hai_outcome_values GROUP BY 1 ORDER BY 1;"
-OUTCOME_VALUE_ROWS_SQL = (
-    "SELECT measure_control, outcome_key, field, value_text, coalesce(value_number::VARCHAR, ''), coalesce(review_decision, '') "
-    "FROM int_hai_outcome_values WHERE outcome_key = '070001:2021:HAI_2' OR outcome_key = '070001:2021:HAI_3' ORDER BY ALL;"
-)
-VALIDATION_ALIGNED_SQL = (
-    "SELECT ccn, window_year::VARCHAR, measure_control, measure, alignment_status, coalesce(value_text, ''), coalesce(value_number::VARCHAR, ''), "
-    "coalesce(period_start::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(fiscal_year::VARCHAR, ''), coalesce(overlap_days::VARCHAR, '') "
-    "FROM int_spine_validation_measures WHERE alignment_status IN ('aligned', 'held_in_staging', 'no_matching_period') ORDER BY ALL;"
-)
-VALIDATION_ALIGNED_COUNT_SQL = (
-    "SELECT 'rows', (SELECT count(*) FROM int_spine_validation_measures)::VARCHAR UNION ALL "
-    "SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_validation_measures)::VARCHAR UNION ALL "
-    "SELECT alignment_status, count(*)::VARCHAR FROM int_spine_validation_measures GROUP BY 1 ORDER BY 1;"
-)
-COUNTY_SQL = (
-    "SELECT ccn, window_year::VARCHAR, measure_source, measure_control, field, alignment_status, coalesce(value_text, ''), "
-    "coalesce(value_number::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(age_months::VARCHAR, ''), is_primary_county_join::VARCHAR "
-    "FROM int_spine_county_measures WHERE alignment_status IN ('aligned', 'held_in_staging') ORDER BY ALL;"
-)
-AL4B_SQL = (
-    "SELECT ccn, window_year::VARCHAR, measure_source, measure_control, field, alignment_status, coalesce(value_text, ''), "
-    "coalesce(value_number::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(value_note, '') "
-    "FROM (SELECT * FROM int_spine_county_context UNION ALL SELECT * FROM int_spine_linkage) "
-    "WHERE alignment_status IN ('aligned', 'held_in_staging') ORDER BY ALL;"
-)
-AL4B_COUNT_SQL = (
-    "SELECT 'context rows', (SELECT count(*) FROM int_spine_county_context)::VARCHAR UNION ALL "
-    "SELECT 'context keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_county_context)::VARCHAR UNION ALL "
-    "SELECT 'linkage rows', (SELECT count(*) FROM int_spine_linkage)::VARCHAR UNION ALL "
-    "SELECT 'linkage keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_linkage)::VARCHAR UNION ALL "
-    "SELECT measure_source || ' ' || alignment_status, count(*)::VARCHAR "
-    "FROM (SELECT * FROM int_spine_county_context UNION ALL SELECT * FROM int_spine_linkage) GROUP BY 1 ORDER BY 1;"
-)
-COUNTY_COUNT_SQL = (
-    "SELECT 'rows', (SELECT count(*) FROM int_spine_county_measures)::VARCHAR UNION ALL "
-    "SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_county_measures)::VARCHAR UNION ALL "
-    "SELECT measure_source || ' ' || alignment_status, count(*)::VARCHAR FROM int_spine_county_measures GROUP BY 1 ORDER BY 1;"
-)
-OPERATIONS_SQL = (
-    "SELECT ccn, window_year::VARCHAR, measure_source, measure_control, alignment_status, coalesce(value_text, ''), "
-    "coalesce(value_number::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(age_months::VARCHAR, ''), coalesce(unit_count::VARCHAR, ''), "
-    "coalesce(skipped_count::VARCHAR, '') FROM int_spine_operations_measures WHERE alignment_status IN ('aligned', 'held_in_staging') ORDER BY ALL;"
-)
-OPERATIONS_COUNT_SQL = (
-    "SELECT 'rows', (SELECT count(*) FROM int_spine_operations_measures)::VARCHAR UNION ALL "
-    "SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_operations_measures)::VARCHAR UNION ALL "
-    "SELECT alignment_status, count(*)::VARCHAR FROM int_spine_operations_measures GROUP BY 1 ORDER BY 1;"
-)
-HOSPITAL_SQL = (
-    "SELECT ccn, window_year::VARCHAR, measure_source, measure_control, field, alignment_status, coalesce(value_code, ''), "
-    "coalesce(value_number::VARCHAR, ''), coalesce(period_end::VARCHAR, ''), coalesce(rule_stage, ''), coalesce(age_months::VARCHAR, ''), "
-    "coalesce(period_copy_count::VARCHAR, '') FROM int_spine_hospital_measures WHERE alignment_status IN ('aligned', 'held_in_staging') ORDER BY ALL;"
-)
-HOSPITAL_COUNT_SQL = (
-    "SELECT 'rows', (SELECT count(*) FROM int_spine_hospital_measures)::VARCHAR UNION ALL "
-    "SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_hospital_measures)::VARCHAR UNION ALL "
-    "SELECT 'spine', (SELECT count(*) FROM int_hospital_spine)::VARCHAR UNION ALL "
-    "SELECT alignment_status, count(*)::VARCHAR FROM int_spine_hospital_measures GROUP BY 1 ORDER BY 1;"
-)
-CARE_SQL = (
-    "SELECT ccn, window_year::VARCHAR, measure_control, alignment_status, coalesce(value_text, ''), coalesce(value_number::VARCHAR, ''), "
-    "coalesce(value_category, ''), coalesce(period_end::VARCHAR, ''), coalesce(age_months::VARCHAR, ''), coalesce(release_file_count::VARCHAR, '') "
-    "FROM int_spine_care_compare_measures WHERE alignment_status <> 'not_in_source' ORDER BY ALL;"
-)
-CARE_COUNT_SQL = (
-    "SELECT (SELECT count(*) FROM int_spine_care_compare_measures)::VARCHAR, "
-    "(SELECT count(*) FROM int_hospital_spine)::VARCHAR || ' x ' || (SELECT count(*) FROM registry_measure_sources)::VARCHAR, "
-    "(SELECT count(DISTINCT alignment_key) FROM int_spine_care_compare_measures)::VARCHAR;"
-)
-OUTCOME_COUNT_SQL = (
-    "SELECT (SELECT count(*) FROM int_spine_hai_outcomes)::VARCHAR, (SELECT 6 * count(*) FROM int_hospital_spine)::VARCHAR, "
-    "(SELECT count(DISTINCT outcome_key) FROM int_spine_hai_outcomes)::VARCHAR;"
 )
 PROGRAM_YEARS_SQL = (
     "SELECT 'hac', ccn, fiscal_year::VARCHAR, coalesce(total_hac_score, ''), coalesce(is_payment_reduced::VARCHAR, ''), "
@@ -4554,16 +4498,24 @@ VBP_DOMAINS_SQL = (
     "coalesce(unweighted_normalized_clinical_outcomes_domain_score, ''), coalesce(weighted_person_and_community_engagement_domain_score, ''), "
     "coalesce(weighted_efficiency_and_cost_reduction_domain_score, '') FROM int_vbp_program_years ORDER BY ALL;"
 )
+# The program-year models carry each score's number (moved from the archived control map).
 PROGRAM_VALUES_SQL = (
-    "SELECT measure_control, ccn, fiscal_year::VARCHAR, field, coalesce(value_text, ''), coalesce(value_number::VARCHAR, '') "
-    "FROM int_validation_program_values ORDER BY ALL;"
+    "SELECT 'hac', ccn, fiscal_year::VARCHAR, 'total_hac_score', coalesce(total_hac_score, ''), coalesce(total_hac_score_number::VARCHAR, '') "
+    "FROM int_hac_program_years "
+    "UNION ALL SELECT 'vbp', ccn, fiscal_year::VARCHAR, 'total_performance_score', coalesce(total_performance_score, ''), "
+    "coalesce(total_performance_score_number::VARCHAR, '') FROM int_vbp_program_years "
+    "UNION ALL SELECT 'vbp', ccn, fiscal_year::VARCHAR, 'unweighted_normalized_safety_domain_score', "
+    "coalesce(unweighted_normalized_safety_domain_score, ''), coalesce(unweighted_normalized_safety_domain_score_number::VARCHAR, '') "
+    "FROM int_vbp_program_years WHERE unweighted_normalized_safety_domain_score IS NOT NULL "
+    "UNION ALL SELECT 'vbp', ccn, fiscal_year::VARCHAR, 'weighted_safety_domain_score', coalesce(weighted_safety_domain_score, ''), "
+    "coalesce(weighted_safety_domain_score_number::VARCHAR, '') FROM int_vbp_program_years WHERE weighted_safety_domain_score IS NOT NULL ORDER BY ALL;"
 )
 PROGRAM_HOLDS_SQL = (
     "SELECT bronze_table, coalesce(ccn, ''), coalesce(fiscal_year::VARCHAR, ''), hold_reason, row_count::VARCHAR "
     "FROM int_validation_program_holds ORDER BY ALL;"
 )
 MMD_SQL = (
-    "SELECT measure_control, coalesce(file_control, ''), data_year::VARCHAR, geography_level, coalesce(county_fips, ''), coalesce(state_fips, ''), "
+    "SELECT condition_label, coalesce(file_control, ''), data_year::VARCHAR, geography_level, coalesce(county_fips, ''), coalesce(state_fips, ''), "
     "coalesce(value_number::VARCHAR, ''), value_unit, denominator_band, is_possible_suppression::VARCHAR, is_unknown_county::VARCHAR, "
     "is_connecticut::VARCHAR FROM int_mmd_prevalence ORDER BY ALL;"
 )
@@ -4868,28 +4820,17 @@ def read_models(case: str) -> dict[str, Any]:
         "holds": [tuple(row) for row in duckdb_csv(database, HOLDS_SQL)],
         "pos": [tuple(row) for row in duckdb_csv(database, POS_SQL)],
         "cmi_rows": [tuple(row) for row in duckdb_csv(database, CMI_ROWS_SQL)],
-        "cmi_years": [tuple(row) for row in duckdb_csv(database, CMI_YEARS_SQL)],
-        "cmi_holds": [tuple(row) for row in duckdb_csv(database, CMI_HOLDS_SQL)],
-        "cmi_data_years": [tuple(row) for row in duckdb_csv(database, CMI_DATA_YEARS_SQL)],
-        "spine": [tuple(row) for row in duckdb_csv(database, SPINE_SQL)],
-        "pos_history": [tuple(row) for row in duckdb_csv(database, POS_HISTORY_SQL)],
-        "owner_history": [tuple(row) for row in duckdb_csv(database, OWNER_HISTORY_SQL)],
         "owner_padded": [tuple(row) for row in duckdb_csv(database, OWNER_PADDED_SQL)],
-        "hgi_history": [tuple(row) for row in duckdb_csv(database, HGI_HISTORY_SQL)],
         "timely": [tuple(row) for row in duckdb_csv(database, TE_SQL)],
         "maternal": [tuple(row) for row in duckdb_csv(database, MATERNAL_SQL)],
         "hcahps": [tuple(row) for row in duckdb_csv(database, HCAHPS_SQL)],
         "cc_holds": [tuple(row) for row in duckdb_csv(database, CC_HOLDS_SQL)],
-        "registry": [tuple(row) for row in duckdb_csv(database, REGISTRY_SQL)],
         "hgi": [tuple(row) for row in duckdb_csv(database, HGI_SQL)],
         "cost_reports": [tuple(row) for row in duckdb_csv(database, COST_REPORTS_SQL)],
-        "cost_measures": [tuple(row) for row in duckdb_csv(database, COST_MEASURES_SQL)],
         "impact_values": [tuple(row) for row in duckdb_csv(database, IMPACT_VALUES_SQL)],
-        "impact_measures": [tuple(row) for row in duckdb_csv(database, IMPACT_MEASURES_SQL)],
         "impact_holds": [tuple(row) for row in duckdb_csv(database, IMPACT_HOLDS_SQL)],
         "mup_providers": [tuple(row) for row in duckdb_csv(database, MUP_PROVIDERS_SQL)],
         "mup_drg": [tuple(row) for row in duckdb_csv(database, MUP_DRG_SQL)],
-        "mup_measures": [tuple(row) for row in duckdb_csv(database, MUP_MEASURES_SQL)],
         "owners": [tuple(row) for row in duckdb_csv(database, OWNERS_SQL)],
         "enrollments": [tuple(row) for row in duckdb_csv(database, ENROLLMENTS_SQL)],
         "enrollment_ccn_sources": [tuple(row) for row in duckdb_csv(database, ENROLLMENT_SOURCES_SQL)],
@@ -4924,24 +4865,6 @@ def read_models(case: str) -> dict[str, Any]:
         "program_values": [tuple(row) for row in duckdb_csv(database, PROGRAM_VALUES_SQL)],
         "vbp_domains": [tuple(row) for row in duckdb_csv(database, VBP_DOMAINS_SQL)],
         "program_holds": [tuple(row) for row in duckdb_csv(database, PROGRAM_HOLDS_SQL)],
-        "hai_outcomes": [tuple(row) for row in duckdb_csv(database, OUTCOME_SQL)],
-        "care_compare": [tuple(row) for row in duckdb_csv(database, CARE_SQL)],
-        "hospital_measures": [tuple(row) for row in duckdb_csv(database, HOSPITAL_SQL)],
-        "operations_measures": [tuple(row) for row in duckdb_csv(database, OPERATIONS_SQL)],
-        "validation_aligned": [tuple(row) for row in duckdb_csv(database, VALIDATION_ALIGNED_SQL)],
-        "county_measures": [tuple(row) for row in duckdb_csv(database, COUNTY_SQL)],
-        "county_measure_counts": [tuple(row) for row in duckdb_csv(database, COUNTY_COUNT_SQL)],
-        "al4b_context": [tuple(row) for row in duckdb_csv(database, AL4B_SQL)],
-        "al4b_context_counts": [tuple(row) for row in duckdb_csv(database, AL4B_COUNT_SQL)],
-        "validation_aligned_counts": [tuple(row) for row in duckdb_csv(database, VALIDATION_ALIGNED_COUNT_SQL)],
-        "operations_measure_counts": [tuple(row) for row in duckdb_csv(database, OPERATIONS_COUNT_SQL)],
-        "hospital_measure_counts": [tuple(row) for row in duckdb_csv(database, HOSPITAL_COUNT_SQL)],
-        "care_compare_counts": [tuple(row) for row in duckdb_csv(database, CARE_COUNT_SQL)],
-        "hai_outcome_counts": [tuple(row) for row in duckdb_csv(database, OUTCOME_COUNT_SQL)],
-        "hai_outcome_status": [tuple(row) for row in duckdb_csv(database, OUTCOME_STATUS_SQL)],
-        "hai_outcome_status_counts": [tuple(row) for row in duckdb_csv(database, OUTCOME_STATUS_COUNT_SQL)],
-        "hai_outcome_values": [tuple(row) for row in duckdb_csv(database, OUTCOME_VALUES_SQL)],
-        "hai_outcome_value_rows": [tuple(row) for row in duckdb_csv(database, OUTCOME_VALUE_ROWS_SQL)],
         "hpsa": [tuple(row) for row in duckdb_csv(database, HPSA_SQL)],
         "hpsa_sources": [tuple(row) for row in duckdb_csv(database, HPSA_SOURCES_SQL)],
         "places_sources": [tuple(row) for row in duckdb_csv(database, PLACES_SOURCES_SQL)],
@@ -4950,12 +4873,6 @@ def read_models(case: str) -> dict[str, Any]:
             tuple(row)
             for row in duckdb_csv(
                 database, "SELECT hold_reason, count(*)::VARCHAR FROM int_occmix_survey_rows WHERE hold_reason IS NOT NULL GROUP BY ALL ORDER BY ALL;"
-            )
-        ],
-        "occmix_measures": [
-            tuple(row)
-            for row in duckdb_csv(
-                database, "SELECT measure_control, count(*)::VARCHAR, count(value_number)::VARCHAR FROM int_occmix_measures GROUP BY ALL ORDER BY ALL;"
             )
         ],
     }
@@ -4996,15 +4913,22 @@ def geography_checks(base: dict[str, Any]) -> dict[str, bool]:
     # suppression kept as flags.
     checks["hud_matches_expected"] = base.get("hud") == sorted(
         [
-            ("2021Q1", "00501", "36103", "state", "false", "0.0", "1.0", "false"),
-            ("2021Q1", "01001", "25013", "state", "false", "1.0", "1.0", "true"),
-            ("2021Q1", "06001", "09110", "state", "true", "1.0", "1.0", "true"),
-            ("2021Q1", "53001", "55117", "state", "false", "1.0", "0.9995", "true"),
-            ("2021Q1", "20001", "11001", "state", "false", "0.75", "0.75", "true"),
-            ("2021Q1", "20001", "24031", "state", "false", "0.25", "0.25", "true"),
-            ("2021Q1", "00601", "72001", "territory", "false", "1.0", "1.0", "true"),
+            ("2018Q4", "06002", "09110", "state", "true", "1.0", "1.0", "true"),
+            ("2018Q4", "20001", "11001", "state", "false", "0.75", "0.75", "true"),
+            ("2018Q4", "20001", "24031", "state", "false", "0.25", "0.25", "true"),
+            ("2018Q4", "35233", "01009", "state", "false", "1.0", "1.0", "true"),
+            ("2018Q4", "36003", "01001", "state", "false", "1.0", "1.0", "true"),
+            ("2018Q4", "36005", "01001", "state", "false", "0.0", "1.0", "false"),
             ("2020Q4", "01001", "25013", "state", "false", "1.0", "1.0", "true"),
             ("2020Q4", "35004", "01073", "state", "false", "1.0", "1.0", "true"),
+            ("2021Q1", "00501", "36103", "state", "false", "0.0", "1.0", "false"),
+            ("2021Q1", "00601", "72001", "territory", "false", "1.0", "1.0", "true"),
+            ("2021Q1", "01001", "25013", "state", "false", "1.0", "1.0", "true"),
+            ("2021Q1", "06001", "09110", "state", "true", "1.0", "1.0", "true"),
+            ("2021Q1", "20001", "11001", "state", "false", "0.75", "0.75", "true"),
+            ("2021Q1", "20001", "24031", "state", "false", "0.25", "0.25", "true"),
+            ("2021Q1", "35005", "01009", "state", "false", "1.0", "1.0", "true"),
+            ("2021Q1", "53001", "55117", "state", "false", "1.0", "0.9995", "true"),
         ]
     )
     checks["hud_holds_match_expected"] = base.get("hud_holds") == sorted(
@@ -5062,7 +4986,6 @@ def geography_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("2016", "10001", "false", "32422", "false", "false", "15.0", "false", "1000.0", "false"),
         ]
     )
-    checks["geography_seed_matches_registry"] = geography_seed_matches()
     checks["geography_generator_refuses_file_without_period"] = refuses_geography(
         lambda: geography_file_periods.rows_for(
             [{"table": "hud_zip_county", "sha256": sha("q9"), "release_id": "missing", "file_name": "crosswalk.csv"}], {}, {}
@@ -5126,7 +5049,6 @@ def county_context_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("2000", "01001", "g1v1r", "15.2", ""),
         ]
     )
-    checks["acs_svi_seed_matches_registry"] = acs_svi_seed_matches()
     checks["vintage_generator_refuses_acs_name_without_year"] = refuses_geography(
         lambda: geography_file_periods.rows_for([{"table": "acs_dp04", "sha256": sha("q7"), "release_id": "r", "file_name": "DP04-Data.csv"}], {}, {}),
         "no publisher vintage",
@@ -5165,7 +5087,6 @@ def income_labor_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("01001", "labor_force", "2023", "1", "false", "false", "26000.0", "", "", "2026-09-26"),
         ]
     )
-    checks["income_labor_seed_matches_registry"] = income_labor_seed_matches()
     checks["vintage_generator_refuses_saipe_name_without_year"] = refuses_geography(
         lambda: geography_file_periods.rows_for([{"table": "saipe_text_lines", "sha256": sha("q5"), "release_id": "r", "file_name": "estall.txt"}], {}, {}),
         "no publisher year",
@@ -5201,14 +5122,16 @@ def county_health_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("01007", "ARTHRITIS", "CrdPrv", "21.0", "", "", "false"),
         ("09120", "LONELINESS", "CrdPrv", "30.2", "", "", "true"),
     ]
+    # S1: every age level is kept (the All filter left silver); the fixture adds one 65+ row.
     checks["gv_matches_expected"] = base.get("gv") == sorted(
         [
-            ("2020", "01073", "ma_prtcptn_rate", "0.3", ""),
-            ("2023", "01001", "bene_dual_pct", "", "*"),
-            ("2023", "01001", "benes_total_cnt", "9000.0", ""),
-            ("2023", "01001", "ma_prtcptn_rate", "0.45", ""),
-            ("2023", "01001", "pqi03_dbts_age_65_74", "", "NA"),
-            ("2022", "01001", "ma_prtcptn_rate", "0.44", ""),
+            ("2020", "01073", "ma_prtcptn_rate", "All", "0.3", ""),
+            ("2023", "01001", "bene_dual_pct", "All", "", "*"),
+            ("2023", "01001", "benes_total_cnt", "All", "9000.0", ""),
+            ("2023", "01001", "ma_prtcptn_rate", "All", "0.45", ""),
+            ("2023", "01001", "pqi03_dbts_age_65_74", "All", "", "NA"),
+            ("2022", "01001", "ma_prtcptn_rate", "All", "0.44", ""),
+            ("2022", "01001", "ma_prtcptn_rate", "65+", "0.52", ""),
         ]
     )
     checks["wonder_matches_expected"] = base.get("wonder") == sorted(
@@ -5220,7 +5143,6 @@ def county_health_checks(base: dict[str, Any]) -> dict[str, bool]:
             (SINGLE_RACE, "01001", "2024", "520.0", "", "Unreliable", "repeated_in_wider_export"),
         ]
     )
-    checks["county_health_seed_matches_registry"] = county_health_seed_matches()
     checks["vintage_generator_refuses_wonder_without_database"] = refuses_geography(
         lambda: geography_file_periods.rows_for(
             [{"table": "wonder_county_mortality", "sha256": sha("q3"), "release_id": "r", "file_name": "county_year.csv"}], {}, {}
@@ -5235,15 +5157,81 @@ def shortage_checks(base: dict[str, Any]) -> dict[str, bool]:
     checks: dict[str, bool] = {}
     # [468] to [473] Controls from the label map, C258.01 from its earlier capture; codes padded; state rows apart; zeros
     # flagged; the unknown county and Connecticut flagged; the per-100,000 unit only for C258.78.
+    # S1: the published condition label replaces the registry control (the label-control map is in the gold bridge).
     checks["mmd_matches_expected"] = base.get("mmd") == sorted(
         [
-            ("C258.02", "C258.02", "2020", "county", "01073", "01", "11.0", "percent", "10,000+", "false", "false", "false"),
-            ("C258.01", "", "2022", "county", "01001", "01", "0.8", "percent", "1,000-4,999", "false", "false", "false"),
-            ("C258.02", "C258.02", "2023", "county", "01001", "01", "12.5", "percent", "1,000-4,999", "false", "false", "false"),
-            ("C258.02", "C258.02", "2023", "county", "01003", "01", "0.0", "percent", "11-499", "true", "false", "false"),
-            ("C258.02", "C258.02", "2023", "county", "09001", "09", "10.1", "percent", "10,000+", "false", "false", "true"),
-            ("C258.02", "C258.02", "2023", "county", "09990", "09", "3.0", "percent", "11-499", "false", "true", "true"),
-            ("C258.78", "C258.78", "2023", "state", "", "01", "170.0", "per_100000", "10,000+", "false", "false", "false"),
+            (
+                "Alzheimer's Disease, Related Disorders, or Senile Dementia",
+                "C258.02",
+                "2020",
+                "county",
+                "01073",
+                "01",
+                "11.0",
+                "percent",
+                "10,000+",
+                "false",
+                "false",
+                "false",
+            ),
+            ("Acute Myocardial Infarction", "", "2022", "county", "01001", "01", "0.8", "percent", "1,000-4,999", "false", "false", "false"),
+            (
+                "Alzheimer's Disease, Related Disorders, or Senile Dementia",
+                "C258.02",
+                "2023",
+                "county",
+                "01001",
+                "01",
+                "12.5",
+                "percent",
+                "1,000-4,999",
+                "false",
+                "false",
+                "false",
+            ),
+            (
+                "Alzheimer's Disease, Related Disorders, or Senile Dementia",
+                "C258.02",
+                "2023",
+                "county",
+                "01003",
+                "01",
+                "0.0",
+                "percent",
+                "11-499",
+                "true",
+                "false",
+                "false",
+            ),
+            (
+                "Alzheimer's Disease, Related Disorders, or Senile Dementia",
+                "C258.02",
+                "2023",
+                "county",
+                "09001",
+                "09",
+                "10.1",
+                "percent",
+                "10,000+",
+                "false",
+                "false",
+                "true",
+            ),
+            (
+                "Alzheimer's Disease, Related Disorders, or Senile Dementia",
+                "C258.02",
+                "2023",
+                "county",
+                "09990",
+                "09",
+                "3.0",
+                "percent",
+                "11-499",
+                "false",
+                "true",
+                "true",
+            ),
+            ("Sickle Cell Disease", "C258.78", "2023", "state", "", "01", "170.0", "per_100000", "10,000+", "false", "false", "false"),
         ]
     )
     # [475] to [479] The exact repeat held; both designations of a reused ID kept; XXXXX kept as a token; dates and scores typed.
@@ -5273,7 +5261,6 @@ def shortage_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("00700", "2026-09-24", "MUA", "2005-10-28", "Census Tract", "113.02", "", "XXXXX", "61.3", "Designated", "", "true", ""),
         ]
     )
-    checks["shortage_seed_matches_registry"] = shortage_seed_matches()
     checks["condition_map_refuses_shared_label"] = refuses_condition(
         lambda: mmd_conditions.rows_for(
             [
@@ -5311,8 +5298,8 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("visits", "010001", "OP_32", "2020-07-01", "11.5", "r9r"),
             ("visits", "010001", "OP_32", "2021-01-01", "11.0", "r9r"),
             ("visits", "010001", "OP_32", "2022-01-01", "12.5", "vi1"),
-            ("visits", "010001", "OP-32", "2022-01-01", "13.0", "vi1"),
-            ("visits", "010003", "OP-32", "2022-01-01", "4.0", "vi1"),
+            # [A12] The OP-32 row beside the exact OP_32 for 010001 is dropped; 010003's alias-only row takes OP_32.
+            ("visits", "010003", "OP_32", "2022-01-01", "4.0", "vi1"),
             ("visits", "010001", "READM_30_HF", "2022-01-01", "20.1", "vi1"),
             ("visits", "010003", "OP_35_ED", "2022-01-01", "Not Available", "vi1"),
             ("visits", "010003", "OP_36", "2022-01-01", "7.0", "vi1"),
@@ -5325,33 +5312,24 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("hrrp", "010003", "READM-30-AMI-HRRP", "2020-07-01", "N/A", "hr1"),
         ]
     )
-    # [508] [509] [510] [629] Exact IDs, plus OP-32 where its hospital and window have no OP_32 row (010003); OP-32 beside OP_32
-    # (010001) and READM_30_HF stay out; E038 and E039 read PSI_90 and PSI_13 (registry revision 3, STG-014) and the older
-    # PSI_90_SAFETY stays out (no alias, STG-013); parents and children both; tokens stay text.
+    # [508] [509] [510] [629] [A12] Each window keeps its published ID beside the reviewed one; numbers only for plain numbers.
+    # The control mapping (C289 to C291, E038, E039) moved to the gold bridge (B1's bridge tests).
     checks["validation_matches_expected"] = base.get("validation") == sorted(
         [
-            ("C290", "010001", "OP_32", "2020-07-01", "11.5", "11.5"),
-            ("C290", "010001", "OP_32", "2021-01-01", "11.0", "11.0"),
-            ("C290.01", "010001", "OP_32", "2020-07-01", "11.5", "11.5"),
-            ("C290.01", "010001", "OP_32", "2021-01-01", "11.0", "11.0"),
-            ("C289", "010001", "READM-30-HF-HRRP", "2020-07-01", "1.0123", "1.0123"),
-            ("C289", "010003", "READM-30-AMI-HRRP", "2020-07-01", "N/A", ""),
-            ("C289.01", "010003", "READM-30-AMI-HRRP", "2020-07-01", "N/A", ""),
-            ("C289.04", "010001", "READM-30-HF-HRRP", "2020-07-01", "1.0123", "1.0123"),
-            ("C290", "010001", "OP_32", "2022-01-01", "12.5", "12.5"),
-            ("C290", "010001", "OP_36", "2020-01-01", "9.9", "9.9"),
-            ("C290", "010003", "OP_35_ED", "2022-01-01", "Not Available", ""),
-            ("C290", "010003", "OP_36", "2022-01-01", "7.0", "7.0"),
-            ("C290.01", "010001", "OP_32", "2022-01-01", "12.5", "12.5"),
-            ("C290.03", "010003", "OP_35_ED", "2022-01-01", "Not Available", ""),
-            ("C290.04", "010001", "OP_36", "2020-01-01", "9.9", "9.9"),
-            ("C290.04", "010003", "OP_36", "2022-01-01", "7.0", "7.0"),
-            ("C291", "010001", "MORT_30_AMI", "2022-01-01", "12.3", "12.3"),
-            ("C291.01", "010001", "MORT_30_AMI", "2022-01-01", "12.3", "12.3"),
-            ("C290", "010003", "OP_32", "2022-01-01", "4.0", "4.0"),
-            ("C290.01", "010003", "OP_32", "2022-01-01", "4.0", "4.0"),
-            ("E038", "010001", "PSI_90", "2022-01-01", "1.01", "1.01"),
-            ("E039", "010001", "PSI_13", "2022-01-01", "4.52", "4.52"),
+            ("visits", "010001", "OP_32", "OP_32", "2020-07-01", "11.5"),
+            ("visits", "010001", "OP_32", "OP_32", "2021-01-01", "11.0"),
+            ("visits", "010001", "OP_32", "OP_32", "2022-01-01", "12.5"),
+            ("visits", "010003", "OP_32", "OP-32", "2022-01-01", "4.0"),
+            ("visits", "010001", "READM_30_HF", "READM_30_HF", "2022-01-01", "20.1"),
+            ("visits", "010003", "OP_35_ED", "OP_35_ED", "2022-01-01", ""),
+            ("visits", "010003", "OP_36", "OP_36", "2022-01-01", "7.0"),
+            ("visits", "010001", "OP_36", "OP_36", "2020-01-01", "9.9"),
+            ("deaths", "010001", "MORT_30_AMI", "MORT_30_AMI", "2022-01-01", "12.3"),
+            ("deaths", "010001", "PSI_90", "PSI_90", "2022-01-01", "1.01"),
+            ("deaths", "010001", "PSI_90_SAFETY", "PSI_90_SAFETY", "2022-01-01", "0.99"),
+            ("deaths", "010001", "PSI_13", "PSI_13", "2022-01-01", "4.52"),
+            ("hrrp", "010001", "READM-30-HF-HRRP", "READM-30-HF-HRRP", "2020-07-01", "1.0123"),
+            ("hrrp", "010003", "READM-30-AMI-HRRP", "READM-30-AMI-HRRP", "2020-07-01", ""),
         ]
     )
     checks["validation_aliases_match_expected"] = base.get("validation_aliases") == [("010003", "OP_32", "OP-32")]
@@ -5359,564 +5337,7 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("cms_cc_complications_and_deaths_hospital", "010001", "MORT_30_HF", "repeated_in_file", "2"),
         ("cms_cc_unplanned_hospital_visits_hospital", "", "", "no_key", "1"),
     ]
-    checks["validation_seed_matches_registry"] = validation_seed_matches()
     return checks
-
-
-def county_measure_checks(base: dict[str, Any]) -> dict[str, bool]:
-    """Compare the base fixture's AL4a rows with their expected values [604] to [611]."""
-    checks: dict[str, bool] = {}
-    # [604] The latest data year before the start through the POS county: 2020 GV and MMD values for 010001's county; WONDER
-    # 2018 from the single-race export (907.4, not the bridged 909.1); RUCC 2013. Reviewed row by row.
-    checks["county_measures_match_expected"] = base.get("county_measures") == [
-        ("010001", "2021", "geographic_variation", "C252", "ma_prtcptn_rate", "aligned", "0.3", "0.3", "2020-12-31", "1", "true"),
-        ("010001", "2021", "mmd", "C258.02", "prevalence", "aligned", "11.0", "11.0", "2020-12-31", "1", "true"),
-        ("01001F", "2021", "rucc", "C198", "rucc_code", "aligned", "2", "", "2013-12-31", "85", "true"),
-        ("01001F", "2021", "wonder", "C259", "crude_rate", "aligned", "907.4", "907.4", "2018-12-31", "25", "true"),
-        ("01001F", "2021", "wonder", "C259", "deaths", "aligned", "500.0", "500.0", "2018-12-31", "25", "true"),
-        ("01001F", "2021", "wonder", "C259", "population", "aligned", "55100.0", "55100.0", "2018-12-31", "25", "true"),
-    ]
-    # [611] One row per spine row and control-field (12 x 195), unique keys, and the counts per source and status.
-    checks["county_measure_counts_match_expected"] = base.get("county_measure_counts") == [
-        ("geographic_variation aligned", "1"),
-        ("geographic_variation no_period_before_start", "3"),
-        ("geographic_variation not_in_source", "296"),
-        ("keys", "2925"),
-        ("mmd aligned", "1"),
-        ("mmd no_period_before_start", "6"),
-        ("mmd not_in_source", "1193"),
-        ("places no_period_before_start", "2"),
-        ("places not_in_source", "1288"),
-        ("rows", "2925"),
-        ("rucc aligned", "1"),
-        ("rucc no_period_before_start", "1"),
-        ("rucc not_in_source", "13"),
-        ("wonder aligned", "3"),
-        ("wonder no_period_before_start", "1"),
-        ("wonder not_in_source", "116"),
-    ]
-    return checks
-
-
-# AL4b, reviewed row by row: [634] ACS vintage 2018 and 2014 and SAIPE 1999 before the start; [636] HPSA and MUA in force
-# for 01001F (score as published at the capture), 0 elsewhere with none in force, and 010001's county held by an undated
-# withdrawal; [638] the service area from 2015, the latest year with unsuppressed rows (2016's cases are suppressed).
-AL4B_EXPECTED: list[tuple[str, ...]] = [
-    ("010001", "2019", "hpsa", "C249", "designations_in_force", "held_in_staging", "", "", "2018-12-31", ""),
-    ("010001", "2019", "hpsa", "C250", "highest_score", "held_in_staging", "", "", "2018-12-31", ""),
-    ("010001", "2019", "hsa", "L001", "service_area_cases", "aligned", "23.0", "23.0", "2015-12-31", "published_counts_only"),
-    ("010001", "2019", "hsa", "L001", "service_area_zips", "aligned", "1.0", "1.0", "2015-12-31", "published_counts_only"),
-    ("010001", "2019", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2018-12-31", ""),
-    ("010001", "2019", "mua", "C251", "highest_score", "aligned", "", "", "2018-12-31", "none_in_force"),
-    ("010001", "2021", "hpsa", "C249", "designations_in_force", "held_in_staging", "", "", "2020-12-31", ""),
-    ("010001", "2021", "hpsa", "C250", "highest_score", "held_in_staging", "", "", "2020-12-31", ""),
-    ("010001", "2021", "hsa", "L001", "service_area_cases", "aligned", "23.0", "23.0", "2015-12-31", "published_counts_only"),
-    ("010001", "2021", "hsa", "L001", "service_area_zips", "aligned", "1.0", "1.0", "2015-12-31", "published_counts_only"),
-    ("010001", "2021", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
-    ("010001", "2021", "mua", "C251", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
-    ("010001", "2025", "hsa", "L001", "service_area_cases", "aligned", "23.0", "23.0", "2015-12-31", "published_counts_only"),
-    ("010001", "2025", "hsa", "L001", "service_area_zips", "aligned", "1.0", "1.0", "2015-12-31", "published_counts_only"),
-    ("010005", "2019", "hpsa", "C249", "designations_in_force", "aligned", "0", "0.0", "2018-12-31", ""),
-    ("010005", "2019", "hpsa", "C250", "highest_score", "aligned", "", "", "2018-12-31", "none_in_force"),
-    ("010005", "2019", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2018-12-31", ""),
-    ("010005", "2019", "mua", "C251", "highest_score", "aligned", "", "", "2018-12-31", "none_in_force"),
-    ("010005", "2021", "hpsa", "C249", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
-    ("010005", "2021", "hpsa", "C250", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
-    ("010005", "2021", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
-    ("010005", "2021", "mua", "C251", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
-    ("01001F", "2021", "acs", "C176", "B19013_001E", "aligned", "58000", "58000.0", "2018-12-31", ""),
-    ("01001F", "2021", "acs", "C176", "B19013_001M", "aligned", "1200", "1200.0", "2018-12-31", ""),
-    ("01001F", "2021", "acs", "C181", "DP04_0078PE", "aligned", "2.9", "2.9", "2014-12-31", ""),
-    ("01001F", "2021", "hpsa", "C249", "designations_in_force", "aligned", "1", "1.0", "2020-12-31", ""),
-    ("01001F", "2021", "hpsa", "C250", "highest_score", "aligned", "15.0", "15.0", "2020-12-31", "score_as_published_at_capture"),
-    ("01001F", "2021", "mua", "C251", "designations_in_force", "aligned", "1", "1.0", "2020-12-31", ""),
-    ("01001F", "2021", "mua", "C251", "highest_score", "aligned", "52.9", "52.9", "2020-12-31", "score_as_published_at_capture"),
-    ("01001F", "2021", "saipe", "C200", "poverty_all_count", "aligned", "4991.0", "4991.0", "1999-12-31", ""),
-    ("01001F", "2021", "saipe", "C200", "poverty_all_pct", "aligned", "11.4", "11.4", "1999-12-31", ""),
-    ("01001F", "2021", "saipe", "C200", "poverty_all_pct_lb90", "aligned", "8.9", "8.9", "1999-12-31", ""),
-    ("01001F", "2021", "saipe", "C200", "poverty_all_pct_ub90", "aligned", "14.0", "14.0", "1999-12-31", ""),
-    ("01001F", "2021", "saipe", "C201", "median_household_income", "aligned", "39702.0", "39702.0", "1999-12-31", ""),
-    ("01001F", "2021", "saipe", "C201", "median_household_income_lb90", "aligned", "37226.0", "37226.0", "1999-12-31", ""),
-    ("01001F", "2021", "saipe", "C201", "median_household_income_ub90", "aligned", "42342.0", "42342.0", "1999-12-31", ""),
-    ("011301", "2020", "hpsa", "C249", "designations_in_force", "aligned", "0", "0.0", "2019-12-31", ""),
-    ("011301", "2020", "hpsa", "C250", "highest_score", "aligned", "", "", "2019-12-31", "none_in_force"),
-    ("011301", "2020", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2019-12-31", ""),
-    ("011301", "2020", "mua", "C251", "highest_score", "aligned", "", "", "2019-12-31", "none_in_force"),
-    ("011301", "2020", "saipe", "C200", "poverty_all_count", "aligned", "12000.0", "12000.0", "1999-12-31", ""),
-    ("011301", "2020", "saipe", "C200", "poverty_all_pct", "aligned", "10.1", "10.1", "1999-12-31", ""),
-    ("011301", "2020", "saipe", "C200", "poverty_all_pct_lb90", "aligned", "8.5", "8.5", "1999-12-31", ""),
-    ("011301", "2020", "saipe", "C200", "poverty_all_pct_ub90", "aligned", "11.7", "11.7", "1999-12-31", ""),
-    ("011301", "2021", "hpsa", "C249", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
-    ("011301", "2021", "hpsa", "C250", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
-    ("011301", "2021", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
-    ("011301", "2021", "mua", "C251", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
-    ("011301", "2021", "saipe", "C200", "poverty_all_count", "aligned", "12000.0", "12000.0", "1999-12-31", ""),
-    ("011301", "2021", "saipe", "C200", "poverty_all_pct", "aligned", "10.1", "10.1", "1999-12-31", ""),
-    ("011301", "2021", "saipe", "C200", "poverty_all_pct_lb90", "aligned", "8.5", "8.5", "1999-12-31", ""),
-    ("011301", "2021", "saipe", "C200", "poverty_all_pct_ub90", "aligned", "11.7", "11.7", "1999-12-31", ""),
-    ("070001", "2021", "hpsa", "C249", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
-    ("070001", "2021", "hpsa", "C250", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
-    ("070001", "2021", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
-    ("070001", "2021", "mua", "C251", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
-    ("210001", "2021", "hpsa", "C249", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
-    ("210001", "2021", "hpsa", "C250", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
-    ("210001", "2021", "mua", "C251", "designations_in_force", "aligned", "0", "0.0", "2020-12-31", ""),
-    ("210001", "2021", "mua", "C251", "highest_score", "aligned", "", "", "2020-12-31", "none_in_force"),
-]
-# [611] Context 14 spine rows x 155 control-fields, linkage 14 x 3, unique keys, and the counts per source and status.
-AL4B_COUNTS_EXPECTED: list[tuple[str, ...]] = [
-    ("acs aligned", "3"),
-    ("acs no_period_before_start", "7"),
-    ("acs not_in_source", "1145"),
-    ("bls no_period_before_start", "2"),
-    ("bls not_in_source", "118"),
-    ("context keys", "2325"),
-    ("context rows", "2325"),
-    ("hpsa aligned", "14"),
-    ("hpsa held_in_staging", "4"),
-    ("hpsa not_in_source", "12"),
-    ("hsa aligned", "6"),
-    ("hsa not_in_source", "24"),
-    ("hud no_period_before_start", "1"),
-    ("hud not_in_source", "14"),
-    ("linkage keys", "45"),
-    ("linkage rows", "45"),
-    ("mua aligned", "18"),
-    ("mua not_in_source", "12"),
-    ("ruca not_in_source", "90"),
-    ("sahie no_period_before_start", "4"),
-    ("sahie not_in_source", "56"),
-    ("saipe aligned", "15"),
-    ("saipe not_in_source", "90"),
-    ("svi no_period_before_start", "6"),
-    ("svi not_in_source", "729"),
-]
-
-
-def al4b_context_checks(base: dict[str, Any]) -> dict[str, bool]:
-    """Compare the base fixture's AL4b rows with their expected values [604] to [611] and [634] to [638]."""
-    checks: dict[str, bool] = {}
-    checks["al4b_context_match_expected"] = base.get("al4b_context") == AL4B_EXPECTED
-    checks["al4b_context_counts_match_expected"] = base.get("al4b_context_counts") == AL4B_COUNTS_EXPECTED
-    return checks
-
-
-def validation_aligned_checks(base: dict[str, Any]) -> dict[str, bool]:
-    """Compare the base fixture's AL5 rows with their expected values [597] to [601]."""
-    checks: dict[str, bool] = {}
-    # [597] The OP_32 window equal to 2021 beats the longer one that covers it; [598] HAC FY 2023 placed by its HAI period
-    # (calendar 2021); HRRP's three-year window overlaps 2021 fully; hospitals whose periods miss a window are
-    # no_matching_period, including E038 and E039 (PSI_90, PSI_13 from 2022, registry revision 3). Reviewed row by row.
-    checks["validation_aligned_match_expected"] = base.get("validation_aligned") == [
-        ("010001", "2019", "C285", "payment_reduction", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2019", "C286", "total_hac_score", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2019", "C289", "READM-30-HF-HRRP", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2019", "C289.04", "READM-30-HF-HRRP", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2019", "C290", "OP_32", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2019", "C290", "OP_36", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2019", "C290.01", "OP_32", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2019", "C290.04", "OP_36", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2019", "C291", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2019", "C291.01", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2019", "E038", "PSI_90", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2019", "E039", "PSI_13", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2021", "C285", "payment_reduction", "aligned", "No", "", "2021-01-01", "2021-12-31", "2023", "365"),
-        ("010001", "2021", "C286", "total_hac_score", "aligned", "4.0", "4.0", "2021-01-01", "2021-12-31", "2023", "365"),
-        ("010001", "2021", "C289", "READM-30-HF-HRRP", "aligned", "1.0123", "1.0123", "2020-07-01", "2023-06-30", "", "365"),
-        ("010001", "2021", "C289.04", "READM-30-HF-HRRP", "aligned", "1.0123", "1.0123", "2020-07-01", "2023-06-30", "", "365"),
-        ("010001", "2021", "C290", "OP_32", "aligned", "11.0", "11.0", "2021-01-01", "2021-12-31", "", "365"),
-        ("010001", "2021", "C290", "OP_36", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2021", "C290.01", "OP_32", "aligned", "11.0", "11.0", "2021-01-01", "2021-12-31", "", "365"),
-        ("010001", "2021", "C290.04", "OP_36", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2021", "C291", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2021", "C291.01", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2021", "E038", "PSI_90", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2021", "E039", "PSI_13", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2025", "C285", "payment_reduction", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2025", "C286", "total_hac_score", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2025", "C289", "READM-30-HF-HRRP", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2025", "C289.04", "READM-30-HF-HRRP", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2025", "C290", "OP_32", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2025", "C290", "OP_36", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2025", "C290.01", "OP_32", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2025", "C290.04", "OP_36", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2025", "C291", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2025", "C291.01", "MORT_30_AMI", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2025", "E038", "PSI_90", "no_matching_period", "", "", "", "", "", ""),
-        ("010001", "2025", "E039", "PSI_13", "no_matching_period", "", "", "", "", "", ""),
-    ]
-    # [600] One row per spine row and seed row (12 x 41), unique keys; [599] no model reads the validation table.
-    checks["validation_aligned_counts_match_expected"] = base.get("validation_aligned_counts") == [
-        ("aligned", "6"),
-        ("keys", "615"),
-        ("no_matching_period", "30"),
-        ("not_in_source", "579"),
-        ("rows", "615"),
-    ]
-    checks["validation_table_kept_apart"] = validation_kept_apart()
-    return checks
-
-
-def operations_measure_checks(base: dict[str, Any]) -> dict[str, bool]:
-    """Compare the base fixture's AL3b rows with their expected values [587] to [595]."""
-    checks: dict[str, bool] = {}
-    # [587] [588] HHS 2020 weeks only: C260 = (50 + 60) / (100 + 100), E035.01 = 3 + 4; [592] [593] the 2020 owner release
-    # through the enrollment CCN: private equity Y from a direct owner, the managing organisation's REIT flag not counted;
-    # [591] ONC's latest period; [594] no change of ownership in 2024 and 24 months since the latest. Reviewed row by row.
-    held = [
-        ("010005", "2021", "hhs_capacity", control, "held_in_staging", "", "", "2020-12-31", "1", "0", "1")
-        for control in [
-            "C260",
-            "C261",
-            "C262.01",
-            "C262.02",
-            "C262.03",
-            "C262.04",
-            "C262.05",
-            "C262.06",
-            "C263.01",
-            "C263.02",
-            "C263.03",
-            "C263.04",
-            "C263.05",
-            "C263.06",
-            "E034.01",
-            "E034.02",
-            "E034.03",
-            "E034.04",
-            "E034.05",
-            "E034.06",
-            "E034.07",
-            "E034.08",
-            "E034.09",
-            "E034.10",
-            "E034.11",
-            "E034.12",
-            "E034.13",
-            "E034.14",
-            "E034.15",
-            "E034.16",
-            "E034.17",
-            "E034.18",
-            "E034.19",
-            "E034.20",
-            "E034.21",
-            "E034.22",
-            "E034.23",
-            "E034.24",
-            "E034.25",
-            "E034.26",
-            "E035.01",
-        ]
-    ]
-    checks["operations_measures_match_expected"] = base.get("operations_measures") == sorted(
-        [
-            ("010001", "2021", "hhs_capacity", "C260", "aligned", "", "0.55", "2020-12-31", "1", "2", "0"),
-            ("010001", "2021", "hhs_capacity", "E035.01", "aligned", "", "7.0", "2020-12-31", "1", "2", "0"),
-            ("010001", "2021", "ownership", "C067", "aligned", "Y", "1.0", "2020-07-31", "6", "2", "0"),
-            ("010001", "2021", "ownership", "C068", "aligned", "not_reported", "0.0", "2020-07-31", "6", "2", "0"),
-            ("010001", "2021", "ownership", "L005", "aligned", "O20000000001", "1.0", "2020-07-31", "6", "2", "0"),
-            ("010001", "2025", "onc", "C071", "aligned", "Y", "", "2023-12-31", "13", "1", "0"),
-            ("010001", "2025", "onc", "C072", "aligned", "Fixture Developer A", "1.0", "2023-12-31", "13", "1", "0"),
-            ("010001", "2025", "onc", "C073", "aligned", "", "1.0", "2023-12-31", "13", "1", "0"),
-            ("010001", "2025", "onc", "C074", "aligned", "0015EFIXTURE01", "", "2023-12-31", "13", "1", "0"),
-            ("010001", "2025", "ownership", "C067", "aligned", "Y", "1.0", "2020-07-31", "54", "2", "0"),
-            ("010001", "2025", "ownership", "C068", "aligned", "not_reported", "0.0", "2020-07-31", "54", "2", "0"),
-            ("010001", "2025", "ownership", "C069", "aligned", "", "0.0", "2024-12-31", "1", "1", "0"),
-            ("010001", "2025", "ownership", "C070", "aligned", "", "24.0", "2023-01-01", "24", "1", "0"),
-            ("010001", "2025", "ownership", "L005", "aligned", "O20000000001", "1.0", "2020-07-31", "54", "2", "0"),
-            *held,
-        ]
-    )
-    # [589] 010005's only 2020 week has two HHS hospitals, so every HHS control is held; [595] one row per control (12 x 52).
-    checks["operations_measure_counts_match_expected"] = base.get("operations_measure_counts") == [
-        ("aligned", "14"),
-        ("held_in_staging", "41"),
-        ("keys", "780"),
-        ("no_period_before_start", "156"),
-        ("not_in_source", "569"),
-        ("rows", "780"),
-    ]
-    return checks
-
-
-def hospital_measure_checks(base: dict[str, Any]) -> dict[str, bool]:
-    """Compare the base fixture's AL3a rows with their expected values [576] to [586]."""
-    checks: dict[str, bool] = {}
-    # [576] to [581] Every aligned or held row: the latest cost report before the start; the IPPS rule year that ends before
-    # it, most final stage first, with same-stage files that disagree held (C025, C038); the Medicare inpatient data year;
-    # the occupational-mix survey. Reviewed row by row against the rules before being fixed here.
-    checks["hospital_measures_match_expected"] = base.get("hospital_measures") == [
-        ("010001", "2019", "ipps_impact", "C001", "beds", "aligned", "", "50.0", "2015-09-30", "correction+final", "40", "1"),
-        ("010001", "2019", "ipps_impact", "C006", "resident_to_bed_ratio", "aligned", "", "0.28515", "2009-09-30", "unspecified", "112", "1"),
-        ("010001", "2019", "ipps_impact", "C021", "geographic_labor_market_area", "aligned", "20020", "", "2009-09-30", "unspecified", "112", "1"),
-        ("010001", "2019", "ipps_impact", "C021", "urgeo", "aligned", "OURBAN", "", "2009-09-30", "unspecified", "112", "1"),
-        ("010001", "2019", "ipps_impact", "C022", "dsh_patient_percentage", "aligned", "", "0.1274", "2009-09-30", "unspecified", "112", "1"),
-        ("010001", "2019", "ipps_impact", "C023", "medicare_percentage", "aligned", "", "0.273", "2009-09-30", "unspecified", "112", "1"),
-        ("010001", "2019", "ipps_impact", "C025", "wage_index", "held_in_staging", "", "", "2015-09-30", "correction+final", "40", "1"),
-        ("010001", "2019", "ipps_impact", "C026", "capital_ime_factor", "aligned", "", "0.028", "2009-09-30", "unspecified", "112", "1"),
-        ("010001", "2019", "ipps_impact", "C026", "operating_ime_factor", "aligned", "", "0.05944", "2009-09-30", "unspecified", "112", "1"),
-        ("010001", "2019", "ipps_impact", "C038", "medicare_bills", "held_in_staging", "", "", "2015-09-30", "correction+final", "40", "1"),
-        ("010001", "2019", "ipps_impact", "C040", "average_daily_census", "aligned", "", "0.654054054054054", "2009-09-30", "unspecified", "112", "1"),
-        ("010001", "2021", "ipps_impact", "C001", "beds", "aligned", "", "50.0", "2015-09-30", "correction+final", "64", "1"),
-        ("010001", "2021", "ipps_impact", "C006", "resident_to_bed_ratio", "aligned", "", "0.28515", "2009-09-30", "unspecified", "136", "1"),
-        ("010001", "2021", "ipps_impact", "C021", "geographic_labor_market_area", "aligned", "20020", "", "2009-09-30", "unspecified", "136", "1"),
-        ("010001", "2021", "ipps_impact", "C021", "urgeo", "aligned", "OURBAN", "", "2009-09-30", "unspecified", "136", "1"),
-        ("010001", "2021", "ipps_impact", "C022", "dsh_patient_percentage", "aligned", "", "0.1274", "2009-09-30", "unspecified", "136", "1"),
-        ("010001", "2021", "ipps_impact", "C023", "medicare_percentage", "aligned", "", "0.273", "2009-09-30", "unspecified", "136", "1"),
-        ("010001", "2021", "ipps_impact", "C025", "wage_index", "held_in_staging", "", "", "2015-09-30", "correction+final", "64", "1"),
-        ("010001", "2021", "ipps_impact", "C026", "capital_ime_factor", "aligned", "", "0.028", "2009-09-30", "unspecified", "136", "1"),
-        ("010001", "2021", "ipps_impact", "C026", "operating_ime_factor", "aligned", "", "0.05944", "2009-09-30", "unspecified", "136", "1"),
-        ("010001", "2021", "ipps_impact", "C038", "medicare_bills", "held_in_staging", "", "", "2015-09-30", "correction+final", "64", "1"),
-        ("010001", "2021", "ipps_impact", "C040", "average_daily_census", "aligned", "", "0.654054054054054", "2009-09-30", "unspecified", "136", "1"),
-        ("010001", "2025", "cost_report", "C001", "value", "aligned", "", "250.0", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C002", "value", "aligned", "2", "", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C003", "value", "aligned", "1", "", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C023", "value", "aligned", "", "0.5", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C024", "value", "aligned", "", "0.1", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C027", "value", "aligned", "", "1500.5", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C028", "value", "aligned", "", "6.002", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C035", "value", "aligned", "", "4380000.0", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C037", "value", "aligned", "", "73000.0", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C038", "value", "aligned", "", "14600.0", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C039", "value", "aligned", "", "200.0", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C040", "value", "aligned", "", "0.8", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C041", "value", "aligned", "", "58.4", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C042", "value", "aligned", "", "5.0", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C045", "value", "aligned", "", "0.124", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C046", "value", "aligned", "", "2.0", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C047", "value", "aligned", "", "0.5", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C048", "value", "aligned", "", "30.0", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C049", "value", "aligned", "", "0.0125", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C050", "value", "aligned", "", "0.02", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C051", "value", "aligned", "", "-10.0", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C052", "value", "aligned", "", "0.1", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C053", "value", "aligned", "", "0.5", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C054", "value", "aligned", "", "0.01", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C055", "value", "aligned", "", "0.25", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "cost_report", "C057", "value", "aligned", "", "30000.0", "2023-09-30", "", "16", "1"),
-        ("010001", "2025", "ipps_impact", "C001", "beds", "aligned", "", "50.0", "2015-09-30", "correction+final", "112", "1"),
-        ("010001", "2025", "ipps_impact", "C006", "resident_to_bed_ratio", "aligned", "", "0.28515", "2009-09-30", "unspecified", "184", "1"),
-        ("010001", "2025", "ipps_impact", "C021", "geographic_labor_market_area", "aligned", "20020", "", "2009-09-30", "unspecified", "184", "1"),
-        ("010001", "2025", "ipps_impact", "C021", "urgeo", "aligned", "OURBAN", "", "2009-09-30", "unspecified", "184", "1"),
-        ("010001", "2025", "ipps_impact", "C022", "dsh_patient_percentage", "aligned", "", "0.1274", "2009-09-30", "unspecified", "184", "1"),
-        ("010001", "2025", "ipps_impact", "C023", "medicare_percentage", "aligned", "", "0.273", "2009-09-30", "unspecified", "184", "1"),
-        ("010001", "2025", "ipps_impact", "C025", "wage_index", "held_in_staging", "", "", "2015-09-30", "correction+final", "112", "1"),
-        ("010001", "2025", "ipps_impact", "C026", "capital_ime_factor", "aligned", "", "0.028", "2009-09-30", "unspecified", "184", "1"),
-        ("010001", "2025", "ipps_impact", "C026", "operating_ime_factor", "aligned", "", "0.05944", "2009-09-30", "unspecified", "184", "1"),
-        ("010001", "2025", "ipps_impact", "C038", "medicare_bills", "held_in_staging", "", "", "2015-09-30", "correction+final", "112", "1"),
-        ("010001", "2025", "ipps_impact", "C040", "average_daily_census", "aligned", "", "0.654054054054054", "2009-09-30", "unspecified", "184", "1"),
-        ("010001", "2025", "medicare_inpatient", "C038", "tot_dschrgs", "aligned", "", "1350.0", "2024-12-31", "", "1", "1"),
-        ("010001", "2025", "medicare_inpatient", "C042", "tot_days", "aligned", "", "5.0", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C076", "bene_avg_risk_scre", "aligned", "", "1.8", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C077", "bene_avg_age", "aligned", "", "74.5", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C078", "bene_age_lt_65_cnt", "aligned", "", "0.1", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C079", "bene_age_65_74_cnt", "aligned", "", "0.4", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C080", "bene_age_75_84_cnt", "aligned", "", "0.3", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C081", "bene_age_gt_84_cnt", "aligned", "", "0.2", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C082", "bene_feml_cnt", "aligned", "", "0.55", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C083", "bene_dual_cnt", "aligned", "", "0.25", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C084", "bene_race_api_cnt", "aligned", "", "0.03", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C084", "bene_race_black_cnt", "aligned", "", "0.2", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C084", "bene_race_hspnc_cnt", "aligned", "", "0.05", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C084", "bene_race_othr_cnt", "aligned", "", "0.02", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C084", "bene_race_wht_cnt", "aligned", "", "0.7", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C085", "tot_benes", "aligned", "", "900.0", "2024-12-31", "", "1", "1"),
-        ("010001", "2025", "medicare_inpatient", "C086", "tot_dschrgs", "aligned", "", "1.5", "2024-12-31", "", "1", "1"),
-        ("010001", "2025", "medicare_inpatient", "C087", "tot_dschrgs", "aligned", "", "1350.0", "2024-12-31", "", "1", "1"),
-        ("010001", "2025", "medicare_inpatient", "C088", "tot_cvrd_days", "aligned", "", "7400.0", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C089", "bene_cc_ph_diabetes_v2_pct", "aligned", "", "0.35", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C090", "bene_cc_ph_ckd_v2_pct", "aligned", "", "0.4", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C109", "bene_cc_bh_depress_v1_pct", "aligned", "", "0.3", "2023-12-31", "", "13", "1"),
-        ("010001", "2025", "medicare_inpatient", "C117", "tot_dschrgs", "aligned", "", "0.06", "2023-12-31", "", "13", "1"),
-        ("010005", "2019", "occupational_mix", "C030", "rnhr", "aligned", "", "100.0", "2016-12-31", "", "25", "1"),
-        ("010005", "2019", "occupational_mix", "C031", "rn_paid_hour_share", "aligned", "", "1.0", "2016-12-31", "", "25", "1"),
-        ("010005", "2019", "occupational_mix", "C032", "lpnst_paid_hour_share", "aligned", "", "0.0", "2016-12-31", "", "25", "1"),
-        ("010005", "2019", "occupational_mix", "C033", "naorat_paid_hour_share", "aligned", "", "0.0", "2016-12-31", "", "25", "1"),
-        ("010005", "2019", "occupational_mix", "C034", "rn_paid_hour_wage", "aligned", "", "30.0", "2016-12-31", "", "25", "1"),
-        ("010005", "2021", "occupational_mix", "C030", "rnhr", "aligned", "", "100.0", "2016-12-31", "", "49", "1"),
-        ("010005", "2021", "occupational_mix", "C031", "rn_paid_hour_share", "aligned", "", "1.0", "2016-12-31", "", "49", "1"),
-        ("010005", "2021", "occupational_mix", "C032", "lpnst_paid_hour_share", "aligned", "", "0.0", "2016-12-31", "", "49", "1"),
-        ("010005", "2021", "occupational_mix", "C033", "naorat_paid_hour_share", "aligned", "", "0.0", "2016-12-31", "", "49", "1"),
-        ("010005", "2021", "occupational_mix", "C034", "rn_paid_hour_wage", "aligned", "", "30.0", "2016-12-31", "", "49", "1"),
-    ]
-    # [582] [583] One row per spine row and control-field (12 x 98), unique keys, and the counts per status.
-    checks["hospital_measure_counts_match_expected"] = base.get("hospital_measure_counts") == [
-        ("aligned", "86"),
-        ("held_in_staging", "6"),
-        ("keys", "1470"),
-        ("no_period_before_start", "130"),
-        ("not_in_source", "1248"),
-        ("rows", "1470"),
-        ("spine", "15"),
-    ]
-    return checks
-
-
-def care_compare_checks(base: dict[str, Any]) -> dict[str, bool]:
-    """Compare the base fixture's AL2 rows with their expected values [564] to [575]."""
-    checks: dict[str, bool] = {}
-    blank = ("", "", "", "", "", "")
-
-    def none_before(ccn: str, year: str, *controls: str) -> list[tuple[str, ...]]:
-        return [(ccn, year, control, "no_period_before_start", *blank) for control in controls]
-
-    # [564] [565] The latest period that ends before the start, its age in calendar months; [567] the status says why a
-    # value is missing; [569] C141's spelling maps to one category; [571] [572] the rating from the release before the start,
-    # held when two files on that date disagree; hospitals with no Care Compare row are not_in_source and not listed.
-    checks["care_compare_match_expected"] = base.get("care_compare") == sorted(
-        [
-            ("010001", "2019", "C143", "aligned", "130", "130.0", "", "2018-12-31", "1", "1"),
-            *none_before("010001", "2019", "C119", "C139", "C140", "C141", "C167", "C168", "C284"),
-            ("010001", "2021", "C141", "aligned", "Low", "", "low", "2020-12-31", "1", "1"),
-            ("010001", "2021", "C143", "aligned", "145", "145.0", "", "2020-12-31", "1", "1"),
-            ("010001", "2021", "C284", "aligned", "2", "2.0", "", "2020-07-01", "6", "1"),
-            *none_before("010001", "2021", "C119", "C139", "C140", "C167", "C168"),
-            ("010001", "2025", "C119", "aligned", "80", "80.0", "", "2022-12-31", "25", "1"),
-            ("010001", "2025", "C139", "aligned", "21", "21.0", "", "2022-12-31", "25", "1"),
-            ("010001", "2025", "C140", "aligned", "507", "507.0", "", "2022-12-31", "25", "1"),
-            ("010001", "2025", "C141", "aligned", "Low", "", "low", "2020-12-31", "49", "1"),
-            ("010001", "2025", "C143", "aligned", "152", "152.0", "", "2022-12-31", "25", "1"),
-            ("010001", "2025", "C149", "held_in_staging", "", "", "", "", "", ""),
-            ("010001", "2025", "C167", "aligned", "Yes", "", "", "2023-12-31", "13", "1"),
-            ("010001", "2025", "C168", "aligned", "30", "30.0", "", "2023-12-31", "13", "1"),
-            ("010001", "2025", "C284", "held_in_staging", "", "", "", "2024-01-31", "12", "2"),
-            *none_before("010002", "2019", "C141"),
-            ("010005", "2021", "C143", "held_in_staging", "", "", "", "", "", ""),
-            ("010005", "2021", "C284", "held_in_staging", "", "", "", "2020-10-01", "3", "2"),
-            ("010005", "2019", "C284", "no_period_before_start", "", "", "", "", "", ""),
-        ]
-    )
-    # [566] Every spine row has one row per control, and the key is unique.
-    counts = base.get("care_compare_counts")
-    row = counts[0] if isinstance(counts, list) and counts else ("", "", "")
-    spine, controls = row[1].split(" x ") if " x " in row[1] else ("0", "0")
-    checks["care_compare_one_row_per_control"] = row[0] == str(int(spine) * int(controls)) == row[2] and int(spine) > 0
-    return checks
-
-
-def outcome_checks(base: dict[str, Any]) -> dict[str, bool]:
-    """Compare the base fixture's AL1 outcome rows with their expected values [549] to [556]."""
-    checks: dict[str, bool] = {}
-    blank = ("", "", "", "", "", "")
-    # [550] to [556] Published parts by exact ID; tokens stay text with no number; footnote codes from every format; the
-    # late release held, not used; population flags from the spine; types with no row are not listed here.
-    checks["hai_outcomes_match_expected"] = base.get("hai_outcomes") == sorted(
-        [
-            ("010001", "2019", "HAI_1", "0.6", "0.6", *blank, "0", "true"),
-            ("010001", "2019", "HAI_2", "0.7", "0.7", *blank, "0", "true"),
-            ("010001", "2021", "HAI_1", "0.4", "0.4", *blank, "0", "true"),
-            ("010001", "2025", "HAI_1", "1.2", "1.2", *blank, "0", "false"),
-            ("010002", "2019", "HAI_1", "0.9", "0.9", *blank, "0", "false"),
-            ("010005", "2021", "HAI_1", "0.6", "0.6", *blank, "0", "false"),
-            # [617] In the primary population now that its state comes from the CCN.
-            ("010009", "2021", "HAI_1", "1.1", "1.1", *blank, "0", "true"),
-            ("01000F", "2025", "HAI_1", "0.3", "0.3", *blank, "0", "false"),
-            ("01001F", "2021", "HAI_1", "0.3", "0.3", *blank, "0", "false"),
-            ("011301", "2021", "HAI_1", "0.5", "0.5", *blank, "0", "false"),
-            ("070001", "2021", "HAI_1", "0.9", "0.9", "0.5", "1.5", "9.0", "10.0", "1000.0", "", "0", "true"),
-            ("070001", "2021", "HAI_2", "Not Available", "", "", "", "0.0", "0.412", "800.0", "13", "0", "true"),
-            ("070001", "2021", "HAI_3", "--", "", "", "", "", "", "", "3,13", "0", "true"),
-            ("070001", "2021", "HAI_6", "N/A", "", "", "", "", "", "", "12", "0", "true"),
-            ("210001", "2021", "HAI_1", "0.8", "0.8", *blank, "0", "false"),
-            ("210001", "2021", "HAI_5", "", "", *blank, "1", "false"),
-            ("990001", "2021", "HAI_1", "1.0", "1.0", *blank, "0", "false"),
-            ("010005", "2019", "HAI_1", "0.6", "0.6", "", "", "", "", "", "", "0", "true"),
-            ("010006", "2018", "HAI_1", "0.6", "0.6", "", "", "", "", "", "", "0", "false"),
-            ("011301", "2020", "HAI_1", "0.5", "0.5", "", "", "", "", "", "", "0", "false"),
-        ]
-    )
-    # [550] [556] Six types for every spine hospital-window, each once.
-    checks["hai_outcomes_six_per_spine_row"] = base.get("hai_outcome_counts") == [
-        ("90", "90", "90"),
-    ]
-    # [560] to [563] Statuses: the baseline-held and staging-held parts are held, not missing; each part keeps its footnote;
-    # the SIR's national comparison as published.
-    checks["hai_outcome_status_match_expected"] = base.get("hai_outcome_status") == sorted(
-        [
-            ("070001", "2021", "HAI_1", "aligned", "0", "", "3", ""),
-            ("070001", "2021", "HAI_2", "aligned", "0", "Not Available", "", "13"),
-            ("070001", "2021", "HAI_3", "aligned", "0", "No Different than National Benchmark", "", ""),
-            ("210001", "2021", "HAI_5", "held_in_staging", "0", "", "", ""),
-            ("990001", "2021", "HAI_4", "held_in_staging", "1", "", "", ""),
-        ]
-    )
-    checks["hai_outcome_status_counts_match"] = base.get("hai_outcome_status_counts") == [
-        ("aligned", "19"),
-        ("held_in_staging", "2"),
-        ("not_in_source", "69"),
-    ]
-    # [559] Each registry control from its exact part: the SIR twice (target and earlier-outcome candidates), the counts, the
-    # bounds and the benchmark category under C283 and its children; only published values.
-    checks["hai_outcome_values_per_control"] = base.get("hai_outcome_values") == [
-        ("C269", "15"),
-        ("C270", "2"),
-        ("C271", "1"),
-        ("C274", "1"),
-        ("C275", "15"),
-        ("C276", "2"),
-        ("C277", "1"),
-        ("C280", "1"),
-        ("C281", "2"),
-        ("C282", "2"),
-        ("C283", "6"),
-        ("C283.benchmark_category", "2"),
-        ("C283.lower_limits", "2"),
-        ("C283.upper_limits", "2"),
-    ]
-    checks["hai_outcome_value_rows_match_expected"] = base.get("hai_outcome_value_rows") == sorted(
-        [
-            ("C270", "070001:2021:HAI_2", "sir", "Not Available", "", ""),
-            ("C276", "070001:2021:HAI_2", "sir", "Not Available", "", ""),
-            ("C281", "070001:2021:HAI_2", "observed", "0", "0.0", "exclude_primary"),
-            ("C282", "070001:2021:HAI_2", "predicted", "0.412", "0.412", "exclude_primary"),
-            ("C283", "070001:2021:HAI_2", "ci_lower", "Not Available", "", "exclude_primary"),
-            ("C283", "070001:2021:HAI_2", "ci_upper", "Not Available", "", "exclude_primary"),
-            ("C283", "070001:2021:HAI_2", "sir_compared_to_national", "Not Available", "", "exclude_primary"),
-            ("C283.lower_limits", "070001:2021:HAI_2", "ci_lower", "Not Available", "", ""),
-            ("C283.upper_limits", "070001:2021:HAI_2", "ci_upper", "Not Available", "", ""),
-            ("C283.benchmark_category", "070001:2021:HAI_2", "sir_compared_to_national", "Not Available", "", ""),
-            ("C271", "070001:2021:HAI_3", "sir", "--", "", ""),
-            ("C277", "070001:2021:HAI_3", "sir", "--", "", ""),
-            ("C283", "070001:2021:HAI_3", "sir_compared_to_national", "No Different than National Benchmark", "", "exclude_primary"),
-            ("C283.benchmark_category", "070001:2021:HAI_3", "sir_compared_to_national", "No Different than National Benchmark", "", ""),
-        ]
-    )
-    checks["hai_outcome_seed_matches_registry"] = hai_outcome_seed_matches()
-    return checks
-
-
-def hai_outcome_seed_matches() -> bool:
-    """Check the HAI outcome seed against the registry: every control of source main-hai-pdc and each C283 child once per
-    type and part, each part named in its control's exact field (a child takes its parent's), decisions as recorded [559]."""
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    sources = {source["source_id"]: source for source in registry["sources"]}
-    controls = {control["id"]: control for control in registry["measure_controls"]}
-    parents = set(sources["main-hai-pdc"]["linked_measure_ids"])
-    expected = parents | {name for name, control in controls.items() if control.get("parent_id") in parents}
-    seed = REPO_ROOT / "dbt/seeds/hai_outcome_measures.csv"
-    if not seed.exists():
-        return False
-    with seed.open(newline="") as handle:
-        rows = list(csv.DictReader(handle))
-    if {row["measure_control"] for row in rows} != expected or len({(row["measure_control"], row["hai_type"], row["part"]) for row in rows}) != len(rows):
-        return False
-    for row in rows:
-        control = controls[row["measure_control"]]
-        field = (
-            control["preserved_controls"].get("current_exact_field") or controls[control["parent_id"]]["preserved_controls"]["current_exact_field"]
-        ).lower()
-        # A field names one type (HAI_1_SIR) or every type (HAI_1_... through HAI_6_...).
-        types = {f"HAI_{n}" for n in range(1, 7)} if " through " in field else {f"HAI_{n}" for n in re.findall(r"hai_(\d)_", field)}
-        part = "compared_to_national" if row["part"] == "COMPARED" else row["part"].lower()
-        if row["hai_type"] not in types or part not in field:
-            return False
-        if row["review_decision"] != (control["preserved_controls"].get("current_review_decision") or ""):
-            return False
-        if row["original_decision"] != (control["preserved_controls"].get("original_decision") or ""):
-            return False
-    per_control = {name: sum(row["measure_control"] == name for row in rows) for name in expected}
-    return all(count == {"C283": 18}.get(name, 6 if name.startswith(("C281", "C282", "C283")) else 1) for name, count in per_control.items())
 
 
 def program_checks(base: dict[str, Any]) -> dict[str, bool]:
@@ -5936,6 +5357,8 @@ def program_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("vbp", "010001", "2025", "23.5", "", "", "tp1"),
             ("vbp", "010003", "2025", "Not Available", "", "", "tp1"),
             ("vbp", "010005", "2019", "30.0", "", "", "tp0"),
+            ("vbp", "010005", "2025", "41.25", "", "", "tp1"),
+            ("vbp", "010007", "2025", "Too Few to Report", "", "", "tp1"),
         ]
     )
     # [525] Every domain score is kept as published; clinical care and clinical outcomes stay apart.
@@ -5945,29 +5368,28 @@ def program_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("010001", "2025", "", "12", "5.25", ""),
         ("010003", "2025", "", "", "", ""),
         ("010005", "2019", "8", "", "", ""),
+        ("010005", "2025", "8.5", "-14", ".5", "3.25"),
+        ("010007", "2025", "Not Available", "", "", "N/A"),
     ]
-    # [519] [520] Named fields only; the reviewed odd value and tokens stay text; C288.payment_adjustment has no rows.
+    # [519] [520] Every score keeps its text; the reviewed odd value and tokens give no number. The control mapping
+    # (C285 to C288) moved to the gold bridge.
     checks["program_values_match_expected"] = base.get("program_values") == sorted(
         [
-            ("C285", "010001", "2023", "payment_reduction", "No", ""),
-            ("C286", "010001", "2023", "total_hac_score", "4.0", "4.0"),
-            ("C285", "010001", "2021", "payment_reduction", "No", ""),
-            ("C285", "010003", "2021", "payment_reduction", "N/A", ""),
-            ("C285", "010001", "2024", "payment_reduction", "Yes", ""),
-            ("C286", "010001", "2021", "total_hac_score", "5.7", "5.7"),
-            ("C286", "010003", "2021", "total_hac_score", "N/A", ""),
-            ("C286", "010001", "2024", "total_hac_score", "6.1", "6.1"),
-            ("C287", "010001", "2025", "unweighted_normalized_safety_domain_score", "10", "10.0"),
-            ("C287", "010001", "2025", "weighted_safety_domain_score", "2.5", "2.5"),
-            *(
-                (control, "010001", year, "total_performance_score", text, number)
-                for control in ("C288", "C288.total_performance")
-                for year, text, number in (("2019", "38.0", "38.0"), ("2020", "24.083333333333(23)", ""), ("2025", "23.5", "23.5"))
-            ),
-            ("C288", "010003", "2025", "total_performance_score", "Not Available", ""),
-            ("C288.total_performance", "010003", "2025", "total_performance_score", "Not Available", ""),
-            ("C288", "010005", "2019", "total_performance_score", "30.0", "30.0"),
-            ("C288.total_performance", "010005", "2019", "total_performance_score", "30.0", "30.0"),
+            ("hac", "010001", "2021", "total_hac_score", "5.7", "5.7"),
+            ("hac", "010001", "2023", "total_hac_score", "4.0", "4.0"),
+            ("hac", "010001", "2024", "total_hac_score", "6.1", "6.1"),
+            ("hac", "010003", "2021", "total_hac_score", "N/A", ""),
+            ("vbp", "010001", "2019", "total_performance_score", "38.0", "38.0"),
+            ("vbp", "010001", "2020", "total_performance_score", "24.083333333333(23)", ""),
+            ("vbp", "010001", "2025", "total_performance_score", "23.5", "23.5"),
+            ("vbp", "010001", "2025", "unweighted_normalized_safety_domain_score", "10", "10.0"),
+            ("vbp", "010001", "2025", "weighted_safety_domain_score", "2.5", "2.5"),
+            ("vbp", "010003", "2025", "total_performance_score", "Not Available", ""),
+            ("vbp", "010005", "2019", "total_performance_score", "30.0", "30.0"),
+            ("vbp", "010005", "2025", "total_performance_score", "41.25", "41.25"),
+            ("vbp", "010005", "2025", "unweighted_normalized_safety_domain_score", "10.25", "10.25"),
+            ("vbp", "010005", "2025", "weighted_safety_domain_score", "2.5E-1", "0.25"),
+            ("vbp", "010007", "2025", "total_performance_score", "Too Few to Report", ""),
         ]
     )
     checks["program_holds_match_expected"] = base.get("program_holds") == [
@@ -5985,53 +5407,6 @@ def refuses_condition(action: Any, fragment: str) -> bool:
         return fragment in str(error)
     return False
 
-
-# POS snapshots end 2018-12-31 (a), 2019-03-31 (b) and 2020-12-31 (c). 010001 changes in b and in c, so three versions;
-# 010002 leaves after b, which closes its version at c; 01001F, 011301, 070001 and 990001 miss b, so their c rows open a
-# version after a gap; 010005, 010006 and 210001 appear only in c [672] [673].
-POS_HISTORY_EXPECTED = [
-    ("010001", "2018-12-31", "2019-03-31", "false", "false", "1", "04"),
-    ("010001", "2019-03-31", "2020-12-31", "false", "false", "1", ""),
-    ("010001", "2020-12-31", "", "true", "false", "1", ""),
-    ("010002", "2018-12-31", "2019-03-31", "false", "false", "1", ""),
-    ("010002", "2019-03-31", "2020-12-31", "false", "false", "1", ""),
-    ("010005", "2020-12-31", "", "true", "false", "1", ""),
-    ("010006", "2020-12-31", "", "true", "false", "1", ""),
-    ("01001F", "2018-12-31", "2019-03-31", "false", "false", "1", "10"),
-    ("01001F", "2020-12-31", "", "true", "true", "1", ""),
-    ("011301", "2018-12-31", "2019-03-31", "false", "false", "1", ""),
-    ("011301", "2020-12-31", "", "true", "true", "1", ""),
-    ("070001", "2018-12-31", "2019-03-31", "false", "false", "1", ""),
-    ("070001", "2020-12-31", "", "true", "true", "1", ""),
-    ("210001", "2020-12-31", "", "true", "false", "1", ""),
-    ("990001", "2018-12-31", "2019-03-31", "false", "false", "1", ""),
-    ("990001", "2020-12-31", "", "true", "true", "1", ""),
-]
-# HGI releases 2020-07-01, 2020-10-01 and 2024-01-31. 010005's two files on 2020-10-01 agree, so one version; 010001's two
-# files on 2024-01-31 disagree, so that date is held and its 2020-07-01 version closes at the next release [674].
-HGI_HISTORY_EXPECTED = [
-    ("010001", "2020-07-01", "2020-10-01", "false", "false", "1"),
-    ("010005", "2020-10-01", "2024-01-31", "false", "false", "1"),
-    ("010005", "2024-01-31", "", "true", "false", "1"),
-]
-# Owner releases end 2020-07-31 (ow0), 2022-11-30 (ow1), 2025-04-30 (ow2) and 2025-05-31 (o1, which lists no owner with an
-# ID and role). 5555555555 is unchanged from ow1 to ow2, so one version over two releases [672]; 9876543210's share
-# changes, so two; every owner absent from the next release closes there [673]; individual owners never enter [676].
-OWNER_HISTORY_EXPECTED = [
-    ("O20000000001", "1111111111", "34", "2020-07-31", "2022-11-30", "false", "false", "1", "0"),
-    ("O20000000001", "2222222222", "43", "2020-07-31", "2022-11-30", "false", "false", "1", "0"),
-    ("O20000000002", "1111111111", "35", "2025-04-30", "2025-05-31", "false", "false", "1", "0"),
-    ("O20000000002", "5555555555", "43", "2022-11-30", "2025-05-31", "false", "false", "2", "0"),
-    ("O20000000002", "9876543210", "34", "2022-11-30", "2025-04-30", "false", "false", "1", "0"),
-    ("O20000000002", "9876543210", "34", "2025-04-30", "2025-05-31", "false", "false", "1", "0"),
-]
-# A publisher correction of snapshot b (010001's control type) rewrites exactly that version [677].
-POS_REVISED_MIDDLE = tuple(
-    replace(item, records=tuple(row + (("gnrl_cntl_type_cd", "2"),) if dict(row)["prvdr_num"] == "010001" else row for row in item.records))
-    if item.key == "pb"
-    else item
-    for item in BASE
-)
 
 # Owner releases ow0, ow1, ow2 and o1 with five more owners of enrollment O20000000009 [714] [715]: 0042633786 lost its
 # leading zeros in ow1; 7777777771 is missing from ow1 with equal terms; 7777777772 is missing from ow1 and its share
@@ -6063,16 +5438,6 @@ OWNER_BRIDGE = tuple(
     else item
     for item in BASE
 )
-OWNER_BRIDGE_EXPECTED = [
-    ("O20000000009", "0042633786", "34", "2020-07-31", "2025-05-31", "false", "false", "3", "0"),
-    ("O20000000009", "7777777771", "34", "2020-07-31", "2025-05-31", "false", "false", "2", "1"),
-    ("O20000000009", "7777777772", "34", "2020-07-31", "2025-04-30", "false", "false", "1", "1"),
-    ("O20000000009", "7777777772", "34", "2025-04-30", "2025-05-31", "false", "false", "1", "0"),
-    ("O20000000009", "7777777773", "34", "2020-07-31", "2022-11-30", "false", "false", "1", "0"),
-    ("O20000000009", "7777777773", "34", "2025-05-31", "", "true", "true", "1", "0"),
-    ("O20000000009", "7777777774", "34", "2020-07-31", "2022-11-30", "false", "false", "1", "0"),
-    ("O20000000009", "7777777774", "34", "2025-04-30", "2025-05-31", "false", "true", "1", "0"),
-]
 
 
 def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
@@ -6083,7 +5448,6 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("base", BASE, frozenset()),
         ("base_again", BASE, frozenset()),
         ("reversed_order", tuple(reversed(BASE)), frozenset()),
-        ("pos_revised_middle", POS_REVISED_MIDDLE, frozenset()),
         ("owner_bridge", OWNER_BRIDGE, frozenset()),
     ]
     jobs += [(case, objects, unlabelled) for case, (_test, objects, unlabelled) in FAILING.items()]
@@ -6238,10 +5602,16 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("010006", "2020-12-31", "AL", "01089", "", "01", "", "00", "true", "80", "", "", "", "", "", "", "", "", "true", "false", "false", "false"),
         ("01001F", "2018-12-31", "AL", "01001", "", "", "10", "00", "true", "100", "", "", "", "", "", "", "", "", "true", "false", "false", "true"),
         ("01001F", "2020-12-31", "AL", "01001", "", "", "", "00", "true", "100", "", "", "", "", "", "", "", "", "true", "false", "false", "true"),
+        ("010021", "2018-12-31", "AL", "01001", "", "", "", "00", "true", "", "", "", "", "", "", "", "", "36003", "true", "false", "false", "false"),
+        ("010022", "2020-12-31", "AL", "", "", "", "", "00", "true", "", "", "", "", "", "", "", "", "35005", "true", "false", "false", "false"),
+        ("010023", "2019-03-31", "AL", "", "", "", "", "00", "true", "", "", "", "", "", "", "", "", "36003", "true", "false", "false", "false"),
+        ("010024", "2018-12-31", "AL", "01001", "", "", "", "00", "true", "", "", "", "", "", "", "", "", "36003", "true", "false", "false", "false"),
+        ("010025", "2018-12-31", "AL", "", "", "", "", "00", "true", "", "", "", "", "", "", "", "", "36005", "true", "false", "false", "false"),
         ("011301", "2018-12-31", "AL", "01003", "", "11", "", "00", "true", "25", "", "", "", "", "", "", "", "", "true", "false", "true", "false"),
         ("011301", "2020-12-31", "AL", "01003", "", "11", "", "00", "true", "25", "", "", "", "", "", "", "", "", "true", "false", "true", "false"),
         ("070001", "2018-12-31", "CT", "09001", "", "", "", "00", "true", "", "", "", "", "", "", "", "", "", "true", "true", "false", "false"),
         ("070001", "2020-12-31", "CT", "09001", "", "01", "", "00", "true", "300", "", "", "", "", "", "", "", "06001", "true", "true", "false", "false"),
+        ("070021", "2018-12-31", "CT", "", "", "", "", "00", "true", "", "", "", "", "", "", "", "", "06002", "true", "true", "false", "false"),
         ("210001", "2020-12-31", "MD", "24005", "", "01", "", "00", "true", "200", "", "", "", "", "", "", "", "", "true", "false", "false", "false"),
         ("990001", "2018-12-31", "CN", "", "", "", "", "00", "true", "", "", "", "", "", "", "", "", "", "false", "false", "false", "false"),
         ("990001", "2020-12-31", "CN", "", "", "", "", "00", "true", "", "", "", "", "", "", "", "", "35004", "false", "false", "false", "false"),
@@ -6278,467 +5648,17 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     )
     # [301] One CMI per CCN and rule year from the best stage's files: a correction over the final file, a final file over
     # the proposed one; two final files that disagree on the CMI or the data year are held.
-    checks["cmi_years_match_expected"] = base.get("cmi_years") == sorted(
-        [
-            ("010001", "2007", "", "final", "1.4972", "q5"),
-            ("010001", "2011", "", "unspecified", "1.751124", "r1"),
-            ("010001", "2020", "2018", "final", "1.9186", "q1"),
-            ("010005", "2020", "2018", "final", "1.381", "q1"),
-            ("010005", "2021", "", "final", "1.267981138", "q6"),
-            ("010001", "2025", "2023", "correction", "2.0542", "q3"),
-            ("010001", "2027", "2025", "final", "1.8688", "q8"),
-            ("010001", "2022", "2019", "final", "1.9837", "s3"),
-            ("010006", "2022", "2019", "final", "1.7", "s3"),
-            ("010001", "2023", "2021", "final", "2.0375", "s2"),
-        ]
-    )
-    checks["cmi_holds_match_expected"] = base.get("cmi_holds") == [
-        ("data", "010005", "2020", "values_disagree", "1"),
-        ("rule", "010001", "2021", "values_disagree", "2"),
-        ("rule", "010006", "2021", "values_disagree", "2"),
-    ]
     # [311] [312] One CMI per CCN and data year: the latest rule that carries the data year, then its best stage.
-    checks["cmi_data_years_match_expected"] = base.get("cmi_data_years") == sorted(
-        [
-            ("010001", "2018", "2020", "final", "1.9186", "q1"),
-            ("010005", "2018", "2020", "final", "1.381", "q1"),
-            ("010001", "2019", "2022", "final", "1.9837", "s3"),
-            ("010006", "2019", "2022", "final", "1.7", "s3"),
-            ("010001", "2020", "2023", "proposed", "2.0352", "s1"),
-            ("010009", "2020", "2023", "proposed", "1.2", "s1"),
-            ("070001", "2020", "2023", "proposed", "1.5", "s1"),
-            ("210001", "2020", "2023", "proposed", "1.8", "s1"),
-            ("010001", "2021", "2023", "final", "2.0375", "s2"),
-            ("010001", "2023", "2025", "correction", "2.0542", "q3"),
-            ("010001", "2025", "2027", "final", "1.8688", "q8"),
-        ]
-    )
     # [306] to [316] One row per hospital and calendar-year window, as of the window start: the POS snapshot that ends in the
     # 12 months before the window, the CMI of the fiscal year before it, and the population flags; [612] to [618], [631],
     # [698] and [701] the fills, each with its source. Reviewed row by row.
     # Silver step 7.3: SCD2 history from source dates only [670] to [677].
-    checks["pos_history_matches_expected"] = base.get("pos_history") == POS_HISTORY_EXPECTED
-    checks["ownership_history_matches_expected"] = base.get("owner_history") == OWNER_HISTORY_EXPECTED
-    # [714] [715] Padded owner IDs and one-release bridges; base owners are unchanged.
+    # [714] Padded owner IDs; base owners are unchanged. The one-release bridge [715] belongs to the SCD2 history,
+    # saved in features/ for the Feast phase.
     code, statuses = built(results, "owner_bridge")
     bridged = model_outputs("owner_bridge")
-    checks["ownership_bridge_matches_expected"] = (
-        code == 0
-        and [row for row in bridged.get("owner_history", []) if row[0] == "O20000000009"] == OWNER_BRIDGE_EXPECTED
-        and [row for row in bridged.get("owner_history", []) if row[0] != "O20000000009"] == OWNER_HISTORY_EXPECTED
-        and bridged.get("owner_padded") == [("0042633786", "2022-11-30")]
-    )
+    checks["owner_ids_padded"] = code == 0 and bridged.get("owner_padded") == [("0042633786", "2022-11-30")]
     checks["base_owner_ids_not_padded"] = base.get("owner_padded") == []
-    checks["hgi_history_matches_expected"] = base.get("hgi_history") == HGI_HISTORY_EXPECTED
-    code, statuses = built(results, "pos_revised_middle")
-    revised = model_outputs("pos_revised_middle").get("pos_history", [])
-    changed = set(revised) ^ set(base.get("pos_history", []))
-    checks["pos_correction_rewrites_one_version"] = code == 0 and changed == {
-        ("010001", "2019-03-31", "2020-12-31", "false", "false", "1", ""),
-        ("010001", "2019-03-31", "2020-12-31", "false", "false", "1", "02"),
-    }
-    checks["spine_matches_expected"] = base.get("spine") == sorted(
-        [
-            # [701] The only snapshot ends 36 months after the window starts: nothing is carried; the state comes from the CCN.
-            (
-                "010006",
-                "2018",
-                "",
-                "AL",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "false",
-                "false",
-                "false",
-                "false",
-                "false",
-                "true",
-                "false",
-                "false",
-                "false",
-                "ccn_state_code",
-                "",
-                "",
-                "",
-                "",
-                "",
-            ),
-            (
-                "010001",
-                "2019",
-                "2018-12-31",
-                "AL",
-                "01073",
-                "1.9186",
-                "2018",
-                "2020",
-                "final",
-                "true",
-                "true",
-                "false",
-                "false",
-                "false",
-                "true",
-                "false",
-                "true",
-                "true",
-                "pos",
-                "pos",
-                "pos",
-                "01",
-                "",
-                "",
-            ),
-            (
-                "010001",
-                "2021",
-                "2020-12-31",
-                "AL",
-                "01073",
-                "2.0352",
-                "2020",
-                "2023",
-                "proposed",
-                "true",
-                "true",
-                "false",
-                "false",
-                "false",
-                "true",
-                "false",
-                "true",
-                "true",
-                "pos",
-                "pos",
-                "pos",
-                "01",
-                "",
-                "",
-            ),
-            # [613] [614] [701] 49 months after the last snapshot: too far to carry; the state comes from the CCN, no county.
-            (
-                "010001",
-                "2025",
-                "",
-                "AL",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "false",
-                "false",
-                "false",
-                "false",
-                "false",
-                "true",
-                "false",
-                "false",
-                "false",
-                "ccn_state_code",
-                "",
-                "",
-                "",
-                "",
-                "",
-            ),
-            # [616] [698] No county in its snapshot and HUD splits the ZIP: no county, since a majority share is not exact.
-            (
-                "010002",
-                "2019",
-                "2018-12-31",
-                "DC",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "true",
-                "false",
-                "false",
-                "false",
-                "false",
-                "true",
-                "false",
-                "false",
-                "false",
-                "pos",
-                "",
-                "pos",
-                "",
-                "",
-                "",
-            ),
-            # [613] [614] [617] Before the first snapshot: location and classification from the first later one; a CMI, so primary.
-            (
-                "010005",
-                "2019",
-                "",
-                "AL",
-                "01089",
-                "1.381",
-                "2018",
-                "2020",
-                "final",
-                "false",
-                "true",
-                "false",
-                "false",
-                "false",
-                "true",
-                "false",
-                "true",
-                "true",
-                "pos_other_snapshot",
-                "pos_other_snapshot",
-                "pos_other_snapshot",
-                "01",
-                "",
-                "",
-            ),
-            (
-                "010005",
-                "2021",
-                "2020-12-31",
-                "AL",
-                "01089",
-                "",
-                "",
-                "",
-                "",
-                "true",
-                "false",
-                "true",
-                "false",
-                "false",
-                "true",
-                "false",
-                "false",
-                "false",
-                "pos",
-                "pos",
-                "pos",
-                "01",
-                "",
-                "",
-            ),
-            # [615] [617] In no POS file and no enrollment: the state from the CCN's SSA code; a CMI, so primary.
-            (
-                "010009",
-                "2021",
-                "",
-                "AL",
-                "",
-                "1.2",
-                "2020",
-                "2023",
-                "proposed",
-                "false",
-                "true",
-                "false",
-                "false",
-                "false",
-                "true",
-                "false",
-                "true",
-                "true",
-                "ccn_state_code",
-                "",
-                "",
-                "",
-                "",
-                "",
-            ),
-            (
-                "01000F",
-                "2025",
-                "",
-                "AL",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "false",
-                "false",
-                "false",
-                "false",
-                "true",
-                "true",
-                "false",
-                "false",
-                "false",
-                "ccn_state_code",
-                "",
-                "",
-                "",
-                "",
-                "",
-            ),
-            (
-                "01001F",
-                "2021",
-                "2020-12-31",
-                "AL",
-                "01001",
-                "",
-                "",
-                "",
-                "",
-                "true",
-                "false",
-                "false",
-                "false",
-                "true",
-                "true",
-                "false",
-                "false",
-                "false",
-                "pos",
-                "pos",
-                "pos",
-                "",
-                "",
-                "",
-            ),
-            # [614] Between two snapshots that agree: classification filled.
-            (
-                "011301",
-                "2020",
-                "",
-                "AL",
-                "01003",
-                "",
-                "",
-                "",
-                "",
-                "false",
-                "false",
-                "false",
-                "true",
-                "false",
-                "true",
-                "false",
-                "false",
-                "true",
-                "pos_other_snapshot",
-                "pos_other_snapshot",
-                "pos_other_snapshot",
-                "11",
-                "",
-                "",
-            ),
-            (
-                "011301",
-                "2021",
-                "2020-12-31",
-                "AL",
-                "01003",
-                "",
-                "",
-                "",
-                "",
-                "true",
-                "false",
-                "false",
-                "true",
-                "false",
-                "true",
-                "false",
-                "false",
-                "true",
-                "pos",
-                "pos",
-                "pos",
-                "11",
-                "",
-                "",
-            ),
-            # [631] Connecticut: the planning region from its ZIP.
-            (
-                "070001",
-                "2021",
-                "2020-12-31",
-                "CT",
-                "09001",
-                "1.5",
-                "2020",
-                "2023",
-                "proposed",
-                "true",
-                "true",
-                "false",
-                "false",
-                "false",
-                "true",
-                "true",
-                "true",
-                "true",
-                "pos",
-                "pos",
-                "pos",
-                "01",
-                "09110",
-                "hud_zip_single_county",
-            ),
-            (
-                "210001",
-                "2021",
-                "2020-12-31",
-                "MD",
-                "24005",
-                "1.8",
-                "2020",
-                "2023",
-                "proposed",
-                "true",
-                "true",
-                "false",
-                "false",
-                "false",
-                "true",
-                "false",
-                "false",
-                "true",
-                "pos",
-                "pos",
-                "pos",
-                "01",
-                "",
-                "",
-            ),
-            # [616] A ZIP whose HUD rows are in another state: no county.
-            (
-                "990001",
-                "2021",
-                "2020-12-31",
-                "CN",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "true",
-                "false",
-                "false",
-                "false",
-                "false",
-                "false",
-                "false",
-                "false",
-                "false",
-                "pos",
-                "",
-                "pos",
-                "",
-                "",
-                "",
-            ),
-        ]
-    )
     # [318] to [322] Care Compare windows as for HAI: the latest release wins, conflicts and unparsed dates are held.
     checks["timely_windows_match_expected"] = base.get("timely") == [
         ("010001", "EDV", "2020-01-01", "2020-12-31", "Low", "", "z6"),
@@ -6761,18 +5681,6 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("cms_cc_timely_and_effective_care_hospital", "010005", "OP_18b", "same_date_conflict", "2"),
     ]
     # [323] [325] [326] [327] Registry controls get exactly their named measure; numbers only for plain numbers.
-    checks["registry_windows_match_expected"] = base.get("registry") == [
-        ("C119", "010001", "2022-01-01", "80", "80.0", ""),
-        ("C139", "010001", "2022-01-01", "21", "21.0", ""),
-        ("C140", "010001", "2022-01-01", "507", "507.0", ""),
-        ("C141", "010001", "2020-01-01", "Low", "", ""),
-        ("C141", "010002", "2022-01-01", "high", "", ""),
-        ("C143", "010001", "2018-01-01", "130", "130.0", ""),
-        ("C143", "010001", "2020-01-01", "145", "145.0", ""),
-        ("C143", "010001", "2022-01-01", "152", "152.0", ""),
-        ("C167", "010001", "2023-01-01", "Yes", "", ""),
-        ("C168", "010001", "2023-01-01", "30", "30.0", ""),
-    ]
     # [328] [329] One Hospital General Information row per CCN and file; two files on one release date are both kept.
     checks["hgi_releases_match_expected"] = base.get("hgi") == [
         ("010001", "2020-07-01", "1", "Acute Care Hospitals", "", "2", "2", "", "z8"),
@@ -6792,38 +5700,6 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("100003", "010001", "2023", "2023", "2023-07-01", "2023-09-30", "92", "false", "2", "", "", "", "", ""),
     ]
     # [339] [340] Registry measures by the seed's columns and rule; a zero or missing denominator gives null.
-    checks["cost_measures_match_expected"] = base.get("cost_measures") == [
-        ("100001", "C001", "250.0", ""),
-        ("100001", "C002", "", "2"),
-        ("100001", "C003", "", "1"),
-        ("100001", "C023", "0.5", ""),
-        ("100001", "C024", "0.1", ""),
-        ("100001", "C027", "1500.5", ""),
-        ("100001", "C028", "6.002", ""),
-        ("100001", "C035", "4380000.0", ""),
-        ("100001", "C037", "73000.0", ""),
-        ("100001", "C038", "14600.0", ""),
-        ("100001", "C039", "200.0", ""),
-        ("100001", "C040", "0.8", ""),
-        ("100001", "C041", "58.4", ""),
-        ("100001", "C042", "5.0", ""),
-        ("100001", "C045", "0.124", ""),
-        ("100001", "C046", "2.0", ""),
-        ("100001", "C047", "0.5", ""),
-        ("100001", "C048", "30.0", ""),
-        ("100001", "C049", "0.0125", ""),
-        ("100001", "C050", "0.02", ""),
-        ("100001", "C051", "-10.0", ""),
-        ("100001", "C052", "0.1", ""),
-        ("100001", "C053", "0.5", ""),
-        ("100001", "C054", "0.01", ""),
-        ("100001", "C055", "0.25", ""),
-        ("100001", "C057", "30000.0", ""),
-        ("100002", "C001", "0.0", ""),
-        ("100002", "C027", "100.0", ""),
-        ("100002", "C028", "", ""),
-        ("100002", "C046", "", ""),
-    ]
     # [342] to [352] Impact files by exact header: SAS dots kept as text with no number, blanks null, leading spaces trimmed,
     # a footer row dropped, a quoted comma kept in one field, no wage index before FY 2011, revised correction-notice columns,
     # lost leading zeros restored; excluded families and description sheets not read.
@@ -6872,28 +5748,6 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     ]
     checks["impact_holds_match_expected"] = base.get("impact_holds") == [("2025", "", "010009", "repeated_in_file", "2")]
     # [353] Registry measures by the seed's field and rule; a missing or dotted value gives no measure row.
-    checks["impact_measures_match_expected"] = base.get("impact_measures") == [
-        ("010001", "C001", "beds", "400.0", ""),
-        ("010001", "C006", "resident_to_bed_ratio", "0.0655", ""),
-        ("010001", "C021", "geographic_labor_market_area", "", "20020"),
-        ("010001", "C021", "urgeo", "", "OURBAN"),
-        ("010001", "C022", "dsh_patient_percentage", "0.2752", ""),
-        ("010001", "C023", "medicare_percentage", "0.187", ""),
-        ("010001", "C024", "medicaid_percentage", "0.013", ""),
-        ("010001", "C025", "wage_index", "0.9049", ""),
-        ("010001", "C026", "capital_ime_factor", "0.05731", ""),
-        ("010001", "C026", "operating_ime_factor", "0.0298", ""),
-        ("010001", "C038", "medicare_bills", "3952.0", ""),
-        ("010001", "C040", "average_daily_census", "0.75", ""),
-        ("010005", "C001", "beds", "100.0", ""),
-        ("010005", "C021", "geographic_labor_market_area", "", "01"),
-        ("010005", "C021", "urgeo", "", "RURAL"),
-        ("010005", "C024", "medicaid_percentage", "0.02", ""),
-        ("010005", "C025", "wage_index", "0.8", ""),
-        ("010005", "C026", "capital_ime_factor", "0.0", ""),
-        ("010005", "C026", "operating_ime_factor", "0.0", ""),
-        ("010005", "C038", "medicare_bills", "1200.0", ""),
-    ]
     # [355] to [359] Medicare inpatient: the data and release years from the file name in any case; suppressed values null.
     checks["mup_providers_match_expected"] = base.get("mup_providers") == [
         ("2023", "2025", "010001", "1000.0", "1500.0", "", "0.4"),
@@ -6908,35 +5762,6 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     ]
     # [360] to [363] Registry measures by the seed: C084 per race field, a suppressed count gives no row, a missing
     # denominator gives null, the sepsis share from DRG 870 to 872, held controls give no rows.
-    checks["mup_measures_match_expected"] = base.get("mup_measures") == [
-        ("010001", "C038", "tot_dschrgs", "1500.0"),
-        ("010001", "C042", "tot_days", "5.0"),
-        ("010001", "C076", "bene_avg_risk_scre", "1.8"),
-        ("010001", "C077", "bene_avg_age", "74.5"),
-        ("010001", "C078", "bene_age_lt_65_cnt", "0.1"),
-        ("010001", "C079", "bene_age_65_74_cnt", "0.4"),
-        ("010001", "C080", "bene_age_75_84_cnt", "0.3"),
-        ("010001", "C081", "bene_age_gt_84_cnt", "0.2"),
-        ("010001", "C082", "bene_feml_cnt", "0.55"),
-        ("010001", "C083", "bene_dual_cnt", "0.25"),
-        ("010001", "C084", "bene_race_api_cnt", "0.03"),
-        ("010001", "C084", "bene_race_black_cnt", "0.2"),
-        ("010001", "C084", "bene_race_hspnc_cnt", "0.05"),
-        ("010001", "C084", "bene_race_othr_cnt", "0.02"),
-        ("010001", "C084", "bene_race_wht_cnt", "0.7"),
-        ("010001", "C085", "tot_benes", "1000.0"),
-        ("010001", "C086", "tot_dschrgs", "1.5"),
-        ("010001", "C087", "tot_dschrgs", "1500.0"),
-        ("010001", "C088", "tot_cvrd_days", "7400.0"),
-        ("010001", "C089", "bene_cc_ph_diabetes_v2_pct", "0.35"),
-        ("010001", "C090", "bene_cc_ph_ckd_v2_pct", "0.4"),
-        ("010001", "C109", "bene_cc_bh_depress_v1_pct", "0.3"),
-        ("010001", "C117", "tot_dschrgs", "0.06"),
-        ("010005", "C038", "tot_dschrgs", "12.0"),
-        ("010005", "C086", "tot_dschrgs", ""),
-        ("010005", "C087", "tot_dschrgs", "12.0"),
-        ("010005", "C117", "tot_dschrgs", "1.0"),
-    ]
     # [365] to [372] Ownership: each file dated by its recorded period; owner flags null before the April 2025 layout and for
     # a blank; one-digit dates; a lost leading zero padded, a unit CCN kept and a value that is not a CCN nulled; a
     # change of ownership kept once per release under one event key.
@@ -6970,9 +5795,10 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     ]
     checks["chow_match_expected"] = base.get("chow") == [
         ("u4", "2023-12-31", "010001", "010001", "010001", "", "2023-01-01", "||2023-01-01|"),
-        ("y1", "2022-03-31", "", "10002900", "100029", "CH", "2021-03-01", "O20000000004|O20000000005|2021-03-01|CH"),
         ("y2", "2022-09-30", "", "10002900", "100029", "CH", "2021-03-01", "O20000000004|O20000000005|2021-03-01|CH"),
         ("y2", "2022-09-30", "013025", "13025", "01T001", "AM", "2022-07-01", "O20000000006|O20000000007|2022-07-01|AM"),
+        ("y3", "2022-12-31", "", "", "", "CH", "2022-08-01", "O20000000021|O20000000022|2022-08-01|CH"),
+        ("y3", "2022-12-31", "", "", "", "CH", "2022-09-01", "O20000000023|O20000000024|2022-09-01|CH"),
     ]
     checks["ownership_generator_refuses_file_without_period"] = refuses_period(
         lambda: ownership_release_periods.rows_for(
@@ -7024,28 +5850,20 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     ]
     checks["onc_chpl_has_no_telephone"] = base.get("phone_columns") == [("0",)]
     checks["onc_attestations_match_expected"] = base.get("onc_attestations") == [("010001", "2014", "7", "2014", "Fixture Developer A")]
+    # The wage and the three shares are formulas saved in features/ (silver section 4).
     checks["occmix_matches_expected"] = base.get("occmix") == [
-        ("010002", "2021-12-25", "2022-12-24", "false", "0.0", "", "", "", ""),
-        ("010003", "2022-01-01", "2022-12-31", "false", "", "", "", "", ""),
-        ("010004", "2019-01-01", "2019-12-31", "false", "80.0", "20.0", "0.8", "0.1", "0.05"),
-        ("010006", "2022-01-01", "2022-12-31", "false", "100.0", "", "", "", ""),
-        ("010006", "2022-01-01", "2022-12-31", "false", "100.0", "", "", "", ""),
-        ("010008", "2023-01-01", "2022-12-31", "false", "100.0", "", "", "", ""),
-        ("010009", "NULL", "2022-12-31", "false", "100.0", "", "", "", ""),
-        ("01014F", "2022-01-01", "2022-12-31", "false", "100.0", "12.0", "0.6667", "0.1333", "0.1667"),
-        ("01014F", "2022-01-01", "2022-12-31", "true", "100.0", "", "", "", ""),
-        ("10005", "2016-01-01", "2016-12-31", "false", "100.0", "30.0", "1.0", "0.0", "0.0"),
-        ("BAD", "2022-01-01", "2022-12-31", "false", "100.0", "", "", "", ""),
+        ("010002", "2021-12-25", "2022-12-24", "false", "0.0"),
+        ("010003", "2022-01-01", "2022-12-31", "false", ""),
+        ("010004", "2019-01-01", "2019-12-31", "false", "80.0"),
+        ("010006", "2022-01-01", "2022-12-31", "false", "100.0"),
+        ("010006", "2022-01-01", "2022-12-31", "false", "100.0"),
+        ("010008", "2023-01-01", "2022-12-31", "false", "100.0"),
+        ("010009", "NULL", "2022-12-31", "false", "100.0"),
+        ("01014F", "2022-01-01", "2022-12-31", "false", "100.0"),
+        ("01014F", "2022-01-01", "2022-12-31", "true", "100.0"),
+        ("10005", "2016-01-01", "2016-12-31", "false", "100.0"),
+        ("BAD", "2022-01-01", "2022-12-31", "false", "100.0"),
     ]
-    checks["occmix_measures_match_expected"] = base.get("occmix_measures") == [
-        ("C030", "11", "4"),
-        ("C031", "11", "3"),
-        ("C032", "11", "3"),
-        ("C033", "11", "3"),
-        ("C034", "11", "3"),
-        ("C043", "11", "0"),
-    ]
-    checks["occmix_seed_matches_registry"] = occmix_seed_matches()
     checks["occmix_holds_match_expected"] = base.get("occmix_holds") == [
         ("deleted_survey_record", "1"),
         ("duplicate_provider_period", "2"),
@@ -7059,13 +5877,6 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     checks.update(shortage_checks(base))
     checks.update(validation_checks(base))
     checks.update(program_checks(base))
-    checks.update(outcome_checks(base))
-    checks.update(care_compare_checks(base))
-    checks.update(hospital_measure_checks(base))
-    checks.update(operations_measure_checks(base))
-    checks.update(validation_aligned_checks(base))
-    checks.update(county_measure_checks(base))
-    checks.update(al4b_context_checks(base))
     code, _ = built(results, "base_again")
     checks["rebuild_identical"] = code == 0 and "error" not in base and model_outputs("base_again") == base
     code, _ = built(results, "reversed_order")
@@ -7102,251 +5913,6 @@ ATTACH 'hai_lakehouse' AS lakehouse (
 """
 
 
-def registry_seed_matches() -> bool:
-    """Check the registry measure seed against the source registry: every control of S13 to S16 once, with the named ID [323] [324]."""
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    families = {family["id"]: family for family in registry["source_families"]}
-    sources = {source["source_id"]: source for source in registry["sources"]}
-    fields = {control["id"]: control["preserved_controls"].get("current_exact_field", "") for control in registry["measure_controls"]}
-    expected = {
-        control
-        for family in ("S13", "S14", "S15", "S16")
-        for source_id in families[family]["audit_source_ids"]
-        if source_id in sources
-        for control in sources[source_id]["linked_measure_ids"]
-    }
-    with (REPO_ROOT / "dbt/seeds/registry_measure_sources.csv").open(newline="") as handle:
-        seed = list(csv.DictReader(handle))
-    named = all(
-        not row["source_measure_id"] or row["source_measure_id"] in fields[row["measure_control"]] or row["measure_control"] in ("C139", "C140") for row in seed
-    )
-    return named and sorted(row["measure_control"] for row in seed) == sorted(expected)
-
-
-def cost_seed_matches() -> bool:
-    """Check that the cost-report measure seed covers exactly the registry's S01 controls [340]."""
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    sources = {source["source_id"]: source for source in registry["sources"]}
-    with (REPO_ROOT / "dbt/seeds/cost_report_measures.csv").open(newline="") as handle:
-        seed = sorted(row["measure_control"] for row in csv.DictReader(handle))
-    return seed == sorted(sources["CMS_HCRIS_PUF"]["linked_measure_ids"])
-
-
-def impact_seed_matches() -> bool:
-    """Check that the impact measure seed covers exactly the registry's CMS_IPPS controls [353]."""
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    sources = {source["source_id"]: source for source in registry["sources"]}
-    with (REPO_ROOT / "dbt/seeds/impact_measures.csv").open(newline="") as handle:
-        seed = sorted({row["measure_control"] for row in csv.DictReader(handle)})
-    return seed == sorted(sources["CMS_IPPS"]["linked_measure_ids"])
-
-
-def hhs_onc_seed_matches(field_names: dict[str, str]) -> bool:
-    """Check the HHS and ONC measure seed against the registry [378] [384].
-
-    Every control HHS_CAPACITY, HHS and ONC_PI link is in the seed once, by itself or by all its children; each child's
-    columns are its exact field names, an API field name the stored columns.json resolves to its CSV header, then the
-    bronze column rule.
-    """
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    sources = {source["source_id"]: source for source in registry["sources"]}
-    controls = {control["id"]: control for control in registry["measure_controls"]}
-    with (REPO_ROOT / "dbt/seeds/hhs_onc_measures.csv").open(newline="") as handle:
-        seed = list(csv.DictReader(handle))
-    linked = {*sources["HHS_CAPACITY"]["linked_measure_ids"], *sources["HHS"]["linked_measure_ids"], *sources["ONC_PI"]["linked_measure_ids"]}
-    if {row["parent_control"] or row["measure_control"] for row in seed} != linked:
-        return False
-    children = {control_id for control_id, control in controls.items() if control.get("parent_id") in linked}
-    if {row["measure_control"] for row in seed if row["parent_control"]} != children:
-        return False
-    # Registry revision 3 (STG-008): C001 and C040 keep their rows with mapping closed and no fields; nothing is unnamed [720].
-    for row in seed:
-        if not row["parent_control"] and row["mapping"] == "closed":
-            decision = controls[row["measure_control"]].get("effective_closeout_decision") or {}
-            if decision.get("issue") != "STG-008" or row["fields"]:
-                return False
-    if any(row["mapping"] not in ("exact", "api_field_name", "closed") for row in seed):
-        return False
-    columns = set(field_names.values())
-    for row in seed:
-        if not row["parent_control"]:
-            continue
-        names = [name.strip(" .,;") for name in controls[row["measure_control"]]["preserved_controls"]["current_exact_field"].split("/")]
-        derived = [field_names.get(name, name) for name in names]
-        if row["fields"].split() != derived or not set(derived) <= columns:
-            return False
-    return True
-
-
-def occmix_seed_matches() -> bool:
-    """Check every S03 definition and decision against the registry, with C043 unmapped."""
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    sources = {source["source_id"]: source for source in registry["sources"]}
-    controls = {control["id"]: control["preserved_controls"] for control in registry["measure_controls"]}
-    with (REPO_ROOT / "dbt/seeds/occmix_measures.csv").open(newline="") as handle:
-        seed = list(csv.DictReader(handle))
-    linked = {*sources["OM"]["linked_measure_ids"], *sources["CMS_OCCMIX"]["linked_measure_ids"]}
-    return sorted(row["measure_control"] for row in seed) == sorted(linked) and all(
-        row["definition"] == controls[row["measure_control"]]["current_exact_field"]
-        and row["review_decision"] == controls[row["measure_control"]]["current_review_decision"]
-        and (row["measure_control"] != "C043" or (not row["value_column"] and row["source_status"] == "unavailable_source_definition"))
-        for row in seed
-    )
-
-
-def ownership_seed_matches() -> bool:
-    """Check that the ownership measure seed covers exactly the registry's controls of CMS_OWNERS, ENROLL and CMS_CHOW [373]."""
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    sources = {source["source_id"]: source for source in registry["sources"]}
-    with (REPO_ROOT / "dbt/seeds/ownership_measures.csv").open(newline="") as handle:
-        seed = sorted(row["measure_control"] for row in csv.DictReader(handle))
-    expected = {*sources["CMS_OWNERS"]["linked_measure_ids"], *sources["ENROLL"]["linked_measure_ids"], *sources["CMS_CHOW"]["linked_measure_ids"]}
-    return seed == sorted(expected)
-
-
-def geography_seed_matches() -> bool:
-    """Check the geography measure seed against the source registry: every control of S21, S22, S35, S36 and S38 once, with its family and decision [417]."""
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    families = {source: family["id"] for family in registry["source_families"] for source in family["audit_source_ids"]}
-    wanted = {"S21", "S22", "S35", "S36", "S38"}
-    expected_rows = sorted(
-        (control["id"], family, control["preserved_controls"]["current_review_decision"])
-        for control in registry["measure_controls"]
-        for family in sorted({families[source] for source in control["source_ids"] if source in families} & wanted)
-    )
-    seed = REPO_ROOT / "dbt/seeds/geography_measures.csv"
-    if not seed.exists():
-        return False
-    with seed.open(newline="") as handle:
-        seeded = sorted((row["measure_control"], row["family"], row["review_decision"]) for row in csv.DictReader(handle))
-    return bool(expected_rows) and seeded == expected_rows
-
-
-def acs_svi_seed_matches() -> bool:
-    """Check the ACS and SVI measure seed against the registry (every control of S18 and S19, with its decision) and its
-    ACS concepts against the reviewed variable map [432]."""
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    families = {source: family["id"] for family in registry["source_families"] for source in family["audit_source_ids"]}
-    expected_controls = {
-        control["id"]: control["preserved_controls"]["current_review_decision"]
-        for control in registry["measure_controls"]
-        if {families[source] for source in control["source_ids"] if source in families} & {"S18", "S19"}
-    }
-    seed = REPO_ROOT / "dbt/seeds/acs_svi_measures.csv"
-    if not seed.exists():
-        return False
-    with seed.open(newline="") as handle:
-        rows = list(csv.DictReader(handle))
-    with (REPO_ROOT / "dbt/seeds/acs_variable_map.csv").open(newline="") as handle:
-        concepts = {row["concept_id"] for row in csv.DictReader(handle)}
-    seeded = {row["measure_control"]: row["review_decision"] for row in rows}
-    named = {item for row in rows if row["source"] == "acs" for item in row["components"].split()}
-    return bool(expected_controls) and seeded == expected_controls and named <= concepts
-
-
-def income_labor_seed_matches() -> bool:
-    """Check the SAIPE, SAHIE and BLS measure seed against the registry: every control of S24, S25 and S29 once per row,
-    with its decision [446]."""
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    families = {source: family["id"] for family in registry["source_families"] for source in family["audit_source_ids"]}
-    wanted = {"S24", "S25", "S29"}
-    expected_rows = sorted(
-        (control["id"], control["preserved_controls"]["current_review_decision"])
-        for control in registry["measure_controls"]
-        if {families[source] for source in control["source_ids"] if source in families} & wanted
-    )
-    seed = REPO_ROOT / "dbt/seeds/income_labor_measures.csv"
-    if not seed.exists():
-        return False
-    with seed.open(newline="") as handle:
-        seeded = sorted((row["measure_control"], row["review_decision"]) for row in csv.DictReader(handle))
-    return bool(expected_rows) and seeded == expected_rows
-
-
-def county_health_seed_matches() -> bool:
-    """Check the PLACES, geographic variation and WONDER measure seed against the registry: every control of S20, S28 and
-    S30 once, with its decision [460]."""
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    families = {source: family["id"] for family in registry["source_families"] for source in family["audit_source_ids"]}
-    expected_rows = sorted(
-        (control["id"], control["preserved_controls"]["current_review_decision"])
-        for control in registry["measure_controls"]
-        if {families[source] for source in control["source_ids"] if source in families} & {"S20", "S28", "S30"}
-    )
-    seed = REPO_ROOT / "dbt/seeds/county_health_measures.csv"
-    if not seed.exists():
-        return False
-    with seed.open(newline="") as handle:
-        seeded = sorted((row["measure_control"], row["review_decision"]) for row in csv.DictReader(handle))
-    return bool(expected_rows) and seeded == expected_rows
-
-
-def validation_seed_matches() -> bool:
-    """Check the validation measure seed against the registry: every control of the D1 sources and their children, each named
-    ID found in its control's exact field, only C288.payment_adjustment unmapped (registry revision 3) [508] [511] [720]."""
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    sources = {source["source_id"]: source for source in registry["sources"]}
-    controls = {control["id"]: control for control in registry["measure_controls"]}
-    names = ("care-hrrp-cms", "care-visits-cms", "care-deaths-cms", "PSI90", "PSI13", "care-hac-cms", "care-vbp-cms")
-    parents = {control for name in names for control in sources[name]["linked_measure_ids"]}
-    expected = parents | {name for name, control in controls.items() if control.get("parent_id") in parents}
-    seed = REPO_ROOT / "dbt/seeds/validation_measures.csv"
-    if not seed.exists():
-        return False
-    with seed.open(newline="") as handle:
-        rows = list(csv.DictReader(handle))
-    # A field is named when it appears in its control's exact field, or its parent's for a child without one (C288 children)
-    # [520]; underscores compare as spaces and case is ignored.
-    fields = {
-        name: (
-            controls[name]["preserved_controls"].get("current_exact_field")
-            or controls[controls[name]["parent_id"]]["preserved_controls"]["current_exact_field"]
-        )
-        .lower()
-        .replace("_", " ")
-        for name in expected
-    }
-    children_ids = {row["measure_control"]: row["source_measure_id"] for row in rows if controls[row["measure_control"]].get("parent_id") in parents}
-    named = all(
-        (row["source_measure_id"].lower().replace("_", " ") in fields[row["measure_control"]])
-        or (row["measure_control"] in parents and row["source_measure_id"] in children_ids.values())
-        for row in rows
-        if row["source_measure_id"]
-    )
-    unmapped = {row["measure_control"] for row in rows if not row["source_measure_id"]} == {"C288.payment_adjustment"}
-    decisions = all(row["review_decision"] == (controls[row["measure_control"]]["preserved_controls"]["current_review_decision"] or "") for row in rows)
-    return {row["measure_control"] for row in rows} == expected and named and unmapped and decisions
-
-
-def shortage_seed_matches() -> bool:
-    """Check the MMD, HPSA and MUA measure seed against the registry and its user additions: every control of S23 and S27
-    once, with its decision [474] [482]."""
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    additions = json.loads((REPO_ROOT / "config/acquisition/registry_additions.json").read_text())
-    families = {source: family["id"] for family in registry["source_families"] for source in family["audit_source_ids"]}
-    expected_rows = sorted(
-        (control["id"], control["preserved_controls"]["current_review_decision"])
-        for control in [*registry["measure_controls"], *additions["measure_controls"]]
-        if {families[source] for source in control["source_ids"] if source in families} & {"S23", "S27"}
-    )
-    seed = REPO_ROOT / "dbt/seeds/shortage_measures.csv"
-    if not seed.exists():
-        return False
-    with seed.open(newline="") as handle:
-        seeded = sorted((row["measure_control"], row["review_decision"]) for row in csv.DictReader(handle))
-    return bool(expected_rows) and seeded == expected_rows
-
-
-def mup_seed_matches() -> bool:
-    """Check that the Medicare inpatient measure seed covers exactly the registry's controls of its two sources [363]."""
-    registry = json.loads((REPO_ROOT / "config/acquisition/source_registry.json").read_text())
-    sources = {source["source_id"]: source for source in registry["sources"]}
-    with (REPO_ROOT / "dbt/seeds/mup_measures.csv").open(newline="") as handle:
-        seed = sorted({row["measure_control"] for row in csv.DictReader(handle)})
-    expected = {*sources["CMS-MUP-PROVIDER"]["linked_measure_ids"], *sources["CMS_MEDICARE_PROVIDER"]["linked_measure_ids"]}
-    return seed == sorted(expected)
-
-
 # Ordered fingerprints of every C1 model, compared between the two real builds [418]. Each row is hashed before the ordered
 # aggregate, so an 11.9 million-row model needs about 0.4 GB, not one string of every row (failure mode 544).
 GEOGRAPHY_FINGERPRINTS = {
@@ -7374,12 +5940,6 @@ GEOGRAPHY_FINGERPRINTS = {
     "int_cc_hrrp_windows": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY window_key)) FROM int_cc_hrrp_windows AS t;",
     "int_hac_program_years": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY program_key)) FROM int_hac_program_years AS t;",
     "int_vbp_program_years": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY program_key)) FROM int_vbp_program_years AS t;",
-    "int_validation_program_values": (
-        "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY program_value_key)) FROM int_validation_program_values AS t;"
-    ),
-    "int_validation_measure_windows": (
-        "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY validation_key)) FROM int_validation_measure_windows AS t;"
-    ),
     "int_hpsa_components": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY hpsa_row_key)) FROM int_hpsa_components AS t;",
     "int_mua_components": "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY mua_row_key)) FROM int_mua_components AS t;",
 }
@@ -7444,7 +6004,6 @@ def geography_real(database: str, init: str) -> dict[str, Any]:
     counts["hud_workbook_twins"] = {"releases": len(twins), "matching": len(matching), "approved_repeat_rows": sum(int(row[4]) - int(row[3]) for row in twins)}
     checks["geography_hud_workbooks_match_csv_twins"] = len(matching) == len(twins) > 0
     checks["geography_periods_seed_reproduced"] = geography_file_periods.SEED.read_text() == geography_file_periods.as_csv(geography_file_periods.build())
-    checks["geography_seed_matches_registry"] = geography_seed_matches()
     return {"checks": checks, "counts": counts}
 
 
@@ -7543,18 +6102,21 @@ PLACES_COVERAGE_SQL = """SELECT edition, data_year::VARCHAR, count(DISTINCT meas
     count(DISTINCT measureid || datavaluetypeid)::VARCHAR FROM int_places_county_values GROUP BY 1, 2 ORDER BY 1, 2;"""
 
 
-# Staged rows counted from the staging views without the models: MMD rows, HPSA and MUA rows (kept plus held) and the
-# approved repeat counts; unknown-county MMD rows are recorded [470] [475] [484].
+# Staged rows counted from the staging views without the models: MMD rows, MMD rows whose published label the gold MMD
+# bridge maps, HPSA and MUA rows (kept plus held) and the approved repeat counts; unknown-county MMD rows are recorded
+# [470] [475] [484].
 SHORTAGE_SQL = """SELECT 'mmd', (SELECT count(*) FROM stg_cms_mmd_csv)::VARCHAR, (SELECT count(*) FROM int_mmd_prevalence)::VARCHAR
 UNION ALL SELECT 'mmd_mapped', (SELECT count(*) FROM stg_cms_mmd_csv)::VARCHAR,
-    (SELECT count(measure_control) FROM int_mmd_prevalence)::VARCHAR
+    (SELECT count(*) FROM int_mmd_prevalence AS p WHERE EXISTS (SELECT 1 FROM mmd_conditions_bridge AS b
+        WHERE b.fact = 'fct_mmd_prevalence' AND b.measure_key = p.condition_label))::VARCHAR
 UNION ALL SELECT 'hpsa', (SELECT count(*) FROM stg_hrsa_hpsa_detail)::VARCHAR, (SELECT count(*) FROM int_hpsa_components)::VARCHAR
 UNION ALL SELECT 'hpsa_held', '4', (SELECT count(*) FROM int_hpsa_components WHERE hold_reason IS NOT NULL)::VARCHAR
 UNION ALL SELECT 'mua', (SELECT count(*) FROM stg_hrsa_mua_detail)::VARCHAR, (SELECT count(*) FROM int_mua_components)::VARCHAR
 UNION ALL SELECT 'mua_held', '358', (SELECT count(*) FROM int_mua_components WHERE hold_reason IS NOT NULL)::VARCHAR
 UNION ALL SELECT 'mmd_unknown_county', (SELECT count(*) FROM stg_cms_mmd_csv WHERE trim(geography) = 'County' AND nullif(trim(county), '') IS NULL)::VARCHAR,
     (SELECT count(*) FROM int_mmd_prevalence WHERE is_unknown_county)::VARCHAR;"""
-MMD_CONTROLS_SQL = "SELECT count(DISTINCT measure_control)::VARCHAR FROM int_mmd_prevalence;"
+# One published condition label per registry control (B1 checks the label-control map both ways in the bridge).
+MMD_CONTROLS_SQL = "SELECT count(DISTINCT condition_label)::VARCHAR FROM int_mmd_prevalence;"
 
 
 # Every distinct usable window key of a D1 table is a window or a held window, never both and never neither; the hospital ID
@@ -7563,25 +6125,31 @@ D1_KEYS_SQL = """WITH keys AS (
     SELECT DISTINCT 'cms_cc_unplanned_hospital_visits_hospital' AS t,
         CASE WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9]{5}') THEN lpad(trim(coalesce(facility_id, provider_id)), 6, '0')
         WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9A-Z]{6}') THEN trim(coalesce(facility_id, provider_id)) END AS e,
-        trim(measure_id) AS m,
-        try_strptime(coalesce(start_date, measure_start_date), '%m/%d/%Y')::date AS s, try_strptime(coalesce(end_date, measure_end_date), '%m/%d/%Y')::date AS f
-    FROM stg_cms_cc_unplanned_hospital_visits_hospital WHERE NOT is_label_held
+        trim(stg.measure_id) AS m,
+        try_strptime(coalesce(start_date, measure_start_date), '%m/%d/%Y')::date AS s,
+        try_strptime(coalesce(end_date, measure_end_date), '%m/%d/%Y')::date AS f,
+        coalesce(alias.measure_id, trim(stg.measure_id)) AS c
+    FROM stg_cms_cc_unplanned_hospital_visits_hospital AS stg
+    LEFT JOIN measure_id_aliases AS alias
+        ON alias.source_model = 'int_cc_unplanned_visits_windows' AND alias.published_measure_id = trim(stg.measure_id)
+    WHERE NOT is_label_held
     UNION ALL
     SELECT DISTINCT 'cms_cc_complications_and_deaths_hospital',
         CASE WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9]{5}') THEN lpad(trim(coalesce(facility_id, provider_id)), 6, '0')
         WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9A-Z]{6}') THEN trim(coalesce(facility_id, provider_id)) END, trim(measure_id),
-        try_strptime(coalesce(start_date, measure_start_date), '%m/%d/%Y')::date, try_strptime(coalesce(end_date, measure_end_date), '%m/%d/%Y')::date
+        try_strptime(coalesce(start_date, measure_start_date), '%m/%d/%Y')::date, try_strptime(coalesce(end_date, measure_end_date), '%m/%d/%Y')::date,
+        trim(measure_id)
     FROM stg_cms_cc_complications_and_deaths_hospital WHERE NOT is_label_held
     UNION ALL
     SELECT DISTINCT 'cms_cc_hospital_readmissions_reduction_program_hospital',
         CASE WHEN regexp_full_match(trim(facility_id), '[0-9]{5}') THEN lpad(trim(facility_id), 6, '0')
         WHEN regexp_full_match(trim(facility_id), '[0-9A-Z]{6}') THEN trim(facility_id) END, trim(measure_name),
-        try_strptime(start_date, '%m/%d/%Y')::date, try_strptime(end_date, '%m/%d/%Y')::date
+        try_strptime(start_date, '%m/%d/%Y')::date, try_strptime(end_date, '%m/%d/%Y')::date, trim(measure_name)
     FROM stg_cms_cc_hospital_readmissions_reduction_program_hospital WHERE NOT is_label_held
 ),
 usable AS (SELECT * FROM keys WHERE nullif(e, '') IS NOT NULL AND nullif(m, '') IS NOT NULL AND s IS NOT NULL AND f IS NOT NULL),
 w AS (
-    SELECT 'cms_cc_unplanned_hospital_visits_hospital' AS t, entity_id AS e, measure_id AS m, window_start AS s, window_end AS f
+    SELECT 'cms_cc_unplanned_hospital_visits_hospital' AS t, entity_id AS e, published_measure_id AS m, window_start AS s, window_end AS f
     FROM int_cc_unplanned_visits_windows
     UNION ALL SELECT 'cms_cc_complications_and_deaths_hospital', entity_id, measure_id, window_start, window_end FROM int_cc_complications_deaths_windows
     UNION ALL SELECT 'cms_cc_hospital_readmissions_reduction_program_hospital', entity_id, measure_id, window_start, window_end FROM int_cc_hrrp_windows
@@ -7589,8 +6157,18 @@ w AS (
 h AS (
     SELECT bronze_table AS t, entity_id AS e, measure_id AS m, window_start AS s, window_end AS f
     FROM int_validation_window_holds WHERE window_start IS NOT NULL
+),
+-- Keys, windows and holds compare by published ID. A usable alias key is dropped by the model when the exact key of its
+-- reviewed ID is kept as a window; a held alias, or an alias beside a held exact key, stays (A12, A32, A33).
+discarded AS (
+    SELECT a.t, a.e, a.m, a.s, a.f FROM usable AS a
+    WHERE a.c <> a.m
+        AND EXISTS (SELECT 1 FROM usable AS x WHERE x.t = a.t AND x.e = a.e AND x.m = a.c AND x.s = a.s AND x.f = a.f)
+        AND NOT EXISTS (SELECT 1 FROM h WHERE h.t = a.t AND h.e = a.e AND h.m = a.c AND h.s = a.s AND h.f = a.f)
+        AND NOT EXISTS (SELECT 1 FROM h WHERE h.t = a.t AND h.e = a.e AND h.m = a.m AND h.s = a.s AND h.f = a.f)
 )
-SELECT usable.t, count(*)::VARCHAR, (SELECT count(*) FROM w WHERE w.t = usable.t)::VARCHAR, (SELECT count(*) FROM h WHERE h.t = usable.t)::VARCHAR,
+SELECT usable.t, (count(*) - (SELECT count(*) FROM discarded WHERE discarded.t = usable.t))::VARCHAR,
+    (SELECT count(*) FROM w WHERE w.t = usable.t)::VARCHAR, (SELECT count(*) FROM h WHERE h.t = usable.t)::VARCHAR,
     (SELECT count(*) FROM w INNER JOIN h USING (t, e, m, s, f) WHERE w.t = usable.t)::VARCHAR
 FROM usable GROUP BY usable.t ORDER BY 1;"""
 
@@ -7620,298 +6198,6 @@ SELECT usable.t, count(*)::VARCHAR, (SELECT count(*) FROM p WHERE p.t = usable.t
 FROM usable GROUP BY usable.t ORDER BY 1;"""
 
 
-# AL1 reconciliation [549] to [556]: outcome rows against the spine, and published and held SIRs counted independently
-# from the calendar-year HAI windows (release date against the last 2015-baseline review, Aug 13 2026).
-OUTCOME_REAL_SQL = """WITH cal AS (
-    SELECT measure_id, score, compared_to_national, release_date FROM int_hai_hospital_windows
-    WHERE month(window_start) = 1 AND day(window_start) = 1 AND window_end = make_date(year(window_start), 12, 31)
-)
-SELECT 'rows', (SELECT count(*) FROM int_spine_hai_outcomes)::VARCHAR, (SELECT 6 * count(*) FROM int_hospital_spine)::VARCHAR
-UNION ALL SELECT 'keys', (SELECT count(DISTINCT outcome_key) FROM int_spine_hai_outcomes)::VARCHAR, (SELECT 6 * count(*) FROM int_hospital_spine)::VARCHAR
-UNION ALL SELECT 'sirs', (SELECT count(*) FROM int_spine_hai_outcomes WHERE has_sir)::VARCHAR,
-    (SELECT count(*) FROM cal WHERE right(measure_id, 4) = '_SIR' AND release_date <= DATE '2026-08-13'
-        AND regexp_full_match(trim(score), '-?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][-+]?[0-9]+)?'))::VARCHAR
-UNION ALL SELECT 'held_parts', (SELECT coalesce(sum(baseline_held_parts), 0) FROM int_spine_hai_outcomes)::VARCHAR,
-    (SELECT count(*) FROM cal WHERE release_date > DATE '2026-08-13')::VARCHAR
-UNION ALL SELECT 'sir_without_counts', (SELECT count(*) FROM int_spine_hai_outcomes WHERE has_sir AND (observed IS NULL OR predicted IS NULL))::VARCHAR, '0'
-UNION ALL SELECT 'c269_values', (SELECT count(*) FROM int_hai_outcome_values WHERE measure_control = 'C269')::VARCHAR,
-    (SELECT count(*) FROM cal WHERE measure_id = 'HAI_1_SIR' AND release_date <= DATE '2026-08-13' AND nullif(trim(score), '') IS NOT NULL)::VARCHAR
-UNION ALL SELECT 'benchmark_values', (SELECT count(*) FROM int_hai_outcome_values WHERE measure_control = 'C283.benchmark_category')::VARCHAR,
-    (SELECT count(*) FROM cal WHERE right(measure_id, 4) = '_SIR' AND release_date <= DATE '2026-08-13'
-        AND nullif(trim(compared_to_national), '') IS NOT NULL)::VARCHAR
-UNION ALL SELECT 'staging_held_parts', (SELECT coalesce(sum(staging_held_parts), 0) FROM int_spine_hai_outcomes)::VARCHAR,
-    (SELECT count(DISTINCT entity_id || measure_id || window_start) FROM int_hai_window_holds WHERE bronze_table = 'cms_hai_hospital'
-        AND month(window_start) = 1 AND day(window_start) = 1 AND window_end = make_date(year(window_start), 12, 31))::VARCHAR;"""
-OUTCOME_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY outcome_key)) FROM int_spine_hai_outcomes AS t;"
-
-
-def outcome_real(database: str) -> dict[str, Any]:
-    """Reconcile the real AL1 outcome with the spine and the calendar-year HAI windows; count SIRs per year and type."""
-    checks: dict[str, bool] = {}
-    counts: dict[str, Any] = {}
-    for name, model, independent in duckdb_csv(database, OUTCOME_REAL_SQL):
-        counts[name] = {"model": int(model), "independent": int(independent)}
-        checks[f"outcome_{name}_reconcile"] = model == independent
-    counts["alignment_status"] = dict(duckdb_csv(database, OUTCOME_STATUS_COUNT_SQL))
-    counts["values_per_control"] = dict(duckdb_csv(database, OUTCOME_VALUES_SQL))
-    counts["sirs_per_year_type"] = dict(
-        duckdb_csv(
-            database,
-            "SELECT window_year || ' ' || hai_type, count(*) FILTER (WHERE has_sir)::VARCHAR FROM int_spine_hai_outcomes GROUP BY 1 ORDER BY 1;",
-        )
-    )
-    return {"checks": checks, "counts": counts}
-
-
-# AL2 reconciliation [564] to [572]: rows against the spine and the registry, aligned windows and ratings counted
-# independently from the staged windows and releases, and no period on or after the window start.
-CARE_REAL_SQL = """WITH spine AS (SELECT spine_key, ccn, make_date(window_year, 1, 1) AS start FROM int_hospital_spine),
-dated AS (
-    SELECT ccn, release_date, count(DISTINCT coalesce(overall_rating_text, '') || '|' || coalesce(overall_rating_footnote, '')) AS versions
-    FROM int_hgi_hospital_releases WHERE ccn IS NOT NULL GROUP BY ALL
-),
-latest AS (SELECT spine.spine_key, spine.ccn, max(dated.release_date) AS release_date FROM spine JOIN dated
-    ON dated.ccn = spine.ccn AND dated.release_date < spine.start GROUP BY ALL)
-SELECT 'rows', (SELECT count(*) FROM int_spine_care_compare_measures)::VARCHAR,
-    ((SELECT count(*) FROM int_hospital_spine) * (SELECT count(*) FROM registry_measure_sources))::VARCHAR
-UNION ALL SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_care_compare_measures)::VARCHAR,
-    ((SELECT count(*) FROM int_hospital_spine) * (SELECT count(*) FROM registry_measure_sources))::VARCHAR
-UNION ALL SELECT 'aligned_windows', (SELECT count(*) FROM int_spine_care_compare_measures
-    WHERE alignment_status = 'aligned' AND measure_control <> 'C284')::VARCHAR,
-    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, windows.measure_control FROM spine JOIN int_registry_measure_windows AS windows
-        ON windows.entity_id = spine.ccn AND windows.window_end < spine.start))::VARCHAR
-UNION ALL SELECT 'aligned_ratings', (SELECT count(*) FROM int_spine_care_compare_measures
-    WHERE alignment_status = 'aligned' AND measure_control = 'C284')::VARCHAR,
-    (SELECT count(*) FROM latest JOIN dated USING (ccn, release_date) WHERE dated.versions = 1)::VARCHAR
-UNION ALL SELECT 'held_ratings', (SELECT count(*) FROM int_spine_care_compare_measures
-    WHERE alignment_status = 'held_in_staging' AND measure_control = 'C284')::VARCHAR,
-    (SELECT count(*) FROM latest JOIN dated USING (ccn, release_date) WHERE dated.versions > 1)::VARCHAR
-UNION ALL SELECT 'periods_on_or_after_start', (SELECT count(*) FROM int_spine_care_compare_measures
-    WHERE alignment_status = 'aligned' AND period_end >= window_start)::VARCHAR, '0'
-UNION ALL SELECT 'c141_unmapped', (SELECT count(*) FROM int_spine_care_compare_measures WHERE measure_control = 'C141'
-    AND value_text IS NOT NULL AND value_text <> 'Not Available' AND value_category IS NULL)::VARCHAR, '0';"""
-CARE_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_care_compare_measures AS t;"
-
-
-def care_compare_real(database: str) -> dict[str, Any]:
-    """Reconcile the real AL2 rows with the spine, the registry windows and the rating releases; count statuses."""
-    checks: dict[str, bool] = {}
-    counts: dict[str, Any] = {}
-    for name, model, independent in duckdb_csv(database, CARE_REAL_SQL):
-        counts[name] = {"model": int(model), "independent": int(independent)}
-        checks[f"care_compare_{name}_reconcile"] = model == independent
-    counts["alignment_status"] = dict(
-        duckdb_csv(database, "SELECT alignment_status, count(*)::VARCHAR FROM int_spine_care_compare_measures GROUP BY 1 ORDER BY 1;")
-    )
-    counts["aligned_per_year"] = dict(
-        duckdb_csv(
-            database,
-            "SELECT window_year::VARCHAR, count(*) FILTER (WHERE alignment_status = 'aligned')::VARCHAR "
-            "FROM int_spine_care_compare_measures GROUP BY 1 ORDER BY 1;",
-        )
-    )
-    counts["c141_categories"] = dict(
-        duckdb_csv(
-            database,
-            "SELECT coalesce(value_category, coalesce(value_text, 'none')), count(*)::VARCHAR FROM int_spine_care_compare_measures "
-            "WHERE measure_control = 'C141' AND alignment_status = 'aligned' GROUP BY 1 ORDER BY 1;",
-        )
-    )
-    return {"checks": checks, "counts": counts}
-
-
-# AL3a reconciliation [576] to [583]: rows against the spine and the four seeds, and per source the hospital-windows and
-# control-fields with a period before the start, counted independently from the staged tables.
-HOSPITAL_REAL_SQL = """WITH spine AS (SELECT spine_key, ccn, window_year, make_date(window_year, 1, 1) AS start FROM int_hospital_spine),
-controls AS (
-    SELECT count(*) AS n FROM (
-        SELECT measure_control FROM cost_report_measures UNION ALL SELECT measure_control FROM impact_measures
-        UNION ALL SELECT DISTINCT measure_control || coalesce(field, 'none') FROM mup_measures UNION ALL SELECT measure_control FROM occmix_measures
-    )
-),
-model AS (SELECT measure_source, count(*) FILTER (WHERE period_end IS NOT NULL) AS n FROM int_spine_hospital_measures GROUP BY 1)
-SELECT 'rows', (SELECT count(*) FROM int_spine_hospital_measures)::VARCHAR, ((SELECT count(*) FROM spine) * (SELECT n FROM controls))::VARCHAR
-UNION ALL SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_hospital_measures)::VARCHAR,
-    ((SELECT count(*) FROM spine) * (SELECT n FROM controls))::VARCHAR
-UNION ALL SELECT 'cost_report_periods', (SELECT n FROM model WHERE measure_source = 'cost_report')::VARCHAR,
-    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, m.measure_control FROM spine JOIN int_cost_report_measures AS m ON m.ccn = spine.ccn
-        JOIN int_cost_reports AS r ON r.rpt_rec_num = m.rpt_rec_num WHERE r.period_end < spine.start))::VARCHAR
-UNION ALL SELECT 'ipps_impact_periods', (SELECT n FROM model WHERE measure_source = 'ipps_impact')::VARCHAR,
-    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, m.measure_control, m.field FROM spine JOIN int_impact_measures AS m
-        ON m.ccn = spine.ccn WHERE m.rule_fiscal_year <= spine.window_year - 1))::VARCHAR
-UNION ALL SELECT 'medicare_inpatient_periods', (SELECT n FROM model WHERE measure_source = 'medicare_inpatient')::VARCHAR,
-    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, m.measure_control, m.field FROM spine JOIN int_mup_measures AS m
-        ON m.ccn = spine.ccn WHERE m.data_year < spine.window_year))::VARCHAR
-UNION ALL SELECT 'occupational_mix_periods', (SELECT n FROM model WHERE measure_source = 'occupational_mix')::VARCHAR,
-    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, m.measure_control FROM spine JOIN int_occmix_measures AS m ON m.ccn = spine.ccn
-        WHERE m.survey_end_date < spine.start AND m.hold_reason IS NULL AND m.value_number IS NOT NULL))::VARCHAR
-UNION ALL SELECT 'periods_on_or_after_start', (SELECT count(*) FROM int_spine_hospital_measures
-    WHERE alignment_status = 'aligned' AND period_end >= window_start)::VARCHAR, '0';"""
-HOSPITAL_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_hospital_measures AS t;"
-
-
-def hospital_measures_real(database: str) -> dict[str, Any]:
-    """Reconcile the real AL3a rows with the spine and the staged sources; count statuses per source."""
-    checks: dict[str, bool] = {}
-    counts: dict[str, Any] = {}
-    for name, model, independent in duckdb_csv(database, HOSPITAL_REAL_SQL):
-        counts[name] = {"model": int(model), "independent": int(independent)}
-        checks[f"hospital_measures_{name}_reconcile"] = model == independent
-    status_sql = "SELECT measure_source || ' ' || alignment_status, count(*)::VARCHAR FROM int_spine_hospital_measures GROUP BY 1 ORDER BY 1;"
-    counts["alignment_status"] = dict(duckdb_csv(database, status_sql))
-    return {"checks": checks, "counts": counts}
-
-
-# AL3b reconciliation [587] to [595]: rows against the spine and the two seeds; HHS, ONC and change-of-ownership periods
-# counted independently from the staged tables; no aligned period on or after the start.
-OPERATIONS_REAL_SQL = """WITH spine AS (SELECT spine_key, ccn, window_year, make_date(window_year, 1, 1) AS start FROM int_hospital_spine),
-controls AS (SELECT (SELECT count(*) FROM hhs_onc_measures) + (SELECT count(*) FROM ownership_measures) AS n),
-model AS (SELECT measure_source, measure_control, count(*) FILTER (WHERE period_end IS NOT NULL) AS n FROM int_spine_operations_measures GROUP BY ALL)
-SELECT 'rows', (SELECT count(*) FROM int_spine_operations_measures)::VARCHAR, ((SELECT count(*) FROM spine) * (SELECT n FROM controls))::VARCHAR
-UNION ALL SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_operations_measures)::VARCHAR,
-    ((SELECT count(*) FROM spine) * (SELECT n FROM controls))::VARCHAR
-UNION ALL SELECT 'hhs_years', (SELECT n FROM model WHERE measure_control = 'C260')::VARCHAR,
-    (SELECT count(DISTINCT spine.spine_key) FROM spine JOIN int_hhs_capacity_weeks AS w ON w.ccn = spine.ccn
-        AND year(w.collection_week) = spine.window_year - 1)::VARCHAR
-UNION ALL SELECT 'onc_periods', (SELECT n FROM model WHERE measure_control = 'C073')::VARCHAR,
-    (SELECT count(DISTINCT spine.spine_key) FROM spine JOIN int_onc_chpl_linkage_rows AS o ON o.ccn = spine.ccn AND o.end_date < spine.start)::VARCHAR
-UNION ALL SELECT 'chow_hospital_windows', (SELECT n FROM model WHERE measure_control = 'C070')::VARCHAR,
-    (SELECT count(DISTINCT spine.spine_key) FROM spine JOIN int_change_of_ownership_rows AS c
-        ON (c.ccn_buyer = spine.ccn OR c.ccn_seller = spine.ccn) AND c.effective_date < spine.start)::VARCHAR
-UNION ALL SELECT 'periods_on_or_after_start', (SELECT count(*) FROM int_spine_operations_measures
-    WHERE alignment_status = 'aligned' AND period_end >= window_start)::VARCHAR, '0';"""
-OPERATIONS_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_operations_measures AS t;"
-
-
-def operations_measures_real(database: str) -> dict[str, Any]:
-    """Reconcile the real AL3b rows with the spine and the staged sources; count statuses per source."""
-    checks: dict[str, bool] = {}
-    counts: dict[str, Any] = {}
-    for name, model, independent in duckdb_csv(database, OPERATIONS_REAL_SQL):
-        counts[name] = {"model": int(model), "independent": int(independent)}
-        checks[f"operations_measures_{name}_reconcile"] = model == independent
-    status_sql = "SELECT measure_source || ' ' || alignment_status, count(*)::VARCHAR FROM int_spine_operations_measures GROUP BY 1 ORDER BY 1;"
-    counts["alignment_status"] = dict(duckdb_csv(database, status_sql))
-    return {"checks": checks, "counts": counts}
-
-
-# AL5 reconciliation [597] to [601]: rows against the spine and the seed; aligned rows counted independently as the
-# control-measures with a published period overlapping the HAI window; no aligned period outside the window.
-VALIDATION_ALIGNED_REAL_SQL = """WITH spine AS (SELECT spine_key, ccn, make_date(window_year, 1, 1) AS start, make_date(window_year, 12, 31) AS finish
-    FROM int_hospital_spine),
-programs AS (
-    SELECT fiscal_year, min(try_strptime(hai_measures_start_date, '%m/%d/%Y'))::DATE AS s, max(try_strptime(hai_measures_end_date, '%m/%d/%Y'))::DATE AS e
-    FROM int_hac_program_years GROUP BY 1
-)
-SELECT 'rows', (SELECT count(*) FROM int_spine_validation_measures)::VARCHAR,
-    ((SELECT count(*) FROM spine) * (SELECT count(*) FROM validation_measures))::VARCHAR
-UNION ALL SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_validation_measures)::VARCHAR,
-    ((SELECT count(*) FROM spine) * (SELECT count(*) FROM validation_measures))::VARCHAR
-UNION ALL SELECT 'aligned_windows', (SELECT count(*) FROM int_spine_validation_measures WHERE alignment_status = 'aligned' AND fiscal_year IS NULL)::VARCHAR,
-    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, w.measure_control, w.measure_id FROM spine JOIN int_validation_measure_windows AS w
-        ON w.entity_id = spine.ccn AND w.window_start <= spine.finish AND w.window_end >= spine.start))::VARCHAR
-UNION ALL SELECT 'aligned_program_years', (SELECT count(*) FROM int_spine_validation_measures
-    WHERE alignment_status = 'aligned' AND fiscal_year IS NOT NULL)::VARCHAR,
-    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, v.measure_control, v.field FROM spine JOIN int_validation_program_values AS v ON v.ccn = spine.ccn
-        JOIN programs ON programs.fiscal_year = v.fiscal_year AND programs.s <= spine.finish AND programs.e >= spine.start))::VARCHAR
-UNION ALL SELECT 'periods_outside_window', (SELECT count(*) FROM int_spine_validation_measures
-    WHERE alignment_status = 'aligned' AND (period_end < window_start OR period_start > make_date(window_year, 12, 31)))::VARCHAR, '0';"""
-VALIDATION_ALIGNED_FINGERPRINT_SQL = (
-    "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_validation_measures AS t;"
-)
-
-
-def validation_aligned_real(database: str) -> dict[str, Any]:
-    """Reconcile the real AL5 rows with the spine, the seed and the staged validation tables; count statuses."""
-    checks: dict[str, bool] = {}
-    counts: dict[str, Any] = {}
-    for name, model, independent in duckdb_csv(database, VALIDATION_ALIGNED_REAL_SQL):
-        counts[name] = {"model": int(model), "independent": int(independent)}
-        checks[f"validation_aligned_{name}_reconcile"] = model == independent
-    counts["alignment_status"] = dict(duckdb_csv(database, VALIDATION_ALIGNED_COUNT_SQL))
-    return {"checks": checks, "counts": counts}
-
-
-def validation_kept_apart() -> bool:
-    """[599] No model reads the validation table: it is compared with the HAI windows, never joined to predictors."""
-    return not any("ref('int_spine_validation_measures')" in path.read_text() for path in (REPO_ROOT / "dbt/models").rglob("*.sql"))
-
-
-# AL4a reconciliation [604] to [611]: rows against the spine and the seeds; per source the hospital-windows and
-# control-fields with a data year before the start through the POS county, counted from the staged tables.
-COUNTY_REAL_SQL = """WITH spine AS (SELECT spine_key, county_fips, planning_region_fips, window_year FROM int_hospital_spine),
-model AS (SELECT measure_source, count(*) FILTER (WHERE period_end IS NOT NULL) AS n FROM int_spine_county_measures GROUP BY 1)
-SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_county_measures)::VARCHAR, (SELECT count(*) FROM int_spine_county_measures)::VARCHAR
-UNION ALL SELECT 'rows_per_spine_row', (SELECT count(*) FROM int_spine_county_measures)::VARCHAR,
-    ((SELECT count(*) FROM spine) * (SELECT count(DISTINCT measure_control || ':' || field) FROM int_spine_county_measures))::VARCHAR
-UNION ALL SELECT 'mmd_periods', (SELECT n FROM model WHERE measure_source = 'mmd')::VARCHAR,
-    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, m.measure_control FROM spine JOIN int_mmd_prevalence AS m
-        ON m.county_fips IN (spine.county_fips, spine.planning_region_fips) AND m.geography_level = 'county' AND m.data_year < spine.window_year))::VARCHAR
-UNION ALL SELECT 'rucc_periods', (SELECT n FROM model WHERE measure_source = 'rucc')::VARCHAR,
-    (SELECT count(DISTINCT spine.spine_key) FROM spine JOIN int_rucc_county_codes AS r
-        ON r.county_fips IN (spine.county_fips, spine.planning_region_fips) AND r.vintage::INTEGER < spine.window_year)::VARCHAR
-UNION ALL SELECT 'places_periods', (SELECT n FROM model WHERE measure_source = 'places')::VARCHAR,
-    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, p.measureid, p.datavaluetypeid FROM spine JOIN int_places_county_values AS p
-        ON p.county_fips IN (spine.county_fips, spine.planning_region_fips) AND p.is_all_states AND p.data_year < spine.window_year
-        JOIN county_health_measures AS c ON c.source_model = 'int_places_county_values' AND c.components = p.measureid))::VARCHAR
-UNION ALL SELECT 'periods_on_or_after_start', (SELECT count(*) FROM int_spine_county_measures
-    WHERE alignment_status = 'aligned' AND period_end >= window_start)::VARCHAR, '0';"""
-COUNTY_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_county_measures AS t;"
-# AL4b: each value source's eligible periods recounted from the staged tables, and the shape of the table [611] [634] [636].
-AL4B_REAL_SQL = """WITH spine AS (SELECT spine_key, county_fips, planning_region_fips, window_year, window_start FROM int_hospital_spine),
-model AS (SELECT measure_source, count(*) FILTER (WHERE period_end IS NOT NULL) AS n FROM int_spine_county_context
-    WHERE measure_source IN ('acs', 'svi') GROUP BY 1),
-acs_fields AS (SELECT DISTINCT measure_control, unnest(string_split(components, ' ')) AS field FROM acs_svi_measures WHERE source = 'acs'),
-svi_fields AS (SELECT DISTINCT measure_control, unnest(string_split(components, ' ')) AS field FROM acs_svi_measures WHERE source = 'svi')
-SELECT 'keys', (SELECT count(DISTINCT alignment_key) FROM int_spine_county_context)::VARCHAR, (SELECT count(*) FROM int_spine_county_context)::VARCHAR
-UNION ALL SELECT 'rows_per_spine_row', (SELECT count(*) FROM int_spine_county_context)::VARCHAR,
-    ((SELECT count(*) FROM spine) * (SELECT count(DISTINCT measure_source || ':' || measure_control || ':' || field) FROM int_spine_county_context))::VARCHAR
-UNION ALL SELECT 'acs_periods', (SELECT n FROM model WHERE measure_source = 'acs')::VARCHAR,
-    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, f.measure_control, f.field FROM spine JOIN int_acs_county_values AS a
-        ON a.county_fips IN (spine.county_fips, spine.planning_region_fips) AND a.vintage::INTEGER < spine.window_year
-        JOIN acs_fields AS f ON f.field = a.concept_id))::VARCHAR
-UNION ALL SELECT 'svi_periods', (SELECT n FROM model WHERE measure_source = 'svi')::VARCHAR,
-    (SELECT count(*) FROM (SELECT DISTINCT spine.spine_key, f.measure_control, f.field FROM spine JOIN int_svi_county_values AS s
-        ON s.county_fips IN (spine.county_fips, spine.planning_region_fips) AND s.edition::INTEGER < spine.window_year
-        JOIN svi_fields AS f ON f.field = s.field))::VARCHAR
-UNION ALL SELECT 'hpsa_windows_in_force', (SELECT count(*) FROM int_spine_county_context
-        WHERE measure_source = 'hpsa' AND field = 'designations_in_force' AND value_number > 0)::VARCHAR,
-    (SELECT count(DISTINCT spine.spine_key) FROM spine JOIN int_hpsa_components AS h
-        ON h.county_fips IN (spine.county_fips, spine.planning_region_fips) AND h.designation_date < spine.window_start
-        AND (h.withdrawn_date IS NULL OR h.withdrawn_date > spine.window_start) AND NOT (h.hpsa_status = 'Withdrawn' AND h.withdrawn_date IS NULL)
-        AND h.designation_date <> DATE '1970-01-01' AND h.hold_reason IS NULL
-        WHERE spine.spine_key NOT IN (SELECT spine_key FROM int_spine_county_context
-            WHERE measure_source = 'hpsa' AND alignment_status = 'held_in_staging'))::VARCHAR
-UNION ALL SELECT 'linkage_rows_per_spine_row', (SELECT count(*) FROM int_spine_linkage)::VARCHAR, ((SELECT count(*) FROM spine) * 3)::VARCHAR
-UNION ALL SELECT 'periods_on_or_after_start', ((SELECT count(*) FROM int_spine_county_context
-    WHERE alignment_status = 'aligned' AND period_end >= window_start)
-    + (SELECT count(*) FROM int_spine_linkage WHERE alignment_status = 'aligned' AND period_end >= window_start))::VARCHAR, '0';"""
-AL4B_LINKAGE_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_linkage AS t;"
-AL4B_FINGERPRINT_SQL = "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(t)), '' ORDER BY alignment_key)) FROM int_spine_county_context AS t;"
-
-
-def al4b_context_real(database: str) -> dict[str, Any]:
-    """Reconcile the real AL4b rows with the spine and the staged sources; count statuses per source."""
-    checks: dict[str, bool] = {}
-    counts: dict[str, Any] = {}
-    for name, model, independent in duckdb_csv(database, AL4B_REAL_SQL):
-        counts[name] = {"model": int(model), "independent": int(independent)}
-        checks[f"al4b_context_{name}_reconcile"] = model == independent
-    counts["alignment_status"] = dict(duckdb_csv(database, AL4B_COUNT_SQL))
-    return {"checks": checks, "counts": counts}
-
-
-def county_measures_real(database: str) -> dict[str, Any]:
-    """Reconcile the real AL4a rows with the spine and the staged county sources; count statuses per source."""
-    checks: dict[str, bool] = {}
-    counts: dict[str, Any] = {}
-    for name, model, independent in duckdb_csv(database, COUNTY_REAL_SQL):
-        counts[name] = {"model": int(model), "independent": int(independent)}
-        checks[f"county_measures_{name}_reconcile"] = model == independent
-    counts["alignment_status"] = dict(duckdb_csv(database, COUNTY_COUNT_SQL))
-    return {"checks": checks, "counts": counts}
-
-
 def validation_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real D1 windows with their staging views' window keys; count rows per control [511] [513]."""
     checks: dict[str, bool] = {}
@@ -7922,19 +6208,9 @@ def validation_real(database: str, init: str) -> dict[str, Any]:
     for table, keys, rows, held, both in duckdb_csv(database, D2_KEYS_SQL, init):
         counts[table] = {"hospital_years": int(keys), "rows": int(rows), "held": int(held), "both": int(both)}
         checks[f"validation_{table}_years_reconcile"] = int(keys) == int(rows) + int(held) and int(both) == 0 and int(rows) > 0
-    counts["program_rows_per_control"] = dict(
-        duckdb_csv(database, "SELECT measure_control, count(*)::VARCHAR FROM int_validation_program_values GROUP BY 1 ORDER BY 1;", init)
-    )
-    counts["rows_per_control"] = dict(
-        duckdb_csv(database, "SELECT measure_control, count(*)::VARCHAR FROM int_validation_measure_windows GROUP BY 1 ORDER BY 1;", init)
-    )
     counts["holds"] = dict(
         duckdb_csv(database, "SELECT bronze_table || ' ' || hold_reason, sum(row_count)::VARCHAR FROM int_validation_window_holds GROUP BY 1 ORDER BY 1;", init)
     )
-    checks["validation_mapped_controls_have_rows"] = all(
-        control in counts["rows_per_control"] for control in ("C289", "C290", "C291", "C289.01", "C290.01", "C291.01")
-    )
-    checks["validation_seed_matches_registry"] = validation_seed_matches()
     return {"checks": checks, "counts": counts}
 
 
@@ -7947,8 +6223,6 @@ def shortage_real(database: str, init: str) -> dict[str, Any]:
         checks[f"shortage_{name}_reconcile"] = staged == typed and int(staged) > 0
     counts["mmd_controls"] = int(duckdb_csv(database, MMD_CONTROLS_SQL, init)[0][0])
     checks["shortage_mmd_all_controls_staged"] = counts["mmd_controls"] == 81
-    checks["shortage_seed_matches_registry"] = shortage_seed_matches()
-    checks["mmd_conditions_seed_reproduced"] = mmd_conditions.SEED.read_text() == mmd_conditions.as_csv(mmd_conditions.build())
     return {"checks": checks, "counts": counts}
 
 
@@ -7963,7 +6237,6 @@ def county_health_real(database: str, init: str) -> dict[str, Any]:
     counts["places_all_state_measures"] = {
         f"{edition}:{year}": f"{covered} of {total}" for edition, year, covered, total in duckdb_csv(database, PLACES_COVERAGE_SQL, init)
     }
-    checks["county_health_seed_matches_registry"] = county_health_seed_matches()
     return {"checks": checks, "counts": counts}
 
 
@@ -7977,7 +6250,6 @@ def income_labor_real(database: str, init: str) -> dict[str, Any]:
     state_rows, full_rows, unmatched = duckdb_csv(database, SAIPE_TWIN_SQL, init)[0]
     counts["saipe_alabama_twin"] = {"state_file_rows": int(state_rows), "full_file_rows": int(full_rows), "unmatched": int(unmatched)}
     checks["income_labor_saipe_state_file_is_twin"] = state_rows == full_rows and unmatched == "0" and int(state_rows) > 0
-    checks["income_labor_seed_matches_registry"] = income_labor_seed_matches()
     return {"checks": checks, "counts": counts}
 
 
@@ -7993,7 +6265,6 @@ def county_context_real(database: str, init: str) -> dict[str, Any]:
     counts["svi_editions"] = {edition: {"county_rows": int(rows), "other_rows": int(other), "typed_rows": int(typed)} for edition, rows, other, typed in svi}
     checks["county_context_svi_rows_reconcile"] = len(svi) == 7 and all(row[1] == row[3] for row in svi)
     checks["county_context_svi_label_row_only_in_2000"] = [(row[0], row[2]) for row in svi if row[2] != "0"] == [("2000", "1")]
-    checks["county_context_seed_matches_registry"] = acs_svi_seed_matches()
     return {"checks": checks, "counts": counts}
 
 
@@ -8005,9 +6276,36 @@ def fingerprint(database: str, query: str) -> list[list[str]]:
         return [["missing", str(error)[-200:]]]
 
 
+# U-6: each real build has its own run ID and folder with its bronze pins; the run lock and launcher wiring stay with the
+# launcher package (amendment A33, failure modes 900 to 903 and 908).
+RUNS = Path("data/analytics/dbt/runs")
+
+
+@contextlib.contextmanager
+def pinned_run(build: str, outcome: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """Pin bronze before one real build and verify it after; the run ID reaches the outcome before the pin [902] [906] [908]."""
+    run_id = f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}"
+    outcome[f"{build}_run_id"] = run_id
+    folder = RUNS / run_id
+    folder.mkdir(parents=True, exist_ok=False)
+    state: dict[str, Any] = {"run_id": run_id, "build_passed": False, "pins_verified": False}
+    catalog.job("pins", ["pin", "--run", run_id])
+    yield state
+    catalog.job("pins", ["verify", "--run", run_id])
+    state["pins_verified"] = True
+    record = {"run_id": run_id, "build": build, "build_passed": state["build_passed"], "pins": str(folder / "pins.json"), "pins_verified": True}
+    (folder / "run.json").write_text(json.dumps(record, indent=2) + "\n")
+
+
+# The real stage's outcome as it runs, so a stage that stops still reaches the report [906].
+REAL_PARTIAL: dict[str, Any] = {}
+
+
 def real_stage(once: bool = False) -> dict[str, Any]:
     """Build the models from the catalog twice (once in an iteration run) and reconcile them with bronze [695] [696]."""
     outcome: dict[str, Any] = {"checks": {}, "counts": {}, "rebuild_checks_skipped": [], "docker_release": []}
+    REAL_PARTIAL.clear()
+    REAL_PARTIAL["outcome"] = outcome
 
     def rebuilt(name: str, *keys: str) -> None:
         """Compare the two builds' fingerprints; an iteration run names the check as skipped instead [695]."""
@@ -8032,9 +6330,11 @@ def real_stage(once: bool = False) -> dict[str, Any]:
         shutil.rmtree(CASES / "real_again", ignore_errors=True)
     for run in ("real",) if once else ("real", "real_again"):
         (CASES / run).mkdir(parents=True, exist_ok=True)
-        code, statuses = dbt_build(run, "lakehouse")
-        failed = sorted(name for name, status in statuses.items() if status not in ("pass", "success"))
-        outcome["checks"][f"{run}_build_passes"] = code == 0 and bool(statuses) and not failed
+        with pinned_run(run, outcome) as pinned:
+            code, statuses = dbt_build(run, "lakehouse")
+            failed = sorted(name for name, status in statuses.items() if status not in ("pass", "success"))
+            outcome["checks"][f"{run}_build_passes"] = pinned["build_passed"] = code == 0 and bool(statuses) and not failed
+        outcome["checks"][f"{run}_pins_verified"] = pinned["pins_verified"]
         outcome[f"{run}_not_passing"] = failed
         builds.append([row[:6] for row in duckdb_csv(database, FILES_SQL)])
         outcome[f"{run}_occmix_fingerprint"] = duckdb_csv(
@@ -8042,14 +6342,6 @@ def real_stage(once: bool = False) -> dict[str, Any]:
             "SELECT count(*)::VARCHAR, md5(string_agg(md5(to_json(s)), '' ORDER BY survey_row_key)) FROM int_occmix_survey_rows AS s;",
         )
         outcome[f"{run}_geography_fingerprints"] = {model: fingerprint(database, query) for model, query in GEOGRAPHY_FINGERPRINTS.items()}
-        outcome[f"{run}_outcome_fingerprint"] = fingerprint(database, OUTCOME_FINGERPRINT_SQL)
-        outcome[f"{run}_care_compare_fingerprint"] = fingerprint(database, CARE_FINGERPRINT_SQL)
-        outcome[f"{run}_hospital_measures_fingerprint"] = fingerprint(database, HOSPITAL_FINGERPRINT_SQL)
-        outcome[f"{run}_operations_measures_fingerprint"] = fingerprint(database, OPERATIONS_FINGERPRINT_SQL)
-        outcome[f"{run}_validation_aligned_fingerprint"] = fingerprint(database, VALIDATION_ALIGNED_FINGERPRINT_SQL)
-        outcome[f"{run}_county_measures_fingerprint"] = fingerprint(database, COUNTY_FINGERPRINT_SQL)
-        outcome[f"{run}_al4b_context_fingerprint"] = fingerprint(database, AL4B_FINGERPRINT_SQL)
-        outcome[f"{run}_al4b_linkage_fingerprint"] = fingerprint(database, AL4B_LINKAGE_FINGERPRINT_SQL)
         if run == "real" and not once:
             # Free the memory the first build left in Docker's VM before the second build; the catalog starts again [545] [547].
             outcome["docker_release"].append(catalog.release())
@@ -8076,34 +6368,6 @@ def real_stage(once: bool = False) -> dict[str, Any]:
     shortage = shortage_real(database, init)
     outcome["checks"].update(shortage["checks"])
     outcome["shortage_counts"] = shortage["counts"]
-    rebuilt("outcome_real_rebuild_identical", "outcome_fingerprint")
-    hai_outcome = outcome_real(database)
-    outcome["checks"].update(hai_outcome["checks"])
-    outcome["outcome_counts"] = hai_outcome["counts"]
-    rebuilt("care_compare_real_rebuild_identical", "care_compare_fingerprint")
-    care_compare = care_compare_real(database)
-    outcome["checks"].update(care_compare["checks"])
-    outcome["al2_care_compare_counts"] = care_compare["counts"]
-    rebuilt("hospital_measures_real_rebuild_identical", "hospital_measures_fingerprint")
-    hospital = hospital_measures_real(database)
-    outcome["checks"].update(hospital["checks"])
-    outcome["al3a_hospital_measure_counts"] = hospital["counts"]
-    rebuilt("operations_measures_real_rebuild_identical", "operations_measures_fingerprint")
-    operations = operations_measures_real(database)
-    outcome["checks"].update(operations["checks"])
-    outcome["al3b_operations_measure_counts"] = operations["counts"]
-    rebuilt("validation_aligned_real_rebuild_identical", "validation_aligned_fingerprint")
-    validation_aligned = validation_aligned_real(database)
-    outcome["checks"].update(validation_aligned["checks"])
-    outcome["al5_validation_counts"] = validation_aligned["counts"]
-    rebuilt("county_measures_real_rebuild_identical", "county_measures_fingerprint")
-    county = county_measures_real(database)
-    outcome["checks"].update(county["checks"])
-    outcome["al4a_county_measure_counts"] = county["counts"]
-    rebuilt("al4b_context_real_rebuild_identical", "al4b_context_fingerprint", "al4b_linkage_fingerprint")
-    al4b = al4b_context_real(database)
-    outcome["checks"].update(al4b["checks"])
-    outcome["al4b_county_context_counts"] = al4b["counts"]
     validation = validation_real(database, init)
     outcome["checks"].update(validation["checks"])
     outcome["validation_counts"] = validation["counts"]
@@ -8142,34 +6406,12 @@ def real_stage(once: bool = False) -> dict[str, Any]:
     )
     names = ("periods", "rows", "no_county", "outside_states_dc", "veterans_affairs", "critical_access_by_ccn", "no_ccn")
     outcome["pos_counts"] = dict(zip(names, (int(value) for value in duckdb_csv(database, pos_counts_sql)[0]), strict=True))
-    # [293] to [304] CMI: rows per rule year and stage, chosen CCN-years, holds and the years without a data year.
+    # [293] to [304] CMI: rows per rule year and stage (the chosen-year and hold models are archived, gate note 20).
     cmi_files_sql = (
         "SELECT rule_fiscal_year::VARCHAR || ' ' || rule_stage || ' ' || coalesce(data_fiscal_year::VARCHAR, 'no data year'), "
         "count(DISTINCT member_sha256)::VARCHAR || ' files, ' || count(*)::VARCHAR || ' rows' FROM int_cmi_hospital_rows GROUP BY 1 ORDER BY 1;"
     )
     outcome["cmi_files"] = dict(duckdb_csv(database, cmi_files_sql))
-    cmi_years_sql = (
-        "SELECT rule_fiscal_year::VARCHAR || ' ' || rule_stage || ' ' || coalesce(data_fiscal_year::VARCHAR, 'no data year'), count(*)::VARCHAR "
-        "FROM int_cmi_hospital_years GROUP BY 1 ORDER BY 1;"
-    )
-    outcome["cmi_years"] = dict(duckdb_csv(database, cmi_years_sql))
-    cmi_holds_sql = "SELECT year_basis || ' ' || fiscal_year::VARCHAR || ' ' || hold_reason, count(*)::VARCHAR FROM int_cmi_holds GROUP BY 1 ORDER BY 1;"
-    outcome["cmi_holds"] = dict(duckdb_csv(database, cmi_holds_sql))
-    # [306] [307] One spine row per hospital with a calendar-year HAI window, counted independently from the windows.
-    hai_years_sql = (
-        "SELECT year(window_start)::VARCHAR, count(DISTINCT entity_id)::VARCHAR FROM int_hai_hospital_windows "
-        "WHERE month(window_start) = 1 AND day(window_start) = 1 AND window_end = make_date(year(window_start), 12, 31) GROUP BY 1 ORDER BY 1;"
-    )
-    spine_years_sql = "SELECT window_year::VARCHAR, count(*)::VARCHAR FROM int_hospital_spine GROUP BY 1 ORDER BY 1;"
-    hai_years = dict(duckdb_csv(database, hai_years_sql))
-    outcome["checks"]["spine_rows_match_hai_hospitals"] = bool(hai_years) and dict(duckdb_csv(database, spine_years_sql)) == hai_years
-    spine_counts_sql = (
-        "SELECT window_year::VARCHAR, count(*)::VARCHAR || ' hospitals, ' || count(*) FILTER (WHERE has_pos_snapshot)::VARCHAR || ' with POS, ' "
-        "|| count(*) FILTER (WHERE has_cmi)::VARCHAR || ' with CMI, ' || count(*) FILTER (WHERE is_cmi_held)::VARCHAR || ' CMI held, ' "
-        "|| count(*) FILTER (WHERE is_primary_population)::VARCHAR || ' primary, ' "
-        "|| count(*) FILTER (WHERE is_sensitivity_population)::VARCHAR || ' sensitivity' FROM int_hospital_spine GROUP BY 1 ORDER BY 1;"
-    )
-    outcome["spine"] = dict(duckdb_csv(database, spine_counts_sql))
     # [318] to [329] Care Compare windows, holds, registry coverage and Hospital General Information releases.
     cc_counts_sql = (
         "SELECT 'timely', count(*)::VARCHAR FROM int_cc_timely_effective_windows UNION ALL "
@@ -8181,60 +6423,28 @@ def real_stage(once: bool = False) -> dict[str, Any]:
     outcome["care_compare_counts"] = dict(duckdb_csv(database, cc_counts_sql))
     cc_holds_sql = "SELECT bronze_table || ' ' || hold_reason, sum(row_count)::VARCHAR FROM int_cc_window_holds GROUP BY 1 ORDER BY 1;"
     outcome["care_compare_holds"] = dict(duckdb_csv(database, cc_holds_sql))
-    coverage_sql = (
-        "SELECT seed.measure_control, count(rows.entity_id)::VARCHAR FROM registry_measure_sources AS seed "
-        "LEFT JOIN int_registry_measure_windows AS rows ON seed.measure_control = rows.measure_control "
-        "WHERE seed.source_model <> 'int_hgi_hospital_releases' GROUP BY 1 ORDER BY 1;"
-    )
-    coverage = dict(duckdb_csv(database, coverage_sql))
-    outcome["registry_controls_without_rows"] = sorted(control for control, rows in coverage.items() if rows == "0")
-    outcome["checks"]["registry_seed_matches_registry"] = registry_seed_matches()
-    # [331] to [340] Cost reports: reports per fiscal year, CCN-years with several reports, measure rows per control.
+    # [331] to [340] Cost reports: reports per fiscal year and CCN-years with several reports (the measure model left silver with S1).
     cost_sql = (
         "SELECT fiscal_year::VARCHAR, count(*)::VARCHAR || ' reports, ' || count(DISTINCT ccn)::VARCHAR || ' CCNs, ' "
         "|| count(*) FILTER (WHERE reports_in_fiscal_year > 1)::VARCHAR || ' in multi-report years, ' "
         "|| count(*) FILTER (WHERE NOT is_full_year)::VARCHAR || ' not a full year' FROM int_cost_reports GROUP BY 1 ORDER BY 1;"
     )
     outcome["cost_reports"] = dict(duckdb_csv(database, cost_sql))
-    cost_measure_sql = (
-        "SELECT measure_control, count(*)::VARCHAR || ' rows, ' || count(coalesce(value_number::VARCHAR, value_code))::VARCHAR || ' with a value' "
-        "FROM int_cost_report_measures GROUP BY 1 ORDER BY 1;"
-    )
-    outcome["cost_report_measures"] = dict(duckdb_csv(database, cost_measure_sql))
-    outcome["checks"]["cost_seed_matches_registry"] = cost_seed_matches()
-    # [342] to [353] Impact files: releases, CCNs and values per rule year; measure rows per control.
+    # [342] to [353] Impact files: releases, CCNs and values per rule year (the measure model left silver with S1).
     impact_sql = (
         "SELECT rule_fiscal_year::VARCHAR, count(DISTINCT member_sha256 || ':' || sheet_name)::VARCHAR || ' releases, ' "
         "|| count(DISTINCT ccn)::VARCHAR || ' CCNs, ' || count(*)::VARCHAR || ' values, ' "
         "|| count(*) FILTER (WHERE value_text = '.')::VARCHAR || ' dots' FROM int_impact_hospital_values GROUP BY 1 ORDER BY 1;"
     )
     outcome["impact_values"] = dict(duckdb_csv(database, impact_sql))
-    impact_measure_sql = (
-        "SELECT measure_control || ' ' || field, count(*)::VARCHAR || ' rows, ' || min(rule_fiscal_year)::VARCHAR || '-' "
-        "|| max(rule_fiscal_year)::VARCHAR FROM int_impact_measures GROUP BY 1 ORDER BY 1;"
-    )
-    outcome["impact_measures"] = dict(duckdb_csv(database, impact_measure_sql))
     outcome["impact_holds"] = duckdb_csv(database, "SELECT rule_fiscal_year::VARCHAR, ccn, hold_reason, hold_rows::VARCHAR FROM int_impact_holds ORDER BY ALL;")
-    outcome["checks"]["impact_seed_matches_registry"] = impact_seed_matches()
-    # [355] to [363] Medicare inpatient: providers and DRG cells per data year; measure rows per control.
+    # [355] to [363] Medicare inpatient: providers and DRG cells per data year (the measure model left silver with S1).
     mup_sql = (
         "SELECT p.data_year::VARCHAR, count(*)::VARCHAR || ' providers, ' || count(*) FILTER (WHERE p.tot_benes IS NULL)::VARCHAR "
         "|| ' without totals, ' || coalesce(max(d.cells), 0)::VARCHAR || ' DRG cells' FROM int_mup_providers AS p LEFT JOIN "
         "(SELECT data_year, count(*) AS cells FROM int_mup_drg_discharges GROUP BY 1) AS d ON p.data_year = d.data_year GROUP BY 1 ORDER BY 1;"
     )
     outcome["mup_providers"] = dict(duckdb_csv(database, mup_sql))
-    mup_measure_sql = (
-        "SELECT measure_control, count(*)::VARCHAR || ' rows, ' || min(data_year)::VARCHAR || '-' || max(data_year)::VARCHAR "
-        "FROM int_mup_measures GROUP BY 1 ORDER BY 1;"
-    )
-    outcome["mup_measures"] = dict(duckdb_csv(database, mup_measure_sql))
-    outcome["checks"]["mup_seed_matches_registry"] = mup_seed_matches()
-    # [362] Every data year with DRG cells has sepsis shares, whichever release its provider file came from.
-    sepsis_gap_sql = (
-        "SELECT count(*)::VARCHAR FROM (SELECT DISTINCT data_year FROM int_mup_drg_discharges) AS d WHERE NOT EXISTS "
-        "(SELECT 1 FROM int_mup_measures AS m WHERE m.measure_control = 'C117' AND m.data_year = d.data_year);"
-    )
-    outcome["checks"]["mup_sepsis_share_every_drg_year"] = duckdb_csv(database, sepsis_gap_sql) == [["0"]]
     # [365] to [373] Ownership: the period seed reproduced; files, rows and events per table; the measure seed matches.
     outcome["checks"]["ownership_periods_seed_reproduced"] = ownership_release_periods.SEED.read_text() == ownership_release_periods.as_csv(
         ownership_release_periods.build()
@@ -8251,7 +6461,6 @@ def real_stage(once: bool = False) -> dict[str, Any]:
         "|| ' with a value that is not a CCN' FROM int_change_of_ownership_rows;"
     )
     outcome["ownership"] = dict(duckdb_csv(database, ownership_sql))
-    outcome["checks"]["ownership_seed_matches_registry"] = ownership_seed_matches()
     # [375] to [384] HHS and ONC: rows, hospitals, weeks and suppressed cells; the measure seed against the registry, with
     # each HHS child's columns derived from the stored columns.json.
     hhs_onc_sql = (
@@ -8266,22 +6475,12 @@ def real_stage(once: bool = False) -> dict[str, Any]:
         "|| min(program_year)::VARCHAR || '-' || max(program_year)::VARCHAR FROM int_onc_attestation_rows;"
     )
     outcome["hhs_onc"] = dict(duckdb_csv(database, hhs_onc_sql))
-    columns_sql = (
-        "SELECT line_text FROM lakehouse.bronze.hhs_capacity_documents_text WHERE _member_sha256 = "
-        "(SELECT min(_member_sha256) FROM lakehouse.bronze.hhs_capacity_documents_text WHERE _member_path = 'columns.json') ORDER BY _row_number;"
-    )
-    metadata = json.loads("\n".join(row[0] for row in duckdb_csv(database, columns_sql, init)))
-    field_names = {item["fieldName"]: re.sub(r"[^0-9a-z]+", "_", item["name"].strip().lower()).strip("_") for item in metadata}
-    outcome["checks"]["hhs_onc_seed_matches_registry"] = hhs_onc_seed_matches(field_names)
     outcome["occmix_periods"] = duckdb_csv(
         database,
         "SELECT year(survey_end_date)::VARCHAR, is_deleted::VARCHAR, count(*)::VARCHAR, count(DISTINCT member_sha256)::VARCHAR "
         "FROM int_occmix_survey_rows GROUP BY ALL ORDER BY ALL;",
     )
     outcome["occmix_holds"] = duckdb_csv(database, "SELECT hold_reason, count(*)::VARCHAR FROM int_occmix_survey_rows GROUP BY ALL ORDER BY ALL;")
-    outcome["occmix_measures"] = duckdb_csv(
-        database, "SELECT measure_control, count(*)::VARCHAR, count(value_number)::VARCHAR FROM int_occmix_measures GROUP BY ALL ORDER BY ALL;"
-    )
     occmix_counts = duckdb_csv(
         database,
         "SELECT (SELECT count(*) FROM int_occmix_survey_rows)::VARCHAR, count(*)::VARCHAR "
@@ -8338,9 +6537,22 @@ def main() -> int:
     if args.real_only:
         report["fixture_skipped"] = "--real-only: the fixture cases did not run; cite the last full pass for them"
     if real:
-        report["real"] = real_stage(once=args.real_once)
+        try:
+            report["real"] = real_stage(once=args.real_once)
+            report["real"]["checks"]["real_stage_completed"] = True
+        except Exception as error:
+            # A stopped pin, build or verify still writes the report with what ran and the run ID [906] [908].
+            report["real"] = REAL_PARTIAL.get("outcome") or {"checks": {}}
+            report["real"]["error"] = f"{type(error).__name__}: {error}"
+            report["real"]["checks"]["real_stage_completed"] = False
         # The heavy run is over: free Docker's VM memory for the next one, unless another project's containers run [545] [546].
-        report["real"]["docker_release"].append(catalog.release())
+        # A cleanup failure is recorded and never stops the report [906].
+        try:
+            report["real"].setdefault("docker_release", []).append(catalog.release())
+            report["real"]["checks"]["docker_release_completed"] = True
+        except Exception as error:
+            report["real"]["docker_release_error"] = f"{type(error).__name__}: {error}"
+            report["real"]["checks"]["docker_release_completed"] = False
     # The code under test must be the code at the start: an edit during the run fails it [693].
     report["dbt_tree_sha256"] = dbt_at_start
     checks = dict(report["fixture"]) | (report["real"]["checks"] if real else {}) | {"dbt_unchanged_during_run": dbt_tree_sha256() == dbt_at_start}

@@ -16,6 +16,9 @@ python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 "$python_bin" -m scripts.quality.repo_checks env-example
 "$python_bin" -m scripts.quality.repo_checks privacy-scan
 "$python_bin" -m scripts.quality.repo_checks writing-check
+# Reference seeds of the gold control bridge, the formula recipes and the repeatable negative cases of their check.
+"$python_bin" -m scripts.lakehouse.bridge_references --check
+"$python_bin" -m scripts.lakehouse.run_bridge_references_e2e
 "$python_bin" -m scripts.lakehouse.run_resource_checks
 "$python_bin" -m scripts.lakehouse.run_lock_e2e
 "$python_bin" -m scripts.orchestration.run_contracts_e2e

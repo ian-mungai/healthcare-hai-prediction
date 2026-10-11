@@ -1,0 +1,11 @@
+fact,measure_key,value_column,vintage_start,vintage_end,measure_control,review_decision,source_seed,source_row
+fct_occupational_mix_survey,rnhr,rnhr,,,C030,Reviewed; Candidate; conditional on valid scope and timing; [B06](notes kept outside the repository),occmix_measures,1
+fct_occupational_mix_survey,rnhr,rnhr,,,C031,Reviewed; Candidate; conditional on valid scope and timing; [B06](notes kept outside the repository),occmix_measures,2
+fct_occupational_mix_survey,nursehr,nursehr,,,C031,Reviewed; Candidate; conditional on valid scope and timing; [B06](notes kept outside the repository),occmix_measures,2
+fct_occupational_mix_survey,lpnsthr,lpnsthr,,,C032,Reviewed; Candidate; conditional on valid scope and timing; [B06](notes kept outside the repository),occmix_measures,3
+fct_occupational_mix_survey,nursehr,nursehr,,,C032,Reviewed; Candidate; conditional on valid scope and timing; [B06](notes kept outside the repository),occmix_measures,3
+fct_occupational_mix_survey,naorathr,naorathr,,,C033,Reviewed; Candidate; conditional on valid scope and timing; [B06](notes kept outside the repository),occmix_measures,4
+fct_occupational_mix_survey,nursehr,nursehr,,,C033,Reviewed; Candidate; conditional on valid scope and timing; [B06](notes kept outside the repository),occmix_measures,4
+fct_occupational_mix_survey,rnsal,rnsal,,,C034,retain_conditional,occmix_measures,5
+fct_occupational_mix_survey,rnhr,rnhr,,,C034,retain_conditional,occmix_measures,5
+fct_occupational_mix_survey,,,,,C043,closed_unavailable_public_sources,occmix_measures,6

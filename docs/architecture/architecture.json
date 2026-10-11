@@ -441,7 +441,8 @@
         "Bronze reads only the S3 manifests and the committed table map",
         "One copy per stored file; bronze.stored_copies lists every copy",
         "Each row traces to its S3 key, version and SHA-256",
-        "dbt staging keeps one row per HAI measurement window"
+        "dbt staging keeps one row per HAI measurement window",
+        "Silver keeps each source's atomic grain; gold control bridge seeds map published keys to registry controls"
       ]
     },
     {
@@ -460,7 +461,7 @@
       "title": "Planned (not built)",
       "items": [
         "Orchestration with scheduled DAGs",
-        "Gold star schema at atomic grain (dbt dim_ and fct_); silver refactor to standard cleansing",
+        "Gold star schema at atomic grain (dbt dim_ and fct_)",
         "Feature store, MLflow model comparison and external validation"
       ]
     }

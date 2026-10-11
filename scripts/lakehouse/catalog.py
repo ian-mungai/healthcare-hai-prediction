@@ -66,6 +66,9 @@ JOBS = {
     "bronze": ("scripts.lakehouse.bronze", True),
     "dictionary": ("scripts.lakehouse.dictionary", True),
     "checksums": ("scripts.lakehouse.checksums", True),
+    # The bronze snapshot pin and its check (failure modes 890 to 894); pins_e2e uses a throwaway catalog.
+    "pins": ("scripts.lakehouse.pins", True),
+    "pins_e2e": ("scripts.lakehouse.run_pins_e2e", False),
 }
 
 

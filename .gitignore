@@ -42,6 +42,9 @@ mlruns/
 *.csv
 # The reviewed dbt seeds are committed; repo_checks.py declares their folder.
 !dbt/seeds/*.csv
+!dbt/seeds/gold/*.csv
+# Formula recipes of the gold control split are committed.
+!features/recipes/*.csv
 *.jsonl
 
 # Data collection code, configuration and tests are tracked so CI can run the acquisition checks;

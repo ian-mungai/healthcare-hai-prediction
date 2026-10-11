@@ -47,7 +47,9 @@ def check(condition: bool, message: str) -> None:
 
 def run(command: list[str], cwd: Path, *, expected: int = 0, forbidden: str | None = None) -> dict[str, Any]:
     """Run an actual local process and retain only sanitized assertion metadata."""
-    environment = {key: value for key, value in os.environ.items() if not key.startswith(("AWS_", "BC_", "GITLEAKS_"))}
+    # GIT_ variables are dropped too: inside a commit hook Git exports GIT_INDEX_FILE, which in a linked worktree is an
+    # absolute path, so a fixture repository's git add would otherwise write into the real index.
+    environment = {key: value for key, value in os.environ.items() if not key.startswith(("AWS_", "BC_", "GITLEAKS_", "GIT_"))}
     # PYTHONPATH lets module entry points (python -m scripts.quality...) resolve from any working directory, including hook runs.
     environment.update(
         AWS_EC2_METADATA_DISABLED="true", PYTHONDONTWRITEBYTECODE="1", PRE_COMMIT_HOME=str(ROOT / ".tools" / "pre_commit_cache"), PYTHONPATH=str(ROOT)

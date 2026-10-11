@@ -1,6 +1,7 @@
 -- One row per hospital (CCN) in each selected case-mix index file, for each rule year and stage the file's copies are
 -- labelled with: the unadjusted CMI, cases and relative weights, and the transfer-adjusted CMI and cases in their own
--- columns, never substituted (failure modes 293 to 304).
+-- columns, never substituted (failure modes 293 to 304). Each of the four numbers keeps the cleaned published text it is cast
+-- from beside it (silver section 5; failure mode 794).
 {{ config(materialized='table') }}
 
 with
@@ -56,9 +57,9 @@ values_read as (
         nullif(replace(replace(trim(file_rows.field_values[layouts.ccn_position]), '"', ''), ',', ''), '') as ccn_text,
         nullif(replace(replace(trim(file_rows.field_values[layouts.cmi_position]), '"', ''), ',', ''), '') as cmi_source_value,
         nullif(replace(replace(trim(file_rows.field_values[layouts.cases_position]), '"', ''), ',', ''), '') as cases_text,
-        nullif(replace(replace(trim(file_rows.field_values[layouts.relative_weights_position]), '"', ''), ',', ''), '') as weights_text,
-        nullif(replace(replace(trim(file_rows.field_values[layouts.transfer_adjusted_cmi_position]), '"', ''), ',', ''), '') as ta_cmi_text,
-        nullif(replace(replace(trim(file_rows.field_values[layouts.transfer_adjusted_cases_position]), '"', ''), ',', ''), '') as ta_cases_text
+        nullif(replace(replace(trim(file_rows.field_values[layouts.relative_weights_position]), '"', ''), ',', ''), '') as relative_weights_text,
+        nullif(replace(replace(trim(file_rows.field_values[layouts.transfer_adjusted_cmi_position]), '"', ''), ',', ''), '') as transfer_adjusted_cmi_text,
+        nullif(replace(replace(trim(file_rows.field_values[layouts.transfer_adjusted_cases_position]), '"', ''), ',', ''), '') as transfer_adjusted_cases_text
     from file_rows
     inner join layouts
         on
@@ -79,33 +80,62 @@ typed as (
         end as ccn,
         try_cast(cmi_source_value as double) as cmi,
         try_cast(cases_text as double) as cases,
-        try_cast(weights_text as double) as relative_weights,
-        try_cast(ta_cmi_text as double) as transfer_adjusted_cmi,
-        try_cast(ta_cases_text as double) as transfer_adjusted_cases
+        try_cast(relative_weights_text as double) as relative_weights,
+        try_cast(transfer_adjusted_cmi_text as double) as transfer_adjusted_cmi,
+        try_cast(transfer_adjusted_cases_text as double) as transfer_adjusted_cases
     from values_read
+),
+
+keyed as (
+    select
+        typed.bronze_table,
+        typed.member_sha256,
+        typed.sheet_name,
+        typed.line_number,
+        labels.rule_fiscal_year,
+        labels.data_fiscal_year,
+        labels.rule_stage,
+        typed.ccn,
+        typed.cmi,
+        typed.cmi_source_value,
+        typed.cases,
+        typed.relative_weights,
+        typed.transfer_adjusted_cmi,
+        typed.transfer_adjusted_cases,
+        typed.has_header,
+        typed.cases_text,
+        typed.relative_weights_text,
+        typed.transfer_adjusted_cmi_text,
+        typed.transfer_adjusted_cases_text,
+        typed.bronze_table || ':' || typed.member_sha256 || ':' || typed.sheet_name || ':' || typed.line_number || ':'
+        || labels.rule_fiscal_year || ':' || labels.rule_stage as cmi_row_key
+    from typed
+    inner join labels
+        on
+            typed.bronze_table = labels.bronze_table
+            and typed.member_sha256 = labels.member_sha256
+    where typed.ccn is not null
 )
 
 select
-    typed.bronze_table,
-    typed.member_sha256,
-    typed.sheet_name,
-    typed.line_number,
-    labels.rule_fiscal_year,
-    labels.data_fiscal_year,
-    labels.rule_stage,
-    typed.ccn,
-    typed.cmi,
-    typed.cmi_source_value,
-    typed.cases,
-    typed.relative_weights,
-    typed.transfer_adjusted_cmi,
-    typed.transfer_adjusted_cases,
-    typed.has_header,
-    typed.bronze_table || ':' || typed.member_sha256 || ':' || typed.sheet_name || ':' || typed.line_number || ':'
-    || labels.rule_fiscal_year || ':' || labels.rule_stage as cmi_row_key
-from typed
-inner join labels
-    on
-        typed.bronze_table = labels.bronze_table
-        and typed.member_sha256 = labels.member_sha256
-where typed.ccn is not null
+    bronze_table,
+    member_sha256,
+    sheet_name,
+    line_number,
+    rule_fiscal_year,
+    data_fiscal_year,
+    rule_stage,
+    ccn,
+    cmi,
+    cmi_source_value,
+    cases,
+    relative_weights,
+    transfer_adjusted_cmi,
+    transfer_adjusted_cases,
+    has_header,
+    cmi_row_key,
+    cases_text,
+    relative_weights_text,
+    transfer_adjusted_cmi_text,
+    transfer_adjusted_cases_text
+from keyed

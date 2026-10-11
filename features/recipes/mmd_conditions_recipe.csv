@@ -1,0 +1,164 @@
+measure_control,rule,role,fact,value_column,key_column,key_value,join_keys,aggregation,guard,group_by,period,suppression,source_row,geography_level,condition_code,shortage_source_row
+C258.01,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Acute Myocardial Infarction,,,,,,,1,county,2,5
+C258.01,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,1,,,
+C258.02,prevalence,value,fct_mmd_prevalence,value_number,condition_label,"Alzheimer's Disease, Related Disorders, or Senile Dementia",,,,,,,2,county,1,6
+C258.02,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,2,,,
+C258.03,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Anemia,,,,,,,3,county,147,7
+C258.03,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,3,,,
+C258.04,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Asthma,,,,,,,4,county,4,8
+C258.04,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,4,,,
+C258.05,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Atrial Fibrillation,,,,,,,5,county,11,9
+C258.05,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,5,,,
+C258.06,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Benign Prostatic Hyperplasia,,,,,,,6,county,148,10
+C258.06,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,6,,,
+C258.07,prevalence,value,fct_mmd_prevalence,value_number,condition_label,"Cancer, Colorectal, Breast, Prostate, Lung",,,,,,,7,county,5,11
+C258.07,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,7,,,
+C258.08,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Cancer - Breast,,,,,,,8,county,78,12
+C258.08,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,8,,,
+C258.09,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Cancer - Colorectal,,,,,,,9,county,79,13
+C258.09,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,9,,,
+C258.10,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Cancer - Endometrial,,,,,,,10,county,149,14
+C258.10,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,10,,,
+C258.11,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Cancer - Lung,,,,,,,11,county,80,15
+C258.11,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,11,,,
+C258.12,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Cancer - Prostate,,,,,,,12,county,81,16
+C258.12,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,12,,,
+C258.13,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Cancer - Urologic,,,,,,,13,county,150,17
+C258.13,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,13,,,
+C258.14,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Cataract,,,,,,,14,county,151,18
+C258.14,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,14,,,
+C258.15,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Chronic Kidney Disease,,,,,,,15,county,12,19
+C258.15,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,15,,,
+C258.16,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Chronic Obstructive Pulmonary Disease,,,,,,,16,county,13,20
+C258.16,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,16,,,
+C258.17,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Depression,,,,,,,17,county,14,21
+C258.17,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,17,,,
+C258.18,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Diabetes,,,,,,,18,county,15,22
+C258.18,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,18,,,
+C258.19,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Disability (reason for Medicare eligibility),,,,,,,19,county,24,23
+C258.19,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,19,,,
+C258.20,prevalence,value,fct_mmd_prevalence,value_number,condition_label,End-stage renal disease (reason for Medicare eligibility),,,,,,,20,county,25,24
+C258.20,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,20,,,
+C258.21,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Glaucoma,,,,,,,21,county,153,25
+C258.21,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,21,,,
+C258.22,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Heart Failure and Non-Ischemic Heart Disease,,,,,,,22,county,16,26
+C258.22,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,22,,,
+C258.23,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Hip/Pelvic Fracture,,,,,,,23,county,152,27
+C258.23,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,23,,,
+C258.24,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Hyperlipidemia,,,,,,,24,county,18,28
+C258.24,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,24,,,
+C258.25,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Hypertension,,,,,,,25,county,17,29
+C258.25,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,25,,,
+C258.26,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Hypothyroidism,,,,,,,26,county,154,30
+C258.26,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,26,,,
+C258.27,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Ischemic Heart Disease,,,,,,,27,county,19,31
+C258.27,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,27,,,
+C258.28,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Obesity,,,,,,,28,county,20,32
+C258.28,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,28,,,
+C258.29,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Osteoporosis With or Without Pathological Fracture,,,,,,,29,county,21,33
+C258.29,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,29,,,
+C258.30,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Parkinson's Diseases and Secondary Parkinsonism,,,,,,,30,county,155,34
+C258.30,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,30,,,
+C258.31,prevalence,value,fct_mmd_prevalence,value_number,condition_label,"Pneumonia, All-cause",,,,,,,31,county,156,35
+C258.31,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,31,,,
+C258.32,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Rheumatoid Arthritis/Osteoarthritis,,,,,,,32,county,3,36
+C258.32,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,32,,,
+C258.33,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Schizophrenia and Other Psychotic Disorders,,,,,,,33,county,22,37
+C258.33,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,33,,,
+C258.34,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Stroke/Transient Ischemic Attack,,,,,,,34,county,23,38
+C258.34,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,34,,,
+C258.35,prevalence,value,fct_mmd_prevalence,value_number,condition_label,0 of the claims-based conditions,,,,,,,35,county,6,39
+C258.35,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,35,,,
+C258.36,prevalence,value,fct_mmd_prevalence,value_number,condition_label,1 of the claims-based conditions,,,,,,,36,county,7,40
+C258.36,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,36,,,
+C258.37,prevalence,value,fct_mmd_prevalence,value_number,condition_label,2 of the claims-based conditions,,,,,,,37,county,8,41
+C258.37,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,37,,,
+C258.38,prevalence,value,fct_mmd_prevalence,value_number,condition_label,3+ of the claims-based conditions,,,,,,,38,county,9,42
+C258.38,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,38,,,
+C258.39,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Congenital and Developmental Conditions,,,,,,,39,county,72,43
+C258.39,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,39,,,
+C258.40,prevalence,value,fct_mmd_prevalence,value_number,condition_label,"ADHD, Conduct Disorders, and Hyperkinetic Syndrome",,,,,,,40,county,42,44
+C258.40,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,40,,,
+C258.41,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Autism Spectrum Disorders,,,,,,,41,county,44,45
+C258.41,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,41,,,
+C258.42,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Cerebral Palsy,,,,,,,42,county,47,46
+C258.42,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,42,,,
+C258.43,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Cystic Fibrosis and Other Metabolic Developmental Disorders,,,,,,,43,county,48,47
+C258.43,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,43,,,
+C258.44,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Intellectual Disabilities and Related Conditions,,,,,,,44,county,55,48
+C258.44,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,44,,,
+C258.45,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Learning Disabilities,,,,,,,45,county,56,49
+C258.45,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,45,,,
+C258.46,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Liver Conditions,,,,,,,46,county,73,50
+C258.46,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,46,,,
+C258.47,prevalence,value,fct_mmd_prevalence,value_number,condition_label,"Liver Disease, Cirrhosis and Other Liver Conditions (except Viral Hepatitis)",,,,,,,47,county,58,51
+C258.47,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,47,,,
+C258.48,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Viral Hepatitis (General),,,,,,,48,county,53,52
+C258.48,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,48,,,
+C258.49,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Anxiety Disorders,,,,,,,49,county,43,53
+C258.49,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,49,,,
+C258.50,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Bipolar Disorder,,,,,,,50,county,45,54
+C258.50,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,50,,,
+C258.51,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Depressive Disorders,,,,,,,51,county,49,55
+C258.51,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,51,,,
+C258.52,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Personality Disorders,,,,,,,52,county,64,56
+C258.52,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,52,,,
+C258.53,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Post-Traumatic Stress Disorder (PTSD),,,,,,,53,county,65,57
+C258.53,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,53,,,
+C258.54,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Schizophrenia,,,,,,,54,county,41,58
+C258.54,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,54,,,
+C258.55,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Tobacco Use Disorders,,,,,,,55,county,69,59
+C258.55,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,55,,,
+C258.56,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Overarching Opioid Use Disorder,,,,,,,56,county,109,60
+C258.56,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,56,,,
+C258.57,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Diagnosis- and Procedure-code basis for OUD,,,,,,,57,county,110,61
+C258.57,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,57,,,
+C258.58,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Opioid-related Hospitalizations/ED Visits,,,,,,,58,county,111,62
+C258.58,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,58,,,
+C258.59,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Utilization of Medication-Assisted Therapy (MAT),,,,,,,59,county,112,63
+C258.59,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,59,,,
+C258.60,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Mobility Limitations and Chronic Pain Conditions,,,,,,,60,county,75,64
+C258.60,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,60,,,
+C258.61,prevalence,value,fct_mmd_prevalence,value_number,condition_label,"Fibromyalgia, Chronic Pain and Fatigue",,,,,,,61,county,51,65
+C258.61,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,61,,,
+C258.62,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Mobility Impairments,,,,,,,62,county,60,66
+C258.62,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,62,,,
+C258.63,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Multiple Sclerosis and Transverse Myelitis,,,,,,,63,county,61,67
+C258.63,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,63,,,
+C258.64,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Muscular Dystrophy,,,,,,,64,county,62,68
+C258.64,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,64,,,
+C258.65,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Neurological Conditions,,,,,,,65,county,76,69
+C258.65,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,65,,,
+C258.66,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Epilepsy,,,,,,,66,county,50,70
+C258.66,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,66,,,
+C258.67,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Migraine and Other Chronic Headache,,,,,,,67,county,59,71
+C258.67,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,67,,,
+C258.68,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Spina Bifida and Other Congenital Anomalies of the Nervous System,,,,,,,68,county,67,72
+C258.68,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,68,,,
+C258.69,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Spinal Cord Injury,,,,,,,69,county,68,73
+C258.69,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,69,,,
+C258.70,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Traumatic Brain Injury and Nonpsychotic Mental Disorders due to Brain Damage,,,,,,,70,county,46,74
+C258.70,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,70,,,
+C258.71,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Other Chronic or Disabling Conditions,,,,,,,71,county,77,75
+C258.71,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,71,,,
+C258.72,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Human Immunodeficiency Virus and/or Acquired Immunodeficiency Syndrome (HIV/AIDS),,,,,,,72,county,54,76
+C258.72,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,72,,,
+C258.73,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Leukemias and Lymphomas,,,,,,,73,county,57,77
+C258.73,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,73,,,
+C258.74,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Peripheral Vascular Disease (PVD),,,,,,,74,county,66,78
+C258.74,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,74,,,
+C258.75,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Pressure Ulcers and Chronic Ulcers,,,,,,,75,county,70,79
+C258.75,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,75,,,
+C258.76,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Sensory - Blindness and Visual Impairment,,,,,,,76,county,71,80
+C258.76,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,76,,,
+C258.77,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Sensory - Deafness and Hearing Impairment,,,,,,,77,county,52,81
+C258.77,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,77,,,
+C258.78,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Sickle Cell Disease,,,,,,,78,state,144,82
+C258.78,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,78,,,
+C258.79,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Other Developmental Delays,,,,,,,79,county,63,83
+C258.79,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,79,,,
+C258.80,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Alcohol Use Disorders,,,,,,,80,county,136,84
+C258.80,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,80,,,
+C258.81,prevalence,value,fct_mmd_prevalence,value_number,condition_label,Drug Use Disorders,,,,,,,81,county,137,85
+C258.81,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,81,,,
+C258,prevalence,context,fct_mmd_prevalence,data_year geography_level county_fips state_fips value_unit denominator_band is_possible_suppression,,,,,,,,,,,,4
