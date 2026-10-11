@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthcare-hai-prediction.invalid/orchestration/submission_request.schema.json",
+  "title": "Submission request",
+  "description": "What a caller (Airflow, a manual launcher) may send to the broker: a template name, the run ID, the mode and the attempt. Nothing else is accepted, so a caller cannot override the image, command, environment, mounts, network, user or limits of a launch specification (Airflow plan section 3; failure mode 756).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["template", "run_id", "mode", "attempt"],
+  "properties": {
+    "template": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$"},
+    "run_id": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"},
+    "mode": {"enum": ["fixture", "publish_fixture", "real"]},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 99}
+  }
+}

@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthcare-hai-prediction.invalid/orchestration/launch_spec.schema.json",
+  "title": "Launch specifications",
+  "description": "The file config/orchestration/job_templates.json: the full specification of every container the broker may start (Airflow plan section 3). The broker checks a submission against it before create and checks the created container with docker inspect before start (failure mode 756). One schema serves the silver, gold and Airflow plans (parallel plan item 4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "templates"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "templates": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]{1,40}$"},
+      "minProperties": 1,
+      "additionalProperties": {"$ref": "#/$defs/template"}
+    }
+  },
+  "$defs": {
+    "class": {"enum": ["offline", "lakehouse_read", "lakehouse_write", "collector", "training", "serving"]},
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["purpose", "image", "entrypoint", "arguments", "modes", "environment", "mounts", "user", "capabilities", "privileged", "admission", "timeout_seconds", "cancel", "kind"],
+      "properties": {
+        "purpose": {"type": "string", "minLength": 10},
+        "image": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._/-]*@sha256:[a-f0-9]{64}$", "description": "An image digest, never a tag"},
+        "entrypoint": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "arguments": {
+          "type": "array",
+          "description": "Fixed arguments; the only substitutions are {run_id}, {mode}, {run_dir} and {build_file}, filled by the broker",
+          "items": {"type": "string", "pattern": "^([^{}]|\\{(run_id|mode|run_dir|build_file)\\})*$"}
+        },
+        "modes": {
+          "type": "object",
+          "description": "The modes this template supports, each with its network and secret class; a no-op mode records why it did nothing and starts no container",
+          "minProperties": 1,
+          "propertyNames": {"enum": ["fixture", "publish_fixture", "real"]},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["class", "no_op"],
+            "properties": {"class": {"$ref": "#/$defs/class"}, "no_op": {"type": "boolean"}}
+          }
+        },
+        "environment": {
+          "type": "array",
+          "description": "Every variable and its source; a value from any other source, including the caller's environment, is refused",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "source"],
+                "properties": {"name": {"enum": ["RUN_ID", "RUN_MODE"]}, "source": {"const": "caller"}}
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "source"],
+                "properties": {
+                  "name": {"enum": ["JOB_MEMORY_LIMIT", "DUCKDB_MEMORY_LIMIT", "SPARK_JOB_MEMORY", "JOB_THREADS", "RUN_DIR", "BUILD_FILE", "RUN_LOCK_TOKEN", "HAI_RESERVATION"]},
+                  "source": {"const": "broker"}
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "source", "secret"],
+                "properties": {
+                  "name": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$"},
+                  "source": {"const": "class_secret"},
+                  "secret": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}$", "description": "A secret the template's class provides (Airflow plan section 9.3)"}
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "source", "value"],
+                "properties": {
+                  "name": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$"},
+                  "source": {"const": "fixed"},
+                  "value": {"type": "string", "description": "A fixed, non-secret setting written in the specification"}
+                }
+              }
+            ]
+          }
+        },
+        "mounts": {
+          "type": "array",
+          "description": "Repository paths read-only; only the run directory writable; every source resolved inside the repository or its data/ folder",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["source", "destination", "read_only"],
+                "properties": {
+                  "source": {"type": "string", "pattern": "^repo:(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]+$"},
+                  "destination": {"type": "string", "pattern": "^/[A-Za-z0-9._/-]+$"},
+                  "read_only": {"const": true}
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["source", "destination", "read_only"],
+                "properties": {"source": {"const": "run_dir"}, "destination": {"type": "string", "pattern": "^/[A-Za-z0-9._/-]+$"}, "read_only": {"type": "boolean"}}
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["source", "destination", "read_only"],
+                "properties": {"source": {"const": "class_aws_file"}, "destination": {"type": "string", "pattern": "^/[A-Za-z0-9._/-]+$"}, "read_only": {"const": true}}
+              }
+            ]
+          }
+        },
+        "user": {"type": "string", "pattern": "^[1-9][0-9]{2,5}:[1-9][0-9]{2,5}$", "description": "A non-root uid:gid"},
+        "capabilities": {"type": "array", "maxItems": 0},
+        "privileged": {"const": false},
+        "admission": {"enum": ["job", "pool", "none"], "description": "The memory_budget admission kind; none only for a template whose every mode is a no-op"},
+        "timeout_seconds": {"type": "integer", "minimum": 60, "maximum": 21600},
+        "cancel": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["signal", "grace_seconds"],
+          "properties": {"signal": {"enum": ["SIGTERM", "SIGINT"]}, "grace_seconds": {"type": "integer", "minimum": 5, "maximum": 600}}
+        },
+        "kind": {"enum": ["finite", "service"]}
+      }
+    }
+  }
+}

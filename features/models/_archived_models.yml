@@ -1,0 +1,529 @@
+# Archived from dbt/models/silver/intermediate/_intermediate__models.yml at beab859; not parsed by dbt.
+version: 2
+
+models:
+  - name: int_cmi_hospital_years
+    description: >
+      One case-mix index per CCN and payment-rule fiscal year from the files of the year's best rule stage (correction,
+      final, interim, proposed, notice, unspecified); disagreeing CCN-years are in int_cmi_holds instead (failure modes
+      300 to 302).
+    columns:
+      - name: year_key
+        description: CCN and rule fiscal year.
+        data_tests: [unique, not_null]
+      - name: cmi
+        description: The chosen unadjusted CMI.
+        data_tests: [not_null]
+      - name: file_count
+        description: Best-stage files that carry the CCN in that rule year and agree.
+
+  - name: int_cmi_hospital_data_years
+    description: >
+      One case-mix index per CCN and discharge (data) fiscal year, from the latest rule year that publishes the data year,
+      then that rule year's best stage; only data years stated in the file names count (failure modes 310 to 312). The
+      FY 2020 data year comes from the FY 2023 proposed rule, the only file that publishes it.
+    columns:
+      - name: year_key
+        description: CCN and data fiscal year.
+        data_tests: [unique, not_null]
+      - name: data_fiscal_year
+        description: The discharge fiscal year of the CMI data.
+        data_tests: [not_null]
+      - name: rule_fiscal_year
+        description: The payment-rule fiscal year of the file the CMI comes from.
+        data_tests: [not_null]
+      - name: cmi
+        description: The chosen unadjusted CMI.
+        data_tests: [not_null]
+
+  - name: int_cmi_holds
+    description: >
+      CCN and year pairs whose chosen CMI rows disagree on the CMI or the data year; no CMI is chosen (failure modes 301
+      and 312). The year basis is rule (int_cmi_hospital_years) or data (int_cmi_hospital_data_years).
+    columns:
+      - name: year_key
+        description: Year basis, CCN and fiscal year.
+        data_tests: [unique, not_null]
+      - name: year_basis
+        description: rule or data.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [rule, data]
+      - name: fiscal_year
+        description: The rule or data fiscal year, by the year basis.
+        data_tests: [not_null]
+      - name: hold_reason
+        description: values_disagree.
+        data_tests: [not_null]
+
+  - name: int_hospital_spine
+    description: >
+      One row per hospital (CCN) and calendar-year HAI window (2018, 2019 and 2021 to 2024 in the stored releases), as of
+      the window start: the POS snapshot that ends in the 12 months before the window, the CMI
+      of the fiscal year that ends before it and the population flags (failure modes 306 to 317). Primary population:
+      a CMI, a POS state in the 50 states and DC, no Veterans Health Administration, no critical access and no Maryland
+      hospital (Maryland is paid under its own all-payer model). The sensitivity population
+      adds critical access and Maryland hospitals. Connecticut stays in both. A missing state, county or classification is
+      filled where it can be derived: the same CCN's other POS snapshots within 24 months of the window start, the
+      enrollment file, the CCN's SSA state code or a ZIP that HUD places in one county only, each named in a source
+      column. Connecticut windows also get their planning region when the ZIP lies in one region. A ZIP split across
+      counties or regions gives none (failure modes 612 to 618, 631, 698 and 701).
+    columns:
+      - name: spine_key
+        description: CCN and window year.
+        data_tests: [unique, not_null]
+      - name: ccn
+        description: The CCN from the HAI windows.
+        data_tests: [not_null]
+      - name: window_year
+        description: The calendar year of the HAI window.
+        data_tests: [not_null]
+      - name: pos_period_end
+        description: End of the POS snapshot used; null when the hospital is not in the snapshot before the window.
+      - name: zip_code
+        description: >
+          The hospital's 5-digit ZIP from its own POS snapshot, else its other snapshots, else the enrollment file; used
+          for the county and planning-region fills and the ZIP-based linkage.
+      - name: state_source
+        description: Where the state comes from; null when no source has it.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [pos, pos_other_snapshot, enrollment, ccn_state_code]
+      - name: county_source
+        description: Where the county comes from; null when no source has it.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [pos, pos_other_snapshot, hud_zip_single_county]
+      - name: classification_source
+        description: >
+          Where the provider subtype and control type come from; null when the window has no snapshot and its neighbours
+          within 24 months disagree or only an earlier one exists.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [pos, pos_other_snapshot]
+      - name: planning_region_fips
+        description: A Connecticut hospital's planning region from its ZIP; null elsewhere.
+      - name: planning_region_source
+        description: hud_zip_single_county when the ZIP lies in one planning region; null otherwise.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [hud_zip_single_county]
+      - name: cmi
+        description: The unadjusted CMI of the fiscal year that ends before the window; null when absent or held.
+      - name: cmi_data_fiscal_year
+        description: The CMI's discharge fiscal year, the window year minus 1.
+      - name: is_cmi_held
+        description: True when the CMI of that data year is held in int_cmi_holds.
+        data_tests: [not_null]
+      - name: is_maryland
+        description: True when the POS state is Maryland; out of the primary population, in the sensitivity run.
+        data_tests: [not_null]
+      - name: is_primary_population
+        description: In the primary model population.
+        data_tests: [not_null]
+      - name: is_sensitivity_population
+        description: In the sensitivity-run population (adds critical access and Maryland hospitals).
+        data_tests: [not_null]
+
+  - name: int_registry_measure_windows
+    description: >
+      One row per registry measure control of families S14 to S16, hospital and measurement window, for exactly the measure
+      ID and value column the registry_measure_sources seed names (failure modes 323 to 327). value_number is set only for
+      plain numbers; categories and tokens stay in value_text. Staging a measure does not make it a predictor.
+    columns:
+      - name: registry_window_key
+        description: Measure control, entity, window start and window end.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: The registry measure control ID.
+        data_tests: [not_null]
+
+  - name: int_cost_report_measures
+    description: >
+      One row per cost report and registry measure control of family S01 whose numerator the report publishes, computed by
+      the cost_report_measures seed (failure modes 339 and 340): value, code, ratio, per_day (numerator over reporting days)
+      or ratio_per_day_denominator (numerator over the denominator per reporting day). A zero or missing denominator gives a
+      null value_number, never infinity. Staging a measure does not make it a predictor; review_decision is the registry's.
+    columns:
+      - name: measure_key
+        description: Report record number and measure control.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: The registry measure control ID.
+        data_tests: [not_null]
+
+  - name: int_impact_measures
+    description: >
+      One row per impact-file release, CCN and registry measure field of source CMS_IPPS (family S04) whose value is
+      published, by the impact_measures seed (failure mode 353): value, code or ratio (C040, average daily census over beds;
+      a zero or missing denominator gives null). Staging a measure does not make it a predictor.
+    columns:
+      - name: measure_key
+        description: File checksum, sheet name, CCN, measure control and field.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: The registry measure control ID.
+        data_tests: [not_null]
+
+  - name: int_mup_measures
+    description: >
+      One row per Medicare inpatient provider summary and registry measure field of sources CMS-MUP-PROVIDER and
+      CMS_MEDICARE_PROVIDER (family S08) whose value or numerator is published, by the mup_measures seed: value, ratio (a
+      null or zero denominator gives null) or drg_share (C117, the published discharges of DRG 870 to 872 over the provider
+      total in the same data year, from the year's one DRG file, which can be an earlier release; small cells are not
+      published, so the share can be low). C084 has one row per race field; held and closed controls give no rows
+      (failure modes 356, 357 and 360 to 363). Staging a measure does not make it a predictor.
+    columns:
+      - name: measure_key
+        description: File checksum, CCN, measure control and field.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: The registry measure control ID.
+        data_tests: [not_null]
+
+  - name: int_occmix_measures
+    description: >
+      Six S03 registry controls per survey row. C030 to C034 retain conditional definitions and review decisions.
+      C043 is unavailable from this source and always null; registry revision 3 closes it as unavailable from public sources
+      (STG-007). Staging does not approve model use or resolve source timing.
+    columns:
+      - name: measure_key
+        description: Survey row key and measure control.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [C030, C031, C032, C033, C034, C043]
+      - name: source_status
+        description: Conditional availability or an unavailable source definition.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [available_conditional, unavailable_source_definition]
+
+  - name: int_validation_measure_windows
+    description: >
+      Group D registry controls per component measure, hospital and window, from the exact IDs validation_measures names
+      and the reviewed renames in measure_id_aliases where the exact ID has no row for that hospital and window; tokens
+      stay text with a null number (failure modes 629 and 630). Controls C289, C290, C291 and children, comparison_only.
+    columns:
+      - name: validation_key
+        description: Control, measure, hospital and window.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests: [not_null]
+      - name: published_measure_id
+        description: The measure ID as published; differs from measure_id only for an aliased rename.
+        data_tests: [not_null]
+
+  - name: int_validation_program_values
+    description: >
+      HAC Reduction and VBP registry controls per field, hospital and program fiscal year, from the fields
+      validation_measures names; tokens and the reviewed odd value stay text with a null number.
+    columns:
+      - name: program_value_key
+        description: Control, field, hospital and fiscal year.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests: [not_null]
+  - name: int_spine_hai_outcomes
+    description: >
+      AL1 outcome: one row per spine hospital-window (calendar year) and HAI infection type, with the published SIR,
+      bounds, observed and predicted counts and exposure by exact measure ID, tokens kept as text, the SIR footnote codes
+      and the spine's population flags. Parts from releases after the last 2015-baseline review are held and counted.
+      Every type stays separate; no target is chosen here.
+    columns:
+      - name: outcome_key
+        description: Spine key and infection type.
+        data_tests: [unique, not_null]
+      - name: spine_key
+        description: Hospital and window year, as in int_hospital_spine.
+        data_tests: [not_null]
+      - name: hai_type
+        description: HAI_1 (CLABSI) to HAI_6 (C. difficile).
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['HAI_1', 'HAI_2', 'HAI_3', 'HAI_4', 'HAI_5', 'HAI_6']
+      - name: alignment_status
+        description: aligned (a part published), held_in_staging (parts held, none published) or not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, held_in_staging, not_in_source]
+  - name: int_spine_care_compare_measures
+    description: >
+      AL2: one row per spine hospital-window and Care Compare process or structure control (registry_measure_sources,
+      families S13 to S16). Each control takes the latest measure window that ends before the HAI window starts; the
+      overall rating (C284) takes the latest Hospital General Information release dated before the start, and two files
+      on one date that disagree are held. Values stay as published with each row's age in months; C141's spellings map to
+      one category each. No age limit and no eligibility choice.
+    columns:
+      - name: alignment_key
+        description: Spine key and registry control.
+        data_tests: [unique, not_null]
+      - name: spine_key
+        description: Hospital and window year, as in int_hospital_spine.
+        data_tests: [not_null]
+      - name: measure_control
+        description: Registry control identifier from registry_measure_sources.
+        data_tests: [not_null]
+      - name: value_category
+        description: C141 only; low, medium, high or very high, null for the Not Available token.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [low, medium, high, very high]
+      - name: age_months
+        description: Calendar months from the period end to the window start; kept without a limit.
+      - name: alignment_status
+        description: >
+          aligned; no_period_before_start (the hospital has periods for the control, none ending before the start);
+          held_in_staging (a held window before the start, or two release files that disagree); not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, no_period_before_start, held_in_staging, not_in_source]
+  - name: int_spine_hospital_measures
+    description: >
+      AL3a: one row per spine hospital-window and hospital finance or operations control by source and field (cost
+      reports, IPPS impact files, Medicare inpatient summaries, occupational-mix surveys). Each takes the latest period that
+      ends before the HAI window starts: the report period, the rule fiscal year (Oct 1 to Sep 30, most final stage), the
+      data year or the survey. Values that disagree for one period are held; occupational-mix copies within 0.0001 count
+      as one value. Age in months, no limit; no eligibility choice.
+    columns:
+      - name: alignment_key
+        description: Spine key, measure source, registry control and field.
+        data_tests: [unique, not_null]
+      - name: measure_source
+        description: cost_report, ipps_impact, medicare_inpatient or occupational_mix.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [cost_report, ipps_impact, medicare_inpatient, occupational_mix]
+      - name: period_copy_count
+        description: Reports, files or copies behind the chosen period.
+      - name: alignment_status
+        description: aligned, no_period_before_start, held_in_staging (values that disagree, or only held survey rows) or not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, no_period_before_start, held_in_staging, not_in_source]
+  - name: int_spine_operations_measures
+    description: >
+      AL3b: one row per spine hospital-window and operations control (hhs_onc_measures and ownership_measures). HHS
+      capacity: the weeks of the calendar year before the window (ratio of sums for two fields, a sum of 7-day sums, a
+      mean of 7-day averages; a CCN-week with two HHS hospitals skipped and counted). ONC: the latest performance period
+      ending before the start. Ownership: the latest owner release before the start through the enrollment CCN, private
+      equity and REIT flags from ownership roles only (Y or not_reported). Change of ownership: events in the year before
+      the start (C069) and months since the latest (C070).
+    columns:
+      - name: alignment_key
+        description: Spine key, measure source and registry control.
+        data_tests: [unique, not_null]
+      - name: measure_source
+        description: hhs_capacity, onc or ownership.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [hhs_capacity, onc, ownership]
+      - name: unit_count
+        description: Usable weeks, period rows, owner rows or events behind the value.
+      - name: skipped_count
+        description: HHS weeks skipped because two HHS hospitals share the CCN.
+      - name: alignment_status
+        description: aligned, no_period_before_start, held_in_staging or not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, no_period_before_start, held_in_staging, not_in_source]
+  - name: int_spine_validation_measures
+    description: >
+      AL5: one row per spine hospital-window and validation control and measure (validation_measures). Validation outcomes
+      are compared with the HAI window, never used to predict it, so each takes the published period that matches the
+      window itself: the equal calendar-year window first, otherwise the largest overlap, then the latest end. HAC and VBP
+      program years are placed by the HAI measure period HAC publishes for each fiscal year. No predictor model reads
+      this table.
+    columns:
+      - name: alignment_key
+        description: Spine key, registry control and measure.
+        data_tests: [unique, not_null]
+      - name: overlap_days
+        description: Days the chosen period shares with the HAI window.
+      - name: alignment_status
+        description: aligned, no_matching_period, held_in_staging or not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, no_matching_period, held_in_staging, not_in_source]
+  - name: int_spine_county_measures
+    description: >
+      AL4a: one row per spine hospital-window and county control-field from PLACES, Medicare Geographic Variation, CDC
+      WONDER, Mapping Medicare Disparities and RUCC, through the hospital's POS county: the latest data year (RUCC vintage)
+      that ends before the HAI window starts. PLACES: all-state measure-years only, the latest release of each data year.
+      WONDER 2018 to 2020 from the single-race database. Connecticut matches on its old county or its planning region.
+    columns:
+      - name: alignment_key
+        description: Spine key, source, registry control and field.
+        data_tests: [unique, not_null]
+      - name: is_primary_county_join
+        description: False only for hospitals with neither a county nor a planning region.
+      - name: alignment_status
+        description: aligned, no_period_before_start, held_in_staging or not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, no_period_before_start, held_in_staging, not_in_source]
+  - name: int_spine_county_context
+    description: >
+      AL4b: one row per spine hospital-window and county context control-field. ACS and SVI (the vintage or edition whose
+      period ends before the window), SAIPE, SAHIE (all-group rows, latest file) and BLS (annual averages): the latest
+      period that ends before the start. HPSA and MUA: designations in force at the start, rebuilt from the designation and
+      withdrawal dates, with the highest score as published at the capture; undated withdrawals and the 1970 date hold
+      the window. RUCA from the hospital ZIP's code. HUD shares and the hospital service area are in int_spine_linkage.
+      Counties come from the filled spine; Connecticut matches on its old county or its planning region (failure modes
+      604 to 611 and 634 to 637).
+    columns:
+      - name: alignment_key
+        description: Spine key, source, registry control and field.
+        data_tests: [unique, not_null]
+      - name: measure_source
+        description: acs, svi, saipe, sahie, bls, hpsa, mua or ruca.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [acs, svi, saipe, sahie, bls, hpsa, mua, ruca]
+      - name: value_note
+        description: >
+          score_as_published_at_capture for HPSA and MUA scores (none_in_force when no designation is in force),
+          zip_code_approximation for RUCA; null otherwise.
+      - name: alignment_status
+        description: aligned, no_period_before_start, held_in_staging or not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, no_period_before_start, held_in_staging, not_in_source]
+  - name: int_spine_linkage
+    description: >
+      AL4b linkage: one row per spine hospital-window and linkage field. L002: the share of the hospital ZIP's residential
+      addresses in its county or planning region, from the latest HUD quarter that ends before the start. L001: the
+      hospital's service-area ZIPs and cases in the latest data year before the window, suppressed rows left out.
+      Linkage only, never a predictor (failure mode 638).
+    columns:
+      - name: alignment_key
+        description: Spine key, source, registry control and field.
+        data_tests: [unique, not_null]
+      - name: measure_source
+        description: hud or hsa.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [hud, hsa]
+      - name: review_decision
+        description: Always linkage_only.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [linkage_only]
+      - name: value_note
+        description: published_counts_only for the service area; null otherwise.
+      - name: alignment_status
+        description: aligned, no_period_before_start or not_in_source.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [aligned, no_period_before_start, not_in_source]
+  - name: int_hai_outcome_values
+    description: >
+      HAI registry controls (main-hai-pdc and C283's children) per outcome row and field with a published value, from the
+      part hai_outcome_measures names; tokens stay text with a null number. Staging approves no use.
+    columns:
+      - name: outcome_value_key
+        description: Control, field and outcome key.
+        data_tests: [unique, not_null]
+      - name: measure_control
+        description: Registry control identifier.
+        data_tests: [not_null]
+  - name: int_hospital_pos_history
+    description: >
+      SCD2 history of each hospital's Provider of Services attributes: one row per CCN and version, dated by snapshot
+      period ends only (valid_from inclusive, valid_to exclusive, null while current). A change in a tracked attribute,
+      compared null-safely, or a return after a snapshot without the CCN starts a version; an absent snapshot closes it.
+      A snapshot that lists one CCN with disagreeing values is held for that snapshot. Values as published; fills stay on
+      the spine (silver step 7.3, failure modes 670 to 677).
+    columns:
+      - name: history_key
+        description: CCN and valid_from.
+        data_tests: [unique, not_null]
+      - name: ccn
+        data_tests: [not_null]
+      - name: valid_from
+        description: Period end of the version's first snapshot.
+        data_tests: [not_null]
+      - name: valid_to
+        description: Period end of the first later snapshot that differs or lacks the CCN; null while current.
+      - name: is_current
+        description: True when the version reaches the latest snapshot.
+      - name: is_after_gap
+        description: True when the version starts after a snapshot without the CCN.
+      - name: release_count
+        description: Snapshots in the version.
+      - name: first_member_sha256
+        description: SHA-256 of the version's first POS file.
+  - name: int_hospital_hgi_history
+    description: >
+      SCD2 history of each hospital's Hospital General Information description (state, county name, ZIP, hospital type,
+      ownership text, emergency services), dated by release dates only. The overall rating is a measure that AL2 aligns
+      and is not tracked. Two files on one release date that disagree for a CCN are held for that date (silver step 7.3).
+    columns:
+      - name: history_key
+        description: CCN and valid_from.
+        data_tests: [unique, not_null]
+      - name: ccn
+        data_tests: [not_null]
+      - name: valid_from
+        data_tests: [not_null]
+  - name: int_hospital_ownership_history
+    description: >
+      SCD2 history of each hospital enrollment's organization owners by owner ID and role: share, owner name and the
+      private-equity and REIT flags, dated by release period ends only. Organization owners only, so no individual's name
+      enters history (failure mode 676); a release that lists an owner twice with different terms is held (silver step 7.3).
+      Owner IDs are padded to 10 digits (failure mode 714). One missing release is bridged, never a held one, and counted
+      in bridged_releases (owner decision Oct 10 2026, failure mode 715).
+    columns:
+      - name: history_key
+        description: Enrollment ID, owner ID, role code and valid_from.
+        data_tests: [unique, not_null]
+      - name: enrollment_id
+        data_tests: [not_null]
+      - name: valid_from
+        data_tests: [not_null]
+      - name: bridged_releases
+        description: Releases without the owner that this version covers (a fill); 0 when the owner is in every release.
+        data_tests: [not_null]

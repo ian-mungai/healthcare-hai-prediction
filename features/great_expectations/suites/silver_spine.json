@@ -1,0 +1,79 @@
+{
+  "name": "silver_spine",
+  "description": "Hospital-window spine: fill sources, populations and window bands",
+  "expectations": [
+    {
+      "id": "spine.county_has_source",
+      "table": "int_hospital_spine",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE (county_fips IS NULL) <> (county_source IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "spine.state_has_source",
+      "table": "int_hospital_spine",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE (state_code IS NULL) <> (state_source IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "spine.classification_has_source",
+      "table": "int_hospital_spine",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE provider_subtype_code IS NOT NULL AND classification_source IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "spine.region_only_connecticut",
+      "table": "int_hospital_spine",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE planning_region_fips IS NOT NULL AND NOT is_connecticut"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "spine.primary_in_sensitivity",
+      "table": "int_hospital_spine",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE is_primary_population AND NOT is_sensitivity_population"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "spine.windows_per_year",
+      "table": "int_hospital_spine",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT window_year FROM {batch} GROUP BY window_year HAVING count(*) < <<spine.windows_per_year.min>> OR count(*) > <<spine.windows_per_year.max>>"
+      },
+      "severity": "distribution"
+    },
+    {
+      "id": "spine.rows",
+      "table": "int_hospital_spine",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": "<<spine.rows.min>>",
+        "max_value": "<<spine.rows.max>>"
+      },
+      "severity": "distribution"
+    },
+    {
+      "id": "spine.county_share",
+      "table": "int_hospital_spine",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT 1 FROM {batch} HAVING avg(CASE WHEN county_fips IS NULL THEN 0 ELSE 1 END) < <<spine.county_share.min>>"
+      },
+      "severity": "distribution"
+    }
+  ]
+}

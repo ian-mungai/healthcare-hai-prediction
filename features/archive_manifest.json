@@ -1,0 +1,994 @@
+{
+  "commit": "beab859750f58cea0bbb0297cf0d635be85ed24f",
+  "dbt_tree_sha256": "49cc1f46390973efb0bb60632978dc742a9f886e38c3396e15de615f91caae5a",
+  "e2e_expectations": {
+    "scripts/lakehouse/run_silver_e2e.py": {
+      "blob": "011046c7ae3b5955732e79a8b072299f9164be61",
+      "symbols": []
+    },
+    "scripts/lakehouse/run_staging_e2e.py": {
+      "blob": "160cbc8b10815413f6594ae8368aa6d27207311c",
+      "symbols": [
+        {
+          "lines": [
+            186,
+            186
+          ],
+          "name": "OCCMIX_TEXT"
+        },
+        {
+          "lines": [
+            1147,
+            1161
+          ],
+          "name": "HAI_SPINE"
+        },
+        {
+          "lines": [
+            1164,
+            1178
+          ],
+          "name": "HAI_OUTCOME"
+        },
+        {
+          "lines": [
+            1200,
+            1200
+          ],
+          "name": "CMI_HEADER"
+        },
+        {
+          "lines": [
+            1201,
+            1201
+          ],
+          "name": "CMI_HEADER_2007"
+        },
+        {
+          "lines": [
+            1202,
+            1202
+          ],
+          "name": "CMI_HEADER_2011"
+        },
+        {
+          "lines": [
+            2288,
+            2288
+          ],
+          "name": "BRIDGED"
+        },
+        {
+          "lines": [
+            3029,
+            3040
+          ],
+          "name": "cmi_case"
+        },
+        {
+          "lines": [
+            4239,
+            4243
+          ],
+          "name": "CMI_ROWS_SQL"
+        },
+        {
+          "lines": [
+            4244,
+            4247
+          ],
+          "name": "CMI_YEARS_SQL"
+        },
+        {
+          "lines": [
+            4248,
+            4248
+          ],
+          "name": "CMI_HOLDS_SQL"
+        },
+        {
+          "lines": [
+            4249,
+            4252
+          ],
+          "name": "CMI_DATA_YEARS_SQL"
+        },
+        {
+          "lines": [
+            4254,
+            4257
+          ],
+          "name": "POS_HISTORY_SQL"
+        },
+        {
+          "lines": [
+            4258,
+            4261
+          ],
+          "name": "OWNER_HISTORY_SQL"
+        },
+        {
+          "lines": [
+            4263,
+            4266
+          ],
+          "name": "HGI_HISTORY_SQL"
+        },
+        {
+          "lines": [
+            4267,
+            4275
+          ],
+          "name": "SPINE_SQL"
+        },
+        {
+          "lines": [
+            4373,
+            4379
+          ],
+          "name": "OCCMIX_SQL"
+        },
+        {
+          "lines": [
+            4459,
+            4464
+          ],
+          "name": "OUTCOME_SQL"
+        },
+        {
+          "lines": [
+            4465,
+            4470
+          ],
+          "name": "OUTCOME_STATUS_SQL"
+        },
+        {
+          "lines": [
+            4471,
+            4471
+          ],
+          "name": "OUTCOME_STATUS_COUNT_SQL"
+        },
+        {
+          "lines": [
+            4472,
+            4472
+          ],
+          "name": "OUTCOME_VALUES_SQL"
+        },
+        {
+          "lines": [
+            4473,
+            4476
+          ],
+          "name": "OUTCOME_VALUE_ROWS_SQL"
+        },
+        {
+          "lines": [
+            4477,
+            4481
+          ],
+          "name": "VALIDATION_ALIGNED_SQL"
+        },
+        {
+          "lines": [
+            4482,
+            4486
+          ],
+          "name": "VALIDATION_ALIGNED_COUNT_SQL"
+        },
+        {
+          "lines": [
+            4492,
+            4497
+          ],
+          "name": "AL4B_SQL"
+        },
+        {
+          "lines": [
+            4498,
+            4505
+          ],
+          "name": "AL4B_COUNT_SQL"
+        },
+        {
+          "lines": [
+            4542,
+            4545
+          ],
+          "name": "OUTCOME_COUNT_SQL"
+        },
+        {
+          "lines": [
+            5366,
+            5398
+          ],
+          "name": "county_measure_checks"
+        },
+        {
+          "lines": [
+            5496,
+            5501
+          ],
+          "name": "al4b_context_checks"
+        },
+        {
+          "lines": [
+            5504,
+            5557
+          ],
+          "name": "validation_aligned_checks"
+        },
+        {
+          "lines": [
+            5560,
+            5640
+          ],
+          "name": "operations_measure_checks"
+        },
+        {
+          "lines": [
+            5643,
+            5753
+          ],
+          "name": "hospital_measure_checks"
+        },
+        {
+          "lines": [
+            5756,
+            5795
+          ],
+          "name": "care_compare_checks"
+        },
+        {
+          "lines": [
+            5798,
+            5886
+          ],
+          "name": "outcome_checks"
+        },
+        {
+          "lines": [
+            5889,
+            5919
+          ],
+          "name": "hai_outcome_seed_matches"
+        },
+        {
+          "lines": [
+            5992,
+            6009
+          ],
+          "name": "POS_HISTORY_EXPECTED"
+        },
+        {
+          "lines": [
+            6012,
+            6016
+          ],
+          "name": "HGI_HISTORY_EXPECTED"
+        },
+        {
+          "lines": [
+            6020,
+            6027
+          ],
+          "name": "OWNER_HISTORY_EXPECTED"
+        },
+        {
+          "lines": [
+            6039,
+            6059
+          ],
+          "name": "OWNER_BRIDGE_ROWS"
+        },
+        {
+          "lines": [
+            6060,
+            6065
+          ],
+          "name": "OWNER_BRIDGE"
+        },
+        {
+          "lines": [
+            6066,
+            6075
+          ],
+          "name": "OWNER_BRIDGE_EXPECTED"
+        },
+        {
+          "lines": [
+            7181,
+            7194
+          ],
+          "name": "occmix_seed_matches"
+        },
+        {
+          "lines": [
+            7625,
+            7644
+          ],
+          "name": "OUTCOME_REAL_SQL"
+        },
+        {
+          "lines": [
+            7645,
+            7645
+          ],
+          "name": "OUTCOME_FINGERPRINT_SQL"
+        },
+        {
+          "lines": [
+            7648,
+            7663
+          ],
+          "name": "outcome_real"
+        },
+        {
+          "lines": [
+            7696,
+            7720
+          ],
+          "name": "care_compare_real"
+        },
+        {
+          "lines": [
+            7753,
+            7762
+          ],
+          "name": "hospital_measures_real"
+        },
+        {
+          "lines": [
+            7786,
+            7795
+          ],
+          "name": "operations_measures_real"
+        },
+        {
+          "lines": [
+            7800,
+            7818
+          ],
+          "name": "VALIDATION_ALIGNED_REAL_SQL"
+        },
+        {
+          "lines": [
+            7819,
+            7821
+          ],
+          "name": "VALIDATION_ALIGNED_FINGERPRINT_SQL"
+        },
+        {
+          "lines": [
+            7824,
+            7832
+          ],
+          "name": "validation_aligned_real"
+        },
+        {
+          "lines": [
+            7861,
+            7888
+          ],
+          "name": "AL4B_REAL_SQL"
+        },
+        {
+          "lines": [
+            7889,
+            7889
+          ],
+          "name": "AL4B_LINKAGE_FINGERPRINT_SQL"
+        },
+        {
+          "lines": [
+            7890,
+            7890
+          ],
+          "name": "AL4B_FINGERPRINT_SQL"
+        },
+        {
+          "lines": [
+            7893,
+            7901
+          ],
+          "name": "al4b_context_real"
+        },
+        {
+          "lines": [
+            7904,
+            7912
+          ],
+          "name": "county_measures_real"
+        }
+      ]
+    },
+    "scripts/lakehouse/silver_quality.py": {
+      "blob": "15117718ea6e085bc390c61f32e60ba2c040abfc",
+      "symbols": []
+    }
+  },
+  "files": {
+    "features/great_expectations/baselines.json": {
+      "blob": "3a34f7b9f9f24db089c2638649dff2a1df23a4f3",
+      "sha256": "58395e1255e8079c7b7cab3b06ba5f02b374903917b0346d8b02165c38891bcc",
+      "source": "data_contracts/great_expectations/baselines.json"
+    },
+    "features/great_expectations/fixture_baselines.json": {
+      "blob": "7e32aa17181465261dac5fb488091f8358e17037",
+      "sha256": "2576c9a2595a78d22f5c7729479809f9241915fb5616c091509ca5fc4b48a826",
+      "source": "data_contracts/great_expectations/fixture_baselines.json"
+    },
+    "features/great_expectations/suites/silver_alignment.json": {
+      "blob": "717891e3c6b86f6edcef68020a7e9d2866266183",
+      "sha256": "bda9193e94a58734b7f881667753aadbb4de8129e5ab921ad633b545720b3834",
+      "source": "data_contracts/great_expectations/suites/silver_alignment.json"
+    },
+    "features/great_expectations/suites/silver_contract.json": {
+      "blob": "76db6a35040968cca83ec152c5992b9a63d1bb88",
+      "sha256": "cedd45016a36c20c682b2974bcf68d122a060a95f8c0deed8dbc5bd293d18027",
+      "source": "data_contracts/great_expectations/suites/silver_contract.json"
+    },
+    "features/great_expectations/suites/silver_history.json": {
+      "blob": "2be03f9acacd686c858b92b20652fb8604126309",
+      "sha256": "65e4f8a073ab3c2dfe8c337365e0bf466dd14aee8f69b18a9ade9ae24798ce69",
+      "source": "data_contracts/great_expectations/suites/silver_history.json"
+    },
+    "features/great_expectations/suites/silver_leakage.json": {
+      "blob": "0c92a4f585bc2369fc6e3deabe189a7f50ddc030",
+      "sha256": "41c5757bad2337aec4c92b9d9bb45d139eaa99addfcae3b35d403f1e63728460",
+      "source": "data_contracts/great_expectations/suites/silver_leakage.json"
+    },
+    "features/great_expectations/suites/silver_outcomes.json": {
+      "blob": "2e61eda5dcbc612cc0ac1807dc22b90f757ad914",
+      "sha256": "62e9f2c810ff36fe94f1e0be2682545d1784ac6f5a56f3e5d58e6f9e9650dd39",
+      "source": "data_contracts/great_expectations/suites/silver_outcomes.json"
+    },
+    "features/great_expectations/suites/silver_spatial.json": {
+      "blob": "e7835bbb69e52e655742b25f0e0e4342ff178fe6",
+      "sha256": "30cd07b2b18434122811722925d84eb21b2c640de709787daa75382b9ebabe60",
+      "source": "data_contracts/great_expectations/suites/silver_spatial.json"
+    },
+    "features/great_expectations/suites/silver_spine.json": {
+      "blob": "01a629f941407d106eafa36db4113d20a0b6f500",
+      "sha256": "6c0c68e86643fce94416c53e04d62ec57322c85808d08e393028148c4a2b697d",
+      "source": "data_contracts/great_expectations/suites/silver_spine.json"
+    },
+    "features/macros/care_compare_alignment.sql": {
+      "blob": "72a23d43898289143e2fcdf6ea2cc4cf0d754801",
+      "sha256": "c61f315b0f15b7e879019b54e591bef0f1f74301bd5ae392c3a27412f93fdf3a",
+      "source": "dbt/macros/care_compare_alignment.sql"
+    },
+    "features/macros/cmi_years.sql": {
+      "blob": "48412a4330c9825392b1da1875a0269f6190cdc8",
+      "sha256": "0ee5f3b54da9617cdd8c5cdbb50c6f7e3846e9fa0d5ba7efe2c67aa7c13d1d6e",
+      "source": "dbt/macros/cmi_years.sql"
+    },
+    "features/macros/hai_outcome_columns.sql": {
+      "blob": "1bed20d23b53de5d81199f2f0c4e7a80d4597f35",
+      "sha256": "2aad53152776bc3f88fade838a3a14c1834cde16d8ee44e3b0cf777a94fd00fb",
+      "source": "dbt/macros/hai_outcome_columns.sql"
+    },
+    "features/macros/hospital_alignment.sql": {
+      "blob": "a2d97f89ee4682e6f692241492517ac25bb74355",
+      "sha256": "0282229464327303957563ee44eb6dce80f8273eea73fd5336891c0e4aac247a",
+      "source": "dbt/macros/hospital_alignment.sql"
+    },
+    "features/macros/scd2.sql": {
+      "blob": "55b888b818f2bea0ac7ea56aaed1ef48ecae8591",
+      "sha256": "e90f0b633e32760e5c937674acacbb5d1b6dfa7e0a9c5f31f77d8de6d840e793",
+      "source": "dbt/macros/scd2.sql"
+    },
+    "features/models/_archived_models.yml": {
+      "sha256": "e7ac7cad20893c394d9cb44743dda6189bfb7f0b33edd28f9629fbe13c0f0905",
+      "source": "dbt/models/silver/intermediate/_intermediate__models.yml (entries)"
+    },
+    "features/models/int_cmi_holds.sql": {
+      "blob": "cec43f078e320b3088d247c5ccb8518f477271a7",
+      "sha256": "5a38fe28456ee8adc0688edbdc5727fe88add308228f0325bcd3ac31b3bf0c14",
+      "source": "dbt/models/silver/intermediate/int_cmi_holds.sql"
+    },
+    "features/models/int_cmi_hospital_data_years.sql": {
+      "blob": "91a4b4d7b23ae96d28be7068283b933c28f0c7ac",
+      "sha256": "ee91cde7a3e00fe41e8c2bbecf332df2152339db38574659f76093643b771f2e",
+      "source": "dbt/models/silver/intermediate/int_cmi_hospital_data_years.sql"
+    },
+    "features/models/int_cmi_hospital_years.sql": {
+      "blob": "57bfd31115ac4e74ffb19ad70187717d5bbf7354",
+      "sha256": "9d5c26303153545bb5d866016e1676260fa634cdd198c1c6d0df101764f240e2",
+      "source": "dbt/models/silver/intermediate/int_cmi_hospital_years.sql"
+    },
+    "features/models/int_cost_report_measures.sql": {
+      "blob": "0110cac5773c7f74f86d4b2fde7a83dbf3a77ff5",
+      "sha256": "b282e0530e498f2137f7b8cd977b3fae7863fc56a3df1fed2c4523aec4d2dff0",
+      "source": "dbt/models/silver/intermediate/int_cost_report_measures.sql"
+    },
+    "features/models/int_hai_outcome_values.sql": {
+      "blob": "974219fe40533e588599bf4149f7060e850787a3",
+      "sha256": "765f24221dc4bfa2b735369e3c563172b3515aea4a6e5d6b0ecef15fbc8268a1",
+      "source": "dbt/models/silver/intermediate/int_hai_outcome_values.sql"
+    },
+    "features/models/int_hospital_hgi_history.sql": {
+      "blob": "c7ee988bad86323c70eb19abede644d02914d245",
+      "sha256": "091e19da177bcd1d94678792640f024ec0f5d817e0e402b153ed201ea4284df4",
+      "source": "dbt/models/silver/intermediate/int_hospital_hgi_history.sql"
+    },
+    "features/models/int_hospital_ownership_history.sql": {
+      "blob": "a3b22f5f5ef812a90eff5bb9aad6185163669c7e",
+      "sha256": "ab718c638cb3cbe0481c04fca0be7abb4081a4a805acb7ac55dfd81294c3c81a",
+      "source": "dbt/models/silver/intermediate/int_hospital_ownership_history.sql"
+    },
+    "features/models/int_hospital_pos_history.sql": {
+      "blob": "2b2a5c8a934b5e90f0a4fe3f9ba7678771a66576",
+      "sha256": "6509a4670a755941e90136fdbad02311270864c97b73905bbc583ebc9e018173",
+      "source": "dbt/models/silver/intermediate/int_hospital_pos_history.sql"
+    },
+    "features/models/int_hospital_spine.sql": {
+      "blob": "6fc675b9507c9e381d61de88a48669865a12b222",
+      "sha256": "32b994838bfcb34971fe01a0af43557d2e328fb7410d6ea93fafe31fc9fe0a2e",
+      "source": "dbt/models/silver/intermediate/int_hospital_spine.sql"
+    },
+    "features/models/int_impact_measures.sql": {
+      "blob": "3c77ece4c12f1ee0db3bfdcf42d4d528391c5a6e",
+      "sha256": "4ea1cd871fa19fdb8a266a7008c2d98742e475be98cf5529bcf5083c905db836",
+      "source": "dbt/models/silver/intermediate/int_impact_measures.sql"
+    },
+    "features/models/int_mup_measures.sql": {
+      "blob": "975bc1a59f492549580ab2944842d949d0674b12",
+      "sha256": "24d2760b619ad58c474a1ea224f7461fa848e10e0c0f9e0a961e8f4de4ce387a",
+      "source": "dbt/models/silver/intermediate/int_mup_measures.sql"
+    },
+    "features/models/int_occmix_measures.sql": {
+      "blob": "034cadf01f820f03864e42159f6ce4fbe14fe8ec",
+      "sha256": "deec7c9b39d0fc2c3e260fae5aaab4c6b19c62f0d4b57d4d253cf6e9a5e1aa86",
+      "source": "dbt/models/silver/intermediate/int_occmix_measures.sql"
+    },
+    "features/models/int_registry_measure_windows.sql": {
+      "blob": "4f17dcf05cbf16e4163aedbeac7a1db5fd979603",
+      "sha256": "e6109d8ce29f93c1aa10dd74ab6e043e0b4ffa791ed3a1561203329489a5dac0",
+      "source": "dbt/models/silver/intermediate/int_registry_measure_windows.sql"
+    },
+    "features/models/int_spine_care_compare_measures.sql": {
+      "blob": "19cce8ed609f338e2f5e8ae513a21fd97d65890b",
+      "sha256": "7dda4283787f83d92bf0142bb93482caf183ec975eee7d6c5d28183ba06b9883",
+      "source": "dbt/models/silver/intermediate/int_spine_care_compare_measures.sql"
+    },
+    "features/models/int_spine_county_context.sql": {
+      "blob": "bc3a07f89fe43efbb383ba9771ddd2e39f5728e6",
+      "sha256": "d3d28d6ea7b159fdfda6edef47d4e982d5adbba3790db1a3df19fea25bf041cd",
+      "source": "dbt/models/silver/intermediate/int_spine_county_context.sql"
+    },
+    "features/models/int_spine_county_measures.sql": {
+      "blob": "306eb5d26b1bffb54139f6819ab30a244ff4dcfa",
+      "sha256": "3611a5cb8e1fb6b5f4fbe4076fb65ef4eec4b848e24f9667599933b8800f2148",
+      "source": "dbt/models/silver/intermediate/int_spine_county_measures.sql"
+    },
+    "features/models/int_spine_hai_outcomes.sql": {
+      "blob": "e3fb69bb71d66aa43c8a48a36ded121314a7c94a",
+      "sha256": "319f17a01c32a592964540f086b1fc28b922487f99573a1abc07e3b505bf507d",
+      "source": "dbt/models/silver/intermediate/int_spine_hai_outcomes.sql"
+    },
+    "features/models/int_spine_hospital_measures.sql": {
+      "blob": "71311cc78ceecd469014252232f1c307197a6457",
+      "sha256": "ed2cb049caceb44f231e2b8c70709817dac482e5131f0c900ab736ba66ff2d08",
+      "source": "dbt/models/silver/intermediate/int_spine_hospital_measures.sql"
+    },
+    "features/models/int_spine_linkage.sql": {
+      "blob": "6a1b5ffeb438e63e472b9511dfcf0ac58911c0fd",
+      "sha256": "8604fa22f70b15f1f6ff67dcdaa625c4069224e8848c2c2fbd3ec19661ebb9bb",
+      "source": "dbt/models/silver/intermediate/int_spine_linkage.sql"
+    },
+    "features/models/int_spine_operations_measures.sql": {
+      "blob": "5a501b007ce01aed48d118983a482c8d5bb01b42",
+      "sha256": "19867e66a0bb30cbcb99c55b1d54c622216a3b8473f59b6f586a8fe858dcf203",
+      "source": "dbt/models/silver/intermediate/int_spine_operations_measures.sql"
+    },
+    "features/models/int_spine_validation_measures.sql": {
+      "blob": "9c65ecc5893bf96b5b4305a4b696882b9e47cb40",
+      "sha256": "9cb47a23c740e110ae60dde31edb6c4f98e6d3e52dac8d5a973b6d9030018212",
+      "source": "dbt/models/silver/intermediate/int_spine_validation_measures.sql"
+    },
+    "features/models/int_validation_measure_windows.sql": {
+      "blob": "9b5a504846a26b4871d2a0002cf9be8c947370d5",
+      "sha256": "718f763cffe0bf76e43a8fa60c0d6ebc6a94ef16039e25abe0bb576c4d90f9a2",
+      "source": "dbt/models/silver/intermediate/int_validation_measure_windows.sql"
+    },
+    "features/models/int_validation_program_values.sql": {
+      "blob": "266b70ff9517c768242864d69fe5b638d1299115",
+      "sha256": "6cbdb55e86c5d7342fb189ed7ce8e8360081961af6c33250575284f0526e5b4c",
+      "source": "dbt/models/silver/intermediate/int_validation_program_values.sql"
+    },
+    "features/tests/assert_care_compare_as_of_start.sql": {
+      "blob": "12b3e572456935c5968732620d6b1200c894a322",
+      "sha256": "cbcee7c91985b7d823539c40f9b6fe9126cf6c1821c2ef0633f90bf8bd11463e",
+      "source": "dbt/tests/assert_care_compare_as_of_start.sql"
+    },
+    "features/tests/assert_care_compare_edv_known.sql": {
+      "blob": "7b369de0c79449e2c0cefee65094209d2cb51786",
+      "sha256": "2ac6d612ee1e41516177bdaefca375a294c9bf786a8c4fc048c704c7035de10d",
+      "source": "dbt/tests/assert_care_compare_edv_known.sql"
+    },
+    "features/tests/assert_county_context_as_of_start.sql": {
+      "blob": "141362a614eb17c0970b8ff7ac9bf267b9a22358",
+      "sha256": "f792d6d31f24623693239a70317ce5e51d6df88cb5d60d53bbbbcacfddf2ea9c",
+      "source": "dbt/tests/assert_county_context_as_of_start.sql"
+    },
+    "features/tests/assert_county_measures_as_of_start.sql": {
+      "blob": "b6e45790fb3b00642b1d6568dedc5a4308c49000",
+      "sha256": "f34a5e252fe663fce87344ffead0dd8f2af48702385c5e56bfc90a0895351070",
+      "source": "dbt/tests/assert_county_measures_as_of_start.sql"
+    },
+    "features/tests/assert_hai_outcome_consistent.sql": {
+      "blob": "5ac792748b01f1c79567f9bdf330d35b90d7bf65",
+      "sha256": "89e9f9db786279b30c92508c9050aa0a3d05733ef7c0550e12d6786299056d73",
+      "source": "dbt/tests/assert_hai_outcome_consistent.sql"
+    },
+    "features/tests/assert_hai_outcome_values_cast.sql": {
+      "blob": "0103ca7f96cd7ae70091e46d2f72d9c0ff064c75",
+      "sha256": "dc28922fd9906ed8be2784eff483e1b8f8d083b5ae1ee14fb9e05b6026c4c2db",
+      "source": "dbt/tests/assert_hai_outcome_values_cast.sql"
+    },
+    "features/tests/assert_history_versions_valid.sql": {
+      "blob": "916a3ffd9d2cf5c87a82428d9956fc2d386a879f",
+      "sha256": "d9da91ae5442c1dbd3ce63e4a06627e1fb859bb58105a428316f47c73996ed60",
+      "source": "dbt/tests/assert_history_versions_valid.sql"
+    },
+    "features/tests/assert_hospital_measures_as_of_start.sql": {
+      "blob": "d85685f713fb2b6c3134b5025c2e809bc75bd4ed",
+      "sha256": "ae99328734a36213f40d2fd6584cfd518abac2f3451323b86fba176a7f5f5014",
+      "source": "dbt/tests/assert_hospital_measures_as_of_start.sql"
+    },
+    "features/tests/assert_occmix_holds_exclude_values.sql": {
+      "blob": "642af90b9d19db9a841b669b4a0bca9b5f23f14a",
+      "sha256": "a6a4a3175ec947d35381424a7b488b22de398d80c3192e02697c8e294889f9d1",
+      "source": "dbt/tests/assert_occmix_holds_exclude_values.sql"
+    },
+    "features/tests/assert_occmix_measure_scope.sql": {
+      "blob": "eb5dc2208270d7eba74efa79505405e5248ebde4",
+      "sha256": "2390778a80f75d40b5e146c1d3b80f7e76a58b21f5f869ba8730fa66b4fdaaed",
+      "source": "dbt/tests/assert_occmix_measure_scope.sql"
+    },
+    "features/tests/assert_operations_measures_as_of_start.sql": {
+      "blob": "1d114d565f5543c6728f58df817b23cf2b9379d2",
+      "sha256": "18b02df42d939ea7b734298bf76ede7332eac6134d7b160b745f8e63811d7b0f",
+      "source": "dbt/tests/assert_operations_measures_as_of_start.sql"
+    },
+    "features/tests/assert_spine_as_of_window_start.sql": {
+      "blob": "aaff6b1a4317eb2b2ba6afcd3586890a67ed632e",
+      "sha256": "b978ae1fb9bc1290cff0ac5e1ad277c8ddbdec324c7d048083a4a8ee28066fd8",
+      "source": "dbt/tests/assert_spine_as_of_window_start.sql"
+    },
+    "features/tests/assert_validation_measures_overlap.sql": {
+      "blob": "acf80ac19669481bc622db792283ed2d41f6786d",
+      "sha256": "601e54f298739822f5c6b15e5cb6426b2ae28f6431a153c8b12fb63418372d2b",
+      "source": "dbt/tests/assert_validation_measures_overlap.sql"
+    }
+  },
+  "formula_models": [
+    "int_cost_report_measures",
+    "int_impact_measures",
+    "int_mup_measures",
+    "int_occmix_measures",
+    "int_registry_measure_windows",
+    "int_validation_measure_windows",
+    "int_validation_program_values"
+  ],
+  "image_id": "sha256:dc4942af06c093e044606553a647fc1551c3ec8e8f91fabb40cce18e25e9b217",
+  "recover": "git show <commit>:<source> restores any file; the runners' symbols are at the recorded lines of their blob.",
+  "references": {
+    "fixture": {
+      "build_file": "data/analytics/dbt/e2e/base/staging.duckdb",
+      "build_file_bytes": 35139584,
+      "files": {
+        "int_cmi_holds": {
+          "content": "36384743557380584027:20025796736238048198275473398090800822",
+          "path": "data/features/reference/fixture_beab859/int_cmi_holds.parquet",
+          "rows": 3,
+          "sha256": "13528da8f589bb6ded6f42c9615a2d78c49c2aec0cb019d412056d56a706afca"
+        },
+        "int_cmi_hospital_data_years": {
+          "content": "74600603506569613923:279840259284488177882430077886895900251",
+          "path": "data/features/reference/fixture_beab859/int_cmi_hospital_data_years.parquet",
+          "rows": 11,
+          "sha256": "0784b56b0409a18d8f835727b84b51f50604f97c784503b7672f62a16e3a28de"
+        },
+        "int_cmi_hospital_years": {
+          "content": "88847677232059329652:215034100216548398652471165730162872429",
+          "path": "data/features/reference/fixture_beab859/int_cmi_hospital_years.parquet",
+          "rows": 10,
+          "sha256": "62d47232958be4855c673abd2ee356ee5e5c3140680348d91ccce00391e16f5b"
+        },
+        "int_cost_report_measures": {
+          "content": "240265231131301611943:219376342331574406696300691762478544780",
+          "path": "data/features/reference/fixture_beab859/int_cost_report_measures.parquet",
+          "rows": 30,
+          "sha256": "f83c8db865fdb72003c80331ca0206cce912edc04529b4033cfe9fdf00fedee4"
+        },
+        "int_hai_outcome_values": {
+          "content": "509610792813415128676:291978952006911207525793429050152928909",
+          "path": "data/features/reference/fixture_beab859/int_hai_outcome_values.parquet",
+          "rows": 54,
+          "sha256": "628f53939cdac23328b4715eb82b98beedbf95361b9336d3273f1f42ff3ae563"
+        },
+        "int_hospital_hgi_history": {
+          "content": "17496415562778705634:41321735821788624616811949147275154031",
+          "path": "data/features/reference/fixture_beab859/int_hospital_hgi_history.parquet",
+          "rows": 3,
+          "sha256": "5109c58103188ddae2f485f3caa04fa7bd1bdebc0e4a0ba0c9206f24e764a8dd"
+        },
+        "int_hospital_ownership_history": {
+          "content": "45382093055534880453:98860641294848009663508513000011997925",
+          "path": "data/features/reference/fixture_beab859/int_hospital_ownership_history.parquet",
+          "rows": 6,
+          "sha256": "50f30fe7504b3b40c3881e6f12f6a21502183570bca9a1128404f4f7bf7f0341"
+        },
+        "int_hospital_pos_history": {
+          "content": "139973126274512142269:52269981217958641853813434001329976280",
+          "path": "data/features/reference/fixture_beab859/int_hospital_pos_history.parquet",
+          "rows": 16,
+          "sha256": "e5752f83621abfbc269019a7f2ea9cfdafd78e574b0915d51352be7eb6e2f988"
+        },
+        "int_hospital_spine": {
+          "content": "137285772716406044180:26700142294870068468799515060848762465",
+          "path": "data/features/reference/fixture_beab859/int_hospital_spine.parquet",
+          "rows": 15,
+          "sha256": "837fc822f080a71cc2586832c1e95d74273f9554f4e1053a59f8c3553b0f1a15"
+        },
+        "int_impact_measures": {
+          "content": "342094170085517895788:216230788978558013659833598785248750886",
+          "path": "data/features/reference/fixture_beab859/int_impact_measures.parquet",
+          "rows": 37,
+          "sha256": "82cf70df7adc36136ee796c7a86256726a128aaffb50f50387e91be0b20b9c75"
+        },
+        "int_mup_measures": {
+          "content": "285145053708314152658:275543288865026542916358826081265953429",
+          "path": "data/features/reference/fixture_beab859/int_mup_measures.parquet",
+          "rows": 31,
+          "sha256": "bf30db2ea14a16eada1f03ad376228cd180609f82cc8859d7425404e37de2bc6"
+        },
+        "int_occmix_measures": {
+          "content": "567502995269860080815:312747048549863814664046027152004094683",
+          "path": "data/features/reference/fixture_beab859/int_occmix_measures.parquet",
+          "rows": 66,
+          "sha256": "08a1385c288e922fa4e5dba0591f73f7005a77b8a5c4274233c23933c0b4e853"
+        },
+        "int_registry_measure_windows": {
+          "content": "94554190895894698245:202389093333972195943067849871959119681",
+          "path": "data/features/reference/fixture_beab859/int_registry_measure_windows.parquet",
+          "rows": 10,
+          "sha256": "7bbb1cafee93422298ea025ec17c81906881f3fe19e4a2602b46b49f17ae2e09"
+        },
+        "int_spine_care_compare_measures": {
+          "content": "7590072168888140958350:217245928630536249945689639799693834049",
+          "path": "data/features/reference/fixture_beab859/int_spine_care_compare_measures.parquet",
+          "rows": 855,
+          "sha256": "6346f85aa61050b92ad046e2fb0a2f3166e32b36de539d9c28ff04cdd608800e"
+        },
+        "int_spine_county_context": {
+          "content": "21748009433320017464143:76526644887299855231165480544234954039",
+          "path": "data/features/reference/fixture_beab859/int_spine_county_context.parquet",
+          "rows": 2325,
+          "sha256": "f99e9e3dec5733b9a463c34114bf814d24d5c11a4bfcd5f30afc6fdb2ab11992"
+        },
+        "int_spine_county_measures": {
+          "content": "27069949576317432607952:120879852911600716210706853362172818419",
+          "path": "data/features/reference/fixture_beab859/int_spine_county_measures.parquet",
+          "rows": 2925,
+          "sha256": "203c9259c650300d29d2ccad86b4b45f17185d207271c6fa514e8161bd477c0b"
+        },
+        "int_spine_hai_outcomes": {
+          "content": "879767152185404514636:188839363507406900845252254003213326863",
+          "path": "data/features/reference/fixture_beab859/int_spine_hai_outcomes.parquet",
+          "rows": 90,
+          "sha256": "f6b32a01b7b8bc03429201c120375ebfad6bcfeea931309b1620b268afe6f105"
+        },
+        "int_spine_hospital_measures": {
+          "content": "14000019072682473797874:93263938837397342653754780879617130618",
+          "path": "data/features/reference/fixture_beab859/int_spine_hospital_measures.parquet",
+          "rows": 1470,
+          "sha256": "41bf831aa399b4ab4b39697be71086e57767d355c9be4b5acee3f50eb84a206f"
+        },
+        "int_spine_linkage": {
+          "content": "418814656799678025197:55049876991098686467621005649000473053",
+          "path": "data/features/reference/fixture_beab859/int_spine_linkage.parquet",
+          "rows": 45,
+          "sha256": "5e77238ec91e2cece12399b565bb91400351e96e9826d6ba5e54a9afca444642"
+        },
+        "int_spine_operations_measures": {
+          "content": "7257390851706754298000:94707567597825594953532906637433506445",
+          "path": "data/features/reference/fixture_beab859/int_spine_operations_measures.parquet",
+          "rows": 780,
+          "sha256": "2f92859497036cc2fc46cb9448d3e2ac3ae8abcffc353b331f7c056fb4a97655"
+        },
+        "int_spine_validation_measures": {
+          "content": "5711941262113083531535:193639987149648428408059723644691852459",
+          "path": "data/features/reference/fixture_beab859/int_spine_validation_measures.parquet",
+          "rows": 615,
+          "sha256": "ff60c6834529e4b56572a19e8ee66f85780e719843dd79d4a86ec5ab7143a554"
+        },
+        "int_validation_measure_windows": {
+          "content": "194832719789995091740:164256363368227105787377664474318218729",
+          "path": "data/features/reference/fixture_beab859/int_validation_measure_windows.parquet",
+          "rows": 22,
+          "sha256": "ff63e8b75779d3a4c20e16ded915f6ce3aeb72eba8c88e8cabbf5750e83c59bc"
+        },
+        "int_validation_program_values": {
+          "content": "170141278175545547635:74915867813279129744817307776500859197",
+          "path": "data/features/reference/fixture_beab859/int_validation_program_values.parquet",
+          "rows": 20,
+          "sha256": "da2742204573cf09a2ec2a10a2a96cae936afc428e4466967522632d37d93204"
+        }
+      }
+    },
+    "real": {
+      "build_file": "data/analytics/dbt/staging.duckdb",
+      "build_file_bytes": 7788048384,
+      "files": {
+        "int_cmi_holds": {
+          "content": "69907641224434206350476:333493948324898138845577839279245267452",
+          "path": "data/features/reference/real_beab859/int_cmi_holds.parquet",
+          "rows": 7541,
+          "sha256": "36a59d22430b77e8708019038b05fda39e36f84358e57f1bdea1220ecc077e09"
+        },
+        "int_cmi_hospital_data_years": {
+          "content": "297758445324358024741405:46222730174196091638481972032826447060",
+          "path": "data/features/reference/real_beab859/int_cmi_hospital_data_years.parquet",
+          "rows": 32381,
+          "sha256": "b6f27bf1fa7989dd46d4d5986fed714ca31deb7884085fcc38048745b6f3df0f"
+        },
+        "int_cmi_hospital_years": {
+          "content": "678426066497199297062383:196872832275844285383129208070585300856",
+          "path": "data/features/reference/real_beab859/int_cmi_hospital_years.parquet",
+          "rows": 73635,
+          "sha256": "d67ef247a2e56882d523b7c85a67de7fe5e37d7672c55cfe7025f9d419c80cfa"
+        },
+        "int_cost_report_measures": {
+          "content": "18617925508136372069884957:77479377616130440458623737275880345279",
+          "path": "data/features/reference/real_beab859/int_cost_report_measures.parquet",
+          "rows": 2019900,
+          "sha256": "1e6041dc332adb0fd54c8b5e1af0646a8704728ef0822b549b03a88522bf632a"
+        },
+        "int_hai_outcome_values": {
+          "content": "16022664467498893060881449:67575162532005826190428856197207737299",
+          "path": "data/features/reference/real_beab859/int_hai_outcome_values.parquet",
+          "rows": 1736220,
+          "sha256": "1523570cb9378a0154bdd229e7e8b31e4f7614d7f8e5ae92b5a13ec2a2c536e6"
+        },
+        "int_hospital_hgi_history": {
+          "content": "167089712383318329754037:84819745788588555646972810563453942874",
+          "path": "data/features/reference/real_beab859/int_hospital_hgi_history.parquet",
+          "rows": 18188,
+          "sha256": "6e2fb8a6ba3f83f0bad91b102f346b6e2f139cb85576c23948d39ea31f53fa3f"
+        },
+        "int_hospital_ownership_history": {
+          "content": "578263708636175682578598:154453789846734707960722286854910796499",
+          "path": "data/features/reference/real_beab859/int_hospital_ownership_history.parquet",
+          "rows": 62704,
+          "sha256": "847b4ca5601d37d5697fb6df7062188c913e85a65c1666eb1f0fff5ad646c46d"
+        },
+        "int_hospital_pos_history": {
+          "content": "203766487539371563273529:10462938815899141115518421192387824361",
+          "path": "data/features/reference/real_beab859/int_hospital_pos_history.parquet",
+          "rows": 22201,
+          "sha256": "ae9bee13554295daf172ca4051aa0c7f369ae6e9dd5d84eb0823d282e334eb76"
+        },
+        "int_hospital_spine": {
+          "content": "267020203745641503540980:160610167030888665748353282828194901166",
+          "path": "data/features/reference/real_beab859/int_hospital_spine.parquet",
+          "rows": 28937,
+          "sha256": "2953f7450018559d35ff6d4a8a4018c449f41e1b22dbab86ef2539a578b82d71"
+        },
+        "int_impact_measures": {
+          "content": "25601422156302273765935044:69240272668234716933013679465691136285",
+          "path": "data/features/reference/real_beab859/int_impact_measures.parquet",
+          "rows": 2774992,
+          "sha256": "1b4676c0824a8fb4973568e71a0b7f8f7715efe0d81e6bc49b1b7ec072203afd"
+        },
+        "int_mup_measures": {
+          "content": "12207372052618644137425419:50051440583866823962809838868390736981",
+          "path": "data/features/reference/real_beab859/int_mup_measures.parquet",
+          "rows": 1323716,
+          "sha256": "f9d72e817f3a87eb3ab42b13a6fefda13302a2efb9c2d9da3f081b2c66de1445"
+        },
+        "int_occmix_measures": {
+          "content": "11335590425453700968859566:200433097368024912825880124616570319280",
+          "path": "data/features/reference/real_beab859/int_occmix_measures.parquet",
+          "rows": 1228128,
+          "sha256": "abb2bf051337c3b5f0b6e8628b7f181bef204f4ae89ba8c62a44dfb3b0bce095"
+        },
+        "int_registry_measure_windows": {
+          "content": "36782419979448795841114693:279746329989639600045801831168715718509",
+          "path": "data/features/reference/real_beab859/int_registry_measure_windows.parquet",
+          "rows": 3987963,
+          "sha256": "daa520e36e48531f76ff4a4f92e1468c81b6b65faddca935538fa37e9f1ba78c"
+        },
+        "int_spine_care_compare_measures": {
+          "content": "15213670764528672545748496:330420776049383050182267878317501425808",
+          "path": "data/features/reference/real_beab859/int_spine_care_compare_measures.parquet",
+          "rows": 1649409,
+          "sha256": "b6d59e4fb09261cf1fe14ce7eac97934d58ad031837167cb68c92ca66e6d2b72"
+        },
+        "int_spine_county_context": {
+          "content": "41362253313276802874917291:57180031830186857435812590203703219297",
+          "path": "data/features/reference/real_beab859/int_spine_county_context.parquet",
+          "rows": 4485235,
+          "sha256": "699f7266ed5844bf3cdeae062c5e8f7b3c51226419cef44221dbaba0e7415e9f"
+        },
+        "int_spine_county_measures": {
+          "content": "52050155455391726899194465:142808170982699029978907855683880146234",
+          "path": "data/features/reference/real_beab859/int_spine_county_measures.parquet",
+          "rows": 5642715,
+          "sha256": "67debf16c24df9ef8ce2da2ff1d5efabcff3210df63cfc1b19fff06d2fbaaf99"
+        },
+        "int_spine_hai_outcomes": {
+          "content": "1604368792816352525421957:273262665014486153007834211298732337988",
+          "path": "data/features/reference/real_beab859/int_spine_hai_outcomes.parquet",
+          "rows": 173622,
+          "sha256": "cb897133cb7c01947679813208f19f1cd4c5dd83a77763579031e946856712ac"
+        },
+        "int_spine_hospital_measures": {
+          "content": "26141195408390201325931504:259388683781144638598731399579091165380",
+          "path": "data/features/reference/real_beab859/int_spine_hospital_measures.parquet",
+          "rows": 2835826,
+          "sha256": "9ba07d54c1dc5c0888b5fd8af3cbb9edc17478ebd2fb4fc77f477839e537c5cc"
+        },
+        "int_spine_linkage": {
+          "content": "802144465841145060856048:302475921871750318910947475847048796422",
+          "path": "data/features/reference/real_beab859/int_spine_linkage.parquet",
+          "rows": 86811,
+          "sha256": "63d1ca7a680bbf30503aa1e839881183c64b0fafabf96f94f5aacb15470dcae4"
+        },
+        "int_spine_operations_measures": {
+          "content": "13870788445785449713260700:215847596798041462638631654885125005793",
+          "path": "data/features/reference/real_beab859/int_spine_operations_measures.parquet",
+          "rows": 1504724,
+          "sha256": "cc7a5777685c1ba89c6639b6266fe86f51178bcd93f5ef08fed9c102f16ab04f"
+        },
+        "int_spine_validation_measures": {
+          "content": "10939440667216817309901250:37956784882285614615201591266104095114",
+          "path": "data/features/reference/real_beab859/int_spine_validation_measures.parquet",
+          "rows": 1186417,
+          "sha256": "7e1d37bb65a2d14c957398e358198b516f1c116f414b2a622e6e58b208f74c32"
+        },
+        "int_validation_measure_windows": {
+          "content": "10356308804533015097376270:71040106419350246042452803951764940987",
+          "path": "data/features/reference/real_beab859/int_validation_measure_windows.parquet",
+          "rows": 1122000,
+          "sha256": "13bc2b9c9d8bedbc67ff32890cebc7a5cfb1dfcdf4a99da9bcdde31cb234ae7c"
+        },
+        "int_validation_program_values": {
+          "content": "1158702925777634942710947:1941724373426199848870853680486942368",
+          "path": "data/features/reference/real_beab859/int_validation_program_values.parquet",
+          "rows": 125514,
+          "sha256": "0bfe5cfee3535d49bdc04207ad91d362f870e50380b690cb49de6d46cc11cfa2"
+        }
+      }
+    }
+  },
+  "saved_models": [
+    "int_hospital_spine",
+    "int_spine_hai_outcomes",
+    "int_spine_care_compare_measures",
+    "int_spine_hospital_measures",
+    "int_spine_operations_measures",
+    "int_spine_validation_measures",
+    "int_spine_county_measures",
+    "int_spine_county_context",
+    "int_spine_linkage",
+    "int_hai_outcome_values",
+    "int_cmi_hospital_years",
+    "int_cmi_hospital_data_years",
+    "int_cmi_holds",
+    "int_hospital_pos_history",
+    "int_hospital_hgi_history",
+    "int_hospital_ownership_history"
+  ],
+  "shared_macros": {
+    "cost_report_columns.sql": "f1d3bad8c0bb6cfa5aa97846015189ae668e53cb",
+    "geography_columns.sql": "8db361f08facd39b201b3a90b225484d9e73450a",
+    "mup_columns.sql": "1c63ecf332ae9b7fec7f97f87307b2a1ea0ee211",
+    "ownership_columns.sql": "eb963eac18cc5d5ecdcd44d0d72f45cd2f7269d8",
+    "pos_columns.sql": "cacd94ca07651086ae4f3e853395064d9ebe2590"
+  },
+  "written_utc": "2026-10-11T00:00:11.914525+00:00"
+}

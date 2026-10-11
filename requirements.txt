@@ -6,7 +6,7 @@ mypy==2.3.1  # tool: type checker run by pre-commit
 pre-commit==4.6.2  # tool: hook runner
 checkov==3.3.19  # tool: Terraform policy scan
 types-jsonschema==4.26.0.20260518  # tool: type stubs for MyPy
-pyyaml==6.0.3  # dynamic: the front-matter check imports it by name (repo_checks.load_yaml); pre-commit installs the same version.
+pyyaml==6.0.3  # dynamic: imported by name in repo_checks.load_yaml (front-matter check) and package_fixture.check; pre-commit installs the same version.
 vulture==2.16  # tool: unused-code check
 deptry==0.25.1  # tool: unused-dependencies check
 # Host scripts read S3 with boto3 (scripts/lakehouse/retired_objects.py and the one-off deletion tool); checkov pins this boto3.

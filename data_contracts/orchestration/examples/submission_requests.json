@@ -1,0 +1,147 @@
+{
+  "accepted": [
+    {
+      "template": "silver_build",
+      "run_id": "20261011T090000Z-0a1b2c3d",
+      "mode": "fixture",
+      "attempt": 1
+    },
+    {
+      "template": "publish_candidates",
+      "run_id": "20261011T090000Z-0a1b2c3d",
+      "mode": "publish_fixture",
+      "attempt": 1
+    }
+  ],
+  "refused": [
+    {
+      "case": "image override",
+      "request": {
+        "template": "silver_build",
+        "run_id": "20261011T090000Z-0a1b2c3d",
+        "mode": "fixture",
+        "attempt": 1,
+        "image": "hai-analytics:latest"
+      }
+    },
+    {
+      "case": "command override",
+      "request": {
+        "template": "silver_build",
+        "run_id": "20261011T090000Z-0a1b2c3d",
+        "mode": "fixture",
+        "attempt": 1,
+        "arguments": [
+          "run-operation",
+          "drop_all"
+        ]
+      }
+    },
+    {
+      "case": "entrypoint override",
+      "request": {
+        "template": "silver_build",
+        "run_id": "20261011T090000Z-0a1b2c3d",
+        "mode": "fixture",
+        "attempt": 1,
+        "entrypoint": [
+          "sh",
+          "-c"
+        ]
+      }
+    },
+    {
+      "case": "environment override",
+      "request": {
+        "template": "silver_build",
+        "run_id": "20261011T090000Z-0a1b2c3d",
+        "mode": "fixture",
+        "attempt": 1,
+        "environment": {
+          "JOB_MEMORY_LIMIT": "99999999999"
+        }
+      }
+    },
+    {
+      "case": "extra mount",
+      "request": {
+        "template": "silver_build",
+        "run_id": "20261011T090000Z-0a1b2c3d",
+        "mode": "fixture",
+        "attempt": 1,
+        "mounts": [
+          {
+            "source": "repo:.",
+            "destination": "/w",
+            "read_only": false
+          }
+        ]
+      }
+    },
+    {
+      "case": "network or class override",
+      "request": {
+        "template": "silver_build",
+        "run_id": "20261011T090000Z-0a1b2c3d",
+        "mode": "fixture",
+        "attempt": 1,
+        "class": "lakehouse_write"
+      }
+    },
+    {
+      "case": "user override",
+      "request": {
+        "template": "silver_build",
+        "run_id": "20261011T090000Z-0a1b2c3d",
+        "mode": "fixture",
+        "attempt": 1,
+        "user": "0:0"
+      }
+    },
+    {
+      "case": "privileged flag",
+      "request": {
+        "template": "silver_build",
+        "run_id": "20261011T090000Z-0a1b2c3d",
+        "mode": "fixture",
+        "attempt": 1,
+        "privileged": true
+      }
+    },
+    {
+      "case": "malformed run ID",
+      "request": {
+        "template": "silver_build",
+        "run_id": "run_a; rm -rf /",
+        "mode": "fixture",
+        "attempt": 1
+      }
+    },
+    {
+      "case": "unknown mode",
+      "request": {
+        "template": "silver_build",
+        "run_id": "20261011T090000Z-0a1b2c3d",
+        "mode": "production",
+        "attempt": 1
+      }
+    },
+    {
+      "case": "attempt zero",
+      "request": {
+        "template": "silver_build",
+        "run_id": "20261011T090000Z-0a1b2c3d",
+        "mode": "fixture",
+        "attempt": 0
+      }
+    },
+    {
+      "case": "missing attempt",
+      "request": {
+        "template": "silver_build",
+        "run_id": "20261011T090000Z-0a1b2c3d",
+        "mode": "fixture"
+      }
+    }
+  ]
+}

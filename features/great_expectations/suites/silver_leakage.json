@@ -1,0 +1,60 @@
+{
+  "name": "silver_leakage",
+  "description": "No validation or linkage control in a predictor table [649]",
+  "expectations": [
+    {
+      "id": "care_compare.no_validation_or_linkage_control",
+      "table": "int_spine_care_compare_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE measure_control IN (SELECT measure_control FROM validation_measures) OR measure_control IN (SELECT DISTINCT measure_control FROM int_spine_linkage)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "hospital_measures.no_validation_or_linkage_control",
+      "table": "int_spine_hospital_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE measure_control IN (SELECT measure_control FROM validation_measures) OR measure_control IN (SELECT DISTINCT measure_control FROM int_spine_linkage)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "operations_measures.no_validation_or_linkage_control",
+      "table": "int_spine_operations_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE measure_control IN (SELECT measure_control FROM validation_measures) OR measure_control IN (SELECT DISTINCT measure_control FROM int_spine_linkage)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "county_measures.no_validation_or_linkage_control",
+      "table": "int_spine_county_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE measure_control IN (SELECT measure_control FROM validation_measures) OR measure_control IN (SELECT DISTINCT measure_control FROM int_spine_linkage)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "county_context.no_validation_or_linkage_control",
+      "table": "int_spine_county_context",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE measure_control IN (SELECT measure_control FROM validation_measures) OR measure_control IN (SELECT DISTINCT measure_control FROM int_spine_linkage)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "validation.only_validation_controls",
+      "table": "int_spine_validation_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE measure_control NOT IN (SELECT measure_control FROM validation_measures)"
+      },
+      "severity": "structural"
+    }
+  ]
+}

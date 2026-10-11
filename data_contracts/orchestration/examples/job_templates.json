@@ -1,0 +1,1358 @@
+{
+  "schema_version": 1,
+  "templates": {
+    "pin_bronze": {
+      "purpose": "Record the snapshot ID of every bronze table the build reads (step 3)",
+      "image": "hai-spark@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "entrypoint": [
+        "python",
+        "-m"
+      ],
+      "arguments": [
+        "scripts.lakehouse.pins",
+        "pin",
+        "--run",
+        "{run_id}",
+        "--out",
+        "{run_dir}/pins.json"
+      ],
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": true
+        },
+        "publish_fixture": {
+          "class": "lakehouse_read",
+          "no_op": false
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false
+        }
+      },
+      "environment": [
+        {
+          "name": "RUN_ID",
+          "source": "caller"
+        },
+        {
+          "name": "RUN_MODE",
+          "source": "caller"
+        },
+        {
+          "name": "JOB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "SPARK_JOB_MEMORY",
+          "source": "broker"
+        },
+        {
+          "name": "JOB_THREADS",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_DIR",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_LOCK_TOKEN",
+          "source": "broker"
+        },
+        {
+          "name": "POLARIS_CLIENT_ID",
+          "source": "class_secret",
+          "secret": "polaris_reader_client_id"
+        },
+        {
+          "name": "POLARIS_CLIENT_SECRET",
+          "source": "class_secret",
+          "secret": "polaris_reader_client_secret"
+        },
+        {
+          "name": "AWS_PROFILE",
+          "source": "class_secret",
+          "secret": "aws_profile"
+        },
+        {
+          "name": "AWS_REGION",
+          "source": "class_secret",
+          "secret": "aws_region"
+        }
+      ],
+      "mounts": [
+        {
+          "source": "repo:scripts",
+          "destination": "/workspace/scripts",
+          "read_only": true
+        },
+        {
+          "source": "repo:config/lakehouse",
+          "destination": "/workspace/config/lakehouse",
+          "read_only": true
+        },
+        {
+          "source": "run_dir",
+          "destination": "/workspace/out",
+          "read_only": false
+        },
+        {
+          "source": "class_aws_file",
+          "destination": "/run/secrets/aws/credentials",
+          "read_only": true
+        }
+      ],
+      "user": "1000:1000",
+      "capabilities": [],
+      "privileged": false,
+      "admission": "job",
+      "timeout_seconds": 1800,
+      "cancel": {
+        "signal": "SIGTERM",
+        "grace_seconds": 60
+      },
+      "kind": "finite"
+    },
+    "silver_build": {
+      "purpose": "Build the kept silver models into the run's build file at the pinned bronze snapshots (step 4)",
+      "image": "hai-analytics@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "entrypoint": [
+        "dbt"
+      ],
+      "arguments": [
+        "build",
+        "--selector",
+        "silver",
+        "--target",
+        "{mode}",
+        "--target-path",
+        "{run_dir}/target/silver",
+        "--log-path",
+        "{run_dir}/logs/silver"
+      ],
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false
+        },
+        "publish_fixture": {
+          "class": "lakehouse_read",
+          "no_op": false
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false
+        }
+      },
+      "environment": [
+        {
+          "name": "RUN_ID",
+          "source": "caller"
+        },
+        {
+          "name": "RUN_MODE",
+          "source": "caller"
+        },
+        {
+          "name": "JOB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "DUCKDB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "JOB_THREADS",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_DIR",
+          "source": "broker"
+        },
+        {
+          "name": "BUILD_FILE",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_LOCK_TOKEN",
+          "source": "broker"
+        },
+        {
+          "name": "HAI_RESERVATION",
+          "source": "broker"
+        },
+        {
+          "name": "DBT_ENV_SECRET_POLARIS_CLIENT_ID",
+          "source": "class_secret",
+          "secret": "polaris_reader_client_id"
+        },
+        {
+          "name": "DBT_ENV_SECRET_POLARIS_CLIENT_SECRET",
+          "source": "class_secret",
+          "secret": "polaris_reader_client_secret"
+        },
+        {
+          "name": "AWS_PROFILE",
+          "source": "class_secret",
+          "secret": "aws_profile"
+        },
+        {
+          "name": "AWS_REGION",
+          "source": "class_secret",
+          "secret": "aws_region"
+        }
+      ],
+      "mounts": [
+        {
+          "source": "repo:dbt",
+          "destination": "/workspace/dbt",
+          "read_only": true
+        },
+        {
+          "source": "repo:services/analytics/resources.sql",
+          "destination": "/opt/analytics/resources.sql",
+          "read_only": true
+        },
+        {
+          "source": "run_dir",
+          "destination": "/workspace/out",
+          "read_only": false
+        },
+        {
+          "source": "class_aws_file",
+          "destination": "/run/secrets/aws/credentials",
+          "read_only": true
+        }
+      ],
+      "user": "1000:1000",
+      "capabilities": [],
+      "privileged": false,
+      "admission": "job",
+      "timeout_seconds": 10800,
+      "cancel": {
+        "signal": "SIGTERM",
+        "grace_seconds": 60
+      },
+      "kind": "finite"
+    },
+    "silver_validate": {
+      "purpose": "Run the atomic silver Great Expectations contracts on the build file and record its SHA-256 (step 5)",
+      "image": "hai-quality@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "entrypoint": [
+        "python",
+        "-m"
+      ],
+      "arguments": [
+        "scripts.lakehouse.silver_quality",
+        "--run",
+        "{run_id}",
+        "--build-file",
+        "{build_file}"
+      ],
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false
+        },
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false
+        }
+      },
+      "environment": [
+        {
+          "name": "RUN_ID",
+          "source": "caller"
+        },
+        {
+          "name": "RUN_MODE",
+          "source": "caller"
+        },
+        {
+          "name": "JOB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "DUCKDB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "JOB_THREADS",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_DIR",
+          "source": "broker"
+        },
+        {
+          "name": "BUILD_FILE",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_LOCK_TOKEN",
+          "source": "broker"
+        }
+      ],
+      "mounts": [
+        {
+          "source": "repo:scripts",
+          "destination": "/workspace/scripts",
+          "read_only": true
+        },
+        {
+          "source": "repo:data_contracts/great_expectations",
+          "destination": "/workspace/data_contracts/great_expectations",
+          "read_only": true
+        },
+        {
+          "source": "run_dir",
+          "destination": "/workspace/out",
+          "read_only": false
+        }
+      ],
+      "user": "1000:1000",
+      "capabilities": [],
+      "privileged": false,
+      "admission": "job",
+      "timeout_seconds": 3600,
+      "cancel": {
+        "signal": "SIGTERM",
+        "grace_seconds": 60
+      },
+      "kind": "finite"
+    },
+    "gold_build": {
+      "purpose": "Build the gold dimensions, bridges and facts on the same build file after rechecking its SHA-256 (step 6)",
+      "image": "hai-analytics@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "entrypoint": [
+        "dbt"
+      ],
+      "arguments": [
+        "build",
+        "--selector",
+        "gold",
+        "--target",
+        "{mode}",
+        "--target-path",
+        "{run_dir}/target/gold",
+        "--log-path",
+        "{run_dir}/logs/gold"
+      ],
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false
+        },
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false
+        }
+      },
+      "environment": [
+        {
+          "name": "RUN_ID",
+          "source": "caller"
+        },
+        {
+          "name": "RUN_MODE",
+          "source": "caller"
+        },
+        {
+          "name": "JOB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "DUCKDB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "JOB_THREADS",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_DIR",
+          "source": "broker"
+        },
+        {
+          "name": "BUILD_FILE",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_LOCK_TOKEN",
+          "source": "broker"
+        },
+        {
+          "name": "HAI_RESERVATION",
+          "source": "broker"
+        }
+      ],
+      "mounts": [
+        {
+          "source": "repo:dbt",
+          "destination": "/workspace/dbt",
+          "read_only": true
+        },
+        {
+          "source": "repo:services/analytics/resources.sql",
+          "destination": "/opt/analytics/resources.sql",
+          "read_only": true
+        },
+        {
+          "source": "run_dir",
+          "destination": "/workspace/out",
+          "read_only": false
+        }
+      ],
+      "user": "1000:1000",
+      "capabilities": [],
+      "privileged": false,
+      "admission": "job",
+      "timeout_seconds": 10800,
+      "cancel": {
+        "signal": "SIGTERM",
+        "grace_seconds": 60
+      },
+      "kind": "finite"
+    },
+    "gold_validate": {
+      "purpose": "Run the gold Great Expectations suites (step 7)",
+      "image": "hai-quality@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "entrypoint": [
+        "python",
+        "-m"
+      ],
+      "arguments": [
+        "scripts.lakehouse.gold_quality",
+        "--run",
+        "{run_id}",
+        "--build-file",
+        "{build_file}"
+      ],
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false
+        },
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false
+        }
+      },
+      "environment": [
+        {
+          "name": "RUN_ID",
+          "source": "caller"
+        },
+        {
+          "name": "RUN_MODE",
+          "source": "caller"
+        },
+        {
+          "name": "JOB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "DUCKDB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "JOB_THREADS",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_DIR",
+          "source": "broker"
+        },
+        {
+          "name": "BUILD_FILE",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_LOCK_TOKEN",
+          "source": "broker"
+        }
+      ],
+      "mounts": [
+        {
+          "source": "repo:scripts",
+          "destination": "/workspace/scripts",
+          "read_only": true
+        },
+        {
+          "source": "repo:data_contracts/great_expectations",
+          "destination": "/workspace/data_contracts/great_expectations",
+          "read_only": true
+        },
+        {
+          "source": "run_dir",
+          "destination": "/workspace/out",
+          "read_only": false
+        }
+      ],
+      "user": "1000:1000",
+      "capabilities": [],
+      "privileged": false,
+      "admission": "job",
+      "timeout_seconds": 3600,
+      "cancel": {
+        "signal": "SIGTERM",
+        "grace_seconds": 60
+      },
+      "kind": "finite"
+    },
+    "cross_layer_checks": {
+      "purpose": "Reconcile gold with silver while silver still exists (step 8)",
+      "image": "hai-quality@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "entrypoint": [
+        "python",
+        "-m"
+      ],
+      "arguments": [
+        "scripts.lakehouse.cross_layer",
+        "--run",
+        "{run_id}",
+        "--build-file",
+        "{build_file}"
+      ],
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false
+        },
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false
+        }
+      },
+      "environment": [
+        {
+          "name": "RUN_ID",
+          "source": "caller"
+        },
+        {
+          "name": "RUN_MODE",
+          "source": "caller"
+        },
+        {
+          "name": "JOB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "DUCKDB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "JOB_THREADS",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_DIR",
+          "source": "broker"
+        },
+        {
+          "name": "BUILD_FILE",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_LOCK_TOKEN",
+          "source": "broker"
+        }
+      ],
+      "mounts": [
+        {
+          "source": "repo:scripts",
+          "destination": "/workspace/scripts",
+          "read_only": true
+        },
+        {
+          "source": "repo:data_contracts/great_expectations",
+          "destination": "/workspace/data_contracts/great_expectations",
+          "read_only": true
+        },
+        {
+          "source": "run_dir",
+          "destination": "/workspace/out",
+          "read_only": false
+        }
+      ],
+      "user": "1000:1000",
+      "capabilities": [],
+      "privileged": false,
+      "admission": "job",
+      "timeout_seconds": 3600,
+      "cancel": {
+        "signal": "SIGTERM",
+        "grace_seconds": 60
+      },
+      "kind": "finite"
+    },
+    "verify_bronze": {
+      "purpose": "Check that the bronze heads still equal the pinned snapshots before any publish (step 9)",
+      "image": "hai-spark@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "entrypoint": [
+        "python",
+        "-m"
+      ],
+      "arguments": [
+        "scripts.lakehouse.pins",
+        "verify",
+        "--run",
+        "{run_id}",
+        "--pins",
+        "{run_dir}/pins.json"
+      ],
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": true
+        },
+        "publish_fixture": {
+          "class": "lakehouse_read",
+          "no_op": false
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false
+        }
+      },
+      "environment": [
+        {
+          "name": "RUN_ID",
+          "source": "caller"
+        },
+        {
+          "name": "RUN_MODE",
+          "source": "caller"
+        },
+        {
+          "name": "JOB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "SPARK_JOB_MEMORY",
+          "source": "broker"
+        },
+        {
+          "name": "JOB_THREADS",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_DIR",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_LOCK_TOKEN",
+          "source": "broker"
+        },
+        {
+          "name": "POLARIS_CLIENT_ID",
+          "source": "class_secret",
+          "secret": "polaris_reader_client_id"
+        },
+        {
+          "name": "POLARIS_CLIENT_SECRET",
+          "source": "class_secret",
+          "secret": "polaris_reader_client_secret"
+        },
+        {
+          "name": "AWS_PROFILE",
+          "source": "class_secret",
+          "secret": "aws_profile"
+        },
+        {
+          "name": "AWS_REGION",
+          "source": "class_secret",
+          "secret": "aws_region"
+        }
+      ],
+      "mounts": [
+        {
+          "source": "repo:scripts",
+          "destination": "/workspace/scripts",
+          "read_only": true
+        },
+        {
+          "source": "repo:config/lakehouse",
+          "destination": "/workspace/config/lakehouse",
+          "read_only": true
+        },
+        {
+          "source": "run_dir",
+          "destination": "/workspace/out",
+          "read_only": false
+        },
+        {
+          "source": "class_aws_file",
+          "destination": "/run/secrets/aws/credentials",
+          "read_only": true
+        }
+      ],
+      "user": "1000:1000",
+      "capabilities": [],
+      "privileged": false,
+      "admission": "job",
+      "timeout_seconds": 1800,
+      "cancel": {
+        "signal": "SIGTERM",
+        "grace_seconds": 60
+      },
+      "kind": "finite"
+    },
+    "publish_candidates": {
+      "purpose": "Write each gold table with MERGE INTO and record the new snapshot IDs as candidates (step 10)",
+      "image": "hai-spark@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "entrypoint": [
+        "python",
+        "-m"
+      ],
+      "arguments": [
+        "scripts.lakehouse.gold_publish",
+        "candidates",
+        "--run",
+        "{run_id}",
+        "--mode",
+        "{mode}",
+        "--build-file",
+        "{build_file}"
+      ],
+      "modes": {
+        "publish_fixture": {
+          "class": "lakehouse_write",
+          "no_op": false
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false
+        }
+      },
+      "environment": [
+        {
+          "name": "RUN_ID",
+          "source": "caller"
+        },
+        {
+          "name": "RUN_MODE",
+          "source": "caller"
+        },
+        {
+          "name": "JOB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "SPARK_JOB_MEMORY",
+          "source": "broker"
+        },
+        {
+          "name": "JOB_THREADS",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_DIR",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_LOCK_TOKEN",
+          "source": "broker"
+        },
+        {
+          "name": "POLARIS_CLIENT_ID",
+          "source": "class_secret",
+          "secret": "polaris_gold_writer_client_id"
+        },
+        {
+          "name": "POLARIS_CLIENT_SECRET",
+          "source": "class_secret",
+          "secret": "polaris_gold_writer_client_secret"
+        },
+        {
+          "name": "AWS_PROFILE",
+          "source": "class_secret",
+          "secret": "aws_profile"
+        },
+        {
+          "name": "AWS_REGION",
+          "source": "class_secret",
+          "secret": "aws_region"
+        }
+      ],
+      "mounts": [
+        {
+          "source": "repo:scripts",
+          "destination": "/workspace/scripts",
+          "read_only": true
+        },
+        {
+          "source": "repo:config/lakehouse",
+          "destination": "/workspace/config/lakehouse",
+          "read_only": true
+        },
+        {
+          "source": "run_dir",
+          "destination": "/workspace/out",
+          "read_only": false
+        },
+        {
+          "source": "class_aws_file",
+          "destination": "/run/secrets/aws/credentials",
+          "read_only": true
+        }
+      ],
+      "user": "1000:1000",
+      "capabilities": [],
+      "privileged": false,
+      "admission": "job",
+      "timeout_seconds": 10800,
+      "cancel": {
+        "signal": "SIGTERM",
+        "grace_seconds": 60
+      },
+      "kind": "finite"
+    },
+    "reconcile_candidates": {
+      "purpose": "Compare counts and fingerprints of exactly the candidate snapshots with the build (step 11)",
+      "image": "hai-spark@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "entrypoint": [
+        "python",
+        "-m"
+      ],
+      "arguments": [
+        "scripts.lakehouse.gold_publish",
+        "reconcile",
+        "--run",
+        "{run_id}",
+        "--mode",
+        "{mode}"
+      ],
+      "modes": {
+        "publish_fixture": {
+          "class": "lakehouse_read",
+          "no_op": false
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false
+        }
+      },
+      "environment": [
+        {
+          "name": "RUN_ID",
+          "source": "caller"
+        },
+        {
+          "name": "RUN_MODE",
+          "source": "caller"
+        },
+        {
+          "name": "JOB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "SPARK_JOB_MEMORY",
+          "source": "broker"
+        },
+        {
+          "name": "JOB_THREADS",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_DIR",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_LOCK_TOKEN",
+          "source": "broker"
+        },
+        {
+          "name": "POLARIS_CLIENT_ID",
+          "source": "class_secret",
+          "secret": "polaris_reader_client_id"
+        },
+        {
+          "name": "POLARIS_CLIENT_SECRET",
+          "source": "class_secret",
+          "secret": "polaris_reader_client_secret"
+        },
+        {
+          "name": "AWS_PROFILE",
+          "source": "class_secret",
+          "secret": "aws_profile"
+        },
+        {
+          "name": "AWS_REGION",
+          "source": "class_secret",
+          "secret": "aws_region"
+        }
+      ],
+      "mounts": [
+        {
+          "source": "repo:scripts",
+          "destination": "/workspace/scripts",
+          "read_only": true
+        },
+        {
+          "source": "repo:config/lakehouse",
+          "destination": "/workspace/config/lakehouse",
+          "read_only": true
+        },
+        {
+          "source": "run_dir",
+          "destination": "/workspace/out",
+          "read_only": false
+        },
+        {
+          "source": "class_aws_file",
+          "destination": "/run/secrets/aws/credentials",
+          "read_only": true
+        }
+      ],
+      "user": "1000:1000",
+      "capabilities": [],
+      "privileged": false,
+      "admission": "job",
+      "timeout_seconds": 3600,
+      "cancel": {
+        "signal": "SIGTERM",
+        "grace_seconds": 60
+      },
+      "kind": "finite"
+    },
+    "catalog_backup": {
+      "purpose": "Write the catalog backup and read it back (step 12)",
+      "image": "hai-spark@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "entrypoint": [
+        "python",
+        "-m"
+      ],
+      "arguments": [
+        "scripts.lakehouse.gold_publish",
+        "backup",
+        "--run",
+        "{run_id}",
+        "--mode",
+        "{mode}"
+      ],
+      "modes": {
+        "publish_fixture": {
+          "class": "lakehouse_write",
+          "no_op": false
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false
+        }
+      },
+      "environment": [
+        {
+          "name": "RUN_ID",
+          "source": "caller"
+        },
+        {
+          "name": "RUN_MODE",
+          "source": "caller"
+        },
+        {
+          "name": "JOB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "SPARK_JOB_MEMORY",
+          "source": "broker"
+        },
+        {
+          "name": "JOB_THREADS",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_DIR",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_LOCK_TOKEN",
+          "source": "broker"
+        },
+        {
+          "name": "POLARIS_CLIENT_ID",
+          "source": "class_secret",
+          "secret": "polaris_gold_writer_client_id"
+        },
+        {
+          "name": "POLARIS_CLIENT_SECRET",
+          "source": "class_secret",
+          "secret": "polaris_gold_writer_client_secret"
+        },
+        {
+          "name": "AWS_PROFILE",
+          "source": "class_secret",
+          "secret": "aws_profile"
+        },
+        {
+          "name": "AWS_REGION",
+          "source": "class_secret",
+          "secret": "aws_region"
+        }
+      ],
+      "mounts": [
+        {
+          "source": "repo:scripts",
+          "destination": "/workspace/scripts",
+          "read_only": true
+        },
+        {
+          "source": "repo:config/lakehouse",
+          "destination": "/workspace/config/lakehouse",
+          "read_only": true
+        },
+        {
+          "source": "run_dir",
+          "destination": "/workspace/out",
+          "read_only": false
+        },
+        {
+          "source": "class_aws_file",
+          "destination": "/run/secrets/aws/credentials",
+          "read_only": true
+        }
+      ],
+      "user": "1000:1000",
+      "capabilities": [],
+      "privileged": false,
+      "admission": "job",
+      "timeout_seconds": 1800,
+      "cancel": {
+        "signal": "SIGTERM",
+        "grace_seconds": 60
+      },
+      "kind": "finite"
+    },
+    "commit_publish": {
+      "purpose": "Write the publish_runs row naming the candidate snapshot set, last (step 13)",
+      "image": "hai-spark@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "entrypoint": [
+        "python",
+        "-m"
+      ],
+      "arguments": [
+        "scripts.lakehouse.gold_publish",
+        "commit",
+        "--run",
+        "{run_id}",
+        "--mode",
+        "{mode}"
+      ],
+      "modes": {
+        "publish_fixture": {
+          "class": "lakehouse_write",
+          "no_op": false
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false
+        }
+      },
+      "environment": [
+        {
+          "name": "RUN_ID",
+          "source": "caller"
+        },
+        {
+          "name": "RUN_MODE",
+          "source": "caller"
+        },
+        {
+          "name": "JOB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "SPARK_JOB_MEMORY",
+          "source": "broker"
+        },
+        {
+          "name": "JOB_THREADS",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_DIR",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_LOCK_TOKEN",
+          "source": "broker"
+        },
+        {
+          "name": "POLARIS_CLIENT_ID",
+          "source": "class_secret",
+          "secret": "polaris_gold_writer_client_id"
+        },
+        {
+          "name": "POLARIS_CLIENT_SECRET",
+          "source": "class_secret",
+          "secret": "polaris_gold_writer_client_secret"
+        },
+        {
+          "name": "AWS_PROFILE",
+          "source": "class_secret",
+          "secret": "aws_profile"
+        },
+        {
+          "name": "AWS_REGION",
+          "source": "class_secret",
+          "secret": "aws_region"
+        }
+      ],
+      "mounts": [
+        {
+          "source": "repo:scripts",
+          "destination": "/workspace/scripts",
+          "read_only": true
+        },
+        {
+          "source": "repo:config/lakehouse",
+          "destination": "/workspace/config/lakehouse",
+          "read_only": true
+        },
+        {
+          "source": "run_dir",
+          "destination": "/workspace/out",
+          "read_only": false
+        },
+        {
+          "source": "class_aws_file",
+          "destination": "/run/secrets/aws/credentials",
+          "read_only": true
+        }
+      ],
+      "user": "1000:1000",
+      "capabilities": [],
+      "privileged": false,
+      "admission": "job",
+      "timeout_seconds": 1800,
+      "cancel": {
+        "signal": "SIGTERM",
+        "grace_seconds": 60
+      },
+      "kind": "finite"
+    },
+    "gold_maintenance": {
+      "purpose": "Expire gold snapshots and compact files, keeping every registered or reserved snapshot set (gold_maintenance_dag)",
+      "image": "hai-spark@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "entrypoint": [
+        "python",
+        "-m"
+      ],
+      "arguments": [
+        "scripts.lakehouse.gold_publish",
+        "maintain",
+        "--run",
+        "{run_id}",
+        "--mode",
+        "{mode}"
+      ],
+      "modes": {
+        "publish_fixture": {
+          "class": "lakehouse_write",
+          "no_op": false
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false
+        }
+      },
+      "environment": [
+        {
+          "name": "RUN_ID",
+          "source": "caller"
+        },
+        {
+          "name": "RUN_MODE",
+          "source": "caller"
+        },
+        {
+          "name": "JOB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "SPARK_JOB_MEMORY",
+          "source": "broker"
+        },
+        {
+          "name": "JOB_THREADS",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_DIR",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_LOCK_TOKEN",
+          "source": "broker"
+        },
+        {
+          "name": "POLARIS_CLIENT_ID",
+          "source": "class_secret",
+          "secret": "polaris_gold_writer_client_id"
+        },
+        {
+          "name": "POLARIS_CLIENT_SECRET",
+          "source": "class_secret",
+          "secret": "polaris_gold_writer_client_secret"
+        },
+        {
+          "name": "AWS_PROFILE",
+          "source": "class_secret",
+          "secret": "aws_profile"
+        },
+        {
+          "name": "AWS_REGION",
+          "source": "class_secret",
+          "secret": "aws_region"
+        }
+      ],
+      "mounts": [
+        {
+          "source": "repo:scripts",
+          "destination": "/workspace/scripts",
+          "read_only": true
+        },
+        {
+          "source": "repo:config/lakehouse",
+          "destination": "/workspace/config/lakehouse",
+          "read_only": true
+        },
+        {
+          "source": "run_dir",
+          "destination": "/workspace/out",
+          "read_only": false
+        },
+        {
+          "source": "class_aws_file",
+          "destination": "/run/secrets/aws/credentials",
+          "read_only": true
+        }
+      ],
+      "user": "1000:1000",
+      "capabilities": [],
+      "privileged": false,
+      "admission": "job",
+      "timeout_seconds": 7200,
+      "cancel": {
+        "signal": "SIGTERM",
+        "grace_seconds": 60
+      },
+      "kind": "finite"
+    },
+    "sense_markers": {
+      "purpose": "Read the approved bronze snapshot manifest and the gold publish_runs head for sensing_dag (decision O5)",
+      "image": "hai-spark@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "entrypoint": [
+        "python",
+        "-m"
+      ],
+      "arguments": [
+        "scripts.lakehouse.pins",
+        "sense",
+        "--run",
+        "{run_id}"
+      ],
+      "modes": {
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false
+        }
+      },
+      "environment": [
+        {
+          "name": "RUN_ID",
+          "source": "caller"
+        },
+        {
+          "name": "RUN_MODE",
+          "source": "caller"
+        },
+        {
+          "name": "JOB_MEMORY_LIMIT",
+          "source": "broker"
+        },
+        {
+          "name": "SPARK_JOB_MEMORY",
+          "source": "broker"
+        },
+        {
+          "name": "JOB_THREADS",
+          "source": "broker"
+        },
+        {
+          "name": "RUN_DIR",
+          "source": "broker"
+        },
+        {
+          "name": "POLARIS_CLIENT_ID",
+          "source": "class_secret",
+          "secret": "polaris_reader_client_id"
+        },
+        {
+          "name": "POLARIS_CLIENT_SECRET",
+          "source": "class_secret",
+          "secret": "polaris_reader_client_secret"
+        },
+        {
+          "name": "AWS_PROFILE",
+          "source": "class_secret",
+          "secret": "aws_profile"
+        },
+        {
+          "name": "AWS_REGION",
+          "source": "class_secret",
+          "secret": "aws_region"
+        }
+      ],
+      "mounts": [
+        {
+          "source": "repo:scripts",
+          "destination": "/workspace/scripts",
+          "read_only": true
+        },
+        {
+          "source": "repo:config/lakehouse",
+          "destination": "/workspace/config/lakehouse",
+          "read_only": true
+        },
+        {
+          "source": "run_dir",
+          "destination": "/workspace/out",
+          "read_only": false
+        },
+        {
+          "source": "class_aws_file",
+          "destination": "/run/secrets/aws/credentials",
+          "read_only": true
+        }
+      ],
+      "user": "1000:1000",
+      "capabilities": [],
+      "privileged": false,
+      "admission": "job",
+      "timeout_seconds": 600,
+      "cancel": {
+        "signal": "SIGTERM",
+        "grace_seconds": 60
+      },
+      "kind": "finite"
+    }
+  }
+}

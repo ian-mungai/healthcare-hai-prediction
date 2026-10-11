@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthcare-hai-prediction.invalid/orchestration/ledger_line.schema.json",
+  "title": "Ledger line",
+  "description": "One line of data/orchestration/ledger/<run_id>.jsonl. The broker appends a line and fsyncs the file before the action the line announces (Airflow plan section 7; failure modes 758 and 775). Order per submission: intent, then started (or adopted after a crash), then finished; failed_closed stops the submission for the owner.",
+  "type": "object",
+  "required": ["schema_version", "event", "at", "submission_id", "run_id", "template", "mode", "attempt"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "event": {"enum": ["intent", "started", "adopted", "finished", "failed_closed"]},
+    "at": {"type": "string", "format": "date-time"},
+    "submission_id": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}:[a-z][a-z0-9_]{1,40}:(fixture|publish_fixture|real):[0-9]{1,2}$"},
+    "run_id": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"},
+    "template": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$"},
+    "mode": {"enum": ["fixture", "publish_fixture", "real"]},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 99}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "event": {"const": "intent"},
+        "spec_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "code_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "inputs": {"type": "object", "description": "Input identities: bronze snapshot IDs, the build file's SHA-256, a publish_runs row", "additionalProperties": {"type": "string"}},
+        "reservation_id": {"type": ["string", "null"], "pattern": "^r-[a-f0-9]{12}$"},
+        "reserved_memory_bytes": {"type": ["integer", "null"], "minimum": 0},
+        "container_name": {"type": "string", "pattern": "^hai-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}-[a-z][a-z0-9_]{1,40}-[0-9]{1,2}$"}
+      },
+      "required": ["spec_sha256", "code_sha256", "inputs", "reservation_id", "reserved_memory_bytes", "container_name"]
+    },
+    {
+      "properties": {
+        "event": {"enum": ["started", "adopted"]},
+        "container_id": {"type": "string", "pattern": "^[a-f0-9]{12,64}$"},
+        "container_state": {"enum": ["created", "running", "exited"]}
+      },
+      "required": ["container_id", "container_state"]
+    },
+    {
+      "properties": {
+        "event": {"const": "finished"},
+        "exit_code": {"type": "integer"},
+        "record_path": {"type": ["string", "null"]},
+        "observed_peak_memory_bytes": {"type": ["integer", "null"], "minimum": 0},
+        "no_op": {"type": "boolean", "description": "True when the mode makes the template an intentional no-op (fixture steps 2, 3, 9 and 15)"}
+      },
+      "required": ["exit_code", "record_path", "observed_peak_memory_bytes", "no_op"]
+    },
+    {
+      "properties": {
+        "event": {"const": "failed_closed"},
+        "reason": {"type": "string", "minLength": 1},
+        "containers": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["reason", "containers"]
+    }
+  ]
+}

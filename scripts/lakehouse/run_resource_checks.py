@@ -145,7 +145,7 @@ def launch_contracts(folder: Path) -> dict[str, bool]:
     docker_path.write_text(docker_path.read_text().replace("  *) echo", "  compose*) " + capture + " ;;\n  *) echo"))
     checkout = folder / "checkout"
     paths = ["scripts/process.py", "scripts/lakehouse/__init__.py"]
-    paths += [f"scripts/lakehouse/{name}" for name in ("catalog.py", "memory_budget.py", "dbt.sh", "query.sh", "ui.sh")]
+    paths += [f"scripts/lakehouse/{name}" for name in ("catalog.py", "memory_budget.py", "run_lock.py", "dbt.sh", "query.sh", "ui.sh")]
     for name in paths:
         dest = checkout / name
         dest.parent.mkdir(parents=True, exist_ok=True)
