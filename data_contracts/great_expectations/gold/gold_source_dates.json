@@ -1,0 +1,411 @@
+{
+  "name": "gold_source_dates",
+  "description": "Each fact's source dates equal its silver model's on the grain key (failure mode 747)",
+  "expectations": [
+    {
+      "id": "fct_acs_county_value.source_dates_equal_silver",
+      "table": "fct_acs_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"acs_value_key\", s.\"acs_value_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_acs_county_values\" AS s ON g.\"acs_value_key\" = s.\"acs_value_key\" WHERE g.\"acs_value_key\" IS NULL OR s.\"acs_value_key\" IS NULL OR g.\"vintage\" IS DISTINCT FROM s.\"vintage\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_bls_county_series.source_dates_equal_silver",
+      "table": "fct_bls_county_series",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"bls_row_key\", s.\"bls_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_bls_county_series\" AS s ON g.\"bls_row_key\" = s.\"bls_row_key\" WHERE g.\"bls_row_key\" IS NULL OR s.\"bls_row_key\" IS NULL OR g.\"data_year\" IS DISTINCT FROM s.\"data_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cc_window_hold.source_dates_equal_silver",
+      "table": "fct_cc_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"hold_key\", s.\"hold_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_cc_window_holds\" AS s ON g.\"hold_key\" = s.\"hold_key\" WHERE g.\"hold_key\" IS NULL OR s.\"hold_key\" IS NULL OR g.\"window_start\" IS DISTINCT FROM s.\"window_start\" OR g.\"window_end\" IS DISTINCT FROM s.\"window_end\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cmi_observation.source_dates_equal_silver",
+      "table": "fct_cmi_observation",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"cmi_row_key\", s.\"cmi_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_cmi_hospital_rows\" AS s ON g.\"cmi_row_key\" = s.\"cmi_row_key\" WHERE g.\"cmi_row_key\" IS NULL OR s.\"cmi_row_key\" IS NULL OR g.\"rule_fiscal_year\" IS DISTINCT FROM s.\"rule_fiscal_year\" OR g.\"data_fiscal_year\" IS DISTINCT FROM s.\"data_fiscal_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_complications_deaths_window.source_dates_equal_silver",
+      "table": "fct_complications_deaths_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"window_key\", s.\"window_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_cc_complications_deaths_windows\" AS s ON g.\"window_key\" = s.\"window_key\" WHERE g.\"window_key\" IS NULL OR s.\"window_key\" IS NULL OR g.\"window_start\" IS DISTINCT FROM s.\"window_start\" OR g.\"window_end\" IS DISTINCT FROM s.\"window_end\" OR g.\"release_date\" IS DISTINCT FROM s.\"release_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cost_report.source_dates_equal_silver",
+      "table": "fct_cost_report",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"rpt_rec_num\", s.\"rpt_rec_num\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_cost_reports\" AS s ON g.\"rpt_rec_num\" = s.\"rpt_rec_num\" WHERE g.\"rpt_rec_num\" IS NULL OR s.\"rpt_rec_num\" IS NULL OR g.\"file_fiscal_year\" IS DISTINCT FROM s.\"file_fiscal_year\" OR g.\"period_begin\" IS DISTINCT FROM s.\"period_begin\" OR g.\"period_end\" IS DISTINCT FROM s.\"period_end\" OR g.\"fiscal_year\" IS DISTINCT FROM s.\"fiscal_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_enrollment_release.source_dates_equal_silver",
+      "table": "fct_enrollment_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"enrollment_key\", s.\"enrollment_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_hospital_enrollment_rows\" AS s ON g.\"enrollment_key\" = s.\"enrollment_key\" WHERE g.\"enrollment_key\" IS NULL OR s.\"enrollment_key\" IS NULL OR g.\"incorporation_date\" IS DISTINCT FROM s.\"incorporation_date\" OR g.\"reh_conversion_date\" IS DISTINCT FROM s.\"reh_conversion_date\" OR g.\"release_label\" IS DISTINCT FROM s.\"release_label\" OR g.\"period_start\" IS DISTINCT FROM s.\"period_start\" OR g.\"period_end\" IS DISTINCT FROM s.\"period_end\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_gv_county_value.source_dates_equal_silver",
+      "table": "fct_gv_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"gv_value_key\", s.\"gv_value_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_gv_county_values\" AS s ON g.\"gv_value_key\" = s.\"gv_value_key\" WHERE g.\"gv_value_key\" IS NULL OR s.\"gv_value_key\" IS NULL OR g.\"data_year\" IS DISTINCT FROM s.\"data_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hac_program_year.source_dates_equal_silver",
+      "table": "fct_hac_program_year",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"program_key\", s.\"program_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_hac_program_years\" AS s ON g.\"program_key\" = s.\"program_key\" WHERE g.\"program_key\" IS NULL OR s.\"program_key\" IS NULL OR g.\"fiscal_year\" IS DISTINCT FROM s.\"fiscal_year\" OR g.\"psi_90_start_date\" IS DISTINCT FROM s.\"psi_90_start_date\" OR g.\"psi_90_end_date\" IS DISTINCT FROM s.\"psi_90_end_date\" OR g.\"hai_measures_start_date\" IS DISTINCT FROM s.\"hai_measures_start_date\" OR g.\"hai_measures_end_date\" IS DISTINCT FROM s.\"hai_measures_end_date\" OR g.\"release_date\" IS DISTINCT FROM s.\"release_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_hospital_window.source_dates_equal_silver",
+      "table": "fct_hai_hospital_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"window_key\", s.\"window_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_hai_hospital_windows\" AS s ON g.\"window_key\" = s.\"window_key\" WHERE g.\"window_key\" IS NULL OR s.\"window_key\" IS NULL OR g.\"window_start\" IS DISTINCT FROM s.\"window_start\" OR g.\"window_end\" IS DISTINCT FROM s.\"window_end\" OR g.\"release_date\" IS DISTINCT FROM s.\"release_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_national_window.source_dates_equal_silver",
+      "table": "fct_hai_national_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"window_key\", s.\"window_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_hai_national_windows\" AS s ON g.\"window_key\" = s.\"window_key\" WHERE g.\"window_key\" IS NULL OR s.\"window_key\" IS NULL OR g.\"window_start\" IS DISTINCT FROM s.\"window_start\" OR g.\"window_end\" IS DISTINCT FROM s.\"window_end\" OR g.\"release_date\" IS DISTINCT FROM s.\"release_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_state_window.source_dates_equal_silver",
+      "table": "fct_hai_state_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"window_key\", s.\"window_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_hai_state_windows\" AS s ON g.\"window_key\" = s.\"window_key\" WHERE g.\"window_key\" IS NULL OR s.\"window_key\" IS NULL OR g.\"window_start\" IS DISTINCT FROM s.\"window_start\" OR g.\"window_end\" IS DISTINCT FROM s.\"window_end\" OR g.\"release_date\" IS DISTINCT FROM s.\"release_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_window_hold.source_dates_equal_silver",
+      "table": "fct_hai_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"hold_key\", s.\"hold_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_hai_window_holds\" AS s ON g.\"hold_key\" = s.\"hold_key\" WHERE g.\"hold_key\" IS NULL OR s.\"hold_key\" IS NULL OR g.\"window_start\" IS DISTINCT FROM s.\"window_start\" OR g.\"window_end\" IS DISTINCT FROM s.\"window_end\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hcahps_window.source_dates_equal_silver",
+      "table": "fct_hcahps_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"window_key\", s.\"window_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_cc_hcahps_windows\" AS s ON g.\"window_key\" = s.\"window_key\" WHERE g.\"window_key\" IS NULL OR s.\"window_key\" IS NULL OR g.\"window_start\" IS DISTINCT FROM s.\"window_start\" OR g.\"window_end\" IS DISTINCT FROM s.\"window_end\" OR g.\"release_date\" IS DISTINCT FROM s.\"release_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hgi_release.source_dates_equal_silver",
+      "table": "fct_hgi_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"release_key\", s.\"release_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_hgi_hospital_releases\" AS s ON g.\"release_key\" = s.\"release_key\" WHERE g.\"release_key\" IS NULL OR s.\"release_key\" IS NULL OR g.\"release_date\" IS DISTINCT FROM s.\"release_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hhs_capacity_week.source_dates_equal_silver",
+      "table": "fct_hhs_capacity_week",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"week_key\", s.\"week_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_hhs_capacity_weeks\" AS s ON g.\"week_key\" = s.\"week_key\" WHERE g.\"week_key\" IS NULL OR s.\"week_key\" IS NULL OR g.\"collection_week\" IS DISTINCT FROM s.\"collection_week\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hospital_owner_release.source_dates_equal_silver",
+      "table": "fct_hospital_owner_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"owner_row_key\", s.\"owner_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_hospital_owner_rows\" AS s ON g.\"owner_row_key\" = s.\"owner_row_key\" WHERE g.\"owner_row_key\" IS NULL OR s.\"owner_row_key\" IS NULL OR g.\"association_date\" IS DISTINCT FROM s.\"association_date\" OR g.\"release_label\" IS DISTINCT FROM s.\"release_label\" OR g.\"period_start\" IS DISTINCT FROM s.\"period_start\" OR g.\"period_end\" IS DISTINCT FROM s.\"period_end\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hpsa_component.source_dates_equal_silver",
+      "table": "fct_hpsa_component",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"hpsa_row_key\", s.\"hpsa_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_hpsa_components\" AS s ON g.\"hpsa_row_key\" = s.\"hpsa_row_key\" WHERE g.\"hpsa_row_key\" IS NULL OR s.\"hpsa_row_key\" IS NULL OR g.\"capture_date\" IS DISTINCT FROM s.\"capture_date\" OR g.\"designation_date\" IS DISTINCT FROM s.\"designation_date\" OR g.\"last_update_date\" IS DISTINCT FROM s.\"last_update_date\" OR g.\"withdrawn_date\" IS DISTINCT FROM s.\"withdrawn_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hrrp_window.source_dates_equal_silver",
+      "table": "fct_hrrp_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"window_key\", s.\"window_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_cc_hrrp_windows\" AS s ON g.\"window_key\" = s.\"window_key\" WHERE g.\"window_key\" IS NULL OR s.\"window_key\" IS NULL OR g.\"window_start\" IS DISTINCT FROM s.\"window_start\" OR g.\"window_end\" IS DISTINCT FROM s.\"window_end\" OR g.\"release_date\" IS DISTINCT FROM s.\"release_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hsa_zip_cases.source_dates_equal_silver",
+      "table": "fct_hsa_zip_cases",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"hsa_row_key\", s.\"hsa_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_hsa_zip_cases\" AS s ON g.\"hsa_row_key\" = s.\"hsa_row_key\" WHERE g.\"hsa_row_key\" IS NULL OR s.\"hsa_row_key\" IS NULL OR g.\"period_start\" IS DISTINCT FROM s.\"period_start\" OR g.\"period_end\" IS DISTINCT FROM s.\"period_end\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hud_zip_county_hold.source_dates_equal_silver",
+      "table": "fct_hud_zip_county_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"hud_row_key\", s.\"hud_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_hud_zip_county_holds\" AS s ON g.\"hud_row_key\" = s.\"hud_row_key\" WHERE g.\"hud_row_key\" IS NULL OR s.\"hud_row_key\" IS NULL OR g.\"quarter_label\" IS DISTINCT FROM s.\"quarter_label\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_impact_hold.source_dates_equal_silver",
+      "table": "fct_impact_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"hold_key\", s.\"hold_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_impact_holds\" AS s ON g.\"hold_key\" = s.\"hold_key\" WHERE g.\"hold_key\" IS NULL OR s.\"hold_key\" IS NULL OR g.\"rule_fiscal_year\" IS DISTINCT FROM s.\"rule_fiscal_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ipps_impact_value.source_dates_equal_silver",
+      "table": "fct_ipps_impact_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"value_key\", s.\"value_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_impact_hospital_values\" AS s ON g.\"value_key\" = s.\"value_key\" WHERE g.\"value_key\" IS NULL OR s.\"value_key\" IS NULL OR g.\"rule_fiscal_year\" IS DISTINCT FROM s.\"rule_fiscal_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_maternal_health_window.source_dates_equal_silver",
+      "table": "fct_maternal_health_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"window_key\", s.\"window_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_cc_maternal_windows\" AS s ON g.\"window_key\" = s.\"window_key\" WHERE g.\"window_key\" IS NULL OR s.\"window_key\" IS NULL OR g.\"window_start\" IS DISTINCT FROM s.\"window_start\" OR g.\"window_end\" IS DISTINCT FROM s.\"window_end\" OR g.\"release_date\" IS DISTINCT FROM s.\"release_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_drg.source_dates_equal_silver",
+      "table": "fct_medicare_inpatient_drg",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"drg_key\", s.\"drg_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_mup_drg_discharges\" AS s ON g.\"drg_key\" = s.\"drg_key\" WHERE g.\"drg_key\" IS NULL OR s.\"drg_key\" IS NULL OR g.\"data_year\" IS DISTINCT FROM s.\"data_year\" OR g.\"release_year\" IS DISTINCT FROM s.\"release_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_provider.source_dates_equal_silver",
+      "table": "fct_medicare_inpatient_provider",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"provider_key\", s.\"provider_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_mup_providers\" AS s ON g.\"provider_key\" = s.\"provider_key\" WHERE g.\"provider_key\" IS NULL OR s.\"provider_key\" IS NULL OR g.\"data_year\" IS DISTINCT FROM s.\"data_year\" OR g.\"release_year\" IS DISTINCT FROM s.\"release_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mmd_prevalence.source_dates_equal_silver",
+      "table": "fct_mmd_prevalence",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"mmd_row_key\", s.\"mmd_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_mmd_prevalence\" AS s ON g.\"mmd_row_key\" = s.\"mmd_row_key\" WHERE g.\"mmd_row_key\" IS NULL OR s.\"mmd_row_key\" IS NULL OR g.\"data_year\" IS DISTINCT FROM s.\"data_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mua_component.source_dates_equal_silver",
+      "table": "fct_mua_component",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"mua_row_key\", s.\"mua_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_mua_components\" AS s ON g.\"mua_row_key\" = s.\"mua_row_key\" WHERE g.\"mua_row_key\" IS NULL OR s.\"mua_row_key\" IS NULL OR g.\"capture_date\" IS DISTINCT FROM s.\"capture_date\" OR g.\"designation_date\" IS DISTINCT FROM s.\"designation_date\" OR g.\"update_date\" IS DISTINCT FROM s.\"update_date\" OR g.\"withdrawal_date\" IS DISTINCT FROM s.\"withdrawal_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_occupational_mix_survey.source_dates_equal_silver",
+      "table": "fct_occupational_mix_survey",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"survey_row_key\", s.\"survey_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_occmix_survey_rows\" AS s ON g.\"survey_row_key\" = s.\"survey_row_key\" WHERE g.\"survey_row_key\" IS NULL OR s.\"survey_row_key\" IS NULL OR g.\"survey_start_date\" IS DISTINCT FROM s.\"survey_start_date\" OR g.\"survey_end_date\" IS DISTINCT FROM s.\"survey_end_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_attestation.source_dates_equal_silver",
+      "table": "fct_onc_attestation",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"attestation_key\", s.\"attestation_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_onc_attestation_rows\" AS s ON g.\"attestation_key\" = s.\"attestation_key\" WHERE g.\"attestation_key\" IS NULL OR s.\"attestation_key\" IS NULL OR g.\"program_year\" IS DISTINCT FROM s.\"program_year\" OR g.\"payment_year\" IS DISTINCT FROM s.\"payment_year\" OR g.\"attestation_year\" IS DISTINCT FROM s.\"attestation_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_ehr_product.source_dates_equal_silver",
+      "table": "fct_onc_ehr_product",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"linkage_key\", s.\"linkage_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_onc_chpl_linkage_rows\" AS s ON g.\"linkage_key\" = s.\"linkage_key\" WHERE g.\"linkage_key\" IS NULL OR s.\"linkage_key\" IS NULL OR g.\"start_date\" IS DISTINCT FROM s.\"start_date\" OR g.\"end_date\" IS DISTINCT FROM s.\"end_date\" OR g.\"program_year\" IS DISTINCT FROM s.\"program_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ownership_change.source_dates_equal_silver",
+      "table": "fct_ownership_change",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"event_key\", s.\"event_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_change_of_ownership_rows\" AS s ON g.\"event_key\" = s.\"event_key\" WHERE g.\"event_key\" IS NULL OR s.\"event_key\" IS NULL OR g.\"effective_date\" IS DISTINCT FROM s.\"effective_date\" OR g.\"release_label\" IS DISTINCT FROM s.\"release_label\" OR g.\"period_start\" IS DISTINCT FROM s.\"period_start\" OR g.\"period_end\" IS DISTINCT FROM s.\"period_end\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_places_county_value.source_dates_equal_silver",
+      "table": "fct_places_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"places_row_key\", s.\"places_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_places_county_values\" AS s ON g.\"places_row_key\" = s.\"places_row_key\" WHERE g.\"places_row_key\" IS NULL OR s.\"places_row_key\" IS NULL OR g.\"edition\" IS DISTINCT FROM s.\"edition\" OR g.\"data_year\" IS DISTINCT FROM s.\"data_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_pos_snapshot.source_dates_equal_silver",
+      "table": "fct_pos_snapshot",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"snapshot_key\", s.\"snapshot_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_pos_hospital_snapshots\" AS s ON g.\"snapshot_key\" = s.\"snapshot_key\" WHERE g.\"snapshot_key\" IS NULL OR s.\"snapshot_key\" IS NULL OR g.\"original_participation_date\" IS DISTINCT FROM s.\"original_participation_date\" OR g.\"certification_date\" IS DISTINCT FROM s.\"certification_date\" OR g.\"termination_date\" IS DISTINCT FROM s.\"termination_date\" OR g.\"period_start\" IS DISTINCT FROM s.\"period_start\" OR g.\"period_end\" IS DISTINCT FROM s.\"period_end\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ruca_code.source_dates_equal_silver",
+      "table": "fct_ruca_code",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"ruca_row_key\", s.\"ruca_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_ruca_codes\" AS s ON g.\"ruca_row_key\" = s.\"ruca_row_key\" WHERE g.\"ruca_row_key\" IS NULL OR s.\"ruca_row_key\" IS NULL OR g.\"vintage\" IS DISTINCT FROM s.\"vintage\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_rucc_county.source_dates_equal_silver",
+      "table": "fct_rucc_county",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"rucc_key\", s.\"rucc_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_rucc_county_codes\" AS s ON g.\"rucc_key\" = s.\"rucc_key\" WHERE g.\"rucc_key\" IS NULL OR s.\"rucc_key\" IS NULL OR g.\"vintage\" IS DISTINCT FROM s.\"vintage\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_sahie_county_value.source_dates_equal_silver",
+      "table": "fct_sahie_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"sahie_row_key\", s.\"sahie_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_sahie_county_rows\" AS s ON g.\"sahie_row_key\" = s.\"sahie_row_key\" WHERE g.\"sahie_row_key\" IS NULL OR s.\"sahie_row_key\" IS NULL OR g.\"file_year\" IS DISTINCT FROM s.\"file_year\" OR g.\"estimate_year\" IS DISTINCT FROM s.\"estimate_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_saipe_county_estimate.source_dates_equal_silver",
+      "table": "fct_saipe_county_estimate",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"saipe_row_key\", s.\"saipe_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_saipe_county_estimates\" AS s ON g.\"saipe_row_key\" = s.\"saipe_row_key\" WHERE g.\"saipe_row_key\" IS NULL OR s.\"saipe_row_key\" IS NULL OR g.\"estimate_year\" IS DISTINCT FROM s.\"estimate_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_svi_county_value.source_dates_equal_silver",
+      "table": "fct_svi_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"svi_value_key\", s.\"svi_value_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_svi_county_values\" AS s ON g.\"svi_value_key\" = s.\"svi_value_key\" WHERE g.\"svi_value_key\" IS NULL OR s.\"svi_value_key\" IS NULL OR g.\"edition\" IS DISTINCT FROM s.\"edition\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_timely_effective_care_window.source_dates_equal_silver",
+      "table": "fct_timely_effective_care_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"window_key\", s.\"window_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_cc_timely_effective_windows\" AS s ON g.\"window_key\" = s.\"window_key\" WHERE g.\"window_key\" IS NULL OR s.\"window_key\" IS NULL OR g.\"window_start\" IS DISTINCT FROM s.\"window_start\" OR g.\"window_end\" IS DISTINCT FROM s.\"window_end\" OR g.\"release_date\" IS DISTINCT FROM s.\"release_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_unplanned_visits_window.source_dates_equal_silver",
+      "table": "fct_unplanned_visits_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"window_key\", s.\"window_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_cc_unplanned_visits_windows\" AS s ON g.\"window_key\" = s.\"window_key\" WHERE g.\"window_key\" IS NULL OR s.\"window_key\" IS NULL OR g.\"window_start\" IS DISTINCT FROM s.\"window_start\" OR g.\"window_end\" IS DISTINCT FROM s.\"window_end\" OR g.\"release_date\" IS DISTINCT FROM s.\"release_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_program_hold.source_dates_equal_silver",
+      "table": "fct_validation_program_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"hold_key\", s.\"hold_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_validation_program_holds\" AS s ON g.\"hold_key\" = s.\"hold_key\" WHERE g.\"hold_key\" IS NULL OR s.\"hold_key\" IS NULL OR g.\"fiscal_year\" IS DISTINCT FROM s.\"fiscal_year\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_window_hold.source_dates_equal_silver",
+      "table": "fct_validation_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"hold_key\", s.\"hold_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_validation_window_holds\" AS s ON g.\"hold_key\" = s.\"hold_key\" WHERE g.\"hold_key\" IS NULL OR s.\"hold_key\" IS NULL OR g.\"window_start\" IS DISTINCT FROM s.\"window_start\" OR g.\"window_end\" IS DISTINCT FROM s.\"window_end\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_vbp_program_year.source_dates_equal_silver",
+      "table": "fct_vbp_program_year",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"program_key\", s.\"program_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_vbp_program_years\" AS s ON g.\"program_key\" = s.\"program_key\" WHERE g.\"program_key\" IS NULL OR s.\"program_key\" IS NULL OR g.\"fiscal_year\" IS DISTINCT FROM s.\"fiscal_year\" OR g.\"release_date\" IS DISTINCT FROM s.\"release_date\""
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_wonder_county_deaths.source_dates_equal_silver",
+      "table": "fct_wonder_county_deaths",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT coalesce(g.\"wonder_row_key\", s.\"wonder_row_key\") AS grain_key FROM {batch} AS g FULL JOIN main.\"int_wonder_county_deaths\" AS s ON g.\"wonder_row_key\" = s.\"wonder_row_key\" WHERE g.\"wonder_row_key\" IS NULL OR s.\"wonder_row_key\" IS NULL OR g.\"period_start\" IS DISTINCT FROM s.\"period_start\" OR g.\"period_end\" IS DISTINCT FROM s.\"period_end\" OR g.\"data_year\" IS DISTINCT FROM s.\"data_year\""
+      },
+      "severity": "structural"
+    }
+  ]
+}

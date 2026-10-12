@@ -1,0 +1,1064 @@
+version: 2
+
+models:
+  - name: fct_cmi_observation
+    description: >-
+      One row per int_cmi_hospital_rows row, grain cmi_row_key: every silver column unchanged, then 2 surrogate keys.
+    columns:
+      - name: cmi_row_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: hospital_sk
+        description: Key of dim_hospital for ccn; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_cmi_observation_values_equal_silver
+          arguments:
+            compare_model: ref('int_cmi_hospital_rows')
+            exclude_columns:
+              - hospital_sk
+              - release_sk
+      - dbt_utils.expression_is_true:
+          name: fct_cmi_observation_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              hospital_sk = coalesce((select max(found.lookup_sk) from (select hospital_sk as lookup_sk, ccn as
+              lookup_natural from {{ ref('dim_hospital') }}) as found where found.lookup_natural = cast(ccn as
+              varchar)), md5('<unknown>')) and release_sk = coalesce((select max(found.lookup_sk) from (select
+              release_sk as lookup_sk, member_sha256 as lookup_natural from {{ ref('dim_release') }}) as found where
+              found.lookup_natural = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_cmi_observation_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(rule_fiscal_year) = 'INTEGER' and typeof(data_fiscal_year) = 'INTEGER'
+      - dbt_utils.expression_is_true:
+          name: fct_cmi_observation_published_text_typed
+          arguments:
+            expression: >-
+              typeof(cases_text) = 'VARCHAR' and typeof(relative_weights_text) = 'VARCHAR' and
+              typeof(transfer_adjusted_cmi_text) = 'VARCHAR' and typeof(transfer_adjusted_cases_text) = 'VARCHAR'
+  - name: fct_cost_report
+    description: >-
+      One row per int_cost_reports row, grain rpt_rec_num: every silver column unchanged, then 4 surrogate keys.
+      Published values are covered by the silver test assert_cost_report_values_cast.
+    columns:
+      - name: rpt_rec_num
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: hospital_sk
+        description: Key of dim_hospital for ccn; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+      - name: state_sk
+        description: Key of dim_state for state_code; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_state')
+                field: state_sk
+      - name: zip_sk
+        description: Key of dim_zip for zip_code; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_zip')
+                field: zip_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_cost_report_values_equal_silver
+          arguments:
+            compare_model: ref('int_cost_reports')
+            exclude_columns:
+              - hospital_sk
+              - release_sk
+              - state_sk
+              - zip_sk
+      - dbt_utils.expression_is_true:
+          name: fct_cost_report_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              hospital_sk = coalesce((select max(found.lookup_sk) from (select hospital_sk as lookup_sk, ccn as
+              lookup_natural from {{ ref('dim_hospital') }}) as found where found.lookup_natural = cast(ccn as
+              varchar)), md5('<unknown>')) and release_sk = coalesce((select max(found.lookup_sk) from (select
+              release_sk as lookup_sk, member_sha256 as lookup_natural from {{ ref('dim_release') }}) as found where
+              found.lookup_natural = cast(member_sha256 as varchar)), md5('<unknown>')) and state_sk = coalesce((select
+              max(found.lookup_sk) from (select state_sk as lookup_sk, state_code as lookup_natural from {{
+              ref('dim_state') }}) as found where found.lookup_natural = cast(state_code as varchar)), md5('<unknown>'))
+              and zip_sk = coalesce((select max(found.lookup_sk) from (select zip_sk as lookup_sk, zip_code as
+              lookup_natural from {{ ref('dim_zip') }}) as found where found.lookup_natural = cast(zip_code as
+              varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_cost_report_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(file_fiscal_year) = 'INTEGER' and typeof(period_begin) = 'DATE' and typeof(period_end) = 'DATE' and
+              typeof(fiscal_year) = 'BIGINT'
+  - name: fct_enrollment_release
+    description: >-
+      One row per int_hospital_enrollment_rows row, grain enrollment_key: every silver column unchanged, then 6
+      surrogate keys.
+    columns:
+      - name: enrollment_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: enrollment_sk
+        description: Key of dim_enrollment for enrollment_id; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_enrollment')
+                field: enrollment_sk
+      - name: hospital_sk
+        description: Key of dim_hospital for ccn; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: owner_organization_sk
+        description: Key of dim_owner_organization for associate_id; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_owner_organization')
+                field: owner_organization_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+      - name: state_sk
+        description: Key of dim_state for state; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_state')
+                field: state_sk
+      - name: zip_sk
+        description: Key of dim_zip for zip_code; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_zip')
+                field: zip_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_enrollment_release_values_equal_silver
+          arguments:
+            compare_model: ref('int_hospital_enrollment_rows')
+            exclude_columns:
+              - enrollment_sk
+              - hospital_sk
+              - owner_organization_sk
+              - release_sk
+              - state_sk
+              - zip_sk
+      - dbt_utils.expression_is_true:
+          name: fct_enrollment_release_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              enrollment_sk = coalesce((select max(found.lookup_sk) from (select enrollment_sk as lookup_sk,
+              enrollment_id as lookup_natural from {{ ref('dim_enrollment') }}) as found where found.lookup_natural =
+              cast(enrollment_id as varchar)), md5('<unknown>')) and hospital_sk = coalesce((select max(found.lookup_sk)
+              from (select hospital_sk as lookup_sk, ccn as lookup_natural from {{ ref('dim_hospital') }}) as found
+              where found.lookup_natural = cast(ccn as varchar)), md5('<unknown>')) and owner_organization_sk =
+              coalesce((select max(found.lookup_sk) from (select owner_organization_sk as lookup_sk, associate_id as
+              lookup_natural from {{ ref('dim_owner_organization') }}) as found where found.lookup_natural =
+              cast(associate_id as varchar)), md5('<unknown>')) and release_sk = coalesce((select max(found.lookup_sk)
+              from (select release_sk as lookup_sk, member_sha256 as lookup_natural from {{ ref('dim_release') }}) as
+              found where found.lookup_natural = cast(member_sha256 as varchar)), md5('<unknown>')) and state_sk =
+              coalesce((select max(found.lookup_sk) from (select state_sk as lookup_sk, state_code as lookup_natural
+              from {{ ref('dim_state') }}) as found where found.lookup_natural = cast(state as varchar)),
+              md5('<unknown>')) and zip_sk = coalesce((select max(found.lookup_sk) from (select zip_sk as lookup_sk,
+              zip_code as lookup_natural from {{ ref('dim_zip') }}) as found where found.lookup_natural = cast(zip_code
+              as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_enrollment_release_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(incorporation_date) = 'DATE' and typeof(reh_conversion_date) = 'DATE' and typeof(release_label) =
+              'VARCHAR' and typeof(period_start) = 'DATE' and typeof(period_end) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: fct_enrollment_release_published_text_typed
+          arguments:
+            expression: >-
+              typeof(provider_type_text) = 'VARCHAR' and typeof(ccn_published) = 'VARCHAR' and
+              typeof(organization_other_type_text) = 'VARCHAR' and typeof(location_other_type_text) = 'VARCHAR' and
+              typeof(subgroup_other_text) = 'VARCHAR'
+  - name: fct_hgi_release
+    description: >-
+      One row per int_hgi_hospital_releases row, grain release_key: every silver column unchanged, then 4 surrogate
+      keys. Published values are covered by the silver test assert_hgi_values_cast.
+    columns:
+      - name: release_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: hospital_sk
+        description: Key of dim_hospital for ccn; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+      - name: state_sk
+        description: Key of dim_state for state_code; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_state')
+                field: state_sk
+      - name: zip_sk
+        description: Key of dim_zip for zip_code; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_zip')
+                field: zip_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_hgi_release_values_equal_silver
+          arguments:
+            compare_model: ref('int_hgi_hospital_releases')
+            exclude_columns:
+              - hospital_sk
+              - release_sk
+              - state_sk
+              - zip_sk
+      - dbt_utils.expression_is_true:
+          name: fct_hgi_release_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              hospital_sk = coalesce((select max(found.lookup_sk) from (select hospital_sk as lookup_sk, ccn as
+              lookup_natural from {{ ref('dim_hospital') }}) as found where found.lookup_natural = cast(ccn as
+              varchar)), md5('<unknown>')) and release_sk = coalesce((select max(found.lookup_sk) from (select
+              release_sk as lookup_sk, member_sha256 as lookup_natural from {{ ref('dim_release') }}) as found where
+              found.lookup_natural = cast(member_sha256 as varchar)), md5('<unknown>')) and state_sk = coalesce((select
+              max(found.lookup_sk) from (select state_sk as lookup_sk, state_code as lookup_natural from {{
+              ref('dim_state') }}) as found where found.lookup_natural = cast(state_code as varchar)), md5('<unknown>'))
+              and zip_sk = coalesce((select max(found.lookup_sk) from (select zip_sk as lookup_sk, zip_code as
+              lookup_natural from {{ ref('dim_zip') }}) as found where found.lookup_natural = cast(zip_code as
+              varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_hgi_release_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(release_date) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: fct_hgi_release_published_text_typed
+          arguments:
+            expression: >-
+              typeof(overall_rating_text) = 'VARCHAR' and typeof(overall_rating_footnote) = 'VARCHAR'
+  - name: fct_hhs_capacity_week
+    description: >-
+      One row per int_hhs_capacity_weeks row, grain week_key: every silver column unchanged, then 4 surrogate keys.
+      Published values are covered by the silver test assert_hhs_onc_values_cast.
+    columns:
+      - name: week_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: hospital_sk
+        description: Key of dim_hospital for ccn; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+      - name: state_sk
+        description: Key of dim_state for state; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_state')
+                field: state_sk
+      - name: zip_sk
+        description: Key of dim_zip for zip; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_zip')
+                field: zip_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_hhs_capacity_week_values_equal_silver
+          arguments:
+            compare_model: ref('int_hhs_capacity_weeks')
+            exclude_columns:
+              - hospital_sk
+              - release_sk
+              - state_sk
+              - zip_sk
+      - dbt_utils.expression_is_true:
+          name: fct_hhs_capacity_week_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              hospital_sk = coalesce((select max(found.lookup_sk) from (select hospital_sk as lookup_sk, ccn as
+              lookup_natural from {{ ref('dim_hospital') }}) as found where found.lookup_natural = cast(ccn as
+              varchar)), md5('<unknown>')) and release_sk = coalesce((select max(found.lookup_sk) from (select
+              release_sk as lookup_sk, member_sha256 as lookup_natural from {{ ref('dim_release') }}) as found where
+              found.lookup_natural = cast(member_sha256 as varchar)), md5('<unknown>')) and state_sk = coalesce((select
+              max(found.lookup_sk) from (select state_sk as lookup_sk, state_code as lookup_natural from {{
+              ref('dim_state') }}) as found where found.lookup_natural = cast(state as varchar)), md5('<unknown>')) and
+              zip_sk = coalesce((select max(found.lookup_sk) from (select zip_sk as lookup_sk, zip_code as
+              lookup_natural from {{ ref('dim_zip') }}) as found where found.lookup_natural = cast(zip as varchar)),
+              md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_hhs_capacity_week_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(collection_week) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: fct_hhs_capacity_week_published_text_typed
+          arguments:
+            expression: >-
+              typeof(ccn_published) = 'VARCHAR' and typeof(nulled_values_published) = 'VARCHAR'
+  - name: fct_hospital_owner_release
+    description: >-
+      One row per int_hospital_owner_rows row, grain owner_row_key: every silver column unchanged, then 3 surrogate
+      keys. Published values are covered by the silver test assert_ownership_values_cast.
+    columns:
+      - name: owner_row_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: enrollment_sk
+        description: Key of dim_enrollment for enrollment_id; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_enrollment')
+                field: enrollment_sk
+      - name: owner_organization_sk
+        description: Key of dim_owner_organization for associate_id; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_owner_organization')
+                field: owner_organization_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_hospital_owner_release_values_equal_silver
+          arguments:
+            compare_model: ref('int_hospital_owner_rows')
+            exclude_columns:
+              - enrollment_sk
+              - owner_organization_sk
+              - release_sk
+      - dbt_utils.expression_is_true:
+          name: fct_hospital_owner_release_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              enrollment_sk = coalesce((select max(found.lookup_sk) from (select enrollment_sk as lookup_sk,
+              enrollment_id as lookup_natural from {{ ref('dim_enrollment') }}) as found where found.lookup_natural =
+              cast(enrollment_id as varchar)), md5('<unknown>')) and owner_organization_sk = coalesce((select
+              max(found.lookup_sk) from (select owner_organization_sk as lookup_sk, associate_id as lookup_natural from
+              {{ ref('dim_owner_organization') }}) as found where found.lookup_natural = cast(associate_id as varchar)),
+              md5('<unknown>')) and release_sk = coalesce((select max(found.lookup_sk) from (select release_sk as
+              lookup_sk, member_sha256 as lookup_natural from {{ ref('dim_release') }}) as found where
+              found.lookup_natural = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_hospital_owner_release_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(association_date) = 'DATE' and typeof(release_label) = 'VARCHAR' and typeof(period_start) = 'DATE'
+              and typeof(period_end) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: fct_hospital_owner_release_published_text_typed
+          arguments:
+            expression: >-
+              typeof(role_text) = 'VARCHAR' and typeof(flags_published) = 'BOOLEAN'
+  - name: fct_impact_hold
+    description: >-
+      One row per int_impact_holds row, grain hold_key: every silver column unchanged, then 2 surrogate keys. A hold
+      fact: it keeps the silver hold model's rows exactly.
+    columns:
+      - name: hold_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: hospital_sk
+        description: Key of dim_hospital for ccn; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_impact_hold_values_equal_silver
+          arguments:
+            compare_model: ref('int_impact_holds')
+            exclude_columns:
+              - hospital_sk
+              - release_sk
+      - dbt_utils.expression_is_true:
+          name: fct_impact_hold_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              hospital_sk = coalesce((select max(found.lookup_sk) from (select hospital_sk as lookup_sk, ccn as
+              lookup_natural from {{ ref('dim_hospital') }}) as found where found.lookup_natural = cast(ccn as
+              varchar)), md5('<unknown>')) and release_sk = coalesce((select max(found.lookup_sk) from (select
+              release_sk as lookup_sk, member_sha256 as lookup_natural from {{ ref('dim_release') }}) as found where
+              found.lookup_natural = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_impact_hold_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(rule_fiscal_year) = 'INTEGER'
+  - name: fct_ipps_impact_value
+    description: >-
+      One row per int_impact_hospital_values row, grain value_key: every silver column unchanged, then 2 surrogate keys.
+    columns:
+      - name: value_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: hospital_sk
+        description: Key of dim_hospital for ccn; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_ipps_impact_value_values_equal_silver
+          arguments:
+            compare_model: ref('int_impact_hospital_values')
+            exclude_columns:
+              - hospital_sk
+              - release_sk
+      - dbt_utils.expression_is_true:
+          name: fct_ipps_impact_value_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              hospital_sk = coalesce((select max(found.lookup_sk) from (select hospital_sk as lookup_sk, ccn as
+              lookup_natural from {{ ref('dim_hospital') }}) as found where found.lookup_natural = cast(ccn as
+              varchar)), md5('<unknown>')) and release_sk = coalesce((select max(found.lookup_sk) from (select
+              release_sk as lookup_sk, member_sha256 as lookup_natural from {{ ref('dim_release') }}) as found where
+              found.lookup_natural = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_ipps_impact_value_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(rule_fiscal_year) = 'INTEGER'
+      - dbt_utils.expression_is_true:
+          name: fct_ipps_impact_value_published_text_typed
+          arguments:
+            expression: >-
+              typeof(value_text) = 'VARCHAR'
+  - name: fct_medicare_inpatient_drg
+    description: >-
+      One row per int_mup_drg_discharges row, grain drg_key: every silver column unchanged, then 2 surrogate keys.
+      Published values are covered by the silver test assert_mup_values_cast.
+    columns:
+      - name: drg_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: hospital_sk
+        description: Key of dim_hospital for ccn; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_medicare_inpatient_drg_values_equal_silver
+          arguments:
+            compare_model: ref('int_mup_drg_discharges')
+            exclude_columns:
+              - hospital_sk
+              - release_sk
+      - dbt_utils.expression_is_true:
+          name: fct_medicare_inpatient_drg_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              hospital_sk = coalesce((select max(found.lookup_sk) from (select hospital_sk as lookup_sk, ccn as
+              lookup_natural from {{ ref('dim_hospital') }}) as found where found.lookup_natural = cast(ccn as
+              varchar)), md5('<unknown>')) and release_sk = coalesce((select max(found.lookup_sk) from (select
+              release_sk as lookup_sk, member_sha256 as lookup_natural from {{ ref('dim_release') }}) as found where
+              found.lookup_natural = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_medicare_inpatient_drg_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(data_year) = 'INTEGER' and typeof(release_year) = 'INTEGER'
+  - name: fct_medicare_inpatient_provider
+    description: >-
+      One row per int_mup_providers row, grain provider_key: every silver column unchanged, then 3 surrogate keys.
+      Published values are covered by the silver test assert_mup_values_cast.
+    columns:
+      - name: provider_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: hospital_sk
+        description: Key of dim_hospital for ccn; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+      - name: state_sk
+        description: Key of dim_state for state_code; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_state')
+                field: state_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_medicare_inpatient_provider_values_equal_silver
+          arguments:
+            compare_model: ref('int_mup_providers')
+            exclude_columns:
+              - hospital_sk
+              - release_sk
+              - state_sk
+      - dbt_utils.expression_is_true:
+          name: fct_medicare_inpatient_provider_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              hospital_sk = coalesce((select max(found.lookup_sk) from (select hospital_sk as lookup_sk, ccn as
+              lookup_natural from {{ ref('dim_hospital') }}) as found where found.lookup_natural = cast(ccn as
+              varchar)), md5('<unknown>')) and release_sk = coalesce((select max(found.lookup_sk) from (select
+              release_sk as lookup_sk, member_sha256 as lookup_natural from {{ ref('dim_release') }}) as found where
+              found.lookup_natural = cast(member_sha256 as varchar)), md5('<unknown>')) and state_sk = coalesce((select
+              max(found.lookup_sk) from (select state_sk as lookup_sk, state_code as lookup_natural from {{
+              ref('dim_state') }}) as found where found.lookup_natural = cast(state_code as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_medicare_inpatient_provider_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(data_year) = 'INTEGER' and typeof(release_year) = 'INTEGER'
+  - name: fct_occupational_mix_survey
+    description: >-
+      One row per int_occmix_survey_rows row, grain survey_row_key: every silver column unchanged, then 2 surrogate
+      keys.
+    columns:
+      - name: survey_row_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: hospital_sk
+        description: Key of dim_hospital for ccn; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_occupational_mix_survey_values_equal_silver
+          arguments:
+            compare_model: ref('int_occmix_survey_rows')
+            exclude_columns:
+              - hospital_sk
+              - release_sk
+      - dbt_utils.expression_is_true:
+          name: fct_occupational_mix_survey_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              hospital_sk = coalesce((select max(found.lookup_sk) from (select hospital_sk as lookup_sk, ccn as
+              lookup_natural from {{ ref('dim_hospital') }}) as found where found.lookup_natural = cast(ccn as
+              varchar)), md5('<unknown>')) and release_sk = coalesce((select max(found.lookup_sk) from (select
+              release_sk as lookup_sk, member_sha256 as lookup_natural from {{ ref('dim_release') }}) as found where
+              found.lookup_natural = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_occupational_mix_survey_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(survey_start_date) = 'DATE' and typeof(survey_end_date) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: fct_occupational_mix_survey_published_text_typed
+          arguments:
+            expression: >-
+              typeof(prov_text) = 'VARCHAR' and typeof(from_text) = 'VARCHAR' and typeof(to_text) = 'VARCHAR' and
+              typeof(rnsal_text) = 'VARCHAR' and typeof(rnhr_text) = 'VARCHAR' and typeof(lpnsthr_text) = 'VARCHAR' and
+              typeof(naorathr_text) = 'VARCHAR' and typeof(mahr_text) = 'VARCHAR' and typeof(nursehr_text) = 'VARCHAR'
+              and typeof(rnahw_text) = 'VARCHAR' and typeof(ccn_published) = 'VARCHAR'
+  - name: fct_onc_attestation
+    description: >-
+      One row per int_onc_attestation_rows row, grain attestation_key: every silver column unchanged, then 3 surrogate
+      keys.
+    columns:
+      - name: attestation_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: hospital_sk
+        description: Key of dim_hospital for ccn; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+      - name: zip_sk
+        description: Key of dim_zip for zip; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_zip')
+                field: zip_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_onc_attestation_values_equal_silver
+          arguments:
+            compare_model: ref('int_onc_attestation_rows')
+            exclude_columns:
+              - hospital_sk
+              - release_sk
+              - zip_sk
+      - dbt_utils.expression_is_true:
+          name: fct_onc_attestation_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              hospital_sk = coalesce((select max(found.lookup_sk) from (select hospital_sk as lookup_sk, ccn as
+              lookup_natural from {{ ref('dim_hospital') }}) as found where found.lookup_natural = cast(ccn as
+              varchar)), md5('<unknown>')) and release_sk = coalesce((select max(found.lookup_sk) from (select
+              release_sk as lookup_sk, member_sha256 as lookup_natural from {{ ref('dim_release') }}) as found where
+              found.lookup_natural = cast(member_sha256 as varchar)), md5('<unknown>')) and zip_sk = coalesce((select
+              max(found.lookup_sk) from (select zip_sk as lookup_sk, zip_code as lookup_natural from {{ ref('dim_zip')
+              }}) as found where found.lookup_natural = cast(zip as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_onc_attestation_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(program_year) = 'INTEGER' and typeof(payment_year) = 'INTEGER' and typeof(attestation_year) =
+              'INTEGER'
+      - dbt_utils.expression_is_true:
+          name: fct_onc_attestation_published_text_typed
+          arguments:
+            expression: >-
+              typeof(ccn_published) = 'VARCHAR' and typeof(payment_year_text) = 'VARCHAR'
+  - name: fct_onc_ehr_product
+    description: >-
+      One row per int_onc_chpl_linkage_rows row, grain linkage_key: every silver column unchanged, then 4 surrogate
+      keys. Published values are covered by the silver test assert_hhs_onc_values_cast.
+    columns:
+      - name: linkage_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: hospital_sk
+        description: Key of dim_hospital for ccn; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+      - name: state_sk
+        description: Key of dim_state for state; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_state')
+                field: state_sk
+      - name: zip_sk
+        description: Key of dim_zip for zip_code; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_zip')
+                field: zip_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_onc_ehr_product_values_equal_silver
+          arguments:
+            compare_model: ref('int_onc_chpl_linkage_rows')
+            exclude_columns:
+              - hospital_sk
+              - release_sk
+              - state_sk
+              - zip_sk
+      - dbt_utils.expression_is_true:
+          name: fct_onc_ehr_product_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              hospital_sk = coalesce((select max(found.lookup_sk) from (select hospital_sk as lookup_sk, ccn as
+              lookup_natural from {{ ref('dim_hospital') }}) as found where found.lookup_natural = cast(ccn as
+              varchar)), md5('<unknown>')) and release_sk = coalesce((select max(found.lookup_sk) from (select
+              release_sk as lookup_sk, member_sha256 as lookup_natural from {{ ref('dim_release') }}) as found where
+              found.lookup_natural = cast(member_sha256 as varchar)), md5('<unknown>')) and state_sk = coalesce((select
+              max(found.lookup_sk) from (select state_sk as lookup_sk, state_code as lookup_natural from {{
+              ref('dim_state') }}) as found where found.lookup_natural = cast(state as varchar)), md5('<unknown>')) and
+              zip_sk = coalesce((select max(found.lookup_sk) from (select zip_sk as lookup_sk, zip_code as
+              lookup_natural from {{ ref('dim_zip') }}) as found where found.lookup_natural = cast(zip_code as
+              varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_onc_ehr_product_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(start_date) = 'DATE' and typeof(end_date) = 'DATE' and typeof(program_year) = 'INTEGER'
+  - name: fct_ownership_change
+    description: >-
+      One row per int_change_of_ownership_rows row, grain event_key: every silver column unchanged, then 7 surrogate
+      keys.
+    columns:
+      - name: event_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: enrollment_buyer_sk
+        description: Key of dim_enrollment for enrollment_id_buyer; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_enrollment')
+                field: enrollment_sk
+      - name: enrollment_seller_sk
+        description: Key of dim_enrollment for enrollment_id_seller; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_enrollment')
+                field: enrollment_sk
+      - name: hospital_buyer_sk
+        description: Key of dim_hospital for ccn_buyer; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: hospital_seller_sk
+        description: Key of dim_hospital for ccn_seller; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: owner_organization_buyer_sk
+        description: Key of dim_owner_organization for associate_id_buyer; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_owner_organization')
+                field: owner_organization_sk
+      - name: owner_organization_seller_sk
+        description: Key of dim_owner_organization for associate_id_seller; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_owner_organization')
+                field: owner_organization_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_ownership_change_values_equal_silver
+          arguments:
+            compare_model: ref('int_change_of_ownership_rows')
+            exclude_columns:
+              - enrollment_buyer_sk
+              - enrollment_seller_sk
+              - hospital_buyer_sk
+              - hospital_seller_sk
+              - owner_organization_buyer_sk
+              - owner_organization_seller_sk
+              - release_sk
+      - dbt_utils.expression_is_true:
+          name: fct_ownership_change_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              enrollment_buyer_sk = coalesce((select max(found.lookup_sk) from (select enrollment_sk as lookup_sk,
+              enrollment_id as lookup_natural from {{ ref('dim_enrollment') }}) as found where found.lookup_natural =
+              cast(enrollment_id_buyer as varchar)), md5('<unknown>')) and enrollment_seller_sk = coalesce((select
+              max(found.lookup_sk) from (select enrollment_sk as lookup_sk, enrollment_id as lookup_natural from {{
+              ref('dim_enrollment') }}) as found where found.lookup_natural = cast(enrollment_id_seller as varchar)),
+              md5('<unknown>')) and hospital_buyer_sk = coalesce((select max(found.lookup_sk) from (select hospital_sk
+              as lookup_sk, ccn as lookup_natural from {{ ref('dim_hospital') }}) as found where found.lookup_natural =
+              cast(ccn_buyer as varchar)), md5('<unknown>')) and hospital_seller_sk = coalesce((select
+              max(found.lookup_sk) from (select hospital_sk as lookup_sk, ccn as lookup_natural from {{
+              ref('dim_hospital') }}) as found where found.lookup_natural = cast(ccn_seller as varchar)),
+              md5('<unknown>')) and owner_organization_buyer_sk = coalesce((select max(found.lookup_sk) from (select
+              owner_organization_sk as lookup_sk, associate_id as lookup_natural from {{ ref('dim_owner_organization')
+              }}) as found where found.lookup_natural = cast(associate_id_buyer as varchar)), md5('<unknown>')) and
+              owner_organization_seller_sk = coalesce((select max(found.lookup_sk) from (select owner_organization_sk as
+              lookup_sk, associate_id as lookup_natural from {{ ref('dim_owner_organization') }}) as found where
+              found.lookup_natural = cast(associate_id_seller as varchar)), md5('<unknown>')) and release_sk =
+              coalesce((select max(found.lookup_sk) from (select release_sk as lookup_sk, member_sha256 as
+              lookup_natural from {{ ref('dim_release') }}) as found where found.lookup_natural = cast(member_sha256 as
+              varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_ownership_change_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(effective_date) = 'DATE' and typeof(release_label) = 'VARCHAR' and typeof(period_start) = 'DATE'
+              and typeof(period_end) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: fct_ownership_change_published_text_typed
+          arguments:
+            expression: >-
+              typeof(ccn_buyer_published) = 'VARCHAR' and typeof(chow_type_text) = 'VARCHAR' and
+              typeof(ccn_seller_published) = 'VARCHAR'
+  - name: fct_ownership_change_hold
+    description: >-
+      One row per int_change_of_ownership_holds row, grain hold_key: every silver column unchanged; no surrogate keys. A
+      hold fact: it keeps the silver hold model's rows exactly.
+    columns:
+      - name: hold_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_ownership_change_hold_values_equal_silver
+          arguments:
+            compare_model: ref('int_change_of_ownership_holds')
+  - name: fct_pos_snapshot
+    description: >-
+      One row per int_pos_hospital_snapshots row, grain snapshot_key: every silver column unchanged, then 5 surrogate
+      keys. Published values are covered by the silver test assert_pos_values_cast.
+    columns:
+      - name: snapshot_key
+        description: The silver unique key.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county for county_fips; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: hospital_sk
+        description: Key of dim_hospital for ccn; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_hospital')
+                field: hospital_sk
+      - name: release_sk
+        description: Key of dim_release for member_sha256; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+      - name: state_sk
+        description: Key of dim_state for state_code; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_state')
+                field: state_sk
+      - name: zip_sk
+        description: Key of dim_zip for zip_code; the unknown member when the natural key is null or unmatched.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_zip')
+                field: zip_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: fct_pos_snapshot_values_equal_silver
+          arguments:
+            compare_model: ref('int_pos_hospital_snapshots')
+            exclude_columns:
+              - county_sk
+              - hospital_sk
+              - release_sk
+              - state_sk
+              - zip_sk
+      - dbt_utils.expression_is_true:
+          name: fct_pos_snapshot_keys_follow_natural_keys
+          arguments:
+            expression: >-
+              county_sk = coalesce((select max(found.lookup_sk) from (select county_sk as lookup_sk, county_fips as
+              lookup_natural from {{ ref('dim_county') }}) as found where found.lookup_natural = cast(county_fips as
+              varchar)), md5('<unknown>')) and hospital_sk = coalesce((select max(found.lookup_sk) from (select
+              hospital_sk as lookup_sk, ccn as lookup_natural from {{ ref('dim_hospital') }}) as found where
+              found.lookup_natural = cast(ccn as varchar)), md5('<unknown>')) and release_sk = coalesce((select
+              max(found.lookup_sk) from (select release_sk as lookup_sk, member_sha256 as lookup_natural from {{
+              ref('dim_release') }}) as found where found.lookup_natural = cast(member_sha256 as varchar)),
+              md5('<unknown>')) and state_sk = coalesce((select max(found.lookup_sk) from (select state_sk as lookup_sk,
+              state_code as lookup_natural from {{ ref('dim_state') }}) as found where found.lookup_natural =
+              cast(state_code as varchar)), md5('<unknown>')) and zip_sk = coalesce((select max(found.lookup_sk) from
+              (select zip_sk as lookup_sk, zip_code as lookup_natural from {{ ref('dim_zip') }}) as found where
+              found.lookup_natural = cast(zip_code as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: fct_pos_snapshot_source_dates_typed
+          arguments:
+            expression: >-
+              typeof(original_participation_date) = 'DATE' and typeof(certification_date) = 'DATE' and
+              typeof(termination_date) = 'DATE' and typeof(period_start) = 'DATE' and typeof(period_end) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: fct_pos_snapshot_published_text_typed
+          arguments:
+            expression: >-
+              typeof(county_fips_published) = 'VARCHAR'

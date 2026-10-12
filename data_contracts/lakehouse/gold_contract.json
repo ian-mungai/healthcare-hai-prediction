@@ -97,7 +97,7 @@
     },
     "bridge_measure_control": {
       "attributes": [],
-      "grain": "measure identity, value field, vintage range, control",
+      "grain": "measure_sk, registry_control_sk, vintage_start, vintage_end",
       "inputs": [
         "dbt/seeds/gold/ (B1)"
       ],
@@ -209,7 +209,9 @@
       "package": "G2"
     },
     "dim_census_tract": {
-      "attributes": [],
+      "attributes": [
+        "census_tract_geoid"
+      ],
       "grain": "tract GEOID",
       "inputs": [
         "int_ruca_codes",
@@ -219,8 +221,9 @@
     },
     "dim_change_type": {
       "attributes": [
+        "code_system",
         "code",
-        "label"
+        "code_label"
       ],
       "grain": "published code",
       "inputs": [
@@ -230,8 +233,9 @@
     },
     "dim_condition": {
       "attributes": [
+        "code_system",
         "code",
-        "label"
+        "code_label"
       ],
       "grain": "published code",
       "inputs": [
@@ -241,8 +245,7 @@
     },
     "dim_county": {
       "attributes": [
-        "connecticut_planning_region",
-        "is_retired_alaska_code"
+        "county_fips"
       ],
       "grain": "5-character county FIPS",
       "inputs": [
@@ -253,9 +256,11 @@
     },
     "dim_date": {
       "attributes": [
-        "week",
-        "month",
-        "quarter",
+        "calendar_date",
+        "iso_year",
+        "iso_week",
+        "month_number",
+        "quarter_number",
         "calendar_year",
         "federal_fiscal_year"
       ],
@@ -267,8 +272,9 @@
     },
     "dim_demographic_group": {
       "attributes": [
+        "code_system",
         "code",
-        "label"
+        "code_label"
       ],
       "grain": "published code",
       "inputs": [
@@ -278,8 +284,9 @@
     },
     "dim_drg": {
       "attributes": [
+        "code_system",
         "code",
-        "label"
+        "code_label"
       ],
       "grain": "published code",
       "inputs": [
@@ -289,8 +296,9 @@
     },
     "dim_ehr_product": {
       "attributes": [
+        "code_system",
         "code",
-        "label"
+        "code_label"
       ],
       "grain": "published code",
       "inputs": [
@@ -299,7 +307,9 @@
       "package": "G2"
     },
     "dim_enrollment": {
-      "attributes": [],
+      "attributes": [
+        "enrollment_id"
+      ],
       "grain": "enrollment_id",
       "inputs": [
         "int_hospital_enrollment_rows",
@@ -310,8 +320,9 @@
     },
     "dim_footnote": {
       "attributes": [
+        "code_system",
         "code",
-        "label"
+        "code_label"
       ],
       "grain": "published code",
       "inputs": [
@@ -321,6 +332,7 @@
     },
     "dim_hospital": {
       "attributes": [
+        "ccn",
         "first_seen",
         "last_seen"
       ],
@@ -332,10 +344,15 @@
     },
     "dim_measure": {
       "attributes": [
-        "label",
+        "measure_identity",
+        "fact",
+        "measure_key",
+        "value_column",
+        "measure_label",
         "unit",
         "value_kind",
-        "vintage_range"
+        "vintage_start",
+        "vintage_end"
       ],
       "grain": "measure identity (gold plan 2.2)",
       "inputs": [
@@ -345,7 +362,9 @@
       "package": "G2"
     },
     "dim_owner_organization": {
-      "attributes": [],
+      "attributes": [
+        "associate_id"
+      ],
       "grain": "associate_id (10 digits)",
       "inputs": [
         "int_hospital_owner_rows",
@@ -355,8 +374,9 @@
     },
     "dim_owner_role": {
       "attributes": [
+        "code_system",
         "code",
-        "label"
+        "code_label"
       ],
       "grain": "published code",
       "inputs": [
@@ -366,10 +386,9 @@
     },
     "dim_registry_control": {
       "attributes": [
-        "family",
+        "measure_control",
         "parent",
-        "review_decision",
-        "closeout_decision"
+        "review_decision"
       ],
       "grain": "registry control (revision 3)",
       "inputs": [
@@ -379,7 +398,9 @@
     },
     "dim_release": {
       "attributes": [
+        "member_sha256",
         "object_key",
+        "copy_count",
         "release_date",
         "period_start",
         "period_end"
@@ -393,8 +414,9 @@
     },
     "dim_rurality_code": {
       "attributes": [
+        "code_system",
         "code",
-        "label"
+        "code_label"
       ],
       "grain": "published code",
       "inputs": [
@@ -404,9 +426,7 @@
     },
     "dim_source": {
       "attributes": [
-        "publisher",
-        "dataset",
-        "label"
+        "dataset_id"
       ],
       "grain": "dataset",
       "inputs": [
@@ -415,7 +435,9 @@
       "package": "G2"
     },
     "dim_state": {
-      "attributes": [],
+      "attributes": [
+        "state_code"
+      ],
       "grain": "state FIPS and postal code",
       "inputs": [
         "published codes in the facts"
@@ -423,7 +445,9 @@
       "package": "G2"
     },
     "dim_zip": {
-      "attributes": [],
+      "attributes": [
+        "zip_code"
+      ],
       "grain": "ZIP code",
       "inputs": [
         "published codes in the facts"
@@ -2674,10 +2698,6 @@
         "release_date"
       ],
       "surrogate_keys": {
-        "hospital_sk": {
-          "dimension": "dim_hospital",
-          "natural_key": "entity_id"
-        },
         "release_sk": {
           "dimension": "dim_release",
           "natural_key": "member_sha256"
@@ -2772,13 +2792,13 @@
         "release_date"
       ],
       "surrogate_keys": {
-        "hospital_sk": {
-          "dimension": "dim_hospital",
-          "natural_key": "entity_id"
-        },
         "release_sk": {
           "dimension": "dim_release",
           "natural_key": "member_sha256"
+        },
+        "state_sk": {
+          "dimension": "dim_state",
+          "natural_key": "entity_id"
         }
       }
     },
@@ -4241,8 +4261,7 @@
       "measure_key_column": null,
       "package": "G3b",
       "published_text_columns": [
-        "role_text",
-        "flags_published"
+        "role_text"
       ],
       "silver_model": "int_hospital_owner_rows",
       "source_dates": [
@@ -8790,9 +8809,10 @@
   "rules": {
     "columns": "Every silver column lands once, under its silver name; no value is stored twice (failure mode 744). Controls appear only in bridge_measure_control.",
     "grain": "A fact's rows equal its silver model's rows; grain test on the silver unique key; rows and content fingerprint equal the silver model's over the silver columns (gold failure mode 743).",
-    "lineage": "Gold reads only kept silver models, lookup seeds and gold models (failure mode 746).",
+    "lineage": "Facts read only their kept silver model, their dimensions and lookup seeds; a dimension or bridge reads only the inputs this contract lists for it, lookup seeds and gold models (failure mode 746; amendment A37).",
     "surrogate_keys": "<dimension>_sk = md5 of the natural key's text in the dimension; a null or unmatched natural key takes the unknown member (failure mode 745).",
-    "unknown_member": "Each dimension has one row with natural key '<unknown>' and <dimension>_sk = md5('<unknown>'); facts never carry a null foreign key."
+    "unknown_member": "Each dimension has one row with natural key '<unknown>' and <dimension>_sk = md5('<unknown>'); the one exception is dim_date, whose unknown row has a null calendar_date (amendment A40); facts never carry a null foreign key."
   },
-  "source": "silver_columns.json (wave 0 item 6) and plans/gold_20261010/plan.md draft 4"
+  "source": "silver_columns.json (wave 0 item 6) and plans/gold_20261010/plan.md draft 4",
+  "wave2_amendments_applied": "A36 to A41, except the A39 bridge_measure_control column list, which stays as the A39 constant in scripts/lakehouse/gold_checks.py until the expression-check rebuild (A45); A42 in dbt_project.yml; A43 and A36 rule 8 as constants in scripts/lakehouse/gold_sql.py"
 }

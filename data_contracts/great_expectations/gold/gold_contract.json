@@ -1,0 +1,2375 @@
+{
+  "name": "gold_contract",
+  "description": "Every gold fact has its contract columns and surrogate keys with their types, and every dimension its key column",
+  "expectations": [
+    {
+      "id": "fct_acs_county_value.columns",
+      "table": "fct_acs_county_value",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "bronze_table",
+          "vintage",
+          "concept_id",
+          "column_name",
+          "county_fips",
+          "value_published",
+          "value_number",
+          "missing_token",
+          "is_top_coded",
+          "is_bottom_coded",
+          "county_scope",
+          "acs_value_key",
+          "is_connecticut",
+          "county_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_acs_county_value.types",
+      "table": "fct_acs_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('bronze_table', 'VARCHAR'), ('vintage', 'VARCHAR'), ('concept_id', 'VARCHAR'), ('column_name', 'VARCHAR'), ('county_fips', 'VARCHAR'), ('value_published', 'VARCHAR'), ('value_number', 'DOUBLE'), ('missing_token', 'VARCHAR'), ('is_top_coded', 'BOOLEAN'), ('is_bottom_coded', 'BOOLEAN'), ('county_scope', 'VARCHAR'), ('acs_value_key', 'VARCHAR'), ('is_connecticut', 'BOOLEAN'), ('county_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_acs_county_value' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_bls_county_series.columns",
+      "table": "fct_bls_county_series",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "capture_date",
+          "series_id",
+          "county_fips",
+          "measure_code",
+          "measure",
+          "data_year",
+          "period_code",
+          "month_number",
+          "is_annual_average",
+          "is_seasonally_adjusted",
+          "value_published",
+          "value_number",
+          "missing_token",
+          "footnote_codes",
+          "bls_row_key",
+          "is_connecticut",
+          "county_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_bls_county_series.types",
+      "table": "fct_bls_county_series",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('capture_date', 'VARCHAR'), ('series_id', 'VARCHAR'), ('county_fips', 'VARCHAR'), ('measure_code', 'VARCHAR'), ('measure', 'VARCHAR'), ('data_year', 'INTEGER'), ('period_code', 'VARCHAR'), ('month_number', 'INTEGER'), ('is_annual_average', 'BOOLEAN'), ('is_seasonally_adjusted', 'BOOLEAN'), ('value_published', 'VARCHAR'), ('value_number', 'DOUBLE'), ('missing_token', 'VARCHAR'), ('footnote_codes', 'VARCHAR[]'), ('bls_row_key', 'VARCHAR'), ('is_connecticut', 'BOOLEAN'), ('county_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_bls_county_series' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cc_window_hold.columns",
+      "table": "fct_cc_window_hold",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "bronze_table",
+          "hold_reason",
+          "entity_id",
+          "measure_id",
+          "window_start",
+          "window_end",
+          "row_count",
+          "hold_key",
+          "member_sha256s",
+          "hospital_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cc_window_hold.types",
+      "table": "fct_cc_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('bronze_table', 'VARCHAR'), ('hold_reason', 'VARCHAR'), ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('row_count', 'BIGINT'), ('hold_key', 'VARCHAR'), ('member_sha256s', 'VARCHAR[]'), ('hospital_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_cc_window_hold' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cmi_observation.columns",
+      "table": "fct_cmi_observation",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "bronze_table",
+          "member_sha256",
+          "sheet_name",
+          "line_number",
+          "rule_fiscal_year",
+          "data_fiscal_year",
+          "rule_stage",
+          "ccn",
+          "cmi",
+          "cmi_source_value",
+          "cases",
+          "relative_weights",
+          "transfer_adjusted_cmi",
+          "transfer_adjusted_cases",
+          "has_header",
+          "cmi_row_key",
+          "cases_text",
+          "relative_weights_text",
+          "transfer_adjusted_cmi_text",
+          "transfer_adjusted_cases_text",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cmi_observation.types",
+      "table": "fct_cmi_observation",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('bronze_table', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('sheet_name', 'VARCHAR'), ('line_number', 'BIGINT'), ('rule_fiscal_year', 'INTEGER'), ('data_fiscal_year', 'INTEGER'), ('rule_stage', 'VARCHAR'), ('ccn', 'VARCHAR'), ('cmi', 'DOUBLE'), ('cmi_source_value', 'VARCHAR'), ('cases', 'DOUBLE'), ('relative_weights', 'DOUBLE'), ('transfer_adjusted_cmi', 'DOUBLE'), ('transfer_adjusted_cases', 'DOUBLE'), ('has_header', 'BOOLEAN'), ('cmi_row_key', 'VARCHAR'), ('cases_text', 'VARCHAR'), ('relative_weights_text', 'VARCHAR'), ('transfer_adjusted_cmi_text', 'VARCHAR'), ('transfer_adjusted_cases_text', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_cmi_observation' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_complications_deaths_window.columns",
+      "table": "fct_complications_deaths_window",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "entity_id",
+          "measure_id",
+          "window_start",
+          "window_end",
+          "measure_name",
+          "compared_to_national",
+          "denominator",
+          "score",
+          "lower_estimate",
+          "higher_estimate",
+          "footnote",
+          "member_sha256",
+          "object_key",
+          "release_date",
+          "release_file_count",
+          "window_key",
+          "published_measure_id",
+          "score_number",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_complications_deaths_window.types",
+      "table": "fct_complications_deaths_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('measure_name', 'VARCHAR'), ('compared_to_national', 'VARCHAR'), ('denominator', 'VARCHAR'), ('score', 'VARCHAR'), ('lower_estimate', 'VARCHAR'), ('higher_estimate', 'VARCHAR'), ('footnote', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('window_key', 'VARCHAR'), ('published_measure_id', 'VARCHAR'), ('score_number', 'DOUBLE'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_complications_deaths_window' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cost_report.columns",
+      "table": "fct_cost_report",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "object_key",
+          "is_label_held",
+          "rpt_rec_num",
+          "provider_ccn_raw",
+          "hospital_name",
+          "state_code",
+          "county",
+          "medicare_cbsa_number",
+          "ccn_facility_type",
+          "provider_type",
+          "type_of_control",
+          "zip_code_raw",
+          "rural_versus_urban_raw",
+          "file_fiscal_year",
+          "period_begin",
+          "period_end",
+          "fte_employees_on_payroll",
+          "number_of_interns_and_residents_fte",
+          "total_days_title_v",
+          "total_days_title_xviii",
+          "total_days_title_xix",
+          "total_days_v_xviii_xix_unknown",
+          "number_of_beds",
+          "total_bed_days_available",
+          "total_discharges_title_v",
+          "total_discharges_title_xviii",
+          "total_discharges_title_xix",
+          "total_discharges_v_xviii_xix_unknown",
+          "number_of_beds_total_for_all_subproviders",
+          "hospital_total_days_title_v_for_adults_peds",
+          "hospital_total_days_title_xviii_for_adults_peds",
+          "hospital_total_days_title_xix_for_adults_peds",
+          "hospital_total_days_v_xviii_xix_unknown_for_adults_peds",
+          "hospital_number_of_beds_for_adults_peds",
+          "hospital_total_bed_days_available_for_adults_peds",
+          "hospital_total_discharges_title_v_for_adults_peds",
+          "hospital_total_discharges_title_xviii_for_adults_peds",
+          "hospital_total_discharges_title_xix_for_adults_peds",
+          "hospital_total_discharges_v_xviii_xix_unknown_for_adults_peds",
+          "cost_of_charity_care",
+          "total_bad_debt_expense",
+          "cost_of_uncompensated_care",
+          "total_unreimbursed_and_uncompensated_care",
+          "total_salaries_from_worksheet_a",
+          "overhead_non_salary_costs",
+          "depreciation_cost",
+          "total_costs",
+          "inpatient_total_charges",
+          "outpatient_total_charges",
+          "combined_outpatient_inpatient_total_charges",
+          "wage_related_costs_core",
+          "wage_related_costs_rhc_fqhc",
+          "total_salaries_adjusted",
+          "contract_labor_direct_patient_care",
+          "wage_related_costs_for_part_a_teaching_physicians",
+          "wage_related_costs_for_interns_and_residents",
+          "cash_on_hand_and_in_banks",
+          "temporary_investments",
+          "notes_receivable",
+          "accounts_receivable",
+          "less_allowances_for_uncollectible_notes_and_accounts_receivable",
+          "inventory",
+          "prepaid_expenses",
+          "other_current_assets",
+          "total_current_assets",
+          "land",
+          "land_improvements",
+          "buildings",
+          "leasehold_improvements",
+          "fixed_equipment",
+          "major_movable_equipment",
+          "minor_equipment_depreciable",
+          "health_information_technology_designated_assets",
+          "total_fixed_assets",
+          "investments",
+          "other_assets",
+          "total_other_assets",
+          "total_assets",
+          "accounts_payable",
+          "salaries_wages_and_fees_payable",
+          "payroll_taxes_payable",
+          "notes_and_loans_payable_short_term",
+          "deferred_income",
+          "other_current_liabilities",
+          "total_current_liabilities",
+          "mortgage_payable",
+          "notes_payable",
+          "unsecured_loans",
+          "other_long_term_liabilities",
+          "total_long_term_liabilities",
+          "total_liabilities",
+          "general_fund_balance",
+          "total_fund_balances",
+          "total_liabilities_and_fund_balances",
+          "drg_amounts_other_than_outlier_payments",
+          "drg_amounts_before_october_1",
+          "drg_amounts_after_october_1",
+          "outlier_payments_for_discharges",
+          "disproportionate_share_adjustment",
+          "allowable_dsh_percentage",
+          "managed_care_simulated_payments",
+          "total_ime_payment",
+          "inpatient_revenue",
+          "outpatient_revenue",
+          "total_patient_revenue",
+          "less_contractual_allowance_and_discounts_on_patients_accounts",
+          "net_patient_revenue",
+          "less_total_operating_expense",
+          "net_income_from_service_to_patients",
+          "total_other_income",
+          "total_income",
+          "total_other_expenses",
+          "net_income",
+          "cost_to_charge_ratio",
+          "net_revenue_from_medicaid",
+          "medicaid_charges",
+          "net_revenue_from_stand_alone_chip",
+          "stand_alone_chip_charges",
+          "ccn",
+          "zip_code",
+          "rural_urban",
+          "fiscal_year",
+          "reporting_days",
+          "is_full_year",
+          "reports_in_fiscal_year",
+          "hospital_sk",
+          "release_sk",
+          "state_sk",
+          "zip_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cost_report.types",
+      "table": "fct_cost_report",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('is_label_held', 'BOOLEAN'), ('rpt_rec_num', 'VARCHAR'), ('provider_ccn_raw', 'VARCHAR'), ('hospital_name', 'VARCHAR'), ('state_code', 'VARCHAR'), ('county', 'VARCHAR'), ('medicare_cbsa_number', 'VARCHAR'), ('ccn_facility_type', 'VARCHAR'), ('provider_type', 'VARCHAR'), ('type_of_control', 'VARCHAR'), ('zip_code_raw', 'VARCHAR'), ('rural_versus_urban_raw', 'VARCHAR'), ('file_fiscal_year', 'INTEGER'), ('period_begin', 'DATE'), ('period_end', 'DATE'), ('fte_employees_on_payroll', 'DOUBLE'), ('number_of_interns_and_residents_fte', 'DOUBLE'), ('total_days_title_v', 'DOUBLE'), ('total_days_title_xviii', 'DOUBLE'), ('total_days_title_xix', 'DOUBLE'), ('total_days_v_xviii_xix_unknown', 'DOUBLE'), ('number_of_beds', 'DOUBLE'), ('total_bed_days_available', 'DOUBLE'), ('total_discharges_title_v', 'DOUBLE'), ('total_discharges_title_xviii', 'DOUBLE'), ('total_discharges_title_xix', 'DOUBLE'), ('total_discharges_v_xviii_xix_unknown', 'DOUBLE'), ('number_of_beds_total_for_all_subproviders', 'DOUBLE'), ('hospital_total_days_title_v_for_adults_peds', 'DOUBLE'), ('hospital_total_days_title_xviii_for_adults_peds', 'DOUBLE'), ('hospital_total_days_title_xix_for_adults_peds', 'DOUBLE'), ('hospital_total_days_v_xviii_xix_unknown_for_adults_peds', 'DOUBLE'), ('hospital_number_of_beds_for_adults_peds', 'DOUBLE'), ('hospital_total_bed_days_available_for_adults_peds', 'DOUBLE'), ('hospital_total_discharges_title_v_for_adults_peds', 'DOUBLE'), ('hospital_total_discharges_title_xviii_for_adults_peds', 'DOUBLE'), ('hospital_total_discharges_title_xix_for_adults_peds', 'DOUBLE'), ('hospital_total_discharges_v_xviii_xix_unknown_for_adults_peds', 'DOUBLE'), ('cost_of_charity_care', 'DOUBLE'), ('total_bad_debt_expense', 'DOUBLE'), ('cost_of_uncompensated_care', 'DOUBLE'), ('total_unreimbursed_and_uncompensated_care', 'DOUBLE'), ('total_salaries_from_worksheet_a', 'DOUBLE'), ('overhead_non_salary_costs', 'DOUBLE'), ('depreciation_cost', 'DOUBLE'), ('total_costs', 'DOUBLE'), ('inpatient_total_charges', 'DOUBLE'), ('outpatient_total_charges', 'DOUBLE'), ('combined_outpatient_inpatient_total_charges', 'DOUBLE'), ('wage_related_costs_core', 'DOUBLE'), ('wage_related_costs_rhc_fqhc', 'DOUBLE'), ('total_salaries_adjusted', 'DOUBLE'), ('contract_labor_direct_patient_care', 'DOUBLE'), ('wage_related_costs_for_part_a_teaching_physicians', 'DOUBLE'), ('wage_related_costs_for_interns_and_residents', 'DOUBLE'), ('cash_on_hand_and_in_banks', 'DOUBLE'), ('temporary_investments', 'DOUBLE'), ('notes_receivable', 'DOUBLE'), ('accounts_receivable', 'DOUBLE'), ('less_allowances_for_uncollectible_notes_and_accounts_receivable', 'DOUBLE'), ('inventory', 'DOUBLE'), ('prepaid_expenses', 'DOUBLE'), ('other_current_assets', 'DOUBLE'), ('total_current_assets', 'DOUBLE'), ('land', 'DOUBLE'), ('land_improvements', 'DOUBLE'), ('buildings', 'DOUBLE'), ('leasehold_improvements', 'DOUBLE'), ('fixed_equipment', 'DOUBLE'), ('major_movable_equipment', 'DOUBLE'), ('minor_equipment_depreciable', 'DOUBLE'), ('health_information_technology_designated_assets', 'DOUBLE'), ('total_fixed_assets', 'DOUBLE'), ('investments', 'DOUBLE'), ('other_assets', 'DOUBLE'), ('total_other_assets', 'DOUBLE'), ('total_assets', 'DOUBLE'), ('accounts_payable', 'DOUBLE'), ('salaries_wages_and_fees_payable', 'DOUBLE'), ('payroll_taxes_payable', 'DOUBLE'), ('notes_and_loans_payable_short_term', 'DOUBLE'), ('deferred_income', 'DOUBLE'), ('other_current_liabilities', 'DOUBLE'), ('total_current_liabilities', 'DOUBLE'), ('mortgage_payable', 'DOUBLE'), ('notes_payable', 'DOUBLE'), ('unsecured_loans', 'DOUBLE'), ('other_long_term_liabilities', 'DOUBLE'), ('total_long_term_liabilities', 'DOUBLE'), ('total_liabilities', 'DOUBLE'), ('general_fund_balance', 'DOUBLE'), ('total_fund_balances', 'DOUBLE'), ('total_liabilities_and_fund_balances', 'DOUBLE'), ('drg_amounts_other_than_outlier_payments', 'DOUBLE'), ('drg_amounts_before_october_1', 'DOUBLE'), ('drg_amounts_after_october_1', 'DOUBLE'), ('outlier_payments_for_discharges', 'DOUBLE'), ('disproportionate_share_adjustment', 'DOUBLE'), ('allowable_dsh_percentage', 'DOUBLE'), ('managed_care_simulated_payments', 'DOUBLE'), ('total_ime_payment', 'DOUBLE'), ('inpatient_revenue', 'DOUBLE'), ('outpatient_revenue', 'DOUBLE'), ('total_patient_revenue', 'DOUBLE'), ('less_contractual_allowance_and_discounts_on_patients_accounts', 'DOUBLE'), ('net_patient_revenue', 'DOUBLE'), ('less_total_operating_expense', 'DOUBLE'), ('net_income_from_service_to_patients', 'DOUBLE'), ('total_other_income', 'DOUBLE'), ('total_income', 'DOUBLE'), ('total_other_expenses', 'DOUBLE'), ('net_income', 'DOUBLE'), ('cost_to_charge_ratio', 'DOUBLE'), ('net_revenue_from_medicaid', 'DOUBLE'), ('medicaid_charges', 'DOUBLE'), ('net_revenue_from_stand_alone_chip', 'DOUBLE'), ('stand_alone_chip_charges', 'DOUBLE'), ('ccn', 'VARCHAR'), ('zip_code', 'VARCHAR'), ('rural_urban', 'VARCHAR'), ('fiscal_year', 'BIGINT'), ('reporting_days', 'BIGINT'), ('is_full_year', 'BOOLEAN'), ('reports_in_fiscal_year', 'BIGINT'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR'), ('state_sk', 'VARCHAR'), ('zip_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_cost_report' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_enrollment_release.columns",
+      "table": "fct_enrollment_release",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "enrollment_id",
+          "enrollment_state",
+          "provider_type_code",
+          "provider_type_text",
+          "npi",
+          "ccn_published",
+          "associate_id",
+          "associate_ids_padded",
+          "organization_name",
+          "doing_business_as_name",
+          "incorporation_date",
+          "incorporation_state",
+          "organization_type_structure",
+          "organization_other_type_text",
+          "proprietary_nonprofit",
+          "address_line_1",
+          "address_line_2",
+          "city",
+          "state",
+          "zip_code",
+          "practice_location_type",
+          "location_other_type_text",
+          "multiple_npi_flag",
+          "subgroup_general",
+          "subgroup_acute_care",
+          "subgroup_alcohol_drug",
+          "subgroup_childrens",
+          "subgroup_long_term",
+          "subgroup_psychiatric",
+          "subgroup_rehabilitation",
+          "subgroup_short_term",
+          "subgroup_swing_bed_approved",
+          "subgroup_psychiatric_unit",
+          "subgroup_rehabilitation_unit",
+          "subgroup_specialty_hospital",
+          "subgroup_other",
+          "reh_conversion_flag",
+          "subgroup_other_text",
+          "reh_conversion_date",
+          "cah_or_hospital_ccn",
+          "release_id",
+          "release_label",
+          "period_start",
+          "period_end",
+          "ccn",
+          "ccn_source",
+          "enrollment_key",
+          "enrollment_sk",
+          "hospital_sk",
+          "owner_organization_sk",
+          "release_sk",
+          "state_sk",
+          "zip_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_enrollment_release.types",
+      "table": "fct_enrollment_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('enrollment_id', 'VARCHAR'), ('enrollment_state', 'VARCHAR'), ('provider_type_code', 'VARCHAR'), ('provider_type_text', 'VARCHAR'), ('npi', 'VARCHAR'), ('ccn_published', 'VARCHAR'), ('associate_id', 'VARCHAR'), ('associate_ids_padded', 'BOOLEAN'), ('organization_name', 'VARCHAR'), ('doing_business_as_name', 'VARCHAR'), ('incorporation_date', 'DATE'), ('incorporation_state', 'VARCHAR'), ('organization_type_structure', 'VARCHAR'), ('organization_other_type_text', 'VARCHAR'), ('proprietary_nonprofit', 'VARCHAR'), ('address_line_1', 'VARCHAR'), ('address_line_2', 'VARCHAR'), ('city', 'VARCHAR'), ('state', 'VARCHAR'), ('zip_code', 'VARCHAR'), ('practice_location_type', 'VARCHAR'), ('location_other_type_text', 'VARCHAR'), ('multiple_npi_flag', 'BOOLEAN'), ('subgroup_general', 'BOOLEAN'), ('subgroup_acute_care', 'BOOLEAN'), ('subgroup_alcohol_drug', 'BOOLEAN'), ('subgroup_childrens', 'BOOLEAN'), ('subgroup_long_term', 'BOOLEAN'), ('subgroup_psychiatric', 'BOOLEAN'), ('subgroup_rehabilitation', 'BOOLEAN'), ('subgroup_short_term', 'BOOLEAN'), ('subgroup_swing_bed_approved', 'BOOLEAN'), ('subgroup_psychiatric_unit', 'BOOLEAN'), ('subgroup_rehabilitation_unit', 'BOOLEAN'), ('subgroup_specialty_hospital', 'BOOLEAN'), ('subgroup_other', 'BOOLEAN'), ('reh_conversion_flag', 'BOOLEAN'), ('subgroup_other_text', 'VARCHAR'), ('reh_conversion_date', 'DATE'), ('cah_or_hospital_ccn', 'VARCHAR'), ('release_id', 'VARCHAR'), ('release_label', 'VARCHAR'), ('period_start', 'DATE'), ('period_end', 'DATE'), ('ccn', 'VARCHAR'), ('ccn_source', 'VARCHAR'), ('enrollment_key', 'VARCHAR'), ('enrollment_sk', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('owner_organization_sk', 'VARCHAR'), ('release_sk', 'VARCHAR'), ('state_sk', 'VARCHAR'), ('zip_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_enrollment_release' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_gv_county_value.columns",
+      "table": "fct_gv_county_value",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "field",
+          "value_published",
+          "data_year",
+          "county_fips",
+          "value_number",
+          "missing_token",
+          "county_scope",
+          "gv_value_key",
+          "is_connecticut",
+          "bene_age_lvl",
+          "county_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_gv_county_value.types",
+      "table": "fct_gv_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('field', 'VARCHAR'), ('value_published', 'VARCHAR'), ('data_year', 'INTEGER'), ('county_fips', 'VARCHAR'), ('value_number', 'DOUBLE'), ('missing_token', 'VARCHAR'), ('county_scope', 'VARCHAR'), ('gv_value_key', 'VARCHAR'), ('is_connecticut', 'BOOLEAN'), ('bene_age_lvl', 'VARCHAR'), ('county_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_gv_county_value' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hac_program_year.columns",
+      "table": "fct_hac_program_year",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "ccn",
+          "fiscal_year",
+          "payment_reduction_published",
+          "is_payment_reduced",
+          "payment_reduction_footnote",
+          "total_hac_score",
+          "total_hac_score_footnote",
+          "psi_90_value",
+          "psi_90_w_z_score",
+          "clabsi_w_z_score",
+          "cauti_w_z_score",
+          "ssi_w_z_score",
+          "cdi_w_z_score",
+          "mrsa_w_z_score",
+          "psi_90_start_date",
+          "psi_90_end_date",
+          "hai_measures_start_date",
+          "hai_measures_end_date",
+          "member_sha256",
+          "object_key",
+          "release_date",
+          "release_file_count",
+          "program_key",
+          "total_hac_score_number",
+          "psi_90_start_date_text",
+          "psi_90_end_date_text",
+          "hai_measures_start_date_text",
+          "hai_measures_end_date_text",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hac_program_year.types",
+      "table": "fct_hac_program_year",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('ccn', 'VARCHAR'), ('fiscal_year', 'INTEGER'), ('payment_reduction_published', 'VARCHAR'), ('is_payment_reduced', 'BOOLEAN'), ('payment_reduction_footnote', 'VARCHAR'), ('total_hac_score', 'VARCHAR'), ('total_hac_score_footnote', 'VARCHAR'), ('psi_90_value', 'VARCHAR'), ('psi_90_w_z_score', 'VARCHAR'), ('clabsi_w_z_score', 'VARCHAR'), ('cauti_w_z_score', 'VARCHAR'), ('ssi_w_z_score', 'VARCHAR'), ('cdi_w_z_score', 'VARCHAR'), ('mrsa_w_z_score', 'VARCHAR'), ('psi_90_start_date', 'DATE'), ('psi_90_end_date', 'DATE'), ('hai_measures_start_date', 'DATE'), ('hai_measures_end_date', 'DATE'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('program_key', 'VARCHAR'), ('total_hac_score_number', 'DOUBLE'), ('psi_90_start_date_text', 'VARCHAR'), ('psi_90_end_date_text', 'VARCHAR'), ('hai_measures_start_date_text', 'VARCHAR'), ('hai_measures_end_date_text', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_hac_program_year' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_hospital_window.columns",
+      "table": "fct_hai_hospital_window",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "entity_id",
+          "measure_id",
+          "window_start",
+          "window_end",
+          "measure_name",
+          "score",
+          "footnote",
+          "compared_to_national",
+          "member_sha256",
+          "object_key",
+          "release_date",
+          "release_file_count",
+          "window_key",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_hospital_window.types",
+      "table": "fct_hai_hospital_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('measure_name', 'VARCHAR'), ('score', 'VARCHAR'), ('footnote', 'VARCHAR'), ('compared_to_national', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('window_key', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_hai_hospital_window' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_national_window.columns",
+      "table": "fct_hai_national_window",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "entity_id",
+          "measure_id",
+          "window_start",
+          "window_end",
+          "measure_name",
+          "score",
+          "footnote",
+          "member_sha256",
+          "object_key",
+          "release_date",
+          "release_file_count",
+          "window_key",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_national_window.types",
+      "table": "fct_hai_national_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('measure_name', 'VARCHAR'), ('score', 'VARCHAR'), ('footnote', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('window_key', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_hai_national_window' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_state_window.columns",
+      "table": "fct_hai_state_window",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "entity_id",
+          "measure_id",
+          "window_start",
+          "window_end",
+          "measure_name",
+          "score",
+          "footnote",
+          "member_sha256",
+          "object_key",
+          "release_date",
+          "release_file_count",
+          "window_key",
+          "release_sk",
+          "state_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_state_window.types",
+      "table": "fct_hai_state_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('measure_name', 'VARCHAR'), ('score', 'VARCHAR'), ('footnote', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('window_key', 'VARCHAR'), ('release_sk', 'VARCHAR'), ('state_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_hai_state_window' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_window_hold.columns",
+      "table": "fct_hai_window_hold",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "bronze_table",
+          "hold_reason",
+          "entity_id",
+          "measure_id",
+          "window_start",
+          "window_end",
+          "row_count",
+          "hold_key",
+          "member_sha256s",
+          "hospital_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_window_hold.types",
+      "table": "fct_hai_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('bronze_table', 'VARCHAR'), ('hold_reason', 'VARCHAR'), ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('row_count', 'BIGINT'), ('hold_key', 'VARCHAR'), ('member_sha256s', 'VARCHAR[]'), ('hospital_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_hai_window_hold' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hcahps_window.columns",
+      "table": "fct_hcahps_window",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "entity_id",
+          "measure_id",
+          "window_start",
+          "window_end",
+          "measure_name",
+          "hcahps_answer_description",
+          "hcahps_answer_percent",
+          "hcahps_answer_percent_footnote",
+          "hcahps_linear_mean_value",
+          "patient_survey_star_rating",
+          "patient_survey_star_rating_footnote",
+          "number_of_completed_surveys",
+          "number_of_completed_surveys_footnote",
+          "survey_response_rate_percent",
+          "survey_response_rate_percent_footnote",
+          "member_sha256",
+          "object_key",
+          "release_date",
+          "release_file_count",
+          "window_key",
+          "hcahps_answer_percent_number",
+          "number_of_completed_surveys_number",
+          "survey_response_rate_percent_number",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hcahps_window.types",
+      "table": "fct_hcahps_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('measure_name', 'VARCHAR'), ('hcahps_answer_description', 'VARCHAR'), ('hcahps_answer_percent', 'VARCHAR'), ('hcahps_answer_percent_footnote', 'VARCHAR'), ('hcahps_linear_mean_value', 'VARCHAR'), ('patient_survey_star_rating', 'VARCHAR'), ('patient_survey_star_rating_footnote', 'VARCHAR'), ('number_of_completed_surveys', 'VARCHAR'), ('number_of_completed_surveys_footnote', 'VARCHAR'), ('survey_response_rate_percent', 'VARCHAR'), ('survey_response_rate_percent_footnote', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('window_key', 'VARCHAR'), ('hcahps_answer_percent_number', 'DOUBLE'), ('number_of_completed_surveys_number', 'DOUBLE'), ('survey_response_rate_percent_number', 'DOUBLE'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_hcahps_window' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hgi_release.columns",
+      "table": "fct_hgi_release",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "object_key",
+          "source_row_number",
+          "is_label_held",
+          "ccn",
+          "state_code",
+          "county_name",
+          "zip_code",
+          "hospital_type",
+          "hospital_ownership",
+          "has_emergency_services",
+          "overall_rating",
+          "overall_rating_text",
+          "overall_rating_footnote",
+          "release_date",
+          "release_file_count",
+          "release_key",
+          "hospital_sk",
+          "release_sk",
+          "state_sk",
+          "zip_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hgi_release.types",
+      "table": "fct_hgi_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('is_label_held', 'BOOLEAN'), ('ccn', 'VARCHAR'), ('state_code', 'VARCHAR'), ('county_name', 'VARCHAR'), ('zip_code', 'VARCHAR'), ('hospital_type', 'VARCHAR'), ('hospital_ownership', 'VARCHAR'), ('has_emergency_services', 'BOOLEAN'), ('overall_rating', 'INTEGER'), ('overall_rating_text', 'VARCHAR'), ('overall_rating_footnote', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('release_key', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR'), ('state_sk', 'VARCHAR'), ('zip_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_hgi_release' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hhs_capacity_week.columns",
+      "table": "fct_hhs_capacity_week",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "hospital_pk",
+          "collection_week",
+          "state",
+          "ccn_published",
+          "hospital_name",
+          "address",
+          "city",
+          "zip",
+          "hospital_subtype",
+          "fips_code",
+          "is_metro_micro",
+          "is_corrected",
+          "hhs_ids",
+          "total_beds_7_day_avg",
+          "all_adult_hospital_beds_7_day_avg",
+          "all_adult_hospital_inpatient_beds_7_day_avg",
+          "inpatient_beds_used_7_day_avg",
+          "all_adult_hospital_inpatient_bed_occupied_7_day_avg",
+          "inpatient_beds_used_covid_7_day_avg",
+          "total_adult_patients_hospitalized_confirmed_and_suspected_covid_7_day_avg",
+          "total_adult_patients_hospitalized_confirmed_covid_7_day_avg",
+          "total_pediatric_patients_hospitalized_confirmed_and_suspected_covid_7_day_avg",
+          "total_pediatric_patients_hospitalized_confirmed_covid_7_day_avg",
+          "inpatient_beds_7_day_avg",
+          "total_icu_beds_7_day_avg",
+          "total_staffed_adult_icu_beds_7_day_avg",
+          "icu_beds_used_7_day_avg",
+          "staffed_adult_icu_bed_occupancy_7_day_avg",
+          "staffed_icu_adult_patients_confirmed_and_suspected_covid_7_day_avg",
+          "staffed_icu_adult_patients_confirmed_covid_7_day_avg",
+          "total_patients_hospitalized_confirmed_influenza_7_day_avg",
+          "icu_patients_confirmed_influenza_7_day_avg",
+          "total_patients_hospitalized_confirmed_influenza_and_covid_7_day_avg",
+          "total_beds_7_day_sum",
+          "all_adult_hospital_beds_7_day_sum",
+          "all_adult_hospital_inpatient_beds_7_day_sum",
+          "inpatient_beds_used_7_day_sum",
+          "all_adult_hospital_inpatient_bed_occupied_7_day_sum",
+          "inpatient_beds_used_covid_7_day_sum",
+          "total_adult_patients_hospitalized_confirmed_and_suspected_covid_7_day_sum",
+          "total_adult_patients_hospitalized_confirmed_covid_7_day_sum",
+          "total_pediatric_patients_hospitalized_confirmed_and_suspected_covid_7_day_sum",
+          "total_pediatric_patients_hospitalized_confirmed_covid_7_day_sum",
+          "inpatient_beds_7_day_sum",
+          "total_icu_beds_7_day_sum",
+          "total_staffed_adult_icu_beds_7_day_sum",
+          "icu_beds_used_7_day_sum",
+          "staffed_adult_icu_bed_occupancy_7_day_sum",
+          "staffed_icu_adult_patients_confirmed_and_suspected_covid_7_day_sum",
+          "staffed_icu_adult_patients_confirmed_covid_7_day_sum",
+          "total_patients_hospitalized_confirmed_influenza_7_day_sum",
+          "icu_patients_confirmed_influenza_7_day_sum",
+          "total_patients_hospitalized_confirmed_influenza_and_covid_7_day_sum",
+          "total_beds_7_day_coverage",
+          "all_adult_hospital_beds_7_day_coverage",
+          "all_adult_hospital_inpatient_beds_7_day_coverage",
+          "inpatient_beds_used_7_day_coverage",
+          "all_adult_hospital_inpatient_bed_occupied_7_day_coverage",
+          "inpatient_beds_used_covid_7_day_coverage",
+          "total_adult_patients_hospitalized_confirmed_and_suspected_covid_7_day_coverage",
+          "total_adult_patients_hospitalized_confirmed_covid_7_day_coverage",
+          "total_pediatric_patients_hospitalized_confirmed_and_suspected_covid_7_day_coverage",
+          "total_pediatric_patients_hospitalized_confirmed_covid_7_day_coverage",
+          "inpatient_beds_7_day_coverage",
+          "total_icu_beds_7_day_coverage",
+          "total_staffed_adult_icu_beds_7_day_coverage",
+          "icu_beds_used_7_day_coverage",
+          "staffed_adult_icu_bed_occupancy_7_day_coverage",
+          "staffed_icu_adult_patients_confirmed_and_suspected_covid_7_day_coverage",
+          "staffed_icu_adult_patients_confirmed_covid_7_day_coverage",
+          "total_patients_hospitalized_confirmed_influenza_7_day_coverage",
+          "icu_patients_confirmed_influenza_7_day_coverage",
+          "total_patients_hospitalized_confirmed_influenza_and_covid_7_day_coverage",
+          "previous_day_admission_adult_covid_confirmed_7_day_sum",
+          "previous_day_admission_adult_covid_confirmed_18_19_7_day_sum",
+          "previous_day_admission_adult_covid_confirmed_20_29_7_day_sum",
+          "previous_day_admission_adult_covid_confirmed_30_39_7_day_sum",
+          "previous_day_admission_adult_covid_confirmed_40_49_7_day_sum",
+          "previous_day_admission_adult_covid_confirmed_50_59_7_day_sum",
+          "previous_day_admission_adult_covid_confirmed_60_69_7_day_sum",
+          "previous_day_admission_adult_covid_confirmed_70_79_7_day_sum",
+          "previous_day_admission_adult_covid_confirmed_80_7_day_sum",
+          "previous_day_admission_adult_covid_confirmed_unknown_7_day_sum",
+          "previous_day_admission_pediatric_covid_confirmed_7_day_sum",
+          "previous_day_covid_ed_visits_7_day_sum",
+          "previous_day_admission_adult_covid_suspected_7_day_sum",
+          "previous_day_admission_adult_covid_suspected_18_19_7_day_sum",
+          "previous_day_admission_adult_covid_suspected_20_29_7_day_sum",
+          "previous_day_admission_adult_covid_suspected_30_39_7_day_sum",
+          "previous_day_admission_adult_covid_suspected_40_49_7_day_sum",
+          "previous_day_admission_adult_covid_suspected_50_59_7_day_sum",
+          "previous_day_admission_adult_covid_suspected_60_69_7_day_sum",
+          "previous_day_admission_adult_covid_suspected_70_79_7_day_sum",
+          "previous_day_admission_adult_covid_suspected_80_7_day_sum",
+          "previous_day_admission_adult_covid_suspected_unknown_7_day_sum",
+          "previous_day_admission_pediatric_covid_suspected_7_day_sum",
+          "previous_day_total_ed_visits_7_day_sum",
+          "previous_day_admission_influenza_confirmed_7_day_sum",
+          "previous_day_admission_adult_covid_confirmed_7_day_coverage",
+          "previous_day_admission_pediatric_covid_confirmed_7_day_coverage",
+          "previous_day_admission_adult_covid_suspected_7_day_coverage",
+          "previous_day_admission_pediatric_covid_suspected_7_day_coverage",
+          "previous_week_personnel_covid_vaccinated_doses_administered_7_day",
+          "total_personnel_covid_vaccinated_doses_none_7_day",
+          "total_personnel_covid_vaccinated_doses_one_7_day",
+          "total_personnel_covid_vaccinated_doses_all_7_day",
+          "previous_week_patients_covid_vaccinated_doses_one_7_day",
+          "previous_week_patients_covid_vaccinated_doses_all_7_day",
+          "all_pediatric_inpatient_bed_occupied_7_day_avg",
+          "all_pediatric_inpatient_bed_occupied_7_day_coverage",
+          "all_pediatric_inpatient_bed_occupied_7_day_sum",
+          "all_pediatric_inpatient_beds_7_day_avg",
+          "all_pediatric_inpatient_beds_7_day_coverage",
+          "all_pediatric_inpatient_beds_7_day_sum",
+          "previous_day_admission_pediatric_covid_confirmed_0_4_7_day_sum",
+          "previous_day_admission_pediatric_covid_confirmed_12_17_7_day_sum",
+          "previous_day_admission_pediatric_covid_confirmed_5_11_7_day_sum",
+          "previous_day_admission_pediatric_covid_confirmed_unknown_7_day_sum",
+          "staffed_icu_pediatric_patients_confirmed_covid_7_day_avg",
+          "staffed_icu_pediatric_patients_confirmed_covid_7_day_coverage",
+          "staffed_icu_pediatric_patients_confirmed_covid_7_day_sum",
+          "staffed_pediatric_icu_bed_occupancy_7_day_avg",
+          "staffed_pediatric_icu_bed_occupancy_7_day_coverage",
+          "staffed_pediatric_icu_bed_occupancy_7_day_sum",
+          "total_staffed_pediatric_icu_beds_7_day_avg",
+          "total_staffed_pediatric_icu_beds_7_day_coverage",
+          "total_staffed_pediatric_icu_beds_7_day_sum",
+          "suppressed_fields",
+          "negative_fields",
+          "ccn",
+          "ccn_source",
+          "week_key",
+          "nulled_values_published",
+          "hospital_sk",
+          "release_sk",
+          "state_sk",
+          "zip_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hhs_capacity_week.types",
+      "table": "fct_hhs_capacity_week",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('hospital_pk', 'VARCHAR'), ('collection_week', 'DATE'), ('state', 'VARCHAR'), ('ccn_published', 'VARCHAR'), ('hospital_name', 'VARCHAR'), ('address', 'VARCHAR'), ('city', 'VARCHAR'), ('zip', 'VARCHAR'), ('hospital_subtype', 'VARCHAR'), ('fips_code', 'VARCHAR'), ('is_metro_micro', 'BOOLEAN'), ('is_corrected', 'BOOLEAN'), ('hhs_ids', 'VARCHAR'), ('total_beds_7_day_avg', 'DOUBLE'), ('all_adult_hospital_beds_7_day_avg', 'DOUBLE'), ('all_adult_hospital_inpatient_beds_7_day_avg', 'DOUBLE'), ('inpatient_beds_used_7_day_avg', 'DOUBLE'), ('all_adult_hospital_inpatient_bed_occupied_7_day_avg', 'DOUBLE'), ('inpatient_beds_used_covid_7_day_avg', 'DOUBLE'), ('total_adult_patients_hospitalized_confirmed_and_suspected_covid_7_day_avg', 'DOUBLE'), ('total_adult_patients_hospitalized_confirmed_covid_7_day_avg', 'DOUBLE'), ('total_pediatric_patients_hospitalized_confirmed_and_suspected_covid_7_day_avg', 'DOUBLE'), ('total_pediatric_patients_hospitalized_confirmed_covid_7_day_avg', 'DOUBLE'), ('inpatient_beds_7_day_avg', 'DOUBLE'), ('total_icu_beds_7_day_avg', 'DOUBLE'), ('total_staffed_adult_icu_beds_7_day_avg', 'DOUBLE'), ('icu_beds_used_7_day_avg', 'DOUBLE'), ('staffed_adult_icu_bed_occupancy_7_day_avg', 'DOUBLE'), ('staffed_icu_adult_patients_confirmed_and_suspected_covid_7_day_avg', 'DOUBLE'), ('staffed_icu_adult_patients_confirmed_covid_7_day_avg', 'DOUBLE'), ('total_patients_hospitalized_confirmed_influenza_7_day_avg', 'DOUBLE'), ('icu_patients_confirmed_influenza_7_day_avg', 'DOUBLE'), ('total_patients_hospitalized_confirmed_influenza_and_covid_7_day_avg', 'DOUBLE'), ('total_beds_7_day_sum', 'DOUBLE'), ('all_adult_hospital_beds_7_day_sum', 'DOUBLE'), ('all_adult_hospital_inpatient_beds_7_day_sum', 'DOUBLE'), ('inpatient_beds_used_7_day_sum', 'DOUBLE'), ('all_adult_hospital_inpatient_bed_occupied_7_day_sum', 'DOUBLE'), ('inpatient_beds_used_covid_7_day_sum', 'DOUBLE'), ('total_adult_patients_hospitalized_confirmed_and_suspected_covid_7_day_sum', 'DOUBLE'), ('total_adult_patients_hospitalized_confirmed_covid_7_day_sum', 'DOUBLE'), ('total_pediatric_patients_hospitalized_confirmed_and_suspected_covid_7_day_sum', 'DOUBLE'), ('total_pediatric_patients_hospitalized_confirmed_covid_7_day_sum', 'DOUBLE'), ('inpatient_beds_7_day_sum', 'DOUBLE'), ('total_icu_beds_7_day_sum', 'DOUBLE'), ('total_staffed_adult_icu_beds_7_day_sum', 'DOUBLE'), ('icu_beds_used_7_day_sum', 'DOUBLE'), ('staffed_adult_icu_bed_occupancy_7_day_sum', 'DOUBLE'), ('staffed_icu_adult_patients_confirmed_and_suspected_covid_7_day_sum', 'DOUBLE'), ('staffed_icu_adult_patients_confirmed_covid_7_day_sum', 'DOUBLE'), ('total_patients_hospitalized_confirmed_influenza_7_day_sum', 'DOUBLE'), ('icu_patients_confirmed_influenza_7_day_sum', 'DOUBLE'), ('total_patients_hospitalized_confirmed_influenza_and_covid_7_day_sum', 'DOUBLE'), ('total_beds_7_day_coverage', 'DOUBLE'), ('all_adult_hospital_beds_7_day_coverage', 'DOUBLE'), ('all_adult_hospital_inpatient_beds_7_day_coverage', 'DOUBLE'), ('inpatient_beds_used_7_day_coverage', 'DOUBLE'), ('all_adult_hospital_inpatient_bed_occupied_7_day_coverage', 'DOUBLE'), ('inpatient_beds_used_covid_7_day_coverage', 'DOUBLE'), ('total_adult_patients_hospitalized_confirmed_and_suspected_covid_7_day_coverage', 'DOUBLE'), ('total_adult_patients_hospitalized_confirmed_covid_7_day_coverage', 'DOUBLE'), ('total_pediatric_patients_hospitalized_confirmed_and_suspected_covid_7_day_coverage', 'DOUBLE'), ('total_pediatric_patients_hospitalized_confirmed_covid_7_day_coverage', 'DOUBLE'), ('inpatient_beds_7_day_coverage', 'DOUBLE'), ('total_icu_beds_7_day_coverage', 'DOUBLE'), ('total_staffed_adult_icu_beds_7_day_coverage', 'DOUBLE'), ('icu_beds_used_7_day_coverage', 'DOUBLE'), ('staffed_adult_icu_bed_occupancy_7_day_coverage', 'DOUBLE'), ('staffed_icu_adult_patients_confirmed_and_suspected_covid_7_day_coverage', 'DOUBLE'), ('staffed_icu_adult_patients_confirmed_covid_7_day_coverage', 'DOUBLE'), ('total_patients_hospitalized_confirmed_influenza_7_day_coverage', 'DOUBLE'), ('icu_patients_confirmed_influenza_7_day_coverage', 'DOUBLE'), ('total_patients_hospitalized_confirmed_influenza_and_covid_7_day_coverage', 'DOUBLE'), ('previous_day_admission_adult_covid_confirmed_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_confirmed_18_19_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_confirmed_20_29_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_confirmed_30_39_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_confirmed_40_49_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_confirmed_50_59_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_confirmed_60_69_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_confirmed_70_79_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_confirmed_80_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_confirmed_unknown_7_day_sum', 'DOUBLE'), ('previous_day_admission_pediatric_covid_confirmed_7_day_sum', 'DOUBLE'), ('previous_day_covid_ed_visits_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_suspected_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_suspected_18_19_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_suspected_20_29_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_suspected_30_39_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_suspected_40_49_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_suspected_50_59_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_suspected_60_69_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_suspected_70_79_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_suspected_80_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_suspected_unknown_7_day_sum', 'DOUBLE'), ('previous_day_admission_pediatric_covid_suspected_7_day_sum', 'DOUBLE'), ('previous_day_total_ed_visits_7_day_sum', 'DOUBLE'), ('previous_day_admission_influenza_confirmed_7_day_sum', 'DOUBLE'), ('previous_day_admission_adult_covid_confirmed_7_day_coverage', 'DOUBLE'), ('previous_day_admission_pediatric_covid_confirmed_7_day_coverage', 'DOUBLE'), ('previous_day_admission_adult_covid_suspected_7_day_coverage', 'DOUBLE'), ('previous_day_admission_pediatric_covid_suspected_7_day_coverage', 'DOUBLE'), ('previous_week_personnel_covid_vaccinated_doses_administered_7_day', 'DOUBLE'), ('total_personnel_covid_vaccinated_doses_none_7_day', 'DOUBLE'), ('total_personnel_covid_vaccinated_doses_one_7_day', 'DOUBLE'), ('total_personnel_covid_vaccinated_doses_all_7_day', 'DOUBLE'), ('previous_week_patients_covid_vaccinated_doses_one_7_day', 'DOUBLE'), ('previous_week_patients_covid_vaccinated_doses_all_7_day', 'DOUBLE'), ('all_pediatric_inpatient_bed_occupied_7_day_avg', 'DOUBLE'), ('all_pediatric_inpatient_bed_occupied_7_day_coverage', 'DOUBLE'), ('all_pediatric_inpatient_bed_occupied_7_day_sum', 'DOUBLE'), ('all_pediatric_inpatient_beds_7_day_avg', 'DOUBLE'), ('all_pediatric_inpatient_beds_7_day_coverage', 'DOUBLE'), ('all_pediatric_inpatient_beds_7_day_sum', 'DOUBLE'), ('previous_day_admission_pediatric_covid_confirmed_0_4_7_day_sum', 'DOUBLE'), ('previous_day_admission_pediatric_covid_confirmed_12_17_7_day_sum', 'DOUBLE'), ('previous_day_admission_pediatric_covid_confirmed_5_11_7_day_sum', 'DOUBLE'), ('previous_day_admission_pediatric_covid_confirmed_unknown_7_day_sum', 'DOUBLE'), ('staffed_icu_pediatric_patients_confirmed_covid_7_day_avg', 'DOUBLE'), ('staffed_icu_pediatric_patients_confirmed_covid_7_day_coverage', 'DOUBLE'), ('staffed_icu_pediatric_patients_confirmed_covid_7_day_sum', 'DOUBLE'), ('staffed_pediatric_icu_bed_occupancy_7_day_avg', 'DOUBLE'), ('staffed_pediatric_icu_bed_occupancy_7_day_coverage', 'DOUBLE'), ('staffed_pediatric_icu_bed_occupancy_7_day_sum', 'DOUBLE'), ('total_staffed_pediatric_icu_beds_7_day_avg', 'DOUBLE'), ('total_staffed_pediatric_icu_beds_7_day_coverage', 'DOUBLE'), ('total_staffed_pediatric_icu_beds_7_day_sum', 'DOUBLE'), ('suppressed_fields', 'VARCHAR[]'), ('negative_fields', 'VARCHAR[]'), ('ccn', 'VARCHAR'), ('ccn_source', 'VARCHAR'), ('week_key', 'VARCHAR'), ('nulled_values_published', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR'), ('state_sk', 'VARCHAR'), ('zip_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_hhs_capacity_week' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hospital_owner_release.columns",
+      "table": "fct_hospital_owner_release",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "enrollment_id",
+          "associate_id",
+          "organization_name",
+          "associate_id_owner",
+          "associate_ids_padded",
+          "type_owner",
+          "role_code",
+          "role_text",
+          "association_date",
+          "organization_name_owner",
+          "doing_business_as_name_owner",
+          "state_owner",
+          "percentage_ownership",
+          "flags_published",
+          "created_for_acquisition_owner",
+          "corporation_owner",
+          "llc_owner",
+          "medical_provider_supplier_owner",
+          "management_services_company_owner",
+          "medical_staffing_company_owner",
+          "holding_company_owner",
+          "investment_firm_owner",
+          "financial_institution_owner",
+          "consulting_firm_owner",
+          "for_profit_owner",
+          "non_profit_owner",
+          "other_type_owner",
+          "private_equity_company_owner",
+          "reit_owner",
+          "chain_home_office_owner",
+          "owned_by_another_org_or_ind_owner",
+          "other_type_text_owner",
+          "release_id",
+          "release_label",
+          "period_start",
+          "period_end",
+          "owner_row_key",
+          "enrollment_sk",
+          "owner_organization_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hospital_owner_release.types",
+      "table": "fct_hospital_owner_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('enrollment_id', 'VARCHAR'), ('associate_id', 'VARCHAR'), ('organization_name', 'VARCHAR'), ('associate_id_owner', 'VARCHAR'), ('associate_ids_padded', 'BOOLEAN'), ('type_owner', 'VARCHAR'), ('role_code', 'VARCHAR'), ('role_text', 'VARCHAR'), ('association_date', 'DATE'), ('organization_name_owner', 'VARCHAR'), ('doing_business_as_name_owner', 'VARCHAR'), ('state_owner', 'VARCHAR'), ('percentage_ownership', 'DOUBLE'), ('flags_published', 'BOOLEAN'), ('created_for_acquisition_owner', 'BOOLEAN'), ('corporation_owner', 'BOOLEAN'), ('llc_owner', 'BOOLEAN'), ('medical_provider_supplier_owner', 'BOOLEAN'), ('management_services_company_owner', 'BOOLEAN'), ('medical_staffing_company_owner', 'BOOLEAN'), ('holding_company_owner', 'BOOLEAN'), ('investment_firm_owner', 'BOOLEAN'), ('financial_institution_owner', 'BOOLEAN'), ('consulting_firm_owner', 'BOOLEAN'), ('for_profit_owner', 'BOOLEAN'), ('non_profit_owner', 'BOOLEAN'), ('other_type_owner', 'BOOLEAN'), ('private_equity_company_owner', 'BOOLEAN'), ('reit_owner', 'BOOLEAN'), ('chain_home_office_owner', 'BOOLEAN'), ('owned_by_another_org_or_ind_owner', 'BOOLEAN'), ('other_type_text_owner', 'VARCHAR'), ('release_id', 'VARCHAR'), ('release_label', 'VARCHAR'), ('period_start', 'DATE'), ('period_end', 'DATE'), ('owner_row_key', 'VARCHAR'), ('enrollment_sk', 'VARCHAR'), ('owner_organization_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_hospital_owner_release' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hpsa_component.columns",
+      "table": "fct_hpsa_component",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "capture_date",
+          "hpsa_id",
+          "hpsa_name",
+          "designation_type",
+          "discipline",
+          "hpsa_status",
+          "hpsa_score_published",
+          "hpsa_score",
+          "designation_date_published",
+          "designation_date",
+          "last_update_date_published",
+          "last_update_date",
+          "withdrawn_date_published",
+          "withdrawn_date",
+          "component_type",
+          "geography_id",
+          "county_code_published",
+          "county_fips",
+          "county_source",
+          "county_token",
+          "rural_status",
+          "hold_reason",
+          "county_scope",
+          "is_connecticut",
+          "hpsa_row_key",
+          "county_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hpsa_component.types",
+      "table": "fct_hpsa_component",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('capture_date', 'DATE'), ('hpsa_id', 'VARCHAR'), ('hpsa_name', 'VARCHAR'), ('designation_type', 'VARCHAR'), ('discipline', 'VARCHAR'), ('hpsa_status', 'VARCHAR'), ('hpsa_score_published', 'VARCHAR'), ('hpsa_score', 'INTEGER'), ('designation_date_published', 'VARCHAR'), ('designation_date', 'DATE'), ('last_update_date_published', 'VARCHAR'), ('last_update_date', 'DATE'), ('withdrawn_date_published', 'VARCHAR'), ('withdrawn_date', 'DATE'), ('component_type', 'VARCHAR'), ('geography_id', 'VARCHAR'), ('county_code_published', 'VARCHAR'), ('county_fips', 'VARCHAR'), ('county_source', 'VARCHAR'), ('county_token', 'VARCHAR'), ('rural_status', 'VARCHAR'), ('hold_reason', 'VARCHAR'), ('county_scope', 'VARCHAR'), ('is_connecticut', 'BOOLEAN'), ('hpsa_row_key', 'VARCHAR'), ('county_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_hpsa_component' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hrrp_window.columns",
+      "table": "fct_hrrp_window",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "entity_id",
+          "measure_id",
+          "window_start",
+          "window_end",
+          "number_of_discharges",
+          "excess_readmission_ratio",
+          "predicted_readmission_rate",
+          "expected_readmission_rate",
+          "number_of_readmissions",
+          "footnote",
+          "member_sha256",
+          "object_key",
+          "release_date",
+          "release_file_count",
+          "window_key",
+          "published_measure_id",
+          "excess_readmission_ratio_number",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hrrp_window.types",
+      "table": "fct_hrrp_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('number_of_discharges', 'VARCHAR'), ('excess_readmission_ratio', 'VARCHAR'), ('predicted_readmission_rate', 'VARCHAR'), ('expected_readmission_rate', 'VARCHAR'), ('number_of_readmissions', 'VARCHAR'), ('footnote', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('window_key', 'VARCHAR'), ('published_measure_id', 'VARCHAR'), ('excess_readmission_ratio_number', 'DOUBLE'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_hrrp_window' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hsa_zip_cases.columns",
+      "table": "fct_hsa_zip_cases",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "data_year",
+          "period_start",
+          "period_end",
+          "ccn_published",
+          "zip_published",
+          "zip_code",
+          "total_cases",
+          "total_days_of_care",
+          "total_charges",
+          "hsa_row_key",
+          "is_ccn_shape_valid",
+          "is_zip_suppressed",
+          "is_zip_missing",
+          "is_cases_suppressed",
+          "is_days_suppressed",
+          "is_charges_suppressed",
+          "release_sk",
+          "zip_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hsa_zip_cases.types",
+      "table": "fct_hsa_zip_cases",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('data_year', 'VARCHAR'), ('period_start', 'DATE'), ('period_end', 'DATE'), ('ccn_published', 'VARCHAR'), ('zip_published', 'VARCHAR'), ('zip_code', 'VARCHAR'), ('total_cases', 'DOUBLE'), ('total_days_of_care', 'DOUBLE'), ('total_charges', 'DOUBLE'), ('hsa_row_key', 'VARCHAR'), ('is_ccn_shape_valid', 'BOOLEAN'), ('is_zip_suppressed', 'BOOLEAN'), ('is_zip_missing', 'BOOLEAN'), ('is_cases_suppressed', 'BOOLEAN'), ('is_days_suppressed', 'BOOLEAN'), ('is_charges_suppressed', 'BOOLEAN'), ('release_sk', 'VARCHAR'), ('zip_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_hsa_zip_cases' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hud_zip_county_hold.columns",
+      "table": "fct_hud_zip_county_hold",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "quarter_label",
+          "zip_code",
+          "geoid_published",
+          "usps_state",
+          "hold_reason",
+          "hud_row_key",
+          "release_sk",
+          "zip_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hud_zip_county_hold.types",
+      "table": "fct_hud_zip_county_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('quarter_label', 'VARCHAR'), ('zip_code', 'VARCHAR'), ('geoid_published', 'VARCHAR'), ('usps_state', 'VARCHAR'), ('hold_reason', 'VARCHAR'), ('hud_row_key', 'VARCHAR'), ('release_sk', 'VARCHAR'), ('zip_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_hud_zip_county_hold' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_impact_hold.columns",
+      "table": "fct_impact_hold",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "bronze_table",
+          "member_sha256",
+          "sheet_name",
+          "family",
+          "rule_fiscal_year",
+          "rule_stage",
+          "ccn",
+          "hold_reason",
+          "hold_rows",
+          "hold_key",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_impact_hold.types",
+      "table": "fct_impact_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('bronze_table', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('sheet_name', 'VARCHAR'), ('family', 'VARCHAR'), ('rule_fiscal_year', 'INTEGER'), ('rule_stage', 'VARCHAR'), ('ccn', 'VARCHAR'), ('hold_reason', 'VARCHAR'), ('hold_rows', 'BIGINT'), ('hold_key', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_impact_hold' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ipps_impact_value.columns",
+      "table": "fct_ipps_impact_value",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "bronze_table",
+          "member_sha256",
+          "sheet_name",
+          "family",
+          "rule_fiscal_year",
+          "rule_stage",
+          "ccn",
+          "field",
+          "is_numeric_field",
+          "value_text",
+          "value_number",
+          "value_key",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ipps_impact_value.types",
+      "table": "fct_ipps_impact_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('bronze_table', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('sheet_name', 'VARCHAR'), ('family', 'VARCHAR'), ('rule_fiscal_year', 'INTEGER'), ('rule_stage', 'VARCHAR'), ('ccn', 'VARCHAR'), ('field', 'VARCHAR'), ('is_numeric_field', 'BOOLEAN'), ('value_text', 'VARCHAR'), ('value_number', 'DOUBLE'), ('value_key', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_ipps_impact_value' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_maternal_health_window.columns",
+      "table": "fct_maternal_health_window",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "entity_id",
+          "measure_id",
+          "window_start",
+          "window_end",
+          "measure_name",
+          "score",
+          "sample",
+          "footnote",
+          "member_sha256",
+          "object_key",
+          "release_date",
+          "release_file_count",
+          "window_key",
+          "score_number",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_maternal_health_window.types",
+      "table": "fct_maternal_health_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('measure_name', 'VARCHAR'), ('score', 'VARCHAR'), ('sample', 'VARCHAR'), ('footnote', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('window_key', 'VARCHAR'), ('score_number', 'DOUBLE'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_maternal_health_window' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_drg.columns",
+      "table": "fct_medicare_inpatient_drg",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "member_path",
+          "ccn",
+          "drg_cd",
+          "drg_desc",
+          "data_year",
+          "release_year",
+          "tot_dschrgs",
+          "avg_submtd_cvrd_chrg",
+          "avg_tot_pymt_amt",
+          "avg_mdcr_pymt_amt",
+          "drg_key",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_drg.types",
+      "table": "fct_medicare_inpatient_drg",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('member_path', 'VARCHAR'), ('ccn', 'VARCHAR'), ('drg_cd', 'VARCHAR'), ('drg_desc', 'VARCHAR'), ('data_year', 'INTEGER'), ('release_year', 'INTEGER'), ('tot_dschrgs', 'DOUBLE'), ('avg_submtd_cvrd_chrg', 'DOUBLE'), ('avg_tot_pymt_amt', 'DOUBLE'), ('avg_mdcr_pymt_amt', 'DOUBLE'), ('drg_key', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_medicare_inpatient_drg' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_provider.columns",
+      "table": "fct_medicare_inpatient_provider",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "member_path",
+          "ccn",
+          "provider_name",
+          "state_code",
+          "state_fips",
+          "zip5",
+          "ruca",
+          "data_year",
+          "release_year",
+          "tot_benes",
+          "tot_submtd_cvrd_chrg",
+          "tot_pymt_amt",
+          "tot_mdcr_pymt_amt",
+          "tot_dschrgs",
+          "tot_cvrd_days",
+          "tot_days",
+          "bene_avg_age",
+          "bene_age_lt_65_cnt",
+          "bene_age_65_74_cnt",
+          "bene_age_75_84_cnt",
+          "bene_age_gt_84_cnt",
+          "bene_feml_cnt",
+          "bene_male_cnt",
+          "bene_race_wht_cnt",
+          "bene_race_black_cnt",
+          "bene_race_api_cnt",
+          "bene_race_hspnc_cnt",
+          "bene_race_natind_cnt",
+          "bene_race_othr_cnt",
+          "bene_dual_cnt",
+          "bene_ndual_cnt",
+          "bene_cc_bh_adhd_othcd_v1_pct",
+          "bene_cc_bh_alcohol_drug_v1_pct",
+          "bene_cc_bh_tobacco_v1_pct",
+          "bene_cc_bh_alz_nonalzdem_v2_pct",
+          "bene_cc_bh_anxiety_v1_pct",
+          "bene_cc_bh_bipolar_v1_pct",
+          "bene_cc_bh_mood_v2_pct",
+          "bene_cc_bh_depress_v1_pct",
+          "bene_cc_bh_pd_v1_pct",
+          "bene_cc_bh_ptsd_v1_pct",
+          "bene_cc_bh_schizo_othpsy_v1_pct",
+          "bene_cc_ph_asthma_v2_pct",
+          "bene_cc_ph_afib_v2_pct",
+          "bene_cc_ph_cancer6_v2_pct",
+          "bene_cc_ph_ckd_v2_pct",
+          "bene_cc_ph_copd_v2_pct",
+          "bene_cc_ph_diabetes_v2_pct",
+          "bene_cc_ph_hf_nonihd_v2_pct",
+          "bene_cc_ph_hyperlipidemia_v2_pct",
+          "bene_cc_ph_hypertension_v2_pct",
+          "bene_cc_ph_ischemicheart_v2_pct",
+          "bene_cc_ph_osteoporosis_v2_pct",
+          "bene_cc_ph_parkinson_v2_pct",
+          "bene_cc_ph_arthritis_v2_pct",
+          "bene_cc_ph_stroke_tia_v2_pct",
+          "bene_avg_risk_scre",
+          "provider_key",
+          "hospital_sk",
+          "release_sk",
+          "state_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_provider.types",
+      "table": "fct_medicare_inpatient_provider",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('member_path', 'VARCHAR'), ('ccn', 'VARCHAR'), ('provider_name', 'VARCHAR'), ('state_code', 'VARCHAR'), ('state_fips', 'VARCHAR'), ('zip5', 'VARCHAR'), ('ruca', 'VARCHAR'), ('data_year', 'INTEGER'), ('release_year', 'INTEGER'), ('tot_benes', 'DOUBLE'), ('tot_submtd_cvrd_chrg', 'DOUBLE'), ('tot_pymt_amt', 'DOUBLE'), ('tot_mdcr_pymt_amt', 'DOUBLE'), ('tot_dschrgs', 'DOUBLE'), ('tot_cvrd_days', 'DOUBLE'), ('tot_days', 'DOUBLE'), ('bene_avg_age', 'DOUBLE'), ('bene_age_lt_65_cnt', 'DOUBLE'), ('bene_age_65_74_cnt', 'DOUBLE'), ('bene_age_75_84_cnt', 'DOUBLE'), ('bene_age_gt_84_cnt', 'DOUBLE'), ('bene_feml_cnt', 'DOUBLE'), ('bene_male_cnt', 'DOUBLE'), ('bene_race_wht_cnt', 'DOUBLE'), ('bene_race_black_cnt', 'DOUBLE'), ('bene_race_api_cnt', 'DOUBLE'), ('bene_race_hspnc_cnt', 'DOUBLE'), ('bene_race_natind_cnt', 'DOUBLE'), ('bene_race_othr_cnt', 'DOUBLE'), ('bene_dual_cnt', 'DOUBLE'), ('bene_ndual_cnt', 'DOUBLE'), ('bene_cc_bh_adhd_othcd_v1_pct', 'DOUBLE'), ('bene_cc_bh_alcohol_drug_v1_pct', 'DOUBLE'), ('bene_cc_bh_tobacco_v1_pct', 'DOUBLE'), ('bene_cc_bh_alz_nonalzdem_v2_pct', 'DOUBLE'), ('bene_cc_bh_anxiety_v1_pct', 'DOUBLE'), ('bene_cc_bh_bipolar_v1_pct', 'DOUBLE'), ('bene_cc_bh_mood_v2_pct', 'DOUBLE'), ('bene_cc_bh_depress_v1_pct', 'DOUBLE'), ('bene_cc_bh_pd_v1_pct', 'DOUBLE'), ('bene_cc_bh_ptsd_v1_pct', 'DOUBLE'), ('bene_cc_bh_schizo_othpsy_v1_pct', 'DOUBLE'), ('bene_cc_ph_asthma_v2_pct', 'DOUBLE'), ('bene_cc_ph_afib_v2_pct', 'DOUBLE'), ('bene_cc_ph_cancer6_v2_pct', 'DOUBLE'), ('bene_cc_ph_ckd_v2_pct', 'DOUBLE'), ('bene_cc_ph_copd_v2_pct', 'DOUBLE'), ('bene_cc_ph_diabetes_v2_pct', 'DOUBLE'), ('bene_cc_ph_hf_nonihd_v2_pct', 'DOUBLE'), ('bene_cc_ph_hyperlipidemia_v2_pct', 'DOUBLE'), ('bene_cc_ph_hypertension_v2_pct', 'DOUBLE'), ('bene_cc_ph_ischemicheart_v2_pct', 'DOUBLE'), ('bene_cc_ph_osteoporosis_v2_pct', 'DOUBLE'), ('bene_cc_ph_parkinson_v2_pct', 'DOUBLE'), ('bene_cc_ph_arthritis_v2_pct', 'DOUBLE'), ('bene_cc_ph_stroke_tia_v2_pct', 'DOUBLE'), ('bene_avg_risk_scre', 'DOUBLE'), ('provider_key', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR'), ('state_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_medicare_inpatient_provider' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mmd_prevalence.columns",
+      "table": "fct_mmd_prevalence",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "file_control",
+          "condition_label",
+          "data_year",
+          "geography_level",
+          "county_fips",
+          "state_fips",
+          "county_name",
+          "urban",
+          "denominator_band",
+          "value_published",
+          "value_number",
+          "value_unit",
+          "is_possible_suppression",
+          "is_unknown_county",
+          "county_scope",
+          "is_connecticut",
+          "mmd_row_key",
+          "county_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mmd_prevalence.types",
+      "table": "fct_mmd_prevalence",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('file_control', 'VARCHAR'), ('condition_label', 'VARCHAR'), ('data_year', 'INTEGER'), ('geography_level', 'VARCHAR'), ('county_fips', 'VARCHAR'), ('state_fips', 'VARCHAR'), ('county_name', 'VARCHAR'), ('urban', 'VARCHAR'), ('denominator_band', 'VARCHAR'), ('value_published', 'VARCHAR'), ('value_number', 'DOUBLE'), ('value_unit', 'VARCHAR'), ('is_possible_suppression', 'BOOLEAN'), ('is_unknown_county', 'BOOLEAN'), ('county_scope', 'VARCHAR'), ('is_connecticut', 'BOOLEAN'), ('mmd_row_key', 'VARCHAR'), ('county_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_mmd_prevalence' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mua_component.columns",
+      "table": "fct_mua_component",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "capture_date",
+          "mua_id",
+          "designation_type_code",
+          "designation_type",
+          "mua_status",
+          "population_type",
+          "imu_score_published",
+          "imu_score",
+          "designation_date_published",
+          "designation_date",
+          "update_date_published",
+          "update_date",
+          "withdrawal_date_published",
+          "withdrawal_date",
+          "component_type",
+          "component_name",
+          "county_code_published",
+          "county_fips",
+          "county_token",
+          "county_subdivision_code",
+          "rural_status",
+          "hold_reason",
+          "county_scope",
+          "is_connecticut",
+          "mua_row_key",
+          "county_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mua_component.types",
+      "table": "fct_mua_component",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('capture_date', 'DATE'), ('mua_id', 'VARCHAR'), ('designation_type_code', 'VARCHAR'), ('designation_type', 'VARCHAR'), ('mua_status', 'VARCHAR'), ('population_type', 'VARCHAR'), ('imu_score_published', 'VARCHAR'), ('imu_score', 'DOUBLE'), ('designation_date_published', 'VARCHAR'), ('designation_date', 'DATE'), ('update_date_published', 'VARCHAR'), ('update_date', 'DATE'), ('withdrawal_date_published', 'VARCHAR'), ('withdrawal_date', 'DATE'), ('component_type', 'VARCHAR'), ('component_name', 'VARCHAR'), ('county_code_published', 'VARCHAR'), ('county_fips', 'VARCHAR'), ('county_token', 'VARCHAR'), ('county_subdivision_code', 'VARCHAR'), ('rural_status', 'VARCHAR'), ('hold_reason', 'VARCHAR'), ('county_scope', 'VARCHAR'), ('is_connecticut', 'BOOLEAN'), ('mua_row_key', 'VARCHAR'), ('county_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_mua_component' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_occupational_mix_survey.columns",
+      "table": "fct_occupational_mix_survey",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "bronze_table",
+          "member_sha256",
+          "sheet_name",
+          "source_row_number",
+          "survey_row_key",
+          "rule_fiscal_years",
+          "rule_stages",
+          "is_deleted",
+          "field_values",
+          "prov_text",
+          "from_text",
+          "to_text",
+          "rnsal_text",
+          "rnhr_text",
+          "lpnsthr_text",
+          "naorathr_text",
+          "mahr_text",
+          "nursehr_text",
+          "rnahw_text",
+          "ccn_published",
+          "ccn",
+          "survey_start_date",
+          "survey_end_date",
+          "rnsal",
+          "rnhr",
+          "lpnsthr",
+          "naorathr",
+          "mahr",
+          "nursehr",
+          "rnahw",
+          "rows_for_provider_period",
+          "hold_reason",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_occupational_mix_survey.types",
+      "table": "fct_occupational_mix_survey",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('bronze_table', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('sheet_name', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('survey_row_key', 'VARCHAR'), ('rule_fiscal_years', 'INTEGER[]'), ('rule_stages', 'VARCHAR[]'), ('is_deleted', 'BOOLEAN'), ('field_values', 'VARCHAR[]'), ('prov_text', 'VARCHAR'), ('from_text', 'VARCHAR'), ('to_text', 'VARCHAR'), ('rnsal_text', 'VARCHAR'), ('rnhr_text', 'VARCHAR'), ('lpnsthr_text', 'VARCHAR'), ('naorathr_text', 'VARCHAR'), ('mahr_text', 'VARCHAR'), ('nursehr_text', 'VARCHAR'), ('rnahw_text', 'VARCHAR'), ('ccn_published', 'VARCHAR'), ('ccn', 'VARCHAR'), ('survey_start_date', 'DATE'), ('survey_end_date', 'DATE'), ('rnsal', 'DOUBLE'), ('rnhr', 'DOUBLE'), ('lpnsthr', 'DOUBLE'), ('naorathr', 'DOUBLE'), ('mahr', 'DOUBLE'), ('nursehr', 'DOUBLE'), ('rnahw', 'DOUBLE'), ('rows_for_provider_period', 'BIGINT'), ('hold_reason', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_occupational_mix_survey' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_attestation.columns",
+      "table": "fct_onc_attestation",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "npi",
+          "ccn",
+          "ccn_published",
+          "provider_type",
+          "business_state_territory",
+          "zip",
+          "hospital_type",
+          "program_type",
+          "program_year",
+          "provider_stage_number",
+          "payment_year",
+          "attestation_month",
+          "attestation_year",
+          "mu_definition_year",
+          "stage_2_scheduled_2014",
+          "ehr_certification_number",
+          "ehr_product_chp_id",
+          "vendor_name",
+          "ehr_product_name",
+          "ehr_product_version",
+          "product_classification",
+          "product_setting",
+          "product_certification_edition_yr",
+          "attestation_key",
+          "payment_year_text",
+          "hospital_sk",
+          "release_sk",
+          "zip_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_attestation.types",
+      "table": "fct_onc_attestation",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('npi', 'VARCHAR'), ('ccn', 'VARCHAR'), ('ccn_published', 'VARCHAR'), ('provider_type', 'VARCHAR'), ('business_state_territory', 'VARCHAR'), ('zip', 'VARCHAR'), ('hospital_type', 'VARCHAR'), ('program_type', 'VARCHAR'), ('program_year', 'INTEGER'), ('provider_stage_number', 'VARCHAR'), ('payment_year', 'INTEGER'), ('attestation_month', 'INTEGER'), ('attestation_year', 'INTEGER'), ('mu_definition_year', 'VARCHAR'), ('stage_2_scheduled_2014', 'VARCHAR'), ('ehr_certification_number', 'VARCHAR'), ('ehr_product_chp_id', 'VARCHAR'), ('vendor_name', 'VARCHAR'), ('ehr_product_name', 'VARCHAR'), ('ehr_product_version', 'VARCHAR'), ('product_classification', 'VARCHAR'), ('product_setting', 'VARCHAR'), ('product_certification_edition_yr', 'VARCHAR'), ('attestation_key', 'VARCHAR'), ('payment_year_text', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR'), ('zip_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_onc_attestation' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_ehr_product.columns",
+      "table": "fct_onc_ehr_product",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "facility_id",
+          "ccn",
+          "facility_name",
+          "address",
+          "city_town",
+          "state",
+          "zip_code",
+          "county_parish",
+          "meets_criteria_for_promoting_interoperability_of_ehrs",
+          "start_date",
+          "end_date",
+          "program_year",
+          "cehrt_id",
+          "chpl_id",
+          "product_database_id",
+          "developer_name",
+          "product_name",
+          "linkage_key",
+          "hospital_sk",
+          "release_sk",
+          "state_sk",
+          "zip_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_ehr_product.types",
+      "table": "fct_onc_ehr_product",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('facility_id', 'VARCHAR'), ('ccn', 'VARCHAR'), ('facility_name', 'VARCHAR'), ('address', 'VARCHAR'), ('city_town', 'VARCHAR'), ('state', 'VARCHAR'), ('zip_code', 'VARCHAR'), ('county_parish', 'VARCHAR'), ('meets_criteria_for_promoting_interoperability_of_ehrs', 'BOOLEAN'), ('start_date', 'DATE'), ('end_date', 'DATE'), ('program_year', 'INTEGER'), ('cehrt_id', 'VARCHAR'), ('chpl_id', 'VARCHAR'), ('product_database_id', 'VARCHAR'), ('developer_name', 'VARCHAR'), ('product_name', 'VARCHAR'), ('linkage_key', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR'), ('state_sk', 'VARCHAR'), ('zip_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_onc_ehr_product' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ownership_change.columns",
+      "table": "fct_ownership_change",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "enrollment_id_buyer",
+          "enrollment_state_buyer",
+          "provider_type_code_buyer",
+          "provider_type_text_buyer",
+          "npi_buyer",
+          "multiple_npi_flag_buyer",
+          "ccn_buyer_published",
+          "associate_id_buyer",
+          "organization_name_buyer",
+          "doing_business_as_name_buyer",
+          "chow_type_code",
+          "chow_type_text",
+          "effective_date",
+          "enrollment_id_seller",
+          "enrollment_state_seller",
+          "provider_type_code_seller",
+          "provider_type_text_seller",
+          "npi_seller",
+          "multiple_npi_flag_seller",
+          "ccn_seller_published",
+          "associate_id_seller",
+          "associate_ids_padded",
+          "organization_name_seller",
+          "doing_business_as_name_seller",
+          "release_id",
+          "release_label",
+          "period_start",
+          "period_end",
+          "ccn_buyer",
+          "ccn_buyer_source",
+          "ccn_seller",
+          "ccn_seller_source",
+          "event_key",
+          "chow_row_key",
+          "releases_listed",
+          "enrollment_buyer_sk",
+          "enrollment_seller_sk",
+          "hospital_buyer_sk",
+          "hospital_seller_sk",
+          "owner_organization_buyer_sk",
+          "owner_organization_seller_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ownership_change.types",
+      "table": "fct_ownership_change",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('enrollment_id_buyer', 'VARCHAR'), ('enrollment_state_buyer', 'VARCHAR'), ('provider_type_code_buyer', 'VARCHAR'), ('provider_type_text_buyer', 'VARCHAR'), ('npi_buyer', 'VARCHAR'), ('multiple_npi_flag_buyer', 'BOOLEAN'), ('ccn_buyer_published', 'VARCHAR'), ('associate_id_buyer', 'VARCHAR'), ('organization_name_buyer', 'VARCHAR'), ('doing_business_as_name_buyer', 'VARCHAR'), ('chow_type_code', 'VARCHAR'), ('chow_type_text', 'VARCHAR'), ('effective_date', 'DATE'), ('enrollment_id_seller', 'VARCHAR'), ('enrollment_state_seller', 'VARCHAR'), ('provider_type_code_seller', 'VARCHAR'), ('provider_type_text_seller', 'VARCHAR'), ('npi_seller', 'VARCHAR'), ('multiple_npi_flag_seller', 'BOOLEAN'), ('ccn_seller_published', 'VARCHAR'), ('associate_id_seller', 'VARCHAR'), ('associate_ids_padded', 'BOOLEAN'), ('organization_name_seller', 'VARCHAR'), ('doing_business_as_name_seller', 'VARCHAR'), ('release_id', 'VARCHAR'), ('release_label', 'VARCHAR'), ('period_start', 'DATE'), ('period_end', 'DATE'), ('ccn_buyer', 'VARCHAR'), ('ccn_buyer_source', 'VARCHAR'), ('ccn_seller', 'VARCHAR'), ('ccn_seller_source', 'VARCHAR'), ('event_key', 'VARCHAR'), ('chow_row_key', 'VARCHAR'), ('releases_listed', 'BIGINT'), ('enrollment_buyer_sk', 'VARCHAR'), ('enrollment_seller_sk', 'VARCHAR'), ('hospital_buyer_sk', 'VARCHAR'), ('hospital_seller_sk', 'VARCHAR'), ('owner_organization_buyer_sk', 'VARCHAR'), ('owner_organization_seller_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_ownership_change' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ownership_change_hold.columns",
+      "table": "fct_ownership_change_hold",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "event_key",
+          "release_id",
+          "differing_fields",
+          "hold_reason",
+          "member_sha256s",
+          "hold_key"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ownership_change_hold.types",
+      "table": "fct_ownership_change_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('event_key', 'VARCHAR'), ('release_id', 'VARCHAR'), ('differing_fields', 'VARCHAR[]'), ('hold_reason', 'VARCHAR'), ('member_sha256s', 'VARCHAR[]'), ('hold_key', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_ownership_change_hold' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_places_county_value.columns",
+      "table": "fct_places_county_value",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "edition",
+          "measureid",
+          "datavaluetypeid",
+          "data_value_published",
+          "footnote_symbol",
+          "data_year",
+          "county_fips",
+          "county_source",
+          "data_value",
+          "low_confidence_limit",
+          "high_confidence_limit",
+          "total_population",
+          "county_scope",
+          "places_row_key",
+          "is_connecticut",
+          "is_all_states",
+          "county_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_places_county_value.types",
+      "table": "fct_places_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('edition', 'VARCHAR'), ('measureid', 'VARCHAR'), ('datavaluetypeid', 'VARCHAR'), ('data_value_published', 'VARCHAR'), ('footnote_symbol', 'VARCHAR'), ('data_year', 'INTEGER'), ('county_fips', 'VARCHAR'), ('county_source', 'VARCHAR'), ('data_value', 'DOUBLE'), ('low_confidence_limit', 'DOUBLE'), ('high_confidence_limit', 'DOUBLE'), ('total_population', 'DOUBLE'), ('county_scope', 'VARCHAR'), ('places_row_key', 'VARCHAR'), ('is_connecticut', 'BOOLEAN'), ('is_all_states', 'BOOLEAN'), ('county_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_places_county_value' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_pos_snapshot.columns",
+      "table": "fct_pos_snapshot",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "object_key",
+          "source_row_number",
+          "provider_number",
+          "facility_name",
+          "state_code",
+          "zip_code",
+          "cbsa_urban_rural_code",
+          "provider_subtype_code",
+          "control_type_code",
+          "termination_code",
+          "fips_state_code",
+          "fips_county_code",
+          "ssa_state_code",
+          "ssa_county_part",
+          "cbsa_code",
+          "medical_school_affiliation_code",
+          "emergency_service_code",
+          "icu_service_code",
+          "surgical_icu_service_code",
+          "neonatal_icu_service_code",
+          "pediatric_icu_service_code",
+          "burn_care_unit_service_code",
+          "acute_renal_dialysis_service_code",
+          "inpatient_surgical_service_code",
+          "cardiac_thoracic_surgery_service_code",
+          "bed_count",
+          "certified_bed_count",
+          "psych_unit_bed_count",
+          "rehab_unit_bed_count",
+          "operating_room_count",
+          "endoscopy_room_count",
+          "cardiac_catheterization_room_count",
+          "offsite_emergency_department_count",
+          "rn_count",
+          "lpn_lvn_count",
+          "nurse_practitioner_count",
+          "crna_count",
+          "has_residency_allopathic",
+          "has_residency_dental",
+          "has_residency_osteopathic",
+          "has_residency_other",
+          "has_residency_podiatric",
+          "original_participation_date",
+          "certification_date",
+          "termination_date",
+          "ccn",
+          "period_start",
+          "period_end",
+          "snapshot_key",
+          "county_fips",
+          "ssa_county_code",
+          "is_active",
+          "is_state_or_dc",
+          "is_connecticut",
+          "is_critical_access_by_ccn",
+          "is_veterans_affairs",
+          "county_fips_published",
+          "county_source",
+          "county_fill_reason",
+          "county_sk",
+          "hospital_sk",
+          "release_sk",
+          "state_sk",
+          "zip_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_pos_snapshot.types",
+      "table": "fct_pos_snapshot",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('provider_number', 'VARCHAR'), ('facility_name', 'VARCHAR'), ('state_code', 'VARCHAR'), ('zip_code', 'VARCHAR'), ('cbsa_urban_rural_code', 'VARCHAR'), ('provider_subtype_code', 'VARCHAR'), ('control_type_code', 'VARCHAR'), ('termination_code', 'VARCHAR'), ('fips_state_code', 'VARCHAR'), ('fips_county_code', 'VARCHAR'), ('ssa_state_code', 'VARCHAR'), ('ssa_county_part', 'VARCHAR'), ('cbsa_code', 'VARCHAR'), ('medical_school_affiliation_code', 'VARCHAR'), ('emergency_service_code', 'VARCHAR'), ('icu_service_code', 'VARCHAR'), ('surgical_icu_service_code', 'VARCHAR'), ('neonatal_icu_service_code', 'VARCHAR'), ('pediatric_icu_service_code', 'VARCHAR'), ('burn_care_unit_service_code', 'VARCHAR'), ('acute_renal_dialysis_service_code', 'VARCHAR'), ('inpatient_surgical_service_code', 'VARCHAR'), ('cardiac_thoracic_surgery_service_code', 'VARCHAR'), ('bed_count', 'INTEGER'), ('certified_bed_count', 'INTEGER'), ('psych_unit_bed_count', 'INTEGER'), ('rehab_unit_bed_count', 'INTEGER'), ('operating_room_count', 'INTEGER'), ('endoscopy_room_count', 'INTEGER'), ('cardiac_catheterization_room_count', 'INTEGER'), ('offsite_emergency_department_count', 'INTEGER'), ('rn_count', 'DOUBLE'), ('lpn_lvn_count', 'DOUBLE'), ('nurse_practitioner_count', 'DOUBLE'), ('crna_count', 'DOUBLE'), ('has_residency_allopathic', 'BOOLEAN'), ('has_residency_dental', 'BOOLEAN'), ('has_residency_osteopathic', 'BOOLEAN'), ('has_residency_other', 'BOOLEAN'), ('has_residency_podiatric', 'BOOLEAN'), ('original_participation_date', 'DATE'), ('certification_date', 'DATE'), ('termination_date', 'DATE'), ('ccn', 'VARCHAR'), ('period_start', 'DATE'), ('period_end', 'DATE'), ('snapshot_key', 'VARCHAR'), ('county_fips', 'VARCHAR'), ('ssa_county_code', 'VARCHAR'), ('is_active', 'BOOLEAN'), ('is_state_or_dc', 'BOOLEAN'), ('is_connecticut', 'BOOLEAN'), ('is_critical_access_by_ccn', 'BOOLEAN'), ('is_veterans_affairs', 'BOOLEAN'), ('county_fips_published', 'VARCHAR'), ('county_source', 'VARCHAR'), ('county_fill_reason', 'VARCHAR'), ('county_sk', 'VARCHAR'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR'), ('state_sk', 'VARCHAR'), ('zip_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_pos_snapshot' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ruca_code.columns",
+      "table": "fct_ruca_code",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "sheet_name",
+          "vintage",
+          "geography_type",
+          "geography_id",
+          "geography_published",
+          "county_fips",
+          "county_fips_2023",
+          "usps_state",
+          "zip_type",
+          "primary_published",
+          "secondary_published",
+          "ruca_row_key",
+          "primary_ruca",
+          "secondary_ruca",
+          "is_connecticut",
+          "county_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ruca_code.types",
+      "table": "fct_ruca_code",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('sheet_name', 'VARCHAR'), ('vintage', 'VARCHAR'), ('geography_type', 'VARCHAR'), ('geography_id', 'VARCHAR'), ('geography_published', 'VARCHAR'), ('county_fips', 'VARCHAR'), ('county_fips_2023', 'VARCHAR'), ('usps_state', 'VARCHAR'), ('zip_type', 'VARCHAR'), ('primary_published', 'VARCHAR'), ('secondary_published', 'VARCHAR'), ('ruca_row_key', 'VARCHAR'), ('primary_ruca', 'VARCHAR'), ('secondary_ruca', 'VARCHAR'), ('is_connecticut', 'BOOLEAN'), ('county_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_ruca_code' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_rucc_county.columns",
+      "table": "fct_rucc_county",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "vintage",
+          "county_fips",
+          "county_published",
+          "state",
+          "county_name",
+          "rucc_published",
+          "description",
+          "population",
+          "population_published",
+          "county_scope",
+          "rucc_key",
+          "rucc_code",
+          "is_connecticut",
+          "county_sk",
+          "release_sk",
+          "state_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_rucc_county.types",
+      "table": "fct_rucc_county",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('vintage', 'VARCHAR'), ('county_fips', 'VARCHAR'), ('county_published', 'VARCHAR'), ('state', 'VARCHAR'), ('county_name', 'VARCHAR'), ('rucc_published', 'VARCHAR'), ('description', 'VARCHAR'), ('population', 'DOUBLE'), ('population_published', 'VARCHAR'), ('county_scope', 'VARCHAR'), ('rucc_key', 'VARCHAR'), ('rucc_code', 'VARCHAR'), ('is_connecticut', 'BOOLEAN'), ('county_sk', 'VARCHAR'), ('release_sk', 'VARCHAR'), ('state_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_rucc_county' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_sahie_county_value.columns",
+      "table": "fct_sahie_county_value",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "file_year",
+          "estimate_year",
+          "release_version",
+          "county_fips",
+          "agecat",
+          "racecat",
+          "sexcat",
+          "iprcat",
+          "nipr",
+          "nipr_moe",
+          "nui",
+          "nui_moe",
+          "nic",
+          "nic_moe",
+          "pctui",
+          "pctui_moe",
+          "pctic",
+          "pctic_moe",
+          "pctelig",
+          "pctelig_moe",
+          "pctliic",
+          "pctliic_moe",
+          "missing_fields",
+          "sahie_row_key",
+          "is_all_groups",
+          "is_connecticut",
+          "county_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_sahie_county_value.types",
+      "table": "fct_sahie_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('file_year', 'INTEGER'), ('estimate_year', 'INTEGER'), ('release_version', 'VARCHAR'), ('county_fips', 'VARCHAR'), ('agecat', 'VARCHAR'), ('racecat', 'VARCHAR'), ('sexcat', 'VARCHAR'), ('iprcat', 'VARCHAR'), ('nipr', 'DOUBLE'), ('nipr_moe', 'DOUBLE'), ('nui', 'DOUBLE'), ('nui_moe', 'DOUBLE'), ('nic', 'DOUBLE'), ('nic_moe', 'DOUBLE'), ('pctui', 'DOUBLE'), ('pctui_moe', 'DOUBLE'), ('pctic', 'DOUBLE'), ('pctic_moe', 'DOUBLE'), ('pctelig', 'DOUBLE'), ('pctelig_moe', 'DOUBLE'), ('pctliic', 'DOUBLE'), ('pctliic_moe', 'DOUBLE'), ('missing_fields', 'VARCHAR[]'), ('sahie_row_key', 'VARCHAR'), ('is_all_groups', 'BOOLEAN'), ('is_connecticut', 'BOOLEAN'), ('county_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_sahie_county_value' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_saipe_county_estimate.columns",
+      "table": "fct_saipe_county_estimate",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "estimate_year",
+          "county_fips",
+          "county_name",
+          "poverty_all_count",
+          "poverty_all_count_lb90",
+          "poverty_all_count_ub90",
+          "poverty_all_pct",
+          "poverty_all_pct_lb90",
+          "poverty_all_pct_ub90",
+          "poverty_0_17_count",
+          "poverty_0_17_count_lb90",
+          "poverty_0_17_count_ub90",
+          "poverty_0_17_pct",
+          "poverty_0_17_pct_lb90",
+          "poverty_0_17_pct_ub90",
+          "poverty_5_17_related_count",
+          "poverty_5_17_related_count_lb90",
+          "poverty_5_17_related_count_ub90",
+          "poverty_5_17_related_pct",
+          "poverty_5_17_related_pct_lb90",
+          "poverty_5_17_related_pct_ub90",
+          "median_household_income",
+          "median_household_income_lb90",
+          "median_household_income_ub90",
+          "missing_fields",
+          "county_scope",
+          "saipe_row_key",
+          "is_connecticut",
+          "county_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_saipe_county_estimate.types",
+      "table": "fct_saipe_county_estimate",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('estimate_year', 'INTEGER'), ('county_fips', 'VARCHAR'), ('county_name', 'VARCHAR'), ('poverty_all_count', 'DOUBLE'), ('poverty_all_count_lb90', 'DOUBLE'), ('poverty_all_count_ub90', 'DOUBLE'), ('poverty_all_pct', 'DOUBLE'), ('poverty_all_pct_lb90', 'DOUBLE'), ('poverty_all_pct_ub90', 'DOUBLE'), ('poverty_0_17_count', 'DOUBLE'), ('poverty_0_17_count_lb90', 'DOUBLE'), ('poverty_0_17_count_ub90', 'DOUBLE'), ('poverty_0_17_pct', 'DOUBLE'), ('poverty_0_17_pct_lb90', 'DOUBLE'), ('poverty_0_17_pct_ub90', 'DOUBLE'), ('poverty_5_17_related_count', 'DOUBLE'), ('poverty_5_17_related_count_lb90', 'DOUBLE'), ('poverty_5_17_related_count_ub90', 'DOUBLE'), ('poverty_5_17_related_pct', 'DOUBLE'), ('poverty_5_17_related_pct_lb90', 'DOUBLE'), ('poverty_5_17_related_pct_ub90', 'DOUBLE'), ('median_household_income', 'DOUBLE'), ('median_household_income_lb90', 'DOUBLE'), ('median_household_income_ub90', 'DOUBLE'), ('missing_fields', 'VARCHAR[]'), ('county_scope', 'VARCHAR'), ('saipe_row_key', 'VARCHAR'), ('is_connecticut', 'BOOLEAN'), ('county_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_saipe_county_estimate' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_svi_county_value.columns",
+      "table": "fct_svi_county_value",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "edition",
+          "county_fips",
+          "field",
+          "value_published",
+          "value_number",
+          "missing_token",
+          "county_scope",
+          "svi_value_key",
+          "is_connecticut",
+          "county_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_svi_county_value.types",
+      "table": "fct_svi_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('edition', 'VARCHAR'), ('county_fips', 'VARCHAR'), ('field', 'VARCHAR'), ('value_published', 'VARCHAR'), ('value_number', 'DOUBLE'), ('missing_token', 'VARCHAR'), ('county_scope', 'VARCHAR'), ('svi_value_key', 'VARCHAR'), ('is_connecticut', 'BOOLEAN'), ('county_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_svi_county_value' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_timely_effective_care_window.columns",
+      "table": "fct_timely_effective_care_window",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "entity_id",
+          "measure_id",
+          "window_start",
+          "window_end",
+          "measure_name",
+          "condition",
+          "score",
+          "sample",
+          "footnote",
+          "member_sha256",
+          "object_key",
+          "release_date",
+          "release_file_count",
+          "window_key",
+          "score_number",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_timely_effective_care_window.types",
+      "table": "fct_timely_effective_care_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('measure_name', 'VARCHAR'), ('condition', 'VARCHAR'), ('score', 'VARCHAR'), ('sample', 'VARCHAR'), ('footnote', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('window_key', 'VARCHAR'), ('score_number', 'DOUBLE'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_timely_effective_care_window' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_unplanned_visits_window.columns",
+      "table": "fct_unplanned_visits_window",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "entity_id",
+          "measure_id",
+          "window_start",
+          "window_end",
+          "measure_name",
+          "compared_to_national",
+          "denominator",
+          "score",
+          "lower_estimate",
+          "higher_estimate",
+          "number_of_patients",
+          "number_of_patients_returned",
+          "footnote",
+          "member_sha256",
+          "object_key",
+          "release_date",
+          "release_file_count",
+          "window_key",
+          "published_measure_id",
+          "score_number",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_unplanned_visits_window.types",
+      "table": "fct_unplanned_visits_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('measure_name', 'VARCHAR'), ('compared_to_national', 'VARCHAR'), ('denominator', 'VARCHAR'), ('score', 'VARCHAR'), ('lower_estimate', 'VARCHAR'), ('higher_estimate', 'VARCHAR'), ('number_of_patients', 'VARCHAR'), ('number_of_patients_returned', 'VARCHAR'), ('footnote', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('window_key', 'VARCHAR'), ('published_measure_id', 'VARCHAR'), ('score_number', 'DOUBLE'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_unplanned_visits_window' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_program_hold.columns",
+      "table": "fct_validation_program_hold",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "bronze_table",
+          "hold_reason",
+          "ccn",
+          "fiscal_year",
+          "row_count",
+          "hold_key",
+          "member_sha256s",
+          "hospital_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_program_hold.types",
+      "table": "fct_validation_program_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('bronze_table', 'VARCHAR'), ('hold_reason', 'VARCHAR'), ('ccn', 'VARCHAR'), ('fiscal_year', 'INTEGER'), ('row_count', 'BIGINT'), ('hold_key', 'VARCHAR'), ('member_sha256s', 'VARCHAR[]'), ('hospital_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_validation_program_hold' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_window_hold.columns",
+      "table": "fct_validation_window_hold",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "bronze_table",
+          "hold_reason",
+          "entity_id",
+          "measure_id",
+          "window_start",
+          "window_end",
+          "row_count",
+          "hold_key",
+          "member_sha256s",
+          "hospital_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_window_hold.types",
+      "table": "fct_validation_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('bronze_table', 'VARCHAR'), ('hold_reason', 'VARCHAR'), ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('row_count', 'BIGINT'), ('hold_key', 'VARCHAR'), ('member_sha256s', 'VARCHAR[]'), ('hospital_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_validation_window_hold' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_vbp_program_year.columns",
+      "table": "fct_vbp_program_year",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "ccn",
+          "fiscal_year",
+          "unweighted_normalized_clinical_care_domain_score",
+          "weighted_normalized_clinical_care_domain_score",
+          "unweighted_normalized_clinical_outcomes_domain_score",
+          "weighted_normalized_clinical_outcomes_domain_score",
+          "unweighted_person_and_community_engagement_domain_score",
+          "weighted_person_and_community_engagement_domain_score",
+          "unweighted_normalized_safety_domain_score",
+          "weighted_safety_domain_score",
+          "unweighted_normalized_efficiency_and_cost_reduction_domain_score",
+          "weighted_efficiency_and_cost_reduction_domain_score",
+          "total_performance_score",
+          "member_sha256",
+          "object_key",
+          "release_date",
+          "release_file_count",
+          "program_key",
+          "unweighted_normalized_clinical_care_domain_score_number",
+          "weighted_normalized_clinical_care_domain_score_number",
+          "unweighted_normalized_clinical_outcomes_domain_score_number",
+          "weighted_normalized_clinical_outcomes_domain_score_number",
+          "unweighted_person_and_community_engagement_domain_score_number",
+          "weighted_person_and_community_engagement_domain_score_number",
+          "unweighted_normalized_safety_domain_score_number",
+          "weighted_safety_domain_score_number",
+          "unweighted_normalized_efficiency_and_cost_reduction_domain_score_number",
+          "weighted_efficiency_and_cost_reduction_domain_score_number",
+          "total_performance_score_number",
+          "hospital_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_vbp_program_year.types",
+      "table": "fct_vbp_program_year",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('ccn', 'VARCHAR'), ('fiscal_year', 'INTEGER'), ('unweighted_normalized_clinical_care_domain_score', 'VARCHAR'), ('weighted_normalized_clinical_care_domain_score', 'VARCHAR'), ('unweighted_normalized_clinical_outcomes_domain_score', 'VARCHAR'), ('weighted_normalized_clinical_outcomes_domain_score', 'VARCHAR'), ('unweighted_person_and_community_engagement_domain_score', 'VARCHAR'), ('weighted_person_and_community_engagement_domain_score', 'VARCHAR'), ('unweighted_normalized_safety_domain_score', 'VARCHAR'), ('weighted_safety_domain_score', 'VARCHAR'), ('unweighted_normalized_efficiency_and_cost_reduction_domain_score', 'VARCHAR'), ('weighted_efficiency_and_cost_reduction_domain_score', 'VARCHAR'), ('total_performance_score', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('program_key', 'VARCHAR'), ('unweighted_normalized_clinical_care_domain_score_number', 'DOUBLE'), ('weighted_normalized_clinical_care_domain_score_number', 'DOUBLE'), ('unweighted_normalized_clinical_outcomes_domain_score_number', 'DOUBLE'), ('weighted_normalized_clinical_outcomes_domain_score_number', 'DOUBLE'), ('unweighted_person_and_community_engagement_domain_score_number', 'DOUBLE'), ('weighted_person_and_community_engagement_domain_score_number', 'DOUBLE'), ('unweighted_normalized_safety_domain_score_number', 'DOUBLE'), ('weighted_safety_domain_score_number', 'DOUBLE'), ('unweighted_normalized_efficiency_and_cost_reduction_domain_score_number', 'DOUBLE'), ('weighted_efficiency_and_cost_reduction_domain_score_number', 'DOUBLE'), ('total_performance_score_number', 'DOUBLE'), ('hospital_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_vbp_program_year' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_wonder_county_deaths.columns",
+      "table": "fct_wonder_county_deaths",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "member_sha256",
+          "source_row_number",
+          "wonder_database",
+          "period_start",
+          "period_end",
+          "county_fips",
+          "data_year",
+          "deaths_published",
+          "deaths",
+          "deaths_token",
+          "population",
+          "crude_rate_published",
+          "crude_rate",
+          "crude_rate_token",
+          "crude_rate_lower_95",
+          "crude_rate_upper_95",
+          "crude_rate_standard_error",
+          "hold_reason",
+          "county_scope",
+          "wonder_row_key",
+          "is_connecticut",
+          "county_sk",
+          "release_sk"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_wonder_county_deaths.types",
+      "table": "fct_wonder_county_deaths",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('wonder_database', 'VARCHAR'), ('period_start', 'DATE'), ('period_end', 'DATE'), ('county_fips', 'VARCHAR'), ('data_year', 'INTEGER'), ('deaths_published', 'VARCHAR'), ('deaths', 'DOUBLE'), ('deaths_token', 'VARCHAR'), ('population', 'DOUBLE'), ('crude_rate_published', 'VARCHAR'), ('crude_rate', 'DOUBLE'), ('crude_rate_token', 'VARCHAR'), ('crude_rate_lower_95', 'DOUBLE'), ('crude_rate_upper_95', 'DOUBLE'), ('crude_rate_standard_error', 'DOUBLE'), ('hold_reason', 'VARCHAR'), ('county_scope', 'VARCHAR'), ('wonder_row_key', 'VARCHAR'), ('is_connecticut', 'BOOLEAN'), ('county_sk', 'VARCHAR'), ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'fct_wonder_county_deaths' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "bridge_county_neighbor.types",
+      "table": "bridge_county_neighbor",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('vintage', 'VARCHAR'), ('county_fips', 'VARCHAR'), ('county_name', 'VARCHAR'), ('county_published', 'VARCHAR'), ('neighbor_fips', 'VARCHAR'), ('neighbor_name', 'VARCHAR'), ('neighbor_published', 'VARCHAR'), ('shared_border_length_m', 'DOUBLE'), ('length_published', 'VARCHAR'), ('county_scope', 'VARCHAR'), ('edge_key', 'VARCHAR'), ('is_self_link', 'BOOLEAN'), ('is_isolated', 'BOOLEAN'), ('is_connecticut', 'BOOLEAN')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'bridge_county_neighbor' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "bridge_measure_control.types",
+      "table": "bridge_measure_control",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('measure_sk', 'VARCHAR'), ('registry_control_sk', 'VARCHAR'), ('measure_control', 'VARCHAR'), ('vintage_start', 'VARCHAR'), ('vintage_end', 'VARCHAR'), ('source_seed', 'VARCHAR'), ('source_row', 'INTEGER')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'bridge_measure_control' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "bridge_zip_county.types",
+      "table": "bridge_zip_county",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('quarter_label', 'VARCHAR'), ('quarter_start_date', 'DATE'), ('quarter_end_date', 'DATE'), ('zip_code', 'VARCHAR'), ('county_fips', 'VARCHAR'), ('county_scope', 'VARCHAR'), ('usps_state', 'VARCHAR'), ('city', 'VARCHAR'), ('res_ratio', 'DOUBLE'), ('bus_ratio', 'DOUBLE'), ('oth_ratio', 'DOUBLE'), ('tot_ratio', 'DOUBLE'), ('zip_residential_ratio_sum', 'DOUBLE'), ('hud_row_key', 'VARCHAR'), ('is_connecticut', 'BOOLEAN'), ('has_residential_addresses', 'BOOLEAN')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'bridge_zip_county' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_census_tract.key_type",
+      "table": "dim_census_tract",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('census_tract_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_census_tract' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_change_type.key_type",
+      "table": "dim_change_type",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('change_type_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_change_type' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_condition.key_type",
+      "table": "dim_condition",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('condition_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_condition' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_county.key_type",
+      "table": "dim_county",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('county_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_county' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_date.key_type",
+      "table": "dim_date",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('date_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_date' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_demographic_group.key_type",
+      "table": "dim_demographic_group",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('demographic_group_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_demographic_group' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_drg.key_type",
+      "table": "dim_drg",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('drg_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_drg' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_ehr_product.key_type",
+      "table": "dim_ehr_product",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('ehr_product_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_ehr_product' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_enrollment.key_type",
+      "table": "dim_enrollment",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('enrollment_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_enrollment' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_footnote.key_type",
+      "table": "dim_footnote",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('footnote_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_footnote' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_hospital.key_type",
+      "table": "dim_hospital",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('hospital_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_hospital' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_measure.key_type",
+      "table": "dim_measure",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('measure_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_measure' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_owner_organization.key_type",
+      "table": "dim_owner_organization",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('owner_organization_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_owner_organization' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_owner_role.key_type",
+      "table": "dim_owner_role",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('owner_role_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_owner_role' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_registry_control.key_type",
+      "table": "dim_registry_control",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('registry_control_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_registry_control' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_release.key_type",
+      "table": "dim_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('release_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_release' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_rurality_code.key_type",
+      "table": "dim_rurality_code",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('rurality_code_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_rurality_code' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_source.key_type",
+      "table": "dim_source",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('source_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_source' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_state.key_type",
+      "table": "dim_state",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('state_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_state' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_zip.key_type",
+      "table": "dim_zip",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('zip_sk', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'dim_zip' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    }
+  ]
+}

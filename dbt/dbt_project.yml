@@ -20,6 +20,9 @@ flags:
   use_colors: false
 
 vars:
+  # The gold release copy-consistency test (warn severity) runs in every gate and real build; package kit checks keep it off
+  # because the kit counts a warning as a failure.
+  check_release_copy_conflicts: true
   # Bronze tables whose stored copies staging resolves (failure modes 166 to 177), with each table's source family.
   copy_tables:
     cms_hai_hospital: hai
@@ -174,6 +177,9 @@ models:
       # Window choices scan every HAI row; tables keep downstream reads fast.
       intermediate:
         +materialized: table
+    # Gold stores atomic facts, dimensions and bridges as tables.
+    gold:
+      +materialized: table
   # dbt-project-evaluator runs only on request (--vars '{run_project_evaluator: true}'); its findings are warnings.
   dbt_project_evaluator:
     +enabled: "{{ var('run_project_evaluator', false) }}"

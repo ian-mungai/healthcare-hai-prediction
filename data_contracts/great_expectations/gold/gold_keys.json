@@ -1,0 +1,2058 @@
+{
+  "name": "gold_keys",
+  "description": "Grain keys are unique; surrogate keys are not null, resolve and follow the contract rule; each dimension holds its unknown member once",
+  "expectations": [
+    {
+      "id": "fct_acs_county_value.grain",
+      "table": "fct_acs_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"acs_value_key\" FROM {batch} GROUP BY \"acs_value_key\" HAVING count(*) > 1 OR \"acs_value_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_acs_county_value.keys_not_null",
+      "table": "fct_acs_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_acs_county_value.keys_resolve",
+      "table": "fct_acs_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"acs_value_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_acs_county_value.keys_follow_rule",
+      "table": "fct_acs_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"acs_value_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_bls_county_series.grain",
+      "table": "fct_bls_county_series",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"bls_row_key\" FROM {batch} GROUP BY \"bls_row_key\" HAVING count(*) > 1 OR \"bls_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_bls_county_series.keys_not_null",
+      "table": "fct_bls_county_series",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_bls_county_series.keys_resolve",
+      "table": "fct_bls_county_series",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"bls_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_bls_county_series.keys_follow_rule",
+      "table": "fct_bls_county_series",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"bls_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cc_window_hold.grain",
+      "table": "fct_cc_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"hold_key\" FROM {batch} GROUP BY \"hold_key\" HAVING count(*) > 1 OR \"hold_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cc_window_hold.keys_not_null",
+      "table": "fct_cc_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cc_window_hold.keys_resolve",
+      "table": "fct_cc_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hold_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cc_window_hold.keys_follow_rule",
+      "table": "fct_cc_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hold_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"entity_id\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cmi_observation.grain",
+      "table": "fct_cmi_observation",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"cmi_row_key\" FROM {batch} GROUP BY \"cmi_row_key\" HAVING count(*) > 1 OR \"cmi_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cmi_observation.keys_not_null",
+      "table": "fct_cmi_observation",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cmi_observation.keys_resolve",
+      "table": "fct_cmi_observation",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"cmi_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cmi_observation.keys_follow_rule",
+      "table": "fct_cmi_observation",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"cmi_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_complications_deaths_window.grain",
+      "table": "fct_complications_deaths_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"window_key\" FROM {batch} GROUP BY \"window_key\" HAVING count(*) > 1 OR \"window_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_complications_deaths_window.keys_not_null",
+      "table": "fct_complications_deaths_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_complications_deaths_window.keys_resolve",
+      "table": "fct_complications_deaths_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_complications_deaths_window.keys_follow_rule",
+      "table": "fct_complications_deaths_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"entity_id\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cost_report.grain",
+      "table": "fct_cost_report",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"rpt_rec_num\" FROM {batch} GROUP BY \"rpt_rec_num\" HAVING count(*) > 1 OR \"rpt_rec_num\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cost_report.keys_not_null",
+      "table": "fct_cost_report",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL OR \"state_sk\" IS NULL OR \"zip_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cost_report.keys_resolve",
+      "table": "fct_cost_report",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"rpt_rec_num\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS r2 ON r2.k = f.\"state_sk\" LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS r3 ON r3.k = f.\"zip_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL) OR (f.\"state_sk\" IS NOT NULL AND r2.k IS NULL) OR (f.\"zip_sk\" IS NOT NULL AND r3.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_cost_report.keys_follow_rule",
+      "table": "fct_cost_report",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"rpt_rec_num\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS m2 ON m2.k = md5(CAST(f.\"state_code\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS m3 ON m3.k = md5(CAST(f.\"zip_code\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>')) OR f.\"state_sk\" IS DISTINCT FROM coalesce(m2.k, md5('<unknown>')) OR f.\"zip_sk\" IS DISTINCT FROM coalesce(m3.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_enrollment_release.grain",
+      "table": "fct_enrollment_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"enrollment_key\" FROM {batch} GROUP BY \"enrollment_key\" HAVING count(*) > 1 OR \"enrollment_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_enrollment_release.keys_not_null",
+      "table": "fct_enrollment_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"enrollment_sk\" IS NULL OR \"hospital_sk\" IS NULL OR \"owner_organization_sk\" IS NULL OR \"release_sk\" IS NULL OR \"state_sk\" IS NULL OR \"zip_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_enrollment_release.keys_resolve",
+      "table": "fct_enrollment_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"enrollment_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"enrollment_sk\" AS k FROM main.\"dim_enrollment\") AS r0 ON r0.k = f.\"enrollment_sk\" LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r1 ON r1.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"owner_organization_sk\" AS k FROM main.\"dim_owner_organization\") AS r2 ON r2.k = f.\"owner_organization_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r3 ON r3.k = f.\"release_sk\" LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS r4 ON r4.k = f.\"state_sk\" LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS r5 ON r5.k = f.\"zip_sk\" WHERE (f.\"enrollment_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"hospital_sk\" IS NOT NULL AND r1.k IS NULL) OR (f.\"owner_organization_sk\" IS NOT NULL AND r2.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r3.k IS NULL) OR (f.\"state_sk\" IS NOT NULL AND r4.k IS NULL) OR (f.\"zip_sk\" IS NOT NULL AND r5.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_enrollment_release.keys_follow_rule",
+      "table": "fct_enrollment_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"enrollment_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"enrollment_sk\" AS k FROM main.\"dim_enrollment\") AS m0 ON m0.k = md5(CAST(f.\"enrollment_id\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m1 ON m1.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"owner_organization_sk\" AS k FROM main.\"dim_owner_organization\") AS m2 ON m2.k = md5(CAST(f.\"associate_id\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m3 ON m3.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS m4 ON m4.k = md5(CAST(f.\"state\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS m5 ON m5.k = md5(CAST(f.\"zip_code\" AS VARCHAR)) WHERE f.\"enrollment_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"hospital_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>')) OR f.\"owner_organization_sk\" IS DISTINCT FROM coalesce(m2.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m3.k, md5('<unknown>')) OR f.\"state_sk\" IS DISTINCT FROM coalesce(m4.k, md5('<unknown>')) OR f.\"zip_sk\" IS DISTINCT FROM coalesce(m5.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_gv_county_value.grain",
+      "table": "fct_gv_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"gv_value_key\" FROM {batch} GROUP BY \"gv_value_key\" HAVING count(*) > 1 OR \"gv_value_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_gv_county_value.keys_not_null",
+      "table": "fct_gv_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_gv_county_value.keys_resolve",
+      "table": "fct_gv_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"gv_value_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_gv_county_value.keys_follow_rule",
+      "table": "fct_gv_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"gv_value_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hac_program_year.grain",
+      "table": "fct_hac_program_year",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"program_key\" FROM {batch} GROUP BY \"program_key\" HAVING count(*) > 1 OR \"program_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hac_program_year.keys_not_null",
+      "table": "fct_hac_program_year",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hac_program_year.keys_resolve",
+      "table": "fct_hac_program_year",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"program_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hac_program_year.keys_follow_rule",
+      "table": "fct_hac_program_year",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"program_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_hospital_window.grain",
+      "table": "fct_hai_hospital_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"window_key\" FROM {batch} GROUP BY \"window_key\" HAVING count(*) > 1 OR \"window_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_hospital_window.keys_not_null",
+      "table": "fct_hai_hospital_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_hospital_window.keys_resolve",
+      "table": "fct_hai_hospital_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_hospital_window.keys_follow_rule",
+      "table": "fct_hai_hospital_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"entity_id\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_national_window.grain",
+      "table": "fct_hai_national_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"window_key\" FROM {batch} GROUP BY \"window_key\" HAVING count(*) > 1 OR \"window_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_national_window.keys_not_null",
+      "table": "fct_hai_national_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_national_window.keys_resolve",
+      "table": "fct_hai_national_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r0 ON r0.k = f.\"release_sk\" WHERE (f.\"release_sk\" IS NOT NULL AND r0.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_national_window.keys_follow_rule",
+      "table": "fct_hai_national_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m0 ON m0.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"release_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_state_window.grain",
+      "table": "fct_hai_state_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"window_key\" FROM {batch} GROUP BY \"window_key\" HAVING count(*) > 1 OR \"window_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_state_window.keys_not_null",
+      "table": "fct_hai_state_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"release_sk\" IS NULL OR \"state_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_state_window.keys_resolve",
+      "table": "fct_hai_state_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r0 ON r0.k = f.\"release_sk\" LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS r1 ON r1.k = f.\"state_sk\" WHERE (f.\"release_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"state_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_state_window.keys_follow_rule",
+      "table": "fct_hai_state_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m0 ON m0.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS m1 ON m1.k = md5(CAST(f.\"entity_id\" AS VARCHAR)) WHERE f.\"release_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"state_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_window_hold.grain",
+      "table": "fct_hai_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"hold_key\" FROM {batch} GROUP BY \"hold_key\" HAVING count(*) > 1 OR \"hold_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_window_hold.keys_not_null",
+      "table": "fct_hai_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_window_hold.keys_resolve",
+      "table": "fct_hai_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hold_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hai_window_hold.keys_follow_rule",
+      "table": "fct_hai_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hold_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"entity_id\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hcahps_window.grain",
+      "table": "fct_hcahps_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"window_key\" FROM {batch} GROUP BY \"window_key\" HAVING count(*) > 1 OR \"window_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hcahps_window.keys_not_null",
+      "table": "fct_hcahps_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hcahps_window.keys_resolve",
+      "table": "fct_hcahps_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hcahps_window.keys_follow_rule",
+      "table": "fct_hcahps_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"entity_id\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hgi_release.grain",
+      "table": "fct_hgi_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"release_key\" FROM {batch} GROUP BY \"release_key\" HAVING count(*) > 1 OR \"release_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hgi_release.keys_not_null",
+      "table": "fct_hgi_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL OR \"state_sk\" IS NULL OR \"zip_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hgi_release.keys_resolve",
+      "table": "fct_hgi_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"release_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS r2 ON r2.k = f.\"state_sk\" LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS r3 ON r3.k = f.\"zip_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL) OR (f.\"state_sk\" IS NOT NULL AND r2.k IS NULL) OR (f.\"zip_sk\" IS NOT NULL AND r3.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hgi_release.keys_follow_rule",
+      "table": "fct_hgi_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"release_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS m2 ON m2.k = md5(CAST(f.\"state_code\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS m3 ON m3.k = md5(CAST(f.\"zip_code\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>')) OR f.\"state_sk\" IS DISTINCT FROM coalesce(m2.k, md5('<unknown>')) OR f.\"zip_sk\" IS DISTINCT FROM coalesce(m3.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hhs_capacity_week.grain",
+      "table": "fct_hhs_capacity_week",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"week_key\" FROM {batch} GROUP BY \"week_key\" HAVING count(*) > 1 OR \"week_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hhs_capacity_week.keys_not_null",
+      "table": "fct_hhs_capacity_week",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL OR \"state_sk\" IS NULL OR \"zip_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hhs_capacity_week.keys_resolve",
+      "table": "fct_hhs_capacity_week",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"week_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS r2 ON r2.k = f.\"state_sk\" LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS r3 ON r3.k = f.\"zip_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL) OR (f.\"state_sk\" IS NOT NULL AND r2.k IS NULL) OR (f.\"zip_sk\" IS NOT NULL AND r3.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hhs_capacity_week.keys_follow_rule",
+      "table": "fct_hhs_capacity_week",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"week_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS m2 ON m2.k = md5(CAST(f.\"state\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS m3 ON m3.k = md5(CAST(f.\"zip\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>')) OR f.\"state_sk\" IS DISTINCT FROM coalesce(m2.k, md5('<unknown>')) OR f.\"zip_sk\" IS DISTINCT FROM coalesce(m3.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hospital_owner_release.grain",
+      "table": "fct_hospital_owner_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"owner_row_key\" FROM {batch} GROUP BY \"owner_row_key\" HAVING count(*) > 1 OR \"owner_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hospital_owner_release.keys_not_null",
+      "table": "fct_hospital_owner_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"enrollment_sk\" IS NULL OR \"owner_organization_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hospital_owner_release.keys_resolve",
+      "table": "fct_hospital_owner_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"owner_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"enrollment_sk\" AS k FROM main.\"dim_enrollment\") AS r0 ON r0.k = f.\"enrollment_sk\" LEFT JOIN (SELECT DISTINCT \"owner_organization_sk\" AS k FROM main.\"dim_owner_organization\") AS r1 ON r1.k = f.\"owner_organization_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r2 ON r2.k = f.\"release_sk\" WHERE (f.\"enrollment_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"owner_organization_sk\" IS NOT NULL AND r1.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r2.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hospital_owner_release.keys_follow_rule",
+      "table": "fct_hospital_owner_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"owner_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"enrollment_sk\" AS k FROM main.\"dim_enrollment\") AS m0 ON m0.k = md5(CAST(f.\"enrollment_id\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"owner_organization_sk\" AS k FROM main.\"dim_owner_organization\") AS m1 ON m1.k = md5(CAST(f.\"associate_id\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m2 ON m2.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"enrollment_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"owner_organization_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m2.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hpsa_component.grain",
+      "table": "fct_hpsa_component",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"hpsa_row_key\" FROM {batch} GROUP BY \"hpsa_row_key\" HAVING count(*) > 1 OR \"hpsa_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hpsa_component.keys_not_null",
+      "table": "fct_hpsa_component",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hpsa_component.keys_resolve",
+      "table": "fct_hpsa_component",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hpsa_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hpsa_component.keys_follow_rule",
+      "table": "fct_hpsa_component",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hpsa_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hrrp_window.grain",
+      "table": "fct_hrrp_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"window_key\" FROM {batch} GROUP BY \"window_key\" HAVING count(*) > 1 OR \"window_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hrrp_window.keys_not_null",
+      "table": "fct_hrrp_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hrrp_window.keys_resolve",
+      "table": "fct_hrrp_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hrrp_window.keys_follow_rule",
+      "table": "fct_hrrp_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"entity_id\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hsa_zip_cases.grain",
+      "table": "fct_hsa_zip_cases",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"hsa_row_key\" FROM {batch} GROUP BY \"hsa_row_key\" HAVING count(*) > 1 OR \"hsa_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hsa_zip_cases.keys_not_null",
+      "table": "fct_hsa_zip_cases",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"release_sk\" IS NULL OR \"zip_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hsa_zip_cases.keys_resolve",
+      "table": "fct_hsa_zip_cases",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hsa_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r0 ON r0.k = f.\"release_sk\" LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS r1 ON r1.k = f.\"zip_sk\" WHERE (f.\"release_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"zip_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hsa_zip_cases.keys_follow_rule",
+      "table": "fct_hsa_zip_cases",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hsa_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m0 ON m0.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS m1 ON m1.k = md5(CAST(f.\"zip_code\" AS VARCHAR)) WHERE f.\"release_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"zip_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hud_zip_county_hold.grain",
+      "table": "fct_hud_zip_county_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"hud_row_key\" FROM {batch} GROUP BY \"hud_row_key\" HAVING count(*) > 1 OR \"hud_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hud_zip_county_hold.keys_not_null",
+      "table": "fct_hud_zip_county_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"release_sk\" IS NULL OR \"zip_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hud_zip_county_hold.keys_resolve",
+      "table": "fct_hud_zip_county_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hud_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r0 ON r0.k = f.\"release_sk\" LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS r1 ON r1.k = f.\"zip_sk\" WHERE (f.\"release_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"zip_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_hud_zip_county_hold.keys_follow_rule",
+      "table": "fct_hud_zip_county_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hud_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m0 ON m0.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS m1 ON m1.k = md5(CAST(f.\"zip_code\" AS VARCHAR)) WHERE f.\"release_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"zip_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_impact_hold.grain",
+      "table": "fct_impact_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"hold_key\" FROM {batch} GROUP BY \"hold_key\" HAVING count(*) > 1 OR \"hold_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_impact_hold.keys_not_null",
+      "table": "fct_impact_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_impact_hold.keys_resolve",
+      "table": "fct_impact_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hold_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_impact_hold.keys_follow_rule",
+      "table": "fct_impact_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hold_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ipps_impact_value.grain",
+      "table": "fct_ipps_impact_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"value_key\" FROM {batch} GROUP BY \"value_key\" HAVING count(*) > 1 OR \"value_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ipps_impact_value.keys_not_null",
+      "table": "fct_ipps_impact_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ipps_impact_value.keys_resolve",
+      "table": "fct_ipps_impact_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"value_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ipps_impact_value.keys_follow_rule",
+      "table": "fct_ipps_impact_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"value_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_maternal_health_window.grain",
+      "table": "fct_maternal_health_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"window_key\" FROM {batch} GROUP BY \"window_key\" HAVING count(*) > 1 OR \"window_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_maternal_health_window.keys_not_null",
+      "table": "fct_maternal_health_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_maternal_health_window.keys_resolve",
+      "table": "fct_maternal_health_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_maternal_health_window.keys_follow_rule",
+      "table": "fct_maternal_health_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"entity_id\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_drg.grain",
+      "table": "fct_medicare_inpatient_drg",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"drg_key\" FROM {batch} GROUP BY \"drg_key\" HAVING count(*) > 1 OR \"drg_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_drg.keys_not_null",
+      "table": "fct_medicare_inpatient_drg",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_drg.keys_resolve",
+      "table": "fct_medicare_inpatient_drg",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"drg_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_drg.keys_follow_rule",
+      "table": "fct_medicare_inpatient_drg",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"drg_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_provider.grain",
+      "table": "fct_medicare_inpatient_provider",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"provider_key\" FROM {batch} GROUP BY \"provider_key\" HAVING count(*) > 1 OR \"provider_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_provider.keys_not_null",
+      "table": "fct_medicare_inpatient_provider",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL OR \"state_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_provider.keys_resolve",
+      "table": "fct_medicare_inpatient_provider",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"provider_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS r2 ON r2.k = f.\"state_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL) OR (f.\"state_sk\" IS NOT NULL AND r2.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_medicare_inpatient_provider.keys_follow_rule",
+      "table": "fct_medicare_inpatient_provider",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"provider_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS m2 ON m2.k = md5(CAST(f.\"state_code\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>')) OR f.\"state_sk\" IS DISTINCT FROM coalesce(m2.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mmd_prevalence.grain",
+      "table": "fct_mmd_prevalence",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"mmd_row_key\" FROM {batch} GROUP BY \"mmd_row_key\" HAVING count(*) > 1 OR \"mmd_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mmd_prevalence.keys_not_null",
+      "table": "fct_mmd_prevalence",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mmd_prevalence.keys_resolve",
+      "table": "fct_mmd_prevalence",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"mmd_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mmd_prevalence.keys_follow_rule",
+      "table": "fct_mmd_prevalence",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"mmd_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mua_component.grain",
+      "table": "fct_mua_component",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"mua_row_key\" FROM {batch} GROUP BY \"mua_row_key\" HAVING count(*) > 1 OR \"mua_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mua_component.keys_not_null",
+      "table": "fct_mua_component",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mua_component.keys_resolve",
+      "table": "fct_mua_component",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"mua_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_mua_component.keys_follow_rule",
+      "table": "fct_mua_component",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"mua_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_occupational_mix_survey.grain",
+      "table": "fct_occupational_mix_survey",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"survey_row_key\" FROM {batch} GROUP BY \"survey_row_key\" HAVING count(*) > 1 OR \"survey_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_occupational_mix_survey.keys_not_null",
+      "table": "fct_occupational_mix_survey",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_occupational_mix_survey.keys_resolve",
+      "table": "fct_occupational_mix_survey",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"survey_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_occupational_mix_survey.keys_follow_rule",
+      "table": "fct_occupational_mix_survey",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"survey_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_attestation.grain",
+      "table": "fct_onc_attestation",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"attestation_key\" FROM {batch} GROUP BY \"attestation_key\" HAVING count(*) > 1 OR \"attestation_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_attestation.keys_not_null",
+      "table": "fct_onc_attestation",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL OR \"zip_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_attestation.keys_resolve",
+      "table": "fct_onc_attestation",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"attestation_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS r2 ON r2.k = f.\"zip_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL) OR (f.\"zip_sk\" IS NOT NULL AND r2.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_attestation.keys_follow_rule",
+      "table": "fct_onc_attestation",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"attestation_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS m2 ON m2.k = md5(CAST(f.\"zip\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>')) OR f.\"zip_sk\" IS DISTINCT FROM coalesce(m2.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_ehr_product.grain",
+      "table": "fct_onc_ehr_product",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"linkage_key\" FROM {batch} GROUP BY \"linkage_key\" HAVING count(*) > 1 OR \"linkage_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_ehr_product.keys_not_null",
+      "table": "fct_onc_ehr_product",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL OR \"state_sk\" IS NULL OR \"zip_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_ehr_product.keys_resolve",
+      "table": "fct_onc_ehr_product",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"linkage_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS r2 ON r2.k = f.\"state_sk\" LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS r3 ON r3.k = f.\"zip_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL) OR (f.\"state_sk\" IS NOT NULL AND r2.k IS NULL) OR (f.\"zip_sk\" IS NOT NULL AND r3.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_onc_ehr_product.keys_follow_rule",
+      "table": "fct_onc_ehr_product",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"linkage_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS m2 ON m2.k = md5(CAST(f.\"state\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS m3 ON m3.k = md5(CAST(f.\"zip_code\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>')) OR f.\"state_sk\" IS DISTINCT FROM coalesce(m2.k, md5('<unknown>')) OR f.\"zip_sk\" IS DISTINCT FROM coalesce(m3.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ownership_change.grain",
+      "table": "fct_ownership_change",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"event_key\" FROM {batch} GROUP BY \"event_key\" HAVING count(*) > 1 OR \"event_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ownership_change.keys_not_null",
+      "table": "fct_ownership_change",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"enrollment_buyer_sk\" IS NULL OR \"enrollment_seller_sk\" IS NULL OR \"hospital_buyer_sk\" IS NULL OR \"hospital_seller_sk\" IS NULL OR \"owner_organization_buyer_sk\" IS NULL OR \"owner_organization_seller_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ownership_change.keys_resolve",
+      "table": "fct_ownership_change",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"event_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"enrollment_sk\" AS k FROM main.\"dim_enrollment\") AS r0 ON r0.k = f.\"enrollment_buyer_sk\" LEFT JOIN (SELECT DISTINCT \"enrollment_sk\" AS k FROM main.\"dim_enrollment\") AS r1 ON r1.k = f.\"enrollment_seller_sk\" LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r2 ON r2.k = f.\"hospital_buyer_sk\" LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r3 ON r3.k = f.\"hospital_seller_sk\" LEFT JOIN (SELECT DISTINCT \"owner_organization_sk\" AS k FROM main.\"dim_owner_organization\") AS r4 ON r4.k = f.\"owner_organization_buyer_sk\" LEFT JOIN (SELECT DISTINCT \"owner_organization_sk\" AS k FROM main.\"dim_owner_organization\") AS r5 ON r5.k = f.\"owner_organization_seller_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r6 ON r6.k = f.\"release_sk\" WHERE (f.\"enrollment_buyer_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"enrollment_seller_sk\" IS NOT NULL AND r1.k IS NULL) OR (f.\"hospital_buyer_sk\" IS NOT NULL AND r2.k IS NULL) OR (f.\"hospital_seller_sk\" IS NOT NULL AND r3.k IS NULL) OR (f.\"owner_organization_buyer_sk\" IS NOT NULL AND r4.k IS NULL) OR (f.\"owner_organization_seller_sk\" IS NOT NULL AND r5.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r6.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ownership_change.keys_follow_rule",
+      "table": "fct_ownership_change",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"event_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"enrollment_sk\" AS k FROM main.\"dim_enrollment\") AS m0 ON m0.k = md5(CAST(f.\"enrollment_id_buyer\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"enrollment_sk\" AS k FROM main.\"dim_enrollment\") AS m1 ON m1.k = md5(CAST(f.\"enrollment_id_seller\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m2 ON m2.k = md5(CAST(f.\"ccn_buyer\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m3 ON m3.k = md5(CAST(f.\"ccn_seller\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"owner_organization_sk\" AS k FROM main.\"dim_owner_organization\") AS m4 ON m4.k = md5(CAST(f.\"associate_id_buyer\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"owner_organization_sk\" AS k FROM main.\"dim_owner_organization\") AS m5 ON m5.k = md5(CAST(f.\"associate_id_seller\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m6 ON m6.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"enrollment_buyer_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"enrollment_seller_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>')) OR f.\"hospital_buyer_sk\" IS DISTINCT FROM coalesce(m2.k, md5('<unknown>')) OR f.\"hospital_seller_sk\" IS DISTINCT FROM coalesce(m3.k, md5('<unknown>')) OR f.\"owner_organization_buyer_sk\" IS DISTINCT FROM coalesce(m4.k, md5('<unknown>')) OR f.\"owner_organization_seller_sk\" IS DISTINCT FROM coalesce(m5.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m6.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ownership_change_hold.grain",
+      "table": "fct_ownership_change_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"hold_key\" FROM {batch} GROUP BY \"hold_key\" HAVING count(*) > 1 OR \"hold_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_places_county_value.grain",
+      "table": "fct_places_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"places_row_key\" FROM {batch} GROUP BY \"places_row_key\" HAVING count(*) > 1 OR \"places_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_places_county_value.keys_not_null",
+      "table": "fct_places_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_places_county_value.keys_resolve",
+      "table": "fct_places_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"places_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_places_county_value.keys_follow_rule",
+      "table": "fct_places_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"places_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_pos_snapshot.grain",
+      "table": "fct_pos_snapshot",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"snapshot_key\" FROM {batch} GROUP BY \"snapshot_key\" HAVING count(*) > 1 OR \"snapshot_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_pos_snapshot.keys_not_null",
+      "table": "fct_pos_snapshot",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL OR \"state_sk\" IS NULL OR \"zip_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_pos_snapshot.keys_resolve",
+      "table": "fct_pos_snapshot",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"snapshot_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r1 ON r1.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r2 ON r2.k = f.\"release_sk\" LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS r3 ON r3.k = f.\"state_sk\" LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS r4 ON r4.k = f.\"zip_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"hospital_sk\" IS NOT NULL AND r1.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r2.k IS NULL) OR (f.\"state_sk\" IS NOT NULL AND r3.k IS NULL) OR (f.\"zip_sk\" IS NOT NULL AND r4.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_pos_snapshot.keys_follow_rule",
+      "table": "fct_pos_snapshot",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"snapshot_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m1 ON m1.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m2 ON m2.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS m3 ON m3.k = md5(CAST(f.\"state_code\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"zip_sk\" AS k FROM main.\"dim_zip\") AS m4 ON m4.k = md5(CAST(f.\"zip_code\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"hospital_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m2.k, md5('<unknown>')) OR f.\"state_sk\" IS DISTINCT FROM coalesce(m3.k, md5('<unknown>')) OR f.\"zip_sk\" IS DISTINCT FROM coalesce(m4.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ruca_code.grain",
+      "table": "fct_ruca_code",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"ruca_row_key\" FROM {batch} GROUP BY \"ruca_row_key\" HAVING count(*) > 1 OR \"ruca_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ruca_code.keys_not_null",
+      "table": "fct_ruca_code",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ruca_code.keys_resolve",
+      "table": "fct_ruca_code",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"ruca_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_ruca_code.keys_follow_rule",
+      "table": "fct_ruca_code",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"ruca_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_rucc_county.grain",
+      "table": "fct_rucc_county",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"rucc_key\" FROM {batch} GROUP BY \"rucc_key\" HAVING count(*) > 1 OR \"rucc_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_rucc_county.keys_not_null",
+      "table": "fct_rucc_county",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"release_sk\" IS NULL OR \"state_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_rucc_county.keys_resolve",
+      "table": "fct_rucc_county",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"rucc_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS r2 ON r2.k = f.\"state_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL) OR (f.\"state_sk\" IS NOT NULL AND r2.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_rucc_county.keys_follow_rule",
+      "table": "fct_rucc_county",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"rucc_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"state_sk\" AS k FROM main.\"dim_state\") AS m2 ON m2.k = md5(CAST(f.\"state\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>')) OR f.\"state_sk\" IS DISTINCT FROM coalesce(m2.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_sahie_county_value.grain",
+      "table": "fct_sahie_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"sahie_row_key\" FROM {batch} GROUP BY \"sahie_row_key\" HAVING count(*) > 1 OR \"sahie_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_sahie_county_value.keys_not_null",
+      "table": "fct_sahie_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_sahie_county_value.keys_resolve",
+      "table": "fct_sahie_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"sahie_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_sahie_county_value.keys_follow_rule",
+      "table": "fct_sahie_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"sahie_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_saipe_county_estimate.grain",
+      "table": "fct_saipe_county_estimate",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"saipe_row_key\" FROM {batch} GROUP BY \"saipe_row_key\" HAVING count(*) > 1 OR \"saipe_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_saipe_county_estimate.keys_not_null",
+      "table": "fct_saipe_county_estimate",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_saipe_county_estimate.keys_resolve",
+      "table": "fct_saipe_county_estimate",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"saipe_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_saipe_county_estimate.keys_follow_rule",
+      "table": "fct_saipe_county_estimate",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"saipe_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_svi_county_value.grain",
+      "table": "fct_svi_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"svi_value_key\" FROM {batch} GROUP BY \"svi_value_key\" HAVING count(*) > 1 OR \"svi_value_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_svi_county_value.keys_not_null",
+      "table": "fct_svi_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_svi_county_value.keys_resolve",
+      "table": "fct_svi_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"svi_value_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_svi_county_value.keys_follow_rule",
+      "table": "fct_svi_county_value",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"svi_value_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_timely_effective_care_window.grain",
+      "table": "fct_timely_effective_care_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"window_key\" FROM {batch} GROUP BY \"window_key\" HAVING count(*) > 1 OR \"window_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_timely_effective_care_window.keys_not_null",
+      "table": "fct_timely_effective_care_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_timely_effective_care_window.keys_resolve",
+      "table": "fct_timely_effective_care_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_timely_effective_care_window.keys_follow_rule",
+      "table": "fct_timely_effective_care_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"entity_id\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_unplanned_visits_window.grain",
+      "table": "fct_unplanned_visits_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"window_key\" FROM {batch} GROUP BY \"window_key\" HAVING count(*) > 1 OR \"window_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_unplanned_visits_window.keys_not_null",
+      "table": "fct_unplanned_visits_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_unplanned_visits_window.keys_resolve",
+      "table": "fct_unplanned_visits_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_unplanned_visits_window.keys_follow_rule",
+      "table": "fct_unplanned_visits_window",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"window_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"entity_id\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_program_hold.grain",
+      "table": "fct_validation_program_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"hold_key\" FROM {batch} GROUP BY \"hold_key\" HAVING count(*) > 1 OR \"hold_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_program_hold.keys_not_null",
+      "table": "fct_validation_program_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_program_hold.keys_resolve",
+      "table": "fct_validation_program_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hold_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_program_hold.keys_follow_rule",
+      "table": "fct_validation_program_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hold_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_window_hold.grain",
+      "table": "fct_validation_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"hold_key\" FROM {batch} GROUP BY \"hold_key\" HAVING count(*) > 1 OR \"hold_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_window_hold.keys_not_null",
+      "table": "fct_validation_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_window_hold.keys_resolve",
+      "table": "fct_validation_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hold_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_validation_window_hold.keys_follow_rule",
+      "table": "fct_validation_window_hold",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"hold_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"entity_id\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_vbp_program_year.grain",
+      "table": "fct_vbp_program_year",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"program_key\" FROM {batch} GROUP BY \"program_key\" HAVING count(*) > 1 OR \"program_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_vbp_program_year.keys_not_null",
+      "table": "fct_vbp_program_year",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hospital_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_vbp_program_year.keys_resolve",
+      "table": "fct_vbp_program_year",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"program_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS r0 ON r0.k = f.\"hospital_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"hospital_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_vbp_program_year.keys_follow_rule",
+      "table": "fct_vbp_program_year",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"program_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"hospital_sk\" AS k FROM main.\"dim_hospital\") AS m0 ON m0.k = md5(CAST(f.\"ccn\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"hospital_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_wonder_county_deaths.grain",
+      "table": "fct_wonder_county_deaths",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"wonder_row_key\" FROM {batch} GROUP BY \"wonder_row_key\" HAVING count(*) > 1 OR \"wonder_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_wonder_county_deaths.keys_not_null",
+      "table": "fct_wonder_county_deaths",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"county_sk\" IS NULL OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_wonder_county_deaths.keys_resolve",
+      "table": "fct_wonder_county_deaths",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"wonder_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS r0 ON r0.k = f.\"county_sk\" LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS r1 ON r1.k = f.\"release_sk\" WHERE (f.\"county_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"release_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "fct_wonder_county_deaths.keys_follow_rule",
+      "table": "fct_wonder_county_deaths",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.\"wonder_row_key\" FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"county_sk\" AS k FROM main.\"dim_county\") AS m0 ON m0.k = md5(CAST(f.\"county_fips\" AS VARCHAR)) LEFT JOIN (SELECT DISTINCT \"release_sk\" AS k FROM main.\"dim_release\") AS m1 ON m1.k = md5(CAST(f.\"member_sha256\" AS VARCHAR)) WHERE f.\"county_sk\" IS DISTINCT FROM coalesce(m0.k, md5('<unknown>')) OR f.\"release_sk\" IS DISTINCT FROM coalesce(m1.k, md5('<unknown>'))"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "bridge_county_neighbor.grain",
+      "table": "bridge_county_neighbor",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"edge_key\" FROM {batch} GROUP BY \"edge_key\" HAVING count(*) > 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "bridge_county_neighbor.key_not_null",
+      "table": "bridge_county_neighbor",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"edge_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "bridge_measure_control.grain",
+      "table": "bridge_measure_control",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "bridge_measure_control.key_not_null",
+      "table": "bridge_measure_control",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "bridge_measure_control.refs_resolve",
+      "table": "bridge_measure_control",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT f.* FROM {batch} AS f LEFT JOIN (SELECT DISTINCT \"measure_sk\" AS k FROM main.\"dim_measure\") AS r0 ON r0.k = f.\"measure_sk\" LEFT JOIN (SELECT DISTINCT \"registry_control_sk\" AS k FROM main.\"dim_registry_control\") AS r1 ON r1.k = f.\"registry_control_sk\" WHERE (f.\"measure_sk\" IS NOT NULL AND r0.k IS NULL) OR (f.\"registry_control_sk\" IS NOT NULL AND r1.k IS NULL)"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "bridge_zip_county.grain",
+      "table": "bridge_zip_county",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"hud_row_key\" FROM {batch} GROUP BY \"hud_row_key\" HAVING count(*) > 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "bridge_zip_county.key_not_null",
+      "table": "bridge_zip_county",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"hud_row_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_census_tract.key_unique",
+      "table": "dim_census_tract",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"census_tract_sk\" FROM {batch} GROUP BY \"census_tract_sk\" HAVING count(*) > 1 OR \"census_tract_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_census_tract.unknown_member_once",
+      "table": "dim_census_tract",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"census_tract_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_change_type.key_unique",
+      "table": "dim_change_type",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"change_type_sk\" FROM {batch} GROUP BY \"change_type_sk\" HAVING count(*) > 1 OR \"change_type_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_change_type.unknown_member_once",
+      "table": "dim_change_type",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"change_type_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_condition.key_unique",
+      "table": "dim_condition",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"condition_sk\" FROM {batch} GROUP BY \"condition_sk\" HAVING count(*) > 1 OR \"condition_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_condition.unknown_member_once",
+      "table": "dim_condition",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"condition_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_county.key_unique",
+      "table": "dim_county",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"county_sk\" FROM {batch} GROUP BY \"county_sk\" HAVING count(*) > 1 OR \"county_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_county.unknown_member_once",
+      "table": "dim_county",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"county_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_date.key_unique",
+      "table": "dim_date",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"date_sk\" FROM {batch} GROUP BY \"date_sk\" HAVING count(*) > 1 OR \"date_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_date.unknown_member_once",
+      "table": "dim_date",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"date_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_demographic_group.key_unique",
+      "table": "dim_demographic_group",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"demographic_group_sk\" FROM {batch} GROUP BY \"demographic_group_sk\" HAVING count(*) > 1 OR \"demographic_group_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_demographic_group.unknown_member_once",
+      "table": "dim_demographic_group",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"demographic_group_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_drg.key_unique",
+      "table": "dim_drg",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"drg_sk\" FROM {batch} GROUP BY \"drg_sk\" HAVING count(*) > 1 OR \"drg_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_drg.unknown_member_once",
+      "table": "dim_drg",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"drg_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_ehr_product.key_unique",
+      "table": "dim_ehr_product",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"ehr_product_sk\" FROM {batch} GROUP BY \"ehr_product_sk\" HAVING count(*) > 1 OR \"ehr_product_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_ehr_product.unknown_member_once",
+      "table": "dim_ehr_product",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"ehr_product_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_enrollment.key_unique",
+      "table": "dim_enrollment",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"enrollment_sk\" FROM {batch} GROUP BY \"enrollment_sk\" HAVING count(*) > 1 OR \"enrollment_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_enrollment.unknown_member_once",
+      "table": "dim_enrollment",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"enrollment_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_footnote.key_unique",
+      "table": "dim_footnote",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"footnote_sk\" FROM {batch} GROUP BY \"footnote_sk\" HAVING count(*) > 1 OR \"footnote_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_footnote.unknown_member_once",
+      "table": "dim_footnote",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"footnote_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_hospital.key_unique",
+      "table": "dim_hospital",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"hospital_sk\" FROM {batch} GROUP BY \"hospital_sk\" HAVING count(*) > 1 OR \"hospital_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_hospital.unknown_member_once",
+      "table": "dim_hospital",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"hospital_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_measure.key_unique",
+      "table": "dim_measure",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\" FROM {batch} GROUP BY \"measure_sk\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_measure.unknown_member_once",
+      "table": "dim_measure",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"measure_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_owner_organization.key_unique",
+      "table": "dim_owner_organization",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"owner_organization_sk\" FROM {batch} GROUP BY \"owner_organization_sk\" HAVING count(*) > 1 OR \"owner_organization_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_owner_organization.unknown_member_once",
+      "table": "dim_owner_organization",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"owner_organization_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_owner_role.key_unique",
+      "table": "dim_owner_role",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"owner_role_sk\" FROM {batch} GROUP BY \"owner_role_sk\" HAVING count(*) > 1 OR \"owner_role_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_owner_role.unknown_member_once",
+      "table": "dim_owner_role",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"owner_role_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_registry_control.key_unique",
+      "table": "dim_registry_control",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"registry_control_sk\" FROM {batch} GROUP BY \"registry_control_sk\" HAVING count(*) > 1 OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_registry_control.unknown_member_once",
+      "table": "dim_registry_control",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"registry_control_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_release.key_unique",
+      "table": "dim_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"release_sk\" FROM {batch} GROUP BY \"release_sk\" HAVING count(*) > 1 OR \"release_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_release.unknown_member_once",
+      "table": "dim_release",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"release_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_rurality_code.key_unique",
+      "table": "dim_rurality_code",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"rurality_code_sk\" FROM {batch} GROUP BY \"rurality_code_sk\" HAVING count(*) > 1 OR \"rurality_code_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_rurality_code.unknown_member_once",
+      "table": "dim_rurality_code",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"rurality_code_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_source.key_unique",
+      "table": "dim_source",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"source_sk\" FROM {batch} GROUP BY \"source_sk\" HAVING count(*) > 1 OR \"source_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_source.unknown_member_once",
+      "table": "dim_source",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"source_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_state.key_unique",
+      "table": "dim_state",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"state_sk\" FROM {batch} GROUP BY \"state_sk\" HAVING count(*) > 1 OR \"state_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_state.unknown_member_once",
+      "table": "dim_state",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"state_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_zip.key_unique",
+      "table": "dim_zip",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"zip_sk\" FROM {batch} GROUP BY \"zip_sk\" HAVING count(*) > 1 OR \"zip_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "dim_zip.unknown_member_once",
+      "table": "dim_zip",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT count(*) AS unknown_members FROM {batch} HAVING count(*) FILTER (WHERE \"zip_sk\" = md5('<unknown>')) <> 1"
+      },
+      "severity": "structural"
+    }
+  ]
+}

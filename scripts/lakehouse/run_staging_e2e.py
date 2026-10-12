@@ -4718,6 +4718,16 @@ def install_packages() -> None:
         raise SystemExit(f"dbt deps failed ({code}): {(stdout + stderr)[-2000:]}")
 
 
+# Amendment A42: the gold release copy-consistency test warns by design (stored copies of one file can carry different release labels). Only
+# that test may warn; every other status except pass and success is a failure, and the runner records whether it warned.
+TOLERATED_WARN = "release_copy_consistency_dim_release_"
+
+
+def node_passes(name: str, status: str) -> bool:
+    """A node passed, or it is the one tolerated warn test and warned (amendment A42)."""
+    return status in ("pass", "success") or (status == "warn" and name == TOLERATED_WARN)
+
+
 def dbt_build(case: str, target: str, project: bool = False) -> tuple[int, dict[str, str]]:
     """Run dbt build for a case, on its own project copy when asked, and return the exit code and each node's status."""
     case_dir = f"{CONTAINER_OUT}/e2e/{case}"
@@ -5453,7 +5463,8 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     jobs += [(case, objects, unlabelled) for case, (_test, objects, unlabelled) in FAILING.items()]
     results = build_cases(jobs, workers)
     code, statuses = built(results, "base")
-    checks["base_build_passes"] = code == 0 and bool(statuses) and all(status in ("pass", "success") for status in statuses.values())
+    checks["base_build_passes"] = code == 0 and bool(statuses) and all(node_passes(name, status) for name, status in statuses.items())
+    FIXTURE_EVIDENCE["base_tolerated_warn"] = statuses.get(TOLERATED_WARN)
     base = model_outputs("base")
     checks["copies_match_expected"] = [tuple(row) for row in want["copies"]] == base.get("copies")
     checks["files_match_expected"] = [tuple(row) for row in want["files"]] == base.get("files")
@@ -6332,7 +6343,8 @@ def real_stage(once: bool = False) -> dict[str, Any]:
         (CASES / run).mkdir(parents=True, exist_ok=True)
         with pinned_run(run, outcome) as pinned:
             code, statuses = dbt_build(run, "lakehouse")
-            failed = sorted(name for name, status in statuses.items() if status not in ("pass", "success"))
+            failed = sorted(name for name, status in statuses.items() if not node_passes(name, status))
+            outcome[f"{run}_tolerated_warn"] = statuses.get(TOLERATED_WARN)
             outcome["checks"][f"{run}_build_passes"] = pinned["build_passed"] = code == 0 and bool(statuses) and not failed
         outcome["checks"][f"{run}_pins_verified"] = pinned["pins_verified"]
         outcome[f"{run}_not_passing"] = failed

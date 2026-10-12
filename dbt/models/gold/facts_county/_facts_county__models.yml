@@ -1,0 +1,1110 @@
+version: 2
+
+models:
+  - name: fct_acs_county_value
+    description: One row per row of int_acs_county_values, every silver column unchanged, then the surrogate keys; silver test assert_county_context_values_cast checks the published values.
+    columns:
+      - name: acs_value_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county; the unknown member for a null or unmatched county_fips.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_acs_county_value_county_sk
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_acs_county_value_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_acs_county_value
+          arguments:
+            compare_model: ref('int_acs_county_values')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - bronze_table
+              - vintage
+              - concept_id
+              - column_name
+              - county_fips
+              - value_published
+              - value_number
+              - missing_token
+              - is_top_coded
+              - is_bottom_coded
+              - county_scope
+              - acs_value_key
+              - is_connecticut
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_acs_county_value
+          arguments:
+            expression: >-
+              county_sk is not distinct from coalesce((select any_value(lookup.sk) from (select county_sk as sk, county_fips as nk from {{ ref('dim_county') }} where county_fips <> '<unknown>') as lookup where lookup.nk = cast(county_fips as varchar)), md5('<unknown>'))
+              and release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_vintage_fct_acs_county_value
+          arguments:
+            expression: typeof(vintage) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_value_published_fct_acs_county_value
+          arguments:
+            expression: typeof(value_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_missing_token_fct_acs_county_value
+          arguments:
+            expression: typeof(missing_token) = 'VARCHAR'
+  - name: fct_bls_county_series
+    description: One row per row of int_bls_county_series, every silver column unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
+    columns:
+      - name: bls_row_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county; the unknown member for a null or unmatched county_fips.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_bls_county_series_county_sk
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_bls_county_series_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_bls_county_series
+          arguments:
+            compare_model: ref('int_bls_county_series')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - capture_date
+              - series_id
+              - county_fips
+              - measure_code
+              - measure
+              - data_year
+              - period_code
+              - month_number
+              - is_annual_average
+              - is_seasonally_adjusted
+              - value_published
+              - value_number
+              - missing_token
+              - footnote_codes
+              - bls_row_key
+              - is_connecticut
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_bls_county_series
+          arguments:
+            expression: >-
+              county_sk is not distinct from coalesce((select any_value(lookup.sk) from (select county_sk as sk, county_fips as nk from {{ ref('dim_county') }} where county_fips <> '<unknown>') as lookup where lookup.nk = cast(county_fips as varchar)), md5('<unknown>'))
+              and release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_data_year_fct_bls_county_series
+          arguments:
+            expression: typeof(data_year) = 'INTEGER'
+      - dbt_utils.expression_is_true:
+          name: typed_text_value_published_fct_bls_county_series
+          arguments:
+            expression: typeof(value_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_missing_token_fct_bls_county_series
+          arguments:
+            expression: typeof(missing_token) = 'VARCHAR'
+  - name: fct_gv_county_value
+    description: One row per row of int_gv_county_values, every silver column unchanged, then the surrogate keys; silver test assert_county_health_values_cast checks the published values.
+    columns:
+      - name: gv_value_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county; the unknown member for a null or unmatched county_fips.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_gv_county_value_county_sk
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_gv_county_value_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_gv_county_value
+          arguments:
+            compare_model: ref('int_gv_county_values')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - field
+              - value_published
+              - data_year
+              - county_fips
+              - value_number
+              - missing_token
+              - county_scope
+              - gv_value_key
+              - is_connecticut
+              - bene_age_lvl
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_gv_county_value
+          arguments:
+            expression: >-
+              county_sk is not distinct from coalesce((select any_value(lookup.sk) from (select county_sk as sk, county_fips as nk from {{ ref('dim_county') }} where county_fips <> '<unknown>') as lookup where lookup.nk = cast(county_fips as varchar)), md5('<unknown>'))
+              and release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_data_year_fct_gv_county_value
+          arguments:
+            expression: typeof(data_year) = 'INTEGER'
+      - dbt_utils.expression_is_true:
+          name: typed_text_value_published_fct_gv_county_value
+          arguments:
+            expression: typeof(value_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_missing_token_fct_gv_county_value
+          arguments:
+            expression: typeof(missing_token) = 'VARCHAR'
+  - name: fct_hpsa_component
+    description: One row per row of int_hpsa_components, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
+    columns:
+      - name: hpsa_row_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county; the unknown member for a null or unmatched county_fips.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_hpsa_component_county_sk
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_hpsa_component_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_hpsa_component
+          arguments:
+            compare_model: ref('int_hpsa_components')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - capture_date
+              - hpsa_id
+              - hpsa_name
+              - designation_type
+              - discipline
+              - hpsa_status
+              - hpsa_score_published
+              - hpsa_score
+              - designation_date_published
+              - designation_date
+              - last_update_date_published
+              - last_update_date
+              - withdrawn_date_published
+              - withdrawn_date
+              - component_type
+              - geography_id
+              - county_code_published
+              - county_fips
+              - county_source
+              - county_token
+              - rural_status
+              - hold_reason
+              - county_scope
+              - is_connecticut
+              - hpsa_row_key
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_hpsa_component
+          arguments:
+            expression: >-
+              county_sk is not distinct from coalesce((select any_value(lookup.sk) from (select county_sk as sk, county_fips as nk from {{ ref('dim_county') }} where county_fips <> '<unknown>') as lookup where lookup.nk = cast(county_fips as varchar)), md5('<unknown>'))
+              and release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_capture_date_fct_hpsa_component
+          arguments:
+            expression: typeof(capture_date) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: typed_designation_date_fct_hpsa_component
+          arguments:
+            expression: typeof(designation_date) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: typed_last_update_date_fct_hpsa_component
+          arguments:
+            expression: typeof(last_update_date) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: typed_withdrawn_date_fct_hpsa_component
+          arguments:
+            expression: typeof(withdrawn_date) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: typed_text_hpsa_score_published_fct_hpsa_component
+          arguments:
+            expression: typeof(hpsa_score_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_designation_date_published_fct_hpsa_component
+          arguments:
+            expression: typeof(designation_date_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_last_update_date_published_fct_hpsa_component
+          arguments:
+            expression: typeof(last_update_date_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_withdrawn_date_published_fct_hpsa_component
+          arguments:
+            expression: typeof(withdrawn_date_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_county_code_published_fct_hpsa_component
+          arguments:
+            expression: typeof(county_code_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_county_token_fct_hpsa_component
+          arguments:
+            expression: typeof(county_token) = 'VARCHAR'
+  - name: fct_hsa_zip_cases
+    description: One row per row of int_hsa_zip_cases, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
+    columns:
+      - name: hsa_row_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_hsa_zip_cases_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+      - name: zip_sk
+        description: Key of dim_zip; the unknown member for a null or unmatched zip_code.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_hsa_zip_cases_zip_sk
+              arguments:
+                to: ref('dim_zip')
+                field: zip_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_hsa_zip_cases
+          arguments:
+            compare_model: ref('int_hsa_zip_cases')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - data_year
+              - period_start
+              - period_end
+              - ccn_published
+              - zip_published
+              - zip_code
+              - total_cases
+              - total_days_of_care
+              - total_charges
+              - hsa_row_key
+              - is_ccn_shape_valid
+              - is_zip_suppressed
+              - is_zip_missing
+              - is_cases_suppressed
+              - is_days_suppressed
+              - is_charges_suppressed
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_hsa_zip_cases
+          arguments:
+            expression: >-
+              release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+              and zip_sk is not distinct from coalesce((select any_value(lookup.sk) from (select zip_sk as sk, zip_code as nk from {{ ref('dim_zip') }} where zip_code <> '<unknown>') as lookup where lookup.nk = cast(zip_code as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_period_start_fct_hsa_zip_cases
+          arguments:
+            expression: typeof(period_start) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: typed_period_end_fct_hsa_zip_cases
+          arguments:
+            expression: typeof(period_end) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: typed_text_ccn_published_fct_hsa_zip_cases
+          arguments:
+            expression: typeof(ccn_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_zip_published_fct_hsa_zip_cases
+          arguments:
+            expression: typeof(zip_published) = 'VARCHAR'
+  - name: fct_hud_zip_county_hold
+    description: One row per row of int_hud_zip_county_holds, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
+    columns:
+      - name: hud_row_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_hud_zip_county_hold_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+      - name: zip_sk
+        description: Key of dim_zip; the unknown member for a null or unmatched zip_code.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_hud_zip_county_hold_zip_sk
+              arguments:
+                to: ref('dim_zip')
+                field: zip_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_hud_zip_county_hold
+          arguments:
+            compare_model: ref('int_hud_zip_county_holds')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - quarter_label
+              - zip_code
+              - geoid_published
+              - usps_state
+              - hold_reason
+              - hud_row_key
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_hud_zip_county_hold
+          arguments:
+            expression: >-
+              release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+              and zip_sk is not distinct from coalesce((select any_value(lookup.sk) from (select zip_sk as sk, zip_code as nk from {{ ref('dim_zip') }} where zip_code <> '<unknown>') as lookup where lookup.nk = cast(zip_code as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_quarter_label_fct_hud_zip_county_hold
+          arguments:
+            expression: typeof(quarter_label) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_geoid_published_fct_hud_zip_county_hold
+          arguments:
+            expression: typeof(geoid_published) = 'VARCHAR'
+  - name: fct_mmd_prevalence
+    description: One row per row of int_mmd_prevalence, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
+    columns:
+      - name: mmd_row_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county; the unknown member for a null or unmatched county_fips.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_mmd_prevalence_county_sk
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_mmd_prevalence_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_mmd_prevalence
+          arguments:
+            compare_model: ref('int_mmd_prevalence')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - file_control
+              - condition_label
+              - data_year
+              - geography_level
+              - county_fips
+              - state_fips
+              - county_name
+              - urban
+              - denominator_band
+              - value_published
+              - value_number
+              - value_unit
+              - is_possible_suppression
+              - is_unknown_county
+              - county_scope
+              - is_connecticut
+              - mmd_row_key
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_mmd_prevalence
+          arguments:
+            expression: >-
+              county_sk is not distinct from coalesce((select any_value(lookup.sk) from (select county_sk as sk, county_fips as nk from {{ ref('dim_county') }} where county_fips <> '<unknown>') as lookup where lookup.nk = cast(county_fips as varchar)), md5('<unknown>'))
+              and release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_data_year_fct_mmd_prevalence
+          arguments:
+            expression: typeof(data_year) = 'INTEGER'
+      - dbt_utils.expression_is_true:
+          name: typed_text_value_published_fct_mmd_prevalence
+          arguments:
+            expression: typeof(value_published) = 'VARCHAR'
+  - name: fct_mua_component
+    description: One row per row of int_mua_components, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
+    columns:
+      - name: mua_row_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county; the unknown member for a null or unmatched county_fips.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_mua_component_county_sk
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_mua_component_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_mua_component
+          arguments:
+            compare_model: ref('int_mua_components')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - capture_date
+              - mua_id
+              - designation_type_code
+              - designation_type
+              - mua_status
+              - population_type
+              - imu_score_published
+              - imu_score
+              - designation_date_published
+              - designation_date
+              - update_date_published
+              - update_date
+              - withdrawal_date_published
+              - withdrawal_date
+              - component_type
+              - component_name
+              - county_code_published
+              - county_fips
+              - county_token
+              - county_subdivision_code
+              - rural_status
+              - hold_reason
+              - county_scope
+              - is_connecticut
+              - mua_row_key
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_mua_component
+          arguments:
+            expression: >-
+              county_sk is not distinct from coalesce((select any_value(lookup.sk) from (select county_sk as sk, county_fips as nk from {{ ref('dim_county') }} where county_fips <> '<unknown>') as lookup where lookup.nk = cast(county_fips as varchar)), md5('<unknown>'))
+              and release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_capture_date_fct_mua_component
+          arguments:
+            expression: typeof(capture_date) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: typed_designation_date_fct_mua_component
+          arguments:
+            expression: typeof(designation_date) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: typed_update_date_fct_mua_component
+          arguments:
+            expression: typeof(update_date) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: typed_withdrawal_date_fct_mua_component
+          arguments:
+            expression: typeof(withdrawal_date) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: typed_text_imu_score_published_fct_mua_component
+          arguments:
+            expression: typeof(imu_score_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_designation_date_published_fct_mua_component
+          arguments:
+            expression: typeof(designation_date_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_update_date_published_fct_mua_component
+          arguments:
+            expression: typeof(update_date_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_withdrawal_date_published_fct_mua_component
+          arguments:
+            expression: typeof(withdrawal_date_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_county_code_published_fct_mua_component
+          arguments:
+            expression: typeof(county_code_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_county_token_fct_mua_component
+          arguments:
+            expression: typeof(county_token) = 'VARCHAR'
+  - name: fct_places_county_value
+    description: One row per row of int_places_county_values, every silver column unchanged, then the surrogate keys; silver test assert_county_health_values_cast checks the published values.
+    columns:
+      - name: places_row_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county; the unknown member for a null or unmatched county_fips.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_places_county_value_county_sk
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_places_county_value_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_places_county_value
+          arguments:
+            compare_model: ref('int_places_county_values')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - edition
+              - measureid
+              - datavaluetypeid
+              - data_value_published
+              - footnote_symbol
+              - data_year
+              - county_fips
+              - county_source
+              - data_value
+              - low_confidence_limit
+              - high_confidence_limit
+              - total_population
+              - county_scope
+              - places_row_key
+              - is_connecticut
+              - is_all_states
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_places_county_value
+          arguments:
+            expression: >-
+              county_sk is not distinct from coalesce((select any_value(lookup.sk) from (select county_sk as sk, county_fips as nk from {{ ref('dim_county') }} where county_fips <> '<unknown>') as lookup where lookup.nk = cast(county_fips as varchar)), md5('<unknown>'))
+              and release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_edition_fct_places_county_value
+          arguments:
+            expression: typeof(edition) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_data_year_fct_places_county_value
+          arguments:
+            expression: typeof(data_year) = 'INTEGER'
+      - dbt_utils.expression_is_true:
+          name: typed_text_data_value_published_fct_places_county_value
+          arguments:
+            expression: typeof(data_value_published) = 'VARCHAR'
+  - name: fct_ruca_code
+    description: One row per row of int_ruca_codes, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
+    columns:
+      - name: ruca_row_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county; the unknown member for a null or unmatched county_fips.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_ruca_code_county_sk
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_ruca_code_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_ruca_code
+          arguments:
+            compare_model: ref('int_ruca_codes')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - sheet_name
+              - vintage
+              - geography_type
+              - geography_id
+              - geography_published
+              - county_fips
+              - county_fips_2023
+              - usps_state
+              - zip_type
+              - primary_published
+              - secondary_published
+              - ruca_row_key
+              - primary_ruca
+              - secondary_ruca
+              - is_connecticut
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_ruca_code
+          arguments:
+            expression: >-
+              county_sk is not distinct from coalesce((select any_value(lookup.sk) from (select county_sk as sk, county_fips as nk from {{ ref('dim_county') }} where county_fips <> '<unknown>') as lookup where lookup.nk = cast(county_fips as varchar)), md5('<unknown>'))
+              and release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_vintage_fct_ruca_code
+          arguments:
+            expression: typeof(vintage) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_geography_published_fct_ruca_code
+          arguments:
+            expression: typeof(geography_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_primary_published_fct_ruca_code
+          arguments:
+            expression: typeof(primary_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_secondary_published_fct_ruca_code
+          arguments:
+            expression: typeof(secondary_published) = 'VARCHAR'
+  - name: fct_rucc_county
+    description: One row per row of int_rucc_county_codes, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
+    columns:
+      - name: rucc_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county; the unknown member for a null or unmatched county_fips.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_rucc_county_county_sk
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_rucc_county_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+      - name: state_sk
+        description: Key of dim_state; the unknown member for a null or unmatched state.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_rucc_county_state_sk
+              arguments:
+                to: ref('dim_state')
+                field: state_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_rucc_county
+          arguments:
+            compare_model: ref('int_rucc_county_codes')
+            compare_columns:
+              - member_sha256
+              - vintage
+              - county_fips
+              - county_published
+              - state
+              - county_name
+              - rucc_published
+              - description
+              - population
+              - population_published
+              - county_scope
+              - rucc_key
+              - rucc_code
+              - is_connecticut
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_rucc_county
+          arguments:
+            expression: >-
+              county_sk is not distinct from coalesce((select any_value(lookup.sk) from (select county_sk as sk, county_fips as nk from {{ ref('dim_county') }} where county_fips <> '<unknown>') as lookup where lookup.nk = cast(county_fips as varchar)), md5('<unknown>'))
+              and release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+              and state_sk is not distinct from coalesce((select any_value(lookup.sk) from (select state_sk as sk, state_code as nk from {{ ref('dim_state') }} where state_code <> '<unknown>') as lookup where lookup.nk = cast(state as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_vintage_fct_rucc_county
+          arguments:
+            expression: typeof(vintage) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_county_published_fct_rucc_county
+          arguments:
+            expression: typeof(county_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_rucc_published_fct_rucc_county
+          arguments:
+            expression: typeof(rucc_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_population_published_fct_rucc_county
+          arguments:
+            expression: typeof(population_published) = 'VARCHAR'
+  - name: fct_sahie_county_value
+    description: One row per row of int_sahie_county_rows, every silver column unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
+    columns:
+      - name: sahie_row_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county; the unknown member for a null or unmatched county_fips.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_sahie_county_value_county_sk
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_sahie_county_value_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_sahie_county_value
+          arguments:
+            compare_model: ref('int_sahie_county_rows')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - file_year
+              - estimate_year
+              - release_version
+              - county_fips
+              - agecat
+              - racecat
+              - sexcat
+              - iprcat
+              - nipr
+              - nipr_moe
+              - nui
+              - nui_moe
+              - nic
+              - nic_moe
+              - pctui
+              - pctui_moe
+              - pctic
+              - pctic_moe
+              - pctelig
+              - pctelig_moe
+              - pctliic
+              - pctliic_moe
+              - missing_fields
+              - sahie_row_key
+              - is_all_groups
+              - is_connecticut
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_sahie_county_value
+          arguments:
+            expression: >-
+              county_sk is not distinct from coalesce((select any_value(lookup.sk) from (select county_sk as sk, county_fips as nk from {{ ref('dim_county') }} where county_fips <> '<unknown>') as lookup where lookup.nk = cast(county_fips as varchar)), md5('<unknown>'))
+              and release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_file_year_fct_sahie_county_value
+          arguments:
+            expression: typeof(file_year) = 'INTEGER'
+      - dbt_utils.expression_is_true:
+          name: typed_estimate_year_fct_sahie_county_value
+          arguments:
+            expression: typeof(estimate_year) = 'INTEGER'
+  - name: fct_saipe_county_estimate
+    description: One row per row of int_saipe_county_estimates, every silver column unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
+    columns:
+      - name: saipe_row_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county; the unknown member for a null or unmatched county_fips.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_saipe_county_estimate_county_sk
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_saipe_county_estimate_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_saipe_county_estimate
+          arguments:
+            compare_model: ref('int_saipe_county_estimates')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - estimate_year
+              - county_fips
+              - county_name
+              - poverty_all_count
+              - poverty_all_count_lb90
+              - poverty_all_count_ub90
+              - poverty_all_pct
+              - poverty_all_pct_lb90
+              - poverty_all_pct_ub90
+              - poverty_0_17_count
+              - poverty_0_17_count_lb90
+              - poverty_0_17_count_ub90
+              - poverty_0_17_pct
+              - poverty_0_17_pct_lb90
+              - poverty_0_17_pct_ub90
+              - poverty_5_17_related_count
+              - poverty_5_17_related_count_lb90
+              - poverty_5_17_related_count_ub90
+              - poverty_5_17_related_pct
+              - poverty_5_17_related_pct_lb90
+              - poverty_5_17_related_pct_ub90
+              - median_household_income
+              - median_household_income_lb90
+              - median_household_income_ub90
+              - missing_fields
+              - county_scope
+              - saipe_row_key
+              - is_connecticut
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_saipe_county_estimate
+          arguments:
+            expression: >-
+              county_sk is not distinct from coalesce((select any_value(lookup.sk) from (select county_sk as sk, county_fips as nk from {{ ref('dim_county') }} where county_fips <> '<unknown>') as lookup where lookup.nk = cast(county_fips as varchar)), md5('<unknown>'))
+              and release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_estimate_year_fct_saipe_county_estimate
+          arguments:
+            expression: typeof(estimate_year) = 'INTEGER'
+  - name: fct_svi_county_value
+    description: One row per row of int_svi_county_values, every silver column unchanged, then the surrogate keys; silver test assert_county_context_values_cast checks the published values.
+    columns:
+      - name: svi_value_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county; the unknown member for a null or unmatched county_fips.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_svi_county_value_county_sk
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_svi_county_value_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_svi_county_value
+          arguments:
+            compare_model: ref('int_svi_county_values')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - edition
+              - county_fips
+              - field
+              - value_published
+              - value_number
+              - missing_token
+              - county_scope
+              - svi_value_key
+              - is_connecticut
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_svi_county_value
+          arguments:
+            expression: >-
+              county_sk is not distinct from coalesce((select any_value(lookup.sk) from (select county_sk as sk, county_fips as nk from {{ ref('dim_county') }} where county_fips <> '<unknown>') as lookup where lookup.nk = cast(county_fips as varchar)), md5('<unknown>'))
+              and release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_edition_fct_svi_county_value
+          arguments:
+            expression: typeof(edition) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_value_published_fct_svi_county_value
+          arguments:
+            expression: typeof(value_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_missing_token_fct_svi_county_value
+          arguments:
+            expression: typeof(missing_token) = 'VARCHAR'
+  - name: fct_wonder_county_deaths
+    description: One row per row of int_wonder_county_deaths, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
+    columns:
+      - name: wonder_row_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+      - name: county_sk
+        description: Key of dim_county; the unknown member for a null or unmatched county_fips.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_wonder_county_deaths_county_sk
+              arguments:
+                to: ref('dim_county')
+                field: county_sk
+      - name: release_sk
+        description: Key of dim_release; the unknown member for a null or unmatched member_sha256.
+        data_tests:
+          - not_null
+          - relationships:
+              name: relationships_fct_wonder_county_deaths_release_sk
+              arguments:
+                to: ref('dim_release')
+                field: release_sk
+    data_tests:
+      - dbt_utils.equality:
+          name: equal_content_fct_wonder_county_deaths
+          arguments:
+            compare_model: ref('int_wonder_county_deaths')
+            compare_columns:
+              - member_sha256
+              - source_row_number
+              - wonder_database
+              - period_start
+              - period_end
+              - county_fips
+              - data_year
+              - deaths_published
+              - deaths
+              - deaths_token
+              - population
+              - crude_rate_published
+              - crude_rate
+              - crude_rate_token
+              - crude_rate_lower_95
+              - crude_rate_upper_95
+              - crude_rate_standard_error
+              - hold_reason
+              - county_scope
+              - wonder_row_key
+              - is_connecticut
+      - dbt_utils.expression_is_true:
+          name: keys_follow_natural_keys_fct_wonder_county_deaths
+          arguments:
+            expression: >-
+              county_sk is not distinct from coalesce((select any_value(lookup.sk) from (select county_sk as sk, county_fips as nk from {{ ref('dim_county') }} where county_fips <> '<unknown>') as lookup where lookup.nk = cast(county_fips as varchar)), md5('<unknown>'))
+              and release_sk is not distinct from coalesce((select any_value(lookup.sk) from (select release_sk as sk, member_sha256 as nk from {{ ref('dim_release') }} where member_sha256 <> '<unknown>') as lookup where lookup.nk = cast(member_sha256 as varchar)), md5('<unknown>'))
+      - dbt_utils.expression_is_true:
+          name: typed_period_start_fct_wonder_county_deaths
+          arguments:
+            expression: typeof(period_start) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: typed_period_end_fct_wonder_county_deaths
+          arguments:
+            expression: typeof(period_end) = 'DATE'
+      - dbt_utils.expression_is_true:
+          name: typed_data_year_fct_wonder_county_deaths
+          arguments:
+            expression: typeof(data_year) = 'INTEGER'
+      - dbt_utils.expression_is_true:
+          name: typed_text_deaths_published_fct_wonder_county_deaths
+          arguments:
+            expression: typeof(deaths_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_deaths_token_fct_wonder_county_deaths
+          arguments:
+            expression: typeof(deaths_token) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_crude_rate_published_fct_wonder_county_deaths
+          arguments:
+            expression: typeof(crude_rate_published) = 'VARCHAR'
+      - dbt_utils.expression_is_true:
+          name: typed_text_crude_rate_token_fct_wonder_county_deaths
+          arguments:
+            expression: typeof(crude_rate_token) = 'VARCHAR'
