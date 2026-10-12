@@ -1,0 +1,1113 @@
+version: 2
+
+models:
+  - name: bridge_county_neighbor
+    description: One row per county, neighbor and vintage as Census publishes it, with every silver column unchanged.
+    columns:
+      - name: edge_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+    data_tests:
+      - dbt_utils.equal_rowcount:
+          arguments:
+            compare_model: ref('int_county_adjacency_edges')
+  - name: bridge_measure_control
+    description: 'Many-to-many of a measure identity (with its value column), a vintage range and a registry control: one row per bridge seed
+      row with a non-empty measure key. The only gold model where registry controls meet the data.'
+    columns:
+      - name: measure_sk
+        description: Key of dim_measure.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_measure')
+                field: measure_sk
+      - name: registry_control_sk
+        description: Key of dim_registry_control.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_registry_control')
+                field: registry_control_sk
+      - name: measure_control
+        description: The registry control ID.
+        data_tests:
+          - not_null
+      - name: vintage_start
+        description: First vintage the control reads for the identity; null when none.
+      - name: vintage_end
+        description: Last vintage the control reads for the identity; null when open.
+      - name: source_seed
+        description: The retired registry-map seed the row came from.
+      - name: source_row
+        description: The data row number of that seed, counted from 1.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - measure_sk
+              - registry_control_sk
+              - vintage_start
+              - vintage_end
+      - bridge_matches_seeds:
+          name: bridge_matches_seeds_bridge_measure_control
+          arguments:
+            seeds:
+              - registry_measure_sources_bridge
+              - cost_report_measures_bridge
+              - impact_measures_bridge
+              - mup_measures_bridge
+              - occmix_measures_bridge
+              - validation_measures_bridge
+              - hai_outcome_measures_bridge
+              - hhs_onc_measures_bridge
+              - ownership_measures_bridge
+              - county_health_measures_bridge
+              - acs_svi_measures_bridge
+              - income_labor_measures_bridge
+              - geography_measures_bridge
+              - mmd_conditions_bridge
+              - shortage_measures_bridge
+  - name: bridge_zip_county
+    description: One row per ZIP code, county and USPS quarter as HUD publishes it, with every silver column unchanged.
+    columns:
+      - name: hud_row_key
+        description: The row key of the silver model.
+        data_tests:
+          - unique
+          - not_null
+    data_tests:
+      - dbt_utils.equal_rowcount:
+          arguments:
+            compare_model: ref('int_hud_zip_county_quarters')
+  - name: dim_census_tract
+    description: One row per 11-digit census tract GEOID, plus the unknown member (natural key '<unknown>'). Read from the RUCA tract rows and
+      the HPSA geography IDs that are 11 digits; any other HPSA ID takes the unknown member in the fact.
+    columns:
+      - name: census_tract_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: census_tract_geoid
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: census_tract_geoid
+      - name: census_tract_geoid
+        description: The natural key as published. The unknown member holds '<unknown>'.
+        data_tests:
+          - unique
+          - not_null
+          - dimension_membership:
+              name: dimension_membership_dim_census_tract
+              arguments:
+                sk_column: census_tract_sk
+                sources:
+                  - model: int_ruca_codes
+                    column: geography_id
+                    where: geography_type = 'tract'
+                  - model: int_hpsa_components
+                    column: geography_id
+                space: regexp_matches(natural_key, '^[0-9]{11}$')
+  - name: dim_change_type
+    description: One row per (change of ownership type code system, code) as published, plus the unknown member.
+    columns:
+      - name: change_type_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code_system
+                expected: '''<unknown>'''
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: concat_ws('|', code_system, code)
+      - name: code_system
+        description: The silver model and column the code comes from. The unknown member holds '<unknown>'.
+        data_tests:
+          - not_null
+      - name: code
+        description: The code as published.
+        data_tests:
+          - not_null
+      - name: code_label
+        description: The label from the paired silver column where silver has one; else null.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - code_system
+              - code
+  - name: dim_condition
+    description: One row per (MMD condition code system, code) as published, plus the unknown member.
+    columns:
+      - name: condition_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code_system
+                expected: '''<unknown>'''
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: concat_ws('|', code_system, code)
+      - name: code_system
+        description: The silver model and column the code comes from. The unknown member holds '<unknown>'.
+        data_tests:
+          - not_null
+      - name: code
+        description: The code as published.
+        data_tests:
+          - not_null
+      - name: code_label
+        description: The label from the paired silver column where silver has one; else null.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - code_system
+              - code
+  - name: dim_county
+    description: One row per 5-character county FIPS that a fact's county key carries, plus the unknown member (natural key '<unknown>'). The
+      Connecticut planning region and the retired Alaska code flag are deferred (amendment A36).
+    columns:
+      - name: county_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: county_fips
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: county_fips
+      - name: county_fips
+        description: The natural key as published. The unknown member holds '<unknown>'.
+        data_tests:
+          - unique
+          - not_null
+          - dimension_membership:
+              name: dimension_membership_dim_county
+              arguments:
+                sk_column: county_sk
+                sources:
+                  - model: int_acs_county_values
+                    column: county_fips
+                  - model: int_bls_county_series
+                    column: county_fips
+                  - model: int_gv_county_values
+                    column: county_fips
+                  - model: int_hpsa_components
+                    column: county_fips
+                  - model: int_mmd_prevalence
+                    column: county_fips
+                  - model: int_mua_components
+                    column: county_fips
+                  - model: int_places_county_values
+                    column: county_fips
+                  - model: int_pos_hospital_snapshots
+                    column: county_fips
+                  - model: int_ruca_codes
+                    column: county_fips
+                  - model: int_rucc_county_codes
+                    column: county_fips
+                  - model: int_sahie_county_rows
+                    column: county_fips
+                  - model: int_saipe_county_estimates
+                    column: county_fips
+                  - model: int_svi_county_values
+                    column: county_fips
+                  - model: int_wonder_county_deaths
+                    column: county_fips
+                space: length(natural_key) = 5
+  - name: dim_date
+    description: One row per day from the earliest to the latest DATE source date of the facts, plus the unknown member. The natural key is the
+      date.
+    columns:
+      - name: date_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: calendar_date
+                expected: 'null'
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: calendar_date
+      - name: calendar_date
+        description: 'The day. Null on the unknown member: the one exception to the ''<unknown>'' natural key (amendment A40 item 1) because the
+          key is a DATE.'
+        data_tests:
+          - unique
+      - name: iso_year
+        description: ISO 8601 year of the day.
+      - name: iso_week
+        description: ISO 8601 week of the day.
+      - name: month_number
+        description: Calendar month, 1 to 12.
+      - name: quarter_number
+        description: Calendar quarter, 1 to 4.
+      - name: calendar_year
+        description: Calendar year.
+      - name: federal_fiscal_year
+        description: 'Federal fiscal year: October 1 starts the next fiscal year.'
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: calendar_date is null or federal_fiscal_year >= calendar_year
+      - dim_date_attributes
+  - name: dim_demographic_group
+    description: One row per (demographic group code system, code) as published, plus the unknown member.
+    columns:
+      - name: demographic_group_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code_system
+                expected: '''<unknown>'''
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: concat_ws('|', code_system, code)
+      - name: code_system
+        description: The silver model and column the code comes from. The unknown member holds '<unknown>'.
+        data_tests:
+          - not_null
+      - name: code
+        description: The code as published.
+        data_tests:
+          - not_null
+      - name: code_label
+        description: The label from the paired silver column where silver has one; else null.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - code_system
+              - code
+  - name: dim_drg
+    description: One row per (diagnosis-related group code system, code) as published, plus the unknown member.
+    columns:
+      - name: drg_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code_system
+                expected: '''<unknown>'''
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: concat_ws('|', code_system, code)
+      - name: code_system
+        description: The silver model and column the code comes from. The unknown member holds '<unknown>'.
+        data_tests:
+          - not_null
+      - name: code
+        description: The code as published.
+        data_tests:
+          - not_null
+      - name: code_label
+        description: The label from the paired silver column where silver has one; else null.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - code_system
+              - code
+  - name: dim_ehr_product
+    description: One row per (ONC CHPL product code system, code) as published, plus the unknown member.
+    columns:
+      - name: ehr_product_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code_system
+                expected: '''<unknown>'''
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: concat_ws('|', code_system, code)
+      - name: code_system
+        description: The silver model and column the code comes from. The unknown member holds '<unknown>'.
+        data_tests:
+          - not_null
+      - name: code
+        description: The code as published.
+        data_tests:
+          - not_null
+      - name: code_label
+        description: The label from the paired silver column where silver has one; else null.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - code_system
+              - code
+  - name: dim_enrollment
+    description: One row per enrollment ID that a fact's enrollment key carries, plus the unknown member (natural key '<unknown>'). The natural
+      key is the only attribute.
+    columns:
+      - name: enrollment_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: enrollment_id
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: enrollment_id
+      - name: enrollment_id
+        description: The natural key as published. The unknown member holds '<unknown>'.
+        data_tests:
+          - unique
+          - not_null
+          - dimension_membership:
+              name: dimension_membership_dim_enrollment
+              arguments:
+                sk_column: enrollment_sk
+                sources:
+                  - model: int_change_of_ownership_rows
+                    column: enrollment_id_buyer
+                  - model: int_change_of_ownership_rows
+                    column: enrollment_id_seller
+                  - model: int_hospital_enrollment_rows
+                    column: enrollment_id
+                  - model: int_hospital_owner_rows
+                    column: enrollment_id
+                space: 'true'
+  - name: dim_footnote
+    description: One row per (Care Compare footnote code system, code) as published, plus the unknown member.
+    columns:
+      - name: footnote_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code_system
+                expected: '''<unknown>'''
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: concat_ws('|', code_system, code)
+      - name: code_system
+        description: The silver model and column the code comes from. The unknown member holds '<unknown>'.
+        data_tests:
+          - not_null
+      - name: code
+        description: The code as published.
+        data_tests:
+          - not_null
+      - name: code_label
+        description: The label from the paired silver column where silver has one; else null.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - code_system
+              - code
+  - name: dim_hospital
+    description: One row per hospital CCN (6-character text) that a fact's hospital key carries, plus the unknown member. A state or national
+      entity ID is not a hospital and takes the unknown member.
+    columns:
+      - name: hospital_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: ccn
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: ccn
+          - gold_fact_keys
+      - name: ccn
+        description: The CCN as published. The unknown member holds '<unknown>'.
+        data_tests:
+          - unique
+          - not_null
+          - dimension_membership:
+              name: dimension_membership_dim_hospital
+              arguments:
+                sk_column: hospital_sk
+                sources:
+                  - model: int_cc_complications_deaths_windows
+                    column: entity_id
+                  - model: int_cc_hcahps_windows
+                    column: entity_id
+                  - model: int_cc_hrrp_windows
+                    column: entity_id
+                  - model: int_cc_maternal_windows
+                    column: entity_id
+                  - model: int_cc_timely_effective_windows
+                    column: entity_id
+                  - model: int_cc_unplanned_visits_windows
+                    column: entity_id
+                  - model: int_cc_window_holds
+                    column: entity_id
+                  - model: int_change_of_ownership_rows
+                    column: ccn_buyer
+                  - model: int_change_of_ownership_rows
+                    column: ccn_seller
+                  - model: int_cmi_hospital_rows
+                    column: ccn
+                  - model: int_cost_reports
+                    column: ccn
+                  - model: int_hac_program_years
+                    column: ccn
+                  - model: int_hai_hospital_windows
+                    column: entity_id
+                  - model: int_hai_window_holds
+                    column: entity_id
+                  - model: int_hgi_hospital_releases
+                    column: ccn
+                  - model: int_hhs_capacity_weeks
+                    column: ccn
+                  - model: int_hospital_enrollment_rows
+                    column: ccn
+                  - model: int_impact_holds
+                    column: ccn
+                  - model: int_impact_hospital_values
+                    column: ccn
+                  - model: int_mup_drg_discharges
+                    column: ccn
+                  - model: int_mup_providers
+                    column: ccn
+                  - model: int_occmix_survey_rows
+                    column: ccn
+                  - model: int_onc_attestation_rows
+                    column: ccn
+                  - model: int_onc_chpl_linkage_rows
+                    column: ccn
+                  - model: int_pos_hospital_snapshots
+                    column: ccn
+                  - model: int_validation_program_holds
+                    column: ccn
+                  - model: int_validation_window_holds
+                    column: entity_id
+                  - model: int_vbp_program_years
+                    column: ccn
+                space: length(natural_key) = 6
+      - name: first_seen
+        description: Earliest DATE value across the source dates of the facts that carry this hospital's key; null when no row has a typed date.
+      - name: last_seen
+        description: Latest DATE value across the same source dates; null when no row has a typed date.
+    data_tests:
+      - hospital_seen_dates:
+          name: hospital_seen_dates_dim_hospital
+          arguments:
+            sources:
+              - model: int_cc_complications_deaths_windows
+                column: entity_id
+                dates:
+                  - window_start
+                  - window_end
+                  - release_date
+              - model: int_cc_hcahps_windows
+                column: entity_id
+                dates:
+                  - window_start
+                  - window_end
+                  - release_date
+              - model: int_cc_hrrp_windows
+                column: entity_id
+                dates:
+                  - window_start
+                  - window_end
+                  - release_date
+              - model: int_cc_maternal_windows
+                column: entity_id
+                dates:
+                  - window_start
+                  - window_end
+                  - release_date
+              - model: int_cc_timely_effective_windows
+                column: entity_id
+                dates:
+                  - window_start
+                  - window_end
+                  - release_date
+              - model: int_cc_unplanned_visits_windows
+                column: entity_id
+                dates:
+                  - window_start
+                  - window_end
+                  - release_date
+              - model: int_cc_window_holds
+                column: entity_id
+                dates:
+                  - window_start
+                  - window_end
+              - model: int_change_of_ownership_rows
+                column: ccn_buyer
+                dates:
+                  - effective_date
+                  - period_start
+                  - period_end
+              - model: int_change_of_ownership_rows
+                column: ccn_seller
+                dates:
+                  - effective_date
+                  - period_start
+                  - period_end
+              - model: int_cmi_hospital_rows
+                column: ccn
+                dates: []
+              - model: int_cost_reports
+                column: ccn
+                dates:
+                  - period_begin
+                  - period_end
+              - model: int_hac_program_years
+                column: ccn
+                dates:
+                  - psi_90_start_date
+                  - psi_90_end_date
+                  - hai_measures_start_date
+                  - hai_measures_end_date
+                  - release_date
+              - model: int_hai_hospital_windows
+                column: entity_id
+                dates:
+                  - window_start
+                  - window_end
+                  - release_date
+              - model: int_hai_window_holds
+                column: entity_id
+                dates:
+                  - window_start
+                  - window_end
+              - model: int_hgi_hospital_releases
+                column: ccn
+                dates:
+                  - release_date
+              - model: int_hhs_capacity_weeks
+                column: ccn
+                dates:
+                  - collection_week
+              - model: int_hospital_enrollment_rows
+                column: ccn
+                dates:
+                  - incorporation_date
+                  - reh_conversion_date
+                  - period_start
+                  - period_end
+              - model: int_impact_holds
+                column: ccn
+                dates: []
+              - model: int_impact_hospital_values
+                column: ccn
+                dates: []
+              - model: int_mup_drg_discharges
+                column: ccn
+                dates: []
+              - model: int_mup_providers
+                column: ccn
+                dates: []
+              - model: int_occmix_survey_rows
+                column: ccn
+                dates:
+                  - survey_start_date
+                  - survey_end_date
+              - model: int_onc_attestation_rows
+                column: ccn
+                dates: []
+              - model: int_onc_chpl_linkage_rows
+                column: ccn
+                dates:
+                  - start_date
+                  - end_date
+              - model: int_pos_hospital_snapshots
+                column: ccn
+                dates:
+                  - original_participation_date
+                  - certification_date
+                  - termination_date
+                  - period_start
+                  - period_end
+              - model: int_validation_program_holds
+                column: ccn
+                dates: []
+              - model: int_validation_window_holds
+                column: entity_id
+                dates:
+                  - window_start
+                  - window_end
+              - model: int_vbp_program_years
+                column: ccn
+                dates:
+                  - release_date
+  - name: dim_measure
+    description: One row per measure identity (fact, measure_key, value_column), plus the unknown member.
+    columns:
+      - name: measure_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: measure_identity
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: measure_identity
+      - name: measure_identity
+        description: 'The identity text: fact, measure key and value column joined by a vertical bar.'
+        data_tests:
+          - unique
+          - not_null
+      - name: fact
+        description: The gold fact or bridge that holds the value.
+      - name: measure_key
+        description: The published measure ID or field of a long fact, or the column name of a wide fact.
+      - name: value_column
+        description: The column that holds the value.
+      - name: measure_label
+        description: The silver model's measure_name for the key where the model has one; else null.
+      - name: unit
+        description: The value_unit of int_mmd_prevalence for MMD rows; else null.
+      - name: value_kind
+        description: 'The type class of the silver column: number, text, boolean or date. Null on the unknown member.'
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - number
+                  - text
+                  - boolean
+                  - date
+      - name: vintage_start
+        description: First vintage the identity holds, from the seeds; null when none.
+      - name: vintage_end
+        description: Last vintage the identity holds, from the seeds; null when open.
+    data_tests:
+      - measure_attribute_branches
+      - measure_attributes_match_silver:
+          name: measure_attributes_match_silver_dim_measure
+          arguments:
+            silver_models:
+              bridge_county_neighbor: int_county_adjacency_edges
+              bridge_zip_county: int_hud_zip_county_quarters
+              fct_acs_county_value: int_acs_county_values
+              fct_bls_county_series: int_bls_county_series
+              fct_complications_deaths_window: int_cc_complications_deaths_windows
+              fct_cost_report: int_cost_reports
+              fct_enrollment_release: int_hospital_enrollment_rows
+              fct_gv_county_value: int_gv_county_values
+              fct_hac_program_year: int_hac_program_years
+              fct_hai_hospital_window: int_hai_hospital_windows
+              fct_hcahps_window: int_cc_hcahps_windows
+              fct_hgi_release: int_hgi_hospital_releases
+              fct_hhs_capacity_week: int_hhs_capacity_weeks
+              fct_hospital_owner_release: int_hospital_owner_rows
+              fct_hpsa_component: int_hpsa_components
+              fct_hrrp_window: int_cc_hrrp_windows
+              fct_hsa_zip_cases: int_hsa_zip_cases
+              fct_ipps_impact_value: int_impact_hospital_values
+              fct_maternal_health_window: int_cc_maternal_windows
+              fct_medicare_inpatient_drg: int_mup_drg_discharges
+              fct_medicare_inpatient_provider: int_mup_providers
+              fct_mmd_prevalence: int_mmd_prevalence
+              fct_mua_component: int_mua_components
+              fct_occupational_mix_survey: int_occmix_survey_rows
+              fct_onc_ehr_product: int_onc_chpl_linkage_rows
+              fct_ownership_change: int_change_of_ownership_rows
+              fct_places_county_value: int_places_county_values
+              fct_ruca_code: int_ruca_codes
+              fct_rucc_county: int_rucc_county_codes
+              fct_sahie_county_value: int_sahie_county_rows
+              fct_saipe_county_estimate: int_saipe_county_estimates
+              fct_svi_county_value: int_svi_county_values
+              fct_timely_effective_care_window: int_cc_timely_effective_windows
+              fct_unplanned_visits_window: int_cc_unplanned_visits_windows
+              fct_vbp_program_year: int_vbp_program_years
+              fct_wonder_county_deaths: int_wonder_county_deaths
+  - name: dim_owner_organization
+    description: One row per 10-digit owner associate ID that a fact's owner key carries, plus the unknown member (natural key '<unknown>'). Names
+      and flags stay on each release row.
+    columns:
+      - name: owner_organization_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: associate_id
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: associate_id
+      - name: associate_id
+        description: The natural key as published. The unknown member holds '<unknown>'.
+        data_tests:
+          - unique
+          - not_null
+          - dimension_membership:
+              name: dimension_membership_dim_owner_organization
+              arguments:
+                sk_column: owner_organization_sk
+                sources:
+                  - model: int_change_of_ownership_rows
+                    column: associate_id_buyer
+                  - model: int_change_of_ownership_rows
+                    column: associate_id_seller
+                  - model: int_hospital_owner_rows
+                    column: associate_id
+                space: regexp_matches(natural_key, '^[0-9]{10}$')
+  - name: dim_owner_role
+    description: One row per (owner role code system, code) as published, plus the unknown member.
+    columns:
+      - name: owner_role_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code_system
+                expected: '''<unknown>'''
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: concat_ws('|', code_system, code)
+      - name: code_system
+        description: The silver model and column the code comes from. The unknown member holds '<unknown>'.
+        data_tests:
+          - not_null
+      - name: code
+        description: The code as published.
+        data_tests:
+          - not_null
+      - name: code_label
+        description: The label from the paired silver column where silver has one; else null.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - code_system
+              - code
+  - name: dim_registry_control
+    description: One row per registry control of revision 3 (base registry and append-only additions), plus the unknown member. The family and
+      the closeout decision are deferred (amendment A36).
+    columns:
+      - name: registry_control_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: measure_control
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: measure_control
+      - name: measure_control
+        description: The registry control ID. The unknown member holds '<unknown>'.
+        data_tests:
+          - unique
+          - not_null
+          - dimension_membership:
+              name: dimension_membership_dim_registry_control
+              arguments:
+                sk_column: registry_control_sk
+                sources:
+                  - model: registry_controls
+                    column: measure_control
+                space: 'true'
+      - name: parent
+        description: The parent control; null for a top-level control.
+      - name: review_decision
+        description: The review decision carried on the control's bridge seed rows; null for a control with no bridge row.
+  - name: dim_release
+    description: One row per stored file (member_sha256), plus the unknown member.
+    columns:
+      - name: release_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: member_sha256
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: member_sha256
+      - name: member_sha256
+        description: SHA-256 of the stored file. The unknown member holds '<unknown>'.
+        data_tests:
+          - unique
+          - not_null
+          - dimension_membership:
+              name: dimension_membership_dim_release
+              arguments:
+                sk_column: release_sk
+                sources:
+                  - model: stg_bronze__file_copies
+                    column: member_sha256
+                space: 'true'
+      - name: object_key
+        description: The smallest object key among the file's stored copies.
+      - name: copy_count
+        description: How many stored copies the file has.
+      - name: release_date
+        description: The publication release read as a date; null when the release text is not a date.
+      - name: period_start
+        description: First day of the period the file covers, from the file-period seeds; null when none covers it.
+      - name: period_end
+        description: Last day of the period the file covers, from the file-period seeds; null when none covers it.
+    data_tests:
+      - release_copy_consistency:
+          config:
+            severity: warn
+            enabled: '{{ var(''check_release_copy_conflicts'', false) }}'
+  - name: dim_rurality_code
+    description: One row per (rurality code code system, code) as published, plus the unknown member.
+    columns:
+      - name: rurality_code_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code_system
+                expected: '''<unknown>'''
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: code
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: concat_ws('|', code_system, code)
+      - name: code_system
+        description: The silver model and column the code comes from. The unknown member holds '<unknown>'.
+        data_tests:
+          - not_null
+      - name: code
+        description: The code as published.
+        data_tests:
+          - not_null
+      - name: code_label
+        description: The label from the paired silver column where silver has one; else null.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - code_system
+              - code
+  - name: dim_source
+    description: One row per stored dataset, plus the unknown member (natural key '<unknown>'). The publisher and the label are deferred (amendment
+      A36).
+    columns:
+      - name: source_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: dataset_id
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: dataset_id
+      - name: dataset_id
+        description: The natural key as published. The unknown member holds '<unknown>'.
+        data_tests:
+          - unique
+          - not_null
+          - dimension_membership:
+              name: dimension_membership_dim_source
+              arguments:
+                sk_column: source_sk
+                sources:
+                  - model: stg_bronze__file_copies
+                    column: dataset_id
+                space: 'true'
+  - name: dim_state
+    description: One row per 2-letter postal state code that a fact's state key carries, plus the unknown member (natural key '<unknown>'). A
+      value that is not two upper-case letters is not a member and takes the unknown member in the facts.
+    columns:
+      - name: state_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: state_code
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: state_code
+      - name: state_code
+        description: The natural key as published. The unknown member holds '<unknown>'.
+        data_tests:
+          - unique
+          - not_null
+          - dimension_membership:
+              name: dimension_membership_dim_state
+              arguments:
+                sk_column: state_sk
+                sources:
+                  - model: int_cost_reports
+                    column: state_code
+                  - model: int_hai_state_windows
+                    column: entity_id
+                  - model: int_hgi_hospital_releases
+                    column: state_code
+                  - model: int_hhs_capacity_weeks
+                    column: state
+                  - model: int_hospital_enrollment_rows
+                    column: state
+                  - model: int_mup_providers
+                    column: state_code
+                  - model: int_onc_chpl_linkage_rows
+                    column: state
+                  - model: int_pos_hospital_snapshots
+                    column: state_code
+                  - model: int_rucc_county_codes
+                    column: state
+                space: regexp_matches(natural_key, '^[A-Z]{2}$')
+  - name: dim_zip
+    description: One row per 5-digit ZIP code that a fact's ZIP key carries, plus the unknown member (natural key '<unknown>'). A value that is
+      not five digits is not a member and takes the unknown member in the facts.
+    columns:
+      - name: zip_sk
+        description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
+          for a null or unmatched natural key.'
+        data_tests:
+          - unique
+          - not_null
+          - unknown_member_once
+          - unknown_member_natural_key:
+              arguments:
+                natural_key: zip_code
+                expected: '''<unknown>'''
+          - surrogate_key_matches_natural_key:
+              arguments:
+                natural_key: zip_code
+      - name: zip_code
+        description: The natural key as published. The unknown member holds '<unknown>'.
+        data_tests:
+          - unique
+          - not_null
+          - dimension_membership:
+              name: dimension_membership_dim_zip
+              arguments:
+                sk_column: zip_sk
+                sources:
+                  - model: int_cost_reports
+                    column: zip_code
+                  - model: int_hgi_hospital_releases
+                    column: zip_code
+                  - model: int_hhs_capacity_weeks
+                    column: zip
+                  - model: int_hospital_enrollment_rows
+                    column: zip_code
+                  - model: int_hsa_zip_cases
+                    column: zip_code
+                  - model: int_hud_zip_county_holds
+                    column: zip_code
+                  - model: int_onc_attestation_rows
+                    column: zip
+                  - model: int_onc_chpl_linkage_rows
+                    column: zip_code
+                  - model: int_pos_hospital_snapshots
+                    column: zip_code
+                space: regexp_matches(natural_key, '^[0-9]{5}$')

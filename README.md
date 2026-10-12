@@ -54,8 +54,9 @@ Services row per hospital and snapshot and one case-mix index per hospital and p
 A hospital-year spine, which lines each hospital and calendar-year HAI window up with the Provider of
 Services snapshot and the case-mix index from before the window and flags the model population, is saved in
 `features/` for the feature phase. Under the layer design approved on October 10 2026, silver does only the standard
-cleansing steps at each source's atomic grain and is not stored. Gold will store atomic facts and dimensions; gold
-control bridge seeds already map each published key to its registry control. The hospital-window spine and the as-of
+cleansing steps at each source's atomic grain and is not stored. Gold holds the atomic facts, conformed dimensions and
+bridges in `dbt/models/gold/`, built and checked locally; publishing them to the Iceberg `gold` namespace is a later
+stage. The gold control bridge seeds map each published key to its registry control. The hospital-window spine and the as-of
 alignment are computed in the feature phase. Modeling and serving come later. The [Architecture](#architecture)
 diagram shows what is built and what is planned.
 
@@ -377,10 +378,25 @@ scripts/lakehouse/dbt.sh build                                      # dbt on the
 .venv/bin/python -m scripts.lakehouse.mmd_conditions --check             # MMD units seed and bridge match the pinned plans
 .venv/bin/python -m scripts.lakehouse.run_mmd_conditions_e2e           # the check catches drift; report: data/e2e/mmd_conditions/
 .venv/bin/python -m scripts.lakehouse.bridge_references --check          # bridges and recipes match the gold contract and the registry
+.venv/bin/python -m scripts.lakehouse.run_gold_e2e                     # gold on fixtures; --real adds two pinned real builds; report: data/e2e/gold/
+.venv/bin/python -m scripts.lakehouse.gold_checks check-suites          # the gold suites match the gold contract
 .venv/bin/python -m scripts.lakehouse.catalog job pins -- pin --run <run_id>      # pin bronze in data/analytics/dbt/runs/<run_id>/pins.json
 .venv/bin/python -m scripts.lakehouse.catalog job pins -- verify --run <run_id>   # fails when a pinned table moved
 .venv/bin/python -m scripts.lakehouse.catalog job pins_e2e                # the pin's scenarios on a throwaway catalog; report: data/e2e/pins/
 ```
+
+**Gold checks.** `scripts/lakehouse/run_gold_e2e.py` builds silver and gold on the staging fixtures and, with `--real`, twice
+from the real bronze tables, pinning the bronze snapshots around each build. It reads the fact list, grains, columns,
+surrogate keys and source dates from `data_contracts/lakehouse/gold_contract.json` and checks that each fact keeps its
+silver model's rows and values, that every key resolves to its dimension or the unknown member, that each dimension
+holds its unknown member once, that gold reads only its declared inputs and that two real builds give identical gold
+fingerprints. Every fact needs rows in the fixture stage; in the real stage every fact except the hold facts needs rows.
+A hold fact may be empty when nothing is held; at least one non-empty hold fact must keep its rows. The expression
+policy findings on the compiled gold SQL are reported without counting toward the verdict until that check is rebuilt;
+an analysis that could not visit every relation a model reads still fails the run. The gold Great Expectations suites in
+`data_contracts/great_expectations/gold/` are generated from the contract (`gold_checks write-suites`) and
+`gold_checks check-suites` in local CI fails when they drift. The test `release_copy_consistency` warns, without
+failing a build, when stored copies of one file carry different release labels.
 
 **Silver validation (Great Expectations).** After a build, Great Expectations 1.23.2 checks 13 silver tables (the spine,
 the alignment tables, county adjacency and the three history tables), as a second gate independent of the dbt tests.
@@ -551,19 +567,19 @@ the "Planned (not built)" card. With Archify unpacked at `<archify>`:
 ARCHIFY_UPDATE_CHECK_DISABLED=1 node <archify>/bin/archify.mjs finalize architecture \
   docs/architecture/architecture.json docs/architecture/architecture.html --repo-root . --quality showcase
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars \
-  --window-size=1600,1120 --virtual-time-budget=5000 \
+  --window-size=1600,1200 --virtual-time-budget=5000 \
   --screenshot=docs/architecture/architecture.png "file://$PWD/docs/architecture/architecture.html"
 ```
 
 `finalize` also writes receipt files beside the HTML; keep them out of Git.
 
-**Layer design (owner decision, October 10 2026; silver follows it, gold is not built yet).** The diagram shows the flow as built.
+**Layer design (owner decision, October 10 2026; silver and gold follow it; gold is built locally and not yet published).** The diagram shows the flow as built.
 
 | Layer | Holds | Stored |
 | --- | --- | --- |
 | Bronze | One copy of each mapped publisher data file and its dictionaries, as published | Iceberg namespace `bronze` |
 | Silver | `stg_` and `int_` models: deduplication, data quality checks, cleansing, schema enforcement, type casting and missing-value handling at each source's atomic grain, with only the joins gold tables need | No: built, validated by Great Expectations, used to build gold, then deleted |
-| Gold | `dim_` and `fct_` models: one fact per source process at its atomic grain and the conformed dimensions | Iceberg namespace `gold` |
+| Gold | `dim_`, `fct_` and `bridge_` models: one fact per source process at its atomic grain, the conformed dimensions and the bridges | Iceberg namespace `gold` (publishing is a later stage; built locally as tables) |
 | Feature phase | The hospital-window entity and populations, the as-of alignment of each source and the ratios derived per registry control, computed from gold for Feast and training | Not stored in gold |
 
 The alignment models and the hospital-year spine described under Usage were built in silver; they and their checks
@@ -885,8 +901,8 @@ No AWS changes implementing these four deferred controls have been applied.
 - `config/quality_tools.json`: pinned native tool versions and publisher hashes.
 - `config/quality/dependency_runtimes.json`: each runtime's requirements files and code, for the dependency check.
 - `docs/architecture/`: the architecture diagram source (`architecture.json`), the HTML that Archify renders from it and the PNG.
-- `dbt/`, `.sqlfluff`: the dbt staging project (sources, staging and intermediate models, seeds, tests and the locked
-  packages) and its SQL style.
+- `dbt/`, `.sqlfluff`: the dbt project (sources, staging and intermediate models, the gold dimensions, bridges and facts
+  in `dbt/models/gold/` with the `gold_fact` macro, seeds, tests and the locked packages) and its SQL style.
 - `scripts/review/`, `requirements-review.txt`: the schema-review tools and their hash-pinned packages.
 - `docs/data_collection.md`: how the source data was collected and how to recheck it.
 - `docs/acquisition_design.md`: what each collector and shared acquisition mechanism checks and which failure each check prevents.
@@ -900,7 +916,8 @@ No AWS changes implementing these four deferred controls have been applied.
   check and its E2E, the measure-ID domain generator and the MMD units writer; the table map, the retired and removed
   lists and the reviewed label overrides.
 - `services/`, `docker-compose.yaml`: the Polaris catalog, Spark job, DuckDB analytics and Great Expectations quality containers.
-- `data_contracts/great_expectations/`: the silver validation suites and their reviewed baselines.
+- `data_contracts/great_expectations/`: the silver validation suites with their reviewed baselines; `gold/` holds the gold
+  suites generated from the gold contract.
 - `data_contracts/lakehouse/`: the silver column contract the package fixture kit reads and the gold contract the bridge
   reference check reads.
 - `dbt/seeds/gold/`: the gold control bridge seeds and the reference seeds their tests read.
@@ -946,8 +963,9 @@ lists exactly one such parent in the row's state (`ccn_source`); any other value
 CCN gets one only from the reviewed matches in `dbt/seeds/hhs_reviewed_ccn_matches.csv`. Registry revision 3 closes the HHS
 part of controls C001 and C040, so the HHS columns are staged but not mapped to them. The derived values and registry
 mappings that silver used to carry (for example the occupational-mix shares and the MMD and ACS control maps) have left
-silver: the formulas are saved in `features/` and the control maps are gold bridge seeds. No gold or model tables exist. The bronze and staging E2E runs use
-Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
+silver: the formulas are saved in `features/` and the control maps are gold bridge seeds. Gold tables are built locally but not yet published to the Iceberg `gold` namespace; no model tables exist. The
+gold E2E's expression-policy findings are reported without counting toward its verdict. The bronze, staging and gold
+E2E runs use Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
 offline. Its first part finished 43 sources; the second (ACS, BLS, HUD and WONDER) waits on its independent review and
 the owner's browser downloads.
 

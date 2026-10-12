@@ -274,7 +274,7 @@
       "id": "duckdb",
       "type": "database",
       "label": "DuckDB and dbt",
-      "sublabel": "silver stg_ and int_ models",
+      "sublabel": "silver stg_, int_; gold dim_, fct_",
       "tag": "read-only attach",
       "pos": [
         1440,
@@ -442,7 +442,8 @@
         "One copy per stored file; bronze.stored_copies lists every copy",
         "Each row traces to its S3 key, version and SHA-256",
         "dbt staging keeps one row per HAI measurement window",
-        "Silver keeps each source's atomic grain; gold control bridge seeds map published keys to registry controls"
+        "Silver keeps each source's atomic grain; gold control bridge seeds map published keys to registry controls",
+        "Gold facts, dimensions and bridges built locally"
       ]
     },
     {
@@ -461,7 +462,7 @@
       "title": "Planned (not built)",
       "items": [
         "Orchestration with scheduled DAGs",
-        "Gold star schema at atomic grain (dbt dim_ and fct_)",
+        "Gold publish to the Iceberg gold namespace",
         "Feature store, MLflow model comparison and external validation"
       ]
     }
