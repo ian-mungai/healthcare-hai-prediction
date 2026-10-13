@@ -103,9 +103,10 @@ surrogate keys and source dates from `data_contracts/lakehouse/gold_contract.jso
 silver model's rows and values, that every key resolves to its dimension or the unknown member, that each dimension
 holds its unknown member once, that gold reads only its declared inputs and that two real builds give identical gold
 fingerprints. Every fact needs rows in the fixture stage; in the real stage every fact except the hold facts needs rows.
-A hold fact may be empty when nothing is held; at least one non-empty hold fact must keep its rows. The expression
-policy findings on the compiled gold SQL are reported without counting toward the verdict until that check is rebuilt;
-an analysis that could not visit every relation a model reads still fails the run. The gold Great Expectations suites in
+A hold fact may be empty when nothing is held; at least one non-empty hold fact must keep its rows. Every expression
+finding on the compiled gold SQL (`scripts/lakehouse/gold_sql.py`) counts toward the verdict. An analysis that could not
+visit every relation a model reads fails the run. The check's own corpus E2E is
+`.venv/bin/python -m scripts.lakehouse.run_gold_sql_e2e --out <report.json>`. The gold Great Expectations suites in
 `data_contracts/great_expectations/gold/` are generated from the contract (`gold_checks write-suites`) and
 `gold_checks check-suites` in local CI fails when they drift. The test `release_copy_consistency` warns, without
 failing a build, when stored copies of one file carry different release labels.

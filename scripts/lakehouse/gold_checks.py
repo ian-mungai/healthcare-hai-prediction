@@ -108,6 +108,7 @@ class Contract:
     tables: tuple[Table, ...]
     allowlist: tuple[str, ...]
     silver: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
+    expression_policy: dict[str, Any] = field(default_factory=lambda: gold_sql.A36_A39_A43_A48)
 
     @property
     def dimensions(self) -> tuple[Table, ...]:
@@ -177,10 +178,12 @@ def bridge_table(name: str, entry: dict[str, Any]) -> Table:
     """A bridge from the contract's columns, or from the A39 constant where the contract still gives only a prose grain."""
     inputs = tuple(entry.get("inputs", []))
     columns = tuple(Column(item["name"], item["silver_column"], item["type"]) for item in entry.get("columns", []))
-    if name == "bridge_measure_control" and not columns:
+    if name == "bridge_measure_control":
         schema = A39_BRIDGE_MEASURE_CONTROL
-        columns = tuple(Column(column, column, kind) for column, kind in schema.columns)
-        return Table(name, "bridge", str(entry["grain"]), columns, inputs, schema.grain, schema.references)
+        columns = columns or tuple(Column(column, column, kind) for column, kind in schema.columns)
+        grain = tuple(entry.get("grain_columns", schema.grain))
+        references = tuple((item["column"], item["dimension"]) for item in entry.get("references", [])) or schema.references
+        return Table(name, "bridge", str(entry["grain"]), columns, inputs, grain, references)
     if not columns:
         raise ContractError(f"{name}: the contract lists no columns for this bridge")
     if entry["grain"] not in {column.name for column in columns}:
@@ -207,7 +210,7 @@ def load_contract(contract_path: Path = CONTRACT, silver_path: Path = SILVER_COL
             tables.append(Table(name, "dimension", str(entry["grain"]), (), tuple(entry.get("inputs", []))))
         else:
             tables.append(bridge_table(name, entry))
-    return Contract(tuple(facts), tuple(tables), tuple(document["expression_allowlist"]), silver)
+    return Contract(tuple(facts), tuple(tables), tuple(document["expression_allowlist"]), silver, document.get("expression_policy", gold_sql.A36_A39_A43_A48))
 
 
 def contract_problems(contract: Contract) -> list[str]:
@@ -703,11 +706,23 @@ def split_parse_rows(rows: list[list[str]], models: list[str]) -> tuple[dict[str
 
 def policy_for(contract: Contract, aggregates: frozenset[str]) -> gold_sql.Policy:
     """The expression policy: the contract's allowlist, its value columns, source dates and dimension keys, and DuckDB's aggregates."""
+    scopes = dict(contract.expression_policy)
+    scopes["source_dates"] = {
+        "dim_date": sorted(contract.date_pairs),
+        "dim_hospital": sorted(
+            (fact.silver_model, column.name)
+            for fact in contract.facts
+            if any(key.dimension == "dim_hospital" for key in fact.keys)
+            for column in fact.columns
+            if column.name in fact.source_dates and column.type == "DATE"
+        ),
+    }
     return gold_sql.Policy(
         gold_sql.capabilities(contract.allowlist),
         contract.value_columns,
         contract.date_pairs,
         aggregates,
+        scopes,
     )
 
 
@@ -723,8 +738,30 @@ def declared_relations(manifest: dict[str, Any]) -> dict[str, set[str]]:
     return declared
 
 
+def rendered_facts(contract: Contract, manifest: dict[str, Any], macro: Path = REPO_ROOT / "dbt/macros/gold_facts.sql") -> dict[str, str]:
+    """Render facts from contract arguments using the actual macro and manifest relation bindings."""
+    relations = {
+        node.get("name", ""): node["relation_name"]
+        for node in manifest["nodes"].values()
+        if node.get("resource_type") in ("model", "seed") and node.get("relation_name")
+    }
+    text = macro.read_text()
+    return {
+        fact.name: gold_sql.render_fact(
+            text, fact.silver_model, fact.grain, {key.name: {"dimension": key.dimension, "natural_key": key.natural_key} for key in fact.keys}, relations
+        )
+        for fact in contract.facts
+    }
+
+
 def expression_problems(
-    contract: Contract, parsed: dict[str, str | None], expected: Iterable[str], aggregates: frozenset[str], declared: dict[str, set[str]]
+    contract: Contract,
+    parsed: dict[str, str | None],
+    expected: Iterable[str],
+    aggregates: frozenset[str],
+    declared: dict[str, set[str]],
+    compiled: dict[str, str] | None = None,
+    expected_fact_sql: dict[str, str] | None = None,
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """Verdicts for arithmetic, case, other expressions and the physical relations a model reads, and the relations each model reads."""
     if not aggregates:
@@ -746,7 +783,10 @@ def expression_problems(
             continue
         fact = facts.get(model)
         fact_map = {key.name: (key.dimension, key.natural_key) for key in fact.keys} if fact else {}
-        analysis = gold_sql.analyze_model(model, contract.kind_of(model), document, policy, fact_map)
+        if fact is not None:
+            analysis = gold_sql.analyze_fact(model, document, policy, fact_map, (compiled or {}).get(model), (expected_fact_sql or {}).get(model))
+        else:
+            analysis = gold_sql.analyze_model(model, contract.kind_of(model), document, policy, fact_map)
         for finding in analysis.findings:
             problems[CHECK_OF_FINDING[finding.check]].append(finding.message)
         reads[model] = sorted(analysis.reads)

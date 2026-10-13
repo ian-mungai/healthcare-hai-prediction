@@ -68,12 +68,12 @@ def real_empty_allowed(contract: gold_checks.Contract) -> dict[str, str]:
 FAULTS = ("interrupt", "exit", "error", "cleanup", "rebuild-empty", "real-setup-exit")
 # The real stage's outcome as it runs, so a stage that stops still reaches the report [842].
 REAL_PARTIAL: dict[str, Any] = {}
-# Amendment A45 (owner split, Oct 12 2026): the expression check parked under the park rule after four rejections in its class. Its findings are
-# reported but not counted until it is rebuilt; lineage, which shares the analysis, stays a counted check.
-REPORT_ONLY = frozenset({"expression_arithmetic", "expression_case", "expression_functions"})
+# GX replaces the historical A45 report-only split: all expression findings count in the verdict.
+# Lineage and analysis completeness remain independent counted checks.
+EXPRESSION_CHECKS = frozenset({"expression_arithmetic", "expression_case", "expression_functions"})
 # Analysis that may have skipped a relation read is still counted, as analysis_complete: an unsupported query node or expression kind, a
 # model with no compiled SQL or SQL that does not parse, and an unanalyzed expression of a class that can hold a subquery. Leaf classes cannot
-# hold a read. Only the expression policy itself is report-only.
+# hold a read. Expression-policy violations also count, independently of analysis completeness.
 LEAF_EXPRESSION_CLASSES = frozenset({"COLUMN_REF", "CONSTANT", "PARAMETER", "DEFAULT"})
 
 
@@ -145,17 +145,17 @@ class Results:
 
     @property
     def verdicts(self) -> dict[str, bool]:
-        """The counted checks; a report-only check is left out (amendment A45)."""
-        return {name: not problems for name, problems in sorted(self.problems.items()) if name not in REPORT_ONLY}
+        """Every computed check counts in the verdict."""
+        return {name: not problems for name, problems in sorted(self.problems.items())}
 
     @property
     def report_only(self) -> dict[str, int]:
-        """Each report-only check with its count of findings."""
-        return {name: len(problems) for name, problems in sorted(self.problems.items()) if name in REPORT_ONLY}
+        """No expression check is report-only; retain the report field for existing consumers."""
+        return {}
 
     @property
     def failed(self) -> list[str]:
-        """Every check with findings, report-only ones included, so a mutation case still names the check it targets."""
+        """Every check with findings, so a mutation case still names the check it targets."""
         return [name for name, problems in sorted(self.problems.items()) if problems]
 
 
@@ -292,9 +292,16 @@ def run_checks(
     results.add("gold_models_match_contract", gold_checks.contract_models_problems(contract, manifest))
     models = sorted(set(contract.model_names) | set(gold_checks.gold_nodes(manifest)))
     parsed, aggregates = parse_compiled(target, manifest, models, backend.plan)
-    expression, reads = gold_checks.expression_problems(contract, parsed, models, aggregates, gold_checks.declared_relations(manifest))
+    compiled = {}
+    for name, node in gold_checks.gold_nodes(manifest).items():
+        path = target / "compiled" / node["package_name"] / node["original_file_path"]
+        if path.is_file():
+            compiled[name] = path.read_text()
+    expression, reads = gold_checks.expression_problems(
+        contract, parsed, models, aggregates, gold_checks.declared_relations(manifest), compiled, gold_checks.rendered_facts(contract, manifest)
+    )
     results.merge(expression)
-    incomplete = {problem for name in REPORT_ONLY for problem in expression.get(name, []) if incomplete_analysis(problem)}
+    incomplete = {problem for name in EXPRESSION_CHECKS for problem in expression.get(name, []) if incomplete_analysis(problem)}
     results.add("analysis_complete", sorted(incomplete))
     results.details["relation_reads"] = reads
     covered["parsed_models"] = (sum(text is not None for text in parsed.values()), len(models))

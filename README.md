@@ -343,7 +343,8 @@ logging) are not implemented.
 
 The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only and
 loads one copy per stored file. Gold tables are built locally but not yet published to the Iceberg `gold` namespace;
-no model tables exist. The gold E2E's expression-policy findings are reported without counting toward its verdict. The
+no model tables exist. The gold E2E counts every expression-check finding on the compiled gold SQL in its verdict; the
+check is static and its known gaps are tracked in the local issue register. The
 bronze, staging and gold E2E runs use Docker and are not part of the local CI script. The final publisher redownload
 (run 3) has its queue built and checked offline. Its first part finished 43 sources; the second (ACS, BLS, HUD and
 WONDER) waits on its independent review and the owner's browser downloads. Some measures have source
