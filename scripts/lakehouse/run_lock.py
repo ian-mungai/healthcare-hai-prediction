@@ -5,16 +5,20 @@ Run from any checkout or worktree of this repository:
     .venv/bin/python -m scripts.lakehouse.run_lock where       # the registry folder every worktree resolves
     .venv/bin/python -m scripts.lakehouse.run_lock status      # holders, runs and readers; never a token
     .venv/bin/python -m scripts.lakehouse.run_lock acquire --domain transform --run <id> --mode fixture
-    RUN_LOCK_TOKEN=<token> .venv/bin/python -m scripts.lakehouse.run_lock release --run <id> --owner
+    .venv/bin/python -m scripts.lakehouse.run_lock release --run <id> --owner
 
 The registry is ``data/orchestration/registry/`` in the main checkout, found through Git's common directory, so every
 worktree shares it; there is no environment override. Tests pass ``--test-registry <folder>``, which can never hold a
-``real`` run. Each change holds an exclusive ``flock`` and replaces ``registry.json`` atomically; a malformed registry
-stops every command and is never reset. ``acquire`` prints the run's token once; the registry keeps only its SHA-256 and
-every later command reads it from ``RUN_LOCK_TOKEN``. Nothing releases a lock automatically: a failed or stale run
-stays ``failed_retained`` until the owner releases it with the token, after its labelled containers are stopped.
+``real`` run. The registry is the launcher's (orchestration/launcher.py): every command is a request to the launcher, which
+is the registry's only writer and is started on demand. ``acquire`` stores the run's token in the token store (a ``0700`` folder under
+``Library/Application Support/hai-prediction/run_tokens/<registry_id>/``) and prints the run ID and the token file path, never the token;
+the registry keeps only its SHA-256, and every later command reads the token from the store. A malformed registry stops every command and
+is never reset. Nothing releases a lock automatically: a failed or stale run stays ``failed_retained`` until the owner releases it, after
+its labelled containers are gone. A registry written before the launcher (schema 1) is migrated by the launcher on its first start, after
+its checks (D1 section 2 item 7); this module reads schema 1 and keeps its state functions for the launcher. The launcher's state
+functions here (``new_run``, ``pin_in``, ``register_in``) hold every lock predicate.
 Exit codes: 0 done, 2 usage, 3 refused, 4 registry error. Failure modes 757, 768, 776, 777 and 880 to 885 are in
-plans/wave0_20261010/failure_modes.md; the design is in plans/airflow_20261010/plan.md sections 4, 9.1 and 9.4.
+plans/wave0_20261010/failure_modes.md; the design is in plans/airflow_20261010/plan.md sections 4, 9.1 and 9.4 and in D1.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ import secrets
 import sys
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -40,9 +44,15 @@ from scripts.process import run_command
 DOMAINS = ("acquisition", "transform", "training", "serving")
 MODES = ("fixture", "publish_fixture", "real")
 REGISTRATION_KINDS = ("catalog_user",)
-SCHEMA_VERSION = 1
+# Schema 1 is the registry the command-line tools wrote before the launcher; schema 2 is the launcher's (D1 section 2 item 7). A schema 1 registry
+# is migrated only by the launcher, after its migration gate; the tools of this module refuse a schema 2 registry and ask for the launcher.
+LEGACY_SCHEMA = 1
+LAUNCHER_SCHEMA = 2
 # Locks and readers (this module); memory reservations and service limits (memory_budget.admit) share the transactions.
 SECTIONS = ("domains", "runs", "readers", "reservations", "services")
+# What the launcher adds: allocations, attempts, operations, guards, registrations, request records, snapshot copies and the containers it created.
+LAUNCHER_SECTIONS = ("allocations", "attempts", "operations", "guards", "registrations", "requests", "copies", "containers")
+TOKEN_FOLDER = ("Library", "Application Support", "hai-prediction", "run_tokens")
 LOCK_WAIT_SECONDS = 30
 CONTAINER_LABEL = "hai.run_id"
 REFUSED, REGISTRY_ERROR = 3, 4
@@ -128,9 +138,27 @@ def read_identity(registry: Registry) -> dict[str, str]:
     return {"registry_id": registry_id, "kind": kind}
 
 
+def empty_state(registry_id: str, schema: int) -> dict[str, Any]:
+    """A registry with no runs, in the legacy schema or the launcher's."""
+    sections = SECTIONS + (LAUNCHER_SECTIONS if schema == LAUNCHER_SCHEMA else ())
+    state: dict[str, Any] = {"schema_version": schema, "registry_id": registry_id, **{key: {} for key in sections}, "reservation_history": []}
+    if schema == LAUNCHER_SCHEMA:
+        state["launcher"] = {"stream_epoch": 0, "status": "stopped", "docker_state": "unknown", "barrier": None, "restart": None, "migrated_at": now()}
+    return state
+
+
+def legacy_only(state: dict[str, Any]) -> None:
+    """The command-line tools of this module work on a schema 1 registry only; a launcher registry has one writer, the launcher."""
+    if state["schema_version"] != LEGACY_SCHEMA:
+        raise Refused("this registry belongs to the launcher; use orchestration/launcher.py")
+
+
 @contextmanager
-def transaction(registry: Registry, write: bool = True) -> Iterator[dict[str, Any]]:
-    """Hold the registry's exclusive lock, yield its state and, when ``write`` and no error, replace it atomically."""
+def transaction(registry: Registry, write: bool = True, create_schema: int = LEGACY_SCHEMA) -> Iterator[dict[str, Any]]:
+    """Hold the registry's exclusive lock, yield its state and, when ``write`` and no error, replace it atomically.
+
+    ``create_schema`` names the schema of a registry that does not exist yet; only the launcher creates schema 2.
+    """
     registry.path.mkdir(parents=True, exist_ok=True)
     with (registry.path / "registry.lock").open("a") as lock:
         deadline = time.monotonic() + LOCK_WAIT_SECONDS
@@ -146,27 +174,32 @@ def transaction(registry: Registry, write: bool = True) -> Iterator[dict[str, An
             if not registry.identity_file.exists() and not registry.state_file.exists():
                 identity = {"registry_id": str(uuid.uuid4()), "kind": registry.kind}
                 write_atomic(registry.identity_file, json.dumps(identity) + "\n")
-                empty = {"schema_version": SCHEMA_VERSION, "registry_id": identity["registry_id"], **{key: {} for key in SECTIONS}, "reservation_history": []}
-                write_atomic(registry.state_file, json.dumps(empty, indent=2) + "\n")
+                write_atomic(registry.state_file, json.dumps(empty_state(identity["registry_id"], create_schema), indent=2) + "\n")
             identity = read_identity(registry)
             try:
                 state = json.loads(registry.state_file.read_text())
-                if not isinstance(state, dict) or state.get("schema_version") != SCHEMA_VERSION:
+                if not isinstance(state, dict) or state.get("schema_version") not in (LEGACY_SCHEMA, LAUNCHER_SCHEMA):
                     raise ValueError("unknown schema")
-                for key in SECTIONS:
+                for key in SECTIONS + (LAUNCHER_SECTIONS if state["schema_version"] == LAUNCHER_SCHEMA else ()):
                     if not isinstance(state.get(key), dict):
                         raise ValueError(f"missing {key}")
+                if state["schema_version"] == LAUNCHER_SCHEMA and not isinstance(state.get("launcher"), dict):
+                    raise ValueError("missing launcher")
                 if not isinstance(state.get("reservation_history"), list):
                     raise ValueError("missing reservation_history")
             except (OSError, ValueError) as exc:
                 raise RegistryError(f"{registry.state_file.name} is not valid: {exc}") from exc
             if state.get("registry_id") != identity["registry_id"]:
                 raise RegistryError(f"registry_id differs from {registry.state_file.name}: the registry was replaced")
+            original = json.dumps(state, indent=2, sort_keys=True) + "\n"
             state["_path"] = str(registry.path)
             yield state
             state.pop("_path", None)
             if write:
-                write_atomic(registry.state_file, json.dumps(state, indent=2, sort_keys=True) + "\n")
+                after = json.dumps(state, indent=2, sort_keys=True) + "\n"
+                # A transaction that changed nothing writes nothing, so the launcher's periodic passes cost no disk writes.
+                if after != original:
+                    write_atomic(registry.state_file, after)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
@@ -183,7 +216,7 @@ def process_start(pid: int) -> str | None:
     return (result.stdout.strip() or None) if result.returncode == 0 else None
 
 
-def is_stale(entry: dict[str, Any]) -> bool:
+def is_stale(entry: Mapping[str, Any]) -> bool:
     """A holder or reader whose process ended or whose PID now names another process [884]."""
     started = process_start(int(entry["pid"]))
     return started is None or started != entry["pid_start"]
@@ -231,6 +264,38 @@ def check_cross_domain(state: dict[str, Any], domain: str, write_prefixes: list[
                 raise Refused(f"write prefix {prefix} overlaps {pinned}, pinned by transform run {holder['run_id']}")
 
 
+def new_run(state: dict[str, Any], domain: str, run_id: str, mode: str, holder: str, pid: int, pid_start: str, write_prefixes: list[str], checkout: str) -> str:
+    """Add a held run to ``state`` and return its token; every lock predicate is checked here [757] [768]."""
+    current = active(state, domain)
+    if current is not None:
+        raise Refused(f"domain {domain} is held by {current['run_id']} (state {current['state']})")
+    if run_id in state["runs"]:
+        raise Refused(f"run ID {run_id} was used before; a retry with new inputs needs a new run ID")
+    check_cross_domain(state, domain, write_prefixes)
+    token = secrets.token_urlsafe(32)
+    state["runs"][run_id] = {
+        "run_id": run_id,
+        "domain": domain,
+        "mode": mode,
+        "holder": holder,
+        "token_sha256": digest(token),
+        "checkout": checkout,
+        "pid": pid,
+        "pid_start": pid_start,
+        "registry_path": state["_path"],
+        "registry_id": state["registry_id"],
+        "state": "held",
+        "write_prefixes": sorted(write_prefixes),
+        "pinned_prefixes": [],
+        "registrations": [],
+        "history": [{"state": "held", "at": now()}],
+    }
+    if state["schema_version"] == LAUNCHER_SCHEMA:
+        state["runs"][run_id].update({"generation": 1, "snapshot": None, "token_file": None})
+    state["domains"][domain] = run_id
+    return token
+
+
 def acquire(registry: Registry, domain: str, run_id: str, mode: str, holder: str, pid: int, write_prefixes: list[str]) -> dict[str, str]:
     """Take the domain's lock for a new run in one transaction and return the run ID and its token [757] [768]."""
     if registry.kind == "test" and mode == "real":
@@ -239,31 +304,8 @@ def acquire(registry: Registry, domain: str, run_id: str, mode: str, holder: str
     if pid_start is None:
         raise Refused(f"holder process {pid} is not running")
     with transaction(registry) as state:
-        current = active(state, domain)
-        if current is not None:
-            raise Refused(f"domain {domain} is held by {current['run_id']} (state {current['state']})")
-        if run_id in state["runs"]:
-            raise Refused(f"run ID {run_id} was used before; a retry with new inputs needs a new run ID")
-        check_cross_domain(state, domain, write_prefixes)
-        token = secrets.token_urlsafe(32)
-        state["runs"][run_id] = {
-            "run_id": run_id,
-            "domain": domain,
-            "mode": mode,
-            "holder": holder,
-            "token_sha256": digest(token),
-            "checkout": str(Path.cwd()),
-            "pid": pid,
-            "pid_start": pid_start,
-            "registry_path": state["_path"],
-            "registry_id": state["registry_id"],
-            "state": "held",
-            "write_prefixes": sorted(write_prefixes),
-            "pinned_prefixes": [],
-            "registrations": [],
-            "history": [{"state": "held", "at": now()}],
-        }
-        state["domains"][domain] = run_id
+        legacy_only(state)
+        token = new_run(state, domain, run_id, mode, holder, pid, pid_start, write_prefixes, str(Path.cwd()))
     return {"run_id": run_id, "token": token}
 
 
@@ -276,18 +318,23 @@ def enter(registry: Registry, run_id: str) -> dict[str, str]:
     return {"run_id": run_id, "domain": entry["domain"], "mode": entry["mode"]}
 
 
+def pin_in(state: dict[str, Any], run_id: str, entry: dict[str, Any], prefixes: list[str]) -> None:
+    """Record the bronze prefixes a held transform run reads; refused over an acquisition run's writes [768]."""
+    if entry["domain"] != "transform" or entry["state"] != "held":
+        raise Refused(f"only a held transform run pins prefixes; {run_id} is {entry['domain']} in state {entry['state']}")
+    writer = active(state, "acquisition")
+    for prefix in prefixes:
+        for written in writer["write_prefixes"] if writer is not None else []:
+            if writer is not None and overlaps(prefix, written):
+                raise Refused(f"prefix {prefix} overlaps {written}, written by acquisition run {writer['run_id']}")
+    state["runs"][run_id]["pinned_prefixes"] = sorted(set(entry["pinned_prefixes"]) | set(prefixes))
+
+
 def pin(registry: Registry, run_id: str, prefixes: list[str]) -> None:
     """Record the bronze prefixes a transform run reads; refused over an acquisition run's writes [768]."""
     with transaction(registry) as state:
-        entry = owned(state, run_id)
-        if entry["domain"] != "transform" or entry["state"] != "held":
-            raise Refused(f"only a held transform run pins prefixes; {run_id} is {entry['domain']} in state {entry['state']}")
-        writer = active(state, "acquisition")
-        for prefix in prefixes:
-            for written in writer["write_prefixes"] if writer is not None else []:
-                if writer is not None and overlaps(prefix, written):
-                    raise Refused(f"prefix {prefix} overlaps {written}, written by acquisition run {writer['run_id']}")
-        state["runs"][run_id]["pinned_prefixes"] = sorted(set(entry["pinned_prefixes"]) | set(prefixes))
+        legacy_only(state)
+        pin_in(state, run_id, owned(state, run_id), prefixes)
 
 
 def set_state(state: dict[str, Any], run_id: str, new: str) -> None:
@@ -302,33 +349,13 @@ def mark(registry: Registry, run_id: str, new: str) -> None:
     """Move a held run to ``finalizing`` or ``failed_retained``; a finalizing run may still fail [776]."""
     allowed = {"finalizing": ("held",), "failed_retained": ("held", "finalizing")}
     with transaction(registry) as state:
+        legacy_only(state)
         entry = owned(state, run_id)
         if entry["state"] == new:
             return
         if entry["state"] not in allowed[new]:
             raise Refused(f"run {run_id} is in state {entry['state']}; it cannot move to {new}")
         set_state(state, run_id, new)
-
-
-def containers(run_id: str, running_only: bool) -> list[str]:
-    """IDs of containers labelled with the run, all or running only."""
-    flags = "-q" if running_only else "-aq"
-    result = run_command("docker", ["ps", flags, "--filter", f"label={CONTAINER_LABEL}={run_id}"], timeout=60)
-    if result.returncode != 0:
-        raise Refused(f"cannot list containers of run {run_id}: {result.stderr.strip()}")
-    return result.stdout.split()
-
-
-def fence(run_id: str) -> None:
-    """Stop every running container labelled with the run and confirm none still runs [776] [885]."""
-    running = containers(run_id, running_only=True)
-    if running:
-        result = run_command("docker", ["stop", *running], timeout=300)
-        if result.returncode != 0:
-            raise Refused(f"cannot stop containers of run {run_id}: {result.stderr.strip()}")
-    left = containers(run_id, running_only=True)
-    if left:
-        raise Refused(f"containers {', '.join(left)} of run {run_id} still run after the stop")
 
 
 def check_record(run_id: str, record: str | None) -> None:
@@ -344,51 +371,51 @@ def check_record(run_id: str, record: str | None) -> None:
 
 
 def release(registry: Registry, run_id: str, record: str | None, owner: bool) -> None:
-    """Release a finalizing run when every predicate holds, or a failed one by the owner after fencing [776] [885]."""
-    with transaction(registry, write=False) as state:
-        entry = owned(state, run_id)
-    if entry["state"] == "released":
-        return
-    if entry["state"] == "failed_retained":
-        if not owner:
-            raise Refused(f"run {run_id} is in state failed_retained; failed_retained needs --owner")
-        fence(run_id)
-    elif entry["state"] == "finalizing":
-        check_record(run_id, record)
-        if entry["registrations"]:
-            raise Refused(f"run {run_id}: {entry['registrations'][0]} registration remains")
-        remaining = containers(run_id, running_only=False)
-        if remaining:
-            raise Refused(f"run {run_id}: container {remaining[0]} remains")
-    else:
-        raise Refused(f"run {run_id} is in state {entry['state']}; release needs finalizing, or failed_retained with --owner")
+    """Release a finalizing run when every predicate holds, or a failed one by the owner [776] [885].
+
+    This is the schema 1 path. It cannot read Docker; the launcher's migration gate refuses to migrate while any container carries the
+    run label, so a run released here with a container left is found there (D1 section 2 item 7).
+    """
     with transaction(registry) as state:
-        current = owned(state, run_id)
-        if current["state"] != entry["state"] or current["registrations"]:
-            raise Refused(f"run {run_id} changed during the release checks; retry")
+        legacy_only(state)
+        entry = owned(state, run_id)
+        if entry["state"] == "released":
+            return
+        if entry["state"] == "failed_retained":
+            if not owner:
+                raise Refused(f"run {run_id} is in state failed_retained; failed_retained needs --owner")
+        elif entry["state"] == "finalizing":
+            check_record(run_id, record)
+            if entry["registrations"]:
+                raise Refused(f"run {run_id}: {entry['registrations'][0]} registration remains")
+        else:
+            raise Refused(f"run {run_id} is in state {entry['state']}; release needs finalizing, or failed_retained with --owner")
         set_state(state, run_id, "released")
 
 
 def recover(registry: Registry, run_id: str) -> None:
-    """Owner recovery of a stale or interrupted run: fence its containers, then keep it as failed_retained [884]."""
-    with transaction(registry, write=False) as state:
-        entry = owned(state, run_id)
-    if entry["state"] in ("failed_retained", "released"):
-        return
-    fence(run_id)
+    """Owner recovery of a stale or interrupted schema 1 run: keep it as failed_retained [884]; containers are the migration gate's concern."""
     with transaction(registry) as state:
-        owned(state, run_id)
+        legacy_only(state)
+        entry = owned(state, run_id)
+        if entry["state"] in ("failed_retained", "released"):
+            return
         set_state(state, run_id, "failed_retained")
+
+
+def register_in(state: dict[str, Any], run_id: str, entry: dict[str, Any], kind: str, add: bool) -> None:
+    """Add or remove a run's registration as a shared-service user [777]."""
+    kinds = set(entry["registrations"])
+    if add and entry["state"] != "held":
+        raise Refused(f"run {run_id} is in state {entry['state']}; only a held run registers")
+    state["runs"][run_id]["registrations"] = sorted(kinds | {kind} if add else kinds - {kind})
 
 
 def register(registry: Registry, run_id: str, kind: str, add: bool) -> None:
     """Add or remove a run's registration as a shared-service user [777]."""
     with transaction(registry) as state:
-        entry = owned(state, run_id)
-        kinds = set(entry["registrations"])
-        if add and entry["state"] != "held":
-            raise Refused(f"run {run_id} is in state {entry['state']}; only a held run registers")
-        state["runs"][run_id]["registrations"] = sorted(kinds | {kind} if add else kinds - {kind})
+        legacy_only(state)
+        register_in(state, run_id, owned(state, run_id), kind, add)
 
 
 def reserve(registry: Registry, reader: str, domain: str, publish_run: str, pid: int) -> None:
@@ -397,6 +424,7 @@ def reserve(registry: Registry, reader: str, domain: str, publish_run: str, pid:
     if pid_start is None:
         raise Refused(f"reader process {pid} is not running")
     with transaction(registry) as state:
+        legacy_only(state)
         if reader in state["readers"]:
             raise Refused(f"reader {reader} already holds a reservation or registration")
         entry = {"domain": domain, "publish_run": publish_run, "snapshot_set": None, "state": "reserved", "pid": pid, "pid_start": pid_start}
@@ -406,6 +434,7 @@ def reserve(registry: Registry, reader: str, domain: str, publish_run: str, pid:
 def register_set(registry: Registry, reader: str, snapshot_set: str) -> None:
     """Turn a reservation into a registration of the pinned snapshot set [777]."""
     with transaction(registry) as state:
+        legacy_only(state)
         if reader not in state["readers"]:
             raise Refused(f"reader {reader} has no reservation")
         state["readers"][reader].update({"snapshot_set": snapshot_set, "state": "registered", "at": now()})
@@ -414,6 +443,7 @@ def register_set(registry: Registry, reader: str, snapshot_set: str) -> None:
 def deregister_reader(registry: Registry, reader: str, owner_confirmed: bool) -> None:
     """Remove a reader; a stale one only with the owner's confirmation [777]."""
     with transaction(registry) as state:
+        legacy_only(state)
         if reader not in state["readers"]:
             return
         if is_stale(state["readers"][reader]) and not owner_confirmed:
@@ -488,8 +518,63 @@ def parser() -> argparse.ArgumentParser:
     return cli
 
 
+def registry_schema(registry: Registry) -> int:
+    """The schema of an existing registry, or the launcher's for one that does not exist yet (only the launcher creates registries)."""
+    if not registry.state_file.exists():
+        return LAUNCHER_SCHEMA
+    with transaction(registry, write=False) as state:
+        return int(state["schema_version"])
+
+
+def launcher_dispatch(args: argparse.Namespace, registry: Registry) -> Any:
+    """The same commands on a launcher registry: each is a request to the launcher, with the run's token from the token store [D1 section 3]."""
+    from orchestration import launcher
+
+    client = launcher.LauncherClient(launcher.resolve_config(args.test_registry))
+
+    def run_principal(owner: bool = False) -> dict[str, Any]:
+        return client.principal_run(args.run, owner=owner)
+
+    command = args.command
+    if command == "status":
+        return client.call("status", {"what": "registry"})
+    if command == "protected-sets":
+        return client.call("status", {"what": "protected_sets"})
+    if command == "acquire":
+        params = {
+            "domain": args.domain,
+            "run_id": args.run,
+            "mode": args.mode,
+            "holder": args.holder,
+            "pid": args.pid,
+            "write_prefixes": args.write_prefix,
+            "checkout": str(Path.cwd()),
+        }
+        reply = client.call("acquire", params)
+        return {"run_id": reply["run_id"], "token_file": reply["token_file"]}
+    if command == "enter":
+        return client.call("enter", {}, run_principal())
+    if command == "recover":
+        return client.call("recover", {"owner": True}, run_principal(owner=True))
+    if command == "pin":
+        return client.call("pin", {"prefixes": args.prefix}, run_principal())
+    if command == "mark":
+        return client.call("mark", {"state": args.state}, run_principal())
+    if command == "release":
+        return client.call("release", {"record": args.record, "owner": args.owner}, run_principal(owner=args.owner), timeout=300)
+    if command in ("register", "deregister"):
+        return client.call("register", {"kind": args.kind, "add": command == "register"}, run_principal())
+    if command == "reserve":
+        return client.call("reserve", {"reader": args.reader, "domain": args.domain, "publish_run": args.publish_run, "pid": args.pid})
+    if command == "register-set":
+        return client.call("register_set", {"reader": args.reader, "snapshot_set": args.snapshot_set})
+    return client.call("deregister_set", {"reader": args.reader, "owner_confirmed": args.owner_confirmed})
+
+
 def dispatch(args: argparse.Namespace, registry: Registry) -> Any:
     """Run one command and return what it prints."""
+    if registry_schema(registry) == LAUNCHER_SCHEMA:
+        return launcher_dispatch(args, registry)
     simple = {
         "status": lambda: status(registry),
         "protected-sets": lambda: protected_sets(registry),
@@ -523,6 +608,12 @@ def main() -> int:
     except RegistryError as exc:
         sys.stderr.write(f"registry error: {exc}\n")
         return REGISTRY_ERROR
+    except Exception as exc:
+        # A launcher refusal arrives as the launcher client's error class; it carries the same exit code as a refusal here.
+        if getattr(exc, "code", None) is None:
+            raise
+        sys.stderr.write(f"refused: {exc}\n")
+        return REFUSED
     sys.stdout.write(json.dumps(result if result is not None else {"ok": True}, indent=2, sort_keys=True) + "\n")
     return 0
 

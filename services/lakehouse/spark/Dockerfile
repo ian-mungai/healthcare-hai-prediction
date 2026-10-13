@@ -1,5 +1,10 @@
 # Spark job image for the lakehouse loaders: Java 21, Python 3.12, Spark 4.1.2 and Iceberg 1.11.0.
 # Every download is pinned by digest or checksum, so a rebuild from a clean checkout gives the same image contents.
+FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS deadline
+COPY --from=hai deadline_run.go /src/deadline_run.go
+WORKDIR /src
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /deadline_run deadline_run.go
+
 FROM eclipse-temurin:21-jre-noble@sha256:0c324fbe2e1455c3159184717440f3b52906ef82a39c4a6efc9edb401d31971a
 
 ARG SPARK_VERSION=4.1.2
@@ -38,3 +43,7 @@ ENV SPARK_HOME=/opt/spark \
 RUN useradd --create-home --uid 10001 spark
 USER spark
 WORKDIR /workspace
+
+# The deadline entrypoint every finite job runs under (D1 section 5 item 1); the label lets the launcher refuse an image without it.
+COPY --from=deadline --chmod=0755 /deadline_run /opt/hai/deadline_run
+LABEL hai.deadline_entrypoint="1" hai.deadline_implementation="go"

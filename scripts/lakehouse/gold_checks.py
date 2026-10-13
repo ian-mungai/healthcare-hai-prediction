@@ -220,7 +220,8 @@ def contract_problems(contract: Contract) -> list[str]:
             problems.append(f"{fact.name}: silver model {fact.silver_model} is not a kept silver model")
             continue
         mapped = [(column.silver_column, column.type) for column in fact.columns]
-        if mapped != silver:
+        # Column order in silver_columns.json is not binding (owner, A52 item 2): names and types are compared.
+        if sorted(mapped) != sorted(silver):
             problems.append(f"{fact.name}: contract columns differ from {fact.silver_model} in silver_columns.json")
         names = [column.name for column in fact.columns] + [key.name for key in fact.keys]
         if len(set(names)) != len(names):

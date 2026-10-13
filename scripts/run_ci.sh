@@ -21,8 +21,12 @@ python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 "$python_bin" -m scripts.lakehouse.run_bridge_references_e2e
 # The gold Great Expectations suites must match the gold contract they are generated from.
 "$python_bin" -m scripts.lakehouse.gold_checks check-suites
+# The silver suites must match the kept-model contract, the moved checks and the baselines they are generated from.
+"$python_bin" -m scripts.lakehouse.run_silver_e2e --check-suites
 "$python_bin" -m scripts.lakehouse.run_resource_checks
 "$python_bin" -m scripts.lakehouse.run_lock_e2e
+# The single launcher against a fake Docker, in test registries (D1 section 15, failure modes 910 to 919).
+"$python_bin" -m scripts.lakehouse.run_launcher_e2e
 "$python_bin" -m scripts.orchestration.run_contracts_e2e
 # dbt SQL style, from the pinned environment the installer creates (scripts/quality/install_sqlfluff.py).
 .tools/sqlfluff/bin/sqlfluff lint dbt/models dbt/tests
@@ -30,6 +34,8 @@ git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m
 git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks data-files
 git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks suppressions
 git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks subprocess-imports
+# Only orchestration/launcher.py may call Docker (D1 section 2 item 4).
+git ls-files -z --cached --others --exclude-standard -- '*.py' '*.sh' | xargs -0 "$python_bin" -m scripts.quality.docker_calls
 if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
   "$python_bin" -m scripts.quality.documentation_review check-untracked
 else

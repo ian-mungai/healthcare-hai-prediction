@@ -1,9 +1,9 @@
 # healthcare-hai-prediction
 
-Predicting hospital healthcare-associated infection rates from public CMS, Census, BLS and state data, built as a reproducible data engineering project on AWS.
+Predicts hospital healthcare-associated infection rates from public CMS, Census, BLS and state data on AWS.
 
-Hospital-acquired infection prediction research for a data engineer. This fresh
-repository builds on the capstone concept, not its implementation. Same-period
+Hospital-acquired infection prediction research for a data engineer, built as a reproducible data engineering project.
+This fresh repository builds on the capstone concept, not its implementation. Same-period
 prediction is primary: a hospital's infection score for a window is predicted from
 measures whose measured period ends before that window starts. Forecasting later windows is a later extension. Acquisition and S3
 storage precede comprehensive schema review and tutorial drafting. Availability
@@ -64,62 +64,10 @@ diagram shows what is built and what is planned.
 
 Prerequisites: macOS on Apple silicon or Linux AMD64, Python 3.12, Git,
 Terraform 1.16.1 and AWS CLI v2. Node.js 18 or later and Google Chrome render the
-architecture diagram.
-The lakehouse runs in Docker Desktop (32 GiB of memory on the development Mac). Every job launch computes one resource plan after the catalog services
-start. Its container limit is the smaller of Docker's total minus running containers'
-use minus 8 GiB headroom and the Mac's free, file-backed and purgeable memory minus
-2 GiB, plus the memory Docker's VM already holds that no running container uses, less a
-2 GiB VM base, so a build that follows another can reuse it. The Mac cap is skipped once
-Docker's VM holds its full allocation.
-A container budget below 4 GiB stops the launch. DuckDB receives 80% of the container
-budget, rounded down to whole GB, to leave room for allocations outside its buffer
-limit. The 4 GiB floor applies to the container, so the engine allowance is smaller.
-This reserve does not guarantee that a workload cannot run out of memory.
-
-Spark retains its heap calculation: the smaller of the container budget divided by
-1.10 and the budget minus 384 MiB, rounded down to whole GiB. Job parallelism uses
-the smaller positive CPU count from `sysctl -n hw.ncpu` and Docker. The same count
-sets Spark workers, lakehouse dbt model concurrency and DuckDB engine threads.
-Fixture dbt model concurrency and the lint target stay at one for deterministic checks.
-`scripts/lakehouse/memory_budget.py --launch-json` shows the complete plan.
-The query, UI, dbt, Spark and staging verification launch paths all apply that plan;
-job containers use `--no-deps` so dependencies cannot start after the measurement.
-The analytics SQL settings are read-only Compose mounts and need no image rebuild.
-
-When Polaris or PostgreSQL starts, `scripts/lakehouse/catalog.py` gives it a
-container limit of 25% or 10% of the available budget (at least 1 GiB or 256 MiB).
-Those limits stay fixed for that container's lifetime. A service-derived job limit
-in the private Compose env file lets catalog-only commands render inactive profiles;
-every job launcher overrides it with its fresh plan. Use the launch scripts to run jobs.
-Close containers and apps you no longer use before a heavy run.
-Docker's VM keeps a heavy build's memory, much of it compressed by macOS, so
-`.venv/bin/python -m scripts.lakehouse.catalog release` stops this project's containers and
-restarts Docker Desktop; it restarts nothing while another project's container runs.
-The staging E2E calls it after each real build. `run_staging_e2e --real-only` runs the
-real builds and their checks without the fixture cases, for changes that touch no fixture.
-
-Run the non-Docker resource contracts with
-`.venv/bin/python -m scripts.lakehouse.run_resource_checks`.
-The artifact under `data/e2e/resource_limits/` records synthetic resource readings,
-repeated CLI results and configuration checks. It does not prove live container limits;
-verify those through Docker inspection and engine settings before declaring runtime
-resource conformance complete.
-
-Run from this repository's root with its existing Python 3.12 `.venv`.
-Dependencies are shared across development and production in `requirements.txt`;
-a requirement used only as a command carries `# tool: <use>` and one imported by
-name carries `# dynamic: <where>`, so the dependency check reads them correctly.
-Gitleaks, TFLint and trivy are installed only in ignored `.tools/`; versions and
-publisher SHA-256 values are pinned in `config/quality_tools.json`. The markdownlint
-hook's `markdownlint-cli2` is installed into `.tools/markdownlint-cli2` with `npm ci`
-from the lockfile in `scripts/quality/markdownlint/`, which pins each package's
-integrity hash; it needs Node.js 22 or later. The `sqlfluff` hook's SQLFluff and
-its dbt templater are installed into `.tools/sqlfluff` from the hash-pinned
-`scripts/quality/sqlfluff/requirements.txt`; the same command installs the dbt
-packages from `dbt/package-lock.yml` into the ignored `data/analytics/dbt/dbt_packages`. The schema-review tools in
-`scripts/review/` need the hash-pinned packages in `requirements-review.txt`,
-installed into the ignored `.review_dependencies/` (Apple silicon only); the file's
-header gives the command.
+architecture diagram. The lakehouse runs in Docker Desktop; the launcher (`orchestration/launcher.py`) computes a
+memory plan for every job from what Docker and the Mac have free and stops a launch whose container budget is below
+4 GiB. Native quality tools install into the ignored `.tools/` at versions and publisher SHA-256 values pinned in
+`config/quality_tools.json`.
 
 ```sh
 python3.12 -m venv .venv
@@ -136,12 +84,26 @@ project profile, named `<PROJECT_NAME>_<ENVIRONMENT>` after its same-named IAM
 user. IAM changes use a separate administrator profile that is never stored in
 `.env`.
 
-The lakehouse runs in Docker Compose (`docker-compose.yaml`):
+The services are defined in `docker-compose.yaml`, which the launcher reads as its service model; the launcher, not
+Compose, starts every container:
 
 - PostgreSQL and Apache Polaris 1.8.0 use digest-pinned images.
-- The Spark 4.1.2 (Iceberg 1.11.0) and DuckDB 1.5.6 images are built from `services/`, with their Python packages hash-pinned.
+- The Spark 4.1.2 (Iceberg 1.11.0), DuckDB 1.5.6 analytics, Great Expectations quality and Polaris bootstrap images are
+  built from `services/`, with their Python packages hash-pinned; each job image carries the deadline entrypoint.
 
-The first catalog command pulls and builds them:
+The launcher uses local images only and never pulls or builds one. Before the first catalog command, pull the two pinned
+images and build the others once:
+
+```sh
+docker pull postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+docker pull apache/polaris:1.8.0@sha256:347615e736cab2c9be0d8c464552ac930be4755302bb0aeb745216bbae99ba5b
+docker build -t hai-polaris-admin:1.8.0 --build-context hai=./services/hai services/lakehouse/polaris_admin
+docker build -t hai-lakehouse-spark:4.1.2-iceberg1.11.0 --build-context hai=./services/hai services/lakehouse/spark
+docker build -t hai-analytics:duckdb1.5.6-dbt1.11.15 --build-context hai=./services/hai services/analytics
+docker build -t hai-quality:gx1.23.2-duckdb1.5.6 --build-context hai=./services/hai services/quality
+```
+
+Then start the catalog from the main checkout (a launcher running in another checkout refuses it):
 
 ```sh
 .venv/bin/python -m scripts.lakehouse.catalog up
@@ -150,26 +112,6 @@ The first catalog command pulls and builds them:
 `up` is idempotent. On first use it generates the catalog credentials into the ignored, owner-only
 `data/lakehouse/secrets/` and never prints them. It creates the `hai_lakehouse` catalog, limited to `lakehouse/` in the
 project bucket. `down` stops the containers and keeps the catalog database.
-
-The native installer supports macOS ARM64 and Linux AMD64. Repeating a verified
-installation preserves bytes and modification times; an unexpected existing
-binary is rejected rather than overwritten. `--archive-directory` supports
-offline installation from the exact pinned release filenames. Do not replace
-the shared system tools to satisfy this project.
-
-Named manual steps. These are the only setup steps no script performs:
-
-1. **API keys.** Request the Census and BLS API keys from their publishers and
-   store each in AWS Secrets Manager, in the configured region, as a secret named
-   `census_api_key` or `bls_api_key` holding JSON with one field, `api_key`.
-   The keys are shared by several projects, so they are created by hand outside
-   Terraform. Store the HUD USPS crosswalk token separately as `hud_api_key`,
-   in the same JSON shape with the token alone in `api_key` (no `Bearer`
-   prefix; the collector adds the header). The IAM
-   configuration grants read access to these three names and never reads a
-   value; each permission update requires a reviewed saved plan before apply.
-2. **Administrator profile.** Configure an AWS CLI profile with IAM permissions
-   for the IAM stack. It is passed on the command line, never stored in `.env`.
 
 ## Usage
 
@@ -197,381 +139,28 @@ The E2E runners can also run on their own; each needs a new output directory:
 .venv/bin/python -m scripts.quality.run_documentation_review_e2e
 ```
 
-The lakehouse jobs run in the Spark container. The bronze E2E uses a throwaway local catalog and synthetic files, never
-S3. Each load reads only the S3 manifests and the committed table map (`config/lakehouse/bronze_tables.json`), loads one
-copy of each stored file (the smallest object key), lists every copy in `bronze.stored_copies`, replaces each object in
-its own commit, prunes objects a table no longer selects, rebuilds the table's data dictionary and writes a counts-only
-report. A corrected manifest replaces the manifest it names as superseded; tables taken out of the map are listed in
-`config/lakehouse/removed_tables.json` and dropped with `--drop-removed`:
+Every container starts through the launcher (`orchestration/launcher.py`), the only process allowed to call Docker. Real
+dbt builds are refused until the provenance package records each build's provenance. The main lakehouse commands:
 
 ```sh
-.venv/bin/python -m scripts.lakehouse.catalog job bronze_e2e        # report: data/e2e/bronze/
-.venv/bin/python -m scripts.lakehouse.catalog job bronze -- --group hai           # or --tables a,b; report: data/e2e/bronze_load/
-.venv/bin/python -m scripts.lakehouse.catalog job bronze -- --tables a,b --copies-only   # list copies, prune, verify
-.venv/bin/python -m scripts.lakehouse.catalog job bronze -- --drop-removed       # drop tables in removed_tables.json
-.venv/bin/python -m scripts.lakehouse.catalog job dictionary -- --tables a,b      # rebuild bronze_dictionary tables
-.venv/bin/python -m scripts.lakehouse.care_compare_tables           # regenerate the care_compare group (read-only S3)
-.venv/bin/python -m scripts.lakehouse.retired_objects --collection <publisher/collection>   # rebuild the retired list
-scripts/lakehouse/query.sh                                          # DuckDB shell, bronze attached read-only
-scripts/lakehouse/ui.sh                                             # DuckDB UI at http://localhost:4213
-```
-
-The dbt staging layer (`dbt/`, dbt-core with dbt-duckdb in the analytics image) reads bronze read-only. Its E2E builds
-the models on synthetic fixtures, including cases that must fail one named test, then on the real bronze tables twice;
-it reconciles each staging table with bronze. Before each real build it pins the current snapshot of every mapped
-bronze table in a new run folder and verifies after the build that none moved (`scripts/lakehouse/pins.py`, run in the
-Spark container as `catalog job pins`); a moved table fails the run. Where a text file and a workbook hold the same IPPS or occupational-mix
-table, staging reads the text file and drops only the workbook sheets that a selected text file of the same release
-matches row for row; every other sheet stays selected (`stg_bronze__sheet_selection`). `scripts.lakehouse.ipps_file_labels` regenerates the IPPS and
-occupational-mix label and twin seeds from the S3 manifests; `--check` confirms the committed seeds. `int_pos_hospital_snapshots`
-types the Provider of Services hospital rows; each file is dated by the catalog coverage in `dbt/seeds/pos_file_periods.csv`,
-which `scripts.lakehouse.pos_file_periods` rebuilds from the S3 manifests and the local acquisition job plans. A valid
-published county is kept (`county_source` pos). A county that is missing or outside the snapshot's state takes the county of
-the snapshot's ZIP when the HUD quarter in force on the snapshot's period end lists that ZIP, with a residential ratio
-above 0, in exactly one county under the snapshot's state (`county_source` hud_zip_crosswalk). Connecticut fills only from
-090xx county codes and keeps a published 091xx county. Otherwise the county stays null and `county_fill_reason` says why;
-`county_fips_published` keeps the published value. The case-mix index
-models read the unadjusted CMI by exact header name (`dbt/seeds/cmi_layout_columns.csv`) and keep the transfer-adjusted CMI in its
-own column, with one row per CCN in each selected file and each rule year and stage (`int_cmi_hospital_rows`). Choosing one CMI
-per hospital and rule year is saved for the feature phase (see [Saved for the Feature Phase](#saved-for-the-feature-phase)).
-The Care Compare timely and effective
-care, maternal health and HCAHPS tables get the same window models as HAI (`int_cc_*_windows`, holds in
-`int_cc_window_holds`). `int_hgi_hospital_releases` types Hospital General Information per file.
-`int_cost_reports` has one row per hospital cost report, in the federal fiscal year in which its period starts, with the
-number of reports of its CCN in that year. The IPPS
-impact files from FY 2001 are read by exact header name (`dbt/seeds/impact_layout_columns.csv`): `int_impact_hospital_values`
-has one row per release, hospital and field. The
-Medicare inpatient provider and DRG summaries are typed per file, with the data and release years from the file name
-(`int_mup_providers`, `int_mup_drg_discharges`); a blank, suppressed cell is null. The registry control mappings are the gold
-control bridge seeds `dbt/seeds/gold/<name>_bridge.csv`: the registry-map seeds that sat beside the staging seeds in
-`dbt/seeds/` are retired. Each bridge keeps the stem of its retired seed plus `_bridge`.
-`scripts/lakehouse/bridge_references.py --check` checks the bridges against `data_contracts/lakehouse/gold_contract.json`. The
-formula rules are in `features/recipes/<name>_recipe.csv`, for the cost report, IPPS impact, Medicare inpatient provider,
-occupational-mix, HHS and ONC, MMD and shortage families; the other families have no recipe. The Care Compare measures
-of the window models above map by exact measure ID in `registry_measure_sources_bridge.csv` and the registry's HAI controls
-(C269 to C283 and C283's children) map to the published HAI parts in `hai_outcome_measures_bridge.csv`. The cost-report
-measures map in `cost_report_measures_bridge.csv`, the registry measures of source CMS_IPPS in `impact_measures_bridge.csv`
-and those of sources CMS-MUP-PROVIDER and CMS_MEDICARE_PROVIDER in `mup_measures_bridge.csv`. The
-owner, enrollment and change-of-ownership files are typed per release (`int_hospital_owner_rows`,
-`int_hospital_enrollment_rows`, `int_change_of_ownership_rows`). Each file is dated by the publisher's catalog period in
-`dbt/seeds/ownership_release_periods.csv`, which `scripts.lakehouse.ownership_release_periods` rebuilds from the S3
-manifests and the local capture receipts. A change of ownership listed in several releases is kept once, from the latest
-release (the latest catalog period end, then the highest release ID, then the lower source row and checksum). Another
-release whose published values differ is held in `int_change_of_ownership_holds`, as is a repeated row of the event in the
-kept release; values are compared as published, so associate IDs 123 and 0123 differ. Associate IDs
-that lost leading zeros are padded to 10 digits and the row is marked. An owner flag a release's layout lacks (private equity and REIT before
-April 2025) is null; `dbt/seeds/gold/ownership_measures_bridge.csv` names the columns each registry control uses. The HHS weekly
-hospital capacity rows are typed per hospital and week (`int_hhs_capacity_weeks`): a count of 1 to 3, published as
--999999, is null and listed in `suppressed_fields`; any other negative value is null and listed in `negative_fields`.
-The ONC Promoting Interoperability to certified-product linkage and
-the older 2011 to 2017 EHR incentive attestations are typed apart (`int_onc_chpl_linkage_rows`,
-`int_onc_attestation_rows`). `dbt/seeds/gold/hhs_onc_measures_bridge.csv` maps the registry controls, with the formula rules in
-`features/recipes/hhs_onc_measures_recipe.csv`; the HHS field names the
-source truncates are resolved through the stored `columns.json`.
-
-Occupational-mix surveys are typed per file, sheet and source row (`int_occmix_survey_rows`). Exact headers distinguish
-survey records from CBSA and S-3 tables; the layout inventory retains every selected file and sheet. Survey dates come
-from FROM and TO, including workbook ISO dates. Payment-rule years stay separate. Deleted records, invalid
-identifiers or periods and duplicate provider-period rows remain visible with a hold and no derived values.
-`dbt/seeds/gold/occmix_measures_bridge.csv` maps all six S03 registry controls (rules in
-`features/recipes/occmix_measures_recipe.csv`): RN paid hours, the RN, combined LPN/LVN plus
-surgical-technologist and NAORAT paid-hour shares and RN salary per paid hour. Missing values and nonpositive
-denominators give null. C043 stays unavailable: paid hours cannot substitute for direct-care worked hours per patient-day;
-registry revision 3 closes it as unavailable from public sources.
-Comma-grouped numbers are parsed only when their grouping is valid. Dots, dashes and blanks remain null.
-Source revisions remain separate; hospital-window alignment, publication timing and model eligibility are pending.
-
-The geography sources are typed at their own grain. HUD ZIP-to-county rows carry the USPS quarter their capture
-receipt records (`int_hud_zip_county_quarters`), with each address ratio kept separately; the 47 rows whose code is
-not a county are held apart (`int_hud_zip_county_holds`). County adjacency covers the 2010 and 2023 to 2026 files with
-self-links and islands flagged (`int_county_adjacency_edges`). Rural-Urban Continuum Codes (2013, 2023) and Rural-Urban
-Commuting Area codes (2010, 2020; tracts and ZIP codes) stay text categories (`int_rucc_county_codes`,
-`int_ruca_codes`). Hospital service area counts keep their suppression marks as flags (`int_hsa_zip_cases`). County
-codes are 5-character text; Connecticut is flagged, not removed. `dbt/seeds/geography_file_periods.csv`, generated by
-`scripts/lakehouse/geography_file_periods.py`, dates every file: HUD and service-area files from their acquisition
-records, RUCC, RUCA and adjacency files by a reviewed vintage that is not a publication date.
-`dbt/seeds/gold/geography_measures_bridge.csv` maps the eight registry controls of these families. Weights, graph rules and
-hospital-window alignment are pending.
-
-ACS 5-year values for 2010 to 2024 come from the data.census.gov exports and, for the detailed tables from 2018, the
-summary files (`int_acs_county_values`, one row per county, vintage and concept). ACS column codes change meaning between
-vintages, so `dbt/seeds/acs_variable_map.csv` names, per concept and vintage, the column and the exact label it must carry;
-a test fails when a file's label differs. A wording change of meaning holds the vintage instead of mixing it in; so do
-the subject-table units that changed from percents to counts in 2017. Missing marks and sentinels stay as tokens; a capped
-median keeps its cap and a flag. SVI's seven editions are staged long under each edition's own field names
-(`int_svi_county_values`), with -999 kept as a token. The ACS file vintage and the SVI edition come from
-`dbt/seeds/geography_file_periods.csv`. `dbt/seeds/gold/acs_svi_measures_bridge.csv` maps 43 of the 44 S18 and S19 controls to ACS concepts
-and SVI fields (C177.02 is in `dbt/seeds/gold/income_labor_measures_bridge.csv`); staging picks no source between them.
-
-SAIPE county estimates for 1989 to 2024 are cut from the fixed-width files at the positions every year's layout documents
-(`int_saipe_county_estimates`): poverty counts and percents with 90% bounds and median household income in nominal dollars.
-SAHIE county rows for 2006 to 2024 keep their published age, race, sex and income groups (`int_sahie_county_rows`); a test
-checks that each file's preamble defines code 0 as under 65, all races, both sexes and all incomes, the group the registry
-names. BLS LAUS county series (`int_bls_county_series`) keep months and annual averages apart, with footnote codes and the
-capture date as the revision vintage. `.` and `-` stay as missing marks. `dbt/seeds/gold/income_labor_measures_bridge.csv` maps the
-SAIPE, SAHIE and BLS registry controls.
-
-PLACES county values keep their release, data year, measure and crude or age-adjusted type (`int_places_county_values`);
-`is_all_states` marks the measure-years whose county rows cover all 50 states and DC, the only ones the project
-uses. The 2020 release has no county codes; its rows take the code PLACES publishes for the same state and county name
-in its other releases (`county_source`). Medicare Geographic Variation county values are staged
-long for every published age level with `*` and `NA` kept as tokens (`int_gv_county_values`). WONDER deaths and crude rates keep their
-database, bridged race (1999 to 2020) or single race (2018 to 2024), with their Suppressed, Unreliable, Missing and Not
-Available marks (`int_wonder_county_deaths`); the 2024 rows repeated identically in the shorter single-race export are
-held. `dbt/seeds/gold/county_health_measures_bridge.csv` maps the 56 registry controls of these sources.
-
-CMS Mapping Medicare Disparities prevalence (`int_mmd_prevalence`) has one row per published file row (condition label, year
-and county or state) for its one filter set. Each row keeps the published `condition_label`, the optional `file_control` (the control the file name
-carries) and its source lineage. Each row takes its unit from the reviewed units seed (`dbt/seeds/mmd_condition_units.csv`). A
-silver row carries no registry control: the gold MMD bridge (`dbt/seeds/gold/mmd_conditions_bridge.csv`) maps each label to
-its control. `scripts/lakehouse/mmd_conditions.py` writes the units seed from the pinned collection plans and checks that the
-bridge maps every plan label to its control exactly once, so the earlier acute myocardial infarction captures are mapped too. Zeros keep a possible-suppression flag and county rows without a name are flagged as unknown counties.
-C258.78 is a state rate per 100,000. All 82 MMD controls stay held for definition. HRSA primary-care HPSA components
-(`int_hpsa_components`) and MUA and MUP components (`int_mua_components`) keep each designation's type, status, score and
-dates as published at the capture, with `XXXXX` county codes kept as tokens; rows repeated identically in the file are held.
-An HPSA tract, subdivision or county ID gives the county a token hides. A facility's postal code gives one through HUD
-when that ZIP lies in one county only (`county_source`).
-The period seed dates each MMD file by the year in its name and the HPSA and MUA files by their capture date, which the
-models carry as `capture_date`. The Federal Register HPSA workbooks stay in bronze. `dbt/seeds/gold/shortage_measures_bridge.csv`
-maps the HPSA and MUA controls (C249 to C251) and the MMD bridge the 82 MMD controls, 85 registry controls in all
-(rules in `features/recipes/shortage_measures_recipe.csv`).
-
-Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
-visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the
-Hospital Readmissions Reduction Program by condition (`int_cc_hrrp_windows`); their holds are in
-`int_validation_window_holds`, apart from `int_cc_window_holds`. Every published measure ID is kept;
-the gold bridge `dbt/seeds/gold/validation_measures_bridge.csv` maps the exact IDs the registry names (C289 to C291 and
-their children). A renamed ID enters under its exact ID only through the reviewed aliases in `dbt/seeds/measure_id_aliases.csv`
-(`OP-32`) and only where the exact ID has no row for that hospital and window; `published_measure_id` keeps the published
-ID. The PSI-90 and PSI-13 controls (E038, E039) read the
-published IDs `PSI_90` and `PSI_13` (registry revision 3); the older `PSI_90_SAFETY` and `PSI_13_POST_SEPSIS` are not
-aliased (`int_cc_complications_deaths_windows`). `Not Available`, `Not Applicable`, `N/A` and `Too Few to Report` stay text. In every
-group D model a 5-digit hospital ID is padded to 6 characters; any other ID that is not 6 digits or capital letters is
-held. These tables are for validation only; none is a predictor.
-
-The HAC Reduction Program (`int_hac_program_years`) and Hospital VBP Total Performance Score (`int_vbp_program_years`)
-are staged per hospital and program fiscal year from the latest release, so a revised file replaces the original. The
-HAC model keeps the payment reduction, Total HAC Score, PSI-90 and domain z-scores; the HAI SIRs that file republishes
-are not staged, so the outcome comes only from the HAI windows. The VBP model keeps every published domain score as
-published; clinical care (older files) and clinical outcomes (later files) stay separate columns. Three older VBP files
-publish no fiscal year and take a reviewed year from `dbt/seeds/vbp_file_fiscal_years.csv`, whose evidence is the
-published national average score. Rows the program-year models leave out are held in `int_validation_program_holds` with a reason (no_key,
-no_fiscal_year, label_held, undated_release, same_date_conflict or repeated_in_file). The gold bridge
-`dbt/seeds/gold/validation_measures_bridge.csv` maps the registry controls (C285 to C288); all are
-comparison_only or exclude_primary.
-
-The dbt packages
-(dbt-project-evaluator 1.4.0 and its dbt_utils 1.4.1) are declared in `dbt/packages.yml` and pinned by version in `dbt/package-lock.yml`; dbt Hub
-publishes no content checksum. They install outside the read-only project: `scripts/lakehouse/dbt.sh deps` installs them in the
-container. The staging E2E installs them before it builds. dbt-project-evaluator is off in every other run and runs
-only on request, on the in-memory `lint` target with no catalog; its findings are warnings:
-
-```sh
-.venv/bin/python -m scripts.lakehouse.run_staging_e2e              # fixtures; --real adds the real tables; report: data/e2e/staging/
-scripts/lakehouse/dbt.sh deps                                       # install the locked dbt packages (once)
-scripts/lakehouse/dbt.sh build                                      # dbt on the real bronze tables
-.venv/bin/python -m scripts.lakehouse.run_project_evaluator         # dbt-project-evaluator; report: data/e2e/dbt_evaluator/
-.venv/bin/python -m scripts.lakehouse.ipps_file_labels --check      # seeds match the S3 manifests (read-only S3)
-.venv/bin/python -m scripts.lakehouse.pos_file_periods --check      # POS periods match the manifests and job plans
-.venv/bin/python -m scripts.lakehouse.ownership_release_periods --check   # ownership periods match the manifests and receipts
-.venv/bin/python -m scripts.lakehouse.geography_file_periods --check      # geography periods match the manifests and records
-.venv/bin/python -m scripts.lakehouse.mmd_conditions --check             # MMD units seed and bridge match the pinned plans
-.venv/bin/python -m scripts.lakehouse.run_mmd_conditions_e2e           # the check catches drift; report: data/e2e/mmd_conditions/
-.venv/bin/python -m scripts.lakehouse.bridge_references --check          # bridges and recipes match the gold contract and the registry
-.venv/bin/python -m scripts.lakehouse.run_gold_e2e                     # gold on fixtures; --real adds two pinned real builds; report: data/e2e/gold/
-.venv/bin/python -m scripts.lakehouse.gold_checks check-suites          # the gold suites match the gold contract
-.venv/bin/python -m scripts.lakehouse.catalog job pins -- pin --run <run_id>      # pin bronze in data/analytics/dbt/runs/<run_id>/pins.json
-.venv/bin/python -m scripts.lakehouse.catalog job pins -- verify --run <run_id>   # fails when a pinned table moved
-.venv/bin/python -m scripts.lakehouse.catalog job pins_e2e                # the pin's scenarios on a throwaway catalog; report: data/e2e/pins/
-```
-
-**Gold checks.** `scripts/lakehouse/run_gold_e2e.py` builds silver and gold on the staging fixtures and, with `--real`, twice
-from the real bronze tables, pinning the bronze snapshots around each build. It reads the fact list, grains, columns,
-surrogate keys and source dates from `data_contracts/lakehouse/gold_contract.json` and checks that each fact keeps its
-silver model's rows and values, that every key resolves to its dimension or the unknown member, that each dimension
-holds its unknown member once, that gold reads only its declared inputs and that two real builds give identical gold
-fingerprints. Every fact needs rows in the fixture stage; in the real stage every fact except the hold facts needs rows.
-A hold fact may be empty when nothing is held; at least one non-empty hold fact must keep its rows. The expression
-policy findings on the compiled gold SQL are reported without counting toward the verdict until that check is rebuilt;
-an analysis that could not visit every relation a model reads still fails the run. The gold Great Expectations suites in
-`data_contracts/great_expectations/gold/` are generated from the contract (`gold_checks write-suites`) and
-`gold_checks check-suites` in local CI fails when they drift. The test `release_copy_consistency` warns, without
-failing a build, when stored copies of one file carry different release labels.
-
-**Silver validation (Great Expectations).** After a build, Great Expectations 1.23.2 checks 13 silver tables (the spine,
-the alignment tables, county adjacency and the three history tables), as a second gate independent of the dbt tests.
-The spine, alignment and history tables are now saved in `features/` and no longer built by dbt, so these suites do not
-pass on the current silver build until a later stage replaces them with atomic-grain suites.
-These were gold's planned inputs before the October 10 2026 layer design; the refactor replaces the suites with atomic
-silver, gold and feature-phase checks. `scripts/lakehouse/silver.py validate` runs `scripts/lakehouse/silver_quality.py`
-in the `quality` image (`services/quality/`, no network, memory limit from the launch plan). It opens the build file
-read-only and stops when an `analytics-dbt` container is running, when `int_silver_build_marker` is missing or when the
-marker's DuckDB version differs from the reader's. The suites in `data_contracts/great_expectations/suites/` are JSON
-lists of Great Expectations classes and arguments:
-
-- the exact ordered columns and types and a row count for each of the 13 tables;
-- the spine's fill sources and populations;
-- six outcome rows per spine row, with the SIR inside its interval and equal to observed over predicted;
-- the fixed rows per spine row of each alignment table, with no negative age and no publisher token turned into a number;
-- no validation or linkage control in a predictor table;
-- five-digit county codes in the adjacency graph;
-- in the three history tables, a current flag on every open version and only there, gap flags that agree with the dates
-  and a changed value in every version that directly follows another; ownership history also needs 10-digit owner IDs
-  that exist among the organization owner rows and no more bridged releases than listed ones.
-
-Bands (windows per year, aligned shares) come from `data_contracts/great_expectations/baselines.json`. The owner
-approved them on October 10 2026, so a band outside its range fails the run (an unapproved file only warns). No
-expectation repeats a dbt test on the same column; the run fails if one does.
-Results keep counts only. Great Expectations keeps no open connection for DuckDB, so every metric came back empty. The
-validator registers DuckDB with it as a single-connection dialect, only for the pinned version.
-
-```sh
-.venv/bin/python -m scripts.lakehouse.silver validate              # the last build; record: data/e2e/silver_quality/<UTC>/run.json
-.venv/bin/python -m scripts.lakehouse.run_silver_e2e               # fixture cases on the staging E2E base build; report alongside
-```
-
-Load large groups in batches of about 20 to 40 tables: each job stops after 1 hour (`COMPOSE_TIMEOUT` in
-`scripts/lakehouse/catalog.py`). A rerun of the same tables ends in the same state.
-
-**Run lock and registry.** `scripts/lakehouse/run_lock.py` keeps one lock per domain (`acquisition`, `transform`,
-`training`, `serving`) for the whole machine, in `data/orchestration/registry/` of the main checkout. Every worktree
-finds it through Git's common directory; there is no environment override. `acquire` prints the run's token once and
-the registry keeps only its SHA-256; nested launchers join the run with `RUN_LOCK_TOKEN`. A run moves from `held` to
-`finalizing` and `released`. A failed or stale run stays `failed_retained` until the owner releases it with its token
-after its labelled containers are stopped; nothing is released automatically. An acquisition run cannot write a
-prefix a transform run pinned. Readers reserve a publish run, then register its snapshot set, so maintenance can keep
-it (`protected-sets`). Resource admission uses the same registry: `memory_budget --admit job` (or `pool` for an E2E
-pool) reserves the machine for one heavy launch at a time and prints the launch plan with its reservation ID; a child
-launch that carries `HAI_RESERVATION` reuses it. Each registered service's unused limit is held back as a growth
-reserve. A reservation whose process ended is cleared at the next admission. Only the package fixture kit uses the
-admission today; no launcher uses the lock or the admission until the launcher wiring stage of the bronze-to-gold
-refactor.
-
-**Package fixture kit.** `scripts/lakehouse/package_fixture.py` builds the synthetic fixture with the pinned analytics
-image and no network, AWS profile or secret (`prepare`), fingerprints a build file read-only (`baseline`) and checks a
-work package's patched project against its frozen selector: required tests with their ancestors, a recorded and
-approved effective selection, the `beab859` baseline and expected-failure mutations (`check`).
-
-```sh
-.venv/bin/python -m scripts.lakehouse.run_lock status       # holders, runs and readers; never a token
-.venv/bin/python -m scripts.orchestration.run_contracts_e2e # orchestration contracts; report: data/e2e/orchestration_contracts/
-.venv/bin/python -m scripts.lakehouse.package_fixture prepare  # credential-free fixture build in data/package_fixture/
-.venv/bin/python -m scripts.lakehouse.run_package_fixture_e2e # the kit's checks, with Docker; report: data/e2e/package_fixture/
-.venv/bin/python -m scripts.lakehouse.run_lock_e2e          # CLI scenarios in test registries; report: data/e2e/run_lock/
+.venv/bin/python -m orchestration.launcher status                  # the launcher; --what registry or catalog
+.venv/bin/python -m scripts.lakehouse.catalog up                   # start the catalog (from the main checkout only)
+scripts/lakehouse/query.sh                                         # DuckDB shell with bronze attached read-only
+.venv/bin/python -m scripts.lakehouse.catalog job bronze -- --group hai   # load a bronze group; report: data/e2e/bronze_load/
+.venv/bin/python -m scripts.lakehouse.run_silver_e2e               # silver and gold quality checks on the fixture; report: data/e2e/silver_quality/
+.venv/bin/python -m scripts.lakehouse.run_gold_e2e                 # gold on the fixture; report: data/e2e/gold/
+.venv/bin/python -m scripts.lakehouse.run_launcher_e2e             # launcher scenarios with a fake Docker; report: data/e2e/launcher/
 ```
 
 Before every commit, stage the intended files by name, then draft, complete and
 retain the ignored local documentation review record (see [Quality Checks](#quality-checks)).
 
-### Saved for the Feature Phase
-
-These models are saved copies in `features/` (`features/models/`, `features/tests/` and `features/macros/`) that dbt does
-not build. Their descriptions stay here as written when they were silver models.
-
-The case-mix index models choose one CMI per hospital and rule year from the year's best rule stage; disagreeing files are held in
-`int_cmi_holds`. `int_hospital_spine` has one row per hospital and calendar-year HAI window, as of the window start: the
-Provider of Services snapshot that ends in the 12 months before the window and the CMI of the fiscal year that ends before
-it (`int_cmi_hospital_data_years`), with the primary and sensitivity population flags. A window missing its own snapshot
-takes its state and county from the same hospital's other snapshots within 24 months, then the enrollment file, then the
-CCN's state code. A county can also come from the hospital ZIP when the HUD crosswalk places that ZIP in one county only; a
-ZIP split across counties gives none. Classification is filled only when the neighboring snapshots agree. Each filled field
-names its source. Connecticut windows also carry their planning region when the ZIP lies in one region.
-
-These saved models still read the retired registry-map seeds of commit `e918ed7`; the same mappings now live in the gold
-control bridges and recipes named below, which a feature-phase rewrite reads instead.
-`int_registry_measure_windows` carried each registry measure of the Care Compare timely and effective care, maternal health and
-HCAHPS families by the exact measure ID in `dbt/seeds/registry_measure_sources.csv` (now
-`dbt/seeds/gold/registry_measure_sources_bridge.csv`).
-`int_cost_report_measures` computed each registry cost-report measure by the
-columns and rule in `dbt/seeds/cost_report_measures.csv` (now `dbt/seeds/gold/cost_report_measures_bridge.csv` and
-`features/recipes/cost_report_measures_recipe.csv`) and gave null for a zero or missing denominator. `int_impact_measures` carried the registry measures of source CMS_IPPS (`dbt/seeds/impact_measures.csv`, now
-`dbt/seeds/gold/impact_measures_bridge.csv`). `int_mup_measures` computed the registry
-measures of sources CMS-MUP-PROVIDER and CMS_MEDICARE_PROVIDER by the fields and rule in `dbt/seeds/mup_measures.csv` (now
-`dbt/seeds/gold/mup_measures_bridge.csv` and `features/recipes/mup_measures_recipe.csv`). `int_validation_program_values` carried the registry controls (C285 to C288); all
-are comparison_only or exclude_primary. `int_validation_measure_windows` carried the PSI-90 and PSI-13 controls (E038, E039): they read the
-published IDs `PSI_90` and `PSI_13` (registry revision 3); the older `PSI_90_SAFETY` and `PSI_13_POST_SEPSIS` are not
-aliased.
-
-The alignment stage lines each staged source up with the hospital-year spine as of the HAI window start. It was built
-in silver at commit `e71779d` and moves to the feature phase under the October 10 2026 layer design (see [Architecture](#architecture)).
-`int_spine_hai_outcomes` (step AL1) has one row per spine hospital-window and infection type (HAI_1 CLABSI to HAI_6
-C. difficile): the published SIR, its bounds, the observed and predicted counts and the exposure, by exact measure ID,
-with tokens kept as text and the SIR footnote codes. No SIR is computed from the counts. A part from a release after the
-last 2015-baseline review (August 13 2026) is held and counted, so 2022-baseline SIRs never join the series; a part
-held in staging is counted too. Each row has an alignment status (aligned, held_in_staging, not_in_source), every part's
-footnote and the SIR's national benchmark category, which `int_hai_hospital_windows` keeps as published. Each type
-stays separate; the model target is chosen before training. `int_hai_outcome_values` carries the registry's HAI controls
-(C269 to C283 and C283's children) by the part `dbt/seeds/hai_outcome_measures.csv` (now `dbt/seeds/gold/hai_outcome_measures_bridge.csv`) names: C269 to C274 as target
-candidates and C275 to C280, the same SIRs, as earlier-outcome forecasting candidates.
-`int_spine_care_compare_measures` (step AL2) has one row per spine hospital-window and Care Compare process or structure
-control in `dbt/seeds/registry_measure_sources.csv` (now `dbt/seeds/gold/registry_measure_sources_bridge.csv`) (families S13 to S16). Each control takes the latest measure window
-that ends before the HAI window starts; the overall rating (C284, excluded from the primary predictors) takes the latest
-Hospital General Information release dated before the start, held when two files on that date disagree. Values stay as
-published with their age in months and no age limit. C141's spellings (for example `low` and `Low`) each map to one
-category. A test fails on any new spelling. A control that starts after a window (for example C161 to C173 from
-2024) is kept with the status `no_period_before_start`; the other statuses are aligned, held_in_staging and
-not_in_source.
-`int_spine_hospital_measures` (step AL3a) does the same for the hospital finance and operations controls, by source and
-field: the latest cost report whose period ends before the start (several reports ending that day are compared), the
-IPPS impact value of the latest rule fiscal year that ends before the start (October to September, the most final stage
-first), the latest Medicare inpatient data year and the latest occupational-mix survey. Values that disagree for one
-period are held and counted. Occupational-mix copies of one survey (text and workbook twins in several rule-year files)
-within 0.0001 of each other count as one value.
-`int_spine_operations_measures` (step AL3b) adds the operations controls as each registry field defines them: HHS capacity
-from the weeks of the calendar year before the window (a ratio of sums for two fields, a sum of 7-day sums or a mean of
-7-day averages; a week where two HHS hospitals share a CCN is skipped and counted), ONC certified-EHR status, developers
-and product count from the latest performance period, private-equity and REIT ownership from the latest owner release
-before the start (direct, indirect and partnership owners only; a blank is `not_reported`, never no). Changes of
-ownership count those in the year before the start, with the completed months since the latest one.
-`int_spine_validation_measures` (step AL5) places the validation outcomes (HAC and VBP program years, HRRP, unplanned
-visits and 30-day mortality) against each HAI window's own period, because they are compared with the window, never used
-to predict it: the published window equal to the calendar year first, otherwise the one with the largest overlap. HAC
-and VBP years are placed by the HAI measure period HAC publishes for each fiscal year. No model reads this table; an E2E
-check fails if one does.
-`int_spine_county_measures` (step AL4a) adds the county context from PLACES, Medicare Geographic Variation, CDC WONDER,
-Mapping Medicare Disparities and RUCC through the spine's county: the latest data year (RUCC vintage) that ends
-before the window starts. PLACES counts only all-state measure-years and takes the latest release of each data year;
-WONDER 2018 to 2020 come from the single-race database. Connecticut matches a source on its old county or its planning
-region.
-`int_spine_county_context` (step AL4b) adds ACS, SVI, SAIPE, SAHIE (all-group rows) and BLS (annual averages) by the same
-rule, HPSA and MUA designations in force at the window start (rebuilt from their designation and withdrawal dates, with
-the score as published at the capture; an undated withdrawal holds the window) and RUCA codes for the hospital ZIP.
-`int_spine_linkage` keeps the HUD residential share of the hospital ZIP and the hospital's service-area ZIPs and cases
-apart as linkage, never predictors.
-
-History is type 2 (SCD2), built in silver (under the October 10 2026 layer design the history method moves to the
-Feast phase and gold keeps the snapshot and release rows) and dated by the publishers' own dates, so a clean checkout rebuilds the
-same versions: `int_hospital_pos_history` (Provider of Services attributes per snapshot), `int_hospital_hgi_history`
-(Hospital General Information descriptions per release; the overall rating stays a measure) and
-`int_hospital_ownership_history` (organization owners only, by enrollment, owner and role, per release). The macro
-`features/macros/scd2.sql` starts a version when a tracked value changes or when a hospital or owner returns after a release
-without it; that release closes the earlier version. A release that lists one key twice with different values is held
-for that release. Some CMS owner and enrollment releases drop the leading zeros of the 10-digit associate IDs, so the
-row models pad them back and mark the row (`associate_ids_padded`). Ownership history bridges an owner missing from one
-release and counts it in `bridged_releases` (owner decision, October 10 2026). A held release is never bridged; POS and
-Hospital General Information history do not bridge. `features/tests/assert_history_versions_valid.sql` fails on overlapping windows or a
-second current version.
-
 ## Architecture
 
 ![Architecture diagram](docs/architecture/architecture.png)
 
-The diagram source is `docs/architecture/architecture.json`, drawn with
-[Archify](https://github.com/tt-a1i/archify) v3.0.1. Each component cites the
-lines of code or configuration it was checked against. Its `finalize` command validates the JSON, writes
-`docs/architecture/architecture.html` and checks it in Chrome; the PNG is
-rendered from the HTML with headless Chrome. Planned components are listed in
-the "Planned (not built)" card. With Archify unpacked at `<archify>`:
-
-```sh
-ARCHIFY_UPDATE_CHECK_DISABLED=1 node <archify>/bin/archify.mjs finalize architecture \
-  docs/architecture/architecture.json docs/architecture/architecture.html --repo-root . --quality showcase
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars \
-  --window-size=1600,1200 --virtual-time-budget=5000 \
-  --screenshot=docs/architecture/architecture.png "file://$PWD/docs/architecture/architecture.html"
-```
-
-`finalize` also writes receipt files beside the HTML; keep them out of Git.
+The diagram is drawn from `docs/architecture/architecture.json` with Archify, whose `finalize` command validates it and
+writes the HTML; the PNG is rendered from the HTML with headless Chrome. Planned components are marked as planned.
 
 **Layer design (owner decision, October 10 2026; silver and gold follow it; gold is built locally and not yet published).** The diagram shows the flow as built.
 
@@ -582,7 +171,7 @@ ARCHIFY_UPDATE_CHECK_DISABLED=1 node <archify>/bin/archify.mjs finalize architec
 | Gold | `dim_`, `fct_` and `bridge_` models: one fact per source process at its atomic grain, the conformed dimensions and the bridges | Iceberg namespace `gold` (publishing is a later stage; built locally as tables) |
 | Feature phase | The hospital-window entity and populations, the as-of alignment of each source and the ratios derived per registry control, computed from gold for Feast and training | Not stored in gold |
 
-The alignment models and the hospital-year spine described under Usage were built in silver; they and their checks
+The alignment models and the hospital-year spine were built in silver; they and their checks
 are saved in `features/` for the feature phase. The HCRIS cost reports are the CMS public use files for fiscal years 2011 to
 2023, all on form CMS-2552-10, so no form-version reconciliation is needed.
 
@@ -622,35 +211,15 @@ operational evidence and the detailed exception record remain untracked.
 The live S3 verification tool is the sole opt-in exception
 to synthetic-only verification. Normal CI does not run it or contact AWS.
 
-**Bronze lakehouse.** Bronze loads one copy of every stored data file as published, every value as text:
+Bronze loads one copy of every stored data file as published, every value as text. Each row carries its source,
+snapshot, S3 key, version and SHA-256; `bronze.stored_copies` lists every stored copy. Bronze leaves out objects removed
+from S3, other copies of a loaded file, a Care Compare contacts file that names state staff, audit copies, receipts and
+Office package parts.
 
-- CSV files keep their columns.
-- Text files keep one row per line.
-- Excel files keep one row per sheet row.
-- PDFs and Word documents keep their table rows and text.
-
-Every row carries its source, snapshot, S3 key, version and SHA-256. `bronze.stored_copies` lists every stored copy of
-each file with its lineage and whether it is loaded or retired. Each table's `bronze_dictionary` entry lists its
-columns with counts and the publisher's description or published type where a stored dictionary gives one. CMS Care
-Compare dictionaries give types only. Bronze does not load:
-
-- objects removed from S3, which the manifests still list (`config/lakehouse/retired_objects.json`, keys, versions and
-  checksums only): the privacy deletion and 2,193 byte-identical duplicate versions, each with a kept
-  twin verified first;
-- other copies of a file already loaded, which `bronze.stored_copies` lists;
-- a Care Compare contacts file that names state staff;
-- audit copies, receipts and Office package parts.
-
-Two HRSA detail files, stored under the dictionary role, have corrected manifests in S3 that give them the data role
-(`config/acquisition/manifest_corrections.json`, written by `scripts.acquisition.correct_manifest_roles`); the original
-manifests stay unchanged. Open gaps are tracked in the local issue register.
-
-[docs/data_collection.md](docs/data_collection.md) explains how every source was
-collected and how to recheck it, including the named manual data steps: terms
-acceptance, API accounts and the browser downloads (CMS Mapping Medicare
-Disparities exports, Census table exports, CDC WONDER county mortality exports
-and the 2010–2020 HUD ZIP-to-county workbooks). Its commands need the acquisition code in `scripts/acquisition/`
-and `config/acquisition/`, both tracked in Git. Registry revision 3 records the owner's six registry decisions of October 8 2026; revisions 1 and 2 keep their exact
+Every source was collected by the acquisition code in `scripts/acquisition/` and `config/acquisition/`, both tracked
+in Git, which can also recheck it. A few data steps are manual: terms acceptance, API accounts and the browser downloads
+(CMS Mapping Medicare Disparities exports, Census table exports, CDC WONDER county mortality exports and the 2010–2020
+HUD ZIP-to-county workbooks). Registry revision 3 records the owner's six registry decisions of October 8 2026; revisions 1 and 2 keep their exact
 legacy fingerprints for historic replay;
 `config/acquisition/legacy_versions.json` does the same for earlier plans and records; both private archives stay outside Git. The bounded publisher redownload (run 3) remains the final verification.
 
@@ -674,147 +243,12 @@ the staged index. The acquisition checks run in their own CI job and through
 their hook only when acquisition files change; run them directly before a release
 with `bash scripts/acquisition/run_checks.sh`.
 
-- **Secrets and credential files:** gitleaks scans the staged index; `.env`
-  (but not `.env.example`), Terraform state and saved plans, keys and cloud
-  credential files are blocked.
-- **Data files:** `.csv`, `.tsv`, `.parquet`, `.xlsx`, `.xls`, `.jsonl`,
-  `.ndjson`, `.avro`, `.db` and `.sqlite` files are allowed only in
-  `tests/fixtures/` for synthetic samples and in `dbt/seeds/` for the reviewed
-  dbt seeds (file labels and checksums from the S3 manifests, no source values). Any file over 5 MB is blocked
-  unless Git LFS stores it. Acquired data stays in S3 and ignored local folders.
-  Git LFS stores two acquisition config files over the limit,
-  `config/acquisition/source_registry.json` and
-  `config/acquisition/planning_v1/acquisition_plans_v1.json` (listed in
-  `.gitattributes`); a clone needs `git lfs install` to fetch them.
-- **Privacy scan:** every tracked or untracked non-ignored file, not only the
-  diff, is scanned for home-directory and machine temporary paths, email
-  addresses outside reserved domains (`example.invalid`, `.test`), phone
-  numbers, AWS account IDs (including those in ARNs) and values of identifying keys in `.env`.
-  Findings give file, line and type, never the value. Files that cannot be read
-  as text are listed as unreviewed; inspect them before publishing. Intentional
-  values go in `.privacy_allowlist` as `<type> <path glob> -- <reason>`,
-  matched by type and path only; an entry without a reason is itself a finding.
-  The synthetic account IDs in the Terraform, infrastructure and configuration
-  tests are listed there. The hook runs
-  `.venv/bin/python -m scripts.quality.repo_checks privacy-scan --all`, where
-  `--all` means the same scope: hidden files are scanned when Git does not
-  ignore them. Ignored files (such as the local `data/` folder) are never
-  scanned, because they cannot reach GitHub (`--warn` reports without failing).
-- **Writing check:** the prose of every tracked or untracked non-ignored
-  Markdown file (front matter, code spans and blocks, URLs and `tests/fixtures/`
-  excluded) is checked for a comma before a final "and", "or" or "nor" and for
-  ISO dates in prose, which are written as `Sep 30 2026`. It also blocks the time-bound
-  words `currently`, `recently`, `soon`, `eventually`, `as of this writing`,
-  `at present`, `in the future` and `for now`. Files declared with
-  `--articles <glob>` are also checked for em dashes. Exceptions go in
-  `.writing_allowlist` as `<type> <path glob> -- <reason>`; an entry without a
-  reason is itself a finding. It blocks: the existing prose was corrected before
-  each rule was enabled. Run it with
-  `.venv/bin/python -m scripts.quality.repo_checks writing-check` (`--warn`
-  reports without failing).
-- **Markdown syntax:** `markdownlint-cli2` checks every staged Markdown file
-  outside `data/` against the Conventional Docs baseline in
-  `.markdownlint-cli2.jsonc` (dash bullets, ATX headings, sequential numbered
-  lists, a language on every code fence). It blocks: a whole-project run was
-  clean when it was added.
-- **Front matter:** every Markdown document outside `data/`, except READMEs,
-  well-known files and `.github/` templates, starts with YAML front matter that
-  parses and holds `title` (equal to the H1), a `description` of at most 120
-  characters and `last_updated` as `YYYY-MM-DD`. It uses PyYAML, pinned in
-  `requirements.txt`. It blocks: a whole-project run was clean when it was added.
-- **Commit messages:** Conventional Commits and no AI attribution, checked in
-  the full message by the `commit-msg` hook and, in GitHub Actions, for every
-  pushed commit. AI credit and agent-session lines are rejected; human
-  co-authors and factual tool mentions are allowed. Detection uses an explicit
-  agent/vendor list, so new forms need a failing sample before the check is
-  extended. Review pull request text separately; a Git hook cannot read it.
-- **Docs match the code:** every environment variable the code reads is listed
-  in `.env.example` and every variable listed there is read by code, a script,
-  a workflow or a template. Local commits require an ignored `.documentation_review.json`, a per-document
-  review outcome bound to the staged snapshot. Draft it with
-  `.venv/bin/python -m scripts.quality.documentation_review prepare --reviewer <name> --reviewed-at <UTC>`
-  after staging, then fill each outcome and note locally. Read in full every changed or new document and every
-  unchanged one that the staged change affects. After a staged change, `prepare --refresh --carry-forward` keeps the
-  outcome of each document whose staged content is unchanged and whose earlier entry is valid, with the earlier
-  review time in its note; set it back to `pending` if the change affects it. Never stage
-  this record. The local hook validates its freshness against the index and rejects
-  tracked or unignored evidence. GitHub Actions checks that the record is untracked and ignored and runs
-  synthetic hook tests; it cannot verify the private local review itself.
-- **Removed names:** a name the staged change removes is no longer referenced:
-  a deleted script, a command-line flag, an environment variable, a top-level
-  Python function or class, a config key with `_`, `-` or camelCase, a Terraform
-  variable, output, module, resource or data source, a deleted dbt model or a
-  dependency that leaves every requirements file. Code names are searched in
-  code and config and in the code spans and fences of Markdown, not in prose;
-  `CHANGELOG.md` is history and is not searched. GitHub Actions runs the same
-  check over every pushed range. A reference that must stay goes in
-  `.cleanup_allowlist` as `<kind> <path glob> -- <reason>`; an entry without a
-  reason is itself a finding. It blocks: a replay over every earlier commit
-  found only deliberate references (a removed config key that the bronze loader
-  refuses by name).
-- **Unused code, dependencies and files:** vulture 2.16 (60%
-  confidence) reports functions, classes and variables nothing uses; deptry
-  0.25.1 reports requirements nothing imports and imports no requirements file
-  declares; `orphan-files` reports tracked files no other file names by path,
-  file name, folder or import (including `python -m`); tflint (`terraform_unused_declarations`, each
-  folder that holds a tracked `.tf` file) reports unused Terraform declarations. vulture and deptry are pinned
-  in `requirements.txt`. They block. deptry checks each runtime on its
-  own code and requirements, as `config/quality/dependency_runtimes.json` maps
-  them: the host (every file no other runtime claims), the review tools, the
-  Spark jobs, the analytics image and the SQLFluff tools (no project code). A
-  package a runtime gets outside pip, such as PySpark, is listed there with its
-  source. A hash-locked requirements file also pins transitive packages, so only
-  its missing imports are reported; a file two runtimes share reports a package
-  as unused only when neither imports it. Exceptions go in `.cleanup_allowlist` with a
-  reason, under the kinds `unused-code`, `unused-dependencies`, `orphan` and
-  `terraform-unused`; dbt's folder-loaded models and macros are listed there.
-  A name used in a way vulture cannot see (a parser callback, a pytest autouse
-  fixture, a field written out through `dataclasses.asdict`) goes in
-  `scripts/quality/vulture_whitelist.py`, one name per entry with its reason, so
-  the rest of its file is still checked. The whitelist also keeps one dead WONDER
-  constant until the next WONDER code version, because its file is in the
-  approved code hashes of 9 collectors. Run one check with
-  `.venv/bin/python -m scripts.quality.repo_checks unused-code` (`--warn`
-  reports without failing).
-- **Lint settings:** Ruff keeps rule sets `E`, `F`, `I`, `B`, `UP`, `S`, `SIM`
-  and `T20` at line length 160 with no ignore or exclude settings; MyPy keeps
-  `--check-untyped-defs` and `--disallow-untyped-defs`. The only allowed
-  suppression is Ruff `S603` in `scripts/process.py`, the one process launcher;
-  other scripts start programs through it and run as modules
-  (`.venv/bin/python -m scripts.quality.scan_secrets`). Tests use
-  `tests/support.py` `check()` instead of `assert`.
-
-**Acquisition checks** (`bash scripts/acquisition/run_checks.sh`) run Ruff, MyPy,
-registry validation, the acquisition regression tests and every offline E2E
-suite twice, with a 90% coverage gate that also counts collector command lines
-run as child processes. They take 12–14 minutes (up to 29 in CI), so they run only
-when acquisition code, configuration or their dependencies change: through the
-`acquisition-checks` pre-commit hook and in a separate GitHub Actions "Acquisition
-Checks" job (30-minute limit, LFS checkout, pinned Terraform). The CI job uses the
-hook's own path pattern through `scripts/acquisition/run_checks_ci.sh`, which also
-matches the CI workflow; a manual run, the first push of a branch or rewritten
-history runs every check. `bash scripts/acquisition/run_checks_ci_e2e.sh` tests
-that gate. CI runs on every push to any branch and on every pull request; each push gets its own run, so a newer
-push never cancels the check of an earlier range. They need no AWS credentials and no
-collected `data/`. Off macOS, the HUD workbook and WONDER suites substitute only the
-macOS browser-download metadata (the "downloaded from" attribute and file creation
-time); on a Mac the real reads run. When the private archive is absent (as in CI), the
-registry-additions suite skips its single legacy-archive check and the code-version suite its archived-original
-checks; both record the skips. Each gate run writes `run.json` beside the suite outcomes in `data/e2e/acquisition_checks/`
-with the seconds of every suite and a hash of the acquisition code and configuration; a change during the run fails it.
-`ACQUISITION_E2E_MODE=iteration` runs each offline suite once instead of twice for a faster loop and marks the run
-"not commit evidence"; the hook and CI always run the full mode. The coverage gate leaves out
-the tools in `scripts/acquisition/one_off/`, which ran once and are evidenced by their run records; a
-gate test loads every committed collector plan through its contract; it needs the collected `data/`, so CI
-skips it.
-
-Each check has a bad and a good sample run through the real `pre-commit` entry
-point (`scripts/quality/run_checks_e2e.py` and
-`scripts/quality/run_documentation_review_e2e.py`); both run in local CI.
-Every detection check was run on the whole repository before it was enabled,
-with no false positives, so they block from the start. The writing check blocked
-only after the existing prose was corrected. The unused code, dependency and file
-checks blocked only after their findings were deleted or listed with a reason. There are no bypasses:
+The checks cover secrets and credential files, data files (allowed only in `tests/fixtures/` and `dbt/seeds/`), a
+privacy scan of every non-ignored file, prose style, Markdown syntax, front matter, commit messages, documentation that
+matches the code, removed names, unused code, dependencies and files, lint settings and Docker calls outside the
+launcher. Each has a failing and a passing sample run in local CI. Local commits need an ignored
+`.documentation_review.json`, a per-document review bound to the staged snapshot
+(`.venv/bin/python -m scripts.quality.documentation_review prepare`). There are no bypasses:
 never use `SKIP=` or `git commit --no-verify`. If a check blocks a valid change,
 fix the check or ask the repository owner.
 
@@ -842,53 +276,10 @@ change that lifts both protections first. The bucket keeps its established name
 rather than the `<project>-<component>-<environment>` pattern, because renaming
 it would mean moving all stored data.
 
-**Environments.** Both stacks tag resources with `Environment = dev`. A `prod`
-environment and an `infra/modules/` layout are deferred until the next
-infrastructure component is added.
-
-**Lifecycle rules.** The bucket-wide rule, applied and read back from S3, aborts incomplete multipart uploads seven days after
-initiation, with no expiration or transition of completed objects, historical
-versions or delete markers. One exception covers only `lakehouse/`, where
-Iceberg replaces and deletes its own table files: replaced versions there expire
-30 days after they are replaced and orphaned delete markers are removed; current
-lakehouse files and everything outside `lakehouse/` never expire. Local mock-plan tests, source-shape checks and live
-configuration readback pass. The seven-day scheduler itself has not been
-observed in a timed test and no deliberately incomplete upload was created for
-verification.
-
-The project's IAM policy grants only bucket-scoped
-`s3:PutLifecycleConfiguration` for lifecycle changes; the storage stack
-holds only the rules above. IAM administration is used only for policy updates;
-storage deployment uses the project profile. This permission can change the
-bucket's entire lifecycle configuration, so future changes still require full
-plan review and preservation of existing rules. Private plans and live
-verification evidence remain untracked under
-`data/infrastructure/lifecycle_deployment/`.
-
-**Deferred controls.** Apply the project's engineering requirements when
-development reaches the relevant stage. Future requirements guide later work;
-deferral does not mean a control is implemented. The following
-acquisition-stage deferrals apply to `aws_s3_bucket.data` only. Checkov
-and trivy evidence retain each exception, resource and reason.
-
-| Deferred control | Reason | Review trigger |
-| --- | --- | --- |
-| Event notifications (`CKV2_AWS_62`) | No event consumer exists. | Implementing an event consumer. |
-| Cross-region replication (`CKV_AWS_144`) | Recovery objectives and a destination are not established. | Recovery design, before production. |
-| KMS (`CKV_AWS_145`, trivy `AWS-0132`) | Acquisition uses SSE-S3/AES256. | Coordinated ingestion and IAM migration, before production. |
-| Access logging (`CKV_AWS_18`, trivy `AWS-0089`) | Acquisition-stage deferral of a separate logging destination; the request-audit gap is accepted for this stage. | Before additional user or service access, production or new sensitive-data use. |
-
-Acquisition
-receipts establish pipeline provenance, not an independent record of every
-bucket request. Review CloudTrail data events alongside server access logging
-when a review trigger is reached. Server access logs are best-effort, not a
-complete audit trail ([AWS documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/ServerLogs.html)).
-
-Existing AES256 encryption, private access, versioning and destruction
-protection are preserved. Synthetic E2E checks verify that the four exceptions
-do not suppress other resources or the versioning control. Passing static
-checks with these exceptions does not establish that deferred controls exist.
-No AWS changes implementing these four deferred controls have been applied.
+Both stacks tag resources `Environment = dev`. The bucket's lifecycle rule aborts incomplete multipart uploads after
+seven days; under `lakehouse/` replaced versions expire 30 days after they are replaced. Current lakehouse files and everything
+outside `lakehouse/` never expire. Event
+notifications, cross-region replication, KMS encryption and access logging are deferred until their review triggers.
 
 ## Repository Layout
 
@@ -905,6 +296,9 @@ No AWS changes implementing these four deferred controls have been applied.
   in `dbt/models/gold/` with the `gold_fact` macro, seeds, tests and the locked packages) and its SQL style.
 - `scripts/review/`, `requirements-review.txt`: the schema-review tools and their hash-pinned packages.
 - `docs/data_collection.md`: how the source data was collected and how to recheck it.
+- `docs/install_details.md`, `docs/lakehouse_usage.md`, `docs/staging_models.md`, `docs/feature_phase_saved.md`,
+  `docs/quality_checks.md`, `docs/infrastructure_controls.md` and `docs/architecture_rendering.md`: the detail behind
+  the README's sections.
 - `docs/acquisition_design.md`: what each collector and shared acquisition mechanism checks and which failure each check prevents.
 - `docs/issue_register.md`: the project's single issue register, kept local-only (Git-ignored).
 - `docs/project_guide.md`: the project's target design with each section's build status, kept local-only (Git-ignored).
@@ -916,8 +310,8 @@ No AWS changes implementing these four deferred controls have been applied.
   check and its E2E, the measure-ID domain generator and the MMD units writer; the table map, the retired and removed
   lists and the reviewed label overrides.
 - `services/`, `docker-compose.yaml`: the Polaris catalog, Spark job, DuckDB analytics and Great Expectations quality containers.
-- `data_contracts/great_expectations/`: the silver validation suites with their reviewed baselines; `gold/` holds the gold
-  suites generated from the gold contract.
+- `data_contracts/great_expectations/`: the silver validation suites with their baselines (approved values and proposed
+  bands); `gold/` holds the gold suites generated from the gold contract.
 - `data_contracts/lakehouse/`: the silver column contract the package fixture kit reads and the gold contract the bridge
   reference check reads.
 - `dbt/seeds/gold/`: the gold control bridge seeds and the reference seeds their tests read.
@@ -944,30 +338,17 @@ run on synthetic inputs; a clean checkout cannot replay stored captures, which n
 the ignored local originals and the private legacy registry archive.
 Nothing in S3 is approved for modeling: definitions, geography and modeling
 reviews remain open. Raw personal-data retention remains a separate unresolved
-control. The deferred controls above are not implemented.
+control. The deferred storage controls (event notifications, cross-region replication, KMS encryption and access
+logging) are not implemented.
 
 The lakehouse runs on one Mac against the project bucket; it is not a deployed service. Bronze holds raw text only and
-loads one copy per stored file. Staging covers the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital
-General Information, ownership, Medicare inpatient, HHS capacity, ONC, Care Compare timely and effective care, maternal health and HCAHPS
-tables, the geography tables (HUD ZIP-to-county, county adjacency, RUCC, RUCA and hospital service areas), the ACS and SVI
-tables, SAIPE, SAHIE, BLS, PLACES, Medicare Geographic Variation, WONDER, MMD and the HRSA HPSA and MUA files. It types the
-HAI and Care Compare windows, the geography files, the ACS, SVI, SAIPE, SAHIE, BLS, PLACES, geographic variation, WONDER
-and MMD values, the HPSA and MUA designations, the group D validation windows (unplanned visits, complications and
-deaths, readmissions reduction) and HAC Reduction and VBP program years, the occupational-mix surveys, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services hospital snapshots, Hospital General Information and the case-mix
-index. The Medicare sepsis share counts only published DRG cells (11 discharges or more), so it can be low for small
-hospitals; the Medicare chronic-condition shares start with data year 2017. Each change-of-ownership release lists
-events back to 2016; silver keeps each event once from its latest release and holds the other releases' rows that
-differ or repeat (`int_change_of_ownership_holds`). An enrollment or
-change-of-ownership value with a location suffix, a lost leading zero or a unit letter maps to its parent CCN when POS
-lists exactly one such parent in the row's state (`ccn_source`); any other value keeps no CCN. An HHS facility without a
-CCN gets one only from the reviewed matches in `dbt/seeds/hhs_reviewed_ccn_matches.csv`. Registry revision 3 closes the HHS
-part of controls C001 and C040, so the HHS columns are staged but not mapped to them. The derived values and registry
-mappings that silver used to carry (for example the occupational-mix shares and the MMD and ACS control maps) have left
-silver: the formulas are saved in `features/` and the control maps are gold bridge seeds. Gold tables are built locally but not yet published to the Iceberg `gold` namespace; no model tables exist. The
-gold E2E's expression-policy findings are reported without counting toward its verdict. The bronze, staging and gold
-E2E runs use Docker and are not part of the local CI script. The final publisher redownload (run 3) has its queue built and checked
-offline. Its first part finished 43 sources; the second (ACS, BLS, HUD and WONDER) waits on its independent review and
-the owner's browser downloads.
+loads one copy per stored file. Gold tables are built locally but not yet published to the Iceberg `gold` namespace;
+no model tables exist. The gold E2E's expression-policy findings are reported without counting toward its verdict. The
+bronze, staging and gold E2E runs use Docker and are not part of the local CI script. The final publisher redownload
+(run 3) has its queue built and checked offline. Its first part finished 43 sources; the second (ACS, BLS, HUD and
+WONDER) waits on its independent review and the owner's browser downloads. Some measures have source
+limits: the Medicare sepsis share counts only published DRG cells (11 discharges or more), so it can be low for small
+hospitals. The Medicare chronic-condition shares start with data year 2017.
 
 ## Contributing
 

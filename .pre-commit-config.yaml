@@ -134,6 +134,11 @@ repos:
         entry: .venv/bin/python -m scripts.quality.repo_checks subprocess-imports
         language: system
         types: [python]
+      - id: docker-calls
+        name: Docker is called only by the launcher
+        entry: .venv/bin/python -m scripts.quality.docker_calls
+        language: system
+        types_or: [python, shell]
       - id: test-checks
         name: Each check blocks its bad sample and passes its good one
         entry: .venv/bin/python -m scripts.quality.run_checks_e2e

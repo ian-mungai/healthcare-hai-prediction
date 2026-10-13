@@ -1,11 +1,14 @@
 """Validate the silver build file with Great Expectations before it is published (silver step 6).
 
 Runs inside the quality image (``hai-quality``), started by ``scripts/lakehouse/silver.py validate``. It opens the build
-file read-only, checks the build marker, compiles the committed JSON suites into Great Expectations objects in an
-ephemeral context, validates every table in the database (SQL pushdown) and writes one result with counts only: no
-data value leaves the build file. Failure modes 639 to 651 and 713 in plans/silver_processed_zone_20261009/plan.md.
+file read-only, checks the build marker, compiles the committed JSON suites of every folder it is given (the silver
+atomic suites and the gold suites) into Great Expectations objects in one ephemeral context, validates every table the
+suites name (SQL pushdown) and writes one result with counts only: no data value leaves the build file. A table a suite
+names but the build lacks is a structural failure of its expectations, not a crash. A band under ``proposed_values`` in the
+baselines file only warns until the owner moves it to ``values``. Failure modes 639 to 651 and 713 in
+plans/silver_processed_zone_20261009/plan.md and 853 to 857 in plans/wp/r3_failure_modes.md.
 
-    python -m scripts.lakehouse.silver_quality --database BUILD --suites DIR --baselines FILE --output FILE
+    python -m scripts.lakehouse.silver_quality --database BUILD --suites DIR [DIR ...] --baselines FILE --output FILE
 """
 
 from __future__ import annotations
@@ -84,43 +87,68 @@ def fingerprints(database: Path, tables: list[str]) -> dict[str, dict[str, Any]]
     return out
 
 
-def resolve(value: Any, baselines: dict[str, Any]) -> Any:
-    """Replace <<name>> placeholders with baseline values; an unknown name stops the run [644]."""
+def resolve(value: Any, baselines: dict[str, Any], used: set[str]) -> Any:
+    """Replace <<name>> placeholders with baseline values and record each name used; an unknown name stops the run [644]."""
     if isinstance(value, dict):
-        return {key: resolve(item, baselines) for key, item in value.items()}
+        return {key: resolve(item, baselines, used) for key, item in value.items()}
     if isinstance(value, list):
-        return [resolve(item, baselines) for item in value]
+        return [resolve(item, baselines, used) for item in value]
     if not isinstance(value, str):
         return value
+
+    def lookup(name: str) -> Any:
+        if name not in baselines:
+            raise QualityError(f"baseline {name} is not in baselines.json")
+        used.add(name)
+        return baselines[name]
+
     whole = PLACEHOLDER.fullmatch(value)
     if whole:
-        if whole[1] not in baselines:
-            raise QualityError(f"baseline {whole[1]} is not in baselines.json")
-        return baselines[whole[1]]
-
-    def text(match: re.Match[str]) -> str:
-        if match[1] not in baselines:
-            raise QualityError(f"baseline {match[1]} is not in baselines.json")
-        return str(baselines[match[1]])
-
-    return PLACEHOLDER.sub(text, value)
+        return lookup(whole[1])
+    return PLACEHOLDER.sub(lambda match: str(lookup(match[1])), value)
 
 
-def load_suites(folder: Path, baselines: dict[str, Any]) -> list[dict[str, Any]]:
-    """Read every suite file; each expectation names its table, Great Expectations class, arguments and severity."""
+def read_baselines(document: dict[str, Any]) -> tuple[dict[str, Any], frozenset[str]]:
+    """The approved ``values`` and the ``proposed_values`` awaiting the owner as one lookup, plus the proposed names [856]."""
+    approved, proposed = document["values"], document.get("proposed_values", {})
+    if both := sorted(set(approved) & set(proposed)):
+        raise QualityError(f"baseline names are both approved and proposed: {', '.join(both)}")
+    return {**approved, **proposed}, frozenset(proposed)
+
+
+def load_suites(folders: list[Path], baselines: dict[str, Any], proposed: frozenset[str]) -> list[dict[str, Any]]:
+    """Read every suite file of every folder; each expectation names its table, Great Expectations class, arguments and severity.
+
+    ``bands`` lists the proposed baseline names an expectation uses. A proposal can only warn, so a structural expectation may not use one [856].
+    """
     entries = []
-    for path in sorted(folder.glob("*.json")):
-        suite = json.loads(path.read_text())
-        for item in suite["expectations"]:
-            if set(item) != {"id", "table", "type", "kwargs", "severity"} or item["severity"] not in SEVERITIES:
-                raise QualityError(f"{path.name}: {item.get('id')} needs exactly id, table, type, kwargs and a known severity")
-            if not hasattr(gxe, item["type"]):
-                raise QualityError(f"{path.name}: unknown expectation type {item['type']}")
-            entries.append({**item, "suite": suite["name"], "kwargs": resolve(item["kwargs"], baselines)})
+    for folder in folders:
+        files = sorted(folder.glob("*.json"))
+        if not files:
+            raise QualityError(f"suites folder {folder.name} holds no suite file")
+        for path in files:
+            suite = json.loads(path.read_text())
+            for item in suite["expectations"]:
+                if set(item) != {"id", "table", "type", "kwargs", "severity"} or item["severity"] not in SEVERITIES:
+                    raise QualityError(f"{path.name}: {item.get('id')} needs exactly id, table, type, kwargs and a known severity")
+                if not hasattr(gxe, item["type"]):
+                    raise QualityError(f"{path.name}: unknown expectation type {item['type']}")
+                used: set[str] = set()
+                kwargs = resolve(item["kwargs"], baselines, used)
+                bands = sorted(used & proposed)
+                if bands and item["severity"] != "distribution":
+                    raise QualityError(f"{path.name}: {item['id']} is structural and uses the proposed baseline {bands[0]}")
+                entries.append({**item, "suite": suite["name"], "kwargs": kwargs, "bands": bands})
     ids = [entry["id"] for entry in entries]
     if len(ids) != len(set(ids)):
         raise QualityError("expectation ids repeat across suites")
     return entries
+
+
+def existing_tables(database: Path) -> set[str]:
+    """Names of the tables and views in the build file's main schema, read-only."""
+    with duckdb.connect(str(database), read_only=True, config=engine_config()) as con:
+        return {row[0] for row in con.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").fetchall()}
 
 
 def counts_only(result: dict[str, Any]) -> dict[str, Any]:
@@ -134,13 +162,30 @@ def counts_only(result: dict[str, Any]) -> dict[str, Any]:
     return kept
 
 
-def validate(database: Path, suites: Path, baselines_path: Path) -> dict[str, Any]:
-    """Validate every expectation and return the run record."""
+def table_missing(entry: dict[str, Any]) -> dict[str, Any]:
+    """The result of an expectation whose table the build lacks: a structural failure that names the table [853]."""
+    return {
+        "id": entry["id"],
+        "suite": entry["suite"],
+        "table": entry["table"],
+        "type": entry["type"],
+        "severity": entry["severity"],
+        "level": "fail",
+        "raised_exception": False,
+        "table_missing": True,
+    }
+
+
+def validate(database: Path, suites: list[Path], baselines_path: Path) -> dict[str, Any]:
+    """Validate every expectation of every suite folder and return the run record."""
     keep_connection()
     marker = read_marker(database)
     baselines_doc = json.loads(baselines_path.read_text())
-    entries = load_suites(suites, baselines_doc["values"])
-    tables = sorted({entry["table"] for entry in entries})
+    values, proposed = read_baselines(baselines_doc)
+    entries = load_suites(suites, values, proposed)
+    named = sorted({entry["table"] for entry in entries})
+    present = existing_tables(database)
+    tables = [table for table in named if table in present]
     # Taken before Great Expectations opens the file: it keeps its own connection for the whole run.
     read = fingerprints(database, tables)
     context = gx.get_context(mode="ephemeral")
@@ -151,13 +196,21 @@ def validate(database: Path, suites: Path, baselines_path: Path) -> dict[str, An
     approved = baselines_doc.get("approved") is True
     results = []
     for entry in entries:
-        expectation = getattr(gxe, entry["type"])(**entry["kwargs"])
+        if entry["table"] not in batches:
+            results.append(table_missing(entry))
+            continue
+        try:
+            expectation = getattr(gxe, entry["type"])(**entry["kwargs"])
+        except ValueError as error:
+            # A band whose minimum is above its maximum is a baseline fault, not a failed build [856].
+            raise QualityError(f"{entry['id']}: invalid arguments: {str(error).splitlines()[0]}") from error
         outcome = batches[entry["table"]].validate(expectation)
         raised = bool(outcome.exception_info and outcome.exception_info.get("raised_exception")) or any(
             isinstance(info, dict) and info.get("raised_exception") for info in (outcome.exception_info or {}).values()
         )
-        # A distribution band only warns until the owner approves the baselines (decision D6) [645].
-        level = "pass" if outcome.success and not raised else ("warn" if entry["severity"] == "distribution" and not approved else "fail")
+        # A distribution band warns until the owner approves the baselines (decision D6); a proposed band warns until it joins ``values`` [645] [856].
+        warns = entry["severity"] == "distribution" and (not approved or bool(entry["bands"]))
+        level = "pass" if outcome.success and not raised else ("warn" if warns else "fail")
         results.append(
             {
                 "id": entry["id"],
@@ -167,6 +220,7 @@ def validate(database: Path, suites: Path, baselines_path: Path) -> dict[str, An
                 "severity": entry["severity"],
                 "level": level,
                 "raised_exception": raised,
+                **({"proposed_bands": entry["bands"]} if entry["bands"] else {}),
                 **counts_only(outcome.result),
             }
         )
@@ -175,7 +229,9 @@ def validate(database: Path, suites: Path, baselines_path: Path) -> dict[str, An
         "great_expectations": gx.__version__,
         "duckdb": duckdb.__version__,
         "marker": marker,
-        "baselines": {"revision": baselines_doc.get("revision"), "approved": approved},
+        "baselines": {"revision": baselines_doc.get("revision"), "approved": approved, "proposed": len(proposed)},
+        "suites": {name: sum(1 for item in results if item["suite"] == name) for name in sorted({item["suite"] for item in results})},
+        "missing_tables": [table for table in named if table not in present],
         "tables": read,
         "expectations": results,
         "counts": {level: sum(1 for item in results if item["level"] == level) for level in ("pass", "warn", "fail")},
@@ -185,7 +241,7 @@ def validate(database: Path, suites: Path, baselines_path: Path) -> dict[str, An
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--database", type=Path, required=True)
-    parser.add_argument("--suites", type=Path, required=True)
+    parser.add_argument("--suites", type=Path, nargs="+", required=True, help="one or more suite folders (silver atomic, gold)")
     parser.add_argument("--baselines", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

@@ -37,7 +37,6 @@ import csv
 import hashlib
 import io
 import json
-import os
 import re
 import secrets
 import shutil
@@ -51,15 +50,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse import catalog, geography_file_periods, ipps_file_labels, memory_budget, mmd_conditions, ownership_release_periods, pos_file_periods
-from scripts.process import run_command
+from orchestration import launcher
+from scripts.lakehouse import catalog, geography_file_periods, ipps_file_labels, mmd_conditions, ownership_release_periods, pos_file_periods
 
 REPO_ROOT = catalog.REPO_ROOT
 OUT = REPO_ROOT / "data/analytics/dbt"
 CASES = OUT / "e2e"
 REPORTS = REPO_ROOT / "data/e2e/staging"
-# The memory budget each real build ran with, recorded in the report [463].
+# The allocation record each launch ran under, recorded in the report [463].
 BUDGETS: list[dict[str, Any]] = []
+# The test registry a test of this runner passes; the real run never sets it.
+TEST_REGISTRY: str | None = None
 CONTAINER_OUT = "/workspace/out"
 TIMEOUT = 7200
 TABLES = (
@@ -4544,89 +4545,62 @@ def unprefixed(rows: list[list[str]], prefix: str) -> dict[str, list[str]]:
     return {row[0].removeprefix(prefix): row[1:] for row in rows}
 
 
-class CasePool:
-    """Parallel fixture builds: one memory and CPU reading split into equal shares, and admission per launch [687] [688].
+@dataclass
+class Allocation:
+    """The launcher client and the allocation the current launches run under; the fixture pool holds one for its workers."""
 
-    Every pooled container is capped at its share (Compose mem_limit), and a launch waits while the memory Docker and
-    the Mac can give, plus what this pool's running containers use, is below one share for each running container and
-    the new one; containers other projects start during the run are therefore counted [687].
-    """
+    client: launcher.LauncherClient
+    allocation: str
+    workers: int
 
-    def __init__(self, workers: int, plan: memory_budget.LaunchPlan) -> None:
-        self.workers = workers
-        self.share = plan.budget.free // workers
-        self.threads = max(1, plan.threads // workers)
-        self.prefix = f"hai-staging-e2e-{os.getpid()}"
-        self.lock = threading.Lock()
-        self.running = 0
-        self.launches = 0
-        self.environment = {
-            **plan.environment(),
-            "JOB_MEMORY_LIMIT": str(self.share),
-            "DUCKDB_MEMORY_LIMIT": f"{(self.share * 4 // 5) // 1000**3}GB",
-            "JOB_THREADS": str(self.threads),
-        }
-
-    def own_usage(self) -> int:
-        """Return the memory this pool's running containers use now."""
-        lines = memory_budget.docker("stats", "--no-stream", "--format", "{{.Name}} {{.MemUsage}}").splitlines()
-        return sum(memory_budget.parse_size(line.split(" ", 1)[1].split("/")[0]) for line in lines if line.startswith(self.prefix))
-
-    def admit(self) -> tuple[str, dict[str, Any]]:
-        """Wait until one more share fits, then reserve it and return the container name and the launch record."""
-        while True:
-            with self.lock:
-                try:
-                    free = memory_budget.current().free
-                except memory_budget.BudgetError:
-                    if self.running == 0:
-                        raise
-                    free = 0
-                if free + self.own_usage() - self.running * self.share >= self.share or self.running == 0 and free >= self.share:
-                    self.running += 1
-                    self.launches += 1
-                    record = {"launch": self.launches, "share": self.share, "threads": self.threads, "free_at_launch": free}
-                    return f"{self.prefix}-{self.launches}", record
-            time.sleep(5)
-
-    def release(self) -> None:
-        with self.lock:
-            self.running -= 1
-
-    def stop_containers(self) -> list[str]:
-        """Stop this pool's containers only, never another project's or another run's [692]."""
-        names = [name for name in memory_budget.docker("ps", "--format", "{{.Names}}").split() if name.startswith(self.prefix)]
-        for name in names:
-            run_command("docker", ["stop", name], timeout=120)
-        return names
+    @property
+    def principal(self) -> dict[str, Any]:
+        """The allocation principal."""
+        return self.client.principal_alloc(self.allocation)
 
 
-POOL: CasePool | None = None
+POOL: Allocation | None = None
+# Set when the pool is interrupted: running workers make no further launch while the pool's attempts are cancelled.
+INTERRUPTED = threading.Event()
 # Seconds each fixture case took to build, for the report [694].
 CASE_SECONDS: dict[str, float] = {}
+FLOOR = 4 * 1024**3
 
 
-def compose_run(service_args: list[str], extra_env: dict[str, str]) -> tuple[int, str, str]:
-    """Run one container of the analytics-dbt service and return its exit code and output; inside the case pool, with its share."""
-    case = extra_env.get("STAGING_E2E_CASE", "query_or_setup")
+def launcher_client() -> launcher.LauncherClient:
+    """A client of the launcher (the real registry, or the test registry of a test)."""
+    return launcher.load_client(TEST_REGISTRY)
+
+
+def case_paths(case: str) -> dict[str, str]:
+    """The host folder of a fixture case and the container path the launcher mounts it at."""
+    return {"case_host": str((CASES / case).resolve()), "case_container": f"{CONTAINER_OUT}/e2e/{case}"}
+
+
+def record_budget(case: str, client: launcher.LauncherClient, allocation: str) -> None:
+    """Keep the allocation's plan with the case it served, for the report [463] [694]."""
+    record = client.call("status", {"what": "allocation", "id": allocation}, client.principal_alloc(allocation))["record"]
+    BUDGETS.append({"case": case, "launch": len(BUDGETS) + 1, **record})
+
+
+def launch(template: str, launch_id: str, args: list[str], params: dict[str, Any], case: str = "query_or_setup") -> launcher.AttemptResult:
+    """Run one attempt of a fixture template under the pool's allocation, or under one taken for this launch, to its end."""
+    if INTERRUPTED.is_set():
+        raise RuntimeError("the fixture pool was interrupted; no further launches")
     pool = POOL
-    if pool is None:
-        plan = memory_budget.launch_plan()
-        environment, name, record = plan.environment(), None, plan.record()
-    else:
-        name, record = pool.admit()
-        environment = pool.environment
-    extra_env = {**extra_env, **environment}
-    BUDGETS.append({"case": case, **record})
-    env_flags = [flag for item, value in extra_env.items() for flag in ("-e", f"{item}={value}")]
-    args = ["compose", "--project-directory", str(REPO_ROOT), "-f", str(REPO_ROOT / "docker-compose.yaml"), "--env-file", str(catalog.COMPOSE_ENV)]
-    args += ["--profile", "query", "run", "--rm", "--no-deps", "-T", "--quiet-pull", *(["--name", name] if name else []), *env_flags, *service_args]
+    client = pool.client if pool is not None else launcher_client()
+    allocation = pool.allocation if pool is not None else client.allocate()
     try:
-        result = run_command("docker", args, cwd=REPO_ROOT, env={**catalog.system_environment(), **environment}, timeout=TIMEOUT)
+        if pool is None:
+            record_budget(case, client, allocation)
+        return client.run_attempt(
+            client.principal_alloc(allocation), template, f"{launch_id}-{secrets.token_hex(4)}", args, params, checkout=REPO_ROOT, seconds=TIMEOUT
+        )
+    except launcher.ClientError as error:
+        raise RuntimeError(f"the launcher refused {template}: {error}") from error
     finally:
-        if pool is not None:
-            pool.release()
-    return result.returncode, result.stdout, result.stderr
+        if pool is None:
+            client.release_allocation(allocation)
 
 
 DBT_SNAPSHOT = CASES / "_dbt_snapshot"
@@ -4654,7 +4628,7 @@ def build_cases(jobs: list[tuple[str, tuple[Stored, ...], frozenset[str]]], work
     """Build every fixture case, in a pool when there is room for two or more workers, and return each result or error.
 
     The checks run afterwards, in their own order, so the outcome does not depend on which build ends first [690]. One
-    failed case is recorded against itself and the others continue [691]; an interrupt stops this pool's containers [692].
+    failed case is recorded against itself and the others continue [691]; an interrupt cancels this pool's attempts [692].
     """
     global POOL
     names = [case for case, _objects, _unlabelled in jobs]
@@ -4674,24 +4648,43 @@ def build_cases(jobs: list[tuple[str, tuple[Stored, ...], frozenset[str]]], work
         error = future.exception()
         return error if error is not None else future.result()
 
-    plan = memory_budget.launch_plan()
-    count = min(workers, plan.threads, plan.budget.free // memory_budget.FLOOR)
-    if count < 2:
-        with ThreadPoolExecutor(max_workers=1) as serial:
-            futures = {job[0]: serial.submit(one, job) for job in jobs}
-            return {case: outcome(future) for case, future in futures.items()}
-    POOL = CasePool(count, plan)
-    executor = ThreadPoolExecutor(max_workers=count)
+    client = launcher_client()
     try:
+        plan = client.call("plan")
+        count = min(workers, int(plan["threads"]), int(plan["environment"]["JOB_MEMORY_LIMIT"]) // FLOOR)
+        if count < 1:
+            raise RuntimeError("the plan holds too little memory for one worker")
+        allocation = client.allocate(workers=count)
+    except launcher.ClientError as error:
+        raise RuntimeError(f"no allocation for the fixture cases: {error}") from error
+    POOL = Allocation(client, allocation, count)
+    executor = ThreadPoolExecutor(max_workers=count)
+    cancellation_persisted = True
+    try:
+        record_budget("pool", client, allocation)
         futures = {job[0]: executor.submit(one, job) for job in jobs}
         return {case: outcome(future) for case, future in futures.items()}
     except BaseException:
-        executor.shutdown(wait=False, cancel_futures=True)
-        POOL.stop_containers()
+        # An interrupt: persist the cancel of every open attempt of the pool first, so the workers' waits end, then join them.
+        INTERRUPTED.set()
+        cancellation_persisted = False
+        try:
+            client.cancel_open()
+            cancellation_persisted = True
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
         raise
     finally:
-        executor.shutdown(wait=True)
+        executor.shutdown(wait=cancellation_persisted)
         POOL = None
+        INTERRUPTED.clear()
+        if client.cancel_unresolved.is_set():
+            # A worker gave up on an unreachable launcher after the cancellations persisted: fail visibly and keep the allocation.
+            raise launcher.ClientError("the pool's cleanup is unresolved; admission retained; see pool_cancel_unresolved.json", "cleanup_unresolved")
+        # Attempts left open by an interrupt are cancelled by the launcher when this process, the holder, ends; a refused release is not an error.
+        if cancellation_persisted:
+            with contextlib.suppress(launcher.ClientError):
+                client.release_allocation(allocation)
 
 
 def built(results: dict[str, tuple[int, dict[str, str]] | BaseException], case: str) -> tuple[int, dict[str, str]]:
@@ -4703,19 +4696,51 @@ def built(results: dict[str, tuple[int, dict[str, str]] | BaseException], case: 
 
 
 def duckdb_csv(database: str, sql: str, init: str | None = None) -> list[list[str]]:
-    """Query a database in the case folder with the DuckDB CLI and return the rows without the header."""
-    init_flags = ["-cmd", ".read /opt/analytics/resources.sql", *(["-init", init] if init else [])]
-    code, stdout, stderr = compose_run(["--entrypoint", "duckdb", "analytics-dbt", database, *init_flags, "-csv", "-noheader", "-c", sql], {})
-    if code:
-        raise RuntimeError(f"duckdb query failed: {stderr.strip().splitlines()[-1:] or ['no output']}")
-    return [row for row in csv.reader(io.StringIO(stdout)) if row]
+    """Query a database with the DuckDB CLI and return the rows without the header: a fixture case's file or the open real run's build file,
+    each read-only with no network."""
+    if database.startswith(f"{CONTAINER_OUT}/e2e/"):
+        case = database.split("/")[4]
+        params: dict[str, Any] = {
+            "mounts": [{"host": str((CASES / case).resolve()), "container": f"{CONTAINER_OUT}/e2e/{case}"}],
+            "database": database,
+            "sql": sql,
+        }
+        if init:
+            params["init"] = init
+        result = launch("duckdb_helper", "query", [], params, case)
+    else:
+        result = real_query(database, sql)
+    if not result.ok:
+        raise RuntimeError(f"duckdb query failed: {result.stderr.strip().splitlines()[-1:] or ['no output']}")
+    return [row for row in csv.reader(io.StringIO(result.stdout)) if row]
+
+
+# The real run whose build file the real stage reads; set while a run is open (pinned_run).
+CURRENT_RUN: dict[str, str] = {}
+
+
+def real_query(database: str, sql: str) -> launcher.AttemptResult:
+    """Read the open real run's build file read-only with no network: an attempt of ``duckdb_helper`` with the run's folder as its only mount."""
+    run_id = CURRENT_RUN.get("id")
+    if not run_id or not database.startswith(f"{CONTAINER_OUT}/"):
+        raise RuntimeError(f"{database} is not the build file of an open real run")
+    client = launcher_client()
+    allocation = client.allocate()
+    principal = client.principal_alloc(allocation)
+    try:
+        params = {"mounts": [{"host": str((RUNS / run_id).resolve()), "container": CONTAINER_OUT}], "database": database, "sql": sql}
+        return client.run_attempt(principal, "duckdb_helper", f"real-{secrets.token_hex(4)}", [], params, checkout=REPO_ROOT)
+    finally:
+        client.release_allocation(allocation)
 
 
 def install_packages() -> None:
-    """Install the dbt packages from dbt/package-lock.yml into the output mount; the project mount stays read-only."""
-    code, stdout, stderr = compose_run(["analytics-dbt", "deps"], {})
-    if code:
-        raise SystemExit(f"dbt deps failed ({code}): {(stdout + stderr)[-2000:]}")
+    """Install the dbt packages from dbt/package-lock.yml into the shared package folder; the project mount stays read-only."""
+    packages = OUT / "dbt_packages"
+    packages.mkdir(parents=True, exist_ok=True)
+    result = launch("dbt_deps", "deps", ["deps"], {"packages_host": str(packages.resolve())})
+    if not result.ok:
+        raise SystemExit(f"dbt deps failed ({result.exit_code}): {(result.stdout + result.stderr)[-2000:]}")
 
 
 # Amendment A42: the gold release copy-consistency test warns by design (stored copies of one file can carry different release labels). Only
@@ -4729,14 +4754,27 @@ def node_passes(name: str, status: str) -> bool:
 
 
 def dbt_build(case: str, target: str, project: bool = False) -> tuple[int, dict[str, str]]:
-    """Run dbt build for a case, on its own project copy when asked, and return the exit code and each node's status."""
-    case_dir = f"{CONTAINER_OUT}/e2e/{case}"
-    env = {"STAGING_E2E_CASE": case_dir, "DBT_TARGET_PATH": f"{case_dir}/target", "DBT_LOG_PATH": f"{case_dir}/logs"}
-    flags = ["--project-dir", f"{case_dir}/project", "--profiles-dir", f"{case_dir}/project"] if project else []
-    # A build that dies leaves no results of its own; never read the previous run's.
-    (CASES / case / "target/run_results.json").unlink(missing_ok=True)
-    code, _, _ = compose_run(["analytics-dbt", "build", "--target", target, *flags], env)
-    results_path = CASES / case / "target/run_results.json"
+    """Run dbt build for a case and return the exit code and each node's status: a fixture case on its own project copy (``fixture_dbt``), or a
+    real build of the open run (``real_dbt``)."""
+    if target == "fixture":
+        if not project:
+            raise RuntimeError("a fixture build runs on the case's own project copy")
+        results_path = CASES / case / "target/run_results.json"
+        # A build that dies leaves no results of its own; never read the previous run's.
+        results_path.unlink(missing_ok=True)
+        result = launch("fixture_dbt", f"build-{case}", ["build"], {**case_paths(case), "packages_host": str((OUT / "dbt_packages").resolve())}, case)
+    else:
+        run_id = CURRENT_RUN.get("id")
+        if not run_id:
+            raise RuntimeError("a real build needs an open real run")
+        client = launcher_client()
+        results_path = RUNS / run_id / "target/run_results.json"
+        results_path.unlink(missing_ok=True)
+        try:
+            result = client.run_attempt(client.principal_run(run_id), "real_dbt", f"build-{case}", ["build"], {}, checkout=REPO_ROOT)
+        except launcher.ClientError as error:
+            raise RuntimeError(f"the launcher refused the real build: {error}") from error
+    code = result.exit_code if result.exit_code is not None else 1
     if not results_path.exists():
         return code, {}
     results = json.loads(results_path.read_text())
@@ -4786,21 +4824,10 @@ def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[st
     variables += f"SET VARIABLE column_map_csv = '{CONTAINER_OUT}/e2e/{case}/column_map.csv';\n"
     (case_dir / "bronze.sql").write_text(variables + FIXTURE_SQL)
     database = f"{CONTAINER_OUT}/e2e/{case}/fixture_lakehouse.duckdb"
-    code, _, stderr = compose_run(
-        [
-            "--entrypoint",
-            "duckdb",
-            "analytics-dbt",
-            database,
-            "-cmd",
-            ".read /opt/analytics/resources.sql",
-            "-c",
-            f".read {CONTAINER_OUT}/e2e/{case}/bronze.sql",
-        ],
-        {},
-    )
-    if code:
-        raise RuntimeError(f"fixture {case} failed: {stderr.strip().splitlines()[-1:] or ['no output']}")
+    params = {**case_paths(case), "database": database, "sql_file": f"{CONTAINER_OUT}/e2e/{case}/bronze.sql"}
+    result = launch("fixture_init", f"init-{case}", [], params, case)
+    if not result.ok:
+        raise RuntimeError(f"fixture {case} failed: {result.stderr.strip().splitlines()[-1:] or ['no output']}")
     return dbt_build(case, "fixture", project=True)
 
 
@@ -5904,26 +5931,6 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
 FIXTURE_EVIDENCE: dict[str, Any] = {}
 
 
-REAL_ATTACH = """.output /dev/null
-SET autoinstall_known_extensions = false;
-LOAD iceberg;
-LOAD httpfs;
-LOAD aws;
-CREATE SECRET lakehouse_s3 (TYPE s3, PROVIDER credential_chain, CHAIN 'config', PROFILE getenv('AWS_PROFILE'), REGION getenv('AWS_REGION'));
-CREATE SECRET lakehouse_catalog (
-    TYPE iceberg,
-    CLIENT_ID getenv('DBT_ENV_SECRET_POLARIS_CLIENT_ID'),
-    CLIENT_SECRET getenv('DBT_ENV_SECRET_POLARIS_CLIENT_SECRET'),
-    OAUTH2_SERVER_URI 'http://polaris:8181/api/catalog/v1/oauth/tokens',
-    OAUTH2_SCOPE 'PRINCIPAL_ROLE:ALL'
-);
-ATTACH 'hai_lakehouse' AS lakehouse (
-    TYPE iceberg, ENDPOINT 'http://polaris:8181/api/catalog', SECRET lakehouse_catalog, ACCESS_DELEGATION_MODE 'none', READ_ONLY
-);
-.output stdout
-"""
-
-
 # Ordered fingerprints of every C1 model, compared between the two real builds [418]. Each row is hashed before the ordered
 # aggregate, so an 11.9 million-row model needs about 0.4 GB, not one string of every row (failure mode 544).
 GEOGRAPHY_FINGERPRINTS = {
@@ -6289,23 +6296,39 @@ def fingerprint(database: str, query: str) -> list[list[str]]:
 
 # U-6: each real build has its own run ID and folder with its bronze pins; the run lock and launcher wiring stay with the
 # launcher package (amendment A33, failure modes 900 to 903 and 908).
-RUNS = Path("data/analytics/dbt/runs")
+RUNS = catalog.STATE.parent / "analytics" / "dbt" / "runs"
 
 
 @contextlib.contextmanager
 def pinned_run(build: str, outcome: dict[str, Any]) -> Iterator[dict[str, Any]]:
-    """Pin bronze before one real build and verify it after; the run ID reaches the outcome before the pin [902] [906] [908]."""
+    """Take a real transform run, pin bronze before one real build and verify it after; the run ID reaches the outcome before the pin [902] [906] [908]."""
     run_id = f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}"
     outcome[f"{build}_run_id"] = run_id
     folder = RUNS / run_id
     folder.mkdir(parents=True, exist_ok=False)
+    client = launcher_client()
+    client.call(
+        "acquire", {"domain": "transform", "run_id": run_id, "mode": "fixture" if TEST_REGISTRY else "real", "checkout": str(REPO_ROOT), "holder": "manual"}
+    )
+    principal = client.principal_run(run_id)
+    CURRENT_RUN["id"] = run_id
     state: dict[str, Any] = {"run_id": run_id, "build_passed": False, "pins_verified": False}
-    catalog.job("pins", ["pin", "--run", run_id])
-    yield state
-    catalog.job("pins", ["verify", "--run", run_id])
-    state["pins_verified"] = True
-    record = {"run_id": run_id, "build": build, "build_passed": state["build_passed"], "pins": str(folder / "pins.json"), "pins_verified": True}
-    (folder / "run.json").write_text(json.dumps(record, indent=2) + "\n")
+    try:
+        catalog.job("pins", ["pin", "--run", run_id])
+        yield state
+        catalog.job("pins", ["verify", "--run", run_id])
+        state["pins_verified"] = True
+        record = {"run_id": run_id, "build": build, "build_passed": state["build_passed"], "pins": str(folder / "pins.json"), "pins_verified": True}
+        (folder / "run.json").write_text(json.dumps(record, indent=2) + "\n")
+        client.call("finalize", {}, principal)
+        client.call("release", {"record": str(folder / "run.json")}, principal, timeout=300)
+    except BaseException:
+        # A failed run keeps its lock until the owner releases it after the launcher fenced its containers.
+        with contextlib.suppress(launcher.ClientError):
+            client.call("mark", {"state": "failed_retained"}, principal)
+        raise
+    finally:
+        CURRENT_RUN.clear()
 
 
 # The real stage's outcome as it runs, so a stage that stops still reaches the report [906].
@@ -6333,7 +6356,6 @@ def real_stage(once: bool = False) -> dict[str, Any]:
     )
     outcome["checks"]["pos_periods_seed_reproduced"] = pos_file_periods.SEED.read_text() == pos_file_periods.as_csv(pos_file_periods.build())
     database = f"{CONTAINER_OUT}/staging.duckdb"
-    (OUT / "real_attach.sql").write_text(REAL_ATTACH)
     init = f"{CONTAINER_OUT}/real_attach.sql"
     builds = []
     if once:
@@ -6535,7 +6557,10 @@ def main() -> int:
         "--real-once", action="store_true", help="one real build, no rebuild comparison: an iteration run, not commit evidence; implies --real [695] [697]"
     )
     parser.add_argument("--workers", type=int, default=4, help="fixture cases built at once; 1 is serial; capped by memory and cores [687] [688]")
+    parser.add_argument("--test-registry", help="a test registry folder (for tests of this runner only)")
     args = parser.parse_args()
+    global TEST_REGISTRY
+    TEST_REGISTRY = catalog.TEST_REGISTRY = args.test_registry
     real = args.real or args.real_only or args.real_once
     mode = "iteration" if args.real_once or args.real_only else ("full" if args.real else "fixture_only")
     dbt_at_start = dbt_tree_sha256()

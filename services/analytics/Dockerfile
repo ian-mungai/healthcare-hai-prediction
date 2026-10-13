@@ -1,6 +1,11 @@
 # Analytics image: DuckDB 1.5.6 (Python package and CLI) with the Iceberg, S3, AWS and UI extensions installed at build time,
 # and dbt-core 1.11.15 with the dbt-duckdb 1.11.0 adapter for the staging models.
 # The base image is pinned by digest and the wheels by hash; extensions are fetched once here, never at query time.
+FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS deadline
+COPY --from=hai deadline_run.go /src/deadline_run.go
+WORKDIR /src
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /deadline_run deadline_run.go
+
 FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
 
 COPY requirements.txt /opt/analytics/requirements.txt
@@ -21,3 +26,7 @@ RUN duckdb -c "INSTALL iceberg; INSTALL httpfs; INSTALL avro; INSTALL aws; INSTA
 
 COPY --chown=root:root bronze.sql ui.sh ui_relay.py /opt/analytics/
 WORKDIR /workspace
+
+# The deadline entrypoint every finite job runs under (D1 section 5 item 1); the label lets the launcher refuse an image without it.
+COPY --from=deadline --chmod=0755 /deadline_run /opt/hai/deadline_run
+LABEL hai.deadline_entrypoint="1" hai.deadline_implementation="go"

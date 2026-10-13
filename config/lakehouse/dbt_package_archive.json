@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "lock_sha256": "95b9edcce3ee666701fc1c1e321af24e93102d33e5686cf2a99d3d14161276b0",
+  "packages": [
+    {
+      "name": "dbt_project_evaluator",
+      "package": "dbt-labs/dbt_project_evaluator",
+      "version": "1.4.0",
+      "filename": "dbt_project_evaluator-1.4.0.tar.gz",
+      "url": "https://codeload.github.com/dbt-labs/dbt-project-evaluator/tar.gz/v1.4.0",
+      "size": 94104,
+      "sha256": "876a23c5edde969af1a77963c30fab0689f747e0ae5c9dcfcfbd720ea336a77f",
+      "hub_metadata_url": "https://hub.getdbt.com/api/v1/dbt-labs/dbt_project_evaluator.json",
+      "hub_metadata_sha256": "44a0eb7ee367ed2d638896d5fae17f7deda355bfcc0fb9d62e161c14c5eb1608"
+    },
+    {
+      "name": "dbt_utils",
+      "package": "dbt-labs/dbt_utils",
+      "version": "1.4.1",
+      "filename": "dbt_utils-1.4.1.tar.gz",
+      "url": "https://codeload.github.com/dbt-labs/dbt-utils/tar.gz/1.4.1",
+      "size": 83314,
+      "sha256": "31cd5d8a8b14ab8030d55c4f70a7e7a2e15e6005cc3dcf075021dd5667d78b5a",
+      "hub_metadata_url": "https://hub.getdbt.com/api/v1/dbt-labs/dbt_utils.json",
+      "hub_metadata_sha256": "2e90f375ac6cebd4fe9a0cca5f4414f37926f3384fdea43b6a3329a18cf6a213"
+    }
+  ],
+  "archive": {
+    "path": "data/analytics/dbt/package_archive/95b9edcce3ee666701fc1c1e321af24e93102d33e5686cf2a99d3d14161276b0/packages_4b88fd9ca571f734c7a0113f1e068fc3b38279a5d83a8b932ea9d75f70452d7c.tar",
+    "size": 184320,
+    "sha256": "4b88fd9ca571f734c7a0113f1e068fc3b38279a5d83a8b932ea9d75f70452d7c"
+  }
+}

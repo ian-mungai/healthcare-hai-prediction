@@ -1,21 +1,13 @@
 #!/usr/bin/env bash
-# Open DuckDB with the bronze tables attached read-only, inside the analytics container.
+# Open an interactive DuckDB shell on the bronze tables, attached read-only through the read-only catalog principal.
 #
-#   scripts/lakehouse/query.sh                                   # interactive shell
-#   scripts/lakehouse/query.sh -c "SELECT count(*) FROM cms_hai_state"   # one statement, then exit
+#   scripts/lakehouse/query.sh                       # interactive shell
+#   scripts/lakehouse/query.sh -c "select 1" -csv    # one query
 #
-# Arguments go to the DuckDB CLI. The catalog script starts Polaris and creates the read-only principal first; Docker
-# reads only the owner-only env file in data/lakehouse/secrets/, never the repository's .env.
+# The launcher starts the catalog if needed and runs the shell as a session-bound attempt of the template query_reader: Ctrl-C reaches
+# DuckDB as input, and closing the terminal detaches the session. No Docker command runs here.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
-.venv/bin/python -m scripts.lakehouse.catalog up >&2
-tty_flag=()
-[[ -t 0 && -t 1 ]] || tty_flag=(-T)
-resources="$(.venv/bin/python -m scripts.lakehouse.memory_budget --launch)"
-read -r container_memory duckdb_memory spark_memory job_threads <<< "$resources"
-exec env -i PATH="$PATH" HOME="$HOME" JOB_MEMORY_LIMIT="$container_memory" DUCKDB_MEMORY_LIMIT="$duckdb_memory" JOB_THREADS="$job_threads" \
-    docker compose --project-directory "$root" -f "$root/docker-compose.yaml" \
-    --env-file "$root/data/lakehouse/secrets/compose.env" --profile query run --rm --no-deps --quiet-pull "${tty_flag[@]}" \
-    analytics duckdb -init /opt/analytics/bronze.sql "$@"
+exec .venv/bin/python -m orchestration.launcher query "$@"

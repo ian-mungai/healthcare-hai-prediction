@@ -1,6 +1,6 @@
 """Pin the bronze snapshot every mapped table is at before a build, and check after the build that none moved.
 
-Run from the repository root; the catalog script starts it inside the Spark container with the read-only principal:
+Run from the repository root; the catalog script asks the launcher to run it as a ``spark_read`` attempt with the read-only principal:
 
     .venv/bin/python -m scripts.lakehouse.catalog job pins -- pin --run <run_id>      # write runs/<run_id>/pins.json
     .venv/bin/python -m scripts.lakehouse.catalog job pins -- verify --run <run_id>   # exit 1 when a table moved
@@ -14,6 +14,8 @@ plans/wave1_20261011/gate/pins_failure_modes.md.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib
 import json
 import os
 import re
@@ -45,7 +47,8 @@ def mapped_tables(table_map: Path = TABLE_MAP) -> list[str]:
 
 def current_snapshots(spark: Any, catalog: str, namespace: str, tables: list[str]) -> dict[str, str]:
     """Each table's main-branch snapshot ID, read from Iceberg's refs metadata table; read-only [891] [893]."""
-    from pyspark.errors import AnalysisException
+    # pyspark exists only in the Spark image; it is imported by name so the launcher can import this module's table map without it.
+    AnalysisException = importlib.import_module("pyspark.errors").AnalysisException
 
     snapshots = {}
     for table in tables:
@@ -61,15 +64,16 @@ def current_snapshots(spark: Any, catalog: str, namespace: str, tables: list[str
     return snapshots
 
 
-def write_once(path: Path, snapshots: dict[str, str]) -> None:
-    """Publish the pins once: a hard link from the fsynced temporary file fails when pins exist, so a second writer loses [892] [904]."""
+def write_once(path: Path, snapshots: dict[str, str]) -> str:
+    """Publish the pins once and return the SHA-256 of the bytes written; a hard link from the fsynced temporary file fails when pins exist [892] [904]."""
     if path.exists():
         raise PinError(f"{path} exists; a run is pinned once")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
+    text = json.dumps(snapshots, indent=2, sort_keys=True) + "\n"
     try:
         with temporary.open("x") as handle:
-            handle.write(json.dumps(snapshots, indent=2, sort_keys=True) + "\n")
+            handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
         try:
@@ -78,6 +82,7 @@ def write_once(path: Path, snapshots: dict[str, str]) -> None:
             raise PinError(f"{path} exists; a run is pinned once") from exc
     finally:
         temporary.unlink(missing_ok=True)
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def read_pins(path: Path) -> dict[str, str]:
@@ -108,7 +113,8 @@ def run_path(run_id: str) -> Path:
 
 def main() -> int:
     """Pin or verify for one run; prints counts and table names only."""
-    from scripts.lakehouse.session import CATALOG, job_memory, spark_session
+    # Imported by name: session.py needs pyspark, which exists only in the Spark image.
+    session = importlib.import_module("scripts.lakehouse.session")
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=("pin", "verify"))
@@ -117,14 +123,14 @@ def main() -> int:
     try:
         path = run_path(args.run)
         tables = mapped_tables()
-        spark = spark_session("bronze-pins", memory=job_memory())
+        spark = session.spark_session("bronze-pins", memory=session.job_memory())
         try:
-            current = current_snapshots(spark, CATALOG, "bronze", tables)
+            current = current_snapshots(spark, session.CATALOG, "bronze", tables)
         finally:
             spark.stop()
         if args.command == "pin":
-            write_once(path, current)
-            sys.stdout.write(json.dumps({"pinned": len(current), "path": str(path)}) + "\n")
+            digest = write_once(path, current)
+            sys.stdout.write(json.dumps({"pinned": len(current), "path": str(path), "sha256": digest}) + "\n")
             return 0
         changed = differences(read_pins(path), current)
         sys.stdout.write(json.dumps({"tables": len(current), "changed": changed}) + "\n")
