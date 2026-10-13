@@ -17,7 +17,7 @@ the "Planned (not built)" card. With Archify unpacked at `<archify>`:
 ARCHIFY_UPDATE_CHECK_DISABLED=1 node <archify>/bin/archify.mjs finalize architecture \
   docs/architecture/architecture.json docs/architecture/architecture.html --repo-root . --quality showcase
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars \
-  --window-size=1600,1200 --virtual-time-budget=5000 \
+  --window-size=1600,1240 --virtual-time-budget=5000 \
   --screenshot=docs/architecture/architecture.png "file://$PWD/docs/architecture/architecture.html"
 ```
 
