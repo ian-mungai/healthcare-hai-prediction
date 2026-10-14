@@ -4535,6 +4535,60 @@ def staging_pool_removal_held(env: Env) -> dict[str, bool]:
     }
 
 
+@case("client_slow_launcher_replies")
+def client_slow_launcher_replies(env: Env) -> dict[str, bool]:
+    """919 (C3b staging run): a launcher that is slow to answer the submit or a few status polls does not end the client's wait; a launcher
+    that stays silent past the patience still fails the wait visibly."""
+    env.start()
+    client = env.client()
+    allocation = env.allocate()
+    principal = env.alloc_principal(allocation)
+    real_call = client.bounded_call
+    slow = {"submit": 2, "status": 3}
+
+    def busy_launcher(method: str, *args: Any, **kwargs: Any) -> Any:
+        # The first replies time out, as from a launcher busy writing a large registry on a loaded machine.
+        if slow.get(method, 0) > 0:
+            slow[method] -= 1
+            raise TimeoutError("timed out")
+        return real_call(method, *args, **kwargs)
+
+    outcome: Any = None
+    with mock.patch.object(client, "bounded_call", busy_launcher):
+        try:
+            outcome = client.run_attempt(principal, "fixture_dbt", "slowpoll", ["build"], env.fixture_params("slowpoll"), checkout=ROOT)
+        except (OSError, launcher.ClientError) as error:
+            outcome = error
+    attempts = [a for a in env.state()["attempts"].values() if a["launch_id"].startswith("slowpoll")]
+    patience = {"poll_patience": 2.0} if hasattr(env.config.timings, "poll_patience") else {}
+    impatient = launcher.LauncherClient(replace(env.config, timings=replace(env.config.timings, **patience)), start=False)
+    real_impatient = impatient.bounded_call
+    silent: Any = None
+    begun = time.monotonic()
+
+    def silent_launcher(method: str, *args: Any, **kwargs: Any) -> Any:
+        if method == "status":
+            raise TimeoutError("timed out")
+        return real_impatient(method, *args, **kwargs)
+
+    with mock.patch.object(impatient, "bounded_call", silent_launcher):
+        try:
+            impatient.run_attempt(principal, "fixture_dbt", "silentpoll", ["build"], env.fixture_params("silentpoll"), checkout=ROOT)
+        except (OSError, launcher.ClientError) as error:
+            silent = error
+    took = time.monotonic() - begun
+    for attempt in env.state()["attempts"].values():
+        if attempt["launch_id"].startswith("silentpoll") and attempt["phase"] != "ended":
+            env.client().call("cancel", {"attempt_id": attempt["id"]}, principal)
+            env.wait_ended(attempt["id"], 30)
+    return {
+        "slow replies: the attempt result is returned": isinstance(outcome, launcher.AttemptResult) and outcome.ok,
+        "slow replies: one attempt only (the retried submit is the same request)": len(attempts) == 1,
+        "a silent launcher fails the wait": isinstance(silent, (OSError, launcher.ClientError)),
+        "the failure comes after the patience, not before": 2.0 <= took < 15.0,
+    }
+
+
 @case("client_exchange_total_budget")
 def client_exchange_total_budget(env: Env) -> dict[str, bool]:
     """919 (F18, delta 3): a reply sent in slow chunks cannot stretch a bounded exchange past its budget."""
@@ -5195,6 +5249,7 @@ ALL_CASES = (
     staging_pool_connect_held,
     staging_pool_launcher_gone,
     staging_pool_removal_held,
+    client_slow_launcher_replies,
     client_exchange_total_budget,
     staging_pool_socket_loss,
     staging_pool_lost_cancel,
