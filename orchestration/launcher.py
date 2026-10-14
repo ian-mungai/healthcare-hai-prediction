@@ -3696,12 +3696,16 @@ class Launcher:
             a = state["attempts"].get(op["attempt"]) if op else None
             matches = op is not None and a is not None and op["kind"] == "create" and op["state"] == "open" and a["phase"] == "creating"
             matches = matches and op is not None and a is not None and a["container_name"] == name and self.labels_match(a, op, labels)
-            disposing = any(o["kind"] == "orphan" and o["state"] == "open" and o.get("container_id") == container_id for o in state["operations"].values())
+            orphaned = [o for o in state["operations"].values() if o["kind"] == "orphan" and o.get("container_id") == container_id]
             if matches and op is not None and a is not None:
                 self.adopt(state, a, op, container_id, info)
-            elif not disposing:
-                # An orphan already being removed raises more events (stop, die); it is disposed of and recorded once.
+            elif not orphaned:
+                # An orphan raises more events (stop, die) while and after it is removed, and an inspect reply can arrive after the removal
+                # settled; container IDs are never reused, so a container with any orphan operation is disposed of and recorded once.
                 self.dispose_orphan(state, container_id, name, labels, actions)
+            elif all(o["state"] == "settled" for o in orphaned):
+                # A late reply describes a container already removed; it does not return to the inventory.
+                self.inventory.pop(container_id, None)
         for action in actions:
             action()
         self.dirty.update(self.bound.values())
