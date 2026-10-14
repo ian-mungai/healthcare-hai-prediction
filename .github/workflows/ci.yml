@@ -18,8 +18,8 @@ jobs:
   infrastructure:
     name: Terraform and IAM Checks
     runs-on: ubuntu-latest
-    # The full hook run takes about 14.5 minutes, so 15 is too tight.
-    timeout-minutes: 30
+    # The hooks take about 9 minutes and local CI, with the launcher E2E, about 25 more on the runner, so 30 is too tight.
+    timeout-minutes: 50
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
