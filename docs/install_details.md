@@ -86,8 +86,9 @@ Named manual steps. These are the only setup steps no script performs:
    The keys are shared by several projects, so they are created by hand outside
    Terraform. Store the HUD USPS crosswalk token separately as `hud_api_key`,
    in the same JSON shape with the token alone in `api_key` (no `Bearer`
-   prefix; the collector adds the header). The IAM
-   configuration grants read access to these three names and never reads a
+   prefix; the collector adds the header). Store the TypeSafe Jev API key as
+   `jev_api_key` in the same shape. The IAM
+   configuration grants read access to these four names and never reads a
    value; each permission update requires a reviewed saved plan before apply.
 2. **Administrator profile.** Configure an AWS CLI profile with IAM permissions
    for the IAM stack. It is passed on the command line, never stored in `.env`.

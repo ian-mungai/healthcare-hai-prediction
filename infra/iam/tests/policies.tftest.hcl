@@ -117,7 +117,7 @@ run "scoped_project_permissions" {
     condition = toset(flatten([
       for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : flatten([statement.Resource])
       ])) == toset([
-      for name in ["bls_api_key", "census_api_key", "hud_api_key"] : "arn:aws:secretsmanager:${var.aws_region}:${var.expected_account_id}:secret:${name}-??????"
+      for name in ["bls_api_key", "census_api_key", "hud_api_key", "jev_api_key"] : "arn:aws:secretsmanager:${var.aws_region}:${var.expected_account_id}:secret:${name}-??????"
     ])
     error_message = "Secret read access must be limited to the named shared API keys in the approved account and region."
   }
