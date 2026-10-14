@@ -4590,7 +4590,15 @@ def light_allocation(client: launcher.LauncherClient) -> str:
     light read queued; a floor-sized share goes on whenever that much is free.
     """
     plan = client.call("plan")
-    return client.allocate(workers=max(1, min(int(plan["threads"]), int(plan["environment"]["JOB_MEMORY_LIMIT"]) // FLOOR)))
+    workers = max(1, min(int(plan["threads"]), int(plan["environment"]["JOB_MEMORY_LIMIT"]) // FLOOR))
+    while True:
+        try:
+            return client.allocate(workers=workers)
+        except launcher.ClientError as error:
+            # The allocation computes its own plan; memory taken since the reading above can refuse this many floor shares.
+            if error.code != "budget" or workers == 1:
+                raise
+            workers -= 1
 
 
 def launch(template: str, launch_id: str, args: list[str], params: dict[str, Any], case: str = "query_or_setup") -> launcher.AttemptResult:

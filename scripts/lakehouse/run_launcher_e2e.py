@@ -1054,6 +1054,9 @@ def scan_reply_after_stream_loss(env: Env) -> dict[str, bool]:
     time.sleep(0.5)
     during = env.ping().get("status")
     env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher serves again after a new subscription")
+    # The new subscription's probe container is removed after serving resumes; a slow machine can still hold it here.
+    with contextlib.suppress(CaseFailure):
+        env.wait(lambda: env.labelled() == [], 10, "the second probe container is removed")
     state = env.state()
     return {
         "the late scan reply left the launcher degraded until the reconnect": during == "degraded",
@@ -4251,6 +4254,48 @@ def staging_read_share(env: Env) -> dict[str, bool]:
     }
 
 
+@case("staging_read_plan_shrinks", stub_host=True)
+def staging_read_plan_shrinks(env: Env) -> dict[str, bool]:
+    """911 (staging run 6): memory that shrinks between the runner's plan reading and the allocation's own plan refuses the share count it
+    chose; the light read retries with fewer shares instead of failing the run."""
+    from scripts.lakehouse import run_staging_e2e as staging
+
+    def on_start(container: dict[str, Any]) -> None:
+        if container["Config"]["Labels"].get("hai.template") == "duckdb_helper":
+            container["_out"] = "n,2\n"
+
+    env.daemon.on_start = on_start
+    env.start()
+    real_call = launcher.LauncherClient.call
+    asked: list[int] = []
+
+    def plan_reads_high(self: launcher.LauncherClient, method: str, *args: Any, **kwargs: Any) -> Any:
+        # The plan reading sees three times the memory the allocation's own plan will find a moment later.
+        reply = real_call(self, method, *args, **kwargs)
+        if method == "plan":
+            reply = {**reply, "environment": {**reply["environment"], "JOB_MEMORY_LIMIT": str(3 * int(reply["environment"]["JOB_MEMORY_LIMIT"]))}}
+        if method == "allocate":
+            asked.append(int((args[0] if args else kwargs.get("params", {})).get("workers", 1)))
+        return reply
+
+    case_name = "read_plan_shrinks_probe"
+    (staging.CASES / case_name).mkdir(parents=True, exist_ok=True)
+    staging.TEST_REGISTRY = str(env.registry)
+    outcome: Any = None
+    try:
+        with mock.patch.object(launcher.LauncherClient, "call", plan_reads_high):
+            outcome = staging.duckdb_csv(f"{staging.CONTAINER_OUT}/e2e/{case_name}/staging.duckdb", "select 1")
+    except (RuntimeError, OSError, launcher.ClientError) as error:
+        outcome = error
+    finally:
+        staging.TEST_REGISTRY = None
+        shutil.rmtree(staging.CASES / case_name, ignore_errors=True)
+    return {
+        "the read returned the helper's rows": outcome == [["n", "2"]],
+        "the first share count was refused and a smaller one followed": len(asked) >= 2 and asked == sorted(asked, reverse=True) and asked[-1] < asked[0],
+    }
+
+
 @case("staging_runner_conversion")
 def staging_runner_conversion(env: Env) -> dict[str, bool]:
     """919: the staging runner's fixture launches (init, build, queries, packages) are launcher attempts; the case folder is the only writable mount."""
@@ -5442,6 +5487,7 @@ ALL_CASES = (
     catalog_client,
     staging_runner_conversion,
     staging_read_share,
+    staging_read_plan_shrinks,
 )
 
 
