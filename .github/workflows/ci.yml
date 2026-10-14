@@ -55,6 +55,8 @@ jobs:
           .venv/bin/python scripts/quality/install_tools.py
           .venv/bin/python -m scripts.quality.install_markdownlint
           .venv/bin/python -m scripts.quality.install_sqlfluff
+          # The launcher E2E renders dbt_deps jobs from the pinned local package archive, which Git does not track.
+          .venv/bin/python -m scripts.lakehouse.dbt_package_archive fetch
 
       - name: Check commit messages
         if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000') }}

@@ -60,7 +60,10 @@ from the lockfile in `scripts/quality/markdownlint/`, which pins each package's
 integrity hash; it needs Node.js 22 or later. The `sqlfluff` hook's SQLFluff and
 its dbt templater are installed into `.tools/sqlfluff` from the hash-pinned
 `scripts/quality/sqlfluff/requirements.txt`; the same command installs the dbt
-packages from `dbt/package-lock.yml` into the ignored `data/analytics/dbt/dbt_packages`. The schema-review tools in
+packages from `dbt/package-lock.yml` into the ignored `data/analytics/dbt/dbt_packages`. The launcher's `dbt_deps`
+job installs the same packages without network from a local archive: `scripts.lakehouse.dbt_package_archive fetch`
+downloads the tarballs named in `config/lakehouse/dbt_package_archive.json`, rebuilds the archive under the ignored
+`data/analytics/dbt/package_archive/` and refuses any byte that differs from the record. The schema-review tools in
 `scripts/review/` need the hash-pinned packages in `requirements-review.txt`,
 installed into the ignored `.review_dependencies/` (Apple silicon only); the file's
 header gives the command.

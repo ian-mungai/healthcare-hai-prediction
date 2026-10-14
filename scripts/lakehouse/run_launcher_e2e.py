@@ -4754,6 +4754,186 @@ def dbt_archive_install_late_foreign(env: Env) -> dict[str, bool]:
     }
 
 
+@case("dbt_archive_fetch_publication")
+def dbt_archive_fetch_publication(env: Env) -> dict[str, bool]:
+    """916 (CI fix review): fetch rebuilds the recorded archive offline, never writes through a link and leaves no damaged archive."""
+    from scripts.lakehouse import dbt_package_archive
+
+    checkout, _, archive, record = synthetic_archive(env.work)
+    members = dbt_package_archive.archive_members(archive.read_bytes())
+    document = json.loads(record.read_text())
+    for row in document["packages"]:
+        row["url"] = f"https://example.com/{row['filename']}"
+    sources = {row["url"]: members[row["filename"]] for row in document["packages"]}
+    # The record names the deterministic packing that fetch reproduces.
+    expected = dbt_package_archive.pack(members)
+    document["archive"].update(size=len(expected), sha256=hashlib.sha256(expected).hexdigest())
+    record.write_text(json.dumps(document))
+    relative = archive.relative_to(checkout)
+    archive.unlink()
+
+    def fresh(name: str) -> Path:
+        # A checkout with the lock and record but no archive, so each probe starts from what a clone holds.
+        root = env.work / name
+        shutil.copytree(checkout, root)
+        return root
+
+    def fetch(root: Path) -> BaseException | None:
+        with mock.patch.object(dbt_package_archive, "download", lambda url: sources[url]):
+            try:
+                dbt_package_archive.fetch(root)
+            except (dbt_package_archive.ArchiveError, OSError) as error:
+                return error
+        return None
+
+    control = fresh("fetch_control")
+    first = fetch(control)
+    inode = (control / relative).stat().st_ino
+    second = fetch(control)
+    outside = env.work / "fetch_outside"
+    outside.mkdir()
+    parent_link = fresh("fetch_parent_link")
+    shutil.rmtree(parent_link / dbt_package_archive.ARCHIVES)
+    (parent_link / dbt_package_archive.ARCHIVES).symlink_to(outside, target_is_directory=True)
+    parent_refused = fetch(parent_link)
+    leaf_link = fresh("fetch_leaf_link")
+    (leaf_link / relative).parent.mkdir(parents=True, exist_ok=True)
+    (leaf_link / relative).symlink_to(outside / "leaf.tar")
+    leaf_refused = fetch(leaf_link)
+    root_link = env.work / "fetch_root_link"
+    root_link.symlink_to(fresh("fetch_root_target"), target_is_directory=True)
+    root_refused = fetch(root_link)
+    partial = fresh("fetch_partial")
+    real_write = os.write
+
+    def short_write(fd: int, data: Any) -> int:
+        # The disk fills after the first block of the archive.
+        real_write(fd, bytes(data[:4096]))
+        raise OSError(28, "No space left on device")
+
+    with mock.patch.object(dbt_package_archive.os, "write", short_write):
+        interrupted = fetch(partial)
+    folder = (partial / relative).parent
+    after_interrupt = sorted(path.name for path in folder.iterdir()) if folder.exists() else []
+    retried = fetch(partial)
+    return {
+        "a clean fetch rebuilds the recorded bytes read-only": first is None
+        and (control / relative).read_bytes() == expected
+        and (control / relative).stat().st_mode & 0o777 == 0o444,
+        "a rerun keeps the published file": second is None and (control / relative).stat().st_ino == inode,
+        "a linked archive folder is refused": isinstance(parent_refused, dbt_package_archive.ArchiveError),
+        "a linked archive file is refused": isinstance(leaf_refused, dbt_package_archive.ArchiveError),
+        "a linked checkout root is refused": isinstance(root_refused, dbt_package_archive.ArchiveError),
+        "nothing is written through a link": not any(outside.iterdir()) and not (env.work / "fetch_root_target" / relative).exists(),
+        "an interrupted write fails": isinstance(interrupted, OSError),
+        "an interrupted write leaves no archive or staging file": after_interrupt == [],
+        "a retry after the interruption publishes the recorded bytes": retried is None and (partial / relative).read_bytes() == expected,
+    }
+
+
+@case("dbt_archive_fetch_races")
+def dbt_archive_fetch_races(env: Env) -> dict[str, bool]:
+    """916 (CI fix review deltas 1 and 2): a swapped root ancestor, staging file or final name never publishes outside and never deletes a file."""
+    from scripts.lakehouse import dbt_package_archive
+
+    checkout, _, archive, record = synthetic_archive(env.work)
+    members = dbt_package_archive.archive_members(archive.read_bytes())
+    document = json.loads(record.read_text())
+    for row in document["packages"]:
+        row["url"] = f"https://example.com/{row['filename']}"
+    sources = {row["url"]: members[row["filename"]] for row in document["packages"]}
+    expected = dbt_package_archive.pack(members)
+    document["archive"].update(size=len(expected), sha256=hashlib.sha256(expected).hexdigest())
+    record.write_text(json.dumps(document))
+    relative = archive.relative_to(checkout)
+    archive.unlink()
+    real_open, real_link = os.open, os.link
+
+    def fetch(root: Path, **patches: Any) -> BaseException | None:
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(dbt_package_archive, "download", lambda url: sources[url]))
+            for name, replacement in patches.items():
+                stack.enter_context(mock.patch.object(dbt_package_archive.os, name, replacement))
+            try:
+                dbt_package_archive.fetch(root)
+            except (dbt_package_archive.ArchiveError, OSError) as error:
+                return error
+        return None
+
+    # Schedule 1: the root's parent becomes a link to another tree after the root path was checked and before it opens.
+    selected, redirected = env.work / "race_selected", env.work / "race_redirected"
+    shutil.copytree(checkout, selected / "root")
+    shutil.copytree(checkout, redirected / "root")
+    swapped: list[bool] = []
+
+    def open_with_ancestor_swap(path: Any, *args: Any, **kwargs: Any) -> int:
+        if not swapped:
+            selected.rename(env.work / "race_original")
+            selected.symlink_to(redirected, target_is_directory=True)
+            swapped.append(True)
+        return real_open(path, *args, **kwargs)
+
+    ancestor = fetch(selected / "root", open=open_with_ancestor_swap)
+    # Schedule 2: the staging name is replaced just before publication, by a link to an outside file with the right bytes
+    # or by a short regular file.
+    outside = env.work / "race_outside.tar"
+    outside.write_bytes(expected)
+
+    def swap_staging(replace_with: Callable[[str, int], None]) -> Callable[..., None]:
+        def link(source: str, name: str, *args: Any, **kwargs: Any) -> None:
+            folder = kwargs.get("src_dir_fd")
+            os.unlink(source, dir_fd=folder)
+            replace_with(source, folder)
+            real_link(source, name, *args, **kwargs)
+
+        return link
+
+    def to_link(source: str, folder: int) -> None:
+        os.symlink(outside, source, dir_fd=folder)
+
+    def to_short_file(source: str, folder: int) -> None:
+        fd = real_open(source, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644, dir_fd=folder)
+        os.write(fd, expected[:4096])
+        os.close(fd)
+
+    linked_root = env.work / "race_staging_link"
+    shutil.copytree(checkout, linked_root)
+    staging_link = fetch(linked_root, link=swap_staging(to_link))
+    short_root = env.work / "race_staging_short"
+    shutil.copytree(checkout, short_root)
+    staging_short = fetch(short_root, link=swap_staging(to_short_file))
+    # A refused publication leaves the final name alone (owner, A106 option A): the retry refuses the leftover until it is removed.
+    leftover = fetch(short_root)
+    (short_root / relative).unlink()
+    retried = fetch(short_root)
+    # Schedule 3: another process replaces the final name with its own valid archive right after this call links it.
+    replaced_root = env.work / "race_final_replaced"
+    shutil.copytree(checkout, replaced_root)
+    replacement = env.work / "race_replacement.tar"
+    replacement.write_bytes(expected)
+    replacement.chmod(0o444)
+    replacement_inode = replacement.stat().st_ino
+
+    def link_then_replace(source: str, name: str, *args: Any, **kwargs: Any) -> None:
+        real_link(source, name, *args, **kwargs)
+        os.replace(replacement, replaced_root / relative)
+
+    final_replaced = fetch(replaced_root, link=link_then_replace)
+    survivor = replaced_root / relative
+    return {
+        "the ancestor swap ran": bool(swapped),
+        "a root ancestor swapped to a link is refused": isinstance(ancestor, dbt_package_archive.ArchiveError),
+        "nothing is published in the redirected tree": not (redirected / "root" / relative).exists(),
+        "a staging file swapped for a link is refused": isinstance(staging_link, dbt_package_archive.ArchiveError),
+        "the outside file is not hard-linked into the checkout": outside.stat().st_nlink == 1,
+        "a staging file swapped for a short file is refused": isinstance(staging_short, dbt_package_archive.ArchiveError),
+        "a retry refuses the leftover short file": isinstance(leftover, dbt_package_archive.ArchiveError),
+        "a retry after removing the leftover publishes the recorded bytes": retried is None and (short_root / relative).read_bytes() == expected,
+        "a final name replaced after the link is refused": isinstance(final_replaced, dbt_package_archive.ArchiveError),
+        "the other process's archive survives": survivor.exists() and survivor.stat().st_ino == replacement_inode and survivor.read_bytes() == expected,
+    }
+
+
 @case("image_python_entrypoint_refused", stub_host=True)
 def image_python_entrypoint_refused(env: Env) -> dict[str, bool]:
     """917: a legacy Python image label cannot satisfy the approved Go implementation requirement."""
@@ -4990,6 +5170,8 @@ ALL_CASES = (
     dbt_archive_record_hash,
     dbt_archive_install_scope,
     dbt_archive_install_late_foreign,
+    dbt_archive_fetch_publication,
+    dbt_archive_fetch_races,
     staging_pool_cancel_unresolved,
     staging_pool_connect_held,
     staging_pool_launcher_gone,

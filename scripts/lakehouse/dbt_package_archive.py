@@ -1,12 +1,15 @@
 """Refresh, verify and install the lock's dbt packages from a pinned local archive; runtime installation has no network.
 
-Refresh is an explicit host operation. Verify and install read only local files and refuse a changed lock, record or archive.
+Refresh and fetch are explicit host operations: refresh pins new tarballs and rewrites the record; fetch rebuilds the
+recorded archive on a fresh clone (or in CI) from the recorded URLs and refuses any byte that differs.
+Verify and install read only local files and refuse a changed lock, record or archive.
 The upstream tarballs remain immutable members of the local archive. Installation validates every member before copying files.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import http.client
 import importlib
@@ -166,6 +169,121 @@ def download(url: str) -> bytes:
     raise ArchiveError("package source redirects more than three times")
 
 
+def pack(contents: dict[str, bytes]) -> bytes:
+    """The deterministic aggregate archive: sorted members, fixed mode and no timestamps or owners."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for filename, content in sorted(contents.items()):
+            member = tarfile.TarInfo(filename)
+            member.size = len(content)
+            member.mode = 0o444
+            archive.addfile(member, io.BytesIO(content))
+    return buffer.getvalue()
+
+
+NOFOLLOW = os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def write_all(fd: int, data: bytes) -> None:
+    """Write every byte to an open file."""
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view) :]
+
+
+def published(folder: int, name: str, data: bytes) -> bool:
+    """Whether the folder already holds the archive; a link refuses, and so do different bytes."""
+    try:
+        fd = os.open(name, os.O_RDONLY | NOFOLLOW, dir_fd=folder)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise ArchiveError("archive path may not contain a link") from error
+    with os.fdopen(fd, "rb") as handle:
+        if handle.read(LIMIT + 1) != data:
+            raise ArchiveError("immutable archive path has different bytes")
+    return True
+
+
+def open_child(folder: int, part: str, create: bool = False) -> int:
+    """Open one folder relative to its parent without following a link, making it first when asked; closes the parent."""
+    try:
+        if create:
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(part, 0o755, dir_fd=folder)
+        return os.open(part, os.O_RDONLY | os.O_DIRECTORY | NOFOLLOW, dir_fd=folder)
+    except OSError as error:
+        raise ArchiveError("archive path may not contain a link") from error
+    finally:
+        os.close(folder)
+
+
+def write_immutable(root: Path, relative: Path, data: bytes) -> None:
+    """Publish an archive once, read-only, under root without following a link; an existing archive must hold the same bytes.
+
+    Every folder from / down opens relative to its parent with O_NOFOLLOW. The bytes go to an exclusive staging file in the
+    same folder, which a hard link publishes: a link never replaces an existing file, and an interrupted write leaves no
+    archive. The published file must be the staged inode, or the call refuses and deletes nothing. A folder that another
+    process moves after it was opened, or an entry it changes during the fetch, is outside this check (issue register WV3-011).
+    """
+    if relative.is_absolute() or ".." in relative.parts or not relative.is_relative_to(ARCHIVES):
+        raise ArchiveError("archive path must be in the ignored package archive folder")
+    if root.absolute() != root.resolve():
+        raise ArchiveError("archive path may not contain a link")
+    folder = os.open("/", os.O_RDONLY | os.O_DIRECTORY | NOFOLLOW)
+    for part in root.absolute().parts[1:]:
+        folder = open_child(folder, part)
+    for part in relative.parts[:-1]:
+        folder = open_child(folder, part, create=True)
+    try:
+        if published(folder, relative.name, data):
+            return
+        staging = f".{relative.name}.{os.getpid()}.{os.urandom(8).hex()}.partial"
+        fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, 0o600, dir_fd=folder)
+        try:
+            write_all(fd, data)
+            os.fchmod(fd, 0o444)
+            os.fsync(fd)
+            staged = os.fstat(fd)
+            try:
+                os.link(staging, relative.name, src_dir_fd=folder, dst_dir_fd=folder, follow_symlinks=False)
+            except FileExistsError:
+                published(folder, relative.name, data)
+                return
+            final = os.stat(relative.name, dir_fd=folder, follow_symlinks=False)
+            if (final.st_dev, final.st_ino) != (staged.st_dev, staged.st_ino):
+                # Another process changed the staging file or the final name: this call cannot prove which entry it
+                # created, so it deletes nothing and refuses; verify and install still check every byte at use.
+                raise ArchiveError(f"another process changed {relative} during the fetch; check it and remove it by hand before a retry")
+        finally:
+            os.close(fd)
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(staging, dir_fd=folder)
+    finally:
+        os.close(folder)
+
+
+def fetch(root: Path) -> str:
+    """Rebuild the recorded archive from the recorded tarball URLs in an explicit host step; any byte that differs from the record refuses."""
+    document = json.loads((root / RECORD).read_bytes())
+    if document.get("schema_version") != 1 or document.get("lock_sha256") != sha((root / LOCK).read_bytes()):
+        raise ArchiveError("lock changed; refresh the package archive explicitly")
+    relative = Path(document["archive"]["path"])
+    if relative.is_absolute() or ".." in relative.parts or not relative.is_relative_to(ARCHIVES):
+        raise ArchiveError("archive path must be in the ignored package archive folder")
+    contents = {}
+    for row in document["packages"]:
+        content = download(row["url"])
+        if len(content) != row["size"] or sha(content) != row["sha256"]:
+            raise ArchiveError(f"downloaded package differs from the pinned record for {row['name']}")
+        contents[row["filename"]] = content
+    data = pack(contents)
+    if len(data) != document["archive"]["size"] or sha(data) != document["archive"]["sha256"]:
+        raise ArchiveError("rebuilt archive differs from the pinned record")
+    write_immutable(root, relative, data)
+    return str(verify(root))
+
+
 def refresh(root: Path) -> dict[str, Any]:
     """Resolve only the lock's named hub releases and download their recorded tarballs in an explicit host step."""
     lock = root / LOCK
@@ -194,22 +312,9 @@ def refresh(root: Path) -> dict[str, Any]:
         )
     if lock.read_bytes() != lock_bytes:
         raise ArchiveError("lock changed during refresh; no record published")
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
-        for filename, content in sorted(contents.items()):
-            member = tarfile.TarInfo(filename)
-            member.size = len(content)
-            member.mode = 0o444
-            archive.addfile(member, io.BytesIO(content))
-    data = buffer.getvalue()
+    data = pack(contents)
     relative = ARCHIVES / sha(lock_bytes) / f"packages_{sha(data)}.tar"
-    output = root / relative
-    output.parent.mkdir(parents=True, exist_ok=True)
-    if output.exists() and output.read_bytes() != data:
-        raise ArchiveError("immutable archive path has different bytes")
-    if not output.exists():
-        output.write_bytes(data)
-        output.chmod(0o444)
+    write_immutable(root, relative, data)
     document = {
         "schema_version": 1,
         "lock_sha256": sha(lock_bytes),
@@ -256,9 +361,9 @@ def install(root: Path, lock: Path, record: Path, archive: Path, destination: Pa
 
 
 def main() -> int:
-    """Run an explicit refresh or an entirely local verify/install command."""
+    """Run an explicit refresh or fetch, or an entirely local verify/install command."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=("refresh", "verify", "install"))
+    parser.add_argument("command", choices=("refresh", "fetch", "verify", "install"))
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--lock", type=Path)
     parser.add_argument("--record", type=Path)
@@ -269,6 +374,8 @@ def main() -> int:
     try:
         if args.command == "refresh":
             result: Any = refresh(args.root)
+        elif args.command == "fetch":
+            result = fetch(args.root)
         elif args.command == "verify":
             result = str(verify(args.root, lock=args.lock, record=args.record, archive=args.archive, record_sha256=args.record_sha256))
         else:
