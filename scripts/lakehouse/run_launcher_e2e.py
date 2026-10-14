@@ -4147,6 +4147,65 @@ def real_query_ok(env: Env, run_id: str) -> bool:
     )
 
 
+@case("staging_read_share", stub_host=True)
+def staging_read_share(env: Env) -> dict[str, bool]:
+    """911 (staging run 5): a light read of the staging runner takes a small share of the plan, so memory that another job takes between its
+    allocation and its launch does not hold it queued; a share of the whole plan would wait until the machine is nearly empty."""
+    from scripts.lakehouse import run_staging_e2e as staging
+
+    def on_start(container: dict[str, Any]) -> None:
+        if container["Config"]["Labels"].get("hai.template") == "duckdb_helper":
+            container["_out"] = "n,2\n"
+
+    env.daemon.on_start = on_start
+    env.start()
+    plan = int(env.client().call("plan")["environment"]["JOB_MEMORY_LIMIT"])
+    rogue = env.daemon.create_rogue("external-growing", {}, running=True)
+    env.daemon.usage["external-growing"] = 0
+    real_allocate = launcher.LauncherClient.allocate
+
+    def allocate_then_grow(self: launcher.LauncherClient, *args: Any, **kwargs: Any) -> str:
+        # Another job grows after the read's plan was taken: all but 6 GiB of that plan is used before the read launches.
+        allocation = real_allocate(self, *args, **kwargs)
+        env.daemon.usage["external-growing"] = max(0, plan - 6 * GIB)
+        return allocation
+
+    case_name = "read_share_probe"
+    (staging.CASES / case_name).mkdir(parents=True, exist_ok=True)
+    staging.TEST_REGISTRY = str(env.registry)
+    outcome: list[Any] = []
+
+    def read() -> None:
+        try:
+            outcome.append(staging.duckdb_csv(f"{staging.CONTAINER_OUT}/e2e/{case_name}/staging.duckdb", "select 1"))
+        except (RuntimeError, OSError, launcher.ClientError) as error:
+            outcome.append(error)
+
+    try:
+        with mock.patch.object(launcher.LauncherClient, "allocate", allocate_then_grow):
+            thread = threading.Thread(target=read)
+            thread.start()
+            thread.join(30)
+            waited = thread.is_alive()
+            if waited:
+                # The unfixed read waits on memory: cancel it so the case ends.
+                for attempt in env.state()["attempts"].values():
+                    if attempt["phase"] != "ended" and attempt["owner"].startswith("alloc:"):
+                        env.client().call("cancel", {"attempt_id": attempt["id"]}, env.alloc_principal(attempt["owner"].split(":", 1)[1]))
+                thread.join(60)
+    finally:
+        staging.TEST_REGISTRY = None
+        env.daemon.containers.pop(rogue, None)
+        env.daemon.usage.pop("external-growing", None)
+        shutil.rmtree(staging.CASES / case_name, ignore_errors=True)
+    shares = [int(a["environment"]["JOB_MEMORY_LIMIT"]) for a in env.state()["allocations"].values() if a.get("environment")]
+    return {
+        "the read ended without waiting on memory": not waited,
+        "the read returned the helper's rows": outcome == [[["n", "2"]]],
+        "the read's share is a fraction of the plan": bool(shares) and max(shares) < plan,
+    }
+
+
 @case("staging_runner_conversion")
 def staging_runner_conversion(env: Env) -> dict[str, bool]:
     """919: the staging runner's fixture launches (init, build, queries, packages) are launcher attempts; the case folder is the only writable mount."""
@@ -5336,6 +5395,7 @@ ALL_CASES = (
     dbt_and_silver_clients,
     catalog_client,
     staging_runner_conversion,
+    staging_read_share,
 )
 
 

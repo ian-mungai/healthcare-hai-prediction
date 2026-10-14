@@ -4583,13 +4583,23 @@ def record_budget(case: str, client: launcher.LauncherClient, allocation: str) -
     BUDGETS.append({"case": case, "launch": len(BUDGETS) + 1, **record})
 
 
+def light_allocation(client: launcher.LauncherClient) -> str:
+    """An allocation for one query or set-up launch: the plan split so that its share is the floor, not the whole machine.
+
+    A share of the whole plan waits until nearly every byte is free, so memory another job takes between the plan and the launch holds a
+    light read queued; a floor-sized share goes on whenever that much is free.
+    """
+    plan = client.call("plan")
+    return client.allocate(workers=max(1, min(int(plan["threads"]), int(plan["environment"]["JOB_MEMORY_LIMIT"]) // FLOOR)))
+
+
 def launch(template: str, launch_id: str, args: list[str], params: dict[str, Any], case: str = "query_or_setup") -> launcher.AttemptResult:
     """Run one attempt of a fixture template under the pool's allocation, or under one taken for this launch, to its end."""
     if INTERRUPTED.is_set():
         raise RuntimeError("the fixture pool was interrupted; no further launches")
     pool = POOL
     client = pool.client if pool is not None else launcher_client()
-    allocation = pool.allocation if pool is not None else client.allocate()
+    allocation = pool.allocation if pool is not None else light_allocation(client)
     try:
         if pool is None:
             record_budget(case, client, allocation)
@@ -4725,7 +4735,7 @@ def real_query(database: str, sql: str) -> launcher.AttemptResult:
     if not run_id or not database.startswith(f"{CONTAINER_OUT}/"):
         raise RuntimeError(f"{database} is not the build file of an open real run")
     client = launcher_client()
-    allocation = client.allocate()
+    allocation = light_allocation(client)
     principal = client.principal_alloc(allocation)
     try:
         params = {"mounts": [{"host": str((RUNS / run_id).resolve()), "container": CONTAINER_OUT}], "database": database, "sql": sql}
