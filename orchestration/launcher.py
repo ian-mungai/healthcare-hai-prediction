@@ -120,6 +120,8 @@ class Timings:
     restart_wait: float = 300.0
     # After a pool's cancellations persist, how long its workers keep polling an unreachable launcher before failing visibly.
     cancel_settle: float = 75.0
+    # How long a client keeps retrying a submit or status exchange that times out (a launcher busy on a loaded machine) before failing.
+    poll_patience: float = 180.0
 
 
 @dataclass(frozen=True)
@@ -5533,16 +5535,24 @@ class LauncherClient:
             if self.cancelling:
                 raise ClientError("the pool is cancelling; no further submits", "cancelled")
             self.pending_submits[request_id] = (payload, principal)
-        try:
-            reply = self.bounded_call("submit", payload, principal, request_id, 1.0)
-        except ClientError as error:
-            if error.code != "unavailable":
-                with self.live_lock:
-                    self.pending_submits.pop(request_id, None)
-            raise
-        except OSError:
-            # The request may already be persisted. Keep its exact identity for cancel_open to replay and reconcile.
-            raise
+        patience_end = time.monotonic() + self.config.timings.poll_patience
+        while True:
+            try:
+                reply = self.bounded_call("submit", payload, principal, request_id, 1.0)
+                break
+            except ClientError as error:
+                if error.code != "unavailable":
+                    with self.live_lock:
+                        self.pending_submits.pop(request_id, None)
+                    raise
+                if self.cancelling or time.monotonic() >= patience_end:
+                    raise
+            except OSError:
+                # The request may already be persisted. Keep its exact identity for cancel_open to replay and reconcile.
+                if self.cancelling or time.monotonic() >= patience_end:
+                    raise
+            # The same request ID again: the launcher returns the persisted reply instead of creating a second attempt.
+            time.sleep(0.2)
         attempt_id = str(reply["attempt_id"])
         with self.live_lock:
             self.pending_submits.pop(request_id, None)
@@ -5551,6 +5561,7 @@ class LauncherClient:
             self.cancel_open()
         ended = False
         unreachable = False
+        failing_since: float | None = None
         try:
             while True:
                 if self.cancel_unresolved.is_set():
@@ -5584,6 +5595,14 @@ class LauncherClient:
                         raise
                     failure = error
                 unreachable = failure is not None
+                if failure is not None and not self.cancelling and not self.cancel_unresolved.is_set():
+                    # A slow or briefly unreachable launcher: keep polling until the patience runs out, then fail visibly.
+                    failing_since = failing_since if failing_since is not None else time.monotonic()
+                    if time.monotonic() - failing_since >= self.config.timings.poll_patience:
+                        raise failure
+                    time.sleep(0.2)
+                    continue
+                failing_since = None
                 if failure is not None:
                     if not self.cancelling or self.cancel_unresolved.is_set():
                         raise failure
