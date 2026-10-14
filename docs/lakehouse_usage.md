@@ -1,7 +1,7 @@
 ---
 title: Lakehouse Usage
 description: Commands and checks for the launcher, bronze, staging, gold, silver validation, the run lock and the fixture kit.
-last_updated: 2026-10-13
+last_updated: 2026-10-14
 ---
 
 # Lakehouse Usage
@@ -14,8 +14,18 @@ last_updated: 2026-10-13
 its clients over a local socket. Every job is an attempt of a fixed template (`dbt_deps`, `real_dbt`, `fixture_dbt`,
 `fixture_init`, `duckdb_helper`, `quality_validate`, `query_reader`, `ui_reader`, `spark_read`, `spark_write`,
 `spark_e2e`) with a closed argument schema, a memory plan and a deadline entrypoint inside the image. `dbt.sh`,
-`query.sh`, `ui.sh`, the catalog script and the fixture kit are its clients. `real_dbt` is refused until the provenance
-package fills `provenance_vars` and `seal`, so no real build runs without recorded provenance.
+`query.sh`, `ui.sh`, the catalog script and the fixture kit are its clients.
+
+A real build (`real_dbt`) gets its provenance from `scripts/lakehouse/provenance.py`: the run ID, the SHA-256 of the dbt
+project and package snapshot and the pinned bronze snapshot set. The launch is refused unless every value is recorded.
+Launches that may write the build file run one at a time in submit order. A hook drops the build marker before each
+mutating launch. After a complete build whose results are all `success` or `pass`, the end hook writes the marker and
+the launcher seals the build: a read-only copy `sealed/<sha256>.duckdb` in the run folder, recorded with its digest in the
+run's completion. A build with any warning, including the release-copy conflict check, is not sealed. After sealing, the
+run refuses every further mutating launch. Each reader (gold, quality, query) attaches the sealed copy and checks its
+digest inside its container before reading. A graceful launcher stop waits for a running seal to finish. The sealed copy
+is a full byte copy, so it needs free disk equal to the build file. `scripts.lakehouse.run_provenance_e2e` covers these
+rules with a fake Docker and a test registry.
 
 ```sh
 .venv/bin/python -m orchestration.launcher status                # the launcher; --what registry, catalog or protected_sets

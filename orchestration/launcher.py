@@ -14,9 +14,9 @@ result is applied only while the attempt is still in the phase the operation exp
 a specification only: the launcher builds each container's create specification from the parsed ``docker-compose.yaml``,
 the template table and validated values, and records the SHA-256 of that effective specification.
 
-``provenance_vars(run)`` and ``seal(run)`` are the frozen interfaces the provenance package fills; until then they
-refuse ``real_dbt``. Failure modes 910 to 919 are in plans/wave2_20261011/d1_design.md section 15 and
-plans/wp/l1a_failure_modes.md.
+``provenance_vars(run)`` and ``seal(run)`` are the frozen interfaces that scripts/lakehouse/provenance.py fills: a ``real_dbt``
+launch needs recorded pins and a complete snapshot, and a gold-eligible build is sealed (D1 section 10).
+Failure modes 910 to 919 are in plans/wave2_20261011/d1_design.md section 15 and plans/wp/l1a_failure_modes.md.
 """
 
 from __future__ import annotations
@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from scripts.lakehouse import dbt_package_archive, memory_budget, pins, run_lock
+from scripts.lakehouse import provenance as build_provenance
 from scripts.process import run_command
 
 PROTOCOL = 1
@@ -909,6 +910,7 @@ TEMPLATES: dict[str, Template] = {
             run_domains=("transform",),
             run_modes=("real",),
         ),
+        Template("sealed_consumer", "quality", True, ("run",), default_seconds=3600, max_seconds=7200, run_domains=("transform",), run_modes=("real",)),
         Template("fixture_dbt", "analytics-dbt", True, ("alloc", "run"), guard="reader", default_seconds=3600, run_modes=("fixture", "publish_fixture")),
         Template("fixture_init", "analytics-dbt", True, ("alloc",), default_seconds=900),
         Template("duckdb_helper", "analytics-dbt", True, ("alloc",), default_seconds=900),
@@ -964,6 +966,7 @@ SPARK_JOBS: dict[str, dict[str, Any]] = {
     "bronze_e2e": {"template": "spark_e2e", "module": "scripts.lakehouse.run_bronze_e2e", "writes": ("data/e2e/bronze",), "aws": False, "grammar": {}},
     "pins_e2e": {"template": "spark_e2e", "module": "scripts.lakehouse.run_pins_e2e", "writes": ("data/e2e/pins",), "aws": False, "grammar": {}},
 }
+SEALED_READERS = ("duckdb_helper", "quality_validate")
 DBT_COMMANDS = ("build", "run", "seed", "snapshot", "test", "run-operation", "ls", "parse", "compile", "debug")
 DBT_OPTIONS_VALUES = {"--select": "many", "-s": "many", "--exclude": "many", "--selector": "one", "--indirect-selection": "choice"}
 DBT_OPTIONS_FLAGS = ("--full-refresh", "--fail-fast", "-x")
@@ -1206,6 +1209,7 @@ class Renderer:
             "query_reader": self.render_query_reader,
             "ui_reader": self.render_ui_reader,
             "real_dbt": self.render_real_dbt,
+            "sealed_consumer": self.render_sealed_consumer,
             "spark_read": self.render_spark_read,
             "spark_write": self.render_spark_write,
             "spark_e2e": self.render_spark_e2e,
@@ -1454,24 +1458,56 @@ class Renderer:
         )
 
     def render_duckdb_helper(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
-        """Read-only ``duckdb`` queries on named files, no network."""
-        self.only_params(inp, ("mounts", "database", "init", "sql", "flags"))
+        """Read-only ``duckdb`` queries on named files, no network. With ``sealed_run`` the database is the run's sealed copy and the container's
+        entrypoint checks it before ``duckdb`` runs (D1 section 10 item 6)."""
+        self.only_params(inp, ("mounts", "database", "init", "sql", "flags", build_provenance.SEALED_RUN_PARAM))
+        sealed = build_provenance.SEALED_RUN_PARAM in inp.params
+        if sealed and inp.params.get("database"):
+            raise LauncherError("a reader of a sealed run takes no database: it reads the sealed copy", "args")
         mounts = [self.resources_mount()]
         container_roots = []
-        for entry in inp.params["mounts"]:
+        for entry in inp.params.get("mounts", []) if sealed else inp.params["mounts"]:
             host = self.allowed(str(entry["host"]), "mount host")
             target = container_path(str(entry["container"]), "/workspace/")
+            if sealed and (target + "/").startswith("/workspace/sealed/"):
+                raise LauncherError("a mount may not cover the sealed copy", "args")
             mounts.append(Mount(str(host.resolve()), target, True))
             container_roots.append(target)
         command: list[str] = []
-        if inp.params.get("database"):
+        if sealed:
+            command = [self.SEALED_DATABASE, "-readonly"]
+        elif inp.params.get("database"):
             command = [container_path(str(inp.params["database"]), "/workspace/"), "-readonly"]
         command += ["-cmd", ".read /opt/analytics/resources.sql"]
         if inp.params.get("init"):
             command += ["-init", container_path(str(inp.params["init"]), "/workspace/")]
         command += [*validate_duckdb_flags(inp.params.get("flags") or ["-csv", "-noheader"]), "-c", str(inp.params["sql"])]
         env = self.allocation_env(inp, ("JOB_MEMORY_LIMIT", "DUCKDB_MEMORY_LIMIT", "JOB_THREADS"))
-        return self.assemble(inp, name, self.image("analytics-dbt"), ["duckdb"], command, env, mounts, int(inp.values["JOB_MEMORY_LIMIT"]), "none")
+        entrypoint = ["duckdb"]
+        if sealed:
+            entrypoint, command, extra = self.sealed_reader(inp, entrypoint, command)
+            mounts += extra
+        return self.assemble(inp, name, self.image("analytics-dbt"), entrypoint, command, env, mounts, int(inp.values["JOB_MEMORY_LIMIT"]), "none")
+
+    SEALED_DATABASE = "/workspace/sealed/build.duckdb"
+    SEALED_CHECK = 'python "$1" consume --sealed "$2" --expected-sha256 "$3" --expected-marker "$4" --print-result && shift 4 && exec "$@"'
+
+    def sealed_reader(self, inp: RenderInput, entrypoint: Sequence[str], command: Sequence[str]) -> tuple[list[str], list[str], list[Mount]]:
+        """Put a reader behind the consumer entrypoint: the same container hashes the sealed copy it attached, prints the check as the first line of
+        standard error and runs the reader only if the digest and the marker are the recorded ones (D1 section 10 item 6).
+
+        Returns the entrypoint, the command and the mounts (the sealed copy and the entrypoint's code, both read-only). The launcher takes the digest and the
+        expected marker from its own record of the sealed run; the caller names only the run.
+        """
+        digest = inp.provenance.get(build_provenance.VARIABLE_SEALED_SHA, "")
+        expected = inp.provenance.get(build_provenance.VARIABLE_SEALED_EXPECTED, "")
+        if inp.run_folder is None or not build_provenance.SHA256.fullmatch(digest) or not expected:
+            raise LauncherError("a reader of a sealed run needs the sealed run", "spec")
+        mounts = [
+            Mount(str(inp.run_folder / build_provenance.SEALED_FOLDER / f"{digest}.duckdb"), self.SEALED_DATABASE, True),
+            Mount(str(self.checkout / "scripts/lakehouse/provenance.py"), "/opt/hai/provenance.py", True),
+        ]
+        return ["sh", "-c", self.SEALED_CHECK, "sh"], ["/opt/hai/provenance.py", self.SEALED_DATABASE, digest, expected, *entrypoint, *command], mounts
 
     def render_dbt_deps(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
         """``dbt deps`` from the lock file into the shared package folder, the only writable mount."""
@@ -1532,20 +1568,29 @@ class Renderer:
         )
 
     def render_quality_validate(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
-        """The Great Expectations validation of a build file, no network."""
-        self.only_params(inp, ("database", "suites_host", "suites_hosts", "baselines_host", "out_host", "build_root"))
+        """The Great Expectations validation of a build file, no network. With ``sealed_run`` the build file is the run's sealed copy and the container's
+        entrypoint checks it before the validation runs (D1 section 10 item 6)."""
+        self.only_params(inp, ("database", "suites_host", "suites_hosts", "baselines_host", "out_host", "build_root", build_provenance.SEALED_RUN_PARAM))
+        sealed = build_provenance.SEALED_RUN_PARAM in inp.params
+        if sealed and ("database" in inp.params or "build_root" in inp.params):
+            raise LauncherError("a validation of a sealed run takes no database and no build_root: it reads the sealed copy", "args")
         values = self.compose_values(self.service_names("quality"), inp.values)
         mounts = self.compose.mounts("quality", values)
         build_mount = next(mount for mount in mounts if mount.target == "/workspace/build")
-        if inp.params.get("build_root"):
+        if sealed:
+            mounts = [mount for mount in mounts if mount is not build_mount]
+        elif inp.params.get("build_root"):
             # A fixture case's own folder instead of the shared build folder, still read-only (the gold fixture stage).
             replacement = Mount(str(self.allowed(str(inp.params["build_root"]), "build_root").resolve()), "/workspace/build", True)
             mounts = [replacement if mount is build_mount else mount for mount in mounts]
             build_mount = replacement
-        database = Path(str(inp.params["database"]))
-        if not inside(database, [Path(build_mount.source)]):
-            raise LauncherError(f"database {database} is outside the build folder", "args")
-        relative = str(database.resolve().relative_to(Path(build_mount.source).resolve()))
+        if sealed:
+            database_argument = self.SEALED_DATABASE
+        else:
+            database = Path(str(inp.params["database"]))
+            if not inside(database, [Path(build_mount.source)]):
+                raise LauncherError(f"database {database} is outside the build folder", "args")
+            database_argument = f"/workspace/build/{database.resolve().relative_to(Path(build_mount.source).resolve())}"
         contracts = self.checkout / "data_contracts" / "great_expectations"
         # One suite folder (``suites_host``) or several (``suites_hosts``: the silver atomic suites and the gold suites in one validation).
         if ("suites_host" in inp.params) == ("suites_hosts" in inp.params):
@@ -1562,7 +1607,7 @@ class Renderer:
         ]
         command = [
             "--database",
-            f"/workspace/build/{relative}",
+            database_argument,
             "--suites",
             *targets,
             "--baselines",
@@ -1572,6 +1617,9 @@ class Renderer:
         ]
         env = self.allocation_env(inp, ("DUCKDB_MEMORY_LIMIT", "JOB_THREADS"))
         entrypoint = ["python", "-m", "scripts.lakehouse.silver_quality"]
+        if sealed:
+            entrypoint, command, sealed_mounts = self.sealed_reader(inp, entrypoint, command)
+            extra += sealed_mounts
         return self.assemble(
             inp, name, self.image("quality"), entrypoint, command, env, [*mounts, *extra], int(inp.values["JOB_MEMORY_LIMIT"]), "none", workdir="/workspace"
         )
@@ -1663,6 +1711,37 @@ class Renderer:
             int(inp.values["JOB_MEMORY_LIMIT"]),
             self.network_name(registry_id),
             workdir="/workspace/dbt",
+        )
+
+    def render_sealed_consumer(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """A consumer of the sealed build: the sealed copy read-only, no network; its entrypoint hashes the mounted file first (D1 section 10 item 6)."""
+        self.only_params(inp, ())
+        if list(inp.args) != ["verify"]:
+            raise LauncherError("sealed_consumer takes the single argument verify", "args")
+        digest = inp.provenance.get(build_provenance.VARIABLE_SEALED_SHA, "")
+        if inp.run_folder is None or not build_provenance.SHA256.fullmatch(digest):
+            raise LauncherError("sealed_consumer needs a sealed run", "spec")
+        results = inp.run_folder / "consumer"
+        results.mkdir(parents=True, exist_ok=True)
+        values = self.compose_values(self.service_names("quality"), inp.values)
+        mounts = [mount for mount in self.compose.mounts("quality", values) if mount.target == "/workspace/scripts"]
+        mounts.append(Mount(str(inp.run_folder / build_provenance.SEALED_FOLDER / f"{digest}.duckdb"), "/workspace/sealed/build.duckdb", True))
+        mounts.append(Mount(str(results), "/workspace/out", False))
+        env = {**self.allocation_env(inp, ("DUCKDB_MEMORY_LIMIT", "JOB_THREADS")), **inp.provenance}
+        command = [
+            "consume",
+            "--sealed",
+            "/workspace/sealed/build.duckdb",
+            "--expected-sha256",
+            digest,
+            "--result",
+            f"/workspace/out/{inp.launch_id}-a{inp.attempt_n}.json",
+            "--expected-marker",
+            inp.provenance[build_provenance.VARIABLE_SEALED_EXPECTED],
+        ]
+        entrypoint = ["python", "-m", "scripts.lakehouse.provenance"]
+        return self.assemble(
+            inp, name, self.image("quality"), entrypoint, command, env, mounts, int(inp.values["JOB_MEMORY_LIMIT"]), "none", workdir="/workspace"
         )
 
     def spark_mounts(self, job: str, inp: RenderInput) -> list[Mount]:
@@ -1795,13 +1874,31 @@ class Renderer:
 
 
 def provenance_vars(run: Mapping[str, Any]) -> dict[str, str]:
-    """The provenance variables a ``real_dbt`` launch of ``run`` carries. Frozen interface: refuses until the provenance package fills it."""
-    raise LauncherError(f"real_dbt is refused for run {run.get('run_id')}: provenance_vars is not filled yet", "provenance")
+    """The provenance variables a ``real_dbt`` launch of ``run`` carries (D1 section 10); a missing or unrecorded value refuses."""
+    from scripts.lakehouse import provenance
+
+    try:
+        return provenance.variables(run)
+    except provenance.ProvenanceError as error:
+        raise LauncherError(f"real_dbt is refused for run {run.get('run_id')}: {error}", "provenance") from error
 
 
 def seal(run: Mapping[str, Any]) -> dict[str, Any]:
-    """Make the sealed copy of a gold-eligible build of ``run``. Frozen interface: refuses until the provenance package fills it."""
-    raise LauncherError(f"run {run.get('run_id')} cannot be sealed: seal is not filled yet", "provenance")
+    """Make the sealed copy of a gold-eligible build of ``run`` and return its completion record (D1 section 10 item 5)."""
+    from scripts.lakehouse import provenance
+
+    try:
+        return provenance.seal_build(run)
+    except provenance.ProvenanceError as error:
+        raise LauncherError(f"run {run.get('run_id')} cannot be sealed: {error}", "provenance") from error
+
+
+def consumer_vars(run: Mapping[str, Any]) -> dict[str, str]:
+    """The environment of a consumer of the run's sealed copy; a run that is not sealed refuses."""
+    try:
+        return build_provenance.consumer_variables(run)
+    except build_provenance.ProvenanceError as error:
+        raise LauncherError(f"run {run.get('run_id')} has no sealed copy: {error}", "provenance") from error
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -2057,6 +2154,7 @@ class Launcher:
             "restartping": self.on_restartping,
             "copy": self.on_copy,
             "rmcopy": self.on_rmcopy,
+            "seal": self.on_seal,
             "attach": self.on_attach,
         }
         self.handlers: dict[str, Callable[[Ctx], Any]] = {
@@ -2258,8 +2356,27 @@ class Launcher:
             self.shutdown_resources()
         return 0
 
+    def drain_seals(self) -> None:
+        """Wait until every seal worker has returned and publish each result through ``on_seal`` (D1 section 10 item 5, review delta 2 finding 9).
+
+        A seal worker copies into the run's folder and cannot be cancelled (the frozen ``seal`` interface). A launcher that gave up the registry lock first
+        would let a replacement find no worker in its own ``inflight`` set, discard the seal record, finish a recovery and accept a release while the old
+        worker still writes. The lock and the seal's open-work protection therefore stay until the worker has stopped, and ``seal_stale`` still decides what
+        publishes. Nothing else is applied. The wait has no limit: the process cannot end before its workers do (the interpreter joins them at exit), and a
+        hard kill ends a worker with its process. A reply to ``shutdown`` is not proof that the worker ended; the process exit is.
+        """
+        while any(key.startswith("seal:") for key in self.inflight):
+            try:
+                tag, key, payload = self.messages.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            self.inflight.discard(key)
+            if tag == "seal":
+                with contextlib.suppress(run_lock.RegistryError, OSError):  # the record stays; the next launcher resumes the seal or discards it
+                    self.on_seal(key, *payload)
+
     def shutdown_resources(self) -> None:
-        """Close every socket and thread the launcher opened."""
+        """Close every socket and thread the launcher opened; the registry lock goes last, after every seal worker has returned."""
         self.running = False
         if self.stream is not None:
             self.stream.close()
@@ -2270,6 +2387,7 @@ class Launcher:
             with contextlib.suppress(OSError):
                 self.listener.close()
         self.cfg.socket_path.unlink(missing_ok=True)
+        self.drain_seals()
         self.pool.shutdown(wait=False, cancel_futures=True)
         try:
             with self.tx() as state:
@@ -2938,8 +3056,14 @@ class Launcher:
                 if pointer is None:
                     raise LauncherError("the run has no complete snapshot", "spec")
                 snapshot = run_folder / "snapshots" / str(pointer)
+            if attempt["template"] == "sealed_consumer":
+                provenance = consumer_vars(state["runs"][ident])
             if attempt["template"] == "spark_read":
                 run_folder = run_folder
+        if attempt["template"] in SEALED_READERS and build_provenance.SEALED_RUN_PARAM in attempt["params"]:
+            sealed_id = str(attempt["params"][build_provenance.SEALED_RUN_PARAM])
+            provenance = self.sealed_reader_vars(state, sealed_id)
+            run_folder = self.cfg.runs_root / sealed_id
         inp = RenderInput(
             attempt["template"],
             self.owner_name(attempt),
@@ -3158,6 +3282,15 @@ class Launcher:
             return
         if not self.docker_ok or self.status != "serving" and owner != DIAGNOSTIC_OWNER:
             return
+        if a["template"] == "real_dbt" and owner.startswith("run:") and build_provenance.is_serialized(a["args"]):
+            held = state["runs"].get(owner.partition(":")[2])
+            blocker = build_provenance.dispatch_blocker(held, a, state["attempts"].values()) if held is not None else None
+            if blocker == "sealed":
+                a["cancel_intent"] = {"reason": "sealed", "at": utc_now()}
+                return
+            if blocker:
+                a["waiting_on"] = blocker
+                return
         if owner.startswith("alloc:"):
             allocation = state["allocations"][owner.partition(":")[2]]
             active = sum(1 for other in state["attempts"].values() if other["owner"] == owner and other["phase"] in ACTIVE_PHASES)
@@ -3184,6 +3317,19 @@ class Launcher:
                 a["preparing"] = True
                 actions.append(lambda: self.spawn(f"prepare:{a['id']}", "prepare", self.prepare_attempt, a["id"], dict(a), False, {}))
             return
+        if a["template"] == "real_dbt" and owner.startswith("run:") and build_provenance.is_mutating(a["args"]) and not a.get("cleared"):
+            # Before each mutating launch the build is open, the completion record is cleared (D1 section 10 item 4) and the results of every
+            # earlier launch are removed, so a seal can only certify what this launch writes.
+            building = state["runs"][owner.partition(":")[2]]
+            try:
+                build_provenance.clear_build_artifacts(building)
+            except build_provenance.ProvenanceError as error:
+                self.finish_attempt(state, a, "create_failed", f"provenance: {error}")
+                return
+            a["cleared"] = True
+            building["build_state"] = "open"
+            for key in ("completion", "seal_error", "build_attempt", "build_binding"):
+                building.pop(key, None)
         self.start_create(state, a, actions)  # False: the image's defaults are being read; the attempt stays queued
 
     CAPACITY_VALID = 10.0
@@ -3607,9 +3753,106 @@ class Launcher:
                 self.finish_attempt(state, a, self.intent_reason(a))
                 if a["reason"] == "exited" and a.get("exit_code") == 0 and a["template"] == "spark_read" and a["args"][:1] == ["pin"]:
                     self.record_pins(state, a)
+                if a["reason"] == "exited" and a.get("exit_code") == 0 and a["template"] == "real_dbt" and build_provenance.is_full_build(a["args"]):
+                    self.begin_seal(state, a)
             else:
                 a["cleanup"]["step"] = "remove"
         self.dirty.add(attempt_id)
+
+    def begin_seal(self, state: dict[str, Any], a: dict[str, Any]) -> None:
+        """A full build ended with exit code 0: the run is ``sealing`` until ``seal`` has decided (D1 section 10 item 5).
+
+        The run records which attempt wrote the build, in which generation and with which arguments; ``seal`` certifies that attempt only. The seal is an
+        operation recorded with the run (``seal``: ID, attempt, generation, binding): it is open work of the run until its worker has returned, and its
+        result is published only while the run still is what the record says (``seal_stale``).
+        """
+        run = state["runs"][a["owner"].partition(":")[2]]
+        run["build_state"] = "sealing"
+        run["build_attempt"] = a["id"]
+        run["build_binding"] = build_provenance.binding(a)
+        run["seal"] = {"id": new_id("sl"), "attempt": a["id"], "generation": int(run.get("generation", 1)), "binding": run["build_binding"]}
+        self.spawn(f"seal:{run['run_id']}:{run['seal']['id']}", "seal", self.seal_worker, dict(run))
+
+    def seal_worker(self, run: Mapping[str, Any]) -> dict[str, Any]:
+        """Worker: the frozen ``seal`` interface; a refusal comes back as an error. A test registry's ``seal_hold`` file holds it (two minutes at most)."""
+        hold = self.registry.path / "seal_hold"
+        deadline = time.monotonic() + 120
+        while self.registry.kind == "test" and hold.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return seal(run)
+
+    @staticmethod
+    def seal_stale(run: Mapping[str, Any], record: Any) -> str | None:
+        """None while the run still is what its seal record says; else why the seal no longer applies (D1 section 10 items 4 and 5, review delta 1 finding 8).
+
+        The run must still be sealing, held or finalizing, in the generation the seal began in, with the same build attempt and binding.
+        """
+        if not isinstance(record, Mapping):
+            return "the run holds no record of the seal"
+        if run.get("build_state") != "sealing":
+            return f"the run is {run.get('build_state')}, not sealing"
+        if run.get("state") not in ("held", "finalizing"):
+            return f"the run is {run.get('state')}"
+        if int(run.get("generation", 1)) != record.get("generation"):
+            return f"the run is in generation {run.get('generation', 1)}; the seal began in generation {record.get('generation')}"
+        if run.get("build_attempt") != record.get("attempt") or run.get("build_binding") != record.get("binding"):
+            return "the run names another build than the seal"
+        return None
+
+    @staticmethod
+    def discard_seal(run: dict[str, Any], reason: str) -> None:
+        """Close a seal that no longer applies: no completion, an open build and the reason."""
+        run.pop("seal", None)
+        run.pop("completion", None)
+        run.update({"build_state": "open", "seal_error": f"the seal was discarded: {reason}"})
+
+    def on_seal(self, key: str, outcome: str, value: Any) -> None:
+        """The seal worker returned. In one registry transaction the seal is closed and its result is published only if ``seal_stale`` finds the run as the
+        record says; otherwise the older seal publishes nothing (a completion record and the ``sealed`` state, or the reason and an open build)."""
+        _, run_id, seal_id = key.split(":", 2)
+        with self.tx() as state:
+            run = state["runs"].get(run_id)
+            record = run.get("seal") if run is not None else None
+            if run is None or not isinstance(record, Mapping) or record.get("id") != seal_id:
+                return
+            reason = self.seal_stale(run, record)
+            if reason is None and outcome == "ok" and (value.get("build_attempt"), value.get("build_generation")) != (record["attempt"], record["generation"]):
+                reason = "the sealed build is not the one the seal began with"
+            if reason is not None:
+                self.discard_seal(run, reason)
+                return
+            run.pop("seal")
+            if outcome == "ok":
+                run.update({"completion": value, "build_state": "sealed"})
+                run.pop("seal_error", None)
+            else:
+                run.update({"build_state": "open", "seal_error": str(value)})
+                run.pop("completion", None)
+
+    @staticmethod
+    def sealed_reader_vars(state: Mapping[str, Any], run_id: str) -> dict[str, str]:
+        """The sealed digest and expected marker of a run's sealed copy for a reader behind the consumer entrypoint; the launcher reads them from its own
+        record, a caller supplies only the run ID."""
+        run = state["runs"].get(run_id)
+        if run is None:
+            raise LauncherError(f"run {run_id} does not exist", "provenance")
+        return consumer_vars(run)
+
+    def advance_seals(self, state: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        """A seal that no worker of this launcher is running (the launcher died) is resumed while it still applies and discarded when it does not; the step
+        is idempotent."""
+        for run_id, run in state["runs"].items():
+            record = run.get("seal")
+            if record is None and run.get("build_state") != "sealing":
+                continue
+            key = f"seal:{run_id}:{record.get('id') if isinstance(record, Mapping) else ''}"
+            if key in self.inflight:
+                continue
+            reason = self.seal_stale(run, record)
+            if reason is not None:
+                self.discard_seal(run, reason)
+            else:
+                actions.append(partial(self.spawn, key, "seal", self.seal_worker, dict(run)))
 
     def safe_read(self, run_id: str, name: str, limit: int = 1 << 20) -> bytes:
         """Read a run file component by component from the runs root with ``O_NOFOLLOW`` along ``runs/<run_id>/<name>`` (D1 section 10 item 2)."""
@@ -4099,6 +4342,8 @@ class Launcher:
         kind, _, ident = owner_prefix.partition(":")
         if kind == "run":
             found += [f"registration {r}" for r in state["runs"][ident]["registrations"]]
+            if state["runs"][ident].get("seal"):
+                found.append(f"seal {state['runs'][ident]['seal']['id']}")
         if kind == "alloc":
             found += [f"registration {r['id']}" for r in state["registrations"].values() if r["allocation"] == ident]
         return found
@@ -4177,6 +4422,7 @@ class Launcher:
         self.advance_catalog(state, actions)
         self.advance_restart(state, actions)
         self.advance_copies(state, actions)
+        self.advance_seals(state, actions)
 
     # allocations ------------------------------------------------------------------------------------------------
 
@@ -4338,6 +4584,11 @@ class Launcher:
         launch_id = str(params.get("launch_id", ""))
         if not IDENTIFIER.fullmatch(launch_id):
             raise LauncherError("launch_id must be a plain identifier", "args")
+        sealed_run = (params.get("params") or {}).get(build_provenance.SEALED_RUN_PARAM)
+        if sealed_run is not None:
+            if template_name not in SEALED_READERS or not isinstance(sealed_run, str) or not RUN_ID.fullmatch(sealed_run):
+                raise LauncherError(f"{build_provenance.SEALED_RUN_PARAM} takes a run ID and only {', '.join(SEALED_READERS)} accept it", "args")
+            self.sealed_reader_vars(ctx.state, sealed_run)
         if kind == "run":
             run = ctx.state["runs"][ident]
             if run["state"] != "held":
@@ -4345,8 +4596,15 @@ class Launcher:
             problem = self.template_problem(ctx.state, owner, template_name, dict(params.get("params") or {}))
             if problem:
                 raise LauncherError(problem, "refused")
+            raw_args = [str(a) for a in params.get("args", [])]
             if template_name == "real_dbt":
                 provenance_vars(run)
+                if build_provenance.is_mutating(raw_args) and run.get("build_state") == "sealed":
+                    raise LauncherError(f"run {ident} is sealed; a mutating launch is refused", "refused")
+            if template_name == "sealed_consumer":
+                if raw_args != ["verify"]:
+                    raise LauncherError("sealed_consumer takes the single argument verify", "args")
+                consumer_vars(run)
         else:
             allocation = ctx.state["allocations"][ident]
             if allocation["state"] != "held":
@@ -4389,9 +4647,15 @@ class Launcher:
         run_folder = None
         if kind == "run":
             run_folder = self.cfg.runs_root / ident
-        if template_name == "real_dbt":
+        if template_name in ("real_dbt", "sealed_consumer"):
             return
-        inp = RenderInput(template_name, ident, "dry", 1, 1, "op-dry", self.PLACEHOLDER_ENV, int(time.time()) + 60, args, params, {}, None, run_folder, {})
+        provenance: dict[str, str] = {}
+        if build_provenance.SEALED_RUN_PARAM in params:
+            run_folder = self.cfg.runs_root / "dry"
+            provenance = {build_provenance.VARIABLE_SEALED_SHA: "0" * 64, build_provenance.VARIABLE_SEALED_EXPECTED: "{}"}
+        inp = RenderInput(
+            template_name, ident, "dry", 1, 1, "op-dry", self.PLACEHOLDER_ENV, int(time.time()) + 60, args, params, {}, None, run_folder, provenance
+        )
         renderer.render(inp, self.registry_id)
 
     def guard_folder(self, template: Template, params: Mapping[str, Any]) -> str | None:
@@ -5726,7 +5990,7 @@ def parser() -> argparse.ArgumentParser:
     restart.add_argument("--owner", action="store_true", required=True)
     commands.add_parser("shutdown", help="stop the launcher").add_argument("--owner", action="store_true", required=True)
     commands.add_parser(
-        "dbt", help="dbt: `deps` runs the dbt_deps template; any other command needs a real run (refused until provenance is filled)"
+        "dbt", help="dbt: `deps` runs the dbt_deps template; any other command needs a real run with recorded pins and a complete snapshot"
     ).add_argument("args", nargs="*")
     commands.add_parser("query", help="an interactive DuckDB shell on the bronze tables (query_reader)").add_argument("args", nargs="*")
     commands.add_parser("ui", help="the DuckDB UI on 127.0.0.1:4213 (ui_reader)")

@@ -13,11 +13,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
+from scripts.lakehouse import provenance
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUILD = REPO_ROOT / "data/analytics/dbt"
@@ -70,16 +72,29 @@ def repeated_dbt_tests(suites: Path, manifest: Path) -> list[str]:
     return repeated
 
 
-def validate(database: Path, suites: Path | list[Path], baselines: Path, manifest: Path = MANIFEST) -> tuple[int, Path]:
+def validate(
+    database: Path | None,
+    suites: Path | list[Path],
+    baselines: Path,
+    manifest: Path = MANIFEST,
+    *,
+    sealed_run: str | None = None,
+    completion: Mapping[str, Any] | None = None,
+) -> tuple[int, Path]:
     """Run the quality attempt on one build file and write the run record; return the exit code and record path.
 
     ``suites`` is one folder (the gold runner passes its gold folder) or a list of folders (the silver atomic suites and the gold suites).
+    With ``sealed_run`` and its ``completion`` record the validation reads the run's sealed copy (``database`` is None): the quality container checks the
+    copy it attached before it validates, and a check that does not accept the copy stops the call (D1 section 10 item 6).
     """
     folders = [suites] if isinstance(suites, Path) else list(suites)
-    for path, kind in [(database, "build file"), *((folder, "suites folder") for folder in folders), (baselines, "baselines file")]:
+    if (sealed_run is None) != (completion is None) or (database is None) != (sealed_run is not None):
+        raise SilverError("a validation reads either a build file or a sealed run with its completion record")
+    inputs = [(database, "build file")] if database is not None else []
+    for path, kind in [*inputs, *((folder, "suites folder") for folder in folders), (baselines, "baselines file")]:
         if not path.exists():
             raise SilverError(f"{kind} {path} does not exist")
-    if not database.resolve().is_relative_to(BUILD.resolve()):
+    if database is not None and not database.resolve().is_relative_to(BUILD.resolve()):
         raise SilverError("the build file must be under data/analytics/dbt")
     link = launcher.load_client(TEST_REGISTRY)
     if build_running(link):
@@ -93,7 +108,8 @@ def validate(database: Path, suites: Path | list[Path], baselines: Path, manifes
         raise SilverError(f"no allocation for the validation: {error}") from error
     principal = link.principal_alloc(allocation)
     try:
-        params: dict[str, Any] = {"database": str(database.resolve()), "baselines_host": str(baselines.resolve()), "out_host": str(out)}
+        params: dict[str, Any] = {"baselines_host": str(baselines.resolve()), "out_host": str(out)}
+        params |= {provenance.SEALED_RUN_PARAM: sealed_run} if sealed_run is not None else {"database": str(database.resolve()) if database else ""}
         if isinstance(suites, Path):
             params["suites_host"] = str(suites.resolve())
         else:
@@ -104,6 +120,11 @@ def validate(database: Path, suites: Path | list[Path], baselines: Path, manifes
         raise SilverError(f"the launcher refused the validation: {error}") from error
     finally:
         link.release_allocation(allocation)
+    if completion is not None:
+        try:
+            provenance.accepted_check(result, completion)
+        except provenance.ProvenanceError as error:
+            raise SilverError(f"the quality container did not accept the sealed copy: {error}") from error
     result_path = out / "result.json"
     if not result_path.is_file():
         raise SilverError(f"the quality container wrote no result ({result.reason}, exit {result.exit_code}): {result.stderr.strip().splitlines()[-1:]}")

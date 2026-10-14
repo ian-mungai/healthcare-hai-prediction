@@ -51,7 +51,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
-from scripts.lakehouse import catalog, geography_file_periods, ipps_file_labels, mmd_conditions, ownership_release_periods, pos_file_periods
+from scripts.lakehouse import catalog, geography_file_periods, ipps_file_labels, mmd_conditions, ownership_release_periods, pos_file_periods, provenance
 
 REPO_ROOT = catalog.REPO_ROOT
 OUT = REPO_ROOT / "data/analytics/dbt"
@@ -4789,8 +4789,11 @@ def dbt_build(case: str, target: str, project: bool = False) -> tuple[int, dict[
         results_path = RUNS / run_id / "target/run_results.json"
         results_path.unlink(missing_ok=True)
         try:
-            result = client.run_attempt(client.principal_run(run_id), "real_dbt", f"build-{case}", ["build"], {}, checkout=REPO_ROOT)
-        except launcher.ClientError as error:
+            # A real build runs on the run's snapshot of the dbt project and packages, with the recorded pins (D1 section 10).
+            principal = client.principal_run(run_id)
+            provenance.request_snapshot(client, principal, run_id, REPO_ROOT, (OUT / "dbt_packages").resolve())
+            result = client.run_attempt(principal, "real_dbt", f"build-{case}", ["build"], {}, checkout=REPO_ROOT)
+        except (launcher.ClientError, provenance.ProvenanceError) as error:
             raise RuntimeError(f"the launcher refused the real build: {error}") from error
     code = result.exit_code if result.exit_code is not None else 1
     if not results_path.exists():

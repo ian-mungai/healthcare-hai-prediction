@@ -19,6 +19,12 @@ flags:
   send_anonymous_usage_stats: false
   use_colors: false
 
+# The hooks around the build marker act only on a real build (macros/build_marker_hooks.sql, D1 section 10 items 4 and 5).
+on-run-start:
+  - "{{ hai_drop_build_marker() }}"
+on-run-end:
+  - "{{ hai_finalize_build_marker(results) }}"
+
 vars:
   # The gold release copy-consistency test (warn severity) runs in every gate and real build; package kit checks keep it off
   # because the kit counts a warning as a failure.

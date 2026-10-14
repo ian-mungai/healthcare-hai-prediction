@@ -3202,6 +3202,29 @@ def render_templates(env: Env) -> dict[str, bool]:
     )
     pf = facts(probe)
     out["probe"] = pf["image"] == compose.image("analytics") and pf["entrypoint"] == ["true"] and pf["mounts"] == set() and pf["network"] == "none"
+    digest = "d" * 64
+    f = render(
+        "sealed_consumer",
+        ["verify"],
+        {},
+        run_folder=run_folder,
+        provenance={"HAI_SEALED_SHA256": digest, "HAI_SEALED_EXPECTED": '{"run_id":"r"}'},
+    )
+    out["sealed_consumer"] = (
+        f["image"] == compose.image("quality")
+        and f["network"] == "none"
+        and f["entrypoint"] == wrapped(["python", "-m", "scripts.lakehouse.provenance"])
+        and f["mounts"]
+        == {
+            (str(ROOT / "scripts"), "/workspace/scripts", True),
+            (str(run_folder / "sealed" / f"{digest}.duckdb"), "/workspace/sealed/build.duckdb", True),
+            (str(run_folder / "consumer"), "/workspace/out", False),
+        }
+        and f["cmd"][:1] == ["consume"]
+        and f["cmd"][f["cmd"].index("--expected-sha256") + 1] == digest
+        and f["env"]["HAI_SEALED_SHA256"] == digest
+        and not any("TOKEN" in name or "SECRET" in name for name in f["env"])
+    )
     out["every template of the table was rendered"] = set(launcher.TEMPLATES) <= {
         "fixture_dbt",
         "fixture_init",
@@ -3211,6 +3234,7 @@ def render_templates(env: Env) -> dict[str, bool]:
         "query_reader",
         "ui_reader",
         "real_dbt",
+        "sealed_consumer",
         "spark_read",
         "spark_write",
         "spark_e2e",

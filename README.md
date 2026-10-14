@@ -140,8 +140,9 @@ The E2E runners can also run on their own; each needs a new output directory:
 .venv/bin/python -m scripts.quality.run_documentation_review_e2e
 ```
 
-Every container starts through the launcher (`orchestration/launcher.py`), the only process allowed to call Docker. Real
-dbt builds are refused until the provenance package records each build's provenance. The main lakehouse commands:
+Every container starts through the launcher (`orchestration/launcher.py`), the only process allowed to call Docker. A real
+dbt build runs only with its provenance recorded; a complete successful build is sealed into a read-only copy that the
+gold, quality and query readers check before they read it. The main lakehouse commands:
 
 ```sh
 .venv/bin/python -m orchestration.launcher status                  # the launcher; --what registry or catalog

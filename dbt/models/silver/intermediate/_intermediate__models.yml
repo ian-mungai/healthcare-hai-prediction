@@ -1257,14 +1257,29 @@ models:
     description: >
       One row naming the dbt run that wrote the build file and the DuckDB version that wrote it, built after the kept
       models it names (amendment A28). Great Expectations validation (scripts/lakehouse/silver.py validate) refuses a
-      build file without it and binds its result to this row (silver step 6, failure modes 639, 646 and 647).
+      build file without it and binds its result to this row (silver step 6, failure modes 639, 646 and 647). On a real
+      build the launcher passes the run, the dbt tree hash, the bronze pins and the Git revision; a missing or
+      unrecorded value stops compilation, and the on-run-end hook keeps the row only after a gold-eligible build
+      (scripts/lakehouse/provenance.py, D1 section 10). Fixture and lint builds read unrecorded for the four provenance columns.
     columns:
       - name: dbt_invocation_id
         description: The dbt invocation that built this file.
         data_tests: [unique, not_null]
       - name: git_revision
-        description: The git revision passed as the dbt variable git_revision, or unrecorded.
+        description: The Git revision of the checkout on a real build; the dbt variable git_revision, or unrecorded, on a fixture build.
         data_tests: [not_null]
       - name: duckdb_version
         description: version() of the DuckDB that wrote the file.
+        data_tests: [not_null]
+      - name: run_id
+        description: The launcher run that built this file.
+        data_tests: [not_null]
+      - name: dbt_tree_sha256
+        description: The launcher's hash of the run's snapshot of the dbt project and its packages.
+        data_tests: [not_null]
+      - name: bronze_pins_sha256
+        description: SHA-256 of the run's pins.json, the bronze snapshot IDs the build read.
+        data_tests: [not_null]
+      - name: pins_json
+        description: The text of the run's pins.json; its SHA-256 is bronze_pins_sha256.
         data_tests: [not_null]
