@@ -97,11 +97,64 @@
     },
     "bridge_measure_control": {
       "attributes": [],
+      "columns": [
+        {
+          "name": "measure_sk",
+          "silver_column": "measure_sk",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "registry_control_sk",
+          "silver_column": "registry_control_sk",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "measure_control",
+          "silver_column": "measure_control",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "vintage_start",
+          "silver_column": "vintage_start",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "vintage_end",
+          "silver_column": "vintage_end",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "source_seed",
+          "silver_column": "source_seed",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "source_row",
+          "silver_column": "source_row",
+          "type": "INTEGER"
+        }
+      ],
       "grain": "measure_sk, registry_control_sk, vintage_start, vintage_end",
+      "grain_columns": [
+        "measure_sk",
+        "registry_control_sk",
+        "vintage_start",
+        "vintage_end"
+      ],
       "inputs": [
         "dbt/seeds/gold/ (B1)"
       ],
-      "package": "G2"
+      "package": "G2",
+      "references": [
+        {
+          "column": "measure_sk",
+          "dimension": "dim_measure"
+        },
+        {
+          "column": "registry_control_sk",
+          "dimension": "dim_registry_control"
+        }
+      ]
     },
     "bridge_zip_county": {
       "attributes": "every silver column",
@@ -461,6 +514,654 @@
     "cast(<natural key> as varchar) inside a surrogate key",
     "case only inside surrogate-key or unknown-member handling"
   ],
+  "expression_policy": {
+    "date_roles": {
+      "calendar_year": [
+        "year"
+      ],
+      "iso_week": [
+        "week",
+        "weekofyear"
+      ],
+      "iso_year": [
+        "isoyear"
+      ],
+      "month": [
+        "month"
+      ],
+      "month_number": [
+        "month"
+      ],
+      "quarter": [
+        "quarter"
+      ],
+      "quarter_number": [
+        "quarter"
+      ]
+    },
+    "label_choice": {
+      "dim_drg": [
+        "code_system",
+        "code"
+      ],
+      "dim_measure": [
+        "fact",
+        "measure_key"
+      ],
+      "dim_rurality_code": [
+        "code_system",
+        "code"
+      ]
+    },
+    "normalization_inputs": {
+      "dim_census_tract": {
+        "census_tract_geoid": [
+          [
+            "int_ruca_codes",
+            "geography_id"
+          ],
+          [
+            "int_hpsa_components",
+            "geography_id"
+          ]
+        ]
+      },
+      "dim_change_type": {
+        "code": [
+          [
+            "int_change_of_ownership_rows",
+            "chow_type_code"
+          ]
+        ],
+        "code_label": [
+          [
+            "int_change_of_ownership_rows",
+            "chow_type_text"
+          ]
+        ]
+      },
+      "dim_condition": {
+        "code": [
+          [
+            "int_mmd_prevalence",
+            "condition_label"
+          ]
+        ],
+        "code_label": [
+          [
+            "int_mmd_prevalence",
+            "condition_label"
+          ]
+        ]
+      },
+      "dim_county": {
+        "county_fips": [
+          [
+            "int_acs_county_values",
+            "county_fips"
+          ],
+          [
+            "int_bls_county_series",
+            "county_fips"
+          ],
+          [
+            "int_gv_county_values",
+            "county_fips"
+          ],
+          [
+            "int_hpsa_components",
+            "county_fips"
+          ],
+          [
+            "int_mmd_prevalence",
+            "county_fips"
+          ],
+          [
+            "int_mua_components",
+            "county_fips"
+          ],
+          [
+            "int_places_county_values",
+            "county_fips"
+          ],
+          [
+            "int_pos_hospital_snapshots",
+            "county_fips"
+          ],
+          [
+            "int_ruca_codes",
+            "county_fips"
+          ],
+          [
+            "int_rucc_county_codes",
+            "county_fips"
+          ],
+          [
+            "int_sahie_county_rows",
+            "county_fips"
+          ],
+          [
+            "int_saipe_county_estimates",
+            "county_fips"
+          ],
+          [
+            "int_svi_county_values",
+            "county_fips"
+          ],
+          [
+            "int_wonder_county_deaths",
+            "county_fips"
+          ]
+        ]
+      },
+      "dim_demographic_group": {
+        "code": [
+          [
+            "int_sahie_county_rows",
+            "agecat"
+          ],
+          [
+            "int_sahie_county_rows",
+            "racecat"
+          ],
+          [
+            "int_sahie_county_rows",
+            "sexcat"
+          ],
+          [
+            "int_sahie_county_rows",
+            "iprcat"
+          ],
+          [
+            "int_gv_county_values",
+            "bene_age_lvl"
+          ]
+        ]
+      },
+      "dim_drg": {
+        "@order": [
+          [
+            "int_mup_drg_discharges",
+            "data_year"
+          ]
+        ],
+        "code": [
+          [
+            "int_mup_drg_discharges",
+            "drg_cd"
+          ]
+        ],
+        "code_label": [
+          [
+            "int_mup_drg_discharges",
+            "drg_desc"
+          ]
+        ]
+      },
+      "dim_ehr_product": {
+        "code": [
+          [
+            "int_onc_chpl_linkage_rows",
+            "product_database_id"
+          ]
+        ],
+        "code_label": [
+          [
+            "int_onc_chpl_linkage_rows",
+            "product_name"
+          ]
+        ]
+      },
+      "dim_enrollment": {
+        "enrollment_id": [
+          [
+            "int_change_of_ownership_rows",
+            "enrollment_id_buyer"
+          ],
+          [
+            "int_change_of_ownership_rows",
+            "enrollment_id_seller"
+          ],
+          [
+            "int_hospital_enrollment_rows",
+            "enrollment_id"
+          ],
+          [
+            "int_hospital_owner_rows",
+            "enrollment_id"
+          ]
+        ]
+      },
+      "dim_footnote": {
+        "code": [
+          [
+            "int_cc_complications_deaths_windows",
+            "footnote"
+          ],
+          [
+            "int_cc_hcahps_windows",
+            "hcahps_answer_percent_footnote"
+          ],
+          [
+            "int_cc_hcahps_windows",
+            "number_of_completed_surveys_footnote"
+          ],
+          [
+            "int_cc_hcahps_windows",
+            "patient_survey_star_rating_footnote"
+          ],
+          [
+            "int_cc_hcahps_windows",
+            "survey_response_rate_percent_footnote"
+          ],
+          [
+            "int_cc_hrrp_windows",
+            "footnote"
+          ],
+          [
+            "int_cc_maternal_windows",
+            "footnote"
+          ],
+          [
+            "int_cc_timely_effective_windows",
+            "footnote"
+          ],
+          [
+            "int_cc_unplanned_visits_windows",
+            "footnote"
+          ],
+          [
+            "int_hac_program_years",
+            "payment_reduction_footnote"
+          ],
+          [
+            "int_hac_program_years",
+            "total_hac_score_footnote"
+          ],
+          [
+            "int_hgi_hospital_releases",
+            "overall_rating_footnote"
+          ]
+        ]
+      },
+      "dim_hospital": {
+        "ccn": [
+          [
+            "int_cc_complications_deaths_windows",
+            "entity_id"
+          ],
+          [
+            "int_cc_hcahps_windows",
+            "entity_id"
+          ],
+          [
+            "int_cc_hrrp_windows",
+            "entity_id"
+          ],
+          [
+            "int_cc_maternal_windows",
+            "entity_id"
+          ],
+          [
+            "int_cc_timely_effective_windows",
+            "entity_id"
+          ],
+          [
+            "int_cc_unplanned_visits_windows",
+            "entity_id"
+          ],
+          [
+            "int_cc_window_holds",
+            "entity_id"
+          ],
+          [
+            "int_change_of_ownership_rows",
+            "ccn_buyer"
+          ],
+          [
+            "int_change_of_ownership_rows",
+            "ccn_seller"
+          ],
+          [
+            "int_cmi_hospital_rows",
+            "ccn"
+          ],
+          [
+            "int_cost_reports",
+            "ccn"
+          ],
+          [
+            "int_hac_program_years",
+            "ccn"
+          ],
+          [
+            "int_hai_hospital_windows",
+            "entity_id"
+          ],
+          [
+            "int_hai_window_holds",
+            "entity_id"
+          ],
+          [
+            "int_hgi_hospital_releases",
+            "ccn"
+          ],
+          [
+            "int_hhs_capacity_weeks",
+            "ccn"
+          ],
+          [
+            "int_hospital_enrollment_rows",
+            "ccn"
+          ],
+          [
+            "int_impact_holds",
+            "ccn"
+          ],
+          [
+            "int_impact_hospital_values",
+            "ccn"
+          ],
+          [
+            "int_mup_drg_discharges",
+            "ccn"
+          ],
+          [
+            "int_mup_providers",
+            "ccn"
+          ],
+          [
+            "int_occmix_survey_rows",
+            "ccn"
+          ],
+          [
+            "int_onc_attestation_rows",
+            "ccn"
+          ],
+          [
+            "int_onc_chpl_linkage_rows",
+            "ccn"
+          ],
+          [
+            "int_pos_hospital_snapshots",
+            "ccn"
+          ],
+          [
+            "int_validation_program_holds",
+            "ccn"
+          ],
+          [
+            "int_validation_window_holds",
+            "entity_id"
+          ],
+          [
+            "int_vbp_program_years",
+            "ccn"
+          ]
+        ]
+      },
+      "dim_measure": {
+        "measure_key": [
+          [
+            "int_acs_county_values",
+            "concept_id"
+          ],
+          [
+            "int_bls_county_series",
+            "measure"
+          ],
+          [
+            "int_cc_complications_deaths_windows",
+            "measure_id"
+          ],
+          [
+            "int_gv_county_values",
+            "field"
+          ],
+          [
+            "int_hai_hospital_windows",
+            "measure_id"
+          ],
+          [
+            "int_hai_national_windows",
+            "measure_id"
+          ],
+          [
+            "int_hai_state_windows",
+            "measure_id"
+          ],
+          [
+            "int_cc_hcahps_windows",
+            "measure_id"
+          ],
+          [
+            "int_cc_hrrp_windows",
+            "measure_id"
+          ],
+          [
+            "int_impact_hospital_values",
+            "field"
+          ],
+          [
+            "int_cc_maternal_windows",
+            "measure_id"
+          ],
+          [
+            "int_mup_drg_discharges",
+            "drg_cd"
+          ],
+          [
+            "int_mmd_prevalence",
+            "condition_label"
+          ],
+          [
+            "int_places_county_values",
+            "measureid"
+          ],
+          [
+            "int_svi_county_values",
+            "field"
+          ],
+          [
+            "int_cc_timely_effective_windows",
+            "measure_id"
+          ],
+          [
+            "int_cc_unplanned_visits_windows",
+            "measure_id"
+          ]
+        ]
+      },
+      "dim_owner_organization": {
+        "associate_id": [
+          [
+            "int_change_of_ownership_rows",
+            "associate_id_buyer"
+          ],
+          [
+            "int_change_of_ownership_rows",
+            "associate_id_seller"
+          ],
+          [
+            "int_hospital_owner_rows",
+            "associate_id"
+          ]
+        ]
+      },
+      "dim_owner_role": {
+        "code": [
+          [
+            "int_hospital_owner_rows",
+            "role_code"
+          ]
+        ],
+        "code_label": [
+          [
+            "int_hospital_owner_rows",
+            "role_text"
+          ]
+        ]
+      },
+      "dim_rurality_code": {
+        "@order": [
+          [
+            "int_rucc_county_codes",
+            "vintage"
+          ]
+        ],
+        "code": [
+          [
+            "int_rucc_county_codes",
+            "rucc_code"
+          ],
+          [
+            "int_ruca_codes",
+            "primary_ruca"
+          ],
+          [
+            "int_pos_hospital_snapshots",
+            "cbsa_urban_rural_code"
+          ]
+        ],
+        "code_label": [
+          [
+            "int_rucc_county_codes",
+            "description"
+          ]
+        ]
+      },
+      "dim_source": {
+        "dataset_id": [
+          [
+            "stg_bronze__file_copies",
+            "dataset_id"
+          ]
+        ]
+      },
+      "dim_state": {
+        "state_code": [
+          [
+            "int_cost_reports",
+            "state_code"
+          ],
+          [
+            "int_hai_state_windows",
+            "entity_id"
+          ],
+          [
+            "int_hgi_hospital_releases",
+            "state_code"
+          ],
+          [
+            "int_hhs_capacity_weeks",
+            "state"
+          ],
+          [
+            "int_hospital_enrollment_rows",
+            "state"
+          ],
+          [
+            "int_mup_providers",
+            "state_code"
+          ],
+          [
+            "int_onc_chpl_linkage_rows",
+            "state"
+          ],
+          [
+            "int_pos_hospital_snapshots",
+            "state_code"
+          ],
+          [
+            "int_rucc_county_codes",
+            "state"
+          ]
+        ]
+      },
+      "dim_zip": {
+        "zip_code": [
+          [
+            "int_cost_reports",
+            "zip_code"
+          ],
+          [
+            "int_hgi_hospital_releases",
+            "zip_code"
+          ],
+          [
+            "int_hhs_capacity_weeks",
+            "zip"
+          ],
+          [
+            "int_hospital_enrollment_rows",
+            "zip_code"
+          ],
+          [
+            "int_hsa_zip_cases",
+            "zip_code"
+          ],
+          [
+            "int_hud_zip_county_holds",
+            "zip_code"
+          ],
+          [
+            "int_onc_attestation_rows",
+            "zip"
+          ],
+          [
+            "int_onc_chpl_linkage_rows",
+            "zip_code"
+          ],
+          [
+            "int_pos_hospital_snapshots",
+            "zip_code"
+          ]
+        ]
+      }
+    },
+    "release": {
+      "model": "dim_release",
+      "object_column": "object_key",
+      "publication_column": "publication_release",
+      "relation": "stg_bronze__file_copies"
+    },
+    "source_date_models": [
+      "dim_date",
+      "dim_hospital"
+    ],
+    "value_space": {
+      "dim_census_tract": [
+        "regexp_matches",
+        "census_tract_geoid",
+        "^[0-9]{11}$"
+      ],
+      "dim_county": [
+        "length",
+        "county_fips",
+        5
+      ],
+      "dim_hospital": [
+        "length",
+        "ccn",
+        6
+      ],
+      "dim_owner_organization": [
+        "regexp_matches",
+        "associate_id",
+        "^[0-9]{10}$"
+      ],
+      "dim_state": [
+        "regexp_matches",
+        "state_code",
+        "^[A-Z]{2}$"
+      ],
+      "dim_zip": [
+        "regexp_matches",
+        "zip_code",
+        "^[0-9]{5}$"
+      ]
+    }
+  },
   "fact_macro": {
     "arguments": {
       "grain": "the silver unique key column",

@@ -19,7 +19,8 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
-from scripts.lakehouse import bronze, catalog, memory_budget
+from orchestration import launcher
+from scripts.lakehouse import bronze, catalog
 from scripts.lakehouse.checksums import EDGE_ROWS
 from scripts.process import run_command
 
@@ -157,14 +158,23 @@ def scenarios() -> dict[str, bool]:
     # [57] [59] Secrets stay redacted and out of the image, the analytics environment and every output; extensions are local.
     _, rows = duckdb("SELECT count(*) FILTER (NOT secret_string LIKE '%redacted%') AS exposed FROM duckdb_secrets();")
     results["duckdb_secrets_redacted"] = rows == [{"exposed": 0}]
-    _, history = run("docker", ["history", "--no-trunc", IMAGE])
-    _, inspect = run("docker", ["image", "inspect", IMAGE])
-    env = catalog.system_environment()
-    config = catalog.compose("--profile", "query", "config", "--format", "json", env=env)
-    analytics_env = json.loads(config)["services"]["analytics"]["environment"]
+    link = launcher.load_client()
+    image = link.call("image", {"service": "analytics", "checkout": str(REPO_ROOT), "history": True})
+    history, inspect = json.dumps(image["history"]), json.dumps(image["inspect"])
+    analytics_env = launcher.ComposeModel(REPO_ROOT / "docker-compose.yaml").service("analytics")["environment"]
     results["root_credentials_not_in_analytics"] = "POLARIS_CLIENT_SECRET" not in analytics_env and "POSTGRES_PASSWORD" not in analytics_env
-    inspection_plan = memory_budget.launch_plan()
-    _, extensions = run("docker", ["run", "--rm", "--memory", str(inspection_plan.budget.free), "--entrypoint", "cat", IMAGE, "/home/analytics/extensions.csv"])
+    allocation = link.allocate()
+    try:
+        extensions = link.run_attempt(
+            link.principal_alloc(allocation),
+            "duckdb_helper",
+            "extensions",
+            [],
+            {"mounts": [], "sql": "SELECT * FROM read_csv('/home/analytics/extensions.csv');", "flags": ["-csv", "-noheader"]},
+            checkout=REPO_ROOT,
+        ).stdout
+    finally:
+        link.release_allocation(allocation)
     results["extensions_installed_in_image"] = all(name in extensions for name in ("iceberg", "httpfs", "avro", "aws"))
     values = [value for key, value in catalog.read_env(catalog.SECRETS).items() if "SECRET" in key or "PASSWORD" in key]
     values += [stored.get("POLARIS_READER_CLIENT_SECRET", "")]

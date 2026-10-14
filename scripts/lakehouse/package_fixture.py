@@ -7,9 +7,11 @@ Run from a checkout or a package worktree:
     .venv/bin/python -m scripts.lakehouse.package_fixture check --package S1 --selector <selectors/s1.yml> --patch <file> --record
     .venv/bin/python -m scripts.lakehouse.package_fixture check --package S1 --selector <selectors/s1.yml> --patch <file> --approved <json>
 
-Every container is the pinned analytics image started with ``docker run --network none``: no Compose file, AWS profile,
-catalog or secret is used, so a fresh worktree needs only the image and the dbt packages already installed in the main
-checkout. Each launch is admitted through ``memory_budget.admit`` (a caller's ``HAI_RESERVATION`` is reused). A
+Every container is an attempt of a launcher template (``fixture_dbt``, ``fixture_init`` or ``duckdb_helper``) on the pinned analytics image with
+no network: no AWS profile, catalog or secret is used, so a fresh worktree needs only the image and the dbt packages already installed in
+the main checkout. The kit is a launcher client and makes no Docker call; its launches run under one allocation, which admits one heavy job
+at a time across worktrees (a caller's ``HAI_ALLOCATION`` is reused). Every dbt call of a package check passes ``check_release_copy_conflicts:
+false``, so the kit counts no ``warn`` of the release copy-consistency test; a gate case (the silver and gold E2E fixture stages) passes true. A
 baseline fingerprints every relation of a build file opened read-only: row count, ordered columns with types and an
 order-independent content hash (the sum of each row's lower 64 MD5 bits and the XOR of each row's full MD5, as text in
 the pinned DuckDB). ``check`` builds a package's patched project, selects its frozen required tests with their ancestors
@@ -37,7 +39,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse import memory_budget, run_lock
+from orchestration import launcher
+from scripts.lakehouse import run_lock
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,6 +48,12 @@ IMAGE = "hai-analytics:duckdb1.5.6-dbt1.11.15"
 OUT = ROOT / "data" / "package_fixture"
 CONTAINER_OUT = "/workspace/out"
 TIMEOUT = 3600
+# The dbt variable the kit sets for every call (amendment A42: the gate runs the release copy-consistency test, package checks do not).
+DBT_VARS = {"check_release_copy_conflicts": False}
+# The same variable for a gate case: the silver and gold E2E fixture stages are gate evidence and run the test as warn (A42, A77).
+GATE_DBT_VARS = {"check_release_copy_conflicts": True}
+# The test registry a test of the kit passes; the real run never sets it.
+TEST_REGISTRY: str | None = None
 # One query per relation; the attach is added for views that read the fixture bronze database.
 FINGERPRINT_SQL = (
     "SELECT '{name}', '{kind}', count(*), coalesce(sum(md5_number_lower(CAST(t AS VARCHAR))::HUGEINT), 0)::VARCHAR, "
@@ -74,78 +83,105 @@ class FixtureError(RuntimeError):
     """A container failed, an input is missing or a check did not hold."""
 
 
+@dataclass(frozen=True)
+class Session:
+    """The launcher client and the allocation every launch of one kit command runs under."""
+
+    client: launcher.LauncherClient
+    allocation: str
+
+    @property
+    def principal(self) -> dict[str, Any]:
+        """The allocation principal: this process or one of its descendants."""
+        return self.client.principal_alloc(self.allocation)
+
+    def run(self, template: str, launch: str, args: list[str], params: dict[str, Any]) -> launcher.AttemptResult:
+        """One attempt of a template, to its end."""
+        try:
+            return self.client.run_attempt(self.principal, template, launch, args, params, checkout=ROOT, seconds=TIMEOUT)
+        except launcher.ClientError as error:
+            raise FixtureError(f"the launcher refused {template}: {error}") from error
+
+
 def image_id() -> str:
-    """The local analytics image's ID; the pinned tag must exist (it is built by the lakehouse setup)."""
-    result = run_command("docker", ["image", "inspect", IMAGE, "--format", "{{.Id}}"], timeout=60)
-    if result.returncode:
-        raise FixtureError(f"image {IMAGE} is missing: {result.stderr.strip()}")
-    return result.stdout.strip()
+    """The local analytics image's ID, read by the launcher; the pinned tag must exist (it is built by the lakehouse setup)."""
+    try:
+        return str(launcher.load_client(TEST_REGISTRY).call("image", {"service": "analytics-dbt", "checkout": str(ROOT)})["id"])
+    except launcher.ClientError as error:
+        raise FixtureError(f"the analytics image cannot be read: {error}") from error
+
+
+# The sessions open in this process, innermost last: callers that hold an allocation through ``reservation`` need not pass it to ``dbt``.
+ACTIVE: list[Session] = []
 
 
 @contextmanager
-def reservation() -> Iterator[dict[str, Any]]:
-    """Admit one heavy launch, or reuse the caller's reservation, and free a reservation this process took [759] [886]."""
-    registry = run_lock.resolve(None, ROOT)
-    plan = memory_budget.admit(registry, "job", os.getpid(), os.environ.get("HAI_RESERVATION"))
+def reservation() -> Iterator[Session]:
+    """Take one allocation for a kit command, or reuse the caller's (``HAI_ALLOCATION``), and release the one this process took [759] [886]."""
+    client = launcher.load_client(TEST_REGISTRY)
+    inherited = os.environ.get("HAI_ALLOCATION")
+    if inherited:
+        session = Session(client, inherited)
+        ACTIVE.append(session)
+        try:
+            yield session
+        finally:
+            ACTIVE.remove(session)
+        return
     try:
-        yield plan
+        allocation = client.allocate()
+    except launcher.ClientError as error:
+        raise FixtureError(f"no allocation: {error}") from error
+    session = Session(client, allocation)
+    ACTIVE.append(session)
+    try:
+        yield session
     finally:
-        if not plan["reused"]:
-            memory_budget.release(registry, plan["reservation_id"])
+        ACTIVE.remove(session)
+        client.release_allocation(allocation)
 
 
-def docker_run(args: list[str], mounts: list[tuple[Path, str, bool]], environment: dict[str, str], entrypoint: str) -> tuple[int, str, str]:
-    """Run the analytics image with no network, no secrets and only the named mounts [888]."""
-    flags = ["run", "--rm", "--network", "none", "--entrypoint", entrypoint, "--memory", environment["JOB_MEMORY_LIMIT"]]
-    for source, destination, read_only in mounts:
-        flags += ["-v", f"{source}:{destination}{':ro' if read_only else ''}"]
-    for name, value in environment.items():
-        flags += ["-e", f"{name}={value}"]
-    result = run_command("docker", [*flags, IMAGE, *args], timeout=TIMEOUT)
-    return result.returncode, result.stdout, result.stderr
-
-
-def duckdb_query(database: Path, sql: str, plan: dict[str, Any], attach: Path | None = None, alias: str = "lakehouse") -> list[list[str]]:
+def duckdb_query(database: Path, sql: str, session: Session, attach: Path | None = None, alias: str = "lakehouse") -> list[list[str]]:
     """Run SQL against a database file opened read-only in the pinned image, with one more file attached read-only."""
-    mounts = [(database.parent.resolve(), "/workspace/in", True), (ROOT / "services/analytics/resources.sql", "/opt/analytics/resources.sql", True)]
+    mounts = [{"host": str(database.parent.resolve()), "container": "/workspace/in"}]
     prefix = ""
     if attach is not None:
-        mounts.append((attach.parent.resolve(), "/workspace/attach", True))
+        mounts.append({"host": str(attach.parent.resolve()), "container": "/workspace/attach"})
         prefix = f"ATTACH '/workspace/attach/{attach.name}' AS {alias} (READ_ONLY);\n"
-    environment = {key: plan["environment"][key] for key in ("JOB_MEMORY_LIMIT", "DUCKDB_MEMORY_LIMIT", "JOB_THREADS")}
-    args = ["-readonly", f"/workspace/in/{database.name}", "-cmd", ".read /opt/analytics/resources.sql", "-csv", "-noheader", "-c", prefix + sql]
-    code, stdout, stderr = docker_run(args, mounts, environment, "duckdb")
-    if code:
-        raise FixtureError(f"duckdb query on {database.name} failed: {stderr.strip()[-500:]}")
-    return [row for row in csv.reader(io.StringIO(stdout)) if row]
+    params = {"mounts": mounts, "database": f"/workspace/in/{database.name}", "sql": prefix + sql, "flags": ["-csv", "-noheader"]}
+    result = session.run("duckdb_helper", f"query-{uuid.uuid4().hex[:10]}", [], params)
+    if not result.ok:
+        raise FixtureError(f"duckdb query on {database.name} failed: {result.stderr.strip()[-500:]}")
+    return [row for row in csv.reader(io.StringIO(result.stdout)) if row]
 
 
 def fingerprint(build_file: Path, fixture_lakehouse: Path | None) -> dict[str, Any]:
     """Fingerprint every relation of a build file; views are included only when their bronze database is attached [737]."""
-    with reservation() as plan:
-        return fingerprint_with(build_file, fixture_lakehouse, plan)
+    with reservation() as session:
+        return fingerprint_with(build_file, fixture_lakehouse, session)
 
 
-def fingerprint_with(build_file: Path, fixture_lakehouse: Path | None, plan: dict[str, Any]) -> dict[str, Any]:
-    """Fingerprint under an admitted plan."""
+def fingerprint_with(build_file: Path, fixture_lakehouse: Path | None, session: Session) -> dict[str, Any]:
+    """Fingerprint under an allocation."""
     columns = duckdb_query(
         build_file,
         "SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'main' ORDER BY table_name, ordinal_position;",
-        plan,
+        session,
     )
     kinds = {
-        name: kind for name, kind in duckdb_query(build_file, "SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = 'main';", plan)
+        name: kind
+        for name, kind in duckdb_query(build_file, "SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = 'main';", session)
     }
     relations = sorted(name for name, kind in kinds.items() if kind == "BASE TABLE" or fixture_lakehouse is not None)
     sql = "\n".join(FINGERPRINT_SQL.format(name=name, kind="view" if kinds[name] == "VIEW" else "table") for name in relations)
     result: dict[str, Any] = {}
-    for name, kind, rows, lower_sum, xor in duckdb_query(build_file, sql, plan, fixture_lakehouse):
+    for name, kind, rows, lower_sum, xor in duckdb_query(build_file, sql, session, fixture_lakehouse):
         result[name] = {"kind": kind, "rows": int(rows), "content": f"{lower_sum}:{xor}", "columns": []}
     for name, column, data_type in columns:
         if name in result:
             result[name]["columns"].append([column, data_type])
     skipped = sorted(set(kinds) - set(result))
-    return {"relations": result, "views_skipped": skipped, "reservation": plan["reservation_id"]}
+    return {"relations": result, "views_skipped": skipped, "reservation": session.allocation}
 
 
 def baseline(build_file: Path, out: Path, fixture_lakehouse: Path | None) -> dict[str, Any]:
@@ -181,22 +217,26 @@ def packages_from_main() -> Path:
 
 @dataclass(frozen=True)
 class Case:
-    """One fixture case folder under data/package_fixture/ with its container mounts and dbt environment."""
+    """One fixture case folder under data/package_fixture/ and the container paths the launcher mounts it at."""
 
     name: str
     folder: Path
-    mounts: list[tuple[Path, str, bool]]
-    environment: dict[str, str]
-    dbt_environment: dict[str, str]
+    gate: bool = False
 
     @property
-    def project_flags(self) -> list[str]:
-        """dbt's project and profile folders inside the container."""
-        return ["--project-dir", f"{CONTAINER_OUT}/{self.name}/project", "--profiles-dir", f"{CONTAINER_OUT}/{self.name}/project"]
+    def params(self) -> dict[str, Any]:
+        """The ``fixture_dbt`` parameters: the case folder, its container path, the package folder and the kit's dbt variable (the gate's for a gate case)."""
+        return {
+            "case_host": str(self.folder.resolve()),
+            "case_container": f"{CONTAINER_OUT}/{self.name}",
+            "packages_host": str((OUT / "dbt_packages").resolve()),
+            "dbt_vars": GATE_DBT_VARS if self.gate else DBT_VARS,
+        }
 
 
-def make_case(name: str, plan: dict[str, Any], patches: list[Path]) -> Case:
-    """Write a case: this checkout's dbt/ with the given patches applied, its seeds and the synthetic bronze database [888]."""
+def make_case(name: str, session: Session, patches: list[Path], gate: bool = False) -> Case:
+    """Write a case: this checkout's dbt/ with the given patches applied, its seeds and the synthetic bronze database [888]. A gate case
+    (the silver and gold E2E fixture stages) runs the release copy-consistency test; a package check does not (A42)."""
     from scripts.lakehouse import run_staging_e2e as staging
 
     # A new folder per run: Docker Desktop's file sharing can show a folder deleted and recreated at the same path as
@@ -231,41 +271,36 @@ def make_case(name: str, plan: dict[str, Any], patches: list[Path]) -> Case:
     variables += f"SET VARIABLE file_preambles_csv = '{CONTAINER_OUT}/{name}/file_preambles.csv';\n"
     variables += f"SET VARIABLE column_map_csv = '{CONTAINER_OUT}/{name}/column_map.csv';\n"
     (folder / "bronze.sql").write_text(variables + staging.FIXTURE_SQL)
-    environment = {key: plan["environment"][key] for key in ("JOB_MEMORY_LIMIT", "DUCKDB_MEMORY_LIMIT", "JOB_THREADS")}
-    mounts = [(OUT.resolve(), CONTAINER_OUT, False), (ROOT / "services/analytics/resources.sql", "/opt/analytics/resources.sql", True)]
-    database = f"{CONTAINER_OUT}/{name}/fixture_lakehouse.duckdb"
-    code, _, stderr = docker_run(
-        [database, "-cmd", ".read /opt/analytics/resources.sql", "-c", f".read {CONTAINER_OUT}/{name}/bronze.sql"], mounts, environment, "duckdb"
-    )
-    if code:
-        raise FixtureError(f"fixture bronze database failed: {stderr.strip()[-500:]}")
-    dbt_environment = {
-        **environment,
-        "STAGING_E2E_CASE": f"{CONTAINER_OUT}/{name}",
-        "DBT_TARGET_PATH": f"{CONTAINER_OUT}/{name}/target",
-        "DBT_LOG_PATH": f"{CONTAINER_OUT}/{name}/logs",
-        "DBT_PACKAGES_INSTALL_PATH": f"{CONTAINER_OUT}/dbt_packages",
-        "DBT_SEND_ANONYMOUS_USAGE_STATS": "false",
+    params = {
+        "case_host": str(folder.resolve()),
+        "case_container": f"{CONTAINER_OUT}/{name}",
+        "database": f"{CONTAINER_OUT}/{name}/fixture_lakehouse.duckdb",
+        "sql_file": f"{CONTAINER_OUT}/{name}/bronze.sql",
     }
-    return Case(name, folder, mounts, environment, dbt_environment)
+    result = session.run("fixture_init", f"init-{name}", [], params)
+    if not result.ok:
+        raise FixtureError(f"fixture bronze database failed: {result.stderr.strip()[-500:]}")
+    return Case(name, folder, gate)
 
 
-def dbt(case: Case, args: list[str]) -> tuple[int, str, dict[str, str]]:
-    """Run dbt in the case and return the exit code, the output tail and each node's status from this invocation."""
+def dbt(case: Case, args: list[str], session: Session | None = None) -> tuple[int, str, dict[str, str]]:
+    """Run dbt in the case and return the exit code, the output tail and each node's status from this invocation; without a session, the innermost
+    allocation of ``reservation`` is used."""
+    session = session or ACTIVE[-1]
     results = case.folder / "target" / "run_results.json"
     results.unlink(missing_ok=True)
-    code, stdout, stderr = docker_run([*args, "--target", "fixture", *case.project_flags], case.mounts, case.dbt_environment, "dbt")
+    result = session.run("fixture_dbt", f"dbt-{uuid.uuid4().hex[:10]}", args, case.params)
     statuses = {item["unique_id"]: item["status"] for item in json.loads(results.read_text())["results"]} if results.exists() else {}
-    return code, (stdout + stderr).strip()[-800:], statuses
+    return (result.exit_code if result.exit_code is not None else 1), (result.stdout + result.stderr).strip()[-800:], statuses
 
 
 def prepare() -> dict[str, Any]:
     """Build the synthetic base fixture case in this checkout's data/package_fixture/ without credentials or network."""
     from scripts.lakehouse import run_staging_e2e as staging
 
-    with reservation() as plan:
-        case = make_case("base", plan, [])
-        code, tail, statuses = dbt(case, ["build"])
+    with reservation() as session:
+        case = make_case("base", session, [])
+        code, tail, statuses = dbt(case, ["build"], session)
         failed = sorted(node for node, status in statuses.items() if status not in ("success", "pass"))
         record = {
             "written_utc": datetime.now(UTC).isoformat(),
@@ -275,7 +310,7 @@ def prepare() -> dict[str, Any]:
             "exit_code": code,
             "nodes": len(statuses),
             "failed_nodes": failed,
-            "reservation": plan["reservation_id"],
+            "reservation": session.allocation,
         }
     (OUT / "prepare.json").write_text(json.dumps(record, indent=2) + "\n")
     if code or failed or not statuses:
@@ -290,17 +325,17 @@ def manifest_sha256(case: Case) -> str:
     return hashlib.sha256(json.dumps(nodes).encode()).hexdigest()
 
 
-def subset_fingerprint(database: Path, model: str, columns: list[str], plan: dict[str, Any], baseline_keys: tuple[Path, str] | None = None) -> list[str]:
+def subset_fingerprint(database: Path, model: str, columns: list[str], session: Session, baseline_keys: tuple[Path, str] | None = None) -> list[str]:
     """Rows and content of one model over the named columns, read-only; with ``baseline_keys`` (the baseline build and
     the grain key), only the rows whose key the baseline has, so documented added fixture rows are left out [737]."""
     pack = ", ".join(f'"{column}" := "{column}"' for column in columns)
     if baseline_keys is None:
-        return duckdb_query(database, SUBSET_SQL.format(pack=pack, name=model), plan)[0]
+        return duckdb_query(database, SUBSET_SQL.format(pack=pack, name=model), session)[0]
     base_build, key = baseline_keys
-    return duckdb_query(database, KEYED_SUBSET_SQL.format(pack=pack, name=model, key=key), plan, attach=base_build, alias="base")[0]
+    return duckdb_query(database, KEYED_SUBSET_SQL.format(pack=pack, name=model, key=key), session, attach=base_build, alias="base")[0]
 
 
-def compare(case: Case, selector: dict[str, Any], plan: dict[str, Any]) -> dict[str, str]:
+def compare(case: Case, selector: dict[str, Any], session: Session) -> dict[str, str]:
     """Each owned model against the beab859 baseline: unchanged models in full, changed ones on their unchanged columns [737]."""
     baseline = json.loads((run_lock.main_checkout(ROOT) / selector["baseline"]).read_text())["relations"]
     contract = json.loads(CONTRACTS.joinpath("silver_columns.json").read_text())["models"]
@@ -311,14 +346,14 @@ def compare(case: Case, selector: dict[str, Any], plan: dict[str, Any]) -> dict[
 
     def ours(model: str, columns: list[str]) -> list[str]:
         """The case's fingerprint, on the baseline's keys when the selector documents added fixture rows."""
-        return subset_fingerprint(built, model, columns, plan, (base_build, added[model][0]) if model in added else None)
+        return subset_fingerprint(built, model, columns, session, (base_build, added[model][0]) if model in added else None)
 
     def extra(model: str) -> str | None:
         """None when the rows beyond the baseline's keys are exactly the documented ones, else what differs [737]."""
         if model not in added:
             return None
         key, documented = added[model]
-        found = sorted(row[0] for row in duckdb_query(built, ADDED_KEYS_SQL.format(name=model, key=key), plan, attach=base_build, alias="base"))
+        found = sorted(row[0] for row in duckdb_query(built, ADDED_KEYS_SQL.format(name=model, key=key), session, attach=base_build, alias="base"))
         if found == documented:
             return None
         return f"added rows {found} against documented {documented}"
@@ -334,7 +369,7 @@ def compare(case: Case, selector: dict[str, Any], plan: dict[str, Any]) -> dict[
 
     for model in selector["compare_unchanged_with_baseline"]:
         columns = [column for column, _ in baseline[model]["columns"]]
-        outcome[model] = verdict(model, "equal", ours(model, columns), subset_fingerprint(base_build, model, columns, plan))
+        outcome[model] = verdict(model, "equal", ours(model, columns), subset_fingerprint(base_build, model, columns, session))
     for model in selector["documented_changes"]:
         changes = contract[model]["changes"]
         if "grain" in changes:
@@ -342,7 +377,7 @@ def compare(case: Case, selector: dict[str, Any], plan: dict[str, Any]) -> dict[
             continue
         skip = set(changes.get("drop", [])) | {column for column, _, _ in changes.get("retype", [])}
         columns = [column for column, _ in baseline[model]["columns"] if column not in skip]
-        outcome[model] = verdict(model, "equal on unchanged columns", ours(model, columns), subset_fingerprint(base_build, model, columns, plan))
+        outcome[model] = verdict(model, "equal on unchanged columns", ours(model, columns), subset_fingerprint(base_build, model, columns, session))
     return outcome
 
 
@@ -374,9 +409,9 @@ def check(package: str, selector_path: Path, patches: list[Path], record: bool, 
     # Records live outside the case folder, which every check rebuilds, so a recorded selection survives [889].
     folder = OUT / "records" / package.lower()
     folder.mkdir(parents=True, exist_ok=True)
-    with reservation() as plan:
-        case = make_case(f"check_{package.lower()}", plan, patches)
-        nodes = selection(case, [*expression, *exclusion])
+    with reservation() as session:
+        case = make_case(f"check_{package.lower()}", session, patches)
+        nodes = selection(case, [*expression, *exclusion], session)
         missing = sorted(set(selector["required_tests"]) - {node_name(node) for node in nodes})
         effective = {"package": package, "selector_sha256": selector_sha256, "manifest_sha256": manifest_sha256(case), "nodes": nodes}
         artifact = folder / "effective_selection.json"
@@ -392,7 +427,7 @@ def check(package: str, selector_path: Path, patches: list[Path], record: bool, 
             problems += [
                 f"{key} differs from the approved selection" for key in ("selector_sha256", "manifest_sha256", "nodes") if accepted[key] != effective[key]
             ]
-        code, tail, statuses = dbt(case, ["build", "--select", *expression, *exclusion, "--indirect-selection", "cautious"])
+        code, tail, statuses = dbt(case, ["build", "--select", *expression, *exclusion, "--indirect-selection", "cautious"], session)
         not_passed = sorted(node for node, status in statuses.items() if status not in ("success", "pass"))
         problems += [f"node {node} {statuses[node]}" for node in not_passed]
         problems += [
@@ -400,13 +435,13 @@ def check(package: str, selector_path: Path, patches: list[Path], record: bool, 
             for test in selector["required_tests"]
             if test not in missing and test not in {node_name(node) for node in statuses}
         ]
-        comparisons = compare(case, selector, plan) if not not_passed else {}
+        comparisons = compare(case, selector, session) if not not_passed else {}
         problems += [f"{model} {verdict}" for model, verdict in comparisons.items() if verdict.startswith("differs")]
         mutations = {}
         for item in expected_failures:
             name, patch, test = item.split(":", 2)
-            mutant = make_case(f"check_{package.lower()}_{name}", plan, [*patches, Path(patch)])
-            _, _, mutant_statuses = dbt(mutant, ["build", "--select", f"+{test}", *exclusion, "--indirect-selection", "cautious"])
+            mutant = make_case(f"check_{package.lower()}_{name}", session, [*patches, Path(patch)])
+            _, _, mutant_statuses = dbt(mutant, ["build", "--select", f"+{test}", *exclusion, "--indirect-selection", "cautious"], session)
             if not mutant_statuses:
                 problems.append(f"expected failure {name}: the mutated build wrote no results")
             failed = sorted(node_name(node) for node, status in mutant_statuses.items() if status in ("fail", "error"))
@@ -436,18 +471,20 @@ def node_name(unique_id: str) -> str:
     return unique_id.split(".")[2]
 
 
-def selection(case: Case, arguments: list[str]) -> list[str]:
+def selection(case: Case, arguments: list[str], session: Session) -> list[str]:
     """The node IDs dbt selects for the selection arguments (with any --exclude) and cautious indirect selection, sorted."""
     args = ["ls", "--select", *arguments, "--indirect-selection", "cautious", "--output", "json", "--output-keys", "unique_id", "--quiet"]
-    code, stdout, stderr = docker_run([*args, "--target", "fixture", *case.project_flags], case.mounts, case.dbt_environment, "dbt")
-    if code:
-        raise FixtureError(f"dbt ls failed: {(stdout + stderr).strip()[-500:]}")
-    return sorted(json.loads(line)["unique_id"] for line in stdout.splitlines() if line.startswith("{"))
+    result = session.run("fixture_dbt", f"ls-{uuid.uuid4().hex[:10]}", args, case.params)
+    if not result.ok:
+        raise FixtureError(f"dbt ls failed: {(result.stdout + result.stderr).strip()[-500:]}")
+    return sorted(json.loads(line)["unique_id"] for line in result.stdout.splitlines() if line.startswith("{"))
 
 
 def main() -> int:
     """Run one command; a failure prints its cause and exits 1."""
+    global TEST_REGISTRY
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--test-registry", help="a test registry folder (for tests of the kit only)")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("prepare", help="build the base fixture case in data/package_fixture/")
     command = commands.add_parser("baseline", help="fingerprint every relation of a build file, read-only")
@@ -462,6 +499,7 @@ def main() -> int:
     command.add_argument("--approved", type=Path, help="the effective selection the lead approved")
     command.add_argument("--expected-failure", action="append", default=[], metavar="NAME:PATCH:TEST", help="a mutation that must fail exactly TEST")
     args = parser.parse_args()
+    TEST_REGISTRY = args.test_registry
     try:
         if args.command == "prepare":
             result = prepare()
@@ -469,7 +507,7 @@ def main() -> int:
             result = baseline(args.build_file, args.out, args.fixture_lakehouse)
         else:
             result = check(args.package, args.selector, args.patch, args.record, args.approved, args.expected_failure)
-    except (FixtureError, memory_budget.BudgetError, run_lock.Refused, run_lock.RegistryError) as error:
+    except (FixtureError, launcher.ClientError, run_lock.Refused, run_lock.RegistryError) as error:
         sys.stderr.write(f"package fixture: {error}\n")
         return 1
     sys.stdout.write(json.dumps(result, indent=2) + "\n")

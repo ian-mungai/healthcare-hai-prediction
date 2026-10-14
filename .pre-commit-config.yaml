@@ -2,8 +2,9 @@
 # Every hook is local and pinned: pre-commit, Ruff and MyPy come from requirements.txt in .venv, gitleaks and TFLint
 # from scripts/quality/install_tools.py in .tools. Hooks run on every commit (pre-commit stage); the full set
 # (manual stage) runs before a release or push with `pre-commit run --all-files --hook-stage manual`, and GitHub CI
-# runs that same command on every push and pull request.
-# There are no bypasses: do not use SKIP= or git commit --no-verify.
+# runs that same command on every push and pull request, with the local_ci hook split out into parallel jobs that run
+# scripts/run_ci.sh in parts (.github/workflows/ci.yml).
+# There are no other bypasses: do not use SKIP= or git commit --no-verify.
 default_install_hook_types: [pre-commit, commit-msg]
 default_stages: [pre-commit, manual]
 fail_fast: false
@@ -134,6 +135,11 @@ repos:
         entry: .venv/bin/python -m scripts.quality.repo_checks subprocess-imports
         language: system
         types: [python]
+      - id: docker-calls
+        name: Docker is called only by the launcher
+        entry: .venv/bin/python -m scripts.quality.docker_calls
+        language: system
+        types_or: [python, shell]
       - id: test-checks
         name: Each check blocks its bad sample and passes its good one
         entry: .venv/bin/python -m scripts.quality.run_checks_e2e

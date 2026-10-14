@@ -9,7 +9,7 @@
       "url": "https://github.com/ian-mungai/healthcare-hai-prediction.git",
       "provider": "github",
       "link_mode": "local-only",
-      "revision": "e4e7aaefe32b7383e5579b7ffe83d88c9ddc9a28"
+      "revision": "6caa23a82eea3805ae9f2a19b3b762dac31d38ab"
     }
   },
   "components": [
@@ -237,8 +237,8 @@
         },
         {
           "path": "docker-compose.yaml",
-          "line": 76,
-          "end_line": 93,
+          "line": 90,
+          "end_line": 121,
           "label": "Spark service"
         }
       ]
@@ -250,7 +250,7 @@
       "sublabel": "Iceberg REST, PostgreSQL",
       "pos": [
         1440,
-        200
+        380
       ],
       "size": [
         180,
@@ -259,13 +259,13 @@
       "sources": [
         {
           "path": "docker-compose.yaml",
-          "line": 21,
-          "end_line": 75,
+          "line": 23,
+          "end_line": 89,
           "label": "catalog services"
         },
         {
           "path": "scripts/lakehouse/catalog.py",
-          "line": 227,
+          "line": 224,
           "label": "catalog up"
         }
       ]
@@ -278,7 +278,7 @@
       "tag": "read-only attach",
       "pos": [
         1440,
-        380
+        560
       ],
       "size": [
         180,
@@ -298,9 +298,42 @@
         },
         {
           "path": "docker-compose.yaml",
-          "line": 113,
-          "end_line": 136,
+          "line": 148,
+          "end_line": 179,
           "label": "dbt service"
+        }
+      ]
+    },
+    {
+      "id": "launcher",
+      "type": "backend",
+      "label": "Launcher",
+      "sublabel": "the only process that starts containers",
+      "tag": "fixed job templates",
+      "pos": [
+        1100,
+        380
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "sources": [
+        {
+          "path": "orchestration/launcher.py",
+          "line": 895,
+          "end_line": 922,
+          "label": "job templates"
+        },
+        {
+          "path": "orchestration/launcher.py",
+          "line": 4538,
+          "label": "catalog_up from the main checkout"
+        },
+        {
+          "path": "scripts/quality/docker_calls.py",
+          "line": 52,
+          "label": "Docker calls only in the launcher"
         }
       ]
     }
@@ -326,11 +359,12 @@
     },
     {
       "kind": "region",
-      "label": "Local lakehouse (Docker Compose on the Mac)",
+      "label": "Local lakehouse (launcher-run containers on the Mac)",
       "wraps": [
         "spark",
         "polaris",
-        "duckdb"
+        "duckdb",
+        "launcher"
       ]
     }
   ],
@@ -411,6 +445,26 @@
       "label": "writes lakehouse/",
       "fromSide": "top",
       "toSide": "top"
+    },
+    {
+      "id": "start-jobs",
+      "from": "launcher",
+      "to": "spark",
+      "label": "starts jobs",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "start-catalog",
+      "from": "launcher",
+      "to": "polaris",
+      "label": "starts catalog"
+    },
+    {
+      "id": "start-dbt",
+      "from": "launcher",
+      "to": "duckdb",
+      "label": "starts dbt, queries"
     }
   ],
   "cards": [
@@ -438,6 +492,7 @@
       "dot": "emerald",
       "title": "Lakehouse",
       "items": [
+        "One launcher starts every container; real dbt builds wait for build provenance",
         "Bronze reads only the S3 manifests and the committed table map",
         "One copy per stored file; bronze.stored_copies lists every copy",
         "Each row traces to its S3 key, version and SHA-256",

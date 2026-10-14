@@ -1,7 +1,6 @@
 # Exceptions to the cleanup checks: <kind> <path glob> -- <reason> (README, Quality Checks).
 orphan dbt/models/* -- dbt loads every model and properties file under model-paths; a final model has no ref() to it
 orphan dbt/macros/* -- dbt loads every macro under macro-paths; models call macros by name, not by file
-config data_contracts/great_expectations/suites/silver_contract.json -- hai_type names the saved spine outcome columns in the suite awaiting its rework (README, Silver validation)
 config data_contracts/lakehouse/gold_contract.json -- geography_level is a live column of the MMD fact the contract declares
 config data_contracts/lakehouse/silver_columns.json -- geography_level is a live column of int_mmd_prevalence the contract declares
 config dbt/models/silver/intermediate/_intermediate__models.yml -- geography_level is a column of int_mmd_prevalence; the name left only the retired mmd_conditions seed
@@ -28,13 +27,6 @@ config scripts/lakehouse/mmd_conditions.py -- geography_level is a column the co
 config scripts/lakehouse/run_bridge_references_e2e.py -- geography_level and source_status are recipe columns in features/recipes, not the retired seed columns
 config scripts/lakehouse/run_staging_e2e.py -- geography_level is a column of int_mmd_prevalence that the runner reads
 dbt README.md -- the Saved for the Feature Phase section describes the saved models by name
-dbt data_contracts/great_expectations/suites/silver_alignment.json -- the silver suite still names the saved spine, alignment and history models until the later E2E and Great Expectations rework replaces it
-dbt data_contracts/great_expectations/suites/silver_contract.json -- the silver suite still names the saved spine, alignment and history models until the later E2E and Great Expectations rework replaces it
-dbt data_contracts/great_expectations/suites/silver_history.json -- the silver suite still names the saved spine, alignment and history models until the later E2E and Great Expectations rework replaces it
-dbt data_contracts/great_expectations/suites/silver_leakage.json -- the silver suite still names the saved spine, alignment and history models until the later E2E and Great Expectations rework replaces it
-dbt data_contracts/great_expectations/suites/silver_outcomes.json -- the silver suite still names the saved spine, alignment and history models until the later E2E and Great Expectations rework replaces it
-dbt data_contracts/great_expectations/suites/silver_spatial.json -- the silver suite still names the saved spine, alignment and history models until the later E2E and Great Expectations rework replaces it
-dbt data_contracts/great_expectations/suites/silver_spine.json -- the silver suite still names the saved spine, alignment and history models until the later E2E and Great Expectations rework replaces it
 dbt data_contracts/lakehouse/silver_columns.json -- the silver contract records the removed models as changes against the beab859 baseline
 dbt features/archive_manifest.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
 dbt features/great_expectations/suites/silver_alignment.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
@@ -71,4 +63,4 @@ dbt features/tests/assert_operations_measures_as_of_start.sql -- saved copy of a
 dbt features/tests/assert_spine_as_of_window_start.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
 dbt features/tests/assert_validation_measures_overlap.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
 dbt scripts/lakehouse/archive_saved_models.py -- the archive tool lists the saved model files it verifies by name
-dbt scripts/lakehouse/run_silver_e2e.py -- the silver validation E2E still names the saved models until the later rework replaces it
+unused-code scripts/lakehouse/fake_docker.py -- http.server calls the do_* hooks, log_message and address_string and reads protocol_version, daemon_threads and close_connection

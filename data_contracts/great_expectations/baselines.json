@@ -3,7 +3,7 @@
   "source": "real silver build of the full silver E2E data/e2e/staging/report_20261009T235041Z.json (363 of 363)",
   "rule": "windows per year and spine rows: 95% of the smallest to 105% of the largest; aligned shares: the measured share plus or minus 0.05; spine county share: at least 0.99; rows per spine row: the control count of each table (structural); spine counties without adjacency edges (state and DC windows): at most the 7 retired Alaska codes of the reviewed build",
   "approved": true,
-  "approval": "owner, Oct 10 2026: the recommended values are accepted for now; review them again when a new release changes the build",
+  "approval": "owner, Oct 10 2026: the recommended values are accepted for now; review them again when a new release changes the build; owner, Oct 12 2026: the row-count bands of the atomic silver models are approved for now; review them after a real build of the refactored silver",
   "values": {
     "spine.windows_per_year.min": 4519,
     "spine.windows_per_year.max": 5183,
@@ -31,6 +31,293 @@
     "aligned_share.linkage.max": 1,
     "aligned_share.validation.min": 0.7121,
     "aligned_share.validation.max": 0.8121,
-    "adjacency.missing_spine_counties.max": 7
+    "adjacency.missing_spine_counties.max": 7,
+    "silver.rows.int_acs_county_values.min": 2897602,
+    "silver.rows.int_acs_county_values.max": 3202614,
+    "silver.rows.int_bls_county_series.min": 5721606,
+    "silver.rows.int_bls_county_series.max": 6323882,
+    "silver.rows.int_cc_complications_deaths_windows.min": 741976,
+    "silver.rows.int_cc_complications_deaths_windows.max": 820080,
+    "silver.rows.int_cc_hcahps_windows.min": 10367587,
+    "silver.rows.int_cc_hcahps_windows.max": 11458913,
+    "silver.rows.int_cc_hrrp_windows.min": 125582,
+    "silver.rows.int_cc_hrrp_windows.max": 138802,
+    "silver.rows.int_cc_maternal_windows.min": 96268,
+    "silver.rows.int_cc_maternal_windows.max": 106402,
+    "silver.rows.int_cc_timely_effective_windows.min": 1693970,
+    "silver.rows.int_cc_timely_effective_windows.max": 1872284,
+    "silver.rows.int_cmi_file_layouts.min": 37,
+    "silver.rows.int_cmi_file_layouts.max": 41,
+    "silver.rows.int_cmi_file_rows.min": 129542,
+    "silver.rows.int_cmi_file_rows.max": 143180,
+    "silver.rows.int_cmi_hospital_rows.min": 135701,
+    "silver.rows.int_cmi_hospital_rows.max": 149987,
+    "silver.rows.int_cost_reports.min": 76073,
+    "silver.rows.int_cost_reports.max": 84081,
+    "silver.rows.int_county_adjacency_edges.min": 99302,
+    "silver.rows.int_county_adjacency_edges.max": 109756,
+    "silver.rows.int_hac_program_years.min": 20927,
+    "silver.rows.int_hac_program_years.max": 23131,
+    "silver.rows.int_hai_hospital_windows.min": 4604619,
+    "silver.rows.int_hai_hospital_windows.max": 5089317,
+    "silver.rows.int_hai_national_windows.min": 159,
+    "silver.rows.int_hai_national_windows.max": 177,
+    "silver.rows.int_hai_state_windows.min": 26812,
+    "silver.rows.int_hai_state_windows.max": 29636,
+    "silver.rows.int_hgi_hospital_releases.min": 146786,
+    "silver.rows.int_hgi_hospital_releases.max": 162238,
+    "silver.rows.int_hhs_capacity_weeks.min": 993135,
+    "silver.rows.int_hhs_capacity_weeks.max": 1097677,
+    "silver.rows.int_hospital_enrollment_rows.min": 373946,
+    "silver.rows.int_hospital_enrollment_rows.max": 413310,
+    "silver.rows.int_hospital_owner_rows.min": 932928,
+    "silver.rows.int_hospital_owner_rows.max": 1031132,
+    "silver.rows.int_hpsa_components.min": 76097,
+    "silver.rows.int_hpsa_components.max": 84109,
+    "silver.rows.int_hsa_zip_cases.min": 11291524,
+    "silver.rows.int_hsa_zip_cases.max": 12480106,
+    "silver.rows.int_hud_zip_county_quarters.min": 3179877,
+    "silver.rows.int_hud_zip_county_quarters.max": 3514601,
+    "silver.rows.int_impact_file_layouts.min": 72,
+    "silver.rows.int_impact_file_layouts.max": 80,
+    "silver.rows.int_impact_file_rows.min": 251926,
+    "silver.rows.int_impact_file_rows.max": 278446,
+    "silver.rows.int_impact_hospital_rows.min": 251102,
+    "silver.rows.int_impact_hospital_rows.max": 277534,
+    "silver.rows.int_impact_hospital_values.min": 2643765,
+    "silver.rows.int_impact_hospital_values.max": 2922057,
+    "silver.rows.int_mmd_prevalence.min": 2580190,
+    "silver.rows.int_mmd_prevalence.max": 2851790,
+    "silver.rows.int_mua_components.min": 19125,
+    "silver.rows.int_mua_components.max": 21139,
+    "silver.rows.int_mup_drg_discharges.min": 2024575,
+    "silver.rows.int_mup_drg_discharges.max": 2237689,
+    "silver.rows.int_mup_providers.min": 36664,
+    "silver.rows.int_mup_providers.max": 40524,
+    "silver.rows.int_occmix_file_layouts.min": 377,
+    "silver.rows.int_occmix_file_layouts.max": 417,
+    "silver.rows.int_occmix_file_rows.min": 663167,
+    "silver.rows.int_occmix_file_rows.max": 732975,
+    "silver.rows.int_occmix_survey_rows.min": 194453,
+    "silver.rows.int_occmix_survey_rows.max": 214923,
+    "silver.rows.int_onc_attestation_rows.min": 66967,
+    "silver.rows.int_onc_attestation_rows.max": 74017,
+    "silver.rows.int_onc_chpl_linkage_rows.min": 65023,
+    "silver.rows.int_onc_chpl_linkage_rows.max": 71869,
+    "silver.rows.int_places_county_values.min": 1187811,
+    "silver.rows.int_places_county_values.max": 1312845,
+    "silver.rows.int_pos_hospital_snapshots.min": 455655,
+    "silver.rows.int_pos_hospital_snapshots.max": 503619,
+    "silver.rows.int_ruca_codes.min": 229748,
+    "silver.rows.int_ruca_codes.max": 253932,
+    "silver.rows.int_rucc_county_codes.min": 6145,
+    "silver.rows.int_rucc_county_codes.max": 6793,
+    "silver.rows.int_sahie_county_rows.min": 4478376,
+    "silver.rows.int_sahie_county_rows.max": 4949784,
+    "silver.rows.int_saipe_county_estimates.min": 92532,
+    "silver.rows.int_saipe_county_estimates.max": 102274,
+    "silver.rows.int_svi_county_values.min": 2448072,
+    "silver.rows.int_svi_county_values.max": 2705764,
+    "silver.rows.int_vbp_program_years.min": 19345,
+    "silver.rows.int_vbp_program_years.max": 21383,
+    "silver.rows.int_wonder_county_deaths.min": 89651,
+    "silver.rows.int_wonder_county_deaths.max": 99089
+  },
+  "row_count_source": "fingerprint of the real silver build file of commit beab859 (real report report_20261010T201212Z), data/wave0/baselines/real_beab859/baseline.json, rows per kept model; no real build of the refactored silver exists yet",
+  "row_count_rule": "row count of each kept model with rows, no grain change, not a hold model: 95% of the real beab859 count to 105% of it",
+  "row_count_evidence": {
+    "int_acs_county_values": {
+      "real_rows_beab859": 3050108,
+      "fixture_rows": 16
+    },
+    "int_bls_county_series": {
+      "real_rows_beab859": 6022744,
+      "fixture_rows": 4
+    },
+    "int_cc_complications_deaths_windows": {
+      "real_rows_beab859": 781028,
+      "fixture_rows": 4
+    },
+    "int_cc_hcahps_windows": {
+      "real_rows_beab859": 10913250,
+      "fixture_rows": 2
+    },
+    "int_cc_hrrp_windows": {
+      "real_rows_beab859": 132192,
+      "fixture_rows": 2
+    },
+    "int_cc_maternal_windows": {
+      "real_rows_beab859": 101335,
+      "fixture_rows": 2
+    },
+    "int_cc_timely_effective_windows": {
+      "real_rows_beab859": 1783127,
+      "fixture_rows": 5
+    },
+    "int_cmi_file_layouts": {
+      "real_rows_beab859": 39,
+      "fixture_rows": 12
+    },
+    "int_cmi_file_rows": {
+      "real_rows_beab859": 136361,
+      "fixture_rows": 35
+    },
+    "int_cmi_hospital_rows": {
+      "real_rows_beab859": 142844,
+      "fixture_rows": 24
+    },
+    "int_cost_reports": {
+      "real_rows_beab859": 80077,
+      "fixture_rows": 5
+    },
+    "int_county_adjacency_edges": {
+      "real_rows_beab859": 104529,
+      "fixture_rows": 16
+    },
+    "int_hac_program_years": {
+      "real_rows_beab859": 22029,
+      "fixture_rows": 4
+    },
+    "int_hai_hospital_windows": {
+      "real_rows_beab859": 4846968,
+      "fixture_rows": 31
+    },
+    "int_hai_national_windows": {
+      "real_rows_beab859": 168,
+      "fixture_rows": 1
+    },
+    "int_hai_state_windows": {
+      "real_rows_beab859": 28224,
+      "fixture_rows": 2
+    },
+    "int_hgi_hospital_releases": {
+      "real_rows_beab859": 154512,
+      "fixture_rows": 6
+    },
+    "int_hhs_capacity_weeks": {
+      "real_rows_beab859": 1045406,
+      "fixture_rows": 9
+    },
+    "int_hospital_enrollment_rows": {
+      "real_rows_beab859": 393628,
+      "fixture_rows": 8
+    },
+    "int_hospital_owner_rows": {
+      "real_rows_beab859": 982030,
+      "fixture_rows": 8
+    },
+    "int_hpsa_components": {
+      "real_rows_beab859": 80103,
+      "fixture_rows": 9
+    },
+    "int_hsa_zip_cases": {
+      "real_rows_beab859": 11885815,
+      "fixture_rows": 7
+    },
+    "int_hud_zip_county_quarters": {
+      "real_rows_beab859": 3347239,
+      "fixture_rows": 16
+    },
+    "int_impact_file_layouts": {
+      "real_rows_beab859": 76,
+      "fixture_rows": 9
+    },
+    "int_impact_file_rows": {
+      "real_rows_beab859": 265186,
+      "fixture_rows": 30
+    },
+    "int_impact_hospital_rows": {
+      "real_rows_beab859": 264318,
+      "fixture_rows": 16
+    },
+    "int_impact_hospital_values": {
+      "real_rows_beab859": 2782911,
+      "fixture_rows": 41
+    },
+    "int_mmd_prevalence": {
+      "real_rows_beab859": 2715990,
+      "fixture_rows": 7
+    },
+    "int_mua_components": {
+      "real_rows_beab859": 20132,
+      "fixture_rows": 6
+    },
+    "int_mup_drg_discharges": {
+      "real_rows_beab859": 2131132,
+      "fixture_rows": 4
+    },
+    "int_mup_providers": {
+      "real_rows_beab859": 38594,
+      "fixture_rows": 3
+    },
+    "int_occmix_file_layouts": {
+      "real_rows_beab859": 397,
+      "fixture_rows": 10
+    },
+    "int_occmix_file_rows": {
+      "real_rows_beab859": 698071,
+      "fixture_rows": 29
+    },
+    "int_occmix_survey_rows": {
+      "real_rows_beab859": 204688,
+      "fixture_rows": 11
+    },
+    "int_onc_attestation_rows": {
+      "real_rows_beab859": 70492,
+      "fixture_rows": 1
+    },
+    "int_onc_chpl_linkage_rows": {
+      "real_rows_beab859": 68446,
+      "fixture_rows": 2
+    },
+    "int_places_county_values": {
+      "real_rows_beab859": 1250328,
+      "fixture_rows": 58
+    },
+    "int_pos_hospital_snapshots": {
+      "real_rows_beab859": 479637,
+      "fixture_rows": 22
+    },
+    "int_ruca_codes": {
+      "real_rows_beab859": 241840,
+      "fixture_rows": 8
+    },
+    "int_rucc_county_codes": {
+      "real_rows_beab859": 6469,
+      "fixture_rows": 5
+    },
+    "int_sahie_county_rows": {
+      "real_rows_beab859": 4714080,
+      "fixture_rows": 3
+    },
+    "int_saipe_county_estimates": {
+      "real_rows_beab859": 97403,
+      "fixture_rows": 3
+    },
+    "int_svi_county_values": {
+      "real_rows_beab859": 2576918,
+      "fixture_rows": 8
+    },
+    "int_vbp_program_years": {
+      "real_rows_beab859": 20364,
+      "fixture_rows": 7
+    },
+    "int_wonder_county_deaths": {
+      "real_rows_beab859": 94370,
+      "fixture_rows": 5
+    }
+  },
+  "row_count_without_band": {
+    "int_cc_unplanned_visits_windows": "documented grain change: the row count differs from the beab859 build",
+    "int_cc_window_holds": "a hold model may be empty in a real build",
+    "int_change_of_ownership_holds": "a hold model may be empty in a real build",
+    "int_change_of_ownership_rows": "documented grain change: the row count differs from the beab859 build",
+    "int_gv_county_values": "documented grain change: the row count differs from the beab859 build",
+    "int_hai_window_holds": "a hold model may be empty in a real build",
+    "int_hud_zip_county_holds": "a hold model may be empty in a real build",
+    "int_impact_holds": "a hold model may be empty in a real build",
+    "int_silver_build_marker": "the marker holds one row per build",
+    "int_validation_program_holds": "a hold model may be empty in a real build",
+    "int_validation_window_holds": "a hold model may be empty in a real build"
   }
 }

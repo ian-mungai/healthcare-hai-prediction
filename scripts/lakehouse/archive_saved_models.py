@@ -23,6 +23,7 @@ import ast
 import hashlib
 import json
 import re
+import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -141,22 +142,25 @@ def copies() -> dict[str, str]:
     return plan
 
 
-def export_reference(build: str, plan: dict[str, Any]) -> dict[str, Any]:
-    """Export the 23 models of one build to Parquet, read-only, in the pinned image with no network."""
+def export_reference(build: str, plan: package_fixture.Session) -> dict[str, Any]:
+    """Export the 23 models of one build to Parquet in the pinned image with no network: the build file is copied next to the output, because
+    the launcher's read-only helper cannot write and ``fixture_init`` writes only inside its one case folder."""
     database = BUILDS[build]
     out = REFERENCE / f"{build}_beab859"
     out.mkdir(parents=True, exist_ok=True)
-    mounts = [
-        (database.parent.resolve(), "/workspace/in", True),
-        (out.resolve(), "/workspace/out", False),
-        (ROOT / "services/analytics/resources.sql", "/opt/analytics/resources.sql", True),
-    ]
-    statements = "\n".join(EXPORT_SQL.format(name=name) for name in (*SAVED, *FORMULAS))
-    environment = {key: plan["environment"][key] for key in ("JOB_MEMORY_LIMIT", "DUCKDB_MEMORY_LIMIT", "JOB_THREADS")}
-    args = ["-readonly", f"/workspace/in/{database.name}", "-cmd", ".read /opt/analytics/resources.sql", "-c", statements]
-    code, _, stderr = package_fixture.docker_run(args, mounts, environment, "duckdb")
-    if code:
-        raise SystemExit(f"{build} export failed: {stderr.strip()[-500:]}")
+    working = out / "export_input.duckdb"
+    shutil.copy2(database, working)
+    base = f"{package_fixture.CONTAINER_OUT}/{out.name}"
+    statements = "\n".join(EXPORT_SQL.format(name=name).replace("/workspace/out/", f"{base}/") for name in (*SAVED, *FORMULAS))
+    (out / "export.sql").write_text(statements)
+    params = {"case_host": str(out.resolve()), "case_container": base, "database": f"{base}/{working.name}", "sql_file": f"{base}/export.sql"}
+    try:
+        result = plan.run("fixture_init", f"export-{build}", [], params)
+    finally:
+        working.unlink(missing_ok=True)
+        (out / "export.sql").unlink(missing_ok=True)
+    if not result.ok:
+        raise SystemExit(f"{build} export failed: {result.stderr.strip()[-500:]}")
     prints = package_fixture.fingerprint_with(database, FIXTURE_LAKEHOUSE if build == "fixture" else None, plan)["relations"]
     files = {}
     for name in (*SAVED, *FORMULAS):

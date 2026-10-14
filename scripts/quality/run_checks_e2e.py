@@ -577,8 +577,11 @@ def scratch_repo(root: Path, case: Case) -> Path:
     # folder is removed, which failed CI run 37736374173 with "Directory not empty".
     git(repo, "config", "gc.auto", "0")
     git(repo, "config", "maintenance.auto", "false")
-    # Copy only files Git tracks or would track, so ignored local code never enters the scratch repository.
-    listed = run_command("git", ["ls-files", "--cached", "--others", "--exclude-standard", "scripts"], cwd=ROOT, check=True).stdout.splitlines()
+    # Copy only files Git tracks or would track, so ignored local code never enters the scratch repository. The launcher reads a
+    # variable .env.example documents (DOCKER_HOST), so the env-example cases need it too.
+    listed = run_command(
+        "git", ["ls-files", "--cached", "--others", "--exclude-standard", "scripts", "orchestration/launcher.py"], cwd=ROOT, check=True
+    ).stdout.splitlines()
     for relative in [*COPIED, *listed]:
         if (ROOT / relative).is_file():
             (repo / relative).parent.mkdir(parents=True, exist_ok=True)

@@ -7,8 +7,8 @@ Run from the repository root with Docker running:
     .venv/bin/python -m scripts.lakehouse.run_gold_e2e --real-once     # fixture stage, then one real build: an iteration run, not commit evidence
     .venv/bin/python -m scripts.lakehouse.run_gold_e2e --real-only     # one real build, no fixture stage: an iteration run, not commit evidence
 
-The fixture stage uses the package fixture kit's credential-free containers (``docker run --network none``), admitted through
-``memory_budget``; it never starts the catalog or reads a secret. The real stage builds from the catalog as the staging runner
+The fixture stage uses the package fixture kit's credential-free launcher attempts (templates with no network), admitted through one
+allocation; it never starts the catalog or reads a secret. The real stage builds from the catalog as the staging runner
 does, with the bronze pin around each build (``pinned_run``), and reads the finished build file offline.
 
 Every check reads the fact list, grains, columns, surrogate keys, source dates, text columns and expression allowlist from the
@@ -40,11 +40,9 @@ from typing import Any
 
 from scripts.lakehouse import catalog, gold_checks, package_fixture, silver
 from scripts.lakehouse import run_staging_e2e as staging
-from scripts.process import run_command
 
 REPO_ROOT = catalog.REPO_ROOT
 REPORTS = REPO_ROOT / "data/e2e/gold"
-QUALITY_IMAGE = "hai-quality:gx1.23.2-duckdb1.5.6"
 BASELINES = REPO_ROOT / "data_contracts/great_expectations/baselines.json"
 GOLD_MODELS = "path:models/gold"
 BUILD_OK = ("success", "pass")
@@ -70,12 +68,12 @@ def real_empty_allowed(contract: gold_checks.Contract) -> dict[str, str]:
 FAULTS = ("interrupt", "exit", "error", "cleanup", "rebuild-empty", "real-setup-exit")
 # The real stage's outcome as it runs, so a stage that stops still reaches the report [842].
 REAL_PARTIAL: dict[str, Any] = {}
-# Amendment A45 (owner split, Oct 12 2026): the expression check parked under the park rule after four rejections in its class. Its findings are
-# reported but not counted until it is rebuilt; lineage, which shares the analysis, stays a counted check.
-REPORT_ONLY = frozenset({"expression_arithmetic", "expression_case", "expression_functions"})
+# GX replaces the historical A45 report-only split: all expression findings count in the verdict.
+# Lineage and analysis completeness remain independent counted checks.
+EXPRESSION_CHECKS = frozenset({"expression_arithmetic", "expression_case", "expression_functions"})
 # Analysis that may have skipped a relation read is still counted, as analysis_complete: an unsupported query node or expression kind, a
 # model with no compiled SQL or SQL that does not parse, and an unanalyzed expression of a class that can hold a subquery. Leaf classes cannot
-# hold a read. Only the expression policy itself is report-only.
+# hold a read. Expression-policy violations also count, independently of analysis completeness.
 LEAF_EXPRESSION_CLASSES = frozenset({"COLUMN_REF", "CONSTANT", "PARAMETER", "DEFAULT"})
 
 
@@ -121,7 +119,7 @@ class Backend:
 
     database: Path
     attach: Path | None
-    plan: dict[str, Any]
+    plan: package_fixture.Session
 
     def query(self, sql: str) -> list[list[str]]:
         return package_fixture.duckdb_query(self.database, sql, self.plan, self.attach)
@@ -147,17 +145,17 @@ class Results:
 
     @property
     def verdicts(self) -> dict[str, bool]:
-        """The counted checks; a report-only check is left out (amendment A45)."""
-        return {name: not problems for name, problems in sorted(self.problems.items()) if name not in REPORT_ONLY}
+        """Every computed check counts in the verdict."""
+        return {name: not problems for name, problems in sorted(self.problems.items())}
 
     @property
     def report_only(self) -> dict[str, int]:
-        """Each report-only check with its count of findings."""
-        return {name: len(problems) for name, problems in sorted(self.problems.items()) if name in REPORT_ONLY}
+        """No expression check is report-only; retain the report field for existing consumers."""
+        return {}
 
     @property
     def failed(self) -> list[str]:
-        """Every check with findings, report-only ones included, so a mutation case still names the check it targets."""
+        """Every check with findings, so a mutation case still names the check it targets."""
         return [name for name, problems in sorted(self.problems.items()) if problems]
 
 
@@ -215,11 +213,7 @@ class Run:
         return path
 
 
-def container_environment(plan: dict[str, Any]) -> dict[str, str]:
-    return {key: plan["environment"][key] for key in ("JOB_MEMORY_LIMIT", "DUCKDB_MEMORY_LIMIT", "JOB_THREADS")}
-
-
-def parse_compiled(target: Path, manifest: dict[str, Any], models: list[str], plan: dict[str, Any]) -> tuple[dict[str, str | None], frozenset[str]]:
+def parse_compiled(target: Path, manifest: dict[str, Any], models: list[str], plan: package_fixture.Session) -> tuple[dict[str, str | None], frozenset[str]]:
     """Each gold model's compiled SQL as DuckDB's parse (JSON), None where no compiled file exists, and DuckDB's aggregate function names [840]."""
     nodes = gold_checks.gold_nodes(manifest)
     paths = {}
@@ -227,16 +221,13 @@ def parse_compiled(target: Path, manifest: dict[str, Any], models: list[str], pl
         node = nodes.get(name)
         if node and (target / "compiled" / node["package_name"] / node["original_file_path"]).is_file():
             paths[name] = f"/workspace/compiled/{node['package_name']}/{node['original_file_path']}"
-    mounts = [
-        ((target / "compiled").resolve(), "/workspace/compiled", True),
-        (REPO_ROOT / "services/analytics/resources.sql", "/opt/analytics/resources.sql", True),
-    ]
     query = gold_checks.parse_query(paths)
-    code, stdout, stderr = package_fixture.docker_run(["-csv", "-noheader", "-c", query], mounts, container_environment(plan), "duckdb")
-    if code:
-        raise package_fixture.FixtureError(f"compiled SQL parse failed: {stderr.strip()[-300:]}")
+    params = {"mounts": [{"host": str((target / "compiled").resolve()), "container": "/workspace/compiled"}], "sql": query, "flags": ["-csv", "-noheader"]}
+    result = plan.run("duckdb_helper", f"parse-{secrets.token_hex(4)}", [], params)
+    if not result.ok:
+        raise package_fixture.FixtureError(f"compiled SQL parse failed: {result.stderr.strip()[-300:]}")
     csv.field_size_limit(sys.maxsize)
-    return gold_checks.split_parse_rows([row for row in csv.reader(io.StringIO(stdout))], models)
+    return gold_checks.split_parse_rows([row for row in csv.reader(io.StringIO(result.stdout))], models)
 
 
 def run_checks(
@@ -301,9 +292,16 @@ def run_checks(
     results.add("gold_models_match_contract", gold_checks.contract_models_problems(contract, manifest))
     models = sorted(set(contract.model_names) | set(gold_checks.gold_nodes(manifest)))
     parsed, aggregates = parse_compiled(target, manifest, models, backend.plan)
-    expression, reads = gold_checks.expression_problems(contract, parsed, models, aggregates, gold_checks.declared_relations(manifest))
+    compiled = {}
+    for name, node in gold_checks.gold_nodes(manifest).items():
+        path = target / "compiled" / node["package_name"] / node["original_file_path"]
+        if path.is_file():
+            compiled[name] = path.read_text()
+    expression, reads = gold_checks.expression_problems(
+        contract, parsed, models, aggregates, gold_checks.declared_relations(manifest), compiled, gold_checks.rendered_facts(contract, manifest)
+    )
     results.merge(expression)
-    incomplete = {problem for name in REPORT_ONLY for problem in expression.get(name, []) if incomplete_analysis(problem)}
+    incomplete = {problem for name in EXPRESSION_CHECKS for problem in expression.get(name, []) if incomplete_analysis(problem)}
     results.add("analysis_complete", sorted(incomplete))
     results.details["relation_reads"] = reads
     covered["parsed_models"] = (sum(text is not None for text in parsed.values()), len(models))
@@ -397,27 +395,26 @@ def gold_node_problems(manifest: dict[str, Any], statuses: dict[str, str], requi
     )
 
 
-def run_suites_offline(case: package_fixture.Case, suites: Path, plan: dict[str, Any]) -> dict[str, Any]:
+def run_suites_offline(case: package_fixture.Case, suites: Path, plan: package_fixture.Session) -> dict[str, Any]:
     """Great Expectations on the fixture build in the quality image: no network, build file and code read-only [843]."""
     out = case.folder / "ge_out"
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir()
-    environment = container_environment(plan)
-    flags = ["run", "--rm", "--network", "none", "--memory", environment["JOB_MEMORY_LIMIT"], "-w", "/workspace", "--entrypoint", "python"]
-    for source, target, read_only in (
-        (REPO_ROOT / "scripts", "/workspace/scripts", True),
-        (case.folder, "/workspace/build", True),
-        (suites.resolve(), "/workspace/suites", True),
-        (BASELINES, "/workspace/baselines.json", True),
-        (out, "/workspace/out", False),
-    ):
-        flags += ["-v", f"{source}:{target}{':ro' if read_only else ''}"]
-    for name, value in environment.items():
-        flags += ["-e", f"{name}={value}"]
-    arguments = ["-m", "scripts.lakehouse.silver_quality", "--database", "/workspace/build/staging.duckdb", "--suites", "/workspace/suites"]
-    arguments += ["--baselines", "/workspace/baselines.json", "--output", "/workspace/out/result.json"]
-    result = run_command("docker", [*flags, QUALITY_IMAGE, *arguments], timeout=package_fixture.TIMEOUT)
-    return suite_summary(out / "result.json", result.returncode)
+    # The launcher mounts only folders inside the data folder (or the contract folder), so the suites are copied next to the case.
+    staged = case.folder / "ge_suites"
+    shutil.rmtree(staged, ignore_errors=True)
+    shutil.copytree(suites.resolve(), staged)
+    baselines = case.folder / "ge_baselines.json"
+    shutil.copy2(BASELINES, baselines)
+    params = {
+        "database": str(case.folder / "staging.duckdb"),
+        "build_root": str(case.folder),
+        "suites_host": str(staged),
+        "baselines_host": str(baselines),
+        "out_host": str(out),
+    }
+    result = plan.run("quality_validate", f"suites-{secrets.token_hex(4)}", [], params)
+    return suite_summary(out / "result.json", result.exit_code if result.exit_code is not None else 1)
 
 
 def suite_summary(path: Path, exit_code: int) -> dict[str, Any]:
@@ -502,12 +499,12 @@ def restore(overlays: list[Path], added: list[Path], project: Path) -> None:
 
 def case_sql(case: package_fixture.Case, sql: str) -> None:
     """Run SQL on the fixture build file itself (a data mutation of the self-test); the build file is the case's own copy."""
-    database = f"{package_fixture.CONTAINER_OUT}/{case.name}/staging.duckdb"
-    code, _stdout, stderr = package_fixture.docker_run(
-        [database, "-cmd", ".read /opt/analytics/resources.sql", "-c", sql], case.mounts, case.environment, "duckdb"
-    )
-    if code:
-        raise package_fixture.FixtureError(f"mutation SQL failed: {stderr.strip()[-300:]}")
+    (case.folder / "mutation.sql").write_text(sql)
+    base = f"{package_fixture.CONTAINER_OUT}/{case.name}"
+    params = {"case_host": str(case.folder.resolve()), "case_container": base, "database": f"{base}/staging.duckdb", "sql_file": f"{base}/mutation.sql"}
+    result = package_fixture.ACTIVE[-1].run("fixture_init", f"mutation-{secrets.token_hex(4)}", [], params)
+    if not result.ok:
+        raise package_fixture.FixtureError(f"mutation SQL failed: {result.stderr.strip()[-300:]}")
 
 
 def test_nodes(case: package_fixture.Case, tests: list[str], minimum_warnings: int, require_release_test: bool) -> tuple[list[str], dict[str, Any]]:
@@ -610,10 +607,10 @@ def fixture_stage(run: Run, args: argparse.Namespace, contract: gold_checks.Cont
     run.enter("fixture:admission")
     inject(run, args, "start")
     with package_fixture.reservation() as plan:
-        stage["reservation"] = plan["reservation_id"]
+        stage["reservation"] = plan.allocation
         started = time.monotonic()
         run.enter("fixture:build")
-        case = package_fixture.make_case("gold_fixture", plan, [])
+        case = package_fixture.make_case("gold_fixture", plan, [], gate=True)
         run.cleanups.append(("remove_ge_output", lambda: shutil.rmtree(case.folder / "ge_out", ignore_errors=True)))
         project = case.folder / "project"
         for overlay in overlays:

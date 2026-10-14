@@ -1914,6 +1914,10 @@
           "VARCHAR"
         ],
         [
+          "total_hac_score_number",
+          "DOUBLE"
+        ],
+        [
           "total_hac_score_footnote",
           "VARCHAR"
         ],
@@ -1962,6 +1966,22 @@
           "DATE"
         ],
         [
+          "psi_90_start_date_text",
+          "VARCHAR"
+        ],
+        [
+          "psi_90_end_date_text",
+          "VARCHAR"
+        ],
+        [
+          "hai_measures_start_date_text",
+          "VARCHAR"
+        ],
+        [
+          "hai_measures_end_date_text",
+          "VARCHAR"
+        ],
+        [
           "member_sha256",
           "VARCHAR"
         ],
@@ -1979,26 +1999,6 @@
         ],
         [
           "program_key",
-          "VARCHAR"
-        ],
-        [
-          "total_hac_score_number",
-          "DOUBLE"
-        ],
-        [
-          "psi_90_start_date_text",
-          "VARCHAR"
-        ],
-        [
-          "psi_90_end_date_text",
-          "VARCHAR"
-        ],
-        [
-          "hai_measures_start_date_text",
-          "VARCHAR"
-        ],
-        [
-          "hai_measures_end_date_text",
           "VARCHAR"
         ]
       ],
@@ -5843,26 +5843,6 @@
           "VARCHAR"
         ],
         [
-          "member_sha256",
-          "VARCHAR"
-        ],
-        [
-          "object_key",
-          "VARCHAR"
-        ],
-        [
-          "release_date",
-          "DATE"
-        ],
-        [
-          "release_file_count",
-          "BIGINT"
-        ],
-        [
-          "program_key",
-          "VARCHAR"
-        ],
-        [
           "unweighted_normalized_clinical_care_domain_score_number",
           "DOUBLE"
         ],
@@ -5905,6 +5885,26 @@
         [
           "total_performance_score_number",
           "DOUBLE"
+        ],
+        [
+          "member_sha256",
+          "VARCHAR"
+        ],
+        [
+          "object_key",
+          "VARCHAR"
+        ],
+        [
+          "release_date",
+          "DATE"
+        ],
+        [
+          "release_file_count",
+          "BIGINT"
+        ],
+        [
+          "program_key",
+          "VARCHAR"
         ]
       ],
       "package": "V1",
@@ -6010,7 +6010,8 @@
     "fills": "A filled column keeps its published value in <column>_published and names its source in <column>_source (silver failure mode 741).",
     "hold_key": "md5(concat_ws('|', bronze_table, hold_reason, coalesce(entity_id or ccn, '<null>'), coalesce(measure_id, '<null>'), coalesce(cast(window_start or fiscal_year as varchar), '<null>'), coalesce(cast(window_end as varchar), '<null>'))); unique test per hold model",
     "unchanged_models": "A model marked unchanged must equal its baseline_rows and baseline_content on the fixture (silver failure mode 737).",
-    "value_preservation": "A typed column keeps its published text beside it unless a cast test proves every non-blank published value cast exactly (silver plan section 5). The check of silver section 5 fails a typed column with neither."
+    "value_preservation": "A typed column keeps its published text beside it unless a cast test proves every non-blank published value cast exactly (silver plan section 5). The check of silver section 5 fails a typed column with neither.",
+    "column_order": "Column order is not binding: checks compare column names and types. The adjacency edge checks keep their original ordered form. int_hac_program_years and int_vbp_program_years list their columns in the built order."
   },
   "source": "data/wave0/baselines/fixture_beab859/baseline.json (commit beab859, dbt tree 49cc1f46)"
 }

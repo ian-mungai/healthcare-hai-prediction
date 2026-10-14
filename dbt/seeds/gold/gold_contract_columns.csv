@@ -1194,6 +1194,13 @@ bridge_county_neighbor,edge_key,,false
 bridge_county_neighbor,is_self_link,,false
 bridge_county_neighbor,is_isolated,,false
 bridge_county_neighbor,is_connecticut,,false
+bridge_measure_control,measure_sk,,false
+bridge_measure_control,registry_control_sk,,false
+bridge_measure_control,measure_control,,false
+bridge_measure_control,vintage_start,,false
+bridge_measure_control,vintage_end,,false
+bridge_measure_control,source_seed,,false
+bridge_measure_control,source_row,,false
 bridge_zip_county,member_sha256,,false
 bridge_zip_county,source_row_number,,false
 bridge_zip_county,quarter_label,,false
