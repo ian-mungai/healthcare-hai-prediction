@@ -162,7 +162,7 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-commit]
-        files: ^(scripts/acquisition/|config/acquisition/|tests/test_source_registry\.py$|scripts/process\.py$|scripts/infrastructure/render_project_config\.py$|requirements\.txt$|\.github/workflows/ci\.yml$)
+        files: ^(scripts/acquisition/|config/acquisition/|tests/test_source_registry\.py$|tests/fixtures/registry_additions_bronze_lineage\.csv$|scripts/process\.py$|scripts/infrastructure/render_project_config\.py$|requirements\.txt$|\.github/workflows/ci\.yml$)
       - id: local_ci
         name: Run local CI
         entry: bash scripts/run_ci.sh
