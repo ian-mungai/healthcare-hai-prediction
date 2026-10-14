@@ -1007,6 +1007,41 @@ def orphan_disposed_once(env: Env) -> dict[str, bool]:
     }
 
 
+@case("orphan_late_inspect_once")
+def orphan_late_inspect_once(env: Env) -> dict[str, bool]:
+    """910 (main CI after PR #5): an inspect reply read before an orphan's removal and delivered after it settled does not dispose of it again."""
+    env.start()
+    seen = 0
+
+    def second_inspect(ctx: dict[str, Any]) -> bool:
+        nonlocal seen
+        if ctx["name"] != "hai-rogue-late":
+            return False
+        seen += 1
+        return seen == 2
+
+    # The removal waits until an inspect raised by the stop has read the container; that reply is then held until the removal settled.
+    remove_gate = env.daemon.add_gate("remove", "before", match=lambda ctx: True)
+    late_gate = env.daemon.add_gate("inspect", "after", match=second_inspect)
+    container = env.daemon.create_rogue("hai-rogue-late", {launcher.LABEL_REGISTRY: env.registry_id(), "hai.owner": "run:ghost"}, running=True)
+    if not (remove_gate.wait_reached() and late_gate.wait_reached()):
+        raise CaseFailure("the removal or the late inspect was not reached")
+    remove_gate.release()
+
+    def operations() -> list[dict[str, Any]]:
+        return [op for op in env.state()["operations"].values() if op["kind"] == "orphan" and op.get("container_id") == container]
+
+    env.wait(lambda: env.labelled() == [] and [op["state"] for op in operations()] == ["settled"], 20, "the orphan is removed and its operation settled")
+    late_gate.release()
+    # Give the launcher time to act on the late reply, as it would on any other inspect.
+    time.sleep(1.5)
+    return {
+        "the orphan is removed": env.labelled() == [],
+        "one orphan record": [n for n in orphan_names(env) if n == "hai-rogue-late"] == ["hai-rogue-late"],
+        "one orphan operation": len(operations()) == 1,
+    }
+
+
 @case("scan_reply_after_stream_loss", timings={"backoff_start": 2.0, "backoff_cap": 3})
 def scan_reply_after_stream_loss(env: Env) -> dict[str, bool]:
     """910 (F7): the stream drops after the probe is acknowledged and while the scan is in flight; the late scan reply does not restore serving."""
@@ -1019,6 +1054,9 @@ def scan_reply_after_stream_loss(env: Env) -> dict[str, bool]:
     time.sleep(0.5)
     during = env.ping().get("status")
     env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher serves again after a new subscription")
+    # The new subscription's probe container is removed after serving resumes; a slow machine can still hold it here.
+    with contextlib.suppress(CaseFailure):
+        env.wait(lambda: env.labelled() == [], 10, "the second probe container is removed")
     state = env.state()
     return {
         "the late scan reply left the launcher degraded until the reconnect": during == "degraded",
@@ -2214,6 +2252,16 @@ def peer_user_rejection(env: Env) -> dict[str, bool]:
         outcome = error
     env.wait(lambda: "rejected a connection from user" in log.read_text(), 10, "the rejection is logged")
     rejected = log.read_text()
+    # The start-up probe runs beside the rejection; a kill before its container is removed would leave that container behind.
+    env.wait(
+        lambda: (
+            any(a.get("probe") for a in env.state()["attempts"].values())
+            and not any(launcher.is_open(a) for a in env.state()["attempts"].values() if a.get("probe"))
+            and env.labelled() == []
+        ),
+        30,
+        "the start-up probe has ended and its container is removed",
+    )
     os.kill(pid, signal.SIGKILL)
     env.wait(lambda: not env.alive(pid), 10, "the launcher is stopped")
     config.socket_path.unlink(missing_ok=True)
@@ -5394,6 +5442,7 @@ ALL_CASES = (
     recovery_cleanup_restart,
     continuous_events_during_scan,
     orphan_disposed_once,
+    orphan_late_inspect_once,
     shared_allocation_two_workers,
     heavy_allocation_exclusion,
     holder_death,
