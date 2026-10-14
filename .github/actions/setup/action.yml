@@ -1,0 +1,35 @@
+name: Set up the checks
+description: Terraform, Python, Node.js and the pinned project tools every CI check job needs.
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+      with:
+        terraform_version: "1.16.1"
+        terraform_wrapper: false
+
+    - name: Setup Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: "3.12"
+        cache: pip
+        cache-dependency-path: requirements.txt
+
+    # markdownlint-cli2 needs Node.js 22 or later.
+    - name: Setup Node.js
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: "22"
+
+    - name: Install shared dependencies
+      shell: bash
+      run: |
+        python -m venv .venv
+        .venv/bin/python -m pip install -r requirements.txt
+        .venv/bin/python scripts/quality/install_tools.py
+        .venv/bin/python -m scripts.quality.install_markdownlint
+        .venv/bin/python -m scripts.quality.install_sqlfluff
+        # The launcher E2E renders dbt_deps jobs from the pinned local package archive, which Git does not track.
+        .venv/bin/python -m scripts.lakehouse.dbt_package_archive fetch

@@ -239,7 +239,12 @@ Pre-commit (`pre-commit` and `commit-msg` stages) and `scripts/run_ci.sh`
 enforce these repository rules at the pinned versions. The full set
 (`.venv/bin/pre-commit run --all-files --hook-stage manual`) runs before a
 release or push. GitHub CI runs that same command on every push and pull
-request. In the full set gitleaks scans every outgoing source file instead of
+request as parallel jobs: the hooks without `local_ci`, then `scripts/run_ci.sh`
+as `CI_PART=core` and, when a change touches a path the launcher reads, the
+launcher E2E in two shards (`CI_PART=launcher`, `LAUNCHER_SHARD=K/2`). Locally
+`scripts/run_ci.sh` runs every part; its independent check groups run
+concurrently after the launcher E2E. In the full set gitleaks scans every
+outgoing source file instead of
 the staged index. The acquisition checks run in their own CI job and through
 their hook only when acquisition files change; run them directly before a release
 with `bash scripts/acquisition/run_checks.sh`.
@@ -288,7 +293,7 @@ notifications, cross-region replication, KMS encryption and access logging are d
 - `scripts/process.py`: the one process launcher every script uses to start programs.
 - `scripts/infrastructure/`: dotenv rendering, identity guards and configuration E2E.
 - `scripts/quality/`: pinned tool installation, secret scanning, repository checks, documentation review and Terraform analysis.
-- `scripts/run_ci.sh`: the local CI script; the `local_ci` hook runs it on every commit and in GitHub CI.
+- `scripts/run_ci.sh`: the local CI script; the `local_ci` hook runs it on every commit; GitHub CI runs it in parts as parallel jobs.
 - `tests/`: retained pytest regression safeguards and their `check()` helper.
 - `config/quality_tools.json`: pinned native tool versions and publisher hashes.
 - `config/quality/dependency_runtimes.json`: each runtime's requirements files and code, for the dependency check.

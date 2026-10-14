@@ -988,6 +988,25 @@ def continuous_events_during_scan(env: Env) -> dict[str, bool]:
     }
 
 
+@case("orphan_disposed_once")
+def orphan_disposed_once(env: Env) -> dict[str, bool]:
+    """910 (PR #3 CI): an orphan whose removal is slow is disposed of and recorded once, however many events it raises meanwhile."""
+    env.start()
+    remove_gate = env.daemon.add_gate("remove", "before", match=lambda ctx: True)
+    container = env.daemon.create_rogue("hai-rogue-slow", {launcher.LABEL_REGISTRY: env.registry_id(), "hai.owner": "run:ghost"}, running=True)
+    remove_gate.wait_reached()
+    # The stop raised die and stop events while the removal waits; give the launcher time to inspect the container again.
+    time.sleep(1.5)
+    remove_gate.release()
+    env.wait(lambda: env.labelled() == [], 20, "the orphan is removed")
+    operations = [op for op in env.state()["operations"].values() if op["kind"] == "orphan" and op.get("container_id") == container]
+    return {
+        "the orphan is removed": env.labelled() == [],
+        "one orphan record": [n for n in orphan_names(env) if n == "hai-rogue-slow"] == ["hai-rogue-slow"],
+        "one orphan operation": len(operations) == 1,
+    }
+
+
 @case("scan_reply_after_stream_loss", timings={"backoff_start": 2.0, "backoff_cap": 3})
 def scan_reply_after_stream_loss(env: Env) -> dict[str, bool]:
     """910 (F7): the stream drops after the probe is acknowledged and while the scan is in flight; the late scan reply does not restore serving."""
@@ -5218,6 +5237,7 @@ ALL_CASES = (
     headers_before_registration,
     recovery_cleanup_restart,
     continuous_events_during_scan,
+    orphan_disposed_once,
     shared_allocation_two_workers,
     heavy_allocation_exclusion,
     holder_death,
@@ -5264,9 +5284,18 @@ ALL_CASES = (
 )
 
 
-def run_cases(selected: list[str]) -> int:
-    """Run the selected cases (all by default), write the report and return the exit code."""
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+def shard_of(names: list[str], shard: str) -> list[str]:
+    """Every Nth case for shard K/N (1-based), in registration order; CI runs the shards as parallel jobs."""
+    match = re.fullmatch(r"([1-9][0-9]*)/([1-9][0-9]*)", shard)
+    if match is None or int(match[1]) > int(match[2]):
+        raise SystemExit(f"--shard must be K/N with 1 <= K <= N, not {shard!r}")
+    index, count = int(match[1]) - 1, int(match[2])
+    return [name for position, name in enumerate(names) if position % count == index]
+
+
+def run_cases(selected: list[str], shard: str = "") -> int:
+    """Run the selected cases (all by default, or one shard of them), write the report and return the exit code."""
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + (f"_shard{shard.replace('/', 'of')}" if shard else "")
     report = OUT / stamp
     report.mkdir(parents=True)
     if {function.__name__ for function in ALL_CASES} != {function.__name__ for function, _ in CASES.values()}:
@@ -5274,6 +5303,8 @@ def run_cases(selected: list[str]) -> int:
     changed = run_command("git", ["diff", "--name-only"], cwd=ROOT).stdout.splitlines()
     sources = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in changed if (ROOT / name).is_file()}
     names = selected or list(CASES)
+    if shard:
+        names = shard_of(names, shard)
     results: list[dict[str, Any]] = []
     for name in names:
         function, settings = CASES[name]
@@ -5321,8 +5352,9 @@ def main() -> int:
     """Parse arguments and run."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--case", action="append", default=[], choices=sorted(CASES))
+    parser.add_argument("--shard", default="", help="run every Nth case only, as K/N (1-based)")
     args = parser.parse_args()
-    return run_cases(args.case)
+    return run_cases(args.case, args.shard)
 
 
 if __name__ == "__main__":

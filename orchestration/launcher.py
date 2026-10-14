@@ -3694,9 +3694,11 @@ class Launcher:
             a = state["attempts"].get(op["attempt"]) if op else None
             matches = op is not None and a is not None and op["kind"] == "create" and op["state"] == "open" and a["phase"] == "creating"
             matches = matches and op is not None and a is not None and a["container_name"] == name and self.labels_match(a, op, labels)
+            disposing = any(o["kind"] == "orphan" and o["state"] == "open" and o.get("container_id") == container_id for o in state["operations"].values())
             if matches and op is not None and a is not None:
                 self.adopt(state, a, op, container_id, info)
-            else:
+            elif not disposing:
+                # An orphan already being removed raises more events (stop, die); it is disposed of and recorded once.
                 self.dispose_orphan(state, container_id, name, labels, actions)
         for action in actions:
             action()
