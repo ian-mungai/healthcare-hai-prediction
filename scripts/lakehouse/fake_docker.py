@@ -401,7 +401,11 @@ class FakeDocker:
             self.create(handler, query, body)
         elif len(parts) == 2 and parts[1] == "json":
             container = self.find(parts[0])
-            handler.reply(200 if container else 404, self.inspect_form(container) if container else {"message": "No such container"})
+            form = self.inspect_form(container) if container else None
+            if container:
+                # A gate here holds an inspect reply read before later changes, as a slow daemon reply does.
+                self.checkpoint("inspect", "after", {"name": container["Name"].lstrip("/"), "labels": container["Config"]["Labels"]})
+            handler.reply(200 if form else 404, form if form else {"message": "No such container"})
         elif len(parts) == 1 and method == "DELETE":
             self.remove(handler, parts[0])
         elif len(parts) == 2 and parts[1] == "start":
