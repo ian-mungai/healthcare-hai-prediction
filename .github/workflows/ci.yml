@@ -19,7 +19,8 @@ jobs:
   # and the launcher E2E in two shards. Together they run everything the local_ci hook runs.
   hooks:
     name: Repository Hooks
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moves to Ubuntu 26 from Oct 19 2026; move deliberately after a green test run on the new image.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
@@ -58,7 +59,7 @@ jobs:
 
   local_ci:
     name: Local CI Core
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # About 15 minutes on the runner with its check groups running concurrently.
     timeout-minutes: 35
     steps:
@@ -94,7 +95,7 @@ jobs:
 
   launcher:
     name: Launcher E2E (Shard ${{ matrix.shard }} of 2)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # About 10 minutes per shard on the runner.
     timeout-minutes: 30
     strategy:
@@ -131,7 +132,7 @@ jobs:
 
   acquisition:
     name: Acquisition Checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Every offline E2E suite runs twice: 12-14 minutes locally, up to 29 minutes here. It runs only when the range
     # changes a path the acquisition-checks hook watches (about 1 minute otherwise); see the run step.
     timeout-minutes: 30
