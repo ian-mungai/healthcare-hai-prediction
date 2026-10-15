@@ -1,10 +1,26 @@
 ---
 title: Lakehouse Usage
 description: Commands and checks for the launcher, bronze, staging, gold, silver validation, the run lock and the fixture kit.
-last_updated: 2026-10-14
+last_updated: 2026-10-15
 ---
 
 # Lakehouse Usage
+
+## Main Commands
+
+Every container starts through the launcher (`orchestration/launcher.py`), the only process allowed to call Docker. A real
+dbt build runs only with its provenance recorded; a complete successful build is sealed into a read-only copy that the
+gold, quality and query readers check before they read it. The main lakehouse commands:
+
+```sh
+.venv/bin/python -m orchestration.launcher status                  # the launcher; --what registry or catalog
+.venv/bin/python -m scripts.lakehouse.catalog up                   # start the catalog (from the main checkout only)
+scripts/lakehouse/query.sh                                         # DuckDB shell with bronze attached read-only
+.venv/bin/python -m scripts.lakehouse.catalog job bronze -- --group hai   # load a bronze group; report: data/e2e/bronze_load/
+.venv/bin/python -m scripts.lakehouse.run_silver_e2e               # silver and gold quality checks on the fixture; report: data/e2e/silver_quality/
+.venv/bin/python -m scripts.lakehouse.run_gold_e2e                 # gold on the fixture; report: data/e2e/gold/
+.venv/bin/python -m scripts.lakehouse.run_launcher_e2e             # launcher scenarios with a fake Docker; report: data/e2e/launcher/
+```
 
 ## Launcher
 

@@ -129,6 +129,7 @@ class Case:
     message: str | None = None
 
 
+POLICY_DOCUMENT = "docs/quality_checks.md"
 RUFF_STANDARD = '[tool.ruff]\nline-length = 160\ntarget-version = "py312"\n\n[tool.ruff.lint]\nselect = ["E", "F", "I", "B", "UP", "S", "SIM", "T20"]\n'
 
 CASES = [
@@ -625,6 +626,8 @@ def run_case(case: Case) -> tuple[bool, str]:
             reason = BLOCK_REASONS.get(case.name, "").format(line=added)
             marker = PASS_MARKERS.get(case.name, "")
             correct = correct and reason in output and marker in output and not any(value in output for value in PRIVACY_VALUES)
+        if not case.expect_pass and case.hook in ("writing-check", "privacy-scan"):
+            correct = correct and POLICY_DOCUMENT in output
         if case.hook in ("writing-check", "markdownlint", "front-matter", "sqlfluff", *CLEANUP_HOOKS):
             correct = correct and BLOCK_REASONS.get(case.name, "") in output
         return correct, output

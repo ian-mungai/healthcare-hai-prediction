@@ -1,7 +1,7 @@
 ---
 title: Saved for the Feature Phase
 description: The silver models saved in features/ for the feature phase, as described when they were silver models.
-last_updated: 2026-10-13
+last_updated: 2026-10-15
 ---
 
 # Saved for the Feature Phase
@@ -34,7 +34,7 @@ published IDs `PSI_90` and `PSI_13` (registry revision 3); the older `PSI_90_SAF
 aliased.
 
 The alignment stage lines each staged source up with the hospital-year spine as of the HAI window start. It was built
-in silver at commit `e71779d` and moves to the feature phase under the October 10 2026 layer design (see [Architecture](../README.md#architecture)).
+in silver at commit `e71779d` and moves to the feature phase under the October 10 2026 layer design (see the [architecture diagram](architecture/architecture.png)).
 `int_spine_hai_outcomes` (step AL1) has one row per spine hospital-window and infection type (HAI_1 CLABSI to HAI_6
 C. difficile): the published SIR, its bounds, the observed and predicted counts and the exposure, by exact measure ID,
 with tokens kept as text and the SIR footnote codes. No SIR is computed from the counts. A part from a release after the

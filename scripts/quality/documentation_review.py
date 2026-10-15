@@ -21,7 +21,7 @@ from typing import cast
 from scripts.process import TimeoutExpired, run_command
 
 RECORD = ".documentation_review.json"
-POLICY = "README.md, Quality Checks: documentation review before every commit"
+POLICY = "docs/quality_checks.md: documentation review before every commit"
 SUFFIXES = {".md", ".mdx", ".markdown", ".rst", ".adoc", ".asciidoc", ".txt", ".html", ".htm", ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".odt"}
 DOC_FOLDERS = {"docs", "doc", "documentation", "guides", "runbooks"}
 DOC_NAMES = {"readme", "changelog", "changes", "contributing", "license", "copying", "authors", "notice"}

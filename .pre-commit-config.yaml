@@ -1,4 +1,4 @@
-# Pre-commit checks for this repository; README.md, Quality Checks, lists what each one enforces.
+# Pre-commit checks for this repository; docs/quality_checks.md lists what each one enforces.
 # Every hook is local and pinned: pre-commit, Ruff and MyPy come from requirements.txt in .venv, gitleaks and TFLint
 # from scripts/quality/install_tools.py in .tools. Before every push, run `pre-commit run --all-files --hook-stage manual`.
 # There are no other bypasses: do not use SKIP= or git commit --no-verify.

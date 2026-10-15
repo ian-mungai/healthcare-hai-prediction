@@ -1,7 +1,7 @@
 ---
 title: Data Collection
 description: How the source data was collected and stored, with the commands that repeat or recheck each step.
-last_updated: 2026-10-10
+last_updated: 2026-10-15
 ---
 
 # Data Collection
@@ -174,7 +174,43 @@ These steps need a person. Everything else runs from the scripts above.
 
 ## Privacy Handling
 
-A few sources contain personal names or contact details. The README's [Data section](../README.md#data) sets the rules; in short:
+A few sources contain personal names or contact details. These rules apply:
+
+Published hospital-level datasets are public reference data subject to their
+source terms. Public availability does not remove personal-data safeguards.
+Any source containing personal names or contact details
+is classified as Confidential and requires a documented ingestion exception.
+
+For the HCAI exception, the untouched download stays local with
+owner-only access. Only the privacy-filtered derivative and non-personal
+references or provenance may enter the project's private S3 storage. The
+derivative remains under privacy and modeling review; redaction does not
+establish formal anonymization or clinical validity. Raw retention duration
+remains unresolved. The development Mac uses FileVault; that host check
+does not establish compliance or resolve retention requirements.
+
+The data bucket carries its own `DataClassification` tag of Confidential.
+Redacted derivatives are not formally
+anonymized. Hospital chief executives in HCAI annual financial files and state
+officials' work contacts in a CMS contacts table are treated as Confidential:
+originals stay local and only redacted copies belong in S3. S3 holds no
+Excel or contact originals: 293 such versions were removed, 75 of them replaced by
+redacted copies. Retirement records cover all 293, storage reconciliation passes
+and no deletion grant remains.
+Operational evidence stays in ignored local
+folders; this status does not clear privacy or modeling holds. The project no
+longer uses the HRSA Area Health Resources Files: their license limits sharing
+the data with third parties, so the five measures built on them were dropped and
+all 399 stored versions were deleted and verified.
+
+Tests use generic synthetic data. Real personal values must never appear in
+fixtures, logs, tutorials, published artifacts or commits. Acquisition inputs,
+operational evidence and the detailed exception record remain untracked.
+
+The live S3 verification tool is the sole opt-in exception
+to synthetic-only verification. Normal CI does not run it or contact AWS.
+
+In practice:
 
 - The unchanged download stays on the local machine with owner-only access.
 - `abstract_public_business_csv --policy <policy> --source-url <url> --input <original> --output <derivative>` writes a privacy-filtered copy; only that copy goes to S3.

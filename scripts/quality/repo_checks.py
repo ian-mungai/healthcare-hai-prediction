@@ -3,7 +3,7 @@
 Run from the repository root: ``.venv/bin/python -m scripts.quality.repo_checks <check> [paths ...]``. Each finding
 names the file and line, the rule, how to fix it and what to do when the rule seems wrong; any finding exits 1. A check
 that cannot run raises and exits non-zero, so it fails closed. There are no bypasses. Markers the checks look for are
-assembled from fragments, so this file does not flag itself. The rules are listed in README.md under Quality Checks.
+assembled from fragments, so this file does not flag itself. The rules are listed in docs/quality_checks.md.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from typing import Any
 
 from scripts.process import run_command
 
-POLICY = "README.md, Quality Checks"
+POLICY = "docs/quality_checks.md"
 ASK = "if the rule seems wrong here, stop and ask the repository owner; there are no bypasses (no SKIP= or --no-verify)"
 
 CREDENTIAL_NAMES = ("*.tfstate", "*.tfstate.backup", "*.tfplan", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ecdsa", "id_ed25519", "credentials")

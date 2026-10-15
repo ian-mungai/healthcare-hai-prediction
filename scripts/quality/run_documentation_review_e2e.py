@@ -270,7 +270,9 @@ def run_case(scenario: str) -> tuple[bool, str]:
         output = result.stdout + result.stderr
         expected = scenario in GOOD
         valid_pass = result.returncode == 0 and "documentation review: PASS" in output
-        valid_rejection = result.returncode != 0 and "documentation review: BLOCK" in output and "Traceback" not in output
+        valid_rejection = (
+            result.returncode != 0 and "documentation review: BLOCK" in output and "docs/quality_checks.md" in output and "Traceback" not in output
+        )
         return (valid_pass if expected else valid_rejection), output
 
 

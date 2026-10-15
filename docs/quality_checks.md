@@ -160,3 +160,69 @@ with no false positives, so they block from the start. The writing check blocked
 only after the existing prose was corrected. Its dash, semicolon and slash kinds warn until a
 whole-repository run has no finding of that kind. The unused code, dependency and file
 checks blocked only after their findings were deleted or listed with a reason.
+
+## How the Checks Run
+
+CI checks Ruff formatting and security rules, MyPy, outgoing-source secret
+scanning, repository checks, configuration and quality E2E, retained regression
+safeguards, Terraform mock tests, TFLint, Checkov and `trivy config` (its
+embedded checks only, run offline). Pre-commit scans the actual staged index,
+including changes hidden by a clean working copy, before local CI. The source
+scan excludes ignored acquisition data; neither scan sends files to an external
+service. Secret values and matching source fragments are omitted from scanner
+diagnostics.
+
+Pre-commit (`pre-commit` and `commit-msg` stages) and `scripts/run_ci.sh`
+enforce these repository rules at the pinned versions. On a commit the
+`local_ci_affected` hook runs `scripts/run_ci.sh` for the staged paths. The full
+set (`.venv/bin/pre-commit run --all-files --hook-stage manual`, whose
+`local_ci` hook runs the full local CI) runs before every release or push.
+GitHub CI runs the manual stage on every push and pull request as parallel
+jobs: the hooks without `local_ci` (file-based hooks check the changed files of
+the range), then `scripts/run_ci.sh` as `CI_PART=core` and, when a change
+touches a path the launcher reads, the launcher E2E in two shards
+(`CI_PART=launcher`, `LAUNCHER_SHARD=K/2`), each for the groups the range
+touches (`CI_SCOPE=range`). Without a usable range (a manual run, the first push
+of a branch or rewritten history) every check runs. Each job caches only what a
+lock file or hash checks again before use (npm packages, Terraform providers,
+the dbt package archive and the SQLFluff packages); the Python environment is
+built fresh from `requirements.txt` without a pip cache. Its timeout is about
+twice its measured time. Locally `scripts/run_ci.sh` runs every part: the gates
+first, then the launcher E2E and then the independent check groups, which run
+concurrently. It prints each step's seconds (GitHub CI adds them to the job
+summary). In the full set gitleaks scans every outgoing source file instead of
+the staged index. The acquisition checks
+run in their own CI job and through their hook only when acquisition files
+change. The full local CI also runs them. Run them directly before a release
+with `bash scripts/acquisition/run_checks.sh`.
+
+The checks cover secrets and credential files, data files (allowed only in `tests/fixtures/` and `dbt/seeds/`), a
+privacy scan of every non-ignored file, prose style, Markdown syntax, front matter, commit messages, documentation that
+matches the code, removed names, unused code, dependencies and files, lint settings and Docker calls outside the
+launcher. Each has a failing and a passing sample run in local CI. Local commits need an ignored
+`.documentation_review.json`, a per-document review bound to the staged snapshot
+(`.venv/bin/python -m scripts.quality.documentation_review prepare`). There are no bypasses:
+never use `SKIP=` or `git commit --no-verify`. If a check blocks a valid change,
+fix the check or ask the repository owner.
+
+`CI_SCOPE` selects the check groups: `full` (the default: every group, the acquisition gate included), `staged` (the
+commit hook) or `range` with `RANGE_START` and `RANGE_END` (GitHub CI). `CI_LIST_ONLY=1` prints which groups would run
+and why. It runs nothing. The groups and the paths they depend on are in `config/quality/ci_groups.json`. A path that
+no group lists and that is not passive selects every applicable group. Markdown outside `dbt/`, anything under `docs/`,
+`.gitignore` and `.gitattributes` are passive: they do not select every group, but a group whose list matches one still
+runs. A change of passive paths that no group lists runs no group. The privacy, secret, credential, data-file,
+writing, Markdown lint and documentation gates always run. They run in every scope and every part, also when no group
+is selected. The Markdown lint gate checks every Markdown document the markdownlint hook checks, so a change to any file
+markdownlint reads (its configuration in any folder, a file a configuration extends or the pin) cannot skip it. The
+acquisition gate is the exception: it runs only in the full scope and its own hook and CI job cover commits and pushes.
+A change to `.sqlfluff` or the SQLFluff pins lints every dbt model and test (the `sql_style` group).
+
+Each CI run retains configuration evidence under `data/e2e/configuration/` and
+quality evidence under `data/e2e/quality/`. E2E reports include source hashes,
+expected and observed process outcomes, repeat commands and tested limits.
+GitHub Actions retains these synthetic artifacts for 14 days. Local TFLint
+needs permission to start its bundled plugin; a sandbox denial is a blocked
+check, not a passing result.
+
+Before every commit, stage the intended files by name, then draft, complete and
+retain the ignored local documentation review record (see Docs match the code above).
