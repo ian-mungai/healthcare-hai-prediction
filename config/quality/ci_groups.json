@@ -1,0 +1,72 @@
+{
+  "note": "Paths each check group of scripts/run_ci.sh depends on (Python regular expressions over repository paths). GitHub CI and local commits select groups from the same lists through scripts/quality/ci_groups.py. A path in global selects every group; a path that no group lists and that is not passive also selects every group. The privacy, secret, credential, data-file, writing, Markdown lint and documentation gates are not groups: they run in every scope. Groups in full_only run only in the full scope (the local run before a push); the acquisition gate keeps its own path list in the acquisition-checks hook, which commits and GitHub CI use.",
+  "global": [
+    "^scripts/run_ci\\.sh$",
+    "^scripts/process\\.py$",
+    "^scripts/quality/ci_groups\\.py$",
+    "^config/quality/ci_groups\\.json$",
+    "^\\.github/",
+    "^\\.pre-commit-config\\.yaml$",
+    "^requirements[^/]*\\.txt$",
+    "^pyproject\\.toml$"
+  ],
+  "passive": [
+    "^(?!dbt/).*\\.md$",
+    "^docs/",
+    "^\\.gitignore$",
+    "^\\.gitattributes$"
+  ],
+  "groups": {
+    "python_lint": [
+      "^(scripts|tests)/.*\\.py$"
+    ],
+    "lakehouse_checks": [
+      "^scripts/(lakehouse|orchestration)/",
+      "^orchestration/",
+      "^dbt/",
+      "^data_contracts/",
+      "^config/",
+      "^services/",
+      "^features/",
+      "^docker-compose\\.yaml$"
+    ],
+    "repository_code_checks": [
+      "\\.(py|sh)$",
+      "^scripts/quality/",
+      "^config/quality/",
+      "^\\.(privacy|writing|cleanup)_allowlist$",
+      "^\\.markdownlint-cli2\\.jsonc$",
+      "^\\.sqlfluff$"
+    ],
+    "configuration_checks": [
+      "^scripts/(infrastructure|quality)/",
+      "^tests/",
+      "^config/",
+      "^infra/",
+      "^\\.env\\.example$"
+    ],
+    "sql_style": [
+      "^dbt/",
+      "^\\.sqlfluff$",
+      "^scripts/quality/(install_sqlfluff\\.py$|sqlfluff/)"
+    ],
+    "terraform_checks": [
+      "^infra/",
+      "^scripts/quality/(static_checks|install_tools)\\.py$",
+      "^config/quality_tools\\.json$"
+    ],
+    "launcher": [
+      "^orchestration/",
+      "^scripts/",
+      "^config/",
+      "^services/",
+      "^data_contracts/",
+      "^dbt/packages\\.yml$",
+      "^dbt/package-lock\\.yml$",
+      "^docker-compose\\.yaml$"
+    ]
+  },
+  "full_only": [
+    "acquisition"
+  ]
+}

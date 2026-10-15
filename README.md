@@ -116,13 +116,26 @@ project bucket. `down` stops the containers and keeps the catalog database.
 
 ## Usage
 
-Run the local CI, which the pre-commit hooks and GitHub Actions also run, without AWS credentials:
+Run the full local CI, which the pre-commit hooks and GitHub Actions also run, without AWS credentials. Run it before
+every push; a commit runs only the check groups its staged paths touch:
 
 ```sh
 env PYTHON_BIN="$PWD/.venv/bin/python" \
   TF_PLUGIN_CACHE_DIR="$PWD/infra/.terraform/providers" \
   /bin/bash scripts/run_ci.sh
 ```
+
+`CI_SCOPE` selects the check groups: `full` (the default: every group, the acquisition gate included), `staged` (the
+commit hook) or `range` with `RANGE_START` and `RANGE_END` (GitHub CI). `CI_LIST_ONLY=1` prints which groups would run
+and why. It runs nothing. The groups and the paths they depend on are in `config/quality/ci_groups.json`. A path that
+no group lists and that is not passive selects every applicable group. Markdown outside `dbt/`, anything under `docs/`,
+`.gitignore` and `.gitattributes` are passive: they do not select every group, but a group whose list matches one still
+runs. A change of passive paths that no group lists runs no group. The privacy, secret, credential, data-file,
+writing, Markdown lint and documentation gates always run. They run in every scope and every part, also when no group
+is selected. The Markdown lint gate checks every Markdown document the markdownlint hook checks, so a change to any file
+markdownlint reads (its configuration in any folder, a file a configuration extends or the pin) cannot skip it. The
+acquisition gate is the exception: it runs only in the full scope and its own hook and CI job cover commits and pushes.
+A change to `.sqlfluff` or the SQLFluff pins lints every dbt model and test (the `sql_style` group).
 
 Each CI run retains configuration evidence under `data/e2e/configuration/` and
 quality evidence under `data/e2e/quality/`. E2E reports include source hashes,
@@ -237,17 +250,27 @@ service. Secret values and matching source fragments are omitted from scanner
 diagnostics.
 
 Pre-commit (`pre-commit` and `commit-msg` stages) and `scripts/run_ci.sh`
-enforce these repository rules at the pinned versions. The full set
-(`.venv/bin/pre-commit run --all-files --hook-stage manual`) runs before a
-release or push. GitHub CI runs that same command on every push and pull
-request as parallel jobs: the hooks without `local_ci`, then `scripts/run_ci.sh`
-as `CI_PART=core` and, when a change touches a path the launcher reads, the
-launcher E2E in two shards (`CI_PART=launcher`, `LAUNCHER_SHARD=K/2`). Locally
-`scripts/run_ci.sh` runs every part; its independent check groups run
-concurrently after the launcher E2E. In the full set gitleaks scans every
-outgoing source file instead of
-the staged index. The acquisition checks run in their own CI job and through
-their hook only when acquisition files change; run them directly before a release
+enforce these repository rules at the pinned versions. On a commit the
+`local_ci_affected` hook runs `scripts/run_ci.sh` for the staged paths. The full
+set (`.venv/bin/pre-commit run --all-files --hook-stage manual`, whose
+`local_ci` hook runs the full local CI) runs before every release or push.
+GitHub CI runs the manual stage on every push and pull request as parallel
+jobs: the hooks without `local_ci` (file-based hooks check the changed files of
+the range), then `scripts/run_ci.sh` as `CI_PART=core` and, when a change
+touches a path the launcher reads, the launcher E2E in two shards
+(`CI_PART=launcher`, `LAUNCHER_SHARD=K/2`), each for the groups the range
+touches (`CI_SCOPE=range`). Without a usable range (a manual run, the first push
+of a branch or rewritten history) every check runs. Each job caches only what a
+lock file or hash checks again before use (npm packages, Terraform providers,
+the dbt package archive and the SQLFluff packages); the Python environment is
+built fresh from `requirements.txt` without a pip cache. Its timeout is about
+twice its measured time. Locally `scripts/run_ci.sh` runs every part: the gates
+first, then the launcher E2E and then the independent check groups, which run
+concurrently. It prints each step's seconds (GitHub CI adds them to the job
+summary). In the full set gitleaks scans every outgoing source file instead of
+the staged index. The acquisition checks
+run in their own CI job and through their hook only when acquisition files
+change. The full local CI also runs them. Run them directly before a release
 with `bash scripts/acquisition/run_checks.sh`.
 
 The checks cover secrets and credential files, data files (allowed only in `tests/fixtures/` and `dbt/seeds/`), a
@@ -294,7 +317,7 @@ notifications, cross-region replication, KMS encryption and access logging are d
 - `scripts/process.py`: the one process launcher every script uses to start programs.
 - `scripts/infrastructure/`: dotenv rendering, identity guards and configuration E2E.
 - `scripts/quality/`: pinned tool installation, secret scanning, repository checks, documentation review and Terraform analysis.
-- `scripts/run_ci.sh`: the local CI script; the `local_ci` hook runs it on every commit; GitHub CI runs it in parts as parallel jobs.
+- `scripts/run_ci.sh`: the local CI script; the `local_ci_affected` hook runs it for the staged paths on every commit, the `local_ci` hook runs it in full in the manual stage and GitHub CI runs it in parts as parallel jobs. `scripts/quality/ci_groups.py` selects its check groups from `config/quality/ci_groups.json`; `scripts/quality/run_ci_groups_e2e.py` tests the selection.
 - `tests/`: retained pytest regression safeguards and their `check()` helper.
 - `config/quality_tools.json`: pinned native tool versions and publisher hashes.
 - `config/quality/dependency_runtimes.json`: each runtime's requirements files and code, for the dependency check.

@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# CI_PART selects what runs: "all" (the default, every check, as the local_ci hook runs it), "core" (everything except
-# the launcher E2E) or "launcher" (the launcher E2E only, one LAUNCHER_SHARD=K/N of it if set). GitHub CI runs "core"
-# and the launcher shards as parallel jobs. Independent check groups run concurrently; the launcher E2E always runs
-# alone first, because several of its cases measure timing that a loaded machine stretches.
+# CI_PART selects what runs: "all" (the default, every part), "core" (everything except the launcher E2E and the
+# acquisition gate) or "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it if set). GitHub CI runs
+# "core" and the launcher shards as parallel jobs.
+# CI_SCOPE selects the check groups (scripts/quality/ci_groups.py, config/quality/ci_groups.json): "full" (the default,
+# every group: run it before every push), "staged" (the groups the staged paths touch: the local_ci_affected commit
+# hook) or "range" (the groups RANGE_START..RANGE_END touches: GitHub CI). The privacy, secret, credential, data-file,
+# writing, Markdown lint and documentation gates run in every scope and in every part, also when no group is selected.
+# CI_LIST_ONLY=1 prints the plan and runs nothing. Each step's seconds are printed and added to the job summary (GITHUB_STEP_SUMMARY).
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 bash -n scripts/run_ci.sh scripts/infrastructure/*.sh
@@ -14,18 +18,39 @@ case "$part" in
   all | core | launcher) ;;
   *) printf 'CI_PART must be all, core or launcher, not %s\n' "$part" >&2; exit 2 ;;
 esac
+scope="${CI_SCOPE:-full}"
+case "$scope" in
+  full | staged | range) ;;
+  *) printf 'CI_SCOPE must be full, staged or range, not %s\n' "$scope" >&2; exit 2 ;;
+esac
+summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/hai_ci.XXXXXX")"
-trap 'rm -rf "$scratch"' EXIT
+# Only a run that sets ci_finished=1 exits 0: bash 3.2 (macOS /bin/bash) reports status 0 to this trap when an unbound
+# variable ends the script, so the trap fails every other exit itself.
+trap 'rm -rf "$scratch"; [[ "${ci_finished:-0}" == 1 ]] || exit 1' EXIT
 
-if [[ "$part" == "launcher" ]]; then
-  # The single launcher against a fake Docker, in test registries (D1 section 15, failure modes 910 to 919).
-  "$python_bin" -m scripts.lakehouse.run_launcher_e2e ${LAUNCHER_SHARD:+--shard "$LAUNCHER_SHARD"}
-  printf '\nThe launcher E2E passed.\n'
+plan_args=(--scope "$scope" --part "$part" --format shell)
+if [[ "$scope" == "range" ]]; then
+  plan_args+=(--from "${RANGE_START:-}" --to "${RANGE_END:-}")
+fi
+plan="$("$python_bin" -m scripts.quality.ci_groups plan "${plan_args[@]}")"
+selected=" "
+while read -r kind group rest; do
+  case "$kind" in
+    reason) printf 'Check groups (scope %s, part %s): %s %s\n' "$scope" "$part" "$group" "$rest" | tee -a "$summary" ;;
+    run) selected+="$group "; printf 'run %s\n' "$group" ;;
+    skip) printf 'skipped %s: %s\n' "$group" "$rest" | tee -a "$summary" ;;
+  esac
+done <<<"$plan"
+if [[ "${CI_LIST_ONLY:-0}" == "1" ]]; then
+  ci_finished=1
   exit 0
 fi
-"$python_bin" -m ruff format --check scripts tests
-"$python_bin" -m ruff check scripts tests
-"$python_bin" -m mypy --check-untyped-defs --disallow-untyped-defs scripts/process.py scripts/infrastructure scripts/quality tests/test_project_config.py tests/support.py
+is_selected() { [[ "$selected" == *" $1 "* ]]; }
+printf '\n| Step | Seconds |\n| --- | ---: |\n' >>"$summary"
+record() { printf '%s: %s s\n' "$1" "$2"; printf '| %s | %s |\n' "$1" "$2" >>"$summary"; }
+
+started=$SECONDS
 "$python_bin" -m scripts.quality.scan_secrets
 # The local dataset folders moved into data/datasets/; an old folder that appears again would split the data (failure mode 227).
 "$python_bin" -c 'import json, pathlib, sys; old = [p for p in json.load(open("config/data_paths.json"))["moved"] if pathlib.Path(p).exists()]; sys.exit("old dataset folders exist again: " + ", ".join(old) if old else 0)'
@@ -34,12 +59,41 @@ fi
 "$python_bin" -m scripts.quality.repo_checks env-example
 "$python_bin" -m scripts.quality.repo_checks privacy-scan
 "$python_bin" -m scripts.quality.repo_checks writing-check
-if [[ "$part" == "all" ]]; then
-  # The single launcher against a fake Docker, in test registries (D1 section 15, failure modes 910 to 919).
-  "$python_bin" -m scripts.lakehouse.run_launcher_e2e
+git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks credential-files
+git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks data-files
+# pre-commit's types: [markdown] is the extensions md and markdown in any letter case; the hook excludes data/.
+git ls-files -z --cached --others --exclude-standard -- ':(icase)*.md' ':(icase)*.markdown' ':(exclude)data' \
+  | xargs -0 "$repo_root/.tools/markdownlint-cli2/node_modules/.bin/markdownlint-cli2" --config .markdownlint-cli2.jsonc
+if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+  "$python_bin" -m scripts.quality.documentation_review check-untracked
+else
+  "$python_bin" -m scripts.quality.documentation_review check
 fi
+record gates $((SECONDS - started))
+
+launcher_e2e() {
+  "$python_bin" -m scripts.lakehouse.run_launcher_e2e ${LAUNCHER_SHARD:+--shard "$LAUNCHER_SHARD"}
+}
+
+if [[ "$part" != "core" ]] && is_selected launcher; then
+  started=$SECONDS
+  launcher_e2e
+  record "launcher${LAUNCHER_SHARD:+ shard $LAUNCHER_SHARD}" $((SECONDS - started))
+fi
+if [[ "$part" == "launcher" ]]; then
+  printf '\nThe launcher part passed.\n'
+  ci_finished=1
+  exit 0
+fi
+
 e2e_output="${E2E_ARTIFACT_DIR:-$repo_root/data/e2e/configuration/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 quality_output="${QUALITY_ARTIFACT_DIR:-$repo_root/data/e2e/quality/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
+
+python_lint() {
+  "$python_bin" -m ruff format --check scripts tests
+  "$python_bin" -m ruff check scripts tests
+  "$python_bin" -m mypy --check-untyped-defs --disallow-untyped-defs scripts/process.py scripts/infrastructure scripts/quality tests/test_project_config.py tests/support.py
+}
 
 lakehouse_checks() {
   # Reference seeds of the gold control bridge, the formula recipes and the repeatable negative cases of their check.
@@ -54,20 +108,14 @@ lakehouse_checks() {
   "$python_bin" -m scripts.orchestration.run_contracts_e2e
 }
 
-repository_checks() {
-  git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks credential-files
-  git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks data-files
+repository_code_checks() {
   git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks suppressions
   git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks subprocess-imports
   # Only orchestration/launcher.py may call Docker (D1 section 2 item 4).
   git ls-files -z --cached --others --exclude-standard -- '*.py' '*.sh' | xargs -0 "$python_bin" -m scripts.quality.docker_calls
-  if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
-    "$python_bin" -m scripts.quality.documentation_review check-untracked
-  else
-    "$python_bin" -m scripts.quality.documentation_review check
-  fi
   "$python_bin" -m scripts.quality.run_checks_e2e
   "$python_bin" -m scripts.quality.run_documentation_review_e2e
+  "$python_bin" -m scripts.quality.run_ci_groups_e2e --selection-only
 }
 
 configuration_checks() {
@@ -76,13 +124,8 @@ configuration_checks() {
   "$python_bin" -m pytest --cov=scripts.infrastructure --cov-report=term-missing -q
 }
 
+
 sql_style() {
-  # dbt SQL style, from the pinned environment the installer creates (scripts/quality/install_sqlfluff.py). GitHub CI
-  # lints the same files in its hooks job, so its core job sets CI_SKIP_SQLFLUFF=1.
-  if [[ "${CI_SKIP_SQLFLUFF:-0}" == "1" ]]; then
-    printf 'SQLFluff skipped: the hooks job lints dbt/models and dbt/tests.\n'
-    return 0
-  fi
   .tools/sqlfluff/bin/sqlfluff lint dbt/models dbt/tests
 }
 
@@ -133,27 +176,43 @@ terraform_checks() {
   fi
 }
 
-# The groups share no files: each writes its own report folder, and only terraform_checks uses the scratch Terraform
-# folders. Each runs with errexit in its own subshell; its output is printed whole after all groups end.
-groups=(lakehouse_checks repository_checks configuration_checks sql_style terraform_checks)
+groups=()
+for group in python_lint lakehouse_checks repository_code_checks configuration_checks sql_style terraform_checks; do
+  if is_selected "$group"; then
+    groups+=("$group")
+  fi
+done
 pids=()
-for group in "${groups[@]}"; do
-  (set -euo pipefail; "$group") > "$scratch/$group.log" 2>&1 &
+for group in ${groups[@]+"${groups[@]}"}; do
+  (
+    set -euo pipefail
+    group_started=$SECONDS
+    "$group"
+    printf '%s\n' $((SECONDS - group_started)) >"$scratch/$group.seconds"
+  ) >"$scratch/$group.log" 2>&1 &
   pids+=("$!")
 done
 failed=()
-for index in "${!groups[@]}"; do
+for index in ${groups[@]+"${!groups[@]}"}; do
   if ! wait "${pids[$index]}"; then
     failed+=("${groups[$index]}")
   fi
 done
-for group in "${groups[@]}"; do
+for group in ${groups[@]+"${groups[@]}"}; do
   printf '\n== %s ==\n' "$group"
   cat "$scratch/$group.log"
+  record "$group" "$(cat "$scratch/$group.seconds" 2>/dev/null || printf 'failed')"
 done
 if ((${#failed[@]})); then
   printf '\nLocal CI failed in: %s\n' "${failed[*]}" >&2
   exit 1
 fi
 
+if [[ "$part" == "all" ]] && is_selected acquisition; then
+  started=$SECONDS
+  bash scripts/acquisition/run_checks.sh
+  record acquisition $((SECONDS - started))
+fi
+
 printf '\nAll local CI checks passed without AWS credentials.\n'
+ci_finished=1
