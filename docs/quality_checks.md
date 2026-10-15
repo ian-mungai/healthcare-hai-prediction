@@ -53,8 +53,8 @@ last_updated: 2026-10-15
   kind name is a usage error. The `.writing_allowlist` entry type is the kind
   name, so `semicolon docs/*.md -- <reason>` keeps the semicolons of those
   files. In a declared article an em dash is one `em dash in article text`
-  finding, not also a `dash` warning. The hook and the local CI command pass no
-  `--block`, so the three kinds warn there. A whole-repository run without
+  finding, not also a `dash` warning. The hook and the local CI command pass
+  `--block dash --block slash`, so dashes and slashes block there and semicolons warn. A whole-repository run without
   `--block` lists them, one `WARN` line each.
 - **Markdown syntax:** `markdownlint-cli2` checks every staged Markdown file
   outside `data/` against the Conventional Docs baseline in
@@ -70,7 +70,7 @@ last_updated: 2026-10-15
   the full message by the `commit-msg` hook and, in GitHub Actions, for every
   pushed commit. AI credit and agent-session lines are rejected; human
   co-authors and factual tool mentions are allowed. Detection uses an explicit
-  agent/vendor list, so new forms need a failing sample before the check is
+  agent and vendor list, so new forms need a failing sample before the check is
   extended. Review pull request text separately; a Git hook cannot read it.
 - **Docs match the code:** every environment variable the code reads is listed
   in `.env.example` and every variable listed there is read by code, a script,
@@ -131,7 +131,7 @@ last_updated: 2026-10-15
 **Acquisition checks** (`bash scripts/acquisition/run_checks.sh`) run Ruff, MyPy,
 registry validation, the acquisition regression tests and every offline E2E
 suite twice, with a 90% coverage gate that also counts collector command lines
-run as child processes. They take 12–14 minutes (up to 29 in CI), so they run only
+run as child processes. They take 12 to 14 minutes (up to 29 in CI), so they run only
 when acquisition code, configuration or their dependencies change: through the
 `acquisition-checks` pre-commit hook and in a separate GitHub Actions "Acquisition
 Checks" job (30-minute limit, LFS checkout, pinned Terraform). The CI job uses the
@@ -157,8 +157,8 @@ point (`scripts/quality/run_checks_e2e.py` and
 `scripts/quality/run_documentation_review_e2e.py`); both run in local CI.
 Every detection check was run on the whole repository before it was enabled,
 with no false positives, so they block from the start. The writing check blocked
-only after the existing prose was corrected. Its dash, semicolon and slash kinds warn until a
-whole-repository run has no finding of that kind. The unused code, dependency and file
+only after the existing prose was corrected. Its dash and slash kinds block since the prose was corrected on
+Oct 15 2026. Its semicolon kind warns until a whole-repository run has no semicolon finding. The unused code, dependency and file
 checks blocked only after their findings were deleted or listed with a reason.
 
 ## How the Checks Run

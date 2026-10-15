@@ -58,7 +58,7 @@ started=$SECONDS
 "$python_bin" -m scripts.quality.repo_checks lint-settings
 "$python_bin" -m scripts.quality.repo_checks env-example
 "$python_bin" -m scripts.quality.repo_checks privacy-scan
-"$python_bin" -m scripts.quality.repo_checks writing-check
+"$python_bin" -m scripts.quality.repo_checks writing-check --block dash --block slash
 git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks credential-files
 git ls-files -z --cached --others --exclude-standard | xargs -0 "$python_bin" -m scripts.quality.repo_checks data-files
 # pre-commit's types: [markdown] is the extensions md and markdown in any letter case; the hook excludes data/.

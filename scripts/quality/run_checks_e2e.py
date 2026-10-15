@@ -69,6 +69,7 @@ CLEAN_WRITING = (
     f"Dates read Sep 30 2026; code keeps `{ISO_DATE}`, `a`, `b` and [the log](https://example.invalid/{ISO_DATE}).\n"
     f"An em dash {EM_DASH} allowed outside articles.\n\n```text\nrun {ISO_DATE}, and done\n```\n"
 )
+CLEAN_WRITING_HOOK = CLEAN_WRITING.replace(f"An em dash {EM_DASH} allowed outside articles.\n", "")
 CLAUSE_COMMA = "Secrets never go into logs or commits" + ", and a privacy scan runs on every commit.\n"
 SERIAL_COMMA = "The check reads Markdown, articles" + ", and commit messages.\n"
 NOR_COMMA = "It is not fast" + ", nor is it cheap.\n"
@@ -428,7 +429,9 @@ CASES = [
     Case("allowlist entry without reason", "privacy-scan", False, {"notes.md": "Nothing here.\n", ALLOWLIST: ALLOWLIST_SOURCE + "email notes.md\n"}),
     Case("allowlist entry with unknown type", "privacy-scan", False, {ALLOWLIST: ALLOWLIST_SOURCE + "address notes.md -- demo\n"}),
     Case("unreadable file listed", "privacy-scan", True, {"docs/diagram.png": b"\x89PNG\r\n\x1a\n\x00\x00"}),
-    Case("clean writing through the hook", "writing-check", True, {"notes.md": CLEAN_WRITING}),
+    Case("clean writing through the hook", "writing-check", True, {"notes.md": CLEAN_WRITING_HOOK}),
+    Case("dash outside an article blocked by the hook", "writing-check", False, {"notes.md": f"An em dash {EM_DASH} reads as a break.\n"}),
+    Case("slash between words blocked by the hook", "writing-check", False, {"notes.md": "Read and/or write the file.\n"}),
     Case("writing finding blocked by the hook", "writing-check", False, {"notes.md": SERIAL_COMMA}),
     Case("time-bound word blocked by the hook", "writing-check", False, {"notes.md": "The loader currently reads S3.\n"}),
     Case("procedural soon passes the hook", "writing-check", True, {"notes.md": "Run it as soon as the load ends.\n"}),
