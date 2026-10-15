@@ -139,7 +139,7 @@ PRIVACY_PATTERNS = {
 }
 RESERVED_DOMAINS = (".invalid", ".test", ".localhost", ".example", "example.com", "example.org", "example.net")
 ENV_VALUE_KEYS = re.compile(r"PROFILE|BUCKET|ACCOUNT|ARN|ENDPOINT|HOST|EMAIL|USER")
-WRITING_RULE = f"{POLICY}: writing check (Oxford comma, date format, time-bound words; em dashes in declared article files)"
+WRITING_RULE = f"{POLICY}: writing check (Oxford comma, date format, time-bound words, dashes, semicolons, slashes; em dashes in declared article files)"
 WRITING_ALLOWLIST = ".writing_allowlist"
 # Checked in prose only: code spans, fenced blocks, front matter, URLs and link targets are masked first.
 WRITING_PATTERNS = {
@@ -157,8 +157,12 @@ WRITING_PATTERNS = {
         "state the fact without the time word, or tie it to a version, commit or issue",
     ),
     "em-dash": ("em dash in article text", re.compile("\u2014"), "use a colon, comma, parentheses or a new sentence"),
+    "dash": ("em or en dash in prose", re.compile("[\u2013\u2014]"), "end the sentence or use a comma"),
+    "semicolon": ("semicolon in prose", re.compile(r";(?!\w)"), "split the text into two sentences"),
+    "slash": ("slash between words in prose", re.compile(r"(?<![\w./~-])[a-z]+/[a-z]+(?![\w/.-])"), 'write "a, b or both" instead of "a/b" or "and/or"'),
 }
 ARTICLE_ONLY = {"em-dash"}
+WARN_FIRST = {"dash", "semicolon", "slash"}
 
 
 @dataclass
@@ -868,12 +872,9 @@ def prose_lines(text: str) -> list[tuple[int, str]]:
     return lines
 
 
-def writing_check(articles: list[str]) -> list[Finding]:
-    """Prose in Markdown follows the writing preferences; em dashes are checked in declared article files only.
-
-    The declared data folders hold synthetic fixtures and are skipped; ignored files (data/, local evidence) never reach it.
-    """
+def writing_check(articles: list[str], block: list[str]) -> tuple[list[Finding], list[Finding]]:
     allowed, findings = read_allowlist(WRITING_ALLOWLIST, list(WRITING_PATTERNS), WRITING_RULE, "why this text is kept as is")
+    warnings: list[Finding] = []
     for path in sorted(set(git("ls-files", "--cached", "--others", "--exclude-standard").splitlines())):
         article = any(fnmatch.fnmatch(path, glob) for glob in articles)
         if not (path.endswith(".md") or article) or path.startswith(DATA_FOLDERS) or not os.path.isfile(path):
@@ -882,9 +883,13 @@ def writing_check(articles: list[str]) -> list[Finding]:
             for kind, (description, pattern, fix) in WRITING_PATTERNS.items():
                 if kind in ARTICLE_ONLY and not article:
                     continue
-                if pattern.search(line) and not any(kind == entry_kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
-                    findings.append(Finding(f"{path}:{number}", description, WRITING_RULE, fix))
-    return findings
+                text = re.sub(r"&#?\w+;", " ", line) if kind in WARN_FIRST else line
+                if kind == "dash" and article:
+                    text = text.replace("\u2014", "")
+                if pattern.search(text) and not any(kind == entry_kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
+                    target = warnings if kind in WARN_FIRST and kind not in block else findings
+                    target.append(Finding(f"{path}:{number}", description, WRITING_RULE, fix))
+    return findings, warnings
 
 
 FRONT_RULE = "bundle standards/documents.md#3-metadata (sections 3.1, 3.2): document front matter"
@@ -982,10 +987,14 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="privacy-scan: every file Git does not ignore, the default scope; ignored files are never scanned")
     parser.add_argument("--warn", action="store_true", help="report findings without failing: a check's warn period before it blocks")
     parser.add_argument("--articles", action="append", default=[], metavar="GLOB", help="writing-check: files that hold article text (em dashes)")
+    parser.add_argument("--block", action="append", default=[], choices=sorted(WARN_FIRST), help="writing-check: make a warn-first kind block")
     args = parser.parse_args()
     if args.check == "writing-check":
-        findings = writing_check(args.articles)
-        return warn(findings) if args.warn else report(findings)
+        findings, warnings = writing_check(args.articles, args.block)
+        if args.warn:
+            return warn(findings + warnings)
+        warn(warnings)
+        return report(findings)
     if args.check == "privacy-scan":
         findings, unreviewed = privacy_scan()
         for line in unreviewed:

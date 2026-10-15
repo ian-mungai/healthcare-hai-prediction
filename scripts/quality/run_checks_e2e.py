@@ -62,6 +62,7 @@ PRIVACY_VALUES = [HOME_PATH, TEMP_PATH, PERSONAL_EMAIL, PHONE, ACCOUNT, ENV_VALU
 WRITING_ALLOWLIST = ".writing_allowlist"
 ISO_DATE = "2026" + "-09-30"
 EM_DASH = "\u2014"
+EN_DASH = "\u2013"
 CLEAN_WRITING = (
     f"---\nlast_updated: {ISO_DATE}\n---\n\n# Notes\n\n"
     "Keep secrets out of logs or commits and run a privacy scan. Lists read red, green and blue.\n"
@@ -430,6 +431,7 @@ CASES = [
     Case("writing finding blocked by the hook", "writing-check", False, {"notes.md": SERIAL_COMMA}),
     Case("time-bound word blocked by the hook", "writing-check", False, {"notes.md": "The loader currently reads S3.\n"}),
     Case("procedural soon passes the hook", "writing-check", True, {"notes.md": "Run it as soon as the load ends.\n"}),
+    Case("warn-first kinds warn through the hook", "writing-check", True, {"notes.md": "Rules help; checks enforce them.\n"}),
     Case(
         "valid front matter passes",
         "front-matter",
@@ -534,6 +536,7 @@ BLOCK_REASONS = {
     "allowlist entry with unknown type": ".privacy_allowlist:{line}: allowlist entry with an unknown type",
     "writing finding blocked by the hook": "notes.md:1: comma before a final 'and', 'or' or 'nor'",
     "time-bound word blocked by the hook": "notes.md:1: time-bound word in prose",
+    "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
     "star bullet blocked by markdownlint": "MD004",
     "missing front matter blocked": "docs/guide.md:1: no front matter",
     "title different from the H1 blocked": "title does not match the H1",
@@ -547,6 +550,7 @@ BLOCK_REASONS = {
 # Good cases that must also print a marker, so a skipped check cannot pass silently.
 PASS_MARKERS = {
     "unreadable file listed": "docs/diagram.png: unreviewed: cannot be read as text",
+    "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
 }
 
 
@@ -732,6 +736,138 @@ def run_writing_case() -> tuple[bool, str]:
     return all(ok for ok, _ in results), "\n".join(line for _, line in results) + "\n"
 
 
+DASH_FINDING = "em or en dash in prose"
+SEMICOLON_FINDING = "semicolon in prose"
+SLASH_FINDING = "slash between words in prose"
+DASH_LINE = f"Rules help {EM_DASH} when they are checked.\n"
+EN_DASH_LINE = f"Rules help {EN_DASH} when they are checked.\n"
+SEMICOLON_LINE = "Rules help; checks enforce them.\n"
+SLASH_LINE = "Read and/or write the file.\n"
+ALL_KINDS = DASH_LINE + SEMICOLON_LINE + SLASH_LINE
+PUNCTUATION_PROSE = (
+    "Rules help when they are checked. Read `a/b;c`, see [the log](https://example.invalid/a;b-c) &amp; write it.\n"
+    "Open docs/quality_checks.md or scripts/run_ci.sh, then ./a/b, ~/a/b and a/b/c. Hyphens stay in well-known words.\n"
+)
+CLEAN_PUNCTUATION = f"---\ntitle: Notes\nnote: a {EM_DASH} b; c/d\n---\n\n# Notes\n\n{PUNCTUATION_PROSE}\n```text\n{ALL_KINDS}```\n"
+BLOCK_ALL = ("--block", "dash", "--block", "semicolon", "--block", "slash")
+KIND_FOLDERS = ("tests/fixtures/", "dbt/seeds/", "features/recipes/")
+WRITING_KIND_SAMPLES = [
+    ("em dash warns", {"notes.md": DASH_LINE}, (), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
+    ("en dash warns", {"notes.md": EN_DASH_LINE}, (), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
+    ("semicolon warns", {"notes.md": SEMICOLON_LINE}, (), 0, [f"WARN notes.md:1: {SEMICOLON_FINDING}"]),
+    ("slash warns", {"notes.md": SLASH_LINE}, (), 0, [f"WARN notes.md:1: {SLASH_FINDING}"]),
+    (
+        "three kinds on three lines warn",
+        {"notes.md": ALL_KINDS},
+        (),
+        0,
+        [f"WARN notes.md:1: {DASH_FINDING}", f"WARN notes.md:2: {SEMICOLON_FINDING}", f"WARN notes.md:3: {SLASH_FINDING}"],
+    ),
+    ("code, URL, path, entity, fence and front matter are not reported", {"notes.md": CLEAN_PUNCTUATION}, (), 0, []),
+    (
+        "an entity keeps the word boundary of a time word",
+        {"notes.md": "The loader currently&nbsp;reads input.\n"},
+        (),
+        1,
+        ["notes.md:1: time-bound word in prose"],
+    ),
+    ("an entity keeps the word boundary of a date", {"notes.md": "Released on&nbsp;2026-10-14&nbsp;after review.\n"}, (), 1, ["notes.md:1: ISO date in prose"]),
+    ("--block dash blocks an em dash", {"notes.md": DASH_LINE}, ("--block", "dash"), 1, [f"notes.md:1: {DASH_FINDING}"]),
+    ("--block dash blocks an en dash", {"notes.md": EN_DASH_LINE}, ("--block", "dash"), 1, [f"notes.md:1: {DASH_FINDING}"]),
+    ("--block semicolon blocks", {"notes.md": SEMICOLON_LINE}, ("--block", "semicolon"), 1, [f"notes.md:1: {SEMICOLON_FINDING}"]),
+    ("--block slash blocks", {"notes.md": SLASH_LINE}, ("--block", "slash"), 1, [f"notes.md:1: {SLASH_FINDING}"]),
+    (
+        "--block of every kind blocks all three",
+        {"notes.md": ALL_KINDS},
+        BLOCK_ALL,
+        1,
+        [f"notes.md:1: {DASH_FINDING}", f"notes.md:2: {SEMICOLON_FINDING}", f"notes.md:3: {SLASH_FINDING}"],
+    ),
+    ("--block of one kind leaves the others warning", {"notes.md": DASH_LINE}, ("--block", "semicolon"), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
+    ("--block of every kind passes clean prose", {"notes.md": CLEAN_PUNCTUATION}, BLOCK_ALL, 0, []),
+    ("--warn keeps a blocked kind a warning", {"notes.md": DASH_LINE}, ("--block", "dash", "--warn"), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
+    (
+        "allowlist entry without reason",
+        {"notes.md": DASH_LINE, WRITING_ALLOWLIST: "dash notes.md\n"},
+        (),
+        1,
+        [f"WARN notes.md:1: {DASH_FINDING}", f"{WRITING_ALLOWLIST}:1: allowlist entry without a reason"],
+    ),
+    (
+        "allowlist entry with a reason silences only its kind",
+        {"notes.md": SEMICOLON_LINE + DASH_LINE, WRITING_ALLOWLIST: "semicolon notes.md -- a quoted sentence keeps its semicolon\n"},
+        (),
+        0,
+        [f"WARN notes.md:2: {DASH_FINDING}"],
+    ),
+    (
+        "allowlist entry silences a blocked kind",
+        {"notes.md": SEMICOLON_LINE, WRITING_ALLOWLIST: "semicolon notes.md -- a quoted sentence keeps its semicolon\n"},
+        ("--block", "semicolon"),
+        0,
+        [],
+    ),
+    (
+        "allowlist entry is by path",
+        {"notes.md": SLASH_LINE, WRITING_ALLOWLIST: "slash docs/*.md -- another folder\n"},
+        (),
+        0,
+        [f"WARN notes.md:1: {SLASH_FINDING}"],
+    ),
+    (
+        "an em dash in a declared article is one finding",
+        {"articles/a.md": DASH_LINE},
+        ("--articles=articles/*.md",),
+        1,
+        ["articles/a.md:1: em dash in article text"],
+    ),
+    ("an en dash in a declared article warns", {"articles/a.md": EN_DASH_LINE}, ("--articles=articles/*.md",), 0, [f"WARN articles/a.md:1: {DASH_FINDING}"]),
+    *[(f"{folder} is not scanned", {f"{folder}notes.md": ALL_KINDS}, BLOCK_ALL, 0, []) for folder in KIND_FOLDERS],
+]
+WRITING_KIND_ERRORS = [
+    ("--block with an unknown kind", ("--block", "colon"), "invalid choice: 'colon'"),
+    ("--block of a kind that always blocks", ("--block", "comma-and"), "invalid choice: 'comma-and'"),
+]
+
+
+def finding_headers(stderr: str, paths: list[str]) -> list[str]:
+    return [line for line in stderr.splitlines() if line.removeprefix("WARN ").startswith(tuple(f"{path}:" for path in paths))]
+
+
+def writing_kinds_repo(scratch: str) -> Path:
+    repo = scratch_repo(Path(scratch), Case("writing setup", "writing-check", True))
+    for relative in git(repo, "ls-files", "*.md").splitlines():
+        (repo / relative).unlink()
+    return repo
+
+
+def run_writing_kinds_case() -> tuple[bool, str]:
+    results = []
+    for name, files, arguments, expected, headers in WRITING_KIND_SAMPLES:
+        with tempfile.TemporaryDirectory(prefix="hai_writing_kinds_") as scratch:
+            repo = writing_kinds_repo(scratch)
+            write(repo, files)
+            result = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "writing-check", *arguments], cwd=repo)
+            found = finding_headers(result.stderr, list(files))
+            ok = result.returncode == expected and found == headers and "Traceback" not in result.stderr
+            results.append(
+                (ok, f"{'ok' if ok else 'WRONG'} {name}: exit={result.returncode} (expected {expected}); findings={len(found)} (expected {len(headers)})")
+            )
+            if not ok:
+                results.append((False, result.stderr))
+    for name, arguments, message in WRITING_KIND_ERRORS:
+        with tempfile.TemporaryDirectory(prefix="hai_writing_kinds_") as scratch:
+            repo = writing_kinds_repo(scratch)
+            write(repo, {"notes.md": ALL_KINDS})
+            result = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "writing-check", *arguments], cwd=repo)
+            named = all(kind in result.stderr for kind in ("dash", "semicolon", "slash"))
+            ok = result.returncode == 2 and message in result.stderr and named and not finding_headers(result.stderr, ["notes.md"])
+            results.append((ok, f"{'ok' if ok else 'WRONG'} {name}: exit={result.returncode} (expected 2)"))
+            if not ok:
+                results.append((False, result.stderr))
+    return all(ok for ok, _ in results), "\n".join(line for _, line in results) + "\n"
+
+
 def main() -> int:
     """Run every case and report the ones whose hook did not behave as expected."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -757,6 +893,7 @@ def main() -> int:
             ("verbose commit", run_verbose_case),
             ("privacy scope", run_privacy_scope_case),
             ("writing samples", run_writing_case),
+            ("writing kinds", run_writing_kinds_case),
         ):
             extra += 1
             ok, output = runner()

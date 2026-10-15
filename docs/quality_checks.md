@@ -1,7 +1,7 @@
 ---
 title: Quality Checks
 description: Every repository check the pre-commit hooks and CI run, what each blocks and how to run it on its own.
-last_updated: 2026-10-13
+last_updated: 2026-10-15
 ---
 
 # Quality Checks
@@ -44,6 +44,18 @@ last_updated: 2026-10-13
   each rule was enabled. Run it with
   `.venv/bin/python -m scripts.quality.repo_checks writing-check` (`--warn`
   reports without failing).
+
+  Three more kinds report in all prose: em and en dashes (`dash`), semicolons
+  (`semicolon`) and slashes between words such as `and/or` (`slash`). They warn
+  by default: each finding prints with a `WARN` prefix and the check exits
+  with code 0. `--block <kind>` makes one kind block (`--block dash --block
+  slash`) once a whole-repository run shows no finding of that kind. Any other
+  kind name is a usage error. The `.writing_allowlist` entry type is the kind
+  name, so `semicolon docs/*.md -- <reason>` keeps the semicolons of those
+  files. In a declared article an em dash is one `em dash in article text`
+  finding, not also a `dash` warning. The hook and the local CI command pass no
+  `--block`, so the three kinds warn there. A whole-repository run without
+  `--block` lists them, one `WARN` line each.
 - **Markdown syntax:** `markdownlint-cli2` checks every staged Markdown file
   outside `data/` against the Conventional Docs baseline in
   `.markdownlint-cli2.jsonc` (dash bullets, ATX headings, sequential numbered
@@ -145,5 +157,6 @@ point (`scripts/quality/run_checks_e2e.py` and
 `scripts/quality/run_documentation_review_e2e.py`); both run in local CI.
 Every detection check was run on the whole repository before it was enabled,
 with no false positives, so they block from the start. The writing check blocked
-only after the existing prose was corrected. The unused code, dependency and file
+only after the existing prose was corrected. Its dash, semicolon and slash kinds warn until a
+whole-repository run has no finding of that kind. The unused code, dependency and file
 checks blocked only after their findings were deleted or listed with a reason.

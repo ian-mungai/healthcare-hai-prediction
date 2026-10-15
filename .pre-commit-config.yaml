@@ -81,6 +81,7 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+        verbose: true
       - id: front-matter
         name: Documents carry valid front matter (title, description, last_updated)
         entry: .venv/bin/python -m scripts.quality.repo_checks front-matter
