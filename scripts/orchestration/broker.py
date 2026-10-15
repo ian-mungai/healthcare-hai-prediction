@@ -1,4 +1,4 @@
-"""The host job broker: the only path from Airflow to work, as a client of the launcher (Airflow plan sections 2, 3, 7, 8 and 9.3; D1 section 5 item 6).
+"""The host job broker: the only path from Airflow to work, as a client of the launcher.
 
 It implements ``orchestration.interface.Submissions``. A submission is checked against ``data_contracts/orchestration/submission_request.schema.json``
 and mapped to a launcher template by ``config/orchestration/broker_templates.json`` (schema ``broker_templates.schema.json``). The broker makes no
@@ -6,16 +6,16 @@ Docker call and keeps no container state: it writes the ``intent`` ledger line (
 ``submit`` requests with request IDs derived from the submission ID, so a repeat returns the launcher's first answer. Attempts, deadlines,
 admission, recovery and release are the launcher's. ``status``, ``cancel``, ``logs`` and ``record`` read the launcher's attempt and bring the ledger
 up to date (``started`` when a container exists, ``finished`` or ``failed_closed`` when the attempt ended). The broker runs no monitor thread, so a
-Docker outage or a launcher restart cannot leave a supervision gap in it (failure mode 927).
+Docker outage or a launcher restart cannot leave a supervision gap in it.
 
 The ledger, the forward cache and the dispatch marker record what the broker saw, not what the launcher accepted, and no absence on the broker's own
-disk is proof that it never sent (owner decision A154). A submission without a settled forward result is always reconciled through the launcher: before the
+disk is proof that it never sent. A submission without a settled forward result is always reconciled through the launcher: before the
 present inventory row can refuse it, fail it closed or let a cancel return, the broker asks for the attempt that the submission's original ``submit``
 request ID created (the launcher's ``status`` target ``submission``, answered to the run's token only). An attempt that is found is reconciled whatever the
 row says now; "not found" is the launcher's answer that it never accepted the submit, the valid retry path; an answer that cannot be had leaves the
-submission unresolved (failure modes 929d, 929j and 929k).
+submission unresolved.
 
-Only the network class ``offline`` runs (amendment A18); a mode of another class, a mode with no launcher row and a name that is not in the file
+Only the network class ``offline`` runs; a mode of another class, a mode with no launcher row and a name that is not in the file
 are refused with that reason. The launcher's closed template table refuses the rest (a changed command, an extra variable or mount, another image).
 
 The supervisor (``scripts/orchestration/supervisor.py``) runs it in-process with its loopback listener. For the owner:
@@ -24,8 +24,8 @@ The supervisor (``scripts/orchestration/supervisor.py``) runs it in-process with
     .venv/bin/python -m scripts.orchestration.broker ledger --run <run_id>
     .venv/bin/python -m scripts.orchestration.broker release --run <run_id> --record <run.json>   # a finalizing run, through the launcher
 
-Tests pass ``--test-registry <folder>/registry``: the state (ledger, records, logs) then lives in ``<folder>``. Failure modes 925 to 932
-(``plans/wp/a1_failure_modes.md``); the listener's log writes never raise (931c).
+Tests pass ``--test-registry <folder>/registry``: the state (ledger, records, logs) then lives in ``<folder>``.
+The listener's log writes never raise.
 """
 
 from __future__ import annotations
@@ -182,7 +182,7 @@ def submission_request(submission_id: str) -> SubmissionRequest:
 def load_templates(path: Path = TEMPLATES_FILE) -> dict[str, Any]:
     """The broker templates, checked against their schema and against the launcher's closed table.
 
-    A mode that forwards to the launcher must have the network class ``offline`` (amendment A18) and name a launcher template that a run can submit.
+    A mode that forwards to the launcher must have the network class ``offline`` and name a launcher template that a run can submit.
     """
     document: dict[str, Any] = json.loads(path.read_text())
     schema = json.loads(TEMPLATES_SCHEMA.read_text())
@@ -386,7 +386,7 @@ class Broker:
 
     def dispatch_file(self, request: SubmissionRequest) -> Path:
         """The marker the broker writes, before it sends ``submit``, for a submission it may have sent. It is a hint for the owner, who can see which
-        submissions the broker meant to send. The broker never reads it: no absence of the marker is proof that nothing was sent (owner decision A154)."""
+        submissions the broker meant to send. The broker never reads it: no absence of the marker is proof that nothing was sent."""
         return self.paths.ledger / f"{request.run_id}.{sha256_text(request.submission_id)[:32]}.sent"
 
     def record_dispatch(self, request: SubmissionRequest) -> None:
@@ -499,7 +499,7 @@ class Broker:
 
     def require_serving(self) -> None:
         """The launcher must be serving: while it is degraded (Docker or its event stream is down) the broker states that instead of the last
-        phase the launcher recorded, which can be stale until the launcher has looked at Docker again (failure mode 927)."""
+        phase the launcher recorded, which can be stale until the launcher has looked at Docker again."""
         deadline = time.monotonic() + START_WAIT_SECONDS
         while True:
             view = self.call("status", {"what": "launcher"})
@@ -557,7 +557,7 @@ class Broker:
     def accepted_forward(self, request: SubmissionRequest, principal: dict[str, Any]) -> dict[str, Any] | None:
         """The launcher's attempt for the submission's original ``submit`` request, or None when the launcher answers that it holds none.
 
-        The launcher is always asked, by the request ID the broker sent, and only its answer decides (owner decision A154). The ledger, the forward cache
+        The launcher is always asked, by the request ID the broker sent, and only its answer decides. The ledger, the forward cache
         and the dispatch marker say what the broker recorded, not what the launcher accepted: a reply can be lost after the launcher accepted the submit, the
         inventory can change before the broker looks again, and a folder can be lost, replaced or written through under the broker. No absence on the
         broker's own disk stands for "never sent": not a missing marker, forward cache or folder, and not a token that is missing. A lookup that cannot be
@@ -792,9 +792,6 @@ class Broker:
         all-state listing shows no container of the run; the broker never passes the owner flag."""
         result: dict[str, Any] = self.call("release", {"record": record}, self.principal(run_id), request_id_of(f"{run_id}:release", "release"))
         return result
-
-
-# Listener (Airflow plan section 8)
 
 
 def handle_for(payload: dict[str, Any]) -> Handle:

@@ -7,7 +7,7 @@ Predicts hospital healthcare-associated infection rates from public CMS, Census,
 ## Install
 
 Prerequisites: macOS on Apple silicon or Linux AMD64, Python 3.12, Git,
-Terraform 1.16.1 and AWS CLI v2. Node.js 18 or later and Google Chrome render the
+Terraform 1.16.1, AWS CLI v2 and Node.js 22 or later for Markdown checks. Google Chrome renders the
 architecture diagram. The lakehouse runs in Docker Desktop; the launcher (`orchestration/launcher.py`) computes a
 memory plan for every job from what Docker and the Mac have free and stops a launch whose container budget is below
 4 GiB. Native quality tools install into the ignored `.tools/` at versions and publisher SHA-256 values pinned in

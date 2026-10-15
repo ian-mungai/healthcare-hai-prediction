@@ -92,7 +92,7 @@ quality_output="${QUALITY_ARTIFACT_DIR:-$repo_root/data/e2e/quality/$(date -u +%
 python_lint() {
   "$python_bin" -m ruff format --check scripts tests
   "$python_bin" -m ruff check scripts tests
-  "$python_bin" -m mypy --check-untyped-defs --disallow-untyped-defs scripts/process.py scripts/infrastructure scripts/quality tests/test_project_config.py tests/support.py
+  "$python_bin" -m scripts.quality.typecheck --check-untyped-defs --disallow-untyped-defs
 }
 
 lakehouse_checks() {
@@ -105,6 +105,7 @@ lakehouse_checks() {
   "$python_bin" -m scripts.lakehouse.run_silver_e2e --check-suites
   "$python_bin" -m scripts.lakehouse.run_resource_checks
   "$python_bin" -m scripts.lakehouse.run_lock_e2e
+  "$python_bin" -m scripts.lakehouse.run_provenance_e2e
   "$python_bin" -m scripts.orchestration.run_contracts_e2e
 }
 

@@ -1,0 +1,100 @@
+{
+  "pending": {
+    "dags/broker_probe_dag.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
+    },
+    "scripts/acquisition/one_off/storage_dedup/delete_duplicate_versions.py": {
+      "runtime": "host_stubs",
+      "reason": "Skipping analyzing \"botocore.exceptions\": module is installed, but missing library stubs or py.typed marker; Skipping analyzing \"boto3\": module is installed, but missing library stubs or py.typed marker"
+    },
+    "scripts/acquisition/redownload.py": {
+      "runtime": "host_stubs",
+      "reason": "Library stubs not installed for \"defusedxml\""
+    },
+    "scripts/lakehouse/bronze.py": {
+      "runtime": "spark",
+      "reason": "Cannot find implementation or library stub for module named \"pyspark.sql.functions\"; Cannot find implementation or library stub for module named \"pyspark.sql\"; Skipping analyzing \"boto3\": module is installed, but missing library stubs or py.typed marker"
+    },
+    "scripts/lakehouse/checksums.py": {
+      "runtime": "spark",
+      "reason": "Cannot find implementation or library stub for module named \"pyspark.sql\""
+    },
+    "scripts/lakehouse/dictionary.py": {
+      "runtime": "spark",
+      "reason": "Cannot find implementation or library stub for module named \"pyspark.sql\""
+    },
+    "scripts/lakehouse/file_readers.py": {
+      "runtime": "spark",
+      "reason": "Library stubs not installed for \"openpyxl\"; Library stubs not installed for \"xlrd\"; Cannot find implementation or library stub for module named \"pyreadstat\"; Cannot find implementation or library stub for module named \"pdfplumber\""
+    },
+    "scripts/lakehouse/retired_objects.py": {
+      "runtime": "host_stubs",
+      "reason": "Skipping analyzing \"boto3\": module is installed, but missing library stubs or py.typed marker"
+    },
+    "scripts/lakehouse/run_bronze_e2e.py": {
+      "runtime": "spark",
+      "reason": "Library stubs not installed for \"openpyxl\""
+    },
+    "scripts/lakehouse/session.py": {
+      "runtime": "spark",
+      "reason": "Cannot find implementation or library stub for module named \"pyspark.sql\""
+    },
+    "scripts/lakehouse/silver_quality.py": {
+      "runtime": "quality",
+      "reason": "Cannot find implementation or library stub for module named \"duckdb\"; Cannot find implementation or library stub for module named \"great_expectations\"; Cannot find implementation or library stub for module named \"great_expectations.expectations\"; Cannot find implementation or library stub for module named \"great_expectations.execution_engine\""
+    },
+    "scripts/orchestration/db_dump.py": {
+      "runtime": "orchestration_image",
+      "reason": "Library stubs not installed for \"psycopg2\""
+    },
+    "scripts/orchestration/in_image_checks.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.dag_processing.dagbag\"; Cannot find implementation or library stub for module named \"airflow.providers.standard.operators.empty\"; Cannot find implementation or library stub for module named \"airflow.sdk\"; Cannot find implementation or library stub for module named \"airflow.sdk.bases.operator\""
+    },
+    "scripts/review/catalog_documents.py": {
+      "runtime": "review",
+      "reason": "Library stubs not installed for \"openpyxl\"; Cannot find implementation or library stub for module named \"pypdf\"; Cannot find implementation or library stub for module named \"pypdf.errors\""
+    },
+    "scripts/review/extract_cross_source_keys.py": {
+      "runtime": "review",
+      "reason": "Library stubs not installed for \"openpyxl\"; Library stubs not installed for \"xlrd\"; Library stubs not installed for \"xlrd.biffh\""
+    },
+    "scripts/review/extract_dictionary_passages.py": {
+      "runtime": "review",
+      "reason": "Cannot find implementation or library stub for module named \"pypdf\""
+    },
+    "scripts/review/extract_hai_definitions.py": {
+      "runtime": "review",
+      "reason": "Cannot find implementation or library stub for module named \"pypdf\""
+    },
+    "scripts/review/inspect_documents.py": {
+      "runtime": "review",
+      "reason": "Library stubs not installed for \"openpyxl\"; Cannot find implementation or library stub for module named \"pypdf\"; Cannot find implementation or library stub for module named \"pypdf.errors\""
+    },
+    "scripts/review/inspect_ipps_legacy.py": {
+      "runtime": "review",
+      "reason": "Cannot find implementation or library stub for module named \"pdfplumber\"; Library stubs not installed for \"xlrd\"; Library stubs not installed for \"xlrd.biffh\""
+    },
+    "scripts/review/inspect_legacy_excel.py": {
+      "runtime": "review",
+      "reason": "Library stubs not installed for \"xlrd\"; Library stubs not installed for \"xlrd.biffh\"; Library stubs not installed for \"xlrd.compdoc\"; Library stubs not installed for \"xlrd.sheet\""
+    },
+    "scripts/review/inspect_members.py": {
+      "runtime": "review",
+      "reason": "Library stubs not installed for \"openpyxl\"; Library stubs not installed for \"xlrd\"; Cannot find implementation or library stub for module named \"pypdf\"; Cannot find implementation or library stub for module named \"pypdf.errors\"; Library stubs not installed for \"xlrd.biffh\""
+    },
+    "scripts/review/run_final_pass_e2e.py": {
+      "runtime": "review",
+      "reason": "Library stubs not installed for \"openpyxl\""
+    },
+    "scripts/review/run_ipps_legacy_e2e.py": {
+      "runtime": "review",
+      "reason": "Cannot find implementation or library stub for module named \"pdfplumber\"; Library stubs not installed for \"xlrd\""
+    },
+    "scripts/review/run_member_review_e2e.py": {
+      "runtime": "review",
+      "reason": "Library stubs not installed for \"openpyxl\""
+    }
+  }
+}

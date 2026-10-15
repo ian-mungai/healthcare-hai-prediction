@@ -9,16 +9,19 @@ assembled from fragments, so this file does not flag itself. The rules are liste
 from __future__ import annotations
 
 import argparse
+import ast
+import configparser
 import datetime
 import fnmatch
 import importlib
 import json
 import os
 import re
+import shlex
 import sys
 import tempfile
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -272,12 +275,71 @@ def lint_settings() -> list[Finding]:
         findings.append(
             Finding("pyproject.toml", f"Ruff loosening keys present: {', '.join(loosening)}", f"{POLICY}: lint settings", "remove them and fix the code")
         )
-    mypy_loosening = sorted(MYPY_LOOSENING_KEYS & set(tool.get("mypy", {})))
-    if mypy_loosening:
-        findings.append(Finding("pyproject.toml", f"MyPy loosening keys present: {', '.join(mypy_loosening)}", f"{POLICY}: lint settings", "remove them"))
+    findings.extend(mypy_profiles())
+    findings.extend(mypy_commands())
     ci = Path(CI_SCRIPT).read_text()
-    if not any(re.search(r"\bmypy\b", line) and all(flag in line for flag in MYPY_FLAGS) for line in ci.splitlines()):
+    if not any(re.search(r"\b(?:mypy|scripts\.quality\.typecheck)\b", line) and all(flag in line for flag in MYPY_FLAGS) for line in ci.splitlines()):
         findings.append(Finding(CI_SCRIPT, f"MyPy no longer runs with {' and '.join(MYPY_FLAGS)}", f"{POLICY}: lint settings", "restore both flags"))
+    return findings
+
+
+def mypy_profiles() -> list[Finding]:
+    """Inspect all committed or nonignored TOML and INI MyPy profiles, including module overrides."""
+    findings = []
+    for path in git("ls-files", "--cached", "--others", "--exclude-standard", "*.toml", "*.ini", "*.cfg").splitlines():
+        content = Path(path).read_text()
+        if not re.search(r"\[(?:tool\.mypy\b|mypy(?:\]|-))", content):
+            continue
+        if path.endswith(".toml"):
+            settings = tomllib.loads(content).get("tool", {}).get("mypy", {})
+            profiles = [("tool.mypy", settings), *(("tool.mypy.overrides", item) for item in settings.get("overrides", []))]
+        else:
+            config = configparser.ConfigParser(interpolation=None)
+            config.read_string(content)
+            profiles = [(name, dict(config[name])) for name in config.sections() if name == "mypy" or name.startswith("mypy-")]
+        for name, settings in profiles:
+            if loosened := sorted(MYPY_LOOSENING_KEYS & set(settings)):
+                findings.append(
+                    Finding(path, f"MyPy loosening keys in {name}: {', '.join(loosened)}", f"{POLICY}: lint settings", "remove them and fix the code")
+                )
+    return findings
+
+
+def mypy_command(path: str, line: int, arguments: Sequence[str | None], files: set[str]) -> list[Finding]:
+    findings = []
+    banned = {"--" + key.replace("_", "-") for key in MYPY_LOOSENING_KEYS}
+    if any(argument and argument.split("=", 1)[0] in banned for argument in arguments):
+        findings.append(Finding(f"{path}:{line}", "MyPy loosening command flags present", f"{POLICY}: lint settings", "remove them and fix the code"))
+    for index, argument in enumerate(arguments):
+        if argument == "--config-file" or (argument and argument.startswith("--config-file=")):
+            config = arguments[index + 1] if argument == "--config-file" and index + 1 < len(arguments) else argument.removeprefix("--config-file=")
+            if config not in files:
+                findings.append(
+                    Finding(
+                        f"{path}:{line}",
+                        "MyPy configuration must name a committed profile instead of a generated or dynamic file",
+                        f"{POLICY}: lint settings",
+                        "use pyproject.toml or a committed MyPy profile so every profile is checked",
+                    )
+                )
+    return findings
+
+
+def mypy_commands() -> list[Finding]:
+    """Check every literal MyPy command and require explicit configuration files to be in the inspected inventory."""
+    files = set(git("ls-files", "--cached", "--others", "--exclude-standard").splitlines())
+    findings = []
+    for path in sorted(files):
+        if path.endswith(".sh"):
+            for number, line in enumerate(Path(path).read_text().splitlines(), 1):
+                if re.search(r"\b(?:mypy|scripts\.quality\.typecheck)\b", line) and not line.lstrip().startswith("#"):
+                    findings.extend(mypy_command(path, number, shlex.split(line.rstrip("\\"), comments=True), files))
+        elif path.endswith(".py"):
+            for node in ast.walk(ast.parse(Path(path).read_text())):
+                if isinstance(node, (ast.List, ast.Tuple)):
+                    arguments = [item.value if isinstance(item, ast.Constant) and isinstance(item.value, str) else None for item in node.elts]
+                    if "mypy" in arguments or "scripts.quality.typecheck" in arguments:
+                        findings.extend(mypy_command(path, node.lineno, arguments, files))
     return findings
 
 

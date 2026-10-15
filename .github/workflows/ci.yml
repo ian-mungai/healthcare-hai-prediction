@@ -11,8 +11,8 @@ permissions:
 # A pull request run checks the whole base..head range, so a newer push may cancel it. A push run checks only its
 # pushed range, so each push gets its own group and is never cancelled: a cancelled range would go unchecked.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   hooks:

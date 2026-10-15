@@ -10,6 +10,7 @@ personal data are assembled at run time, so this file does not trip the checks i
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -167,6 +168,29 @@ CASES = [
         "MyPy flag removed", "lint-settings", False, {"pyproject.toml": RUFF_STANDARD, "scripts/run_ci.sh": CI_SOURCE.replace(" --disallow-untyped-defs", "")}
     ),
     Case("MyPy loosened in settings", "lint-settings", False, {"pyproject.toml": RUFF_STANDARD + "\n[tool.mypy]\nignore_errors = true\n"}),
+    Case("MyPy alternate profile", "lint-settings", True, {"config/quality/mypy.ini": "[mypy]\npython_version = 3.12\n"}),
+    Case("MyPy alternate profile loosened", "lint-settings", False, {"config/quality/mypy.ini": "[mypy]\nignore_missing_imports = True\n"}),
+    Case(
+        "MyPy per-module profile loosened",
+        "lint-settings",
+        False,
+        {"config/quality/mypy.ini": "[mypy]\npython_version = 3.12\n[mypy-example.*]\nfollow_imports = silent\n"},
+    ),
+    Case(
+        "MyPy TOML override loosened",
+        "lint-settings",
+        False,
+        {"pyproject.toml": RUFF_STANDARD + '\n[[tool.mypy.overrides]]\nmodule = "example.*"\nignore_errors = true\n'},
+    ),
+    Case(
+        "MyPy generated profile",
+        "lint-settings",
+        False,
+        {
+            "scripts/typed.py": 'from pathlib import Path\nconfig = Path("generated.ini")\n'
+            'COMMAND = ["python", "-m", "mypy", "--config-file", str(config), "--check-untyped-defs", "--disallow-untyped-defs"]\n'
+        },
+    ),
     Case("documented variable", "env-example", True, {"scripts/tool.py": "import os\n\nNAME = " + ENVIRON + '.get("AWS_REGION", "")\n'}),
     Case("undocumented variable", "env-example", False, {"scripts/tool.py": "import os\n\nNAME = " + ENVIRON + '["NEW_SETTING"]\n'}),
     Case("script removed with its docs", "removed-names", True, committed={f"scripts/{OLD_SCRIPT}": "X = 1\n"}, delete=[f"scripts/{OLD_SCRIPT}"]),
@@ -633,6 +657,9 @@ def run_case(case: Case) -> tuple[bool, str]:
             correct = correct and POLICY_DOCUMENT in output
         if case.hook in ("writing-check", "markdownlint", "front-matter", "sqlfluff", *CLEANUP_HOOKS):
             correct = correct and BLOCK_REASONS.get(case.name, "") in output
+        if case.hook == "lint-settings" and not case.expect_pass and case.name.startswith("MyPy"):
+            reason = "configuration must name a committed profile" if case.name == "MyPy generated profile" else "MyPy"
+            correct = correct and reason in output
         return correct, output
 
 
@@ -874,6 +901,100 @@ def run_writing_kinds_case() -> tuple[bool, str]:
     return all(ok for ok, _ in results), "\n".join(line for _, line in results) + "\n"
 
 
+def typecheck_fixture(repo: Path) -> None:
+    repo.mkdir()
+    git(repo, "init", "-q")
+    for relative in ("scripts/process.py", "scripts/quality/typecheck.py", "pyproject.toml"):
+        write(repo, {relative: (ROOT / relative).read_text()})
+    write(repo, {"scripts/pending_leaf.py": "import hai_typecheck_missing_dependency\n", "scripts/clean.py": "VALUE = 1\n"})
+
+
+def fixture_typecheck(repo: Path, pending: dict[str, dict[str, str]]) -> tuple[int, str]:
+    write(repo, {"config/quality/mypy_runtimes.json": json.dumps({"pending": pending}) + "\n"})
+    result = run_command(
+        str(ROOT / ".venv/bin/python"),
+        ["-m", "scripts.quality.typecheck", "--check-untyped-defs", "--disallow-untyped-defs"],
+        cwd=repo,
+        env={**os.environ, "MYPY_CACHE_DIR": str(repo.parent / "cache")},
+        timeout=180,
+    )
+    return result.returncode, result.stdout + result.stderr
+
+
+def run_typecheck_import_case() -> tuple[bool, str]:
+    with tempfile.TemporaryDirectory(prefix="hai_typecheck_imports_") as scratch:
+        repo = Path(scratch) / "repo"
+        typecheck_fixture(repo)
+        importers = {
+            "scripts/acquisition/direct.py": "from scripts import pending_leaf\n",
+            "scripts/acquisition/relative.py": "from .. import pending_leaf\n",
+            "scripts/orchestration/transitive.py": "from scripts.acquisition import relative\n",
+            "scripts/package/__init__.py": "from scripts import pending_leaf\n",
+            "scripts/package/child.py": "VALUE = 1\n",
+            "scripts/quality/package_user.py": "import scripts.package.child\n",
+            "scripts/acquisition/cycle_a.py": "from scripts.acquisition import cycle_b\n",
+            "scripts/acquisition/cycle_b.py": "from scripts.acquisition import cycle_a\nfrom scripts import pending_leaf\n",
+        }
+        dynamic = {
+            "scripts/acquisition/dynamic.py": 'import importlib\n\nimportlib.import_module("scripts.pending_leaf")\n',
+            "scripts/acquisition/builtin_dynamic.py": '__import__("scripts.pending_leaf")\n',
+        }
+        write(repo, {**importers, **dynamic})
+        code, output = fixture_typecheck(repo, {"scripts/pending_leaf.py": {"runtime": "fixture", "reason": "synthetic missing dependency"}})
+        checks = {
+            "strict selection passes": code == 0 and "Success: no issues found" in output,
+            "all importers name the cause": all(f"pending {path}: imports a pending module" in output for path in importers),
+            "dynamic imports stay checked": all(f"pending {path}:" not in output for path in dynamic),
+            "clean source remains checked": "pending scripts/clean.py:" not in output and "MyPy runtime host: 5 source files," in output,
+        }
+        return all(checks.values()), json.dumps(checks) + "\n" + output
+
+
+def run_typecheck_manifest_case() -> tuple[bool, str]:
+    with tempfile.TemporaryDirectory(prefix="hai_typecheck_manifest_") as scratch:
+        repo = Path(scratch) / "repo"
+        typecheck_fixture(repo)
+        entry = {"runtime": "fixture", "reason": "synthetic missing dependency"}
+        pending = {"scripts/pending_leaf.py": entry}
+        cases: tuple[tuple[str, dict[str, dict[str, str]], str, int, str], ...] = (
+            ("matching leaves", pending, "import hai_typecheck_missing_dependency\n", 0, "pending manifest matches 1 import-diagnostic files"),
+            (
+                "clean extra leaf",
+                {**pending, "scripts/clean.py": entry},
+                "import hai_typecheck_missing_dependency\n",
+                1,
+                "stale manifest leaf: scripts/clean.py",
+            ),
+            ("missing leaf", {}, "import hai_typecheck_missing_dependency\n", 1, "missing manifest leaf: scripts/pending_leaf.py"),
+            ("resolved import", pending, "import math\n", 1, "stale manifest leaf: scripts/pending_leaf.py"),
+            ("source error in pending leaf", pending, "import hai_typecheck_missing_dependency\nVALUE: int = 'bad'\n", 1, "non-import MyPy diagnostic"),
+        )
+        results = []
+        for name, manifest, source, expected, marker in cases:
+            write(repo, {"scripts/pending_leaf.py": source})
+            code, output = fixture_typecheck(repo, manifest)
+            ok = code == expected and marker in output and "Traceback" not in output
+            results.append((ok, f"{'ok' if ok else 'WRONG'} {name}: exit {code}, expected {expected}\n{output}"))
+        return all(ok for ok, _ in results), "\n".join(output for _, output in results)
+
+
+def run_typecheck_cold_case() -> tuple[bool, str]:
+    results = []
+    for runtime in ("host", "acquisition", "orchestration"):
+        with tempfile.TemporaryDirectory(prefix=f"hai_mypy_{runtime}_") as cache:
+            result = run_command(
+                str(ROOT / ".venv/bin/python"),
+                ["-m", "scripts.quality.typecheck", "--runtime", runtime, "--check-untyped-defs", "--disallow-untyped-defs"],
+                cwd=ROOT,
+                env={**os.environ, "MYPY_CACHE_DIR": cache},
+                timeout=900,
+            )
+            output = result.stdout + result.stderr
+            ok = result.returncode == 0 and f"MyPy runtime {runtime}:" in output and "Success: no issues found" in output
+            results.append((ok, f"{'ok' if ok else 'WRONG'} cold-cache {runtime}: exit {result.returncode}\n{output}"))
+    return all(ok for ok, _ in results), "\n".join(output for _, output in results)
+
+
 def main() -> int:
     """Run every case and report the ones whose hook did not behave as expected."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -900,6 +1021,9 @@ def main() -> int:
             ("privacy scope", run_privacy_scope_case),
             ("writing samples", run_writing_case),
             ("writing kinds", run_writing_kinds_case),
+            ("typecheck import closure", run_typecheck_import_case),
+            ("typecheck pending manifest", run_typecheck_manifest_case),
+            ("typecheck cold caches", run_typecheck_cold_case),
         ):
             extra += 1
             ok, output = runner()

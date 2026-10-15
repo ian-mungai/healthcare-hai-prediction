@@ -18,7 +18,9 @@
   ],
   "groups": {
     "python_lint": [
-      "^(scripts|tests)/.*\\.py$"
+      "^(scripts|tests)/.*\\.py$",
+      "^(orchestration|dags|services)/.*\\.py$",
+      "^config/quality/mypy_runtimes\\.json$"
     ],
     "lakehouse_checks": [
       "^scripts/(lakehouse|orchestration)/",

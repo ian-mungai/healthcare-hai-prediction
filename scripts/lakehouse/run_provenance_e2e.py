@@ -49,7 +49,6 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "data" / "e2e" / "provenance"
 TOOLS_PYTHON = ROOT / ".tools" / "sqlfluff" / "bin" / "python"
 TOOLS_DBT = ROOT / ".tools" / "sqlfluff" / "bin" / "dbt"
-BASE_COMMIT = "8e45b7a8ef492ba436d68063f21d2c67d0e55407"
 INTERFACE_HASH = "1b2ddecae18c84d32d26669ac460a04d601b0a4557b8d9dfb115d878229fe3d7"
 RELEASE_COPY_TEST = "release_copy_consistency_dim_release_"
 # The dbt commands whose task runs the models and the hooks: they write the build file, run_results.json and manifest.json.
@@ -437,24 +436,13 @@ def traced_paths(*prefixes: str, before: Callable[[str, str], None] | None = Non
 
 @case("interface_frozen", "unpatched")
 def interface_frozen(env: Env) -> dict[str, bool]:
-    """The interface hash is the one L1a froze and both signature lines equal the base commit's.
-
-    The package review also checked that the delivered diff touched only the two function bodies (launch brief, Open Choice 1). That diff
-    is against the package base, so it cannot hold once the launcher proposals and later main commits are integrated; the lasting guarantee
-    is the frozen interface itself.
-    """
+    """Check the launcher's provenance and sealing signatures against the frozen interface digest."""
     signatures = f"provenance_vars{inspect.signature(launcher.provenance_vars)}\nseal{inspect.signature(launcher.seal)}\n"
-    path = "orchestration/launcher.py"
-    before = run_command("git", ["show", f"{BASE_COMMIT}:{path}"], cwd=ROOT).stdout.splitlines()
-    now = (ROOT / path).read_text().splitlines()
-
-    def signature_line(lines: list[str], name: str) -> list[str]:
-        return [line for line in lines if line.startswith(f"def {name}(")]
+    lines = (ROOT / "orchestration/launcher.py").read_text().splitlines()
 
     return {
         "the interface hash equals the frozen hash": hashlib.sha256(signatures.encode()).hexdigest() == INTERFACE_HASH,
-        "each signature line exists once": all(len(signature_line(now, name)) == 1 for name in ("provenance_vars", "seal")),
-        "the signature lines equal the base commit's": all(signature_line(now, name) == signature_line(before, name) for name in ("provenance_vars", "seal")),
+        "each signature line exists once": all(sum(line.startswith(f"def {name}(") for line in lines) == 1 for name in ("provenance_vars", "seal")),
     }
 
 

@@ -1,4 +1,4 @@
-"""Offline checks of the orchestration code and configuration (Airflow plan section 11.1; failure modes 761, 764, 766, 771, 925, 934).
+"""Offline checks of the orchestration code and configuration.
 
 Run ``.venv/bin/python -m scripts.orchestration.offline_checks [--test-registry <folder>/registry] [--no-image]`` from the repository root.
 ``--no-image`` skips the checks that need the launcher and the built Airflow image. Nothing reaches the network, AWS or the catalog, and the
@@ -10,12 +10,13 @@ checks make no Docker call: the image checks are launcher requests (``image``, `
 2. The broker templates validate against their schema and the launcher's closed table.
 3. The interface-only import check: DAG files import only Airflow, the standard library (never ``subprocess``), ``orchestration.interface`` and
    ``orchestration.client``; the client only the standard library and the interface.
-4. The ``transform_dag`` graph validator on plain graphs: the section 5 graph passes and each mutation fails.
-5. The Docker-call check over every A1 file.
+4. The ``transform_dag`` graph validator on plain graphs: the required graph passes and each mutation fails.
+5. The Docker-call check over every orchestration source file.
 6. With the built image, through the launcher: the image's labels, user and last layers; every DAG file imports in the image with no error or
    cycle; the graph validator on real Airflow DAG objects; every installed distribution equals the constraints file.
-7. Ruff over ``dags/``, ``orchestration/`` and ``scripts/orchestration/``; MyPy on the host code and on the DAG and in-image files with Airflow's
-   own packages treated as untyped (the packages cannot be copied out of the image without a Docker call).
+7. Ruff over ``dags/``, ``orchestration/`` and ``scripts/orchestration/``; strict MyPy on the orchestration host scope.
+   Files needing Airflow or PostgreSQL types are listed as pending in the report and in ``config/quality/mypy_runtimes.json``.
+   Check them in their runtime environment with ``scripts.quality.typecheck --runtime orchestration_image`` and both strict flags.
 
 The report is ``data/e2e/orchestration_offline/<UTC>/report.json``.
 """
@@ -47,7 +48,6 @@ ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_FILE = ROOT / "config" / "orchestration" / "platform.json"
 CODE = ("dags", "orchestration", "scripts/orchestration")
 IN_IMAGE = "scripts/orchestration/in_image_checks.py"
-DB_DUMP = "scripts/orchestration/db_dump.py"
 FORBIDDEN_MOUNT_MARKERS = (".aws", "lakehouse/secrets", "${HOME}")
 DAG_MODULES = {"orchestration.interface", "orchestration.client"}
 NEVER_IN_DAGS = {"subprocess", "docker", "scripts"}
@@ -68,17 +68,6 @@ A1_FILES = (
     "orchestration/client.py",
     "orchestration/graph.py",
     "dags/broker_probe_dag.py",
-)
-MYPY_CONFIG = "\n".join(
-    [
-        "[mypy]",
-        "python_version = 3.12",
-        "explicit_package_bases = True",
-        "follow_imports = silent",
-        "[mypy-airflow.*,attr.*,attrs.*,pendulum.*,psycopg2.*]",
-        "ignore_missing_imports = True",
-        "",
-    ]
 )
 
 
@@ -123,7 +112,7 @@ def constraints_problems(data: bytes, platform: dict[str, Any]) -> list[str]:
 
 
 def dockerfile_problems(text: str, platform: dict[str, Any]) -> list[str]:
-    """The thin image is the pinned base plus the entrypoint and the two labels; no package is installed (owner decision A1-2 a, amendment A107)."""
+    """The thin image is the pinned base plus the entrypoint and the two labels; no package is installed."""
     airflow = platform["airflow"]
     lines = [line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
     froms = [line for line in lines if line.upper().startswith("FROM ")]
@@ -189,7 +178,7 @@ def interface_problems() -> list[str]:
 
 
 def docker_call_problems() -> list[str]:
-    """The repository's Docker-call check over every A1 file."""
+    """The repository's Docker-call check over the orchestration source files."""
     present = [name for name in A1_FILES if (ROOT / name).is_file()]
     result = run_command(sys.executable, ["-m", "scripts.quality.docker_calls", *present], cwd=ROOT, timeout=300)
     return [] if result.returncode == 0 else (result.stdout + result.stderr).strip().splitlines()[:10]
@@ -353,26 +342,18 @@ def distribution_cases() -> dict[str, dict[str, Any]]:
 
 def lint() -> dict[str, dict[str, Any]]:
     """Ruff and MyPy over the orchestration code."""
-    python_files = sorted(str(path.relative_to(ROOT)) for folder in CODE for path in (ROOT / folder).glob("*.py"))
-    host_files = [path for path in python_files if not path.startswith("dags/") and path not in (IN_IMAGE, DB_DUMP) and path != "orchestration/launcher.py"]
-    image_files = [path for path in python_files if path.startswith("dags/") or path in (IN_IMAGE, DB_DUMP)]
-    config = ROOT / "data" / "cache" / "orchestration_typecheck" / "mypy.ini"
-    config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text(MYPY_CONFIG)
     runs = {
         "ruff format": [sys.executable, "-m", "ruff", "format", "--check", *CODE],
         "ruff check": [sys.executable, "-m", "ruff", "check", *CODE],
-        "mypy host code": [sys.executable, "-m", "mypy", "--config-file", str(config), "--check-untyped-defs", "--disallow-untyped-defs", *host_files],
-        "mypy DAG and in-image code (Airflow untyped)": [
+        "mypy orchestration host scope": [
             sys.executable,
             "-m",
-            "mypy",
-            "--config-file",
-            str(config),
+            "scripts.quality.typecheck",
+            "--runtime",
+            "orchestration",
             "--check-untyped-defs",
             "--disallow-untyped-defs",
-            *image_files,
-        ],  # fmt: skip
+        ],
     }
     results = {}
     for name, command in runs.items():
@@ -493,7 +474,7 @@ def main() -> int:
     folder = ROOT / "data" / "e2e" / "orchestration_offline" / started.strftime("%Y%m%dT%H%M%SZ")
     folder.mkdir(parents=True)
     report = {
-        "feature": "orchestration offline checks (Airflow plan section 11.1)",
+        "feature": "orchestration offline checks",
         "started_utc": started.isoformat(),
         "status": "pass" if passed else "fail",
         "commit": run_command("git", ["rev-parse", "HEAD"], cwd=ROOT).stdout.strip(),
@@ -503,11 +484,17 @@ def main() -> int:
         "platform_sha256": hashlib.sha256(PLATFORM_FILE.read_bytes()).hexdigest(),
         "sections": sorted(sections),
         "results": results,
+        "pending_typechecks": {
+            path: entry
+            for path, entry in json.loads((ROOT / "config/quality/mypy_runtimes.json").read_text())["pending"].items()
+            if entry["runtime"] == "orchestration_image"
+        },
         "limits": [
             "Static and in-image checks; no DAG run, broker launch or Airflow service starts here (see run_broker_e2e, run_stack_e2e and run_real_e2e)."
         ],
     }
     (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+    sys.stdout.write(f"pending: {len(report['pending_typechecks'])} Airflow-runtime typechecks (dependencies and stubs required).\n")
     sys.stdout.write(f"{report['status']}: {(folder / 'report.json').relative_to(ROOT)}\n")
     return 0 if passed else 1
 

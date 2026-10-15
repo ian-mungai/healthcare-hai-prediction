@@ -1,10 +1,10 @@
 ---
-title: Quality Checks
+title: Quality checks
 description: Every repository check the pre-commit hooks and CI run, what each blocks and how to run it on its own.
 last_updated: 2026-10-15
 ---
 
-# Quality Checks
+# Quality checks
 
 - **Secrets and credential files:** gitleaks scans the staged index; `.env`
   (but not `.env.example`), Terraform state and saved plans, keys and cloud
@@ -75,10 +75,14 @@ last_updated: 2026-10-15
 - **Docs match the code:** every environment variable the code reads is listed
   in `.env.example` and every variable listed there is read by code, a script,
   a workflow or a template. Local commits require an ignored `.documentation_review.json`, a per-document
-  review outcome bound to the staged snapshot. Draft it with
+  review outcome bound to the complete staged source and configuration snapshot. Before the first release tag,
+  the document inventory is `README.md` only. Other documents, including explicit extra formats, do not require
+  per-commit review during development. A version tag such as `v1.0.0` restores the full inventory and requires
+  its review. Other tags do not change the inventory. Draft the record with
   `.venv/bin/python -m scripts.quality.documentation_review prepare --reviewer <name> --reviewed-at <UTC>`
-  after staging, then fill each outcome and note locally. Read in full every changed or new document and every
-  unchanged one that the staged change affects. After a staged change, `prepare --refresh --carry-forward` keeps the
+  after staging, then fill each outcome and note locally. Read the README in full during development.
+  Once released, read in full every changed or new document and every unchanged one that the staged change affects.
+  After a staged change, `prepare --refresh --carry-forward` keeps the
   outcome of each document whose staged content is unchanged and whose earlier entry is valid, with the earlier
   review time in its note; set it back to `pending` if the change affects it. Never stage
   this record. The local hook validates its freshness against the index and rejects
@@ -122,11 +126,27 @@ last_updated: 2026-10-15
   reports without failing).
 - **Lint settings:** Ruff keeps rule sets `E`, `F`, `I`, `B`, `UP`, `S`, `SIM`
   and `T20` at line length 160 with no ignore or exclude settings; MyPy keeps
-  `--check-untyped-defs` and `--disallow-untyped-defs`. The only allowed
+  `--check-untyped-defs` and `--disallow-untyped-defs`. The settings check covers every nonignored MyPy TOML and
+  INI profile, module overrides and literal command flags. A command cannot select a generated or dynamic profile.
+  `scripts/quality/typecheck.py` checks every host-compatible Python source. Dependency-bound leaves and their required
+  types are listed in `config/quality/mypy_runtimes.json`. This is the only hand-written exclusion list. The selector
+  derives their transitive local importers, including package initialization. Calls such as `importlib.import_module`
+  are not imports for this purpose, because MyPy does not follow them. It reports
+  each as pending with the cause "imports a pending module". The leaves and their importers remain pending until their
+  dependencies and types are available. Every host run checks that the leaf set equals the files with import diagnostics
+  in an unrestricted MyPy run. An extra leaf, a missing leaf or any other type diagnostic fails the check.
+  The acquisition and orchestration host scopes use this same inventory without import suppressions.
+  Run a declared runtime with
+  `.venv/bin/python -m scripts.quality.typecheck --runtime <name> --check-untyped-defs --disallow-untyped-defs`
+  in its compatible environment. The only allowed
   suppression is Ruff `S603` in `scripts/process.py`, the one process launcher;
   other scripts start programs through it and run as modules
   (`.venv/bin/python -m scripts.quality.scan_secrets`). Tests use
   `tests/support.py` `check()` instead of `assert`.
+
+The strict command above prints the selected file count and every pending file with its cause for the chosen runtime.
+The check E2E runs the host, acquisition and orchestration scopes with separate empty MyPy caches and verifies synthetic
+import chains and manifest mismatches.
 
 **Acquisition checks** (`bash scripts/acquisition/run_checks.sh`) run Ruff, MyPy,
 registry validation, the acquisition regression tests and every offline E2E
@@ -161,7 +181,7 @@ only after the existing prose was corrected. Its dash and slash kinds block sinc
 Oct 15 2026. Its semicolon kind warns until a whole-repository run has no semicolon finding. The unused code, dependency and file
 checks blocked only after their findings were deleted or listed with a reason.
 
-## How the Checks Run
+## How the checks run
 
 CI checks Ruff formatting and security rules, MyPy, outgoing-source secret
 scanning, repository checks, configuration and quality E2E, retained regression
@@ -200,7 +220,8 @@ The checks cover secrets and credential files, data files (allowed only in `test
 privacy scan of every non-ignored file, prose style, Markdown syntax, front matter, commit messages, documentation that
 matches the code, removed names, unused code, dependencies and files, lint settings and Docker calls outside the
 launcher. Each has a failing and a passing sample run in local CI. Local commits need an ignored
-`.documentation_review.json`, a per-document review bound to the staged snapshot
+`.documentation_review.json`, a review of `README.md` before the first release tag and the full document inventory
+from that tag onward, bound to the complete staged snapshot
 (`.venv/bin/python -m scripts.quality.documentation_review prepare`). There are no bypasses:
 never use `SKIP=` or `git commit --no-verify`. If a check blocks a valid change,
 fix the check or ask the repository owner.

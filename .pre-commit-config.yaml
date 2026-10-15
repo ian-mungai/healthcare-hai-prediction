@@ -160,7 +160,7 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-commit]
-        files: ^(scripts/acquisition/|config/acquisition/|tests/test_source_registry\.py$|tests/fixtures/registry_additions_bronze_lineage\.csv$|scripts/process\.py$|scripts/infrastructure/render_project_config\.py$|requirements\.txt$|\.github/workflows/ci\.yml$)
+        files: ^(scripts/acquisition/|config/acquisition/|tests/test_source_registry\.py$|tests/fixtures/registry_additions_bronze_lineage\.csv$|scripts/process\.py$|scripts/quality/typecheck\.py$|config/quality/mypy_runtimes\.json$|scripts/infrastructure/render_project_config\.py$|requirements\.txt$|\.github/workflows/ci\.yml$)
       - id: local_ci_affected
         name: Run local CI for the staged paths
         entry: env CI_SCOPE=staged bash scripts/run_ci.sh

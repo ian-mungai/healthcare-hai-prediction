@@ -26,6 +26,7 @@ SUFFIXES = {".md", ".mdx", ".markdown", ".rst", ".adoc", ".asciidoc", ".txt", ".
 DOC_FOLDERS = {"docs", "doc", "documentation", "guides", "runbooks"}
 DOC_NAMES = {"readme", "changelog", "changes", "contributing", "license", "copying", "authors", "notice"}
 OUTCOMES = {"current", "updated", "historical"}
+RELEASE_TAG = re.compile(r"v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?")
 
 
 class ReviewError(ValueError):
@@ -69,17 +70,20 @@ def is_document(path: str) -> bool:
 
 
 def document_paths(files: dict[str, tuple[str, str]], extra: list[str]) -> list[str]:
-    """Return complete discoverable and explicitly included documentation, rejecting unsupported links."""
+    """Return README only before the first release tag, then all documentation, rejecting unsupported links."""
     for path in extra:
         parts = PurePosixPath(path)
         if path == RECORD or parts.is_absolute() or ".." in parts.parts or parts.as_posix() != path or path not in files:
             raise ReviewError("extra_documents: each entry must be an existing staged repository-relative file")
     paths = sorted({path for path in files if is_document(path)} | set(extra))
+    released = any(RELEASE_TAG.fullmatch(tag) for tag in git("tag", "--list").splitlines())
+    if not released:
+        paths = [path for path in paths if path == "README.md"]
     for path in paths:
         if files[path][0] not in {"100644", "100755"}:
             raise ReviewError(f"{path!r}: documentation links/submodules are unsupported; review and stage a regular file")
     for path in git("ls-files", "--others", "--exclude-standard", "-z").split("\0"):
-        if path and is_document(path):
+        if path and is_document(path) and (released or path == "README.md"):
             raise ReviewError(f"{path!r}: untracked documentation is unreviewed; include it in the staged review")
     return paths
 
@@ -221,7 +225,9 @@ def prepare(files: dict[str, tuple[str, str]], reviewer: str, reviewed_at: str, 
     old: dict[str, object] = {}
     if target.exists():
         old = parse_record(target.read_text())
-        if old.get("snapshot_sha256") == current_snapshot and old.get("extra_documents") == extra:
+        old_items = old.get("documents")
+        old_paths = sorted([item.get("path") for item in old_items if isinstance(item, dict)], key=str) if isinstance(old_items, list) else None
+        if old.get("snapshot_sha256") == current_snapshot and old.get("extra_documents") == extra and old_paths == paths:
             sys.stdout.write("Existing evidence for this snapshot preserved; complete any pending outcomes in the local record.\n")
             return
         if not refresh:

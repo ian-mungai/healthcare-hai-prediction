@@ -6065,8 +6065,8 @@ def client_slow_launcher_replies(env: Env) -> dict[str, bool]:
         except (OSError, launcher.ClientError) as error:
             outcome = error
     attempts = [a for a in env.state()["attempts"].values() if a["launch_id"].startswith("slowpoll")]
-    patience = {"poll_patience": 2.0} if hasattr(env.config.timings, "poll_patience") else {}
-    impatient = launcher.LauncherClient(replace(env.config, timings=replace(env.config.timings, **patience)), start=False)
+    timings = replace(env.config.timings, poll_patience=2.0) if hasattr(env.config.timings, "poll_patience") else env.config.timings
+    impatient = launcher.LauncherClient(replace(env.config, timings=timings), start=False)
     real_impatient = impatient.bounded_call
     silent: Any = None
     begun = time.monotonic()
@@ -7385,7 +7385,7 @@ def dbt_archive_fetch_races(env: Env) -> dict[str, bool]:
     outside = env.work / "race_outside.tar"
     outside.write_bytes(expected)
 
-    def swap_staging(replace_with: Callable[[str, int], None]) -> Callable[..., None]:
+    def swap_staging(replace_with: Callable[[str, int | None], None]) -> Callable[..., None]:
         def link(source: str, name: str, *args: Any, **kwargs: Any) -> None:
             folder = kwargs.get("src_dir_fd")
             os.unlink(source, dir_fd=folder)
@@ -7394,10 +7394,10 @@ def dbt_archive_fetch_races(env: Env) -> dict[str, bool]:
 
         return link
 
-    def to_link(source: str, folder: int) -> None:
+    def to_link(source: str, folder: int | None) -> None:
         os.symlink(outside, source, dir_fd=folder)
 
-    def to_short_file(source: str, folder: int) -> None:
+    def to_short_file(source: str, folder: int | None) -> None:
         fd = real_open(source, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644, dir_fd=folder)
         os.write(fd, expected[:4096])
         os.close(fd)

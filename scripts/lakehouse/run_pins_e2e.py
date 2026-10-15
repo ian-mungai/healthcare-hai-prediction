@@ -33,7 +33,7 @@ def refused(action: Callable[[], object], reason: str) -> bool:
     return False
 
 
-class RivalPublishes(type(Path())):
+class RivalPublishes(Path):
     """A pins path whose existence check passes, after which a rival writer publishes its own pins first [904]."""
 
     def exists(self, *, follow_symlinks: bool = True) -> bool:

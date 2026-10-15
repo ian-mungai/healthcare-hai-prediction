@@ -1,7 +1,7 @@
 """E2E for the check-group selection of scripts/run_ci.sh (scripts/quality/ci_groups.py and config/quality/ci_groups.json).
 
 Run from the repository root: ``.venv/bin/python -m scripts.quality.run_ci_groups_e2e``. It adds a scratch Git worktree at HEAD,
-copies the working selector, path list and CI entry into it, then checks which groups each scope selects: committed ranges
+copies the working check inputs into it, then checks which groups each scope selects: committed ranges
 of known content, unusable ranges, staged changes (a deletion and a rename included), explicit paths, the full scope and
 invalid input. Real runs of the CI entry check that the unconditional gates run in every part (also with an empty selection)
 and before the launcher E2E, that a failing gate fails every part, that the full Markdown lint runs as a gate in every scope
@@ -10,8 +10,9 @@ inherits an alternate ``GIT_INDEX_FILE`` and checks that the caller's index, sta
 modes CS1 to CS31 (plans, local). The report goes to data/e2e/ci_groups/<UTC>_<pid>/report.json with the revision, the SHA-256
 of the files under test and the tool versions; the run fails when a file under test changes while it runs.
 
-``--selection-only`` runs the selector cases alone, as an iteration run and not commit evidence: it skips every case that
-runs scripts/run_ci.sh or this runner.
+``--selection-only`` runs the selector and acquisition-hook selection cases as an iteration run and not commit evidence.
+It skips every case that runs scripts/run_ci.sh or this runner. Acquisition selection uses a scratch replacement of the
+heavy gate body and the real hook configuration.
 """
 
 from __future__ import annotations
@@ -32,7 +33,33 @@ from scripts.process import clear_git_environment, find_program, run_command
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = ROOT / ".venv" / "bin" / "python"
 RUNNER = "scripts/quality/run_ci_groups_e2e.py"
-COPIED = ("scripts/run_ci.sh", "scripts/quality/ci_groups.py", "config/quality/ci_groups.json", RUNNER)
+COPIED = (
+    ".github/workflows/ci.yml",
+    ".markdownlint-cli2.jsonc",
+    ".pre-commit-config.yaml",
+    "README.md",
+    "config/quality/ci_groups.json",
+    "config/quality/docker_calls_reviewed.json",
+    "config/quality/mypy_runtimes.json",
+    "dbt/models/silver/intermediate/_intermediate__models.yml",
+    "docs/quality_checks.md",
+    "scripts/acquisition/run_checks.sh",
+    "scripts/lakehouse/archive_saved_models.py",
+    "scripts/lakehouse/run_bronze_e2e.py",
+    "scripts/lakehouse/run_launcher_e2e.py",
+    "scripts/lakehouse/run_pins_e2e.py",
+    "scripts/lakehouse/run_provenance_e2e.py",
+    "scripts/orchestration/broker.py",
+    "scripts/orchestration/offline_checks.py",
+    "scripts/quality/ci_groups.py",
+    "scripts/quality/documentation_review.py",
+    "scripts/quality/repo_checks.py",
+    "scripts/quality/run_checks_e2e.py",
+    RUNNER,
+    "scripts/quality/run_documentation_review_e2e.py",
+    "scripts/quality/typecheck.py",
+    "scripts/run_ci.sh",
+)
 LAUNCHER_E2E = "scripts/lakehouse/run_launcher_e2e.py"
 DOCS_ONLY = "9c22c1e"
 INFRA_ONLY = "063cbba"
@@ -338,7 +365,7 @@ def inherited_context_cases(work: Path, out: Path, scratch: Path) -> list[dict[s
 
 
 def code_identity(work: Path) -> dict[str, Any]:
-    files = [*COPIED, "scripts/process.py", ".markdownlint-cli2.jsonc", ".pre-commit-config.yaml"]
+    files = [*COPIED, "scripts/process.py"]
     versions = {
         "python": run_command(str(PYTHON), ["--version"], timeout=60).stdout.strip(),
         "git": run_command("git", ["--version"], timeout=60).stdout.strip(),
@@ -346,6 +373,26 @@ def code_identity(work: Path) -> dict[str, Any]:
         "markdownlint-cli2": "installed" if MARKDOWNLINT.exists() else "missing",
     }
     return {"revision": git(work, "rev-parse", "HEAD").strip(), "sha256": {path: sha256_of(ROOT / path) for path in files}, "tools": versions}
+
+
+def acquisition_selection_case(work: Path, path: str, wanted: bool) -> dict[str, Any]:
+    entry = work / "scripts/acquisition/run_checks.sh"
+    original = entry.read_bytes()
+    marker = "acquisition-selection-probe"
+    try:
+        entry.write_text(f"#!/usr/bin/env bash\nprintf '%s\\n' {marker}\n")
+        result = run_command(
+            str(PYTHON),
+            ["-m", "pre_commit", "run", "acquisition-checks", "--hook-stage", "pre-commit", "--verbose", "--files", path],
+            cwd=work,
+            env={**os.environ, "PRE_COMMIT_HOME": str(ROOT / ".tools/pre_commit_cache")},
+            timeout=180,
+        )
+    finally:
+        entry.write_bytes(original)
+    output = result.stdout + result.stderr
+    passed = result.returncode == 0 and ((marker in output) if wanted else ("no files to check" in output and marker not in output))
+    return {"case": f"acquisition_selection_{path}", "passed": passed, "exit": result.returncode, "wanted": wanted, "output": output}
 
 
 def selection_cases(work: Path) -> list[dict[str, Any]]:
@@ -378,7 +425,25 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             work,
             "launcher_path",
             ["--scope", "paths", "--path", "orchestration/launcher.py", "--part", "all"],
-            ["lakehouse_checks", "orchestration_checks", "repository_code_checks", "launcher"],
+            ["python_lint", "lakehouse_checks", "orchestration_checks", "repository_code_checks", "launcher"],
+        ),
+        selection_case(
+            work,
+            "dag_python_selects_types",
+            ["--scope", "paths", "--path", "dags/broker_probe_dag.py", "--part", "core"],
+            ["python_lint", "orchestration_checks", "repository_code_checks"],
+        ),
+        selection_case(
+            work,
+            "service_python_selects_types",
+            ["--scope", "paths", "--path", "services/hai/deadline_run.py", "--part", "core"],
+            ["python_lint", "lakehouse_checks", "repository_code_checks"],
+        ),
+        selection_case(
+            work,
+            "type_manifest_selects_types",
+            ["--scope", "paths", "--path", "config/quality/mypy_runtimes.json", "--part", "core"],
+            ["python_lint", "lakehouse_checks", "repository_code_checks", "configuration_checks"],
         ),
         selection_case(work, "launcher_part_skips_docs", ["--scope", "paths", "--path", "docs/data_collection.md", "--part", "launcher"], []),
         selection_case(work, "full_scope_runs_all", ["--scope", "full", "--part", "all"], [*CORE, "launcher", "acquisition"], "full scope"),
@@ -420,6 +485,11 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
     cases.append({"case": "invalid_scope_refused", "passed": code == 2, "exit": code})
     code, _, _ = select(work, "--scope", "full", "--part", "bogus")
     cases.append({"case": "invalid_part_refused", "passed": code == 2, "exit": code})
+    cases += [
+        acquisition_selection_case(work, "scripts/quality/typecheck.py", True),
+        acquisition_selection_case(work, "config/quality/mypy_runtimes.json", True),
+        acquisition_selection_case(work, "docs/quality_checks.md", False),
+    ]
     return cases
 
 
