@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import enum
 import errno
 import fcntl
 import hashlib
@@ -31,6 +32,7 @@ import hmac
 import http.client
 import importlib
 import json
+import logging
 import os
 import pwd
 import queue
@@ -110,9 +112,16 @@ SECRET_NAME = re.compile(r"(PASSWORD|SECRET|TOKEN)", re.IGNORECASE)
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}")
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 MAX_LINE = 1 << 20
+SESSION_BUFFER_LIMIT = 128 * 1024
+INPUT_CHUNK = 16 * 1024
 DEFAULT_IMAGE_LABEL = "hai.deadline_entrypoint"
 DEFAULT_IMAGE_IMPLEMENTATION = "hai.deadline_implementation"
 CAPTURE_LIMIT = 32 * 1024 * 1024
+EXCHANGE_BUDGET = 1.0
+EXCHANGE_BUDGET_CAP = 4.0
+PROBE_BUDGET = 1.0
+LIVENESS_CODES = ("unavailable", "unresponsive")
+CLIENT_LOG = logging.getLogger("launcher.client")
 
 
 class LauncherError(Exception):
@@ -132,7 +141,13 @@ class Degraded(LauncherError):
 
 @dataclass(frozen=True)
 class Timings:
-    """Every wait the launcher uses; a test registry may shorten them, the real registry uses the defaults."""
+    """Every wait the launcher uses; a test registry may shorten them, the real registry uses the defaults.
+
+    ``compact_threshold`` is a size in bytes: above it, finished records older than ``compact_floor`` seconds move to the archive. A client
+    fails after ``gone_after`` seconds of refused connections or ``stuck_after`` seconds without a liveness reply, and logs an exchange that
+    takes longer than ``slow_exchange`` seconds beyond the wait it asked for. After such a failure its cleanup (replaying an ambiguous submit,
+    cancelling, releasing) has ``cleanup_budget`` seconds in all.
+    """
 
     create_timeout: float = 120.0
     probe_timeout: float = 10.0
@@ -148,6 +163,14 @@ class Timings:
     cancel_settle: float = 75.0
     # How long a client keeps retrying a submit or status exchange that times out (a launcher busy on a loaded machine) before failing.
     poll_patience: float = 180.0
+    history_retain: float = 86400.0
+    compact_every: float = 600.0
+    compact_threshold: int = 1_000_000
+    compact_floor: float = 3600.0
+    stuck_after: float = 30.0
+    gone_after: float = 1.0
+    slow_exchange: float = 0.5
+    cleanup_budget: float = 20.0
 
 
 @dataclass(frozen=True)
@@ -1131,10 +1154,18 @@ def validate_duckdb_flags(flags: Sequence[str]) -> list[str]:
     return list(flags)
 
 
+def resolve_checked(path: Path, what: str) -> Path:
+    """``path`` resolved; a symlink loop (``RuntimeError`` on Python 3.12, ``OSError`` later) refuses the mount: what lies behind it cannot be checked."""
+    try:
+        return path.resolve()
+    except (RuntimeError, OSError) as error:
+        raise LauncherError(f"{what}: {path} is a symlink loop or cannot be resolved, so it cannot be checked", "mount") from error
+
+
 def inside(path: Path, roots: Sequence[Path]) -> bool:
-    """True when the resolved path is equal to or inside one of the roots."""
-    resolved = path.resolve()
-    return any(resolved == root.resolve() or resolved.is_relative_to(root.resolve()) for root in roots)
+    """True when the resolved path is equal to or inside one of the roots; a path or a root that cannot be resolved refuses the mount."""
+    target, folders = resolve_checked(path, "path"), [resolve_checked(root, "allowed root") for root in roots]
+    return any(target == folder or target.is_relative_to(folder) for folder in folders)
 
 
 # A mount source is searched this far for a secrets folder; a larger tree is refused rather than admitted unchecked.
@@ -1165,6 +1196,11 @@ def identities(path: Path) -> set[tuple[int, int]]:
     return {found for found in (identity(candidate) for candidate in (path, *path.parents)) if found is not None}
 
 
+def resolved_in(source: Path, path: Path) -> Path:
+    """``path`` resolved for the check of the mount source ``source``; a loop refuses the mount."""
+    return resolve_checked(path, f"mount source {source}")
+
+
 def held_secrets(source: Path) -> Path | None:
     """The first secrets folder (any letter case) at any depth below a source folder, nearest first.
 
@@ -1176,13 +1212,13 @@ def held_secrets(source: Path) -> Path | None:
     """
     if not source.is_dir():
         return None
-    root = source.resolve()
+    root = resolved_in(source, source)
     queue, visited, seen = [source], {identity(root)}, 0
     while queue:
         folder = queue.pop(0)
         try:
             entries = sorted(os.scandir(folder), key=lambda entry: entry.name)
-            parent_names = {folded(folder)[-1:], folded(folder.resolve())[-1:]}  # the lexical and the resolved folder name
+            parent_names = {folded(folder)[-1:], folded(resolved_in(source, folder))[-1:]}
         except OSError as error:
             raise LauncherError(f"mount source {source}: {folder} cannot be read to check for a secrets folder ({error})", "mount") from error
         for entry in entries:
@@ -1191,7 +1227,7 @@ def held_secrets(source: Path) -> Path | None:
                 spellings = [(*parent, entry.name.casefold()) for parent in parent_names]
                 if entry.is_symlink():
                     with contextlib.suppress(OSError):  # a link to a secrets folder inside the source, whatever the link is named
-                        target = child.resolve()
+                        target = resolved_in(source, child)
                         if target == root or target.is_relative_to(root):
                             spellings.append(folded(target)[-2:])
                 if any(secrets_part(spelling) for spelling in spellings):
@@ -1199,7 +1235,7 @@ def held_secrets(source: Path) -> Path | None:
             if not entry.is_dir(follow_symlinks=True):
                 continue
             if entry.is_symlink():
-                target = child.resolve()
+                target = resolved_in(source, child)
                 if not (target == root or target.is_relative_to(root)):
                     continue
             key = identity(child)
@@ -1313,7 +1349,7 @@ class Renderer:
             worktrees = main / "data" / "worktrees"
             if worktrees.is_dir():
                 found += sorted(entry for entry in worktrees.iterdir() if entry.is_dir())
-        return list(dict.fromkeys(path.resolve() for path in found))
+        return list(dict.fromkeys(resolve_checked(path, "checkout") for path in found))
 
     def check_mounts(self, mounts: Sequence[Mount]) -> None:
         """Refuse a source that equals, is inside or contains the token root or any checkout's secrets folder (D1 section 7 item 3).
@@ -1327,7 +1363,7 @@ class Renderer:
             source = Path(mount.source)
             if mount.source in exact_credentials and not mount.read_only:
                 raise LauncherError("a credential mount must be read-only", "mount")
-            resolved = source.resolve()
+            resolved = resolve_checked(source, f"mount source {mount.source}")
             # The path as given is checked before it is resolved, so a link named ``secrets`` cannot pass as the folder it points to.
             if secrets_part(folded(source.absolute())) or secrets_part(folded(resolved)):
                 raise LauncherError(f"mount source {mount.source} lies in a secrets folder", "mount")
@@ -1337,7 +1373,7 @@ class Renderer:
                 raise LauncherError(f"mount source {mount.source} contains a secrets folder ({held})", "mount")
             source_id, source_line = identity(resolved), identities(resolved)
             for guarded in protected:
-                target = guarded.resolve()
+                target = resolve_checked(guarded, f"protected folder {guarded.name}")
                 # Compared by spelling in one letter case and by file identity, so a case variant or another name for the same folder still matches.
                 spelled = folded(resolved)[: len(folded(target))] == folded(target) or folded(target)[: len(folded(resolved))] == folded(resolved)
                 target_id = identity(target)
@@ -1578,7 +1614,7 @@ class Renderer:
         self.only_params(inp, ("packages_host", "project_host"))
         packages = self.allowed(str(inp.params["packages_host"]), "packages_host")
         project = Path(str(inp.params.get("project_host") or self.checkout / "dbt"))
-        if project.resolve() not in (self.checkout.resolve() / "dbt", self.main.resolve() / "dbt"):
+        if resolve_checked(project, "project_host") not in (self.checkout.resolve() / "dbt", self.main.resolve() / "dbt"):
             raise LauncherError("project_host must be dbt/ of this checkout or the main checkout", "args")
         env = {
             **self.allocation_env(inp, ("JOB_THREADS",)),
@@ -2131,16 +2167,44 @@ class Conn:
         self.buffer = b""
         self.closed = False
         self.session: Session | None = None
+        self.outbuf = bytearray()
+        self.interest = selectors.EVENT_READ
+        self.notify: Callable[[Conn], None] | None = None
 
     def send(self, message: Mapping[str, Any]) -> None:
-        """Send one JSON line; a failure closes the connection."""
+        """Send one JSON line; a failure closes the connection.
+
+        A connection with a session, or with output still waiting, never blocks the loop: the line joins ``outbuf`` and the loop sends it when
+        the socket accepts bytes.
+        """
         if self.closed:
             return
-        try:
-            self.sock.settimeout(5)
-            self.sock.sendall(json.dumps(message).encode() + b"\n")
-        except OSError:
-            self.closed = True
+        line = json.dumps(message).encode() + b"\n"
+        if self.session is None and not self.outbuf:
+            try:
+                self.sock.settimeout(5)
+                self.sock.sendall(line)
+            except OSError:
+                self.closed = True
+            return
+        self.outbuf += line
+        self.flush()
+
+    def flush(self) -> None:
+        """Send as much of ``outbuf`` as the socket accepts without blocking, then tell the loop which events the socket needs."""
+        if not self.closed:
+            try:
+                self.sock.setblocking(False)
+                while self.outbuf:
+                    del self.outbuf[: self.sock.send(self.outbuf)]
+            except BlockingIOError:
+                pass
+            except OSError:
+                self.closed = True
+        if self.closed:
+            self.outbuf.clear()
+        if self.notify is not None:
+            self.notify(self)
 
 
 @dataclass
@@ -2155,6 +2219,8 @@ class Session:
     policy: str
     detached: bool = False
     pending: bytes = b""
+    pending_in: bytearray = field(default_factory=bytearray)
+    interest: int = selectors.EVENT_READ
 
 
 @dataclass
@@ -2244,6 +2310,62 @@ def is_open(attempt: Mapping[str, Any]) -> bool:
     return attempt["phase"] != "ended"
 
 
+ARCHIVE_FOLDER = "history"
+ARCHIVE_STALLED_WRITES = 3
+
+
+def write_all(fd: int, data: bytes) -> None:
+    """Write every byte of ``data``: a short write continues with the rest, an interrupted write repeats and a call that makes no progress fails."""
+    view, stalled = memoryview(data), 0
+    while view:
+        try:
+            count = os.write(fd, view)
+        except InterruptedError:
+            continue
+        if count <= 0:
+            stalled += 1
+            if stalled >= ARCHIVE_STALLED_WRITES:
+                raise OSError(errno.EIO, "a write made no progress")
+            continue
+        stalled = 0
+        view = view[count:]
+
+
+def read_exact(fd: int, length: int, offset: int) -> bytes:
+    """Read ``length`` bytes at ``offset``; fewer bytes than the file holds there is an error."""
+    found = b""
+    while len(found) < length:
+        chunk = os.pread(fd, min(length - len(found), 1 << 20), offset + len(found))
+        if not chunk:
+            raise OSError(errno.EIO, "the file is shorter than its size")
+        found += chunk
+    return found
+
+
+def archive_recover_tail(fd: int) -> int:
+    """Cut an incomplete last line off an archive file and return the size that is left: every append ends in a newline, so a tail without one
+    is the remains of an append that did not finish, and its records are still in the registry."""
+    size = os.fstat(fd).st_size
+    end = size
+    while end > 0:
+        begin = max(0, end - (1 << 16))
+        index = read_exact(fd, end - begin, begin).rfind(b"\n")
+        if index >= 0:
+            end = begin + index + 1
+            break
+        end = begin
+    if end != size:
+        os.ftruncate(fd, end)
+        os.fsync(fd)
+    return end
+
+
+def archive_verify(fd: int, start: int, data: bytes) -> None:
+    """The file holds exactly ``data`` after its first ``start`` bytes."""
+    if os.fstat(fd).st_size != start + len(data) or read_exact(fd, len(data), start) != data:
+        raise OSError(errno.EIO, "the archive file differs from the bytes written")
+
+
 class Launcher:
     """The launcher process: one registry, one loop, every Docker side effect recorded as an operation."""
 
@@ -2284,6 +2406,11 @@ class Launcher:
         self.scan_wall: dict[int, float] = {}
         self.bound: dict[str, str] = {}
         self.last_maintenance = 0.0
+        self.last_compact = 0.0
+        self.maintained: tuple[int, str] | None = None
+        self.compacted_at: tuple[int, str] | None = None
+        self.create_deadlines: list[tuple[str, float]] = []
+        self.orphan_retries: list[tuple[str, str]] = []
         self.last_failure: dict[str, float] = {}
         self.spawn_epoch: dict[str, int] = {}
         self.waiter_principals: dict[tuple[int, str], dict[str, Any]] = {}
@@ -2590,16 +2717,22 @@ class Launcher:
     def loop(self) -> None:
         """The single-threaded loop: sockets, worker messages and timers, until stopped."""
         while self.running:
-            for key, _ in self.selector.select(timeout=self.timings.tick):
+            for key, mask in self.selector.select(timeout=self.timings.tick):
                 if key.data == "listener":
                     self.accept()
                 elif key.data == "wake":
                     with contextlib.suppress(BlockingIOError):
                         os.read(self.wake_read, 4096)
                 elif key.data == "session_docker":
-                    self.session_docker_ready(key.fileobj)
+                    self.session_docker_event(key.fileobj, mask)
                 elif isinstance(key.data, Conn):
-                    self.read_conn(key.data)
+                    if mask & selectors.EVENT_WRITE:
+                        key.data.flush()
+                        if key.data.closed:
+                            self.close_conn(key.data)
+                            continue
+                    if mask & selectors.EVENT_READ:
+                        self.read_conn(key.data)
             self.guarded(self.drain_messages)
             self.guarded(self.timers)
             self.guarded(self.process_dirty)
@@ -2643,6 +2776,7 @@ class Launcher:
             return
         sock.setblocking(False)
         conn = Conn(sock, peer)
+        conn.notify = self.update_conn
         self.conns[sock.fileno()] = conn
         self.selector.register(sock, selectors.EVENT_READ, conn)
 
@@ -2651,6 +2785,7 @@ class Launcher:
         if conn.closed and conn.sock.fileno() == -1:
             return
         conn.closed = True
+        conn.outbuf.clear()
         with contextlib.suppress(KeyError, ValueError, OSError):
             self.selector.unregister(conn.sock)
         self.conns.pop(conn.sock.fileno(), None)
@@ -2658,7 +2793,40 @@ class Launcher:
             conn.sock.close()
         if conn.session is not None:
             conn.session.detached = True
+            conn.session.pending_in.clear()
+            self.update_session(conn.session)
         self.waiters = [w for w in self.waiters if w.conn is not conn]
+
+    def watch(self, sock: socket.socket, data: Any, have: int, wanted: int) -> int:
+        """Change the events a registered socket is selected for (none removes it) and return the new set."""
+        if wanted != have and sock.fileno() != -1:
+            with contextlib.suppress(KeyError, ValueError, OSError):
+                if have and wanted:
+                    self.selector.modify(sock, wanted, data)
+                elif wanted:
+                    self.selector.register(sock, wanted, data)
+                else:
+                    self.selector.unregister(sock)
+        return wanted
+
+    def update_conn(self, conn: Conn) -> None:
+        """A client connection is read unless its session's input to Docker is backed up and written while output waits in ``outbuf``."""
+        if conn.sock.fileno() == -1 or conn.sock.fileno() not in self.conns:
+            return
+        backed_up = conn.session is not None and len(conn.session.pending_in) >= SESSION_BUFFER_LIMIT
+        wanted = (0 if backed_up else selectors.EVENT_READ) | (selectors.EVENT_WRITE if conn.outbuf else 0)
+        conn.interest = self.watch(conn.sock, conn, conn.interest, wanted)
+        if conn.session is not None:
+            self.update_session(conn.session)
+
+    def update_session(self, session: Session) -> None:
+        """The Docker side of a session is read unless the client's output is backed up and written while input waits."""
+        docker = session.docker_socket
+        if docker.fileno() == -1 or self.sessions.get(docker.fileno()) is not session:
+            return
+        backed_up = len(session.conn.outbuf) >= SESSION_BUFFER_LIMIT
+        wanted = (0 if backed_up else selectors.EVENT_READ) | (selectors.EVENT_WRITE if session.pending_in else 0)
+        session.interest = self.watch(docker, "session_docker", session.interest, wanted)
 
     def read_conn(self, conn: Conn) -> None:
         """Read what a client sent and handle each complete line."""
@@ -2690,6 +2858,9 @@ class Launcher:
             method = str(request["method"])
         except (ValueError, KeyError, TypeError):
             conn.send({"ok": False, "error": "malformed request", "code": "protocol"})
+            return
+        if method == "live":
+            conn.send({"id": request_id, "ok": True, "result": {"live": True, "pid": os.getpid(), "status": self.status}})
             return
         try:
             result = self.dispatch(conn, request, request_id, method)
@@ -4223,6 +4394,11 @@ class Launcher:
 
     def docker_dispose(self, container_id: str) -> None:
         """Worker: stop and remove a container."""
+        info = self.docker.inspect(container_id)
+        if info is None:
+            return
+        if ((info.get("Config") or {}).get("Labels") or {}).get(LABEL_REGISTRY) != self.registry_id:
+            raise LauncherError("refusing to dispose of a container without this registry's label", "ownership")
         self.docker.stop(container_id, 1)
         self.docker.remove(container_id)
 
@@ -4258,27 +4434,172 @@ class Launcher:
                 if a is not None and is_open(a):
                     self.finish_attempt(state, a, "create_failed", "no container appeared within the create timeout and a fresh scan found none")
 
+    def registry_snapshot(self) -> tuple[tuple[int, str], bytes]:
+        """One read of registry.json: its bytes with their size and SHA-256.
+
+        Any outside write that changes a byte changes the signature, whatever it does to the inode or the times, and the signature describes exactly
+        the bytes returned with it.
+        """
+        data = self.registry.state_file.read_bytes()
+        return (len(data), hashlib.sha256(data).hexdigest()), data
+
+    def read_open_operations(self, data: bytes) -> None:
+        """Parse the registry snapshot ``data`` and keep what the timed work needs from its open operations."""
+        state = run_lock.parse_state(data, self.registry_id, self.registry.state_file.name)
+        if state["schema_version"] != run_lock.LAUNCHER_SCHEMA:
+            raise run_lock.RegistryError(f"{self.registry.state_file.name} is not valid: launcher schema required")
+        operations = state["operations"].values()
+        open_ops = [op for op in operations if op["state"] == "open"]
+        self.create_deadlines = [(op["op_id"], op["dispatched_at"] + self.timings.create_timeout) for op in open_ops if op["kind"] == "create"]
+        self.orphan_retries = [(op["op_id"], op["container_id"]) for op in open_ops if op["kind"] == "orphan" and op.get("container_id")]
+
     def maintenance(self, now: float) -> None:
-        """Timed work that needs the registry: scans for expired creates, orphan retries and the owners' managers."""
+        """Timed work: scans for expired creates, orphan retries and the move of old records. The registry is parsed only when its file changed.
+
+        Above ``compact_threshold`` bytes the move takes records older than ``compact_floor`` and is tried once per change of the file; the
+        periodic pass every ``compact_every`` chooses the age by the current size, so records that age with no change still move.
+        """
         if not self.docker_ok or self.status == "starting":
             return
         if now - self.last_maintenance < 0.5:
             return
         self.last_maintenance = now
-        wanted_scan = False
-        retry: list[tuple[str, str]] = []
-        with self.tx(write=False) as state:
-            for op in state["operations"].values():
-                if op["state"] != "open":
-                    continue
-                if op["kind"] == "create" and time.time() > op["dispatched_at"] + self.timings.create_timeout and f"op:{op['op_id']}" not in self.inflight:
-                    wanted_scan = True
-                if op["kind"] == "orphan" and f"op:{op['op_id']}" not in self.inflight and op.get("container_id"):
-                    retry.append((op["op_id"], op["container_id"]))
-        if wanted_scan and not any(k.startswith("scan:") for k in self.inflight):
+        signature, snapshot = self.registry_snapshot()
+        if signature != self.maintained:
+            self.read_open_operations(snapshot)
+            self.maintained = signature
+        wall = time.time()
+        expired = any(wall > deadline and f"op:{op_id}" not in self.inflight for op_id, deadline in self.create_deadlines)
+        if expired and not any(k.startswith("scan:") for k in self.inflight):
             self.start_scan()
-        for op_id, container_id in retry:
-            self.spawn(f"op:{op_id}", "orphan", self.docker_dispose, container_id)
+        for op_id, container_id in self.orphan_retries:
+            if f"op:{op_id}" not in self.inflight:
+                self.spawn(f"op:{op_id}", "orphan", self.docker_dispose, container_id)
+        over = signature[0] > self.timings.compact_threshold
+        if now - self.last_compact >= self.timings.compact_every:
+            self.last_compact = now
+            self.compacted_at = signature
+            self.compact_history(self.timings.compact_floor if over else self.timings.history_retain)
+        elif over and signature != self.compacted_at:
+            self.compacted_at = signature
+            self.compact_history(self.timings.compact_floor)
+
+    def history_to_move(self, state: Mapping[str, Any], retain: float | None = None) -> list[tuple[str, str, Any]]:
+        """The terminal records older than ``retain`` seconds (default ``history_retain``), as (collection, key, record) (failure modes RH1 to RH10 and RH20).
+
+        An attempt moves only when it ended, none of its operations is open and its owner is a released or failed allocation that nothing live
+        names: no later submit can then reuse its attempt number in a container name. Its settled operations and its container record move with
+        it, unless the inventory still lists the container. An allocation that an attempt in the registry, a registration, a reader, a session or a
+        reservation names stays (RH5 and RH20): the selection drops such an allocation, which keeps the attempts it owns, and repeats until nothing
+        more is dropped. Done requests and reservation events move by age; open work never moves.
+        """
+        cutoff = time.time() - (self.timings.history_retain if retain is None else retain)
+
+        def old(text: Any) -> bool:
+            try:
+                return datetime.fromisoformat(str(text)).timestamp() < cutoff
+            except (TypeError, ValueError):
+                return False
+
+        live = json.dumps([state.get(name, {}) for name in ("registrations", "readers", "sessions", "reservations")])
+        open_ops = {op["attempt"] for op in state["operations"].values() if op["state"] == "open"}
+        by_owner: dict[str, list[dict[str, Any]]] = {}
+        named_by: dict[str, set[str]] = {}
+        for attempt in state["attempts"].values():
+            by_owner.setdefault(str(attempt["owner"]), []).append(attempt)
+            if attempt.get("attempt_alloc"):
+                named_by.setdefault(str(attempt["attempt_alloc"]), set()).add(attempt["id"])
+        chosen: dict[str, list[dict[str, Any]]] = {}
+        for alloc_id, allocation in state["allocations"].items():
+            owned = by_owner.get(f"alloc:{alloc_id}", [])
+            if allocation["state"] not in ("released", "failed") or f'"{alloc_id}"' in live:
+                continue
+            if any(a["phase"] != "ended" or a["id"] in open_ops or not old(a.get("ended_at")) for a in owned) or not (
+                owned or old(allocation.get("created_at"))
+            ):
+                continue
+            chosen[alloc_id] = owned
+        while True:
+            moving = {a["id"] for owned in chosen.values() for a in owned}
+            dropped = [alloc_id for alloc_id in chosen if named_by.get(alloc_id, set()) - moving]
+            if not dropped:
+                break
+            for alloc_id in dropped:
+                del chosen[alloc_id]
+        moved: list[tuple[str, str, Any]] = []
+        attempts: set[str] = set()
+        for alloc_id, owned in chosen.items():
+            attempts.update(a["id"] for a in owned)
+            moved += [("attempts", a["id"], a) for a in owned]
+            moved.append(("allocations", alloc_id, state["allocations"][alloc_id]))
+        moved += [("operations", key, op) for key, op in state["operations"].items() if op["state"] == "settled" and op.get("attempt") in attempts]
+        for container_id, record in state["containers"].items():
+            present = container_id in self.inventory and self.inventory[container_id].get("state") != "absent"
+            if record.get("attempt") in attempts and not present:
+                moved.append(("containers", container_id, record))
+        moved += [("requests", key, record) for key, record in state["requests"].items() if record["state"] == "done" and old(record.get("at"))]
+        moved += [
+            ("reservation_history", f"{event.get('reservation_id')}@{event.get('at')}", event) for event in state["reservation_history"] if old(event.get("at"))
+        ]
+        return moved
+
+    def compact_history(self, retain: float | None = None) -> None:
+        """Move terminal records older than ``retain`` seconds out of the registry into its append-only archive, so a transaction rewrites less.
+
+        The archive lines are written and flushed before the registry is rewritten: a crash between the two repeats lines, never loses a record.
+        """
+        with self.tx(write=False) as state:
+            if not self.history_to_move(state, retain):
+                return
+        with self.tx() as state:
+            moved = self.history_to_move(state, retain)
+            if not moved:
+                return
+            self.archive_history(moved)
+            for collection, key, _record in moved:
+                if collection != "reservation_history":
+                    state[collection].pop(key, None)
+            gone = {id(record) for collection, _, record in moved if collection == "reservation_history"}
+            state["reservation_history"] = [event for event in state["reservation_history"] if id(event) not in gone]
+
+    def archive_history(self, moved: list[tuple[str, str, Any]]) -> None:
+        """Append the moved records to ``history/<UTC date>.jsonl`` beside the registry (owner-only) and make them durable before the caller removes them.
+
+        Every byte is written (a short write continues, an interrupted one repeats, a write that makes no progress fails), synced and read back; a
+        failed append is cut back to the size before it. An incomplete last line left by a crash is cut off before the next batch is added, so a
+        later batch never joins it. The registry folder is synced after the history folder exists: a new folder's entry is durable before the
+        registry is replaced. A link in place of the folder or the day file is refused.
+        """
+        at = utc_now()
+        data = "".join(json.dumps({"collection": c, "key": k, "archived_at": at, "record": r}, sort_keys=True) + "\n" for c, k, r in moved).encode()
+        registry_fd = os.open(self.registry.path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(ARCHIVE_FOLDER, 0o700, dir_fd=registry_fd)
+            folder_fd = os.open(ARCHIVE_FOLDER, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=registry_fd)
+            try:
+                os.fsync(registry_fd)
+                fd = os.open(f"{datetime.now(UTC):%Y%m%d}.jsonl", os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600, dir_fd=folder_fd)
+                try:
+                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                        raise OSError(errno.EPERM, "the archive file is not a regular file")
+                    os.fchmod(fd, 0o600)
+                    start = archive_recover_tail(fd)
+                    try:
+                        write_all(fd, data)
+                        os.fsync(fd)
+                        os.fsync(folder_fd)
+                        archive_verify(fd, start, data)
+                    except Exception:
+                        with contextlib.suppress(OSError):
+                            os.ftruncate(fd, start)
+                        raise
+                finally:
+                    os.close(fd)
+            finally:
+                os.close(folder_fd)
+        finally:
+            os.close(registry_fd)
 
     # -- methods: status, runs, allocations, submit, cancel (D1 sections 3, 5 and 6) ----------------------------------
 
@@ -6048,6 +6369,7 @@ class Launcher:
             if outcome == "ok":
                 value.close()
             return
+        value.setblocking(False)
         session = Session(conn, attempt_id, container_id, value, tty, policy)
         conn.session = session
         self.sessions[value.fileno()] = session
@@ -6057,6 +6379,27 @@ class Launcher:
             if attempt is not None:
                 attempt["session_seen"] = time.time()
         conn.send({"id": request_id, "ok": True, "result": {"attached": True, "tty": tty}})
+
+    def session_docker_event(self, sock: Any, mask: int) -> None:
+        """Docker is ready: send the input that waits for it, then relay its output."""
+        session = self.sessions.get(sock.fileno())
+        if session is None:
+            return
+        if mask & selectors.EVENT_WRITE:
+            self.session_send_input(session)
+        if mask & selectors.EVENT_READ and self.sessions.get(sock.fileno()) is session:
+            self.session_docker_ready(sock)
+
+    def session_send_input(self, session: Session) -> None:
+        """Send as much waiting input to Docker as its socket accepts without blocking."""
+        try:
+            while session.pending_in:
+                del session.pending_in[: session.docker_socket.send(session.pending_in)]
+        except BlockingIOError:
+            pass
+        except OSError:
+            session.pending_in.clear()
+        self.update_conn(session.conn)
 
     def session_docker_ready(self, sock: Any) -> None:
         """Output from the container: relay it to the client."""
@@ -6092,17 +6435,20 @@ class Launcher:
             except ValueError:
                 continue
             if "in" in message:
-                with contextlib.suppress(OSError):
-                    session.docker_socket.sendall(base64.b64decode(message["in"]))
+                with contextlib.suppress(ValueError, TypeError):
+                    session.pending_in += base64.b64decode(message["in"])
             elif message.get("signal") == "INT":
                 if session.policy == "forward":
-                    with contextlib.suppress(OSError):
-                        session.docker_socket.sendall(b"\x03")
+                    session.pending_in += b"\x03"
                 else:
                     self.cancel_attempt_by_session(session)
             elif message.get("detach"):
                 self.end_session(session, "detached", detach=True)
                 return
+        if len(conn.buffer) > MAX_LINE:
+            self.close_conn(conn)
+            return
+        self.session_send_input(session)
 
     def cancel_attempt_by_session(self, session: Session) -> None:
         """A session's Ctrl-C under the ``cancel`` policy persists a cancel intent."""
@@ -6123,8 +6469,10 @@ class Launcher:
             if known is session:
                 self.sessions.pop(fileno, None)
         session.detached = True
+        session.pending_in.clear()
         session.conn.session = None
         session.conn.send({"closed": reason, "detached": detach})
+        self.update_conn(session.conn)
 
     def session_timers(self, now: float) -> None:
         """A detached or lost session keeps the container for the idle limit, then cancels the attempt (D1 section 9 item 3)."""
@@ -6168,6 +6516,13 @@ def resolve_config(test_registry: str | None, cwd: Path | None = None) -> Config
             settings = json.loads(test_file.read_text())
         timing_values: dict[str, Any] = {key: int(value) if key == "stop_grace" else float(value) for key, value in dict(settings.get("timings", {})).items()}
         timings = replace(Timings(), **timing_values)
+        if timings.history_retain <= timings.poll_patience:
+            raise LauncherError(f"history_retain ({timings.history_retain} s) must exceed poll_patience ({timings.poll_patience} s)", "config")
+        if timings.compact_floor <= timings.poll_patience:
+            raise LauncherError(f"compact_floor ({timings.compact_floor} s) must exceed poll_patience ({timings.poll_patience} s)", "config")
+        for name in ("compact_threshold", "stuck_after", "gone_after", "slow_exchange", "cleanup_budget"):
+            if getattr(timings, name) <= 0:
+                raise LauncherError(f"{name} ({getattr(timings, name)}) must be positive", "config")
         folder = registry.path / "test_state"
         return Config(
             registry=registry,
@@ -6205,6 +6560,15 @@ class ClientError(Exception):
         super().__init__(message)
         self.code = code
 
+    @property
+    def transport(self) -> bool:
+        """True when the connection to the launcher failed (it is gone or does not answer), not when the launcher refused the request."""
+        return self.code in LIVENESS_CODES
+
+    def describe(self, what: str) -> str:
+        """The error for a person: ``the launcher refused <what>: ...``, or for a lost connection ``the launcher did not answer <what>: ... [code]``."""
+        return f"the launcher did not answer {what}: {self} [{self.code}]" if self.transport else f"the launcher refused {what}: {self}"
+
 
 @dataclass
 class AttemptResult:
@@ -6221,6 +6585,87 @@ class AttemptResult:
     def ok(self) -> bool:
         """True when the attempt ran and exited with code 0."""
         return self.reason == "exited" and self.exit_code == 0
+
+
+class ReleaseOutcome(enum.StrEnum):
+    """What ``LauncherClient.release_allocation`` achieved.
+
+    ``RELEASED``: the launcher confirmed the release. ``RETAINED``: after a lost connection the work of the allocation was not settled within
+    ``cleanup_budget``, so no release was requested and the launcher releases the allocation once its holder is gone. ``UNRESOLVED``: the work was
+    settled and the release request got no answer, so whether the allocation is released is not known.
+    """
+
+    RELEASED = "released"
+    RETAINED = "retained"
+    UNRESOLVED = "unresolved"
+
+
+NO_PRINCIPAL = "any:"
+
+
+def principal_key(principal: Mapping[str, Any] | None) -> str:
+    """What names a principal in a client's records: its kind with its allocation or run ID, or ``NO_PRINCIPAL`` for an exchange without one."""
+    if not principal or principal.get("kind", "any") == "any":
+        return NO_PRINCIPAL
+    return f"{principal['kind']}:{principal.get('alloc_id') or principal.get('run_id') or ''}"
+
+
+class Patience:
+    """What one waiting client has seen of the launcher: whether it answers, whether it makes progress and how long an exchange may take.
+
+    A launcher that refuses connections for ``gone_after`` seconds is gone. A launcher that answers a liveness request is making progress; one that
+    stays silent for ``stuck_after`` seconds is stuck. Otherwise the client keeps trying until ``poll_patience`` runs out. A timed-out exchange
+    doubles the next exchange's budget up to ``EXCHANGE_BUDGET_CAP``; a quick exchange resets it.
+    """
+
+    def __init__(self, client: LauncherClient, principal: Mapping[str, Any]) -> None:
+        self.client = client
+        self.principal = principal
+        self.timings = client.config.timings
+        self.failing_since: float | None = None
+        self.gone_since: float | None = None
+        self.last_progress = time.monotonic()
+        self.learned = EXCHANGE_BUDGET
+
+    def budget(self, settle_deadline: float | None = None) -> float:
+        """Seconds the next exchange may take: one second once a pool's settle limit counts, else the learned budget within the progress limit."""
+        if settle_deadline is not None:
+            return max(0.05, min(EXCHANGE_BUDGET, settle_deadline - time.monotonic()))
+        return max(0.5, min(self.learned, self.timings.stuck_after - (time.monotonic() - self.last_progress)))
+
+    def call(self, method: str, params: dict[str, Any], principal: dict[str, Any], request_id: str, budget: float) -> Any:
+        """One bounded exchange; a reply counts as progress."""
+        begun = time.monotonic()
+        result = self.client.bounded_call(method, params, principal, request_id, budget)
+        self.client.forget_failure(self.principal)
+        self.failing_since = self.gone_since = None
+        self.last_progress = time.monotonic()
+        if self.last_progress - begun < self.timings.slow_exchange:
+            self.learned = EXCHANGE_BUDGET
+        return result
+
+    def failed(self, error: BaseException, attempt_id: str | None = None) -> None:
+        """After a failed exchange: raise the error that ends the wait, or return so the caller tries again."""
+        now = time.monotonic()
+        self.failing_since = now if self.failing_since is None else self.failing_since
+        state = self.client.probe(PROBE_BUDGET)
+        if state == "gone":
+            self.gone_since = now if self.gone_since is None else self.gone_since
+            if now - self.gone_since >= self.timings.gone_after:
+                raise self.client.note_failure(
+                    ClientError(f"the launcher is not running: nothing answers at {self.client.config.socket_path}", "unavailable"), self.principal, attempt_id
+                ) from error
+        else:
+            self.gone_since = None
+            if state == "alive":
+                self.last_progress = time.monotonic()
+            elif time.monotonic() - self.last_progress >= self.timings.stuck_after:
+                raise self.client.note_failure(
+                    ClientError(f"the launcher is alive but made no progress for {self.timings.stuck_after:g} s", "unresponsive"), self.principal, attempt_id
+                ) from error
+            self.learned = min(self.learned * 2, EXCHANGE_BUDGET_CAP)
+        if now - self.failing_since >= self.timings.poll_patience:
+            raise self.client.note_failure(error, self.principal, attempt_id)
 
 
 class LauncherClient:
@@ -6240,6 +6685,9 @@ class LauncherClient:
         self.cancel_persisted_at: float | None = None
         self.socket_factory: Callable[..., socket.socket] = socket.socket
         self.launch_nonce = ""  # passed to a launcher this client starts, so the client can recognize it later
+        self.lost: dict[str, float | None] = {}
+        self.lost_lock = threading.Lock()
+        self.abandoned: set[str] = set()
 
     # -- connection ------------------------------------------------------------------------------------------------
 
@@ -6323,6 +6771,15 @@ class LauncherClient:
         self, method: str, params: dict[str, Any] | None = None, principal: dict[str, Any] | None = None, request_id: str | None = None, timeout: float = 120.0
     ) -> Any:
         """One request and its reply; a refusal raises ``ClientError``."""
+        try:
+            result = self.send(method, params, principal, request_id, timeout)
+        except (ClientError, OSError) as error:
+            self.note_failure(error, principal)
+            raise
+        self.forget_failure(principal)
+        return result
+
+    def send(self, method: str, params: dict[str, Any] | None, principal: dict[str, Any] | None, request_id: str | None, timeout: float) -> Any:
         request_id = request_id or self.next_id()
         deadline = time.monotonic() + 60
         while True:
@@ -6337,8 +6794,104 @@ class LauncherClient:
                 sock.close()
             time.sleep(0.2)
 
+    def note_exchange(self, method: str, params: Mapping[str, Any], seconds: float, outcome: str) -> None:
+        asked = float(params.get("wait") or 0.0) if method == "status" else 0.0
+        if seconds - asked > self.config.timings.slow_exchange:
+            CLIENT_LOG.warning("launcher exchange %s %s %.2f s%s", method, outcome, seconds, f" (asked to wait {asked:.2f} s)" if asked else "")
+
+    def note_failure[E: BaseException](self, error: E, principal: Mapping[str, Any] | None, attempt_id: str | None = None) -> E:
+        """Remember a lost connection for the principal whose exchange failed, so its cleanup is bounded; any other error is passed through unchanged.
+
+        The record of a principal (its key, with the cleanup deadline once set) stays until its own work is settled: another worker's exchange does
+        not clear it or move its deadline. With ``attempt_id``, the accepted attempt whose wait failed is marked abandoned in the same lock interval,
+        so a sibling's success cannot clear the failure before the attempt's cleanup is recorded.
+        """
+        if isinstance(error, OSError) or (isinstance(error, ClientError) and error.transport):
+            with self.live_lock, self.lost_lock:
+                if attempt_id is not None and attempt_id in self.live:
+                    self.abandoned.add(attempt_id)
+                self.lost.setdefault(principal_key(principal), None)
+        return error
+
+    def forget_failure(self, principal: Mapping[str, Any] | None) -> None:
+        """An exchange of this principal succeeded, which ends a failure with no principal and the principal's own unless work of it was left open.
+
+        Left open means an ambiguous submit or an attempt that its worker's wait gave up on.
+        """
+        key = principal_key(principal)
+        with self.live_lock, self.lost_lock:
+            owes = any(principal_key(owner) == key for _, owner in self.pending_submits.values()) or any(
+                principal_key(self.live[attempt_id]) == key for attempt_id in self.abandoned if attempt_id in self.live
+            )
+            self.lost.pop(NO_PRINCIPAL, None)
+            if not owes:
+                self.lost.pop(key, None)
+
+    def lost_contact(self, principal: Mapping[str, Any] | None) -> bool:
+        """True when this principal (or an exchange with none) lost the connection to the launcher and no interrupted pool owns the cleanup."""
+        if self.cancelling or self.cancel_unresolved.is_set():
+            return False
+        with self.lost_lock:
+            return principal_key(principal) in self.lost or NO_PRINCIPAL in self.lost
+
+    def cleanup_deadline(self, principal: Mapping[str, Any]) -> float:
+        """When the cleanup of this principal must end: ``cleanup_budget`` after its first cleanup step, whatever other workers complete."""
+        key = principal_key(principal)
+        with self.lost_lock:
+            key = key if key in self.lost else NO_PRINCIPAL
+            until = self.lost.get(key)
+            if until is None:
+                until = time.monotonic() + self.config.timings.cleanup_budget
+                if key in self.lost:
+                    self.lost[key] = until
+            return until
+
+    def probe(self, seconds: float) -> str:
+        """Send a liveness request, which the launcher answers without reading its registry, and log it like any exchange.
+
+        Returns ``"gone"`` when nothing listens at the socket, ``"alive"`` when any reply arrived within ``seconds`` and ``"silent"`` otherwise.
+        """
+        begun = time.monotonic()
+        state = self.probe_once(seconds)
+        outcome = {"alive": "took", "silent": "got no reply after", "gone": "found no listener after"}[state]
+        self.note_exchange("live", {}, time.monotonic() - begun, outcome)
+        return state
+
+    def probe_once(self, seconds: float) -> str:
+        deadline = time.monotonic() + seconds
+        message = {"v": PROTOCOL, "id": self.next_id(), "method": "live", "params": {}, "principal": {"kind": "any"}}
+        try:
+            with self.open_socket(seconds) as sock:
+                sock.settimeout(max(0.05, deadline - time.monotonic()))
+                sock.sendall(json.dumps(message).encode() + b"\n")
+                buffer = b""
+                while b"\n" not in buffer:
+                    if time.monotonic() >= deadline:
+                        return "silent"
+                    sock.settimeout(max(0.05, deadline - time.monotonic()))
+                    chunk = sock.recv(65536)
+                    if not chunk:
+                        return "silent"
+                    buffer += chunk
+        except (FileNotFoundError, ConnectionRefusedError):
+            return "gone"
+        except OSError:
+            return "silent"
+        return "alive"
+
     def exchange(self, sock: socket.socket, method: str, params: dict[str, Any], principal: dict[str, Any], request_id: str, timeout: float) -> Any:
         """Send a request on an open socket and read its reply; ``timeout`` bounds the whole exchange, not each read."""
+        begun = time.monotonic()
+        outcome = "took"
+        try:
+            return self.exchange_within(sock, method, params, principal, request_id, timeout)
+        except TimeoutError:
+            outcome = "timed out after"
+            raise
+        finally:
+            self.note_exchange(method, params, time.monotonic() - begun, outcome)
+
+    def exchange_within(self, sock: socket.socket, method: str, params: dict[str, Any], principal: dict[str, Any], request_id: str, timeout: float) -> Any:
         deadline = time.monotonic() + timeout
 
         def remaining() -> float:
@@ -6387,9 +6940,98 @@ class LauncherClient:
             raise ClientError(str(record.get("error", f"allocation {reply['alloc_id']} is {record['state']}")), "budget")
         return str(reply["alloc_id"])
 
-    def release_allocation(self, alloc_id: str) -> None:
-        """Release an allocation."""
-        self.call("release_allocation", {}, self.principal_alloc(alloc_id), timeout=120)
+    def release_allocation(self, alloc_id: str) -> ReleaseOutcome:
+        """Release an allocation and report what happened (``ReleaseOutcome``).
+
+        Without a lost connection this is an ordinary call, and a refusal raises. After a lost connection the work of the allocation is settled first
+        (see ``settle``) and the release is one bounded request; that path never raises, so the original failure reaches the caller.
+        """
+        principal = self.principal_alloc(alloc_id)
+        if not self.lost_contact(principal):
+            self.call("release_allocation", {}, principal, timeout=120)
+            return ReleaseOutcome.RELEASED
+        budget = self.config.timings.cleanup_budget
+        deadline = self.cleanup_deadline(principal)
+        if not self.settle(principal):
+            CLIENT_LOG.warning("allocation %s retained: its work was not settled within %g s of the launcher failure", alloc_id, budget)
+            return ReleaseOutcome.RETAINED
+        try:
+            self.cleanup_exchange("release_allocation", {}, principal, self.next_id(), deadline)
+        except (ClientError, OSError) as error:
+            CLIENT_LOG.warning(
+                "allocation %s release unresolved: no confirmation within %g s of the launcher failure (%s)",
+                alloc_id,
+                budget,
+                error.code if isinstance(error, ClientError) else type(error).__name__,
+            )
+            return ReleaseOutcome.UNRESOLVED
+        with self.lost_lock:
+            self.lost.pop(principal_key(principal), None)
+        return ReleaseOutcome.RELEASED
+
+    def cleanup_exchange(self, method: str, params: dict[str, Any], principal: dict[str, Any], request_id: str, deadline: float) -> Any:
+        """One exchange with the existing socket that ends by ``deadline``; it never starts a launcher."""
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError(f"{method}: the cleanup budget is spent")
+        return self.bounded_call(method, params, principal, request_id, min(EXCHANGE_BUDGET, left))
+
+    def cleanup_call(self, method: str, params: dict[str, Any], principal: dict[str, Any], timeout: float = 120.0) -> Any:
+        """A request that undoes earlier work: an ordinary call, or after a lost connection one bounded exchange whose failure is logged, not raised."""
+        if not self.lost_contact(principal):
+            return self.call(method, params, principal, timeout=timeout)
+        try:
+            return self.cleanup_exchange(method, params, principal, self.next_id(), self.cleanup_deadline(principal))
+        except (ClientError, OSError) as error:
+            CLIENT_LOG.warning(
+                "launcher cleanup %s failed after a launcher failure (%s)", method, error.code if isinstance(error, ClientError) else type(error).__name__
+            )
+            return None
+
+    def settle(self, principal: dict[str, Any]) -> bool:
+        """After a lost connection, settle the work of one principal inside its cleanup deadline; True when nothing of it is ambiguous or open.
+
+        An ambiguous submit is replayed under its own request ID: a refusal drops it, a reply gives its attempt. Each open attempt is cancelled and
+        awaited. Work of other principals on this client is not touched.
+        """
+        if not self.lost_contact(principal):
+            return True
+        deadline = self.cleanup_deadline(principal)
+        key = principal_key(principal)
+        cancelled: set[str] = set()
+        while time.monotonic() < deadline:
+            with self.live_lock:
+                pending = {request_id: item for request_id, item in self.pending_submits.items() if principal_key(item[1]) == key}
+                attempts = [attempt_id for attempt_id, owner in self.live.items() if principal_key(owner) == key]
+            if not pending and not attempts:
+                return True
+            for request_id, (payload, owner) in pending.items():
+                try:
+                    reply = self.cleanup_exchange("submit", payload, owner, request_id, deadline)
+                except ClientError as error:
+                    if not error.transport:
+                        with self.live_lock:
+                            self.pending_submits.pop(request_id, None)
+                    continue
+                except OSError:
+                    continue
+                with self.live_lock:
+                    self.pending_submits.pop(request_id, None)
+                    self.live[str(reply["attempt_id"])] = owner
+            for attempt_id in attempts:
+                try:
+                    record = self.cleanup_exchange("status", {"what": "attempt", "id": attempt_id}, principal, self.next_id(), deadline)
+                    if record.get("phase") == "ended":
+                        with self.live_lock:
+                            self.live.pop(attempt_id, None)
+                            self.abandoned.discard(attempt_id)
+                    elif attempt_id not in cancelled:
+                        self.cleanup_exchange("cancel", {"attempt_id": attempt_id}, principal, f"cleanup-cancel-{attempt_id}", deadline)
+                        cancelled.add(attempt_id)
+                except (ClientError, OSError):
+                    continue
+            time.sleep(0.05)
+        return False
 
     def run_attempt(
         self,
@@ -6419,22 +7061,24 @@ class LauncherClient:
             if self.cancelling:
                 raise ClientError("the pool is cancelling; no further submits", "cancelled")
             self.pending_submits[request_id] = (payload, principal)
-        patience_end = time.monotonic() + self.config.timings.poll_patience
+        patience = Patience(self, principal)
         while True:
             try:
-                reply = self.bounded_call("submit", payload, principal, request_id, 1.0)
+                reply = patience.call("submit", payload, principal, request_id, patience.budget())
                 break
             except ClientError as error:
                 if error.code != "unavailable":
                     with self.live_lock:
                         self.pending_submits.pop(request_id, None)
                     raise
-                if self.cancelling or time.monotonic() >= patience_end:
+                if self.cancelling:
                     raise
-            except OSError:
+                patience.failed(error)
+            except OSError as error:
                 # The request may already be persisted. Keep its exact identity for cancel_open to replay and reconcile.
-                if self.cancelling or time.monotonic() >= patience_end:
+                if self.cancelling:
                     raise
+                patience.failed(error)
             # The same request ID again: the launcher returns the persisted reply instead of creating a second attempt.
             time.sleep(0.2)
         attempt_id = str(reply["attempt_id"])
@@ -6445,7 +7089,6 @@ class LauncherClient:
             self.cancel_open()
         ended = False
         unreachable = False
-        failing_since: float | None = None
         try:
             while True:
                 if self.cancel_unresolved.is_set():
@@ -6461,11 +7104,10 @@ class LauncherClient:
                         else "an attempt did not end within cancel_settle after the cancellations persisted"
                     )
                     self.record_unresolved(unresolved, [], reason)
-                # A short socket wait lets an interrupted pool exit through the bounded unresolved path; it never outlasts the settle limit.
-                budget = 1.0 if settle_deadline is None else max(0.05, min(1.0, settle_deadline - time.monotonic()))
+                budget = patience.budget(settle_deadline)
                 failure: BaseException | None = None
                 try:
-                    record = self.bounded_call(
+                    record = patience.call(
                         "status",
                         {"what": "attempt", "id": attempt_id, "wait": min(0.2, budget / 2), "until": {"field": "phase", "values": ["ended"]}},
                         principal,
@@ -6480,13 +7122,9 @@ class LauncherClient:
                     failure = error
                 unreachable = failure is not None
                 if failure is not None and not self.cancelling and not self.cancel_unresolved.is_set():
-                    # A slow or briefly unreachable launcher: keep polling until the patience runs out, then fail visibly.
-                    failing_since = failing_since if failing_since is not None else time.monotonic()
-                    if time.monotonic() - failing_since >= self.config.timings.poll_patience:
-                        raise failure
+                    patience.failed(failure, attempt_id)
                     time.sleep(0.2)
                     continue
-                failing_since = None
                 if failure is not None:
                     if not self.cancelling or self.cancel_unresolved.is_set():
                         raise failure
@@ -6503,9 +7141,11 @@ class LauncherClient:
                     ended = True
                     break
         finally:
-            if ended:
-                with self.live_lock:
+            with self.live_lock:
+                if ended:
                     self.live.pop(attempt_id, None)
+                else:
+                    self.abandoned.add(attempt_id)
         return self.result_of(record)
 
     def settle_deadline(self) -> float | None:
@@ -6608,7 +7248,15 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser(
         "dbt", help="dbt: `deps` runs the dbt_deps template; any other command needs a real run with recorded pins and a complete snapshot"
     ).add_argument("args", nargs="*")
-    commands.add_parser("query", help="an interactive DuckDB shell on the bronze tables (query_reader)").add_argument("args", nargs="*")
+    query = commands.add_parser(
+        "query",
+        help="an interactive DuckDB shell on the bronze tables (query_reader)",
+        description="Open a DuckDB shell on the bronze tables, or run one statement. Every word after `query` goes to DuckDB unchanged.",
+        epilog=f"supported DuckDB arguments: -c SQL (run one statement and exit) and the output flags {' '.join(DUCKDB_QUERY_FLAGS)}.\n"
+        "A file or pipe on standard input is the shell's input.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    query.add_argument("args", nargs="*", metavar="DUCKDB_ARG", help="-c SQL and the output flags above")
     commands.add_parser("ui", help="the DuckDB UI on 127.0.0.1:4213 (ui_reader)")
     run = commands.add_parser("run", help="take an allocation, run one attempt of a template and print its output")
     run.add_argument("--template", required=True, choices=sorted(set(TEMPLATES) - {"probe", "catalog_service", "orchestration_service"}))
@@ -6620,9 +7268,30 @@ def parser() -> argparse.ArgumentParser:
     return cli
 
 
+def passthrough_split(argv: list[str]) -> tuple[list[str], list[str] | None]:
+    """Split ``argv`` at the ``query`` command: the words after it go to DuckDB unchanged (argparse cannot pass a leading ``-c`` through)."""
+    index = 0
+    while index < len(argv) and argv[index].startswith("-"):
+        if argv[index] == "--test-registry":
+            index += 2
+        elif argv[index].startswith("--test-registry="):
+            index += 1
+        else:
+            return argv, None
+    if index < len(argv) and argv[index] == "query":
+        tail = argv[index + 1 :]
+        if tail[:1] in (["-h"], ["--help"]):
+            return argv, None
+        return argv[: index + 1], tail[1:] if tail[:1] == ["--"] else tail
+    return argv, None
+
+
 def main() -> int:
     """Run one command; refusals exit 3, errors 4, a degraded launcher 5."""
-    args = parser().parse_args()
+    head, passthrough = passthrough_split(sys.argv[1:])
+    args = parser().parse_args(head)
+    if passthrough is not None:
+        args.args = passthrough
     try:
         if args.command == "serve":
             return Launcher(resolve_config(args.test_registry)).serve()
@@ -6649,7 +7318,7 @@ def main() -> int:
             return run_command_line(client, args)
     except ClientError as error:
         sys.stderr.write(f"launcher: {error} [{error.code}]\n")
-        return DEGRADED_EXIT if error.code in ("degraded", "unavailable") else REFUSED_EXIT
+        return DEGRADED_EXIT if error.transport or error.code == "degraded" else REFUSED_EXIT
     except (run_lock.Refused, LauncherError) as error:
         sys.stderr.write(f"refused: {error}\n")
         return REFUSED_EXIT
@@ -6691,10 +7360,11 @@ def dbt_command(client: LauncherClient, arguments: list[str]) -> int:
         code = result.exit_code if result.exit_code is not None else ERROR_EXIT
     except ClientError as error:
         sys.stderr.write(f"launcher: {error} [{error.code}]\n")
-        code = REFUSED_EXIT
+        code = DEGRADED_EXIT if error.transport else REFUSED_EXIT
     finally:
         if code:
-            client.call("mark", {"state": "failed_retained"}, principal)
+            client.settle(principal)
+            client.cleanup_call("mark", {"state": "failed_retained"}, principal)
         else:
             record = client.config.runs_root / run_id / "run_record.json"
             record.parent.mkdir(parents=True, exist_ok=True)
@@ -6740,63 +7410,124 @@ def interactive_command(client: LauncherClient, kind: str, arguments: list[str])
     finally:
         if attempt_id:
             with contextlib.suppress(ClientError):
-                client.call("cancel", {"attempt_id": attempt_id}, principal)
-                client.wait_for("attempt", attempt_id, "phase", ("ended",), principal, 120)
-        client.call("deregister_reader", {"registration_id": registration}, principal)
+                client.cleanup_call("cancel", {"attempt_id": attempt_id}, principal)
+                if not client.lost_contact(principal):
+                    client.wait_for("attempt", attempt_id, "phase", ("ended",), principal, 120)
+        client.cleanup_call("deregister_reader", {"registration_id": registration}, principal)
         client.release_allocation(allocation)
 
 
 def relay_session(client: LauncherClient, principal: dict[str, Any], attempt_id: str, tty: bool) -> None:
-    """Relay the terminal to a session: input goes to the launcher, output comes back, Ctrl-C is a session message, never a raw signal."""
+    """Relay the terminal to a session: input goes to the launcher, output comes back, Ctrl-C is a session message, never a raw signal.
+
+    Input is read in chunks of ``INPUT_CHUNK`` bytes only while less than ``SESSION_BUFFER_LIMIT`` waits to be sent, and the socket is written
+    only when it accepts bytes, so output keeps draining while a large input is sent (failure modes SR1 to SR5). A standard input that cannot
+    be watched (``/dev/null`` on macOS, any regular file on Linux) is read in the same loop, one chunk per pass.
+    """
     import termios
 
     sock = client.connect()
-    request = {"v": PROTOCOL, "id": client.next_id(), "method": "session", "params": {"attempt_id": attempt_id}, "principal": principal}
-    sock.sendall(json.dumps(request).encode() + b"\n")
-    reply = json.loads(sock.makefile().readline())
-    if not reply.get("ok"):
-        raise ClientError(str(reply.get("error")), str(reply.get("code", "refused")))
     saved = termios.tcgetattr(sys.stdin.fileno()) if tty else None
     selector = selectors.DefaultSelector()
-    selector.register(sock, selectors.EVENT_READ, "launcher")
-    selector.register(sys.stdin, selectors.EVENT_READ, "stdin")
-    if tty:
-        import tty as tty_module
+    outgoing, buffer = bytearray(), b""
+    stdin_open, stdin_registered, launcher_events = True, False, selectors.EVENT_READ
 
-        tty_module.setraw(sys.stdin.fileno())
-    buffer = b""
+    def relay_lines() -> bool:
+        """Write the output of every complete line in ``buffer``; True once the launcher says the session is closed."""
+        nonlocal buffer
+        while b"\n" in buffer:
+            line, buffer = buffer.split(b"\n", 1)
+            message = json.loads(line)
+            if "out" in message:
+                sys.stdout.buffer.write(base64.b64decode(message["out"]))
+                sys.stdout.buffer.flush()
+            elif "closed" in message:
+                return True
+        return False
+
     try:
+        request = {"v": PROTOCOL, "id": client.next_id(), "method": "session", "params": {"attempt_id": attempt_id}, "principal": principal}
+        sock.sendall(json.dumps(request).encode() + b"\n")
+        while b"\n" not in buffer:
+            chunk = sock.recv(65536)
+            if not chunk:
+                raise ClientError("the launcher closed the connection before it answered", "unavailable")
+            buffer += chunk
+        first, _, buffer = buffer.partition(b"\n")
+        reply = json.loads(first)
+        if not reply.get("ok"):
+            raise ClientError(str(reply.get("error")), str(reply.get("code", "refused")))
+        sock.setblocking(False)
+        selector.register(sock, launcher_events, "launcher")
+        try:
+            selector.register(sys.stdin, selectors.EVENT_READ, "stdin")
+            watched = stdin_registered = True
+        except (OSError, ValueError):
+            watched = False
+        if tty:
+            import tty as tty_module
+
+            tty_module.setraw(sys.stdin.fileno())
+        if relay_lines():
+            return
         while True:
-            for key, _ in selector.select():
+            room = stdin_open and len(outgoing) < SESSION_BUFFER_LIMIT
+            if watched and room != stdin_registered:
+                if room:
+                    selector.register(sys.stdin, selectors.EVENT_READ, "stdin")
+                else:
+                    selector.unregister(sys.stdin)
+                stdin_registered = room
+            wanted = selectors.EVENT_READ | (selectors.EVENT_WRITE if outgoing else 0)
+            if wanted != launcher_events:
+                selector.modify(sock, wanted, "launcher")
+                launcher_events = wanted
+            for key, mask in selector.select(timeout=0 if room and not watched else None):
                 if key.data == "stdin":
-                    data = os.read(sys.stdin.fileno(), 4096)
-                    if not data:
-                        selector.unregister(sys.stdin)
-                        continue
-                    if tty:
-                        sock.sendall(json.dumps({"in": base64.b64encode(data).decode()}).encode() + b"\n")
+                    data = os.read(sys.stdin.fileno(), INPUT_CHUNK)
+                    if data:
+                        outgoing += session_input_line(data, tty)
                     else:
-                        message = {"signal": "INT"} if data == b"\x03" else {"in": base64.b64encode(data).decode()}
-                        sock.sendall(json.dumps(message).encode() + b"\n")
+                        stdin_open = False
                     continue
-                chunk = sock.recv(65536)
-                if not chunk:
-                    return
-                buffer += chunk
-                while b"\n" in buffer:
-                    line, buffer = buffer.split(b"\n", 1)
-                    message = json.loads(line)
-                    if "out" in message:
-                        sys.stdout.buffer.write(base64.b64decode(message["out"]))
-                        sys.stdout.buffer.flush()
-                    elif "closed" in message:
+                if mask & selectors.EVENT_WRITE:
+                    try:
+                        del outgoing[: sock.send(outgoing)]
+                    except BlockingIOError:
+                        pass
+                    except (BrokenPipeError, ConnectionResetError):
+                        outgoing.clear()
+                        stdin_open = False
+                if mask & selectors.EVENT_READ:
+                    try:
+                        chunk = sock.recv(65536)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
                         return
+                    buffer += chunk
+                    if relay_lines():
+                        return
+            if room and not watched:
+                data = os.read(sys.stdin.fileno(), INPUT_CHUNK)
+                if data:
+                    outgoing += session_input_line(data, tty)
+                else:
+                    stdin_open = False
     except KeyboardInterrupt:
+        sock.settimeout(5)
         sock.sendall(json.dumps({"signal": "INT"}).encode() + b"\n")
     finally:
         if saved is not None:
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, saved)
+        selector.close()
         sock.close()
+
+
+def session_input_line(data: bytes, tty: bool) -> bytes:
+    """One line of the session protocol for a chunk of input; outside a terminal a lone Ctrl-C is the interrupt signal."""
+    message = {"signal": "INT"} if data == b"\x03" and not tty else {"in": base64.b64encode(data).decode()}
+    return json.dumps(message).encode() + b"\n"
 
 
 def run_command_line(client: LauncherClient, args: argparse.Namespace) -> int:
@@ -6805,12 +7536,24 @@ def run_command_line(client: LauncherClient, args: argparse.Namespace) -> int:
     for item in args.param:
         name, _, value = item.partition("=")
         params[name] = json.loads(value)
+    template = TEMPLATES[args.template]
+    if template.needs_catalog:
+        client.call("catalog_up")
+        record = client.wait_for("catalog", "", "phase", ("up", "down"), {"kind": "any"}, 900)
+        if record.get("phase") != "up":
+            sys.stderr.write(f"launcher: the catalog did not start: {record.get('error')}\n")
+            return ERROR_EXIT
     alloc_id = client.allocate(args.workers)
+    principal = client.principal_alloc(alloc_id)
+    registration = ""
     try:
-        result = client.run_attempt(
-            client.principal_alloc(alloc_id), args.template, args.launch_id or f"cli-{uuid.uuid4().hex[:8]}", args.args, params, seconds=args.seconds
-        )
+        if template.reader:
+            registration = str(client.call("register_reader", {}, principal)["registration_id"])
+        result = client.run_attempt(principal, args.template, args.launch_id or f"cli-{uuid.uuid4().hex[:8]}", args.args, params, seconds=args.seconds)
     finally:
+        if registration:
+            client.settle(principal)
+            client.cleanup_call("deregister_reader", {"registration_id": registration}, principal)
         client.release_allocation(alloc_id)
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)

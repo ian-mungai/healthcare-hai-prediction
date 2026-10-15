@@ -12,26 +12,30 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import errno
 import fcntl
 import hashlib
 import importlib
 import io
 import json
+import logging
 import os
 import re
 import shlex
 import shutil
 import signal
 import socket
+import stat
 import sys
 import tarfile
 import tempfile
 import threading
 import time
 import traceback
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -41,7 +45,7 @@ from orchestration import launcher
 from scripts.lakehouse import pins as pins_module
 from scripts.lakehouse import run_lock
 from scripts.lakehouse.fake_docker import FakeDocker, Gate
-from scripts.process import run_command
+from scripts.process import TimeoutExpired, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "data" / "e2e" / "launcher"
@@ -1011,18 +1015,18 @@ def orphan_disposed_once(env: Env) -> dict[str, bool]:
 def orphan_late_inspect_once(env: Env) -> dict[str, bool]:
     """910 (main CI after PR #5): an inspect reply read before an orphan's removal and delivered after it settled does not dispose of it again."""
     env.start()
-    seen = 0
+    captured_after_stop = False
 
-    def second_inspect(ctx: dict[str, Any]) -> bool:
-        nonlocal seen
+    def after_stop(ctx: dict[str, Any]) -> bool:
+        nonlocal captured_after_stop
         if ctx["name"] != "hai-rogue-late":
             return False
-        seen += 1
-        return seen == 2
+        found = env.daemon.find(ctx["name"])
+        captured_after_stop = found is not None and not bool(found["State"]["Running"])
+        return captured_after_stop
 
-    # The removal waits until an inspect raised by the stop has read the container; that reply is then held until the removal settled.
     remove_gate = env.daemon.add_gate("remove", "before", match=lambda ctx: True)
-    late_gate = env.daemon.add_gate("inspect", "after", match=second_inspect)
+    late_gate = env.daemon.add_gate("inspect", "after", match=after_stop)
     container = env.daemon.create_rogue("hai-rogue-late", {launcher.LABEL_REGISTRY: env.registry_id(), "hai.owner": "run:ghost"}, running=True)
     if not (remove_gate.wait_reached() and late_gate.wait_reached()):
         raise CaseFailure("the removal or the late inspect was not reached")
@@ -1033,9 +1037,9 @@ def orphan_late_inspect_once(env: Env) -> dict[str, bool]:
 
     env.wait(lambda: env.labelled() == [] and [op["state"] for op in operations()] == ["settled"], 20, "the orphan is removed and its operation settled")
     late_gate.release()
-    # Give the launcher time to act on the late reply, as it would on any other inspect.
     time.sleep(1.5)
     return {
+        "the late inspect was captured after the container stopped": captured_after_stop,
         "the orphan is removed": env.labelled() == [],
         "one orphan record": [n for n in orphan_names(env) if n == "hai-rogue-late"] == ["hai-rogue-late"],
         "one orphan operation": len(operations()) == 1,
@@ -1199,6 +1203,1282 @@ time.sleep(600)
         "the attempt ended cancelled by holder policy": ended["reason"] == "cancelled" and ended["cancel_intent"]["reason"] == "holder_dead",
         "the registration ended with the container": info["registration"] not in env.state()["registrations"],
         "the allocation was released and the catalog stopped": env.state()["allocations"][info["alloc"]]["state"] == "released" and not env.labelled(),
+    }
+
+
+LONG_AGO = "2000-01-01T00:00:00+00:00"
+
+
+def age_records(env: Env, *, attempts: Iterable[str] = (), allocations: Iterable[str] = (), requests: Iterable[str] = (), at: str = LONG_AGO) -> None:
+    """Make the named records old enough to move: the case, not the clock, decides which record expires (failure mode HT1)."""
+    with run_lock.transaction(run_lock.Registry(env.registry, "test")) as state:
+        for attempt_id in attempts:
+            state["attempts"][attempt_id]["ended_at"] = at
+        for allocation_id in allocations:
+            state["allocations"][allocation_id]["created_at"] = at
+        for key in requests:
+            state["requests"][key]["at"] = at
+
+
+def seconds_ago(seconds: float) -> str:
+    return (datetime.now(UTC) - timedelta(seconds=seconds)).isoformat()
+
+
+def outcome_of(function: Callable[[], Any]) -> Any:
+    """The value a call returns, or the launcher or socket error it raises."""
+    try:
+        return function()
+    except (OSError, launcher.ClientError) as error:
+        return error
+
+
+class Hook:
+    """What the in-process launcher does to each request before it handles it: a delay, or a block until released."""
+
+    def __init__(self) -> None:
+        self.delay = 0.0
+        self.slow_first = 0.0
+        self.blocked: frozenset[str] = frozenset()
+        self.release = threading.Event()
+        self.seen: Counter[str] = Counter()
+        self.calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+
+
+@contextlib.contextmanager
+def served_here(env: Env) -> Iterator[Hook]:
+    """A launcher that runs in a thread of this process on the case's registry, so a case can slow or block its request handling."""
+    instance = launcher.Launcher(env.config)
+    hook = Hook()
+    original = instance.dispatch
+
+    def hooked(conn: launcher.Conn, request: dict[str, Any], request_id: str, method: str) -> Any:
+        hook.seen[method] += 1
+        hook.calls.append((method, dict(request.get("principal") or {}), dict(request.get("params") or {})))
+        if method in hook.blocked:
+            hook.release.wait(60)
+        elif hook.slow_first:
+            hook.slow_first, pause = 0.0, hook.slow_first
+            time.sleep(pause)
+        elif hook.delay:
+            time.sleep(hook.delay)
+        return original(conn, request, request_id, method)
+
+    thread = threading.Thread(target=instance.serve, name="in-process-launcher")
+    with mock.patch.object(instance, "dispatch", hooked):
+        thread.start()
+        try:
+            env.wait(lambda: env.ping().get("status") == "serving", 30, "the in-process launcher serves")
+            yield hook
+        finally:
+            hook.delay, hook.blocked = 0.0, frozenset()
+            hook.release.set()
+            with contextlib.suppress(launcher.ClientError, OSError):
+                env.client(start=False).call("shutdown", {"owner": True}, {"kind": "any", "owner": True})
+            thread.join(20)
+
+
+def archived_records(env: Env) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    for path in sorted((env.registry / "history").glob("*.jsonl")):
+        for row in path.read_bytes().split(b"\n"):
+            with contextlib.suppress(ValueError):
+                found.append(dict(json.loads(row)))
+    return found
+
+
+def compaction_barrier(env: Env, client: launcher.LauncherClient, principal: dict[str, Any], attempt_id: str) -> None:
+    """Wait for a compaction that ran after this call began: an aged marker request is archived only by a pass that starts after the marker exists."""
+    before = set(env.state()["requests"])
+    expect_error(lambda: client.call("cancel", {"attempt_id": attempt_id}, principal))
+    marker = sorted(set(env.state()["requests"]) - before)
+    age_records(env, requests=marker)
+    env.wait(lambda: not set(marker) & set(env.state()["requests"]), 30, "a compaction archives the marker request")
+
+
+@contextlib.contextmanager
+def compactor(env: Env) -> Iterator[launcher.Launcher]:
+    """A launcher object on the case's registry that does not serve: its compaction and selection run in this process."""
+    instance = launcher.Launcher(env.config)
+    instance.registry_id = env.registry_id()
+    try:
+        yield instance
+    finally:
+        instance.selector.close()
+        instance.pool.shutdown(wait=True)
+        os.close(instance.wake_read)
+        os.close(instance.wake_write)
+
+
+@case("registry_history_bounded", timings={"history_retain": 3600.0, "compact_every": 0.3, "poll_patience": 1.0})
+def registry_history_bounded(env: Env) -> dict[str, bool]:
+    """A116 item 2 (failure modes RH1 to RH10, RH20, HT1): terminal records older than the retention move out of the registry into an owner-only
+    append-only archive beside it, while running attempts, open operations, held allocations, recent requests and every allocation that a staying
+    attempt, registration, reader or reservation names stay; a retention not longer than the client's patience is refused. The case ages the
+    records it wants to expire by a registry write and observes the compaction by a marker record: no deadline of the clock decides a result."""
+    bad = {**env.settings, "timings": {**env.settings["timings"], "history_retain": 1.0}}
+    (env.registry / "launcher_test.json").write_text(json.dumps(bad, indent=2))
+    short_retention = expect_error_of(lambda: launcher.resolve_config(str(env.registry)))
+    env.write_settings()
+    env.start()
+    client = env.client()
+    released = env.allocate()
+    ended: list[str] = []
+    for index in range(3):
+        attempt_id = env.submit(env.alloc_principal(released), launch=f"old{index}", params=env.fixture_params(f"old{index}"))["attempt_id"]
+        env.wait_ended(attempt_id)
+        ended.append(attempt_id)
+    client.release_allocation(released)
+    run_principal = env.acquire_run("history_run")
+    run_attempt = env.submit(run_principal, launch="run1", params=env.fixture_params("run1"))["attempt_id"]
+    per_attempt = env.wait_ended(run_attempt)["attempt_alloc"]
+    alloc = env.allocate()
+    principal = env.alloc_principal(alloc)
+    kept = env.submit(principal, launch="kept", params=env.fixture_params("kept"))["attempt_id"]
+    env.wait_ended(kept)
+    before = env.state()
+    old_operations = {key for key, op in before["operations"].items() if op["attempt"] in ended}
+    old_containers = {key for key, record in before["containers"].items() if record.get("attempt") in ended}
+    old_requests = set(before["requests"])
+    env.daemon.script = lambda container: None
+    live = env.submit(principal, launch="live", params=env.fixture_params("live"))["attempt_id"]
+    env.wait_phase(live, ("started",))
+    age_records(env, attempts=[*ended, kept, run_attempt], allocations=[released, alloc, per_attempt], requests=old_requests)
+
+    def moved() -> dict[str, Any] | None:
+        current = env.state()
+        gone = all(a not in current["attempts"] for a in ended) and not old_requests & set(current["requests"])
+        return current if gone else None
+
+    state = env.wait(moved, 30, "the ended attempts and the old requests leave the registry")
+    before_fresh = set(env.state()["requests"])
+    expect_error(lambda: client.call("cancel", {"attempt_id": kept}, principal))
+    fresh = set(env.state()["requests"]) - before_fresh
+    compaction_barrier(env, client, principal, kept)
+    fresh_kept = bool(fresh) and fresh <= set(env.state()["requests"])
+    after_run = env.state()
+    run_attempt_stays = run_attempt in after_run["attempts"] and after_run["attempts"][run_attempt]["attempt_alloc"] == per_attempt
+    per_attempt_stays = per_attempt in after_run["allocations"]
+    archive_files = sorted((env.registry / "history").glob("*.jsonl"))
+    text = "".join(path.read_text() for path in archive_files)
+    archived = {(line["collection"], line["key"]) for line in archived_records(env)}
+    restored = {(line["collection"], line["key"]): line["record"] for line in archived_records(env)}
+    owned = [key for (collection, key) in restored if collection == "attempts" and restored[(collection, key)]["owner"] == f"alloc:{released}"]
+    references: dict[str, bool] = {}
+    with compactor(env) as instance:
+
+        def selected(change: Callable[[dict[str, Any]], None]) -> set[tuple[str, str]]:
+            copy = json.loads(json.dumps(after_run))
+            copy["allocations"][released] = restored[("allocations", released)]
+            for attempt_id in owned:
+                copy["attempts"][attempt_id] = restored[("attempts", attempt_id)]
+            change(copy)
+            return {(collection, key) for collection, key, _ in instance.history_to_move(copy)}
+
+        def staying_attempt(copy: dict[str, Any]) -> None:
+            copy["attempts"][run_attempt]["attempt_alloc"] = released
+
+        def registration(copy: dict[str, Any]) -> None:
+            copy["registrations"]["r1"] = {"id": "r1", "kind": "reader", "allocation": released, "at": LONG_AGO}
+
+        def reader(copy: dict[str, Any]) -> None:
+            copy["readers"]["reader_x"] = {"state": "registered", "allocation": released}
+
+        def reservation(copy: dict[str, Any]) -> None:
+            copy["reservations"]["reserve_x"] = {"allocation": released}
+
+        free = selected(lambda copy: None)
+        references["control: an allocation nothing names moves"] = ("allocations", released) in free and all(("attempts", a) in free for a in owned)
+        for label, change in (
+            ("a staying attempt (attempt_alloc)", staying_attempt),
+            ("a registration", registration),
+            ("a reader", reader),
+            ("a reservation", reservation),
+        ):
+            names = selected(change)
+            references[f"{label} keeps the allocation and the attempts it owns"] = ("allocations", released) not in names and not any(
+                ("attempts", a) in names for a in owned
+            )
+    client.call("mark", {"state": "failed_retained"}, run_principal)
+    client.call("release", {"owner": True}, client.principal_run("history_run", owner=True))
+    return {
+        "a run's per-attempt allocation stays while its attempt stays": run_attempt_stays and per_attempt_stays,
+        **{f"incoming reference: {label}": ok for label, ok in references.items()},
+        "a retention not longer than the client's patience is refused": isinstance(short_retention, launcher.LauncherError),
+        "every ended attempt moved to the archive": all(("attempts", a) in archived for a in ended),
+        "their operations moved to the archive": bool(old_operations)
+        and all(op not in state["operations"] and ("operations", op) in archived for op in old_operations),
+        "their container records moved to the archive": bool(old_containers)
+        and all(c not in state["containers"] and ("containers", c) in archived for c in old_containers),
+        "the old requests moved to the archive": bool(old_requests) and all(r not in state["requests"] and ("requests", r) in archived for r in old_requests),
+        "the released allocation moved with its attempts": released not in state["allocations"] and ("allocations", released) in archived,
+        "the running attempt stays": live in state["attempts"] and state["attempts"][live]["phase"] != "ended",
+        "an ended attempt of a held allocation stays (its owner may still reuse the attempt number)": kept in state["attempts"],
+        "the held allocation stays": state["allocations"][alloc]["state"] == "held",
+        "a request younger than the retention stays through later compactions": fresh_kept,
+        "the archive files are owner-only": bool(archive_files) and all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in archive_files),
+        "no compose secret value is in the archive": all(value not in text for value in env.secret_values.values() if len(value) > 8),
+        "the launcher still serves": client.call("ping")["status"] == "serving",
+    }
+
+
+@case("registry_archive_faults")
+def registry_archive_faults(env: Env) -> dict[str, bool]:
+    """RH11 to RH19: a compaction that archives records to disk loses none when a write is short, returns zero bytes, is interrupted, fails after a
+    partial append or reports bytes that are not on disk, when the launcher restarts after a crash that left an incomplete last line, when the
+    history folder is created for the first time or when the archive path is a link. Isolation is needed because the faults are in the write calls;
+    the records come from a real launcher run and the compaction runs in this process on a copy of that registry."""
+    env.start()
+    client = env.client()
+    allocation = env.allocate()
+    for index in range(3):
+        env.wait_ended(env.submit(env.alloc_principal(allocation), launch=f"f{index}", params=env.fixture_params(f"f{index}"))["attempt_id"])
+    client.release_allocation(allocation)
+    env.stop_launcher()
+    with run_lock.transaction(run_lock.Registry(env.registry, "test")) as state:
+        for attempt in state["attempts"].values():
+            attempt["ended_at"] = LONG_AGO
+        for record in state["allocations"].values():
+            record["created_at"] = LONG_AGO
+        for request in state["requests"].values():
+            request["at"] = LONG_AGO
+    baseline = (env.registry / "registry.json").read_bytes()
+    history = env.registry / "history"
+    real_write, real_fsync, real_replace = os.write, os.fsync, os.replace
+
+    def mine(data: Any) -> bool:
+        return bytes(data[:14]) == b'{"archived_at"'
+
+    def short(fd: int, data: Any) -> int:
+        return real_write(fd, data[: max(1, len(data) // 2)]) if mine(data) else real_write(fd, data)
+
+    def zero(fd: int, data: Any) -> int:
+        return 0 if mine(data) else real_write(fd, data)
+
+    interrupted_once = [False]
+
+    def interrupted(fd: int, data: Any) -> int:
+        if mine(data) and not interrupted_once[0]:
+            interrupted_once[0] = True
+            raise InterruptedError(errno.EINTR, "synthetic interrupted write")
+        return real_write(fd, data)
+
+    def partial_then_error(fd: int, data: Any) -> int:
+        if mine(data):
+            real_write(fd, data[:32])
+            raise OSError(errno.ENOSPC, "synthetic disk full after a partial append")
+        return real_write(fd, data)
+
+    def corrupted(fd: int, data: Any) -> int:
+        return real_write(fd, b"X" * len(data)) if mine(data) else real_write(fd, data)
+
+    def reset() -> None:
+        shutil.rmtree(history, ignore_errors=True)
+        history.unlink(missing_ok=True)
+        (env.registry / "registry.json").write_bytes(baseline)
+
+    def compact(*patches: Any) -> BaseException | None:
+        with compactor(env) as instance, contextlib.ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
+            try:
+                instance.compact_history()
+            except OSError as error:
+                return error
+        return None
+
+    with compactor(env) as instance:
+        eligible = [(collection, key) for collection, key, _ in instance.history_to_move(env.state()) if collection != "reservation_history"]
+
+    def tally() -> dict[str, Any]:
+        """What the archive and the registry hold for the eligible keys: archived counts, malformed lines, records still in the registry, records lost."""
+        lines = [chunk for path in sorted(history.glob("*.jsonl")) for chunk in path.read_bytes().split(b"\n") if chunk]
+        counts: Counter[tuple[str, str]] = Counter()
+        malformed = 0
+        for chunk in lines:
+            try:
+                row = json.loads(chunk)
+                counts[(row["collection"], row["key"])] += 1
+            except (ValueError, KeyError, TypeError):
+                malformed += 1
+        state = env.state()
+        kept = sum(key in state[collection] for collection, key in eligible)
+        lost = sum(key not in state[collection] and counts[(collection, key)] == 0 for collection, key in eligible)
+        return {"counts": counts, "malformed": malformed, "kept": kept, "lost": lost}
+
+    def complete(result: dict[str, Any]) -> bool:
+        return result["lost"] == 0 and result["kept"] == 0 and result["malformed"] == 0 and all(result["counts"][key] >= 1 for key in eligible)
+
+    checks: dict[str, bool] = {"the fixture holds records to archive": len(eligible) >= 6}
+    reset()
+    checks["control: a full write archives every record once"] = (
+        compact() is None and complete(tally()) and all(count == 1 for count in tally()["counts"].values())
+    )
+    checks["the archive is owner-only"] = stat.S_IMODE(next(history.glob("*.jsonl")).stat().st_mode) == 0o600
+    reset()
+    error = compact(mock.patch.object(launcher.os, "write", short))
+    checks["RH11: short writes are completed and every record is archived"] = error is None and complete(tally())
+    reset()
+    error = compact(mock.patch.object(launcher.os, "write", zero))
+    result = tally()
+    checks["RH12: a write that returns zero bytes fails, keeps every record and leaves no partial line"] = (
+        isinstance(error, OSError) and result["kept"] == len(eligible) and result["lost"] == 0 and result["malformed"] == 0
+    )
+    reset()
+    error = compact(mock.patch.object(launcher.os, "write", interrupted))
+    checks["RH13: an interrupted write is retried"] = error is None and complete(tally())
+    reset()
+    error = compact(mock.patch.object(launcher.os, "write", partial_then_error))
+    failed = tally()
+    checks["RH14: a failure after a partial append keeps every record and cuts the partial line back"] = (
+        isinstance(error, OSError) and failed["kept"] == len(eligible) and failed["lost"] == 0 and failed["malformed"] == 0
+    )
+    retry_error = compact()
+    retried = tally()
+    checks["RH14: the retry archives every record once, with no malformed line"] = (
+        retry_error is None and complete(retried) and all(count == 1 for count in retried["counts"].values())
+    )
+    before_restart = [path.read_bytes() for path in sorted(history.glob("*.jsonl"))]
+    restart_error = compact()
+    checks["RH19: a restart after the retry changes nothing"] = restart_error is None and before_restart == [
+        path.read_bytes() for path in sorted(history.glob("*.jsonl"))
+    ]
+    reset()
+    history.mkdir(mode=0o700)
+    day = history / f"{datetime.now(UTC):%Y%m%d}.jsonl"
+    previous = json.dumps({"archived_at": LONG_AGO, "collection": "attempts", "key": "previous", "record": {}}, sort_keys=True).encode() + b"\n"
+    day.write_bytes(previous + b'{"archived_at": "2000-01-01T00:00:00+00:00", "collection": "attempts", "key": "tor')
+    day.chmod(0o600)
+    error = compact()
+    after_crash = tally()
+    checks["RH15: an incomplete last line from a crash does not corrupt the next append"] = error is None and complete(after_crash)
+    checks["RH15: the complete lines before the incomplete one stay"] = after_crash["counts"][("attempts", "previous")] == 1
+    reset()
+    error = compact(mock.patch.object(launcher.os, "write", corrupted))
+    result = tally()
+    checks["RH16: bytes that differ on disk fail the verification and keep every record"] = isinstance(error, OSError) and result["kept"] == len(eligible)
+    reset()
+    registry_inode = env.registry.stat().st_ino
+    events: list[tuple[str, str]] = []
+
+    def kind_of(fd: int) -> str:
+        info = os.fstat(fd)
+        if stat.S_ISDIR(info.st_mode):
+            return "registry folder" if info.st_ino == registry_inode else "history folder"
+        return "file"
+
+    def logged_fsync(fd: int) -> None:
+        events.append(("fsync", kind_of(fd)))
+        real_fsync(fd)
+
+    def logged_replace(source: Any, destination: Any, *arguments: Any, **keywords: Any) -> None:
+        events.append(("replace", Path(destination).name))
+        real_replace(source, destination, *arguments, **keywords)
+
+    error = compact(mock.patch.object(launcher.os, "fsync", logged_fsync), mock.patch.object(launcher.os, "replace", logged_replace))
+    registry_replace = events.index(("replace", "registry.json")) if ("replace", "registry.json") in events else len(events)
+    checks["RH17: the registry folder is synced after the history folder is created and before the registry is replaced"] = (
+        error is None and ("fsync", "registry folder") in events[:registry_replace]
+    )
+    reset()
+
+    def registry_folder_fails(fd: int) -> None:
+        if kind_of(fd) == "registry folder" and ("replace", "registry.json") not in events:
+            raise OSError(errno.EIO, "synthetic failure to sync the registry folder")
+        real_fsync(fd)
+
+    events.clear()
+    error = compact(mock.patch.object(launcher.os, "fsync", registry_folder_fails), mock.patch.object(launcher.os, "replace", logged_replace))
+    result = tally()
+    checks["RH17: a failed sync of the registry folder keeps every record"] = isinstance(error, OSError) and result["kept"] == len(eligible)
+    reset()
+    victim = env.temp / "victim.jsonl"
+    victim.write_bytes(b"keep\n")
+    history.mkdir(mode=0o700)
+    (history / f"{datetime.now(UTC):%Y%m%d}.jsonl").symlink_to(victim)
+    error = compact()
+    checks["RH18: a link in place of the day file is refused and its target is untouched"] = (
+        isinstance(error, OSError) and victim.read_bytes() == b"keep\n" and tally()["kept"] == len(eligible)
+    )
+    reset()
+    elsewhere = env.temp / "elsewhere"
+    elsewhere.mkdir()
+    history.symlink_to(elsewhere)
+    error = compact()
+    checks["RH18: a link in place of the history folder is refused and its target stays empty"] = (
+        isinstance(error, OSError) and not any(elsewhere.iterdir()) and tally()["kept"] == len(eligible)
+    )
+    return checks
+
+
+THRESHOLD_TIMINGS = {"history_retain": 3600.0, "compact_every": 0.3, "poll_patience": 1.0, "compact_floor": 120.0}
+
+
+def archive_pairs(env: Env) -> set[tuple[str, str]]:
+    return {(line["collection"], line["key"]) for line in archived_records(env)}
+
+
+def registry_bytes(env: Env) -> int:
+    return (env.registry / "registry.json").stat().st_size
+
+
+@case("registry_threshold_compaction", timings={**THRESHOLD_TIMINGS, "compact_threshold": 32_000})
+def registry_threshold_compaction(env: Env) -> dict[str, bool]:
+    """A160 (failure modes TH1 to TH5, TH9 to TH11): a registry above the size threshold moves its finished records older than the age floor
+    (not the 24-hour retention) into the archive, and nothing younger than the floor; a floor not above the client's patience or a threshold
+    that is not positive is refused at start. The old records are made old by a registry write, so no clock decides a result."""
+    refusals: dict[str, BaseException | None] = {}
+    for label, change in (
+        ("a floor equal to the client's patience", {"compact_floor": 1.0}),
+        ("a floor below the client's patience", {"compact_floor": 0.5}),
+        ("a threshold of zero", {"compact_threshold": 0}),
+        ("a negative floor", {"compact_floor": -5.0}),
+    ):
+        (env.registry / "launcher_test.json").write_text(json.dumps({**env.settings, "timings": {**env.settings["timings"], **change}}))
+        refusals[label] = expect_error_of(lambda: launcher.resolve_config(str(env.registry)))
+    env.write_settings()
+    threshold = int(env.settings["timings"]["compact_threshold"])
+    env.start()
+    client = env.client()
+    released = env.allocate()
+    ended: list[str] = []
+    for index in range(3):
+        attempt_id = env.submit(env.alloc_principal(released), launch=f"old{index}", params=env.fixture_params(f"old{index}"))["attempt_id"]
+        env.wait_ended(attempt_id)
+        ended.append(attempt_id)
+    client.release_allocation(released)
+    alloc = env.allocate()
+    principal = env.alloc_principal(alloc)
+    kept = env.submit(principal, launch="kept", params=env.fixture_params("kept"))["attempt_id"]
+    env.wait_ended(kept)
+    before = env.state()
+    old_operations = {key for key, op in before["operations"].items() if op["attempt"] in ended}
+    old_containers = {key for key, record in before["containers"].items() if record.get("attempt") in ended}
+    old_requests = set(before["requests"])
+    env.daemon.script = lambda container: None
+    live = env.submit(principal, launch="live", params=env.fixture_params("live"))["attempt_id"]
+    env.wait_phase(live, ("started",))
+    size_before = registry_bytes(env)
+    time.sleep(2.0)
+    fresh_only = env.state()
+    nothing_moved_while_fresh = not archived_records(env) and set(ended) <= set(fresh_only["attempts"])
+    age_records(env, attempts=[*ended, kept], allocations=[released, alloc], requests=old_requests, at=seconds_ago(600))
+    aged_alloc = env.state()["allocations"][alloc]
+
+    def moved() -> dict[str, Any] | None:
+        current = env.state()
+        gone = all(a not in current["attempts"] for a in ended) and not old_requests & set(current["requests"])
+        return current if gone else None
+
+    try:
+        state = env.wait(moved, 20, "the records older than the floor leave the registry")
+    except CaseFailure:
+        state = env.state()
+    archived = archive_pairs(env)
+    before_fresh = set(env.state()["requests"])
+    expect_error(lambda: client.call("cancel", {"attempt_id": kept}, principal))
+    fresh = set(env.state()["requests"]) - before_fresh
+    compaction_barrier(env, client, principal, kept)
+    final = env.state()
+    return {
+        **{f"refused at start: {label}": isinstance(error, launcher.LauncherError) and error.code == "config" for label, error in refusals.items()},
+        "the registry is over the threshold before the records age": size_before > threshold,
+        "over the threshold with only fresh records, nothing moves": nothing_moved_while_fresh,
+        "every old attempt moved to the archive": all(("attempts", a) in archived for a in ended),
+        "their operations, containers and requests moved with them": bool(old_operations and old_containers and old_requests)
+        and all(("operations", key) in archived for key in old_operations)
+        and all(("containers", key) in archived for key in old_containers)
+        and all(("requests", key) in archived for key in old_requests),
+        "the released allocation moved with its attempts": released not in state["allocations"] and ("allocations", released) in archived,
+        "the file is under the threshold after the move": registry_bytes(env) < threshold,
+        "the held allocation stays": final["allocations"][alloc]["state"] == "held" and aged_alloc["state"] == "held",
+        "the ended attempt of the held allocation stays": kept in final["attempts"],
+        "the running attempt stays": live in final["attempts"] and final["attempts"][live]["phase"] != "ended",
+        "a request younger than the floor stays": bool(fresh) and fresh <= set(final["requests"]),
+        "the launcher still serves": client.call("ping")["status"] == "serving",
+    }
+
+
+@case("registry_threshold_control", timings=THRESHOLD_TIMINGS)
+def registry_threshold_control(env: Env) -> dict[str, bool]:
+    """A160 control (failure mode TH3): below the size threshold the periodic pass keeps the 24-hour behavior. A record older than the retention
+    moves; a record older than the age floor and younger than the retention stays."""
+    env.start()
+    client = env.client()
+    older = env.allocate()
+    old_attempt = env.submit(env.alloc_principal(older), launch="older", params=env.fixture_params("older"))["attempt_id"]
+    env.wait_ended(old_attempt)
+    client.release_allocation(older)
+    middle = env.allocate()
+    middle_attempt = env.submit(env.alloc_principal(middle), launch="middle", params=env.fixture_params("middle"))["attempt_id"]
+    env.wait_ended(middle_attempt)
+    client.release_allocation(middle)
+    marker_owner = env.allocate()
+    principal = env.alloc_principal(marker_owner)
+    age_records(env, attempts=[old_attempt], allocations=[older])
+    age_records(env, attempts=[middle_attempt], allocations=[middle], at=seconds_ago(600))
+    size = registry_bytes(env)
+
+    def older_moved() -> bool:
+        return old_attempt not in env.state()["attempts"]
+
+    with contextlib.suppress(CaseFailure):
+        env.wait(older_moved, 20, "the record older than the retention leaves the registry")
+    compaction_barrier(env, client, principal, middle_attempt)
+    state = env.state()
+    archived = archive_pairs(env)
+    return {
+        "the registry is under the default threshold": size < launcher.Timings().compact_threshold,
+        "a record older than the retention moved": ("attempts", old_attempt) in archived and old_attempt not in state["attempts"],
+        "a record older than the floor and younger than the retention stays": middle_attempt in state["attempts"]
+        and ("attempts", middle_attempt) not in archived,
+        "its allocation stays": middle in state["allocations"] and ("allocations", middle) not in archived,
+        "the launcher still serves": client.call("ping")["status"] == "serving",
+    }
+
+
+@case("registry_threshold_ages", timings={**THRESHOLD_TIMINGS, "compact_floor": 4.0, "compact_threshold": 10_000})
+def registry_threshold_ages(env: Env) -> dict[str, bool]:
+    """A160 (failure mode TH8): records that become old enough with no change to the file move on the next periodic pass, and not before the
+    age floor, while the registry is above the threshold."""
+    env.start()
+    client = env.client()
+    released = env.allocate()
+    ended: list[str] = []
+    for index in range(2):
+        attempt_id = env.submit(env.alloc_principal(released), launch=f"age{index}", params=env.fixture_params(f"age{index}"))["attempt_id"]
+        env.wait_ended(attempt_id)
+        ended.append(attempt_id)
+    client.release_allocation(released)
+    ended_at = datetime.fromisoformat(max(env.state()["attempts"][a]["ended_at"] for a in ended)).timestamp()
+    over = registry_bytes(env) > int(env.settings["timings"]["compact_threshold"])
+    seen: dict[str, float] = {}
+
+    def gone() -> bool:
+        if all(a not in env.state()["attempts"] for a in ended):
+            seen["at"] = time.time()
+            return True
+        return False
+
+    with contextlib.suppress(CaseFailure):
+        env.wait(gone, 25, "the attempts leave the registry once they are older than the floor")
+    archived = archive_pairs(env)
+    return {
+        "the registry is over the threshold": over,
+        "the attempts moved to the archive with no change to the file": all(("attempts", a) in archived for a in ended),
+        "they did not move before the age floor": "at" in seen and seen["at"] - ended_at >= 3.5,
+        "the launcher still serves": client.call("ping")["status"] == "serving",
+    }
+
+
+BULK_REQUESTS = 3000
+
+
+def bulk_registry(env: Env) -> int:
+    """Fill the registry with synthetic finished requests (fresh, so none is old enough to move) until it is over one million bytes."""
+    at = utc_stamp()
+    env.registry_id()
+    with run_lock.transaction(run_lock.Registry(env.registry, "test")) as state:
+        for index in range(BULK_REQUESTS):
+            state["requests"][f"any:0|status|synthetic-{index}"] = {
+                "payload_sha256": f"{index:064x}",
+                "state": "done",
+                "result": {"note": "synthetic record " + "x" * 200},
+                "method": "status",
+                "at": at,
+            }
+    return registry_bytes(env)
+
+
+def utc_stamp() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+@case("registry_reread_on_change", timings={"compact_every": 1_000_000_000.0, "history_retain": 3600.0, "poll_patience": 1.0, "create_timeout": 3.0})
+def registry_reread_on_change(env: Env) -> dict[str, bool]:
+    """A161 fix 3 (failure modes TO12a to TO12e, TH6 and TH7): the maintenance tick of an idle launcher with a large registry does not parse the
+    file; a change to the file is picked up on the next tick; a create operation that expires and an orphan operation that needs a retry are
+    still handled with no parse; a refused archive is tried once per change of the file. Parses are counted by wrapping ``Launcher.read_open_operations``."""
+    size = bulk_registry(env)
+    real = run_lock.transaction
+    reads: list[bool] = []
+    real_read = launcher.Launcher.read_open_operations
+
+    def counted(self: launcher.Launcher, *args: Any, **keywords: Any) -> None:
+        reads.append(True)
+        real_read(self, *args, **keywords)
+
+    def outside(change: Callable[[dict[str, Any]], None]) -> None:
+        with real(run_lock.Registry(env.registry, "test")) as state:
+            change(state)
+
+    scans, spawned, archive = mock.Mock(), mock.Mock(), mock.Mock(side_effect=OSError("synthetic archive fault"))
+    clock = iter(range(10_000))
+
+    def tick() -> None:
+        with contextlib.suppress(OSError):
+            instance.maintenance(1000.0 + 0.6 * next(clock))
+
+    with compactor(env) as instance, mock.patch.object(launcher.Launcher, "read_open_operations", counted):
+        instance.docker_ok, instance.status = True, "serving"
+        with (
+            mock.patch.object(instance, "start_scan", scans),
+            mock.patch.object(instance, "spawn", spawned),
+            mock.patch.object(instance, "archive_history", archive),
+        ):
+            tick()
+            first = len(reads)
+            for _ in range(19):
+                tick()
+            idle_reads = len(reads) - first
+            outside(
+                lambda state: state["requests"].update(
+                    {"outside": {"payload_sha256": "0" * 64, "state": "done", "result": {}, "method": "status", "at": utc_stamp()}}
+                )
+            )
+            before_change = len(reads)
+            tick()
+            change_reads = len(reads) - before_change
+            tick()
+            tick()
+            outside(
+                lambda state: state["operations"].update(
+                    {"orphan": {"op_id": "orphan", "state": "open", "kind": "orphan", "attempt": "none", "container_id": "c0", "dispatched_at": time.time()}}
+                )
+            )
+            tick()
+            after_orphan = len(reads)
+            spawned_before = spawned.call_count
+            for _ in range(3):
+                tick()
+            orphan_retries, orphan_reads = spawned.call_count - spawned_before, len(reads) - after_orphan
+            outside(lambda state: state["operations"]["orphan"].update({"state": "settled"}))
+            tick()
+            spawned_settled = spawned.call_count
+            tick()
+            tick()
+            stopped_retrying = spawned.call_count == spawned_settled
+            created = time.time()
+            outside(
+                lambda state: state["operations"].update(
+                    {"create": {"op_id": "create", "state": "open", "kind": "create", "attempt": "none", "dispatched_at": created}}
+                )
+            )
+            tick()
+            after_create = len(reads)
+            early_scans = scans.call_count
+            tick()
+            time.sleep(3.4)
+            tick()
+            tick()
+            scan_reads = len(reads) - after_create
+            outside(
+                lambda state: state["requests"].update(
+                    {"old": {"payload_sha256": "1" * 64, "state": "done", "result": {}, "method": "status", "at": LONG_AGO}},
+                )
+            )
+            tick()
+            attempts_after_change = archive.call_count
+            for _ in range(8):
+                tick()
+            archive_retries = archive.call_count - attempts_after_change
+    return {
+        "the registry is over one million bytes": size > 1_000_000,
+        "an idle launcher parses the file at most on its first tick": idle_reads == 0 and first <= 2,
+        "a change to the file is read on the next tick": change_reads >= 1,
+        "an open orphan operation is retried on every tick": orphan_retries == 3,
+        "the retry tick parses nothing": orphan_reads == 0,
+        "a settled orphan operation is no longer retried after the next read": stopped_retrying,
+        "no scan starts before the create operation expires": early_scans == 0,
+        "the scan starts once the operation expired": scans.call_count >= 1,
+        "the expiry needs no parse": scan_reads == 0,
+        "a refused archive is tried on the change that made the records old": attempts_after_change >= 1,
+        "and not again on later ticks while the file stays the same": archive_retries == 0,
+    }
+
+
+@case("registry_reread_inplace", timings={"compact_every": 1_000_000_000.0, "history_retain": 3600.0, "poll_patience": 1.0, "create_timeout": 3.0})
+def registry_reread_inplace(env: Env) -> dict[str, bool]:
+    """Round 4 finding 8 (failure modes RS1 to RS4): an outside write that keeps the file's inode, size and modification time (an in-place edit
+    of equal length, with the time restored) still changes what maintenance retries. Each edit is read once on the next tick; an idle registry
+    is not read; an atomic replacement is still read."""
+    env.registry_id()
+    path = env.registry / "registry.json"
+    real = run_lock.transaction
+    reads: list[bool] = []
+    real_read = launcher.Launcher.read_open_operations
+
+    def counted(self: launcher.Launcher, *args: Any, **keywords: Any) -> None:
+        reads.append(True)
+        real_read(self, *args, **keywords)
+
+    def outside(change: Callable[[dict[str, Any]], None]) -> None:
+        with real(run_lock.Registry(env.registry, "test")) as state:
+            change(state)
+
+    def edit_in_place(old: bytes, new: bytes) -> bool:
+        """Replace ``old`` by ``new`` (equal length) inside the file and restore its times; True when inode, size and mtime are unchanged."""
+        before = path.stat()
+        data = path.read_bytes()
+        if len(old) != len(new) or data.count(old) != 1:
+            raise CaseFailure("the in-place edit needs one occurrence and an equal length")
+        with path.open("r+b") as handle:
+            handle.seek(data.index(old))
+            handle.write(new)
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        after = path.stat()
+        return (after.st_ino, after.st_mtime_ns, after.st_size) == (before.st_ino, before.st_mtime_ns, before.st_size)
+
+    outside(
+        lambda state: state["operations"].update(
+            {
+                "orphan": {
+                    "op_id": "orphan",
+                    "state": "open",
+                    "kind": "orphan",
+                    "attempt": "none",
+                    "container_id": "container_aaaa",
+                    "dispatched_at": time.time(),
+                }
+            }
+        )
+    )
+    spawned = mock.Mock()
+    clock = iter(range(10_000))
+
+    def tick() -> None:
+        with contextlib.suppress(OSError):
+            instance.maintenance(1000.0 + 0.6 * next(clock))
+
+    def target() -> str:
+        return str(spawned.call_args.args[3]) if spawned.call_args else ""
+
+    with compactor(env) as instance, mock.patch.object(launcher.Launcher, "read_open_operations", counted):
+        instance.docker_ok, instance.status = True, "serving"
+        with mock.patch.object(instance, "start_scan", mock.Mock()), mock.patch.object(instance, "spawn", spawned):
+            tick()
+            tick()
+            first_target, first_reads = target(), len(reads)
+            for _ in range(5):
+                tick()
+            idle_reads = len(reads) - first_reads
+            kept_stat = edit_in_place(b"container_aaaa", b"container_bbaa")
+            before_edit = len(reads)
+            tick()
+            half_target, half_reads = target(), len(reads) - before_edit
+            kept_stat_again = edit_in_place(b"container_bbaa", b"container_bbbb")
+            before_edit = len(reads)
+            tick()
+            final_target, final_reads = target(), len(reads) - before_edit
+            tick()
+            tick()
+            idle_after = len(reads) - before_edit - final_reads
+            outside(lambda state: state["operations"]["orphan"].update({"state": "settled"}))
+            tick()
+            settled_calls = spawned.call_count
+            tick()
+            tick()
+    return {
+        "the first tick retries the orphan operation's container": first_target == "container_aaaa",
+        "an idle registry is not read": idle_reads == 0,
+        "the first edit kept the file's inode, size and modification time": kept_stat and kept_stat_again,
+        "the first edit is read once on the next tick": half_reads == 1,
+        "the retry then targets the edited container": half_target == "container_bbaa",
+        "a second edit of the same kind is read once and retried": final_reads == 1 and final_target == "container_bbbb",
+        "ticks after the edits read nothing": idle_after == 0,
+        "an atomic replacement is still read and stops the retry": spawned.call_count == settled_calls,
+    }
+
+
+@case(
+    "registry_snapshot_identity",
+    timings={"compact_every": 1_000_000_000.0, "compact_threshold": 1_000_000_000.0, "history_retain": 3600.0, "poll_patience": 1.0},
+)
+def registry_snapshot_identity(env: Env) -> dict[str, bool]:
+    """Round 5 finding 15 (failure modes SN1, SN2 and SN5): the change indicator and the cached open operations describe one snapshot of the
+    file. An outside atomic replacement (state B) lands right after the file was hashed; state A comes back before the next tick, so the
+    signature taken from A must not certify a cache that holds B. Without the restore the next tick reads B once. A half-written file is
+    refused without storing its signature."""
+    env.registry_id()
+    path = env.registry / "registry.json"
+    real = run_lock.transaction
+
+    def outside(change: Callable[[dict[str, Any]], None]) -> None:
+        with real(run_lock.Registry(env.registry, "test")) as state:
+            change(state)
+
+    outside(
+        lambda state: state["operations"].update(
+            {"orphan": {"op_id": "orphan", "state": "open", "kind": "orphan", "attempt": "none", "container_id": "synthetic_a", "dispatched_at": time.time()}}
+        )
+    )
+    original = path.read_bytes()
+    changed = original.replace(b"synthetic_a", b"synthetic_b")
+    if len(changed) != len(original) or changed == original:
+        raise CaseFailure("the two states need the same length and different content")
+
+    def replace_with(data: bytes) -> None:
+        replacement = path.with_name("outside-replacement")
+        replacement.write_bytes(data)
+        replacement.chmod(0o600)
+        replacement.replace(path)
+
+    armed: list[bytes] = []
+    real_file_digest, real_sha256 = hashlib.file_digest, hashlib.sha256
+
+    def fire() -> None:
+        if armed:
+            replace_with(armed.pop())
+
+    def file_digest_then_write(*args: Any, **keywords: Any) -> Any:
+        digest = real_file_digest(*args, **keywords)
+        fire()
+        return digest
+
+    def sha256_then_write(*args: Any, **keywords: Any) -> Any:
+        digest = real_sha256(*args, **keywords)
+        fire()
+        return digest
+
+    spawned = mock.Mock()
+    clock = iter(range(10_000))
+    reads: list[bool] = []
+    real_read = launcher.Launcher.read_open_operations
+
+    def counted_read(self: launcher.Launcher, *args: Any, **keywords: Any) -> None:
+        reads.append(True)
+        real_read(self, *args, **keywords)
+
+    def tick() -> None:
+        instance.maintenance(1000.0 + 0.6 * next(clock))
+
+    def raised(function: Callable[[], Any]) -> BaseException | None:
+        try:
+            function()
+        except run_lock.RegistryError as error:
+            return error
+        return None
+
+    def target() -> str:
+        return str(spawned.call_args.args[3]) if spawned.call_args else ""
+
+    with compactor(env) as instance, mock.patch.object(launcher.Launcher, "read_open_operations", counted_read):
+        instance.docker_ok, instance.status = True, "serving"
+        with (
+            mock.patch.object(instance, "start_scan", mock.Mock()),
+            mock.patch.object(instance, "spawn", spawned),
+            mock.patch.object(hashlib, "file_digest", file_digest_then_write),
+            mock.patch.object(hashlib, "sha256", sha256_then_write),
+        ):
+            armed.append(changed)
+            tick()
+            replaced_after_hash = not armed
+            first_reads = len(reads)
+            replace_with(original)
+            tick()
+            restored_target, restored_reads = target(), len(reads) - first_reads
+            tick()
+            idle_reads = len(reads) - first_reads - restored_reads
+            armed.append(changed)
+            tick()
+            tick()
+            changed_target = target()
+            replace_with(original)
+            tick()
+            back_target = target()
+            known = instance.maintained
+            replace_with(original[: len(original) // 2])
+            refused = raised(tick)
+            kept = instance.maintained == known
+            replace_with(changed)
+            tick()
+            after_refusal_target = target()
+    return {
+        "the replacement landed after the file was hashed": replaced_after_hash,
+        "after state A came back, the retry targets A and not the replaced state": restored_target == "synthetic_a",
+        "an idle registry is not read again": idle_reads == 0,
+        "a replacement that stays is read and its target is retried": changed_target == "synthetic_b",
+        "the restored state is read and retried again": back_target == "synthetic_a",
+        "a half-written file is refused as invalid": isinstance(refused, run_lock.RegistryError),
+        "its signature is not stored": kept,
+        "the next valid state is read and retried": after_refusal_target == "synthetic_b",
+    }
+
+
+def snapshot_validation_scenario(env: Env, name: str, mutate: Callable[[dict[str, Any]], Any], cause: str) -> dict[str, bool]:
+    path = env.registry / "registry.json"
+    registry_id = env.registry_id()
+    original = path.read_bytes()
+    container = env.daemon.create_rogue(f"synthetic-{name}", {launcher.LABEL_REGISTRY: registry_id}, True)
+    state = env.state()
+    state["operations"]["synthetic_orphan"] = {
+        "op_id": "synthetic_orphan",
+        "state": "open",
+        "kind": "orphan",
+        "attempt": None,
+        "container_id": container,
+        "dispatched_at": time.time(),
+    }
+    replacement_data = mutate(state)
+    seen: dict[str, bool] = {}
+    try:
+        with compactor(env) as instance:
+            instance.docker_ok, instance.status = True, "serving"
+            instance.maintenance(time.monotonic())
+            signature, retries = instance.maintained, list(instance.orphan_retries)
+            replacement = path.with_name("synthetic-replacement")
+            replacement.write_bytes(
+                replacement_data if isinstance(replacement_data, bytes) else json.dumps(state if replacement_data is None else replacement_data).encode()
+            )
+            replacement.chmod(0o600)
+            session_timers = instance.session_timers
+
+            def replace_after_transaction(now: float) -> None:
+                session_timers(now)
+                seen["preceding transaction succeeded"] = True
+                replacement.replace(path)
+                instance.last_maintenance = 0.0
+
+            mark = len(env.daemon.calls)
+            try:
+                with mock.patch.object(instance, "session_timers", replace_after_transaction):
+                    instance.timers()
+                seen["rejected"] = False
+                seen["cites its cause"] = False
+            except run_lock.RegistryError as error:
+                seen["rejected"] = True
+                seen["cites its cause"] = bool(cause) and cause in str(error)
+            instance.pool.shutdown(wait=True)
+            seen["container removed"] = container not in env.daemon.containers
+            calls = env.daemon.calls[mark:]
+            seen["no stop or remove"] = not any(c["path"].endswith("/stop") or c["method"] == "DELETE" for c in calls)
+            seen["cache preserved"] = instance.maintained == signature and instance.orphan_retries == retries
+            path.write_bytes(original)
+            instance.last_maintenance = 0.0
+            instance.maintenance(time.monotonic())
+            seen["valid snapshot recovers"] = instance.maintained == signature and instance.orphan_retries == retries
+            instance.docker.stop(container, 1)
+            instance.docker.remove(container)
+    finally:
+        path.write_bytes(original)
+    return seen
+
+
+def disposal_identity_checks(env: Env) -> dict[str, bool]:
+    registry_id = env.registry_id()
+    checks: dict[str, bool] = {}
+    with compactor(env) as instance:
+        for name, labels in (
+            ("matching", {launcher.LABEL_REGISTRY: registry_id}),
+            ("foreign", {launcher.LABEL_REGISTRY: "synthetic-foreign"}),
+            ("missing", {}),
+        ):
+            container = env.daemon.create_rogue(f"synthetic-dispose-{name}", labels, True)
+            mark = len(env.daemon.calls)
+            outcome: launcher.LauncherError | None = None
+            try:
+                instance.docker_dispose(container)
+            except launcher.LauncherError as error:
+                outcome = error
+            calls = env.daemon.calls[mark:]
+            if name == "matching":
+                checks["the disposal worker removes its matching container"] = outcome is None and container not in env.daemon.containers
+            else:
+                checks[f"the disposal worker rejects a {name} label before stop or remove"] = (
+                    isinstance(outcome, launcher.LauncherError)
+                    and outcome.code == "ownership"
+                    and container in env.daemon.containers
+                    and not any(c["path"].endswith("/stop") or c["method"] == "DELETE" for c in calls)
+                )
+            instance.docker.stop(container, 1)
+            instance.docker.remove(container)
+            checks[f"a vanished {name} container remains an idempotent disposal"] = outcome_of(partial(instance.docker_dispose, container)) is None
+    return checks
+
+
+@case("registry_snapshot_validation", timings={"compact_every": 1e12, "compact_threshold": 1e12})
+def registry_snapshot_validation(env: Env) -> dict[str, bool]:
+    checks: dict[str, bool] = {}
+    controls: dict[str, dict[str, bool]] = {}
+    mutations: dict[str, Callable[[dict[str, Any]], Any]] = {
+        "matching": lambda state: None,
+        "foreign": lambda state: state.update(registry_id="synthetic-foreign"),
+        "unknown_schema": lambda state: state.update(schema_version=99),
+        "legacy_schema": lambda state: state.update(schema_version=run_lock.LEGACY_SCHEMA),
+        "launcher": lambda state: state.update(launcher=[]),
+        "reservation_history": lambda state: state.update(reservation_history={}),
+        "invalid_json": lambda state: b"{",
+        "non_object": lambda state: [],
+        **{name: partial(dict.update, **{name: []}) for name in run_lock.SECTIONS + run_lock.LAUNCHER_SECTIONS},
+    }
+    causes = {
+        "foreign": "registry_id differs",
+        "unknown_schema": "unknown schema",
+        "legacy_schema": "launcher schema required",
+        "launcher": "missing launcher",
+        "reservation_history": "missing reservation_history",
+        "invalid_json": "is not valid",
+        "non_object": "unknown schema",
+        **{name: f"missing {name}" for name in run_lock.SECTIONS + run_lock.LAUNCHER_SECTIONS},
+    }
+    for name, mutate in mutations.items():
+        seen = snapshot_validation_scenario(env, name, mutate, causes.get(name, ""))
+        controls[name] = seen
+        if name == "matching":
+            checks["a matching snapshot removes its synthetic orphan"] = (
+                seen["preceding transaction succeeded"] and seen["container removed"] and not seen["rejected"]
+            )
+        else:
+            checks[f"{name}: invalid snapshot is rejected before stop or remove"] = (
+                seen["preceding transaction succeeded"]
+                and seen["rejected"]
+                and seen["cites its cause"]
+                and seen["no stop or remove"]
+                and not seen["container removed"]
+            )
+            checks[f"{name}: rejection preserves the cache and permits recovery"] = seen["cache preserved"] and seen["valid snapshot recovers"]
+    checks |= disposal_identity_checks(env)
+    path = env.registry / "registry.json"
+    original = path.read_bytes()
+    try:
+        for schema in (run_lock.LEGACY_SCHEMA, run_lock.LAUNCHER_SCHEMA):
+            state = run_lock.empty_state(env.registry_id(), schema)
+            path.write_text(json.dumps(state))
+            with run_lock.transaction(run_lock.Registry(env.registry, "test"), write=False) as parsed:
+                checks[f"transactions keep valid schema {schema} behavior"] = (
+                    parsed["schema_version"] == schema and parsed["registry_id"] == state["registry_id"]
+                )
+    finally:
+        path.write_bytes(original)
+    (env.report / "snapshot_validation.json").write_text(json.dumps(controls, indent=2) + "\n")
+    return checks
+
+
+@case("client_loss_wording")
+def client_loss_wording(env: Env) -> dict[str, bool]:
+    """Round 5 choice 8 (failure modes WD1 to WD3): the package fixture and the staging runner describe a lost connection to the launcher as
+    one the launcher did not answer, with its code, and keep the word refused for a refusal."""
+    from scripts.lakehouse import package_fixture
+    from scripts.lakehouse import run_staging_e2e as staging
+
+    lost = launcher.ClientError("nothing answers at the socket", "unavailable")
+    refusal = launcher.ClientError("no such template", "refused")
+
+    def kit_text(error: launcher.ClientError) -> str:
+        client = env.client(start=False)
+        with mock.patch.object(client, "run_attempt", side_effect=error):
+            try:
+                package_fixture.Session(client, "al-wording").run("fixture_dbt", "wording", [], {})
+            except package_fixture.FixtureError as raised:
+                return str(raised)
+        return ""
+
+    def staging_text(error: launcher.ClientError) -> str:
+        client = env.client(start=False)
+        with (
+            mock.patch.object(staging, "POOL", None),
+            mock.patch.object(staging, "launcher_client", return_value=client),
+            mock.patch.object(staging, "light_allocation", return_value="al-wording"),
+            mock.patch.object(staging, "record_budget"),
+            mock.patch.object(client, "run_attempt", side_effect=error),
+            mock.patch.object(client, "release_allocation"),
+        ):
+            try:
+                staging.launch("fixture_dbt", "wording", [], {})
+            except RuntimeError as raised:
+                return str(raised)
+        return ""
+
+    kit_lost, kit_refused, staging_lost, staging_refused = kit_text(lost), kit_text(refusal), staging_text(lost), staging_text(refusal)
+    return {
+        "package fixture: a lost connection is a launcher that did not answer, with its code": "did not answer" in kit_lost and "[unavailable]" in kit_lost,
+        "package fixture: a lost connection is not called a refusal": "refused" not in kit_lost,
+        "package fixture: a refusal is still called a refusal": "refused" in kit_refused and "no such template" in kit_refused,
+        "staging runner: a lost connection is a launcher that did not answer, with its code": "did not answer" in staging_lost
+        and "[unavailable]" in staging_lost,
+        "staging runner: a lost connection is not called a refusal": "refused" not in staging_lost,
+        "staging runner: a refusal is still called a refusal": "refused" in staging_refused and "no such template" in staging_refused,
+    }
+
+
+@case("query_cli")
+def query_cli(env: Env) -> dict[str, bool]:
+    """A115 item 8 and round 2 finding 5: the documented one-query form ``query -c "..." -csv`` passes its arguments to DuckDB, ``query`` runs with no
+    terminal (stdin closed), ``query --help`` prints the supported arguments and exits 0 before any catalog start or allocation, every supported flag
+    reaches the DuckDB command and an unsupported one is refused with nothing held; ``run --template query_reader`` takes the reader registration
+    its template needs and gives it back."""
+    catalog_script(env, others_run_forever=False)
+    env.start()
+    base = ["-m", "orchestration.launcher", "--test-registry", str(env.registry)]
+    before_help, containers_before = env.state(), set(env.daemon.create_bodies)
+    help_long = run_command(sys.executable, [*base, "query", "--help"], cwd=ROOT, timeout=60)
+    help_short = run_command(sys.executable, [*base, "query", "-h"], cwd=ROOT, timeout=60)
+    after_help = env.state()
+    help_started_nothing = (
+        catalog_phase(env) == "down"
+        and set(after_help["attempts"]) == set(before_help["attempts"])
+        and after_help["allocations"] == before_help["allocations"]
+        and after_help["registrations"] == before_help["registrations"]
+        and set(env.daemon.create_bodies) == containers_before
+    )
+    catalog_up(env)
+    query = run_command(sys.executable, [*base, "query", "-c", "select 1", "-csv"], cwd=ROOT, timeout=120)
+    flags = list(launcher.DUCKDB_QUERY_FLAGS)
+    every_flag = run_command(sys.executable, [*base, "query", "-c", "select 3", *flags], cwd=ROOT, timeout=120)
+    unsupported = run_command(sys.executable, [*base, "query", "-c", "select 4", "-unsupported"], cwd=ROOT, timeout=120)
+    run = run_command(
+        sys.executable, [*base, "run", "--template", "query_reader", "--param", "tty=false", "--", "-csv", "-c", "select 2"], cwd=ROOT, timeout=120
+    )
+    state = env.state()
+    arguments = [attempt["args"] for attempt in state["attempts"].values() if attempt["template"] == "query_reader"]
+    commands = [list(body["Cmd"]) for body in env.daemon.create_bodies.values() if body.get("Labels", {}).get("hai.template") == "query_reader"]
+    return {
+        "query --help exits 0 and prints the supported arguments": help_long.returncode == 0
+        and "-c" in help_long.stdout
+        and all(flag in help_long.stdout for flag in flags),
+        "query -h prints the same help": help_short.returncode == 0 and help_short.stdout == help_long.stdout,
+        "help starts no catalog and takes no allocation, registration or attempt": help_started_nothing,
+        "query -c ... -csv exits 0": query.returncode == 0,
+        "query passes -c, its SQL and -csv to the attempt unchanged": ["-c", "select 1", "-csv"] in arguments,
+        "query with stdin closed does not fail on reading stdin": "Invalid argument" not in query.stderr,
+        "every supported flag and the SQL reach the DuckDB command": every_flag.returncode == 0
+        and any(all(flag in command for flag in flags) and command[-2:] == ["-c", "select 3"] for command in commands),
+        "an unsupported flag is refused by the closed schema (exit 3)": unsupported.returncode == 3 and "not in the closed schema" in unsupported.stderr,
+        "run --template query_reader exits 0": run.returncode == 0,
+        "run passes its arguments to the attempt": ["-csv", "-c", "select 2"] in arguments,
+        "no reader registration is left": not state["registrations"],
+        "every allocation is released": all(allocation["state"] == "released" for allocation in state["allocations"].values()),
+    }
+
+
+STDIN_CLIENT = """\
+import errno, os, resource, selectors, sys, threading
+sys.path.insert(0, sys.argv[1])
+from orchestration import launcher
+mode, source = sys.argv[2], sys.argv[3]
+sys.argv = ["launcher", *sys.argv[4:]]
+if mode == "unwatched":
+    plain = selectors.DefaultSelector
+
+    class Refusing(plain):
+        def register(self, fileobj, events, data=None):
+            if data == "stdin":
+                raise OSError(errno.EPERM, "a standard input that the selector refuses, as a regular file is on Linux")
+            return super().register(fileobj, events, data)
+
+    selectors.DefaultSelector = Refusing
+if mode == "pipe":
+    reader, writer = os.pipe()
+
+    def feed():
+        with open(source, "rb") as stream:
+            while chunk := stream.read(65536):
+                view = memoryview(chunk)
+                while view:
+                    view = view[os.write(writer, view):]
+        os.close(writer)
+
+    threading.Thread(target=feed, daemon=True).start()
+    os.dup2(reader, 0)
+else:
+    os.dup2(os.open(source, os.O_RDONLY), 0)
+code = launcher.main()
+sys.stdout.flush()
+peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+sys.stderr.write("peak_rss_bytes=%d\\n" % (peak if sys.platform == "darwin" else peak * 1024))
+raise SystemExit(code)
+"""
+
+
+@case("query_stdin_large")
+def query_stdin_large(env: Env) -> dict[str, bool]:
+    """Round 2 finding 2 (failure modes SR1 to SR7): ``query`` with a standard input that cannot be watched (a regular file) sends it in bounded
+    chunks and drains the output in the same loop. A multi-megabyte file reaches the container byte for byte and every echoed byte comes back,
+    the client's peak memory stays near that of a small file, the launcher answers pings meanwhile and the same file through a pipe (the duplex
+    control) and through the platform's own selector behaves the same. The unwatched mode refuses the standard input in the selector, as Linux does
+    for a regular file, because macOS watches regular files and refuses only ``/dev/null``."""
+    catalog_script(env, others_run_forever=False)
+    queries: list[dict[str, Any]] = []
+    previous = env.daemon.script
+
+    def script(container: dict[str, Any]) -> tuple[float, int] | None:
+        if container["Config"]["Labels"].get("hai.template") == "query_reader":
+            queries.append(container)
+            return None
+        return previous(container)
+
+    env.daemon.script = script
+    env.start()
+    catalog_up(env)
+    client_script = env.work / "stdin_client.py"
+    client_script.write_text(STDIN_CLIENT)
+    base = [str(client_script), str(ROOT)]
+    registry = ["--test-registry", str(env.registry), "query"]
+    pings: list[bool] = []
+
+    def one(label: str, size: int, mode: str) -> dict[str, Any]:
+        payload = (b"select 1;\n" * (size // 10 + 1))[:size]
+        source = env.work / f"{label}.sql"
+        source.write_bytes(payload)
+        index = len(queries)
+        stop = threading.Event()
+
+        def watch() -> None:
+            """End the container once all input has arrived, and ping the launcher while the client sends."""
+            while not stop.is_set():
+                if len(queries) > index and len(queries[index]["_stdin"]) >= size:
+                    env.daemon.finish(queries[index], 0)
+                    return
+                try:
+                    pings.append(env.client(start=False).call("ping", timeout=10)["status"] == "serving")
+                except (launcher.ClientError, OSError, ValueError):
+                    pings.append(False)
+                time.sleep(0.25)
+
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
+        timed_out = False
+        try:
+            child = run_command(sys.executable, [*base, mode, str(source), *registry], cwd=ROOT, timeout=60)
+        except TimeoutExpired:
+            timed_out = True
+            child = None
+        finally:
+            stop.set()
+            watcher.join(timeout=10)
+        received = bytes(queries[index]["_stdin"]) if len(queries) > index else b""
+        peak = re.search(r"peak_rss_bytes=(\d+)", child.stderr) if child is not None else None
+        result = {
+            "label": label,
+            "bytes": size,
+            "timed_out": timed_out,
+            "exit": None if child is None else child.returncode,
+            "received": received == payload,
+            "echoed": child is not None and child.stdout.replace("echo:", "") == payload.decode(),
+            "peak": int(peak[1]) if peak else 0,
+        }
+        (env.work / f"{label}.json").write_text(json.dumps(result, indent=1))
+        return result
+
+    size = 4 * 1024 * 1024
+    small = one("small", 100, "file")
+    unwatched = one("large_unwatched", size, "unwatched")
+    native = one("large_file", size, "file")
+    piped = one("large_pipe", size, "pipe")
+    margin = 8 * 1024 * 1024
+    return {
+        "a small file reaches the container and its echo returns": small["exit"] == 0 and small["received"] and small["echoed"],
+        "a multi-megabyte file on a standard input that cannot be watched reaches the container byte for byte": unwatched["exit"] == 0
+        and unwatched["received"],
+        "every echoed byte of that file comes back (output drained while input is sent)": unwatched["echoed"],
+        "the client's peak memory for that file stays within a fixed margin of the small file's": small["peak"] > 0
+        and unwatched["peak"] > 0
+        and unwatched["peak"] <= small["peak"] + margin,
+        "a multi-megabyte regular file on the platform's own selector arrives and returns whole": native["exit"] == 0
+        and native["received"]
+        and native["echoed"],
+        "duplex control: the same file through a watchable pipe arrives and returns whole": piped["exit"] == 0 and piped["received"] and piped["echoed"],
+        "the launcher answered every ping during the transfers": bool(pings) and all(pings),
+        "no client timed out": not any(run["timed_out"] for run in (small, unwatched, native, piped)),
     }
 
 
@@ -2707,7 +3987,8 @@ def kit_launcher_ownership(env: Env) -> dict[str, bool]:
 @case("mount_containment_depth_and_case")
 def mount_containment_depth_and_case(env: Env) -> dict[str, bool]:
     """913 (F23, deltas 3 to 5): a named root that holds an unlisted checkout's secrets folder at any depth, in another letter case, behind a link
-    named secrets or below an alias of its lakehouse folder is refused; a clean named root is still admitted."""
+    named secrets or below an alias of its lakehouse folder is refused; a clean named root is still admitted. A link loop under a named root cannot be
+    checked, so the mount is refused as a mount, not ended by an error of the check."""
     outside = Path(tempfile.mkdtemp(prefix="hai-depth-", dir="/tmp")).resolve()
     clean, deep, cased = outside / "clean", outside / "deep", outside / "cased"
     clean.mkdir()
@@ -2720,6 +4001,28 @@ def mount_containment_depth_and_case(env: Env) -> dict[str, bool]:
     aliased = outside / "aliased"
     (aliased / "unlisted" / "data" / "lakehouse" / "secrets").mkdir(parents=True)
     (aliased / "unlisted" / "data" / "a").symlink_to("lakehouse")  # sorts before the real folder, so the scan reaches the lakehouse inode through it first
+    looped = outside / "looped"
+    (looped / "data").mkdir(parents=True)
+    (looped / "data" / "a").symlink_to("b")
+    (looped / "data" / "b").symlink_to("a")
+    source_loop = outside / "source_loop"
+    source_loop.symlink_to("source_loop")
+    below_alias = outside / "below_alias"
+    (below_alias / "target").mkdir(parents=True)
+    (below_alias / "a").symlink_to("target")
+    (below_alias / "target" / "cycle").symlink_to("cycle")
+    token_loop = outside / "token_loop"
+    token_loop.symlink_to("token_loop")
+
+    def mount_refusal(call: Callable[[], Any]) -> bool:
+        """True only for the mount refusal: a loop that escapes as RuntimeError, or no refusal at all, is not it."""
+        try:
+            call()
+        except launcher.LauncherError as error:
+            return error.code == "mount"
+        except RuntimeError:
+            return False
+        return False
 
     def helper(principal: dict[str, Any], launch: str, host: Path) -> BaseException | None:
         return expect_error(
@@ -2727,7 +4030,7 @@ def mount_containment_depth_and_case(env: Env) -> dict[str, bool]:
         )
 
     try:
-        env.settings["allowed_roots"] = [str(clean), str(deep), str(cased), str(linked), str(aliased)]
+        env.settings["allowed_roots"] = [str(clean), str(deep), str(cased), str(linked), str(aliased), str(looped)]
         env.write_settings()
         env.start()
         principal = env.alloc_principal(env.allocate())
@@ -2744,6 +4047,34 @@ def mount_containment_depth_and_case(env: Env) -> dict[str, bool]:
             ),
             # Delta recheck 5 (F23): a directory alias of lakehouse that sorts before the real folder must not hide its secrets child.
             "a named root whose lakehouse alias sorts before the real folder is refused": refused(helper(principal, "d8", aliased), "mount"),
+            "a named root holding a symlink loop is refused as a mount": refused(helper(principal, "d9", looped), "mount"),
+            "the launcher still admits a clean named root after the loop": helper(principal, "d10", clean) is None,
+            "a host path that is itself a symlink loop is refused as a mount": refused(helper(principal, "d11", source_loop), "mount"),
+        }
+        renderer = launcher.Renderer(env.config, launcher.ComposeModel(ROOT / "docker-compose.yaml"), ROOT, ROOT, b"k" * 32)
+
+        def check(source: Path, renderer: launcher.Renderer = renderer) -> bool:
+            return mount_refusal(lambda: renderer.check_mounts([launcher.Mount(str(source), "/workspace/in", True)]))
+
+        def admitted(source: Path) -> bool:
+            try:
+                renderer.check_mounts([launcher.Mount(str(source), "/workspace/in", True)])
+            except (launcher.LauncherError, RuntimeError):
+                return False
+            return True
+
+        loop_root = launcher.Renderer(replace(env.config, allowed_roots=(source_loop,)), renderer.compose, ROOT, ROOT, b"k" * 32)
+        loop_token = launcher.Renderer(replace(env.config, token_root=token_loop), renderer.compose, ROOT, ROOT, b"k" * 32)
+        results |= {
+            "check_mounts control: a clean source is admitted": admitted(clean),
+            "check_mounts: a source that is itself a loop is refused as a mount": check(source_loop),
+            "check_mounts: a loop below the source is refused as a mount": check(looped),
+            "check_mounts: a loop below an alias inside the source is refused as a mount": check(below_alias),
+            "check_mounts: a loop at the token root is refused as a mount": mount_refusal(
+                lambda: loop_token.check_mounts([launcher.Mount(str(clean), "/workspace/in", True)])
+            ),
+            "allowed: a requested path that is a loop is refused as a mount": mount_refusal(lambda: renderer.allowed(str(source_loop), "case_host")),
+            "allowed: an allowed root that is a loop is refused as a mount": mount_refusal(lambda: loop_root.allowed(str(clean), "case_host")),
         }
     finally:
         shutil.rmtree(outside, ignore_errors=True)
@@ -4803,6 +6134,934 @@ def client_exchange_total_budget(env: Env) -> dict[str, bool]:
     }
 
 
+@case("client_fail_fast_gone", timings={"poll_patience": 12.0, "history_retain": 3600.0})
+def client_fail_fast_gone(env: Env) -> dict[str, bool]:
+    """A161 fix 2 (failure modes TO1 and TO2): a client whose launcher is gone fails in about a second, not after its patience: with no socket
+    at the first submit, and with the launcher killed (socket file left, connection refused) while the client waits for its attempt."""
+    client = env.client(start=False)
+    begun = time.monotonic()
+    missing = outcome_of(
+        lambda: client.run_attempt(client.principal_alloc("a_missing"), "fixture_dbt", "gone1", ["build"], env.fixture_params("gone1"), checkout=ROOT)
+    )
+    took_missing = time.monotonic() - begun
+    hold_forever(env)
+    env.start()
+    allocation = env.allocate()
+    observed: dict[str, float] = {}
+
+    def kill_when_started() -> None:
+        env.wait(lambda: any(a["phase"] == "started" for a in env.state()["attempts"].values()), 20, "the attempt starts")
+        pid = int(env.ping()["pid"])
+        observed["killed"] = time.monotonic()
+        os.kill(pid, signal.SIGKILL)
+
+    thread = threading.Thread(target=kill_when_started)
+    thread.start()
+    killed = outcome_of(
+        lambda: client.run_attempt(env.alloc_principal(allocation), "fixture_dbt", "gone2", ["build"], env.fixture_params("gone2"), checkout=ROOT)
+    )
+    took_killed = time.monotonic() - observed.get("killed", time.monotonic())
+    thread.join(20)
+    env.wait(lambda: not env.alive_launcher(), 15, "the killed launcher is gone")
+    env.start()
+    (env.report / "timings.json").write_text(
+        json.dumps({"no_socket_seconds": round(took_missing, 2), "killed_launcher_seconds": round(took_killed, 2)}, indent=2)
+    )
+    return {
+        "no socket: the client fails in about a second": 0.8 <= took_missing < 4.0,
+        "no socket: the failure is a launcher error that says the launcher is not running": isinstance(missing, launcher.ClientError)
+        and missing.code == "unavailable"
+        and "not running" in str(missing),
+        "killed launcher: the client fails in about a second": 0.8 <= took_killed < 4.0,
+        "killed launcher: the failure says the launcher is not running": isinstance(killed, launcher.ClientError)
+        and killed.code == "unavailable"
+        and "not running" in str(killed),
+    }
+
+
+@case("client_fail_fast_alive", timings={"poll_patience": 12.0, "history_retain": 3600.0, "stuck_after": 3.0})
+def client_fail_fast_alive(env: Env) -> dict[str, bool]:
+    """A161 fix 2 (failure modes TO3 to TO5 and TO7): a launcher that is alive but slow on every request (longer than the old one-second
+    exchange budget) keeps the client waiting until the attempt result arrives; a launcher that is alive but blocked fails the client after
+    the progress limit, at the first submit and later while it waits; the liveness request reads no registry."""
+    with served_here(env) as hook:
+        client = env.client(start=False)
+        allocation = client.allocate()
+        principal = client.principal_alloc(allocation)
+        hook.delay = 1.5
+        begun = time.monotonic()
+        slow = outcome_of(lambda: client.run_attempt(principal, "fixture_dbt", "slow", ["build"], env.fixture_params("slow"), checkout=ROOT))
+        took_slow = time.monotonic() - begun
+        slow_attempts = [a for a in env.state()["attempts"].values() if a["launch_id"].startswith("slow")]
+        hook.delay = 0.0
+        hook.blocked = frozenset({"submit"})
+        begun = time.monotonic()
+        stuck_submit = outcome_of(lambda: client.run_attempt(principal, "fixture_dbt", "stuck1", ["build"], env.fixture_params("stuck1"), checkout=ROOT))
+        took_submit = time.monotonic() - begun
+        hook.release.set()
+        hook.blocked = frozenset()
+        for attempt in env.state()["attempts"].values():
+            if attempt["launch_id"].startswith("stuck1"):
+                env.wait_ended(attempt["id"])
+        hook.release.clear()
+        hook.blocked = frozenset({"status"})
+        begun = time.monotonic()
+        stuck_status = outcome_of(lambda: client.run_attempt(principal, "fixture_dbt", "stuck2", ["build"], env.fixture_params("stuck2"), checkout=ROOT))
+        took_status = time.monotonic() - begun
+        hook.release.set()
+        hook.blocked = frozenset()
+        for attempt in env.state()["attempts"].values():
+            if attempt["launch_id"].startswith("stuck2"):
+                env.wait_ended(attempt["id"])
+        with compactor(env) as instance:
+            left, right = socket.socketpair()
+            conn = launcher.Conn(left, launcher.Peer(os.getuid(), os.getpid(), None))
+            real = run_lock.transaction
+            opened: list[str] = []
+
+            @contextlib.contextmanager
+            def counted(*args: Any, **keywords: Any) -> Iterator[dict[str, Any]]:
+                opened.append("transaction")
+                with real(*args, **keywords) as state:
+                    yield state
+
+            replies: dict[str, dict[str, Any]] = {}
+            transactions: dict[str, int] = {}
+            with mock.patch.object(launcher.run_lock, "transaction", counted):
+                for method in ("live", "ping"):
+                    opened.clear()
+                    instance.handle_line(
+                        conn, json.dumps({"v": launcher.PROTOCOL, "id": f"r-{method}", "method": method, "params": {}, "principal": {"kind": "any"}}).encode()
+                    )
+                    transactions[method] = len(opened)
+                    right.settimeout(5)
+                    replies[method] = json.loads(right.recv(65536).split(b"\n", 1)[0])
+            left.close()
+            right.close()
+    seconds = {"slow_progressing": took_slow, "blocked_at_submit": took_submit, "blocked_while_waiting": took_status}
+    (env.report / "timings.json").write_text(json.dumps({name: round(value, 2) for name, value in seconds.items()}, indent=2))
+    return {
+        "slow but progressing: the client gets the attempt result": isinstance(slow, launcher.AttemptResult) and slow.ok,
+        "slow but progressing: one attempt only (the retried request is the same request)": len(slow_attempts) == 1,
+        "slow but progressing: the wait ended well before the patience": took_slow < 12.0,
+        "blocked at the submit: the client fails after the progress limit, not the patience": isinstance(stuck_submit, launcher.ClientError)
+        and stuck_submit.code == "unresponsive"
+        and 2.5 <= took_submit < 8.0,
+        "blocked while waiting: the client fails after the progress limit, not the patience": isinstance(stuck_status, launcher.ClientError)
+        and stuck_status.code == "unresponsive"
+        and 2.5 <= took_status < 8.0,
+        "the blocked-launcher failure says the launcher is alive and made no progress": isinstance(stuck_submit, launcher.ClientError)
+        and "no progress" in str(stuck_submit),
+        "the blocked requests reached the launcher": hook.seen["submit"] >= 1 and hook.seen["status"] >= 1,
+        "the liveness request is answered": bool(replies.get("live", {}).get("ok")),
+        "the liveness request opens no registry transaction": bool(replies.get("live", {}).get("ok")) and transactions.get("live") == 0,
+        "control: a ping opens registry transactions": transactions.get("ping", 0) >= 1,
+    }
+
+
+@case("client_slow_exchange_log", timings={"poll_patience": 12.0, "history_retain": 3600.0})
+def client_slow_exchange_log(env: Env) -> dict[str, bool]:
+    """A161 fix 3 (failure modes TO10a to TO10d): a client exchange that takes more than half a second writes one log line with the method and
+    the seconds; a fast exchange and the wait a status was asked for write none; an exchange that times out writes one line that says so."""
+    seen: list[str] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append(record.getMessage())
+
+    log = logging.getLogger("launcher.client")
+    handler = Capture(logging.WARNING)
+    log.addHandler(handler)
+    previous = log.level
+    log.setLevel(logging.WARNING)
+    try:
+        with served_here(env) as hook:
+            client = env.client(start=False)
+            allocation = client.allocate()
+            principal = client.principal_alloc(allocation)
+            seen.clear()
+            client.call("ping")
+            fast = list(seen)
+            seen.clear()
+            client.call("status", {"what": "allocation", "id": allocation, "wait": 1.0, "until": {"field": "state", "values": ["never"]}}, principal)
+            waited = list(seen)
+            seen.clear()
+            hook.delay = 0.8
+            client.call("ping")
+            slow = list(seen)
+            seen.clear()
+            hook.delay = 1.6
+            timed_out = outcome_of(lambda: client.bounded_call("ping", {}, {"kind": "any"}, "log-timeout", 0.6))
+            late = list(seen)
+            hook.delay = 0.0
+            client.call("ping")
+            seen.clear()
+            fast_probe = client.probe(1.0)
+            fast_probe_lines = list(seen)
+
+            def hold_loop(delay: float, blocked: bool) -> tuple[threading.Thread, int]:
+                """Send a status request that keeps the launcher's loop busy (for ``delay`` seconds, or until released) and wait until it is inside."""
+                before = hook.seen["status"]
+                if blocked:
+                    hook.blocked = frozenset({"status"})
+                else:
+                    hook.delay = delay
+                holder = threading.Thread(target=lambda: outcome_of(lambda: env.client(start=False).call("status", {"what": "launcher"}, timeout=30)))
+                holder.start()
+                env.wait(lambda: hook.seen["status"] > before, 10, "a status request is inside the launcher's handler")
+                return holder, before
+
+            seen.clear()
+            holder, _ = hold_loop(0.0, blocked=True)
+            begun = time.monotonic()
+            silent_probe = client.probe(0.7)
+            silent_took = time.monotonic() - begun
+            silent_lines = list(seen)
+            hook.release.set()
+            hook.blocked = frozenset()
+            holder.join(20)
+            hook.release.clear()
+            seen.clear()
+            holder, _ = hold_loop(0.8, blocked=False)
+            slow_probe = client.probe(2.0)
+            slow_probe_lines = [line for line in seen if "exchange live" in line]
+            hook.delay = 0.0
+            holder.join(20)
+            seen.clear()
+            nowhere = launcher.LauncherClient(replace(client.config, registry=run_lock.Registry(env.temp / "no_such_registry", "test")), start=False)
+            gone_probe = nowhere.probe(1.0)
+            gone_lines = list(seen)
+    finally:
+        log.removeHandler(handler)
+        log.setLevel(previous)
+    (env.report / "log_lines.json").write_text(
+        json.dumps({"slow": slow, "timed_out": late, "silent_probe": silent_lines, "slow_probe": slow_probe_lines, "gone_probe": gone_lines}, indent=2)
+    )
+    return {
+        "a fast exchange writes no line": fast == [],
+        "a status that waited on purpose writes no line": waited == [],
+        "a slow exchange writes one line": len(slow) == 1,
+        "the line names the method and the seconds": len(slow) == 1 and "ping" in slow[0] and re.search(r"0\.[89]\d* s|1\.\d+ s", slow[0]) is not None,
+        "an exchange that times out is a timeout": isinstance(timed_out, (TimeoutError, OSError)),
+        "it writes one line that says it timed out": len(late) == 1 and "timed out" in late[0] and "ping" in late[0],
+        "a fast probe is answered and writes no line": fast_probe == "alive" and fast_probe_lines == [],
+        "a probe against a blocked loop is silent for its whole budget": silent_probe == "silent" and 0.6 <= silent_took < 1.5,
+        "it writes one line with the method, the outcome and the actual duration": len(silent_lines) == 1
+        and re.fullmatch(r"launcher exchange live got no reply after 0\.[6-9]\d* s|launcher exchange live got no reply after 1\.[0-4]\d* s", silent_lines[0])
+        is not None,
+        "a probe the loop answers late writes one line with its duration": slow_probe == "alive"
+        and len(slow_probe_lines) == 1
+        and re.fullmatch(r"launcher exchange live took 0\.[5-9]\d* s|launcher exchange live took 1\.[0-4]\d* s", slow_probe_lines[0]) is not None,
+        "a probe that finds no listener is instant and writes no line": gone_probe == "gone" and gone_lines == [],
+        "no line holds a request ID, a principal or a payload": all(
+            re.fullmatch(r"launcher exchange [a-z_]+ [a-z ]+ \d+\.\d+ s( \(asked to wait \d+\.\d+ s\))?", line)
+            for line in [*slow, *late, *silent_lines, *slow_probe_lines]
+        ),
+    }
+
+
+@case("staging_preflight", timings={"poll_patience": 12.0, "history_retain": 3600.0})
+def staging_preflight(env: Env) -> dict[str, bool]:
+    """A161 fix 3 and round 4 finding 10 (failure modes PF1 to PF6): the staging runner decides on one ping before it starts anything. A slow
+    first exchange is refused even when a second one would be fast; a launcher that does not answer within the limit is refused; a fast launcher
+    passes; a launcher that is not running is refused with its own message and is not started, so no attempt is created; the check changes no
+    state; the runner exits 2 on a refusal."""
+    from scripts.lakehouse import run_staging_e2e as staging
+
+    preflight = getattr(staging, "preflight_launcher", None)
+    staging.TEST_REGISTRY = str(env.registry)
+    results: dict[str, Any] = {}
+    exit_code: int | None = None
+    spoken = io.StringIO()
+    try:
+        with served_here(env) as hook:
+            before = env.state()
+            hook.delay = 0.0
+            results["fast"] = preflight() if preflight else "missing"
+            hook.slow_first = 0.8
+            begun = time.monotonic()
+            results["first_slow"] = preflight() if preflight else "missing"
+            first_slow_took = time.monotonic() - begun
+            hook.slow_first = 0.0
+            hook.seen.clear()
+            hook.delay = 0.8
+            results["slow"] = preflight() if preflight else "missing"
+            slow_exchanges = hook.seen["ping"]
+            with mock.patch.object(staging, "PREFLIGHT_WAIT", 1.0, create=True):
+                hook.delay = 1.6
+                begun = time.monotonic()
+                results["silent"] = preflight() if preflight else "missing"
+                silent_took = time.monotonic() - begun
+            hook.delay = 0.8
+            with mock.patch.object(sys, "argv", ["run_staging_e2e", "--test-registry", str(env.registry)]), contextlib.redirect_stderr(spoken):
+                exit_code = staging.main()
+            hook.delay = 0.0
+            env.client(start=False).call("ping")
+            after = env.state()
+        attempts_before = len(env.state()["attempts"])
+        results["cold"] = preflight() if preflight else "missing"
+        cold_started = env.alive_launcher()
+        attempts_cold = len(env.state()["attempts"])
+    finally:
+        staging.TEST_REGISTRY = None
+    slow, silent, cold = (str(results.get(name)) for name in ("slow", "silent", "cold"))
+    return {
+        "a fast launcher passes": results.get("fast") is None,
+        "a slow first exchange is refused although a second would be fast": results.get("first_slow") not in (None, "missing"),
+        "the refused first exchange is the only one": first_slow_took < 1.5,
+        "a launcher that stays slow is refused after one exchange": slow not in ("None", "missing") and slow_exchanges == 1,
+        "the refusal gives the measured exchange time and the registry size": "ping" in slow and re.search(r"\d+\.\d+ s", slow) is not None and "MB" in slow,
+        "the refusal names compaction as a fix to try": "compact" in slow,
+        "the refusal does not name the registry size as the cause": not any(word in slow for word in ("because", "cause", "means a large registry")),
+        "a launcher that does not answer within the limit is refused": silent not in ("None", "missing") and "within" in silent and silent_took < 1.6,
+        "the runner exits 2 on a refusal and says why": exit_code == 2 and "ping" in spoken.getvalue(),
+        "a launcher that is not running is refused with its own message": cold not in ("None", "missing") and "not running" in cold,
+        "the pre-flight does not start a launcher": not cold_started,
+        "no probe attempt or other attempt is created on a cold launcher": attempts_cold == attempts_before,
+        "the check changed no attempt, allocation or run on a serving launcher": all(
+            after[name].keys() == before[name].keys() for name in ("attempts", "allocations", "runs")
+        ),
+    }
+
+
+CLEANUP_TIMINGS = {"poll_patience": 12.0, "history_retain": 3600.0, "stuck_after": 1.5, "cleanup_budget": 4.0}
+CLEANUP_BOUND = 1.5 + 1.0 + 4.0 + 3.0
+
+
+@contextlib.contextmanager
+def client_log_lines() -> Iterator[list[str]]:
+    """The messages the client writes on its ``launcher.client`` logger while the block runs."""
+    seen: list[str] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append(record.getMessage())
+
+    log = logging.getLogger("launcher.client")
+    handler = Capture(logging.WARNING)
+    log.addHandler(handler)
+    previous = log.level
+    log.setLevel(logging.WARNING)
+    try:
+        yield seen
+    finally:
+        log.removeHandler(handler)
+        log.setLevel(previous)
+
+
+@case("client_cleanup_after_stuck", timings=CLEANUP_TIMINGS)
+def client_cleanup_after_stuck(env: Env) -> dict[str, bool]:
+    """Round 4 finding 9 (failure modes CU1 to CU5, CU11 and CU14): a caller that releases its allocation after ``run_attempt`` failed
+    ``unresponsive`` is not held by the stuck loop. Cleanup is bounded by ``cleanup_budget``. It replays the ambiguous submit, cancels the attempt
+    it finds, waits for its end and releases the allocation; it drops the submit as refused only after the launcher refused the replay; when the
+    loop stays blocked it retains the allocation and the original error reaches the caller. Another worker's attempt on the same client is
+    not touched."""
+
+    def stuck_run(client: launcher.LauncherClient, allocation: str, launch: str, template: str = "fixture_dbt") -> tuple[Any, float]:
+        """``run_attempt`` followed by the unconditional release the CLI and the wrappers use; the outcome and the seconds."""
+        principal = client.principal_alloc(allocation)
+        begun = time.monotonic()
+
+        def caller() -> Any:
+            try:
+                return client.run_attempt(principal, template, launch, ["build"], env.fixture_params(launch), checkout=ROOT)
+            finally:
+                client.release_allocation(allocation)
+
+        return outcome_of(caller), time.monotonic() - begun
+
+    def is_unresponsive(outcome: Any) -> bool:
+        return isinstance(outcome, launcher.ClientError) and outcome.code == "unresponsive"
+
+    with client_log_lines() as lines, served_here(env) as hook:
+        client = env.client(start=False)
+        other_allocation = "al-another-worker"
+        client.live["another_workers_attempt"] = client.principal_alloc(other_allocation)
+        mark = len(hook.calls)
+
+        first = client.allocate()
+        hook.release.clear()
+        hook.blocked = frozenset({"submit"})
+        timer = threading.Timer(3.5, hook.release.set)
+        timer.start()
+        reconciled, took_first = stuck_run(client, first, "stuck1")
+        timer.cancel()
+        hook.blocked = frozenset()
+        state = env.state()
+        first_attempts = [a for a in state["attempts"].values() if a["launch_id"].startswith("stuck1")]
+        first_state, first_pending = state["allocations"][first]["state"], dict(client.pending_submits)
+        client.pending_submits.clear()
+        env.teardown()
+
+        second = client.allocate()
+        hook.release.clear()
+        hook.blocked = frozenset({"submit"})
+        lines.clear()
+        watchdog = threading.Timer(14.0, hook.release.set)
+        watchdog.start()
+        retained, took_second = stuck_run(client, second, "stuck2")
+        watchdog.cancel()
+        second_state, second_pending, second_lines = env.state()["allocations"][second]["state"], dict(client.pending_submits), list(lines)
+        hook.release.set()
+        hook.blocked = frozenset()
+        env.wait(lambda: any(a["launch_id"].startswith("stuck2") for a in env.state()["attempts"].values()), 20, "the blocked submit is handled")
+        client.pending_submits.clear()
+        released_calls = [c for c in hook.calls[mark:] if c[0] == "release_allocation" and c[1].get("alloc_id") == second]
+        env.teardown()
+
+        third = client.allocate()
+        hook.release.clear()
+        hook.blocked = frozenset({"submit"})
+        timer = threading.Timer(3.5, hook.release.set)
+        timer.start()
+        refused, took_third = stuck_run(client, third, "stuck3", template="no_such_template")
+        timer.cancel()
+        hook.blocked = frozenset()
+        third_state, third_pending = env.state()["allocations"][third]["state"], dict(client.pending_submits)
+        client.pending_submits.clear()
+        untouched = all(c[1].get("alloc_id") != other_allocation for c in hook.calls[mark:]) and "another_workers_attempt" in client.live
+        client.live.clear()
+    (env.report / "timings.json").write_text(
+        json.dumps({"reconciled": round(took_first, 2), "retained": round(took_second, 2), "refused": round(took_third, 2)}, indent=2)
+    )
+    return {
+        "reconciled: the original unresponsive error reaches the caller": is_unresponsive(reconciled),
+        "reconciled: cleanup ended within the bound": took_first < CLEANUP_BOUND,
+        "reconciled: the replayed submit found the attempt, which was cancelled and ended": len(first_attempts) == 1
+        and all(a["phase"] == "ended" for a in first_attempts),
+        "reconciled: the allocation is released": first_state == "released",
+        "reconciled: no submit stays pending": first_pending == {},
+        "retained: the original unresponsive error reaches the caller": is_unresponsive(retained),
+        "retained: cleanup ended within the bound although the loop stayed blocked": took_second < CLEANUP_BOUND,
+        "retained: the allocation is kept and no release request was sent": second_state == "held" and released_calls == [],
+        "retained: the unresolved submit stays recorded": len(second_pending) == 1,
+        "retained: one log line names the allocation": len([line for line in second_lines if second in line and "retained" in line]) == 1,
+        "refused: the replayed submit was refused by the launcher and then dropped": third_pending == {} and third_state == "released",
+        "refused: cleanup ended within the bound": took_third < CLEANUP_BOUND,
+        "another worker's attempt on the same client is not touched": untouched,
+    }
+
+
+@case("client_cleanup_shared_success", timings=CLEANUP_TIMINGS)
+def client_cleanup_shared_success(env: Env) -> dict[str, bool]:
+    """Round 5 finding 13 (failure modes SC1 to SC4): the cleanup a failed worker still owes is not erased by a successful exchange of another
+    worker on the same client. One worker's ``run_attempt`` fails ``unresponsive`` with its submit ambiguous; the submit is then persisted and
+    a sibling completes a status exchange before the worker's ``finally`` releases the allocation. The sibling shares the allocation's principal
+    in one scenario and exchanges with no principal in another. The release still replays the submit, cancels its attempt and releases. In the last
+    scenario a sibling answers every 0.2 s while Docker removal hangs: cleanup ends within ``cleanup_budget`` from its own first step and the
+    allocation is retained."""
+    env.daemon.script = lambda container: None if container["Config"]["Labels"].get("hai.template") == "fixture_dbt" else (0.2, 0)
+
+    def scenario(label: str, sibling: str) -> dict[str, Any]:
+        """A failed worker and a sibling: ``none``, ``same`` principal, ``other`` principal, ``polling`` (the attempt was accepted, then the status
+        wait failed) or ``chatty`` (a hung removal)."""
+        client = env.client(start=False)
+        allocation = client.allocate()
+        principal = client.principal_alloc(allocation)
+        seen: dict[str, Any] = {}
+        stop, gate = threading.Event(), None
+        hook.release.clear()
+        hook.blocked = frozenset({"status" if sibling == "polling" else "submit"})
+
+        def sibling_status() -> None:
+            if sibling == "other":
+                client.call("status", {"what": "launcher"})
+            else:
+                client.call("status", {"what": "allocation", "id": allocation}, principal)
+
+        def chatter() -> None:
+            while not stop.is_set():
+                with contextlib.suppress(launcher.ClientError, OSError):
+                    sibling_status()
+                stop.wait(0.2)
+
+        def caller() -> Any:
+            nonlocal gate
+            try:
+                try:
+                    return client.run_attempt(principal, "fixture_dbt", label, ["build"], env.fixture_params(label), checkout=ROOT)
+                except launcher.ClientError:
+                    hook.blocked = frozenset()
+                    hook.release.set()
+                    env.wait(lambda: any(a["launch_id"].startswith(label) for a in env.state()["attempts"].values()), 10, "the ambiguous submit is accepted")
+                    if sibling == "chatty":
+                        env.wait(lambda: any(a["phase"] == "started" for a in env.state()["attempts"].values()), 10, "the attempt started")
+                        gate = env.daemon.add_gate("remove", "before")
+                        threading.Thread(target=chatter).start()
+                        time.sleep(0.6)
+                    elif sibling != "none":
+                        worker = threading.Thread(target=sibling_status)
+                        worker.start()
+                        worker.join(10)
+                        if worker.is_alive():
+                            raise CaseFailure("the sibling status exchange did not return") from None
+                    raise
+            finally:
+                begun = time.monotonic()
+                try:
+                    seen["release"] = client.release_allocation(allocation)
+                finally:
+                    seen["release_seconds"] = time.monotonic() - begun
+                    stop.set()
+
+        with client_log_lines() as lines:
+            seen["outcome"] = outcome_of(caller)
+        state = env.state()
+        seen |= {
+            "unresponsive": isinstance(seen["outcome"], launcher.ClientError) and seen["outcome"].code == "unresponsive",
+            "refused": isinstance(seen["outcome"], launcher.ClientError) and seen["outcome"].code == "refused",
+            "pending": len(client.pending_submits),
+            "open_attempts": sum(a["phase"] != "ended" for a in state["attempts"].values()),
+            "held": state["allocations"][allocation]["state"] == "held",
+            "release_calls": [c for c in hook.calls if c[0] == "release_allocation" and c[1].get("alloc_id") == allocation],
+            "retained_lines": [line for line in lines if allocation in line and "retained" in line],
+        }
+        if gate is not None:
+            gate.release()
+        env.teardown()
+        return seen
+
+    with served_here(env) as hook:
+        control = scenario("control", "none")
+        same = scenario("same", "same")
+        other = scenario("other", "other")
+        polling = scenario("polling", "polling")
+        chatty = scenario("chatty", "chatty")
+    (env.report / "scenarios.json").write_text(
+        json.dumps(
+            {
+                name: {key: str(value) for key, value in seen.items() if key != "outcome"}
+                for name, seen in (("control", control), ("same", same), ("other", other), ("polling", polling), ("chatty", chatty))
+            },
+            indent=1,
+        )
+    )
+
+    def reconciled(seen: dict[str, Any]) -> bool:
+        return seen["unresponsive"] and seen["pending"] == 0 and seen["open_attempts"] == 0 and not seen["held"]
+
+    return {
+        "control: the original unresponsive error reaches the caller and nothing stays open": reconciled(control),
+        "a sibling of the same principal completed an exchange and the failed worker's cleanup still reconciles": reconciled(same),
+        "the failed worker's release is not refused because of the sibling": not same["refused"],
+        "a sibling completed an exchange after the failure of the status wait: the worker's attempt is cancelled and released": reconciled(polling),
+        "a sibling exchanging under another principal does not change the cleanup": reconciled(other),
+        "chatty sibling: the original unresponsive error reaches the caller": chatty["unresponsive"] and not chatty["refused"],
+        "chatty sibling: cleanup ends within the budget of its own first step": chatty["release_seconds"] < CLEANUP_TIMINGS["cleanup_budget"] + 2.0,
+        "chatty sibling: the allocation is retained and no release request is sent": chatty["held"] and chatty["release_calls"] == [],
+        "chatty sibling: one log line names the allocation": len(chatty["retained_lines"]) == 1,
+    }
+
+
+def cleanup_propagation_scenario(env: Env, early: bool) -> dict[str, Any]:
+    name = "before_unwind" if early else "after_unwind"
+    seen: dict[str, Any] = {}
+    noted, allow_raise, unwound, allow_cleanup = (threading.Event() for _ in range(4))
+    worker: threading.Thread | None = None
+    try:
+        with served_here(env) as hook:
+            client = env.client(start=False)
+            allocation = client.allocate()
+            principal = client.principal_alloc(allocation)
+            hook.blocked = frozenset({"status"})
+            original = client.note_failure
+
+            def pause_failure(error: Any, *arguments: Any) -> Any:
+                result = original(error, *arguments)
+                if isinstance(error, launcher.ClientError) and error.code == "unresponsive":
+                    seen["original_error"] = error
+                    noted.set()
+                    if not allow_raise.wait(15):
+                        raise CaseFailure("the test did not resume failure propagation")
+                return result
+
+            def caller() -> None:
+                try:
+                    try:
+                        client.run_attempt(principal, "fixture_dbt", name, ["build"], env.fixture_params(name))
+                    except launcher.ClientError:
+                        unwound.set()
+                        if not allow_cleanup.wait(15):
+                            raise CaseFailure("the test did not resume caller cleanup") from None
+                        raise
+                finally:
+                    seen["release"] = client.release_allocation(allocation)
+
+            def run_worker() -> None:
+                seen["outcome"] = outcome_of(caller)
+
+            with mock.patch.object(client, "note_failure", pause_failure):
+                worker = threading.Thread(target=run_worker)
+                worker.start()
+                if not noted.wait(15):
+                    raise CaseFailure("the worker did not record the terminal wait failure")
+                hook.blocked = frozenset()
+                hook.release.set()
+                if not early:
+                    allow_raise.set()
+                    if not unwound.wait(10):
+                        raise CaseFailure("the worker did not unwind")
+                seen["failure_before_sibling"] = client.lost_contact(principal)
+                seen["live_before_sibling"] = len(client.live)
+                seen["pending_before_sibling"] = len(client.pending_submits)
+                deadline = client.cleanup_deadline(principal)
+                client.call("status", {"what": "allocation", "id": allocation}, principal)
+                seen["sibling_completed"] = True
+                seen["failure_after_sibling"] = client.lost_contact(principal)
+                seen["deadline_preserved"] = client.cleanup_deadline(principal) == deadline
+                allow_raise.set()
+                allow_cleanup.set()
+                worker.join(15)
+                if worker.is_alive():
+                    raise CaseFailure("the worker did not finish bounded cleanup")
+            state = env.state()
+            seen["original_error_preserved"] = seen["outcome"] is seen["original_error"]
+            seen["pending_after_cleanup"] = len(client.pending_submits)
+            seen["open_after_cleanup"] = sum(a["phase"] != "ended" for a in state["attempts"].values())
+            seen["held_after_cleanup"] = sum(a["state"] == "held" for a in state["allocations"].values())
+            env.teardown()
+    finally:
+        allow_raise.set()
+        allow_cleanup.set()
+        if worker is not None:
+            worker.join(20)
+    return {key: str(value) if isinstance(value, (BaseException, launcher.ReleaseOutcome)) else value for key, value in seen.items()}
+
+
+def cleanup_publication_race(env: Env) -> bool:
+    client = env.client(start=False)
+    principal = client.principal_alloc("synthetic-publication")
+    live_lock = client.live_lock
+    published: list[float] = []
+
+    class PublishOnUnlock:
+        def __enter__(self) -> None:
+            live_lock.acquire()
+
+        def __exit__(self, *_: Any) -> None:
+            live_lock.release()
+            if not published:
+                published.append(0.0)
+                client.note_failure(launcher.ClientError("synthetic terminal wait", "unresponsive"), principal)
+                published[0] = client.cleanup_deadline(principal)
+
+    with mock.patch.object(client, "live_lock", PublishOnUnlock()):
+        client.forget_failure(principal)
+    return client.lost_contact(principal) and client.cleanup_deadline(principal) == published[0]
+
+
+@case("client_cleanup_propagation", timings={"stuck_after": 1.5, "poll_patience": 12.0, "cleanup_budget": 2.5})
+def client_cleanup_propagation(env: Env) -> dict[str, bool]:
+    env.daemon.script = lambda container: None if container["Config"]["Labels"].get("hai.template") == "fixture_dbt" else (0.2, 0)
+    checks = {"a success cannot erase a failure published after its work check": cleanup_publication_race(env)}
+    scenarios = {"after_unwind": cleanup_propagation_scenario(env, False), "before_unwind": cleanup_propagation_scenario(env, True)}
+    for name, seen in scenarios.items():
+        checks |= {
+            f"{name}: an accepted attempt has no ambiguous submit": seen["live_before_sibling"] == 1 and seen["pending_before_sibling"] == 0,
+            f"{name}: the sibling completes without clearing the failure": seen["sibling_completed"]
+            and seen["failure_before_sibling"]
+            and seen["failure_after_sibling"],
+            f"{name}: the principal keeps its first cleanup deadline": seen["deadline_preserved"],
+            f"{name}: the exact original exception reaches the caller": seen["original_error_preserved"],
+            f"{name}: cleanup cancels, drains and releases": seen["pending_after_cleanup"] == seen["open_after_cleanup"] == seen["held_after_cleanup"] == 0
+            and seen["release"] == "released",
+        }
+    (env.report / "propagation.json").write_text(json.dumps(scenarios, indent=2) + "\n")
+    return checks
+
+
+@case("client_release_outcome", timings=CLEANUP_TIMINGS)
+def client_release_outcome(env: Env) -> dict[str, bool]:
+    """Round 5 finding 14 (failure modes RO1 to RO3): ``release_allocation`` tells released, retained and unresolved apart and the silver runner's
+    cleanup report shows which. The real ``fixture_stage`` and ``Run.settle`` run with a fixture attempt that blocks the launcher's submit
+    handling past the cleanup budget (retained), with no failure (released) and, in a third scenario, with a release request the launcher does
+    not answer after the work was settled (unresolved). The original ``unresponsive`` error reaches the caller in the failing scenarios."""
+    from scripts.lakehouse import run_silver_e2e as silver_runner
+
+    def is_unresponsive(outcome: Any) -> bool:
+        return isinstance(outcome, launcher.ClientError) and outcome.code == "unresponsive"
+
+    def silver_scenario(blocked: bool) -> dict[str, Any]:
+        client = env.client(start=False)
+        run = silver_runner.Run(mode="full")
+
+        def fixture_attempt(run: Any, args: Any, session: Any, stage: Any) -> None:
+            if blocked:
+                hook.release.clear()
+                hook.blocked = frozenset({"submit"})
+                session.client.run_attempt(session.principal, "fixture_dbt", "silver-release", ["build"], env.fixture_params("silver"))
+
+        with (
+            mock.patch.object(launcher, "load_client", return_value=client),
+            mock.patch.object(silver_runner, "fixture_cases", side_effect=fixture_attempt),
+            client_log_lines() as lines,
+        ):
+            outcome = outcome_of(lambda: silver_runner.fixture_stage(run, argparse.Namespace()))
+        report = run.settle()
+        seen = {
+            "unresponsive": is_unresponsive(outcome),
+            "claims_released": run.allocation_released is True,
+            "cleanup_ok": bool(report["ok"]),
+            "reported_outcome": str(report.get("allocation_release")),
+            "held": sum(a["state"] == "held" for a in env.state()["allocations"].values()),
+            "pending": len(client.pending_submits),
+            "lines": [line for line in lines if "retained" in line],
+        }
+        hook.blocked = frozenset()
+        hook.release.set()
+        if blocked:
+            env.wait(lambda: bool(env.state()["attempts"]), 10, "the retained submit is accepted")
+        env.teardown()
+        return seen
+
+    def unresolved_scenario() -> dict[str, Any]:
+        client = env.client(start=False)
+        allocation = client.allocate()
+        principal = client.principal_alloc(allocation)
+        seen: dict[str, Any] = {}
+
+        def work_settled_release_blocked() -> None:
+            hook.blocked = frozenset({"release_allocation"})
+            hook.release.set()
+            hook.release.clear()
+
+        def caller() -> Any:
+            try:
+                return client.run_attempt(principal, "fixture_dbt", "unresolved", ["build"], env.fixture_params("unresolved"), checkout=ROOT)
+            finally:
+                seen["release"] = client.release_allocation(allocation)
+
+        hook.release.clear()
+        hook.blocked = frozenset({"submit"})
+        timer = threading.Timer(3.5, work_settled_release_blocked)
+        timer.start()
+        with client_log_lines() as lines:
+            outcome = outcome_of(caller)
+        timer.cancel()
+        hook.blocked = frozenset()
+        hook.release.set()
+        seen |= {
+            "unresponsive": is_unresponsive(outcome),
+            "pending": len(client.pending_submits),
+            "lines": [line for line in lines if allocation in line and "unresolved" in line],
+        }
+        env.teardown()
+        return seen
+
+    with served_here(env) as hook:
+        retained = silver_scenario(True)
+        released = silver_scenario(False)
+        unresolved = unresolved_scenario()
+    (env.report / "scenarios.json").write_text(json.dumps({"retained": retained, "released": released, "unresolved": unresolved}, indent=1, default=str))
+    return {
+        "retained: the original unresponsive error reaches the caller": retained["unresponsive"],
+        "retained: the allocation is held with its submit pending": retained["held"] == 1 and retained["pending"] == 1,
+        "retained: the silver runner does not claim the allocation was released": not retained["claims_released"],
+        "retained: the cleanup summary is not ok": not retained["cleanup_ok"],
+        "retained: the report shows the outcome retained": retained["reported_outcome"] == "retained",
+        "released: the silver runner reports a release and an ok cleanup": released["claims_released"] and released["cleanup_ok"],
+        "released: the report shows the outcome released": released["reported_outcome"] == "released",
+        "released: nothing is held": released["held"] == 0,
+        "unresolved: the release request got no answer and nothing was raised in its place": unresolved["unresponsive"],
+        "unresolved: the release returns the outcome unresolved": str(unresolved["release"]) == "unresolved",
+        "unresolved: one log line names the allocation": len(unresolved["lines"]) == 1,
+    }
+
+
+def command_exit(argv: list[str]) -> tuple[int, str, float]:
+    """Run ``launcher.main()`` in this process with the arguments; the exit code, what it wrote to standard error and the seconds."""
+    spoken = io.StringIO()
+    begun = time.monotonic()
+    with mock.patch.object(sys, "argv", ["launcher", *argv]), contextlib.redirect_stderr(spoken), contextlib.redirect_stdout(io.StringIO()):
+        code = launcher.main()
+    return code, spoken.getvalue(), time.monotonic() - begun
+
+
+@case("client_cleanup_cli", timings=CLEANUP_TIMINGS)
+def client_cleanup_cli(env: Env) -> dict[str, bool]:
+    """Round 4 finding 9 (failure modes CU6 to CU8, CU10 and CU12): the command line ends a liveness failure in the degraded exit 5 and bounds
+    its cleanup. ``run`` and ``dbt deps`` run through ``main`` against a launcher whose loop is blocked. The other paths are checked at the
+    exit boundary with the client calls recorded: ``unavailable`` and ``unresponsive`` exit 5 and clean up with bounded calls, a refusal exits
+    3 and cleans up with the ordinary calls, a real dbt launch marks its run failed_retained with a bounded call and never finalizes it,
+    and ``query`` deregisters its reader and releases with bounded calls."""
+    registry = ["--test-registry", str(env.registry)]
+    params = [word for name, value in env.fixture_params("cli1").items() for word in ("--param", f"{name}={json.dumps(value)}")]
+    stuck: dict[str, tuple[int, str, float, list[str]]] = {}
+    with served_here(env) as hook:
+        for label, argv in (
+            ("run", [*registry, "run", "--template", "fixture_dbt", "--launch-id", "cli1", *params, "build"]),
+            ("dbt deps", [*registry, "dbt", "deps"]),
+        ):
+            hook.release.clear()
+            hook.blocked = frozenset({"submit"})
+            watchdog = threading.Timer(20.0, hook.release.set)
+            watchdog.start()
+            code, text, took = command_exit(argv)
+            watchdog.cancel()
+            held = [a["state"] for a in env.state()["allocations"].values() if a["kind"] == "shared" and a["state"] == "held"]
+            hook.release.set()
+            hook.blocked = frozenset()
+            env.wait(lambda: env.ping().get("status") == "serving", 20, "the loop is free again")
+            env.teardown()
+            stuck[label] = (code, text, took, held)
+
+    recorded: list[tuple[str, Any, float]] = []
+    failure: list[BaseException] = []
+    answers = {"register_reader": {"registration_id": "r1"}, "plan": {"budget": {}}}
+
+    def record_call(
+        self: launcher.LauncherClient,
+        method: str,
+        params: dict[str, Any] | None = None,
+        principal: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        timeout: float = 120.0,
+    ) -> Any:
+        recorded.append((method, params, timeout))
+        if method == "submit" and failure:
+            raise self.note_failure(failure[0], principal)
+        return answers.get(method, {})
+
+    def record_bounded(self: launcher.LauncherClient, method: str, params: dict[str, Any], principal: dict[str, Any], request_id: str, seconds: float) -> Any:
+        recorded.append((method, params, seconds))
+        return answers.get(method, {})
+
+    def at_boundary(argv: list[str], error: BaseException | None) -> tuple[int, list[tuple[str, Any, float]]]:
+        """The exit code of ``main`` and the calls it made when the attempt (or, for ``query``, the submit) fails with the error."""
+        recorded.clear()
+        failure.clear()
+        if error is not None:
+            failure.append(error)
+        ended = launcher.AttemptResult("att", "exited", 0, "", "", {})
+
+        def attempt(self: launcher.LauncherClient, *args: Any, **keywords: Any) -> launcher.AttemptResult:
+            if error is not None:
+                raise self.note_failure(error, args[0])
+            return ended
+
+        with (
+            mock.patch.object(launcher.LauncherClient, "call", record_call),
+            mock.patch.object(launcher.LauncherClient, "bounded_call", record_bounded),
+            mock.patch.object(launcher.LauncherClient, "wait_for", lambda *a, **k: {"phase": "up"}),
+            mock.patch.object(launcher.LauncherClient, "allocate", lambda *a, **k: "a_cli"),
+            mock.patch.object(launcher.LauncherClient, "principal_run", lambda self, run_id, owner=False: {"kind": "run", "run_id": run_id, "token": "x"}),
+            mock.patch.object(launcher.LauncherClient, "run_attempt", attempt),
+        ):
+            code, _, _ = command_exit([*registry, *argv])
+        return code, list(recorded)
+
+    def calls_named(calls: list[tuple[str, Any, float]], method: str) -> list[float]:
+        return [seconds for name, _, seconds in calls if name == method]
+
+    unavailable = launcher.ClientError("the launcher is not running", "unavailable")
+    unresponsive = launcher.ClientError("the launcher is alive but made no progress for 1.5 s", "unresponsive")
+    refusal = launcher.ClientError("no such template", "args")
+    run_unavailable = at_boundary(["run", "--template", "fixture_dbt", "build"], unavailable)
+    run_unresponsive = at_boundary(["run", "--template", "fixture_dbt", "build"], unresponsive)
+    run_refused = at_boundary(["run", "--template", "fixture_dbt", "build"], refusal)
+    run_ok = at_boundary(["run", "--template", "fixture_dbt", "build"], None)
+    build_unresponsive = at_boundary(["dbt", "build"], unresponsive)
+    build_refused = at_boundary(["dbt", "build"], refusal)
+    build_ok = at_boundary(["dbt", "build"], None)
+    query_unavailable = at_boundary(["query"], launcher.ClientError("the launcher closed the connection", "unavailable"))
+    bound = env.config.timings.cleanup_budget
+    return {
+        **{f"{label}, launcher blocked: exits 5 and says unresponsive": stuck[label][0] == 5 and "[unresponsive]" in stuck[label][1] for label in stuck},
+        **{f"{label}, launcher blocked: ends within the detection time plus the cleanup bound": stuck[label][2] < CLEANUP_BOUND for label in stuck},
+        **{f"{label}, launcher blocked: the allocation is retained": stuck[label][3] != [] and len(stuck[label][3]) == 1 for label in stuck},
+        "run: unavailable exits 5": run_unavailable[0] == 5,
+        "run: unresponsive exits 5": run_unresponsive[0] == 5,
+        "run: a refusal still exits 3": run_refused[0] == 3,
+        "run: after a liveness failure the release is one bounded call": [s <= bound for s in calls_named(run_unresponsive[1], "release_allocation")] == [True]
+        and [s <= bound for s in calls_named(run_unavailable[1], "release_allocation")] == [True],
+        "run: after a refusal the release is the ordinary call": calls_named(run_refused[1], "release_allocation") == [120.0],
+        "run: a success releases with the ordinary call and exits 0": run_ok[0] == 0 and calls_named(run_ok[1], "release_allocation") == [120.0],
+        "dbt launch: unresponsive exits 5": build_unresponsive[0] == 5,
+        "dbt launch: the run is marked failed_retained with a bounded call and never finalized": [
+            s <= bound for s in calls_named(build_unresponsive[1], "mark")
+        ]
+        == [True]
+        and not calls_named(build_unresponsive[1], "finalize")
+        and not calls_named(build_unresponsive[1], "release"),
+        "dbt launch: a refusal exits 3 and marks with the ordinary call": build_refused[0] == 3 and calls_named(build_refused[1], "mark") == [120.0],
+        "dbt launch: a success finalizes and releases with the ordinary calls": build_ok[0] == 0
+        and calls_named(build_ok[1], "finalize") == [120.0]
+        and calls_named(build_ok[1], "release") == [300.0],
+        "query: a liveness failure exits 5 and cleans up with bounded calls": query_unavailable[0] == 5
+        and [s <= bound for s in calls_named(query_unavailable[1], "deregister_reader")] == [True]
+        and [s <= bound for s in calls_named(query_unavailable[1], "release_allocation")] == [True],
+    }
+
+
+def attempt_started(env: Env, prefix: str) -> bool:
+    return any(a["launch_id"].startswith(prefix) for a in env.state()["attempts"].values())
+
+
+@case("client_cleanup_wrappers", timings=CLEANUP_TIMINGS)
+def client_cleanup_wrappers(env: Env) -> dict[str, bool]:
+    """Round 4 finding 9 (failure modes CU9): the catalog job and the silver validation, against a launcher whose loop is blocked, end within the
+    detection time plus the cleanup bound, say that the launcher did not answer (not that it refused) with the code, and keep the allocation."""
+    from scripts.lakehouse import catalog, silver
+
+    build = ROOT / "data" / "analytics" / "dbt"
+    database = build / "staging.duckdb"
+    manifest = build / "e2e" / "real_again" / "target" / "manifest.json"
+    made = []
+    for path, text in ((database, ""), (manifest, json.dumps({"nodes": {}}))):
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+            made.append(path)
+    results_before = set(silver.RESULTS.glob("*")) if silver.RESULTS.exists() else set()
+    saved = (catalog.TEST_REGISTRY, catalog.COMPOSE_ENV, silver.TEST_REGISTRY)
+    catalog.TEST_REGISTRY = silver.TEST_REGISTRY = str(env.registry)
+    catalog.COMPOSE_ENV = env.temp / "compose.env"
+    outcomes: dict[str, Any] = {}
+    took: dict[str, float] = {}
+    held: dict[str, list[str]] = {}
+    try:
+        with served_here(env) as hook:
+            for label, prefix, call in (
+                ("catalog", "job-", lambda: catalog.job("bronze_e2e", [])),
+                ("silver", "silver-", lambda: silver.validate(database, silver.CONTRACTS / "suites", silver.CONTRACTS / "baselines.json", manifest)),
+            ):
+                hook.release.clear()
+                hook.blocked = frozenset({"submit"})
+                watchdog = threading.Timer(16.0, hook.release.set)
+                watchdog.start()
+                begun = time.monotonic()
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        call()
+                except (catalog.CatalogError, silver.SilverError, launcher.ClientError) as error:
+                    outcomes[label] = error
+                took[label] = time.monotonic() - begun
+                watchdog.cancel()
+                held[label] = [a["state"] for a in env.state()["allocations"].values() if a["kind"] == "shared" and a["state"] == "held"]
+                hook.release.set()
+                hook.blocked = frozenset()
+                env.wait(partial(attempt_started, env, prefix), 15, "the blocked submit is handled")
+                env.teardown()
+    finally:
+        catalog.TEST_REGISTRY, catalog.COMPOSE_ENV, silver.TEST_REGISTRY = saved
+        for path in made:
+            path.unlink(missing_ok=True)
+        if silver.RESULTS.exists():
+            for leftover in set(silver.RESULTS.glob("*")) - results_before:
+                shutil.rmtree(leftover, ignore_errors=True)
+    texts = {label: str(error) for label, error in outcomes.items()}
+    return {
+        **{f"{label}: ends within the detection time plus the cleanup bound": label in took and took[label] < CLEANUP_BOUND for label in ("catalog", "silver")},
+        **{
+            f"{label}: the text says the launcher did not answer and carries the code": "did not answer" in texts.get(label, "")
+            and "unresponsive" in texts.get(label, "")
+            and "refused" not in texts.get(label, "")
+            for label in ("catalog", "silver")
+        },
+        **{f"{label}: the allocation is retained": len(held.get(label, [])) == 1 for label in ("catalog", "silver")},
+    }
+
+
 def synthetic_archive(work: Path) -> tuple[Path, Path, Path, Path]:
     """A checkout with the real lock, a synthetic package archive and its record (no network): (checkout, lock, archive, record)."""
     checkout = work / "archive_checkout"
@@ -5425,6 +7684,24 @@ ALL_CASES = (
     staging_pool_removal_held,
     client_slow_launcher_replies,
     client_exchange_total_budget,
+    client_fail_fast_gone,
+    client_fail_fast_alive,
+    client_slow_exchange_log,
+    client_cleanup_after_stuck,
+    client_cleanup_shared_success,
+    client_cleanup_propagation,
+    client_release_outcome,
+    client_loss_wording,
+    client_cleanup_cli,
+    client_cleanup_wrappers,
+    staging_preflight,
+    registry_threshold_compaction,
+    registry_threshold_control,
+    registry_threshold_ages,
+    registry_reread_on_change,
+    registry_reread_inplace,
+    registry_snapshot_identity,
+    registry_snapshot_validation,
     staging_pool_socket_loss,
     staging_pool_lost_cancel,
     staging_pool_lost_submit,
@@ -5443,6 +7720,10 @@ ALL_CASES = (
     mount_fence_other_checkouts,
     template_owner_predicates,
     reader_holder_death,
+    query_cli,
+    query_stdin_large,
+    registry_history_bounded,
+    registry_archive_faults,
     request_replay_outcomes,
     network_ops_restart,
     scan_reply_after_stream_loss,

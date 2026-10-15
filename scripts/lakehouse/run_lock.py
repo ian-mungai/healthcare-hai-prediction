@@ -153,6 +153,26 @@ def legacy_only(state: dict[str, Any]) -> None:
         raise Refused("this registry belongs to the launcher; use orchestration/launcher.py")
 
 
+def parse_state(data: bytes, registry_id: str, filename: str = "registry.json") -> dict[str, Any]:
+    """Parse supplied registry bytes and return their state, or raise ``RegistryError`` for an invalid schema, shape or registry identity."""
+    try:
+        state = json.loads(data.decode("utf-8"))
+        if not isinstance(state, dict) or state.get("schema_version") not in (LEGACY_SCHEMA, LAUNCHER_SCHEMA):
+            raise ValueError("unknown schema")
+        for key in SECTIONS + (LAUNCHER_SECTIONS if state["schema_version"] == LAUNCHER_SCHEMA else ()):
+            if not isinstance(state.get(key), dict):
+                raise ValueError(f"missing {key}")
+        if state["schema_version"] == LAUNCHER_SCHEMA and not isinstance(state.get("launcher"), dict):
+            raise ValueError("missing launcher")
+        if not isinstance(state.get("reservation_history"), list):
+            raise ValueError("missing reservation_history")
+    except ValueError as error:
+        raise RegistryError(f"{filename} is not valid: {error}") from error
+    if state.get("registry_id") != registry_id:
+        raise RegistryError(f"registry_id differs from {filename}: the registry was replaced")
+    return state
+
+
 @contextmanager
 def transaction(registry: Registry, write: bool = True, create_schema: int = LEGACY_SCHEMA) -> Iterator[dict[str, Any]]:
     """Hold the registry's exclusive lock, yield its state and, when ``write`` and no error, replace it atomically.
@@ -177,20 +197,10 @@ def transaction(registry: Registry, write: bool = True, create_schema: int = LEG
                 write_atomic(registry.state_file, json.dumps(empty_state(identity["registry_id"], create_schema), indent=2) + "\n")
             identity = read_identity(registry)
             try:
-                state = json.loads(registry.state_file.read_text())
-                if not isinstance(state, dict) or state.get("schema_version") not in (LEGACY_SCHEMA, LAUNCHER_SCHEMA):
-                    raise ValueError("unknown schema")
-                for key in SECTIONS + (LAUNCHER_SECTIONS if state["schema_version"] == LAUNCHER_SCHEMA else ()):
-                    if not isinstance(state.get(key), dict):
-                        raise ValueError(f"missing {key}")
-                if state["schema_version"] == LAUNCHER_SCHEMA and not isinstance(state.get("launcher"), dict):
-                    raise ValueError("missing launcher")
-                if not isinstance(state.get("reservation_history"), list):
-                    raise ValueError("missing reservation_history")
-            except (OSError, ValueError) as exc:
+                data = registry.state_file.read_bytes()
+            except OSError as exc:
                 raise RegistryError(f"{registry.state_file.name} is not valid: {exc}") from exc
-            if state.get("registry_id") != identity["registry_id"]:
-                raise RegistryError(f"registry_id differs from {registry.state_file.name}: the registry was replaced")
+            state = parse_state(data, identity["registry_id"], registry.state_file.name)
             original = json.dumps(state, indent=2, sort_keys=True) + "\n"
             state["_path"] = str(registry.path)
             yield state

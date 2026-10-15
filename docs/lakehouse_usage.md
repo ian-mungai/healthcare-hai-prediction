@@ -1,12 +1,12 @@
 ---
-title: Lakehouse Usage
+title: Lakehouse usage
 description: Commands and checks for the launcher, bronze, staging, gold, silver validation, the run lock and the fixture kit.
 last_updated: 2026-10-15
 ---
 
-# Lakehouse Usage
+# Lakehouse usage
 
-## Main Commands
+## Main commands
 
 Every container starts through the launcher (`orchestration/launcher.py`), the only process allowed to call Docker. A real
 dbt build runs only with its provenance recorded; a complete successful build is sealed into a read-only copy that the
@@ -31,6 +31,92 @@ its clients over a local socket. Every job is an attempt of a fixed template (`d
 `fixture_init`, `duckdb_helper`, `quality_validate`, `query_reader`, `ui_reader`, `spark_read`, `spark_write`,
 `spark_e2e`) with a closed argument schema, a memory plan and a deadline entrypoint inside the image. `dbt.sh`,
 `query.sh`, `ui.sh`, the catalog script and the fixture kit are its clients.
+
+The registry keeps live state and the last 24 hours of terminal records. Every 10 minutes the launcher moves older
+records into the append-only archive `history/<UTC date>.jsonl` beside `registry.json` (owner-only): ended attempts of
+released or failed allocations with their settled operations and container records, done requests and reservation
+events. A transaction then no longer rewrites the whole history. A record leaves the registry only after its archive
+line is complete on disk: the launcher writes every byte, syncs the file and its folders, reads the lines back and cuts an
+incomplete last line left by a crash. A failed append keeps the records in the registry and the next pass tries again; a
+crash can repeat a line but never lose one. An allocation that an attempt in the registry, a registration, a reader or a
+reservation still names stays. A test registry's retention must exceed the client's retry patience, so a retried request
+always finds its first result.
+
+The launcher also watches the file's size. On each maintenance tick (every 0.5 s) it reads `registry.json` once and takes
+the size and SHA-256 of those bytes. Above 1,000,000 bytes (`compact_threshold`) it moves finished records older than 1 hour
+(`compact_floor`) under the same selection and archive rules, instead of waiting for the 24-hour retention. The hour is 20
+times the client's 180 s `poll_patience`, so a retried request still finds its first result. The move is tried once per
+change of the file. The periodic pass (every `compact_every`, 600 s) chooses the age by the current size, so records
+that become old with no write still move. Under the threshold nothing younger than 24 hours moves. A test registry may
+lower the threshold and the floor. The floor must stay above `poll_patience`. A threshold or floor of zero or less is
+refused at start. The maintenance tick parses the registry only when the file changed, so an idle launcher with a large
+registry no longer parses it every half second. A change is a different size or a different SHA-256 of the content, so
+every outside write counts, including an edit in place that keeps the size and restores the modification time. A tick that
+sees a different signature parses those same bytes and no others, so the cached open operations and their signature
+always describe the same content. Before caching or acting on those bytes, the launcher applies the transaction's
+schema and shape checks and verifies the registry ID against the ID it holds. A foreign or malformed snapshot raises
+a registry error before any orphan stop or removal. The disposal worker also inspects the container and requires
+its `hai.registry_id` label to match before stopping or removing it. A replacement that lands while a tick runs is read on the next tick. So is one that
+restores earlier content after the cache took a later state. A file that is not valid JSON is refused with a registry
+error and its signature is not stored, so the next tick reads it again. The read and the hash cost about 0.4 ms for a 1 MB
+file and 3 ms for an 8 MB file (one machine, warm cache). The time-based work (create deadlines, orphan retries and the
+periodic pass) runs on every tick with no parse. The state machine pass (every `tick`,
+0.2 s) and the session timers still read the registry on each tick.
+
+A client that waits for the launcher (`run_attempt`) tells a gone launcher from a slow one and from a stuck one:
+
+- **Gone:** the socket is missing or refuses connections for `gone_after` (1 s). The client fails at once with code
+  `unavailable` and the message "the launcher is not running".
+- **Alive:** after a timed-out exchange the client sends a `live` request, which the launcher answers without reading its
+  registry. An answer means the loop is alive. The client repeats the same request ID with a longer budget (1 s, doubled
+  after each timeout up to 4 s, reset by a quick exchange) and waits up to `poll_patience` (180 s). A request that stays
+  stuck while the loop keeps answering falls back to that `poll_patience`.
+- **Not answering:** no `live` answer for `stuck_after` (30 s). The client fails with code `unresponsive`.
+- **Interrupted pool:** once a pool is cancelling, none of this applies. The bounded unresolved path and `cancel_settle`
+  decide, as before.
+- **Slow exchange:** an exchange that takes more than `slow_exchange` (0.5 s) beyond the wait it asked for writes one line,
+  `launcher exchange <method> took <seconds> s` (or `timed out after`), to the `launcher.client` logger, which prints on
+  standard error unless the program configures logging. The liveness probe is timed and logged the same way, as method
+  `live` with the outcome `took`, `got no reply after` or `found no listener after`. A line holds the method, the outcome,
+  the seconds and the requested wait, never a request ID, a principal or a payload.
+
+The single loop answers `live` between its steps, not during a registry write. Liveness therefore means that the loop
+returns to the socket within `stuck_after`. It does not show that the outstanding request progresses: a request that the
+loop never finishes while it keeps answering `live` is not detected before `poll_patience`.
+
+After `unavailable` or `unresponsive` the client's cleanup never starts a launcher and has `cleanup_budget` (20 s) in all for each
+principal (an allocation or a run), counted from that principal's first cleanup step. The record of the lost connection and
+its deadline belong to that principal. A successful exchange of another worker on the same client does not clear them or
+move the deadline, even when that worker uses the same allocation, because the failed worker's ambiguous submit may still
+have created an attempt or its accepted attempt may still be open. A terminal wait failure records its accepted attempt's
+cleanup obligation together with the failure, before the exception propagates. The sibling's clearing decision uses the
+same lock interval, so it cannot observe the failure without that obligation. The record ends when the principal's own work is settled. A failure of an exchange that names no
+principal ends with the next successful exchange.
+
+`release_allocation` replays each ambiguous submit of the allocation under its own request ID: a refusal by the launcher
+drops it, a reply names the attempt. It cancels the open attempts, waits for them to end and then makes one bounded release
+request. It returns a `ReleaseOutcome`:
+
+- **`released`:** the launcher confirmed the release.
+- **`retained`:** the work of the allocation was not settled within the budget, so no release was requested. One
+  `launcher.client` line names the allocation and the launcher releases it once its holder process is gone.
+- **`unresolved`:** the work was settled and the release request got no answer in time, so the client does not know
+  whether the allocation is released. One `launcher.client` line names it.
+
+Without a lost connection the call is an ordinary one and a refusal raises `ClientError`. After a lost connection it never
+raises, so the original failure reaches the caller: a release or deregistration that fails after such a failure is logged
+and does not replace it. `unavailable` and `unresponsive` both end `launcher run` and `launcher dbt` with exit code 5
+(degraded), not 3 (refused). The catalog and silver scripts, the package fixture and the staging runner report that the
+launcher did not answer, with the code, instead of that it refused. A caller that reports cleanup reads the outcome: the
+silver runner's cleanup summary holds `allocation_release` (the outcome) beside `allocation_released` (true only for
+`released`). A retained or unresolved release makes its `ok` false.
+
+`scripts/lakehouse/query.sh -c "select 1" -csv` runs one query and needs no terminal; every word after `query` goes to
+DuckDB unchanged. `query --help` prints the supported arguments (`-c SQL` and the output flags) and exits 0 without
+starting the catalog or taking an allocation. A file or pipe on standard input is sent in chunks of 16 KiB while the
+shell's output is printed, so a large file neither fills memory nor stops the output. `.venv/bin/python -m
+orchestration.launcher run --template query_reader --param tty=false -- -csv -c "select 1"` starts the catalog its
+template needs and takes and returns the reader registration.
 
 A real build (`real_dbt`) gets its provenance from `scripts/lakehouse/provenance.py`: the run ID, the SHA-256 of the dbt
 project and package snapshot and the pinned bronze snapshot set. The launch is refused unless every value is recorded.
@@ -94,7 +180,7 @@ Two HRSA detail files, stored under the dictionary role, have corrected manifest
 (`config/acquisition/manifest_corrections.json`, written by `scripts.acquisition.correct_manifest_roles`); the original
 manifests stay unchanged. Open gaps are tracked in the local issue register.
 
-## Staging, Gold and Pins
+## Staging, gold and pins
 
 The staging models and their checks are described in [staging_models.md](staging_models.md).
 
@@ -122,6 +208,13 @@ scripts/lakehouse/dbt.sh build                                      # dbt on the
 .venv/bin/python -m scripts.lakehouse.catalog job pins -- verify --run <run_id>   # fails when a pinned table moved
 .venv/bin/python -m scripts.lakehouse.catalog job pins_e2e                # the pin's scenarios on a throwaway catalog; report: data/e2e/pins/
 ```
+
+Before it starts the catalog or a build, `run_staging_e2e` sends one ping to a running launcher and decides on that
+exchange: no retry, no warm-up and no launcher start, so it creates no attempt, allocation or run. It stops with exit
+code 2 when the ping takes more than 0.5 s, fails or has no answer within 5 s. The message gives the measured time and the
+size of `registry.json`, then names compaction as one fix to try (the launcher moves finished records older than 1 hour
+once the file passes 1 MB); it does not say the size caused the delay. A launcher that is not running is refused with its
+own message and the command that starts it. The check changes no state.
 
 **Gold checks.** `scripts/lakehouse/run_gold_e2e.py` builds silver and gold on the staging fixtures and, with `--real`, twice
 from the real bronze tables, pinning the bronze snapshots around each build. It reads the fact list, grains, columns,
@@ -171,7 +264,7 @@ dialect, only for the pinned version.
 Load large groups in batches of about 20 to 40 tables: each job stops at its launcher template's time limit
 (`default_seconds` in `orchestration/launcher.py`). A rerun of the same tables ends in the same state.
 
-## Run Lock, Registry and Fixture Kit
+## Run lock, registry and fixture kit
 
 **Run lock and registry.** `scripts/lakehouse/run_lock.py` keeps one lock per domain (`acquisition`, `transform`,
 `training`, `serving`) for the whole machine, in `data/orchestration/registry/` of the main checkout. Every worktree

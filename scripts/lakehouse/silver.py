@@ -117,7 +117,7 @@ def validate(
         result = link.run_attempt(principal, "quality_validate", f"silver-{run_id}", [], params, checkout=REPO_ROOT)
         launch = link.call("status", {"what": "allocation", "id": allocation}, principal)
     except launcher.ClientError as error:
-        raise SilverError(f"the launcher refused the validation: {error}") from error
+        raise SilverError(error.describe("the validation")) from error
     finally:
         link.release_allocation(allocation)
     if completion is not None:
