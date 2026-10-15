@@ -78,6 +78,7 @@ def candidate_placements(
         if match:
             retired[match.group(1)].add((match.group(2), item["key"].split("/datasets/")[0]))
     aliases = cms_aliases()
+    registry_texts: dict[str, str] | None = None
     found: dict[str, dict[str, list[tuple[str, str]]]] = {}
     for dataset_id in ids:
         rules: dict[str, list[tuple[str, str]]] = defaultdict(list)
@@ -98,8 +99,10 @@ def candidate_placements(
                 if token in record["official_landing_url"]:
                     rules["cms_token_in_landing_url"].append((source, f"the landing URL of {source} contains the publisher dataset ID {token}"))
             if not rules.get("cms_token_in_landing_url"):
-                for source, record in sources.items():
-                    if any(token in text for text in strings_of(record)):
+                if registry_texts is None:
+                    registry_texts = {source: "\x00".join(strings_of(record)) for source, record in sources.items()}
+                for source, text in registry_texts.items():
+                    if token in text:
                         rules["cms_token_in_registry_record"].append((source, f"the registry record of {source} names a member file that starts with {token}"))
         collections = table_collections.get(dataset_id, set())
         if len(collections) == 1:

@@ -243,6 +243,105 @@ EXPECTED_MESSAGE = {
 EXPECTED_MESSAGE.update({name: message for name, (_, message) in EVIDENCE_MUTATIONS.items()})
 
 
+def run_coverage_cases(root: Path) -> list[dict[str, Any]]:
+    """Check completeness, explicit unplaced coverage and evidence through public offline CLIs."""
+    from scripts.acquisition.source_metadata import derive
+
+    fixture = REPO_ROOT / "tests/fixtures/registry_additions_bronze_lineage.csv"
+    cases = []
+    for name, message in (
+        ("missing_id", "Bronze dataset_ids are neither placed nor listed as unplaced"),
+        ("unplaced_id", None),
+        ("placement_without_evidence", "needs one evidence record per dataset_id"),
+    ):
+        case = prepare(root, "coverage_" + name)
+        document = read_json(case / FILES[2])
+        ids = ["cms_gv"] + (["synthetic_coverage_unknown"] if name == "unplaced_id" else [])
+        placements, unresolved = derive(ids, read_json(case / FILES[0]))
+        metadata = entry(document, "CMS_GV")
+        metadata["dataset_ids"] = ["cms_gv"]
+        metadata["dataset_ids_evidence"] = [{key: value for key, value in placements[0].items() if key != "source_id"}]
+        metadata["dataset_ids_evidence"][0]["acquired_via"] = "main-hai-pdc"
+        document.update(source_metadata=[metadata], dataset_id_placements=placements, unplaced_dataset_ids=unresolved)
+        additions = case / FILES[2]
+        additions.write_bytes(encoded_json(document))
+        lock = case / FILES[3]
+        lock.unlink()
+        valid_control = cli(case, write_lock=True)
+        if name == "placement_without_evidence":
+            metadata["dataset_ids_evidence"] = []
+            additions.write_bytes(encoded_json(document))
+        lineage = case / "bronze_lineage.csv"
+        text = fixture.read_text(encoding="utf-8")
+        if name == "placement_without_evidence":
+            text = "\n".join(line for line in text.splitlines() if "synthetic_coverage_unknown" not in line) + "\n"
+        lineage.write_text(text, encoding="utf-8")
+        checked = cli(case, bronze_lineage=lineage)
+        lock.unlink()
+        written = cli(case, write_lock=True, bronze_lineage=lineage)
+        source_checked = run_argv(
+            [sys.executable, "-m", "scripts.acquisition.source_metadata", "--check", "--additions", str(additions), "--bronze-lineage", str(lineage)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        checks = [{"name": "valid_control", "passed": valid_control.returncode == 0}]
+        if message:
+            checks += [
+                {"name": "writer_refuses_intended_cause", "passed": written.returncode == 2 and message in written.stderr},
+                {"name": "loader_refuses_intended_cause", "passed": checked.returncode == 2 and message in checked.stderr},
+                {"name": "source_refuses_intended_cause", "passed": source_checked.returncode == 2 and message in source_checked.stderr},
+                {"name": "no_lock_created", "passed": not lock.exists()},
+            ]
+        else:
+            before = fingerprint(lock) if lock.exists() else None
+            repeated = cli(case, write_lock=True, bronze_lineage=lineage)
+            checks += [
+                {"name": "explicit_unplaced_accepted", "passed": written.returncode == checked.returncode == source_checked.returncode == 0},
+                {"name": "repeat_preserves_lock", "passed": before is not None and repeated.returncode == 0 and before == fingerprint(lock)},
+            ]
+        cases.append(
+            {
+                "case": "coverage_" + name,
+                "passed": all(check["passed"] for check in checks),
+                "checks": checks,
+                "valid_control": process_evidence(valid_control),
+                "writer": process_evidence(written),
+                "readback": process_evidence(checked),
+                "source_check": process_evidence(source_checked),
+                "fixture_sha256": fingerprint(fixture)[0],
+            }
+        )
+    case = prepare(root, "coverage_absent_additions")
+    valid_control = cli(case)
+    for filename in FILES[2:]:
+        (case / filename).unlink()
+    lineage = case / "bronze_lineage.csv"
+    lineage.write_bytes(fixture.read_bytes())
+    checked = cli(case, bronze_lineage=lineage)
+    ordinary = cli(case)
+    message = "Bronze dataset_ids are neither placed nor listed as unplaced"
+    checks = [
+        {"name": "valid_control", "passed": valid_control.returncode == 0},
+        {"name": "explicit_gate_refuses_empty_inventory", "passed": checked.returncode == 2 and message in checked.stderr},
+        {"name": "ordinary_optional_additions_accepted", "passed": ordinary.returncode == 0 and "Bronze lineage gate not run" in ordinary.stdout},
+        {"name": "no_additions_pair_created", "passed": all(not (case / filename).exists() for filename in FILES[2:])},
+    ]
+    cases.append(
+        {
+            "case": "coverage_absent_additions",
+            "passed": all(check["passed"] for check in checks),
+            "checks": checks,
+            "valid_control": process_evidence(valid_control),
+            "readback": process_evidence(checked),
+            "ordinary_optional": process_evidence(ordinary),
+            "fixture_sha256": fingerprint(fixture)[0],
+        }
+    )
+    return cases
+
+
 def run_lineage_cases(root: Path) -> list[dict[str, Any]]:
     """Exercise synthetic bronze provenance through both public CLIs and the lock writer."""
     from scripts.acquisition.registry_additions import additions_lock
@@ -283,7 +382,7 @@ def run_lineage_cases(root: Path) -> list[dict[str, Any]]:
         (case / FILES[2]).write_bytes(encoded_json(document))
         (case / FILES[3]).unlink()
         lineage = case / "bronze_lineage.csv"
-        text = fixture.read_text(encoding="utf-8")
+        text = "\n".join(line for line in fixture.read_text(encoding="utf-8").splitlines() if "synthetic_coverage_unknown" not in line) + "\n"
         if variant == "unreviewed":
             text = text.replace("main-hai-pdc", "ACS")
         elif variant == "redundant":
@@ -373,7 +472,8 @@ def run_lineage_cases(root: Path) -> list[dict[str, Any]]:
         additions.write_bytes(encoded_json(document))
         before = fingerprint(additions)
         lineage = case / "bronze_lineage.csv"
-        lineage.write_text(fixture.read_text(encoding="utf-8").replace("main-hai-pdc", route), encoding="utf-8")
+        text = "\n".join(line for line in fixture.read_text(encoding="utf-8").splitlines() if "synthetic_coverage_unknown" not in line) + "\n"
+        lineage.write_text(text.replace("main-hai-pdc", route), encoding="utf-8")
         inventory = case / "inventory.csv"
         inventory.write_text("dataset_id\ncms_gv\n", encoding="utf-8")
         argv = [
@@ -645,6 +745,7 @@ def run_cases(root: Path) -> list[dict[str, Any]]:
             ],
         )
     cases.extend(run_lineage_cases(root))
+    cases.extend(run_coverage_cases(root))
     record(
         "code_snapshot_preserved",
         None,

@@ -1,3 +1,4 @@
 bronze_table,_source_id,_dataset_id,n
 synthetic_direct,CMS_GV,cms_gv,7
 synthetic_bulk,main-hai-pdc,cms_gv,11
+synthetic_unknown,SYNTHETIC_SOURCE,synthetic_coverage_unknown,3

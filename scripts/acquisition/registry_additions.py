@@ -211,7 +211,7 @@ def read_bronze_lineage(path: Path) -> dict[str, set[str]]:
 
 
 def validate_bronze_lineage(additions: dict[str, Any], lineage: dict[str, set[str]]) -> None:
-    """Reject absent placements, invented acquisition routes or unaccounted bronze sources."""
+    """Require coverage of every bronze ID and reject absent placements or unaccounted sources."""
     evidence = {record["dataset_id"]: record for entry in additions.get("source_metadata", []) for record in entry["dataset_ids_evidence"]}
     for placement in additions.get("dataset_id_placements", []):
         dataset_id, source_id = placement["dataset_id"], placement["source_id"]
@@ -222,6 +222,9 @@ def validate_bronze_lineage(additions: dict[str, Any], lineage: dict[str, set[st
         require(via is None or via != source_id, f"Dataset_id {dataset_id} acquired_via duplicates its catalog source.")
         allowed = {source_id} | ({via} if via is not None else set())
         require(observed <= allowed, f"Placement {dataset_id} does not account for bronze sources {sorted(observed - allowed)}.")
+    covered = {record["dataset_id"] for key in ("dataset_id_placements", "unplaced_dataset_ids") for record in additions.get(key, [])}
+    missing = sorted(lineage.keys() - covered)
+    require(not missing, f"Bronze dataset_ids are neither placed nor listed as unplaced: {missing}.")
 
 
 def validate_additions(
@@ -254,9 +257,11 @@ def validate_additions(
 def load_registry_additions(
     registry: dict[str, Any], path: Path = ADDITIONS_PATH, lock_path: Path = ADDITIONS_LOCK_PATH, bronze_lineage: dict[str, set[str]] | None = None
 ) -> list[dict[str, Any]]:
-    """Return validated added controls; both files absent means no additions, one absent is an error."""
+    """Return validated controls; optional absent files must still satisfy an explicitly requested lineage gate."""
     initial_presence = (path.exists(), lock_path.exists())
     if initial_presence == (False, False):
+        if bronze_lineage is not None:
+            validate_bronze_lineage({}, bronze_lineage)
         return []
     require(all(initial_presence), "Registry additions and their lock must exist together.")
     if path == ADDITIONS_PATH and lock_path == ADDITIONS_LOCK_PATH:
@@ -268,6 +273,8 @@ def load_registry_additions(
             path, lock_path = legacy["additions"], legacy["additions_lock"]
     present = (path.exists(), lock_path.exists())
     if present == (False, False):
+        if bronze_lineage is not None:
+            validate_bronze_lineage({}, bronze_lineage)
         return []
     require(all(present), "Registry additions and their lock must exist together.")
     try:
@@ -306,7 +313,7 @@ def main() -> None:
     parser.add_argument("--additions-lock", type=Path, default=ADDITIONS_LOCK_PATH)
     parser.add_argument("--write-lock", action="store_true", help="Create the additions lock if absent; verify it if present.")
     parser.add_argument(
-        "--bronze-lineage", type=Path, help="Gate placements against an explicit bronze provenance CSV; otherwise check catalog derivation only."
+        "--bronze-lineage", type=Path, help="Require coverage and gate placements against an explicit bronze provenance CSV; otherwise check derivation only."
     )
     arguments = parser.parse_args()
     try:
