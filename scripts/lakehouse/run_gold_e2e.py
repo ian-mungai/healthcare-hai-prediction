@@ -38,7 +38,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse import catalog, gold_checks, package_fixture, silver
+from scripts.lakehouse import catalog, gold_checks, package_fixture, provenance, silver
 from scripts.lakehouse import run_staging_e2e as staging
 
 REPO_ROOT = catalog.REPO_ROOT
@@ -127,6 +127,18 @@ class Backend:
     def run(self, statements: list[str]) -> list[list[str]]:
         """Run statements in chunks and return every row."""
         return [row for chunk in gold_checks.chunks(statements) for row in self.query(chunk)]
+
+
+@dataclass
+class SealedBackend(Backend):
+    """Offline queries on the sealed copy of a run. Each query runs in a container whose entrypoint checks the copy that container attached before it runs
+    ``duckdb``; the rows come back only for an accepted check, and a rejected one raises (D1 section 10 item 6). No path of the copy is ever handed out."""
+
+    run_id: str = ""
+    completion: dict[str, Any] = field(default_factory=dict)
+
+    def query(self, sql: str) -> list[list[str]]:
+        return provenance.sealed_duckdb(self.plan, self.run_id, self.completion, sql)
 
 
 @dataclass
@@ -660,6 +672,20 @@ def real_setup(run: Run, start: Callable[[], object], install: Callable[[], obje
     install()
 
 
+def seal_check(build: str, run_id: str, outcome: dict[str, Any]) -> dict[str, Any]:
+    """The completion record of the run's sealed copy, after the launcher's consumer container accepted it; an unsealed run or a rejected copy stops the stage
+    (the readers still check the copy they attach: this call is the early stop, not the check)."""
+    client = staging.launcher_client()
+    principal = client.principal_run(run_id)
+    completion = provenance.sealed_completion(client, principal, run_id)
+    accepted = provenance.run_consumer(client, principal, run_id, f"verify-{build}", REPO_ROOT)
+    outcome["checks"][f"{build}_sealed_consumer_accepts"] = accepted
+    if not accepted:
+        raise RuntimeError(f"the consumer container rejected the sealed copy of the {build} build; no reader opens it")
+    outcome.setdefault("sealed", {})[build] = {key: completion[key] for key in ("sha256", "inode", "device", "invocation_id")}
+    return completion
+
+
 def real_stage(run: Run, contract: gold_checks.Contract, suites: Path, once: bool) -> None:
     """Two real builds (one in an iteration run), each inside a bronze pin; checks on the last build file, read offline [842]."""
     outcome: dict[str, Any] = {"checks": {}, "details": {}, "rebuild_checks_skipped": [], "docker_release": []}
@@ -670,6 +696,7 @@ def real_stage(run: Run, contract: gold_checks.Contract, suites: Path, once: boo
     prints: list[list[list[str]]] = []
     runs = ("real",) if once else ("real", "real_again")
     statuses: dict[str, str] = {}
+    sealed: dict[str, tuple[str, dict[str, Any]]] = {}
     for build in runs:
         (staging.CASES / build).mkdir(parents=True, exist_ok=True)
         run.enter(f"real:{build}:pin")
@@ -679,12 +706,18 @@ def real_stage(run: Run, contract: gold_checks.Contract, suites: Path, once: boo
             failed = not_passing(statuses)
             outcome.setdefault("warnings", {})[build] = warning_counts(staging.CASES / build / "target/run_results.json")
             outcome["checks"][f"{build}_build_passes"] = pinned["build_passed"] = code == 0 and bool(statuses) and not failed
+            if pinned["build_passed"]:
+                run.enter(f"real:{build}:sealed")
+                sealed[build] = (pinned["run_id"], seal_check(build, pinned["run_id"], outcome))
             run.enter(f"real:{build}:verify")
         outcome["checks"][f"{build}_pins_verified"] = pinned["pins_verified"]
+        if build not in sealed:
+            outcome["checks"][f"{build}_sealed"] = False
+            return
         outcome[f"{build}_not_passing"] = failed[:30]
         run.enter(f"real:{build}:fingerprint")
         with package_fixture.reservation() as plan:
-            prints.append(gold_prints(contract, Backend(staging.OUT / "staging.duckdb", None, plan)))
+            prints.append(gold_prints(contract, SealedBackend(Path(sealed[build][1]["file"]), None, plan, *sealed[build])))
         if build == "real" and not once:
             # Free the memory the first build left in Docker's VM before the second build; the catalog starts again.
             outcome["docker_release"].append(catalog.release())
@@ -695,7 +728,7 @@ def real_stage(run: Run, contract: gold_checks.Contract, suites: Path, once: boo
         outcome["checks"]["gold_rebuild_identical"] = not gold_checks.rebuild_problems(prints[0], prints[1], contract.model_names)
     run.enter("real:checks")
     with package_fixture.reservation() as plan:
-        backend = Backend(staging.OUT / "staging.duckdb", None, plan)
+        backend = SealedBackend(Path(sealed[runs[-1]][1]["file"]), None, plan, *sealed[runs[-1]])
         results = run_checks(contract, backend, staging.CASES / runs[-1] / "target", suites, statuses, real_empty_allowed(contract))
         outcome["checks"].update({f"real.{name}": ok for name, ok in results.verdicts.items()})
         outcome["report_only"] = results.report_only
@@ -703,7 +736,8 @@ def real_stage(run: Run, contract: gold_checks.Contract, suites: Path, once: boo
         outcome["problems"] = {name: problems[:10] for name, problems in results.problems.items() if problems}
     # Great Expectations on the final build file, through the silver launcher with the gold suites folder.
     run.enter("real:suites")
-    code, record = silver.validate(staging.OUT / "staging.duckdb", suites, BASELINES, staging.CASES / runs[-1] / "target/manifest.json")
+    last_run, last_completion = sealed[runs[-1]]
+    code, record = silver.validate(None, suites, BASELINES, staging.CASES / runs[-1] / "target/manifest.json", sealed_run=last_run, completion=last_completion)
     summary = json.loads(record.read_text())
     outcome["checks"]["real.gold_suites_pass"] = code == 0 and bool(summary.get("expectations")) and summary["counts"]["fail"] == 0
     outcome["suites"] = {"record": str(record.relative_to(REPO_ROOT)), "counts": summary["counts"], "repeated_dbt_tests": summary["repeated_dbt_tests"]}

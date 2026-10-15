@@ -1556,7 +1556,7 @@ def supersession_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch
         base = store(storage, collection, "hpsa", "HPSA__s", [(None, "DETAIL.csv", detail)], role="dictionary")
         identity = stored_identity(collection, "hpsa", "DETAIL.csv", detail)
         change = [{"key": identity["key"], "version_id": identity["version_id"], "from_role": "dictionary", "to_role": "data"}]
-        tables = [
+        tables: list[dict[str, Any]] = [
             {
                 "table": f"{collection.replace('/', '_')}_documents",
                 "group": "s",

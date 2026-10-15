@@ -10,6 +10,7 @@ personal data are assembled at run time, so this file does not trip the checks i
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -62,12 +63,14 @@ PRIVACY_VALUES = [HOME_PATH, TEMP_PATH, PERSONAL_EMAIL, PHONE, ACCOUNT, ENV_VALU
 WRITING_ALLOWLIST = ".writing_allowlist"
 ISO_DATE = "2026" + "-09-30"
 EM_DASH = "\u2014"
+EN_DASH = "\u2013"
 CLEAN_WRITING = (
     f"---\nlast_updated: {ISO_DATE}\n---\n\n# Notes\n\n"
     "Keep secrets out of logs or commits and run a privacy scan. Lists read red, green and blue.\n"
     f"Dates read Sep 30 2026; code keeps `{ISO_DATE}`, `a`, `b` and [the log](https://example.invalid/{ISO_DATE}).\n"
     f"An em dash {EM_DASH} allowed outside articles.\n\n```text\nrun {ISO_DATE}, and done\n```\n"
 )
+CLEAN_WRITING_HOOK = CLEAN_WRITING.replace(f"An em dash {EM_DASH} allowed outside articles.\n", "")
 CLAUSE_COMMA = "Secrets never go into logs or commits" + ", and a privacy scan runs on every commit.\n"
 SERIAL_COMMA = "The check reads Markdown, articles" + ", and commit messages.\n"
 NOR_COMMA = "It is not fast" + ", nor is it cheap.\n"
@@ -128,6 +131,7 @@ class Case:
     message: str | None = None
 
 
+POLICY_DOCUMENT = "docs/quality_checks.md"
 RUFF_STANDARD = '[tool.ruff]\nline-length = 160\ntarget-version = "py312"\n\n[tool.ruff.lint]\nselect = ["E", "F", "I", "B", "UP", "S", "SIM", "T20"]\n'
 
 CASES = [
@@ -164,6 +168,29 @@ CASES = [
         "MyPy flag removed", "lint-settings", False, {"pyproject.toml": RUFF_STANDARD, "scripts/run_ci.sh": CI_SOURCE.replace(" --disallow-untyped-defs", "")}
     ),
     Case("MyPy loosened in settings", "lint-settings", False, {"pyproject.toml": RUFF_STANDARD + "\n[tool.mypy]\nignore_errors = true\n"}),
+    Case("MyPy alternate profile", "lint-settings", True, {"config/quality/mypy.ini": "[mypy]\npython_version = 3.12\n"}),
+    Case("MyPy alternate profile loosened", "lint-settings", False, {"config/quality/mypy.ini": "[mypy]\nignore_missing_imports = True\n"}),
+    Case(
+        "MyPy per-module profile loosened",
+        "lint-settings",
+        False,
+        {"config/quality/mypy.ini": "[mypy]\npython_version = 3.12\n[mypy-example.*]\nfollow_imports = silent\n"},
+    ),
+    Case(
+        "MyPy TOML override loosened",
+        "lint-settings",
+        False,
+        {"pyproject.toml": RUFF_STANDARD + '\n[[tool.mypy.overrides]]\nmodule = "example.*"\nignore_errors = true\n'},
+    ),
+    Case(
+        "MyPy generated profile",
+        "lint-settings",
+        False,
+        {
+            "scripts/typed.py": 'from pathlib import Path\nconfig = Path("generated.ini")\n'
+            'COMMAND = ["python", "-m", "mypy", "--config-file", str(config), "--check-untyped-defs", "--disallow-untyped-defs"]\n'
+        },
+    ),
     Case("documented variable", "env-example", True, {"scripts/tool.py": "import os\n\nNAME = " + ENVIRON + '.get("AWS_REGION", "")\n'}),
     Case("undocumented variable", "env-example", False, {"scripts/tool.py": "import os\n\nNAME = " + ENVIRON + '["NEW_SETTING"]\n'}),
     Case("script removed with its docs", "removed-names", True, committed={f"scripts/{OLD_SCRIPT}": "X = 1\n"}, delete=[f"scripts/{OLD_SCRIPT}"]),
@@ -426,10 +453,13 @@ CASES = [
     Case("allowlist entry without reason", "privacy-scan", False, {"notes.md": "Nothing here.\n", ALLOWLIST: ALLOWLIST_SOURCE + "email notes.md\n"}),
     Case("allowlist entry with unknown type", "privacy-scan", False, {ALLOWLIST: ALLOWLIST_SOURCE + "address notes.md -- demo\n"}),
     Case("unreadable file listed", "privacy-scan", True, {"docs/diagram.png": b"\x89PNG\r\n\x1a\n\x00\x00"}),
-    Case("clean writing through the hook", "writing-check", True, {"notes.md": CLEAN_WRITING}),
+    Case("clean writing through the hook", "writing-check", True, {"notes.md": CLEAN_WRITING_HOOK}),
+    Case("dash outside an article blocked by the hook", "writing-check", False, {"notes.md": f"An em dash {EM_DASH} reads as a break.\n"}),
+    Case("slash between words blocked by the hook", "writing-check", False, {"notes.md": "Read and/or write the file.\n"}),
     Case("writing finding blocked by the hook", "writing-check", False, {"notes.md": SERIAL_COMMA}),
     Case("time-bound word blocked by the hook", "writing-check", False, {"notes.md": "The loader currently reads S3.\n"}),
     Case("procedural soon passes the hook", "writing-check", True, {"notes.md": "Run it as soon as the load ends.\n"}),
+    Case("warn-first kinds warn through the hook", "writing-check", True, {"notes.md": "Rules help; checks enforce them.\n"}),
     Case(
         "valid front matter passes",
         "front-matter",
@@ -534,6 +564,7 @@ BLOCK_REASONS = {
     "allowlist entry with unknown type": ".privacy_allowlist:{line}: allowlist entry with an unknown type",
     "writing finding blocked by the hook": "notes.md:1: comma before a final 'and', 'or' or 'nor'",
     "time-bound word blocked by the hook": "notes.md:1: time-bound word in prose",
+    "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
     "star bullet blocked by markdownlint": "MD004",
     "missing front matter blocked": "docs/guide.md:1: no front matter",
     "title different from the H1 blocked": "title does not match the H1",
@@ -547,6 +578,7 @@ BLOCK_REASONS = {
 # Good cases that must also print a marker, so a skipped check cannot pass silently.
 PASS_MARKERS = {
     "unreadable file listed": "docs/diagram.png: unreviewed: cannot be read as text",
+    "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
 }
 
 
@@ -621,8 +653,13 @@ def run_case(case: Case) -> tuple[bool, str]:
             reason = BLOCK_REASONS.get(case.name, "").format(line=added)
             marker = PASS_MARKERS.get(case.name, "")
             correct = correct and reason in output and marker in output and not any(value in output for value in PRIVACY_VALUES)
+        if not case.expect_pass and case.hook in ("writing-check", "privacy-scan"):
+            correct = correct and POLICY_DOCUMENT in output
         if case.hook in ("writing-check", "markdownlint", "front-matter", "sqlfluff", *CLEANUP_HOOKS):
             correct = correct and BLOCK_REASONS.get(case.name, "") in output
+        if case.hook == "lint-settings" and not case.expect_pass and case.name.startswith("MyPy"):
+            reason = "configuration must name a committed profile" if case.name == "MyPy generated profile" else "MyPy"
+            correct = correct and reason in output
         return correct, output
 
 
@@ -732,6 +769,232 @@ def run_writing_case() -> tuple[bool, str]:
     return all(ok for ok, _ in results), "\n".join(line for _, line in results) + "\n"
 
 
+DASH_FINDING = "em or en dash in prose"
+SEMICOLON_FINDING = "semicolon in prose"
+SLASH_FINDING = "slash between words in prose"
+DASH_LINE = f"Rules help {EM_DASH} when they are checked.\n"
+EN_DASH_LINE = f"Rules help {EN_DASH} when they are checked.\n"
+SEMICOLON_LINE = "Rules help; checks enforce them.\n"
+SLASH_LINE = "Read and/or write the file.\n"
+ALL_KINDS = DASH_LINE + SEMICOLON_LINE + SLASH_LINE
+PUNCTUATION_PROSE = (
+    "Rules help when they are checked. Read `a/b;c`, see [the log](https://example.invalid/a;b-c) &amp; write it.\n"
+    "Open docs/quality_checks.md or scripts/run_ci.sh, then ./a/b, ~/a/b and a/b/c. Hyphens stay in well-known words.\n"
+)
+CLEAN_PUNCTUATION = f"---\ntitle: Notes\nnote: a {EM_DASH} b; c/d\n---\n\n# Notes\n\n{PUNCTUATION_PROSE}\n```text\n{ALL_KINDS}```\n"
+BLOCK_ALL = ("--block", "dash", "--block", "semicolon", "--block", "slash")
+KIND_FOLDERS = ("tests/fixtures/", "dbt/seeds/", "features/recipes/")
+WRITING_KIND_SAMPLES = [
+    ("em dash warns", {"notes.md": DASH_LINE}, (), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
+    ("en dash warns", {"notes.md": EN_DASH_LINE}, (), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
+    ("semicolon warns", {"notes.md": SEMICOLON_LINE}, (), 0, [f"WARN notes.md:1: {SEMICOLON_FINDING}"]),
+    ("slash warns", {"notes.md": SLASH_LINE}, (), 0, [f"WARN notes.md:1: {SLASH_FINDING}"]),
+    (
+        "three kinds on three lines warn",
+        {"notes.md": ALL_KINDS},
+        (),
+        0,
+        [f"WARN notes.md:1: {DASH_FINDING}", f"WARN notes.md:2: {SEMICOLON_FINDING}", f"WARN notes.md:3: {SLASH_FINDING}"],
+    ),
+    ("code, URL, path, entity, fence and front matter are not reported", {"notes.md": CLEAN_PUNCTUATION}, (), 0, []),
+    (
+        "an entity keeps the word boundary of a time word",
+        {"notes.md": "The loader currently&nbsp;reads input.\n"},
+        (),
+        1,
+        ["notes.md:1: time-bound word in prose"],
+    ),
+    ("an entity keeps the word boundary of a date", {"notes.md": "Released on&nbsp;2026-10-14&nbsp;after review.\n"}, (), 1, ["notes.md:1: ISO date in prose"]),
+    ("--block dash blocks an em dash", {"notes.md": DASH_LINE}, ("--block", "dash"), 1, [f"notes.md:1: {DASH_FINDING}"]),
+    ("--block dash blocks an en dash", {"notes.md": EN_DASH_LINE}, ("--block", "dash"), 1, [f"notes.md:1: {DASH_FINDING}"]),
+    ("--block semicolon blocks", {"notes.md": SEMICOLON_LINE}, ("--block", "semicolon"), 1, [f"notes.md:1: {SEMICOLON_FINDING}"]),
+    ("--block slash blocks", {"notes.md": SLASH_LINE}, ("--block", "slash"), 1, [f"notes.md:1: {SLASH_FINDING}"]),
+    (
+        "--block of every kind blocks all three",
+        {"notes.md": ALL_KINDS},
+        BLOCK_ALL,
+        1,
+        [f"notes.md:1: {DASH_FINDING}", f"notes.md:2: {SEMICOLON_FINDING}", f"notes.md:3: {SLASH_FINDING}"],
+    ),
+    ("--block of one kind leaves the others warning", {"notes.md": DASH_LINE}, ("--block", "semicolon"), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
+    ("--block of every kind passes clean prose", {"notes.md": CLEAN_PUNCTUATION}, BLOCK_ALL, 0, []),
+    ("--warn keeps a blocked kind a warning", {"notes.md": DASH_LINE}, ("--block", "dash", "--warn"), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
+    (
+        "allowlist entry without reason",
+        {"notes.md": DASH_LINE, WRITING_ALLOWLIST: "dash notes.md\n"},
+        (),
+        1,
+        [f"WARN notes.md:1: {DASH_FINDING}", f"{WRITING_ALLOWLIST}:1: allowlist entry without a reason"],
+    ),
+    (
+        "allowlist entry with a reason silences only its kind",
+        {"notes.md": SEMICOLON_LINE + DASH_LINE, WRITING_ALLOWLIST: "semicolon notes.md -- a quoted sentence keeps its semicolon\n"},
+        (),
+        0,
+        [f"WARN notes.md:2: {DASH_FINDING}"],
+    ),
+    (
+        "allowlist entry silences a blocked kind",
+        {"notes.md": SEMICOLON_LINE, WRITING_ALLOWLIST: "semicolon notes.md -- a quoted sentence keeps its semicolon\n"},
+        ("--block", "semicolon"),
+        0,
+        [],
+    ),
+    (
+        "allowlist entry is by path",
+        {"notes.md": SLASH_LINE, WRITING_ALLOWLIST: "slash docs/*.md -- another folder\n"},
+        (),
+        0,
+        [f"WARN notes.md:1: {SLASH_FINDING}"],
+    ),
+    (
+        "an em dash in a declared article is one finding",
+        {"articles/a.md": DASH_LINE},
+        ("--articles=articles/*.md",),
+        1,
+        ["articles/a.md:1: em dash in article text"],
+    ),
+    ("an en dash in a declared article warns", {"articles/a.md": EN_DASH_LINE}, ("--articles=articles/*.md",), 0, [f"WARN articles/a.md:1: {DASH_FINDING}"]),
+    *[(f"{folder} is not scanned", {f"{folder}notes.md": ALL_KINDS}, BLOCK_ALL, 0, []) for folder in KIND_FOLDERS],
+]
+WRITING_KIND_ERRORS = [
+    ("--block with an unknown kind", ("--block", "colon"), "invalid choice: 'colon'"),
+    ("--block of a kind that always blocks", ("--block", "comma-and"), "invalid choice: 'comma-and'"),
+]
+
+
+def finding_headers(stderr: str, paths: list[str]) -> list[str]:
+    return [line for line in stderr.splitlines() if line.removeprefix("WARN ").startswith(tuple(f"{path}:" for path in paths))]
+
+
+def writing_kinds_repo(scratch: str) -> Path:
+    repo = scratch_repo(Path(scratch), Case("writing setup", "writing-check", True))
+    for relative in git(repo, "ls-files", "*.md").splitlines():
+        (repo / relative).unlink()
+    return repo
+
+
+def run_writing_kinds_case() -> tuple[bool, str]:
+    results = []
+    for name, files, arguments, expected, headers in WRITING_KIND_SAMPLES:
+        with tempfile.TemporaryDirectory(prefix="hai_writing_kinds_") as scratch:
+            repo = writing_kinds_repo(scratch)
+            write(repo, files)
+            result = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "writing-check", *arguments], cwd=repo)
+            found = finding_headers(result.stderr, list(files))
+            ok = result.returncode == expected and found == headers and "Traceback" not in result.stderr
+            results.append(
+                (ok, f"{'ok' if ok else 'WRONG'} {name}: exit={result.returncode} (expected {expected}); findings={len(found)} (expected {len(headers)})")
+            )
+            if not ok:
+                results.append((False, result.stderr))
+    for name, arguments, message in WRITING_KIND_ERRORS:
+        with tempfile.TemporaryDirectory(prefix="hai_writing_kinds_") as scratch:
+            repo = writing_kinds_repo(scratch)
+            write(repo, {"notes.md": ALL_KINDS})
+            result = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "writing-check", *arguments], cwd=repo)
+            named = all(kind in result.stderr for kind in ("dash", "semicolon", "slash"))
+            ok = result.returncode == 2 and message in result.stderr and named and not finding_headers(result.stderr, ["notes.md"])
+            results.append((ok, f"{'ok' if ok else 'WRONG'} {name}: exit={result.returncode} (expected 2)"))
+            if not ok:
+                results.append((False, result.stderr))
+    return all(ok for ok, _ in results), "\n".join(line for _, line in results) + "\n"
+
+
+def typecheck_fixture(repo: Path) -> None:
+    repo.mkdir()
+    git(repo, "init", "-q")
+    for relative in ("scripts/process.py", "scripts/quality/typecheck.py", "pyproject.toml"):
+        write(repo, {relative: (ROOT / relative).read_text()})
+    write(repo, {"scripts/pending_leaf.py": "import hai_typecheck_missing_dependency\n", "scripts/clean.py": "VALUE = 1\n"})
+
+
+def fixture_typecheck(repo: Path, pending: dict[str, dict[str, str]]) -> tuple[int, str]:
+    write(repo, {"config/quality/mypy_runtimes.json": json.dumps({"pending": pending}) + "\n"})
+    result = run_command(
+        str(ROOT / ".venv/bin/python"),
+        ["-m", "scripts.quality.typecheck", "--check-untyped-defs", "--disallow-untyped-defs"],
+        cwd=repo,
+        env={**os.environ, "MYPY_CACHE_DIR": str(repo.parent / "cache")},
+        timeout=180,
+    )
+    return result.returncode, result.stdout + result.stderr
+
+
+def run_typecheck_import_case() -> tuple[bool, str]:
+    with tempfile.TemporaryDirectory(prefix="hai_typecheck_imports_") as scratch:
+        repo = Path(scratch) / "repo"
+        typecheck_fixture(repo)
+        importers = {
+            "scripts/acquisition/direct.py": "from scripts import pending_leaf\n",
+            "scripts/acquisition/relative.py": "from .. import pending_leaf\n",
+            "scripts/orchestration/transitive.py": "from scripts.acquisition import relative\n",
+            "scripts/package/__init__.py": "from scripts import pending_leaf\n",
+            "scripts/package/child.py": "VALUE = 1\n",
+            "scripts/quality/package_user.py": "import scripts.package.child\n",
+            "scripts/acquisition/cycle_a.py": "from scripts.acquisition import cycle_b\n",
+            "scripts/acquisition/cycle_b.py": "from scripts.acquisition import cycle_a\nfrom scripts import pending_leaf\n",
+        }
+        dynamic = {
+            "scripts/acquisition/dynamic.py": 'import importlib\n\nimportlib.import_module("scripts.pending_leaf")\n',
+            "scripts/acquisition/builtin_dynamic.py": '__import__("scripts.pending_leaf")\n',
+        }
+        write(repo, {**importers, **dynamic})
+        code, output = fixture_typecheck(repo, {"scripts/pending_leaf.py": {"runtime": "fixture", "reason": "synthetic missing dependency"}})
+        checks = {
+            "strict selection passes": code == 0 and "Success: no issues found" in output,
+            "all importers name the cause": all(f"pending {path}: imports a pending module" in output for path in importers),
+            "dynamic imports stay checked": all(f"pending {path}:" not in output for path in dynamic),
+            "clean source remains checked": "pending scripts/clean.py:" not in output and "MyPy runtime host: 5 source files," in output,
+        }
+        return all(checks.values()), json.dumps(checks) + "\n" + output
+
+
+def run_typecheck_manifest_case() -> tuple[bool, str]:
+    with tempfile.TemporaryDirectory(prefix="hai_typecheck_manifest_") as scratch:
+        repo = Path(scratch) / "repo"
+        typecheck_fixture(repo)
+        entry = {"runtime": "fixture", "reason": "synthetic missing dependency"}
+        pending = {"scripts/pending_leaf.py": entry}
+        cases: tuple[tuple[str, dict[str, dict[str, str]], str, int, str], ...] = (
+            ("matching leaves", pending, "import hai_typecheck_missing_dependency\n", 0, "pending manifest matches 1 import-diagnostic files"),
+            (
+                "clean extra leaf",
+                {**pending, "scripts/clean.py": entry},
+                "import hai_typecheck_missing_dependency\n",
+                1,
+                "stale manifest leaf: scripts/clean.py",
+            ),
+            ("missing leaf", {}, "import hai_typecheck_missing_dependency\n", 1, "missing manifest leaf: scripts/pending_leaf.py"),
+            ("resolved import", pending, "import math\n", 1, "stale manifest leaf: scripts/pending_leaf.py"),
+            ("source error in pending leaf", pending, "import hai_typecheck_missing_dependency\nVALUE: int = 'bad'\n", 1, "non-import MyPy diagnostic"),
+        )
+        results = []
+        for name, manifest, source, expected, marker in cases:
+            write(repo, {"scripts/pending_leaf.py": source})
+            code, output = fixture_typecheck(repo, manifest)
+            ok = code == expected and marker in output and "Traceback" not in output
+            results.append((ok, f"{'ok' if ok else 'WRONG'} {name}: exit {code}, expected {expected}\n{output}"))
+        return all(ok for ok, _ in results), "\n".join(output for _, output in results)
+
+
+def run_typecheck_cold_case() -> tuple[bool, str]:
+    results = []
+    for runtime in ("host", "acquisition", "orchestration"):
+        with tempfile.TemporaryDirectory(prefix=f"hai_mypy_{runtime}_") as cache:
+            result = run_command(
+                str(ROOT / ".venv/bin/python"),
+                ["-m", "scripts.quality.typecheck", "--runtime", runtime, "--check-untyped-defs", "--disallow-untyped-defs"],
+                cwd=ROOT,
+                env={**os.environ, "MYPY_CACHE_DIR": cache},
+                timeout=900,
+            )
+            output = result.stdout + result.stderr
+            ok = result.returncode == 0 and f"MyPy runtime {runtime}:" in output and "Success: no issues found" in output
+            results.append((ok, f"{'ok' if ok else 'WRONG'} cold-cache {runtime}: exit {result.returncode}\n{output}"))
+    return all(ok for ok, _ in results), "\n".join(output for _, output in results)
+
+
 def main() -> int:
     """Run every case and report the ones whose hook did not behave as expected."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -757,6 +1020,10 @@ def main() -> int:
             ("verbose commit", run_verbose_case),
             ("privacy scope", run_privacy_scope_case),
             ("writing samples", run_writing_case),
+            ("writing kinds", run_writing_kinds_case),
+            ("typecheck import closure", run_typecheck_import_case),
+            ("typecheck pending manifest", run_typecheck_manifest_case),
+            ("typecheck cold caches", run_typecheck_cold_case),
         ):
             extra += 1
             ok, output = runner()

@@ -1,7 +1,7 @@
 ---
 title: Acquisition Design
 description: What each collector and shared acquisition mechanism checks and which failure each check prevents.
-last_updated: 2026-10-10
+last_updated: 2026-10-14
 ---
 
 # Acquisition Design
@@ -116,7 +116,12 @@ These rules hold for the BLS, Census profile, Census detailed, HUD API, HUD work
 
 ### Source Registry, Terms and Access Releases
 
-`source_registry.py` checks `config/acquisition/source_registry.json` against its lock. `registry_additions.py` handles added measure controls. `s3_store.py` checks releases of held sources.
+`source_registry.py` checks `config/acquisition/source_registry.json` against its lock. `registry_additions.py` handles added
+measure controls and each source's publisher and bronze `dataset_id` values; `source_metadata.py` derives those placements
+from tracked configuration. With `--bronze-lineage <file>` both require every bronze dataset ID to be placed or listed as
+unplaced, even when the optional additions files are absent. They check every placement against the bronze `_source_id`
+of its dataset: it must equal the placing source or a reviewed acquisition route (`acquired_via`, only `main-hai-pdc`, the
+bulk PDC download). `s3_store.py` checks releases of held sources.
 
 | Check | Failure it prevents |
 | --- | --- |

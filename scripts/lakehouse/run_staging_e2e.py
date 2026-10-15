@@ -51,7 +51,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
-from scripts.lakehouse import catalog, geography_file_periods, ipps_file_labels, mmd_conditions, ownership_release_periods, pos_file_periods
+from scripts.lakehouse import catalog, geography_file_periods, ipps_file_labels, mmd_conditions, ownership_release_periods, pos_file_periods, provenance
 
 REPO_ROOT = catalog.REPO_ROOT
 OUT = REPO_ROOT / "data/analytics/dbt"
@@ -4615,7 +4615,7 @@ def launch(template: str, launch_id: str, args: list[str], params: dict[str, Any
             client.principal_alloc(allocation), template, f"{launch_id}-{secrets.token_hex(4)}", args, params, checkout=REPO_ROOT, seconds=TIMEOUT
         )
     except launcher.ClientError as error:
-        raise RuntimeError(f"the launcher refused {template}: {error}") from error
+        raise RuntimeError(error.describe(template)) from error
     finally:
         if pool is None:
             client.release_allocation(allocation)
@@ -4789,8 +4789,11 @@ def dbt_build(case: str, target: str, project: bool = False) -> tuple[int, dict[
         results_path = RUNS / run_id / "target/run_results.json"
         results_path.unlink(missing_ok=True)
         try:
-            result = client.run_attempt(client.principal_run(run_id), "real_dbt", f"build-{case}", ["build"], {}, checkout=REPO_ROOT)
-        except launcher.ClientError as error:
+            # A real build runs on the run's snapshot of the dbt project and packages, with the recorded pins (D1 section 10).
+            principal = client.principal_run(run_id)
+            provenance.request_snapshot(client, principal, run_id, REPO_ROOT, (OUT / "dbt_packages").resolve())
+            result = client.run_attempt(principal, "real_dbt", f"build-{case}", ["build"], {}, checkout=REPO_ROOT)
+        except (launcher.ClientError, provenance.ProvenanceError) as error:
             raise RuntimeError(f"the launcher refused the real build: {error}") from error
     code = result.exit_code if result.exit_code is not None else 1
     if not results_path.exists():
@@ -6564,6 +6567,40 @@ def real_stage(once: bool = False) -> dict[str, Any]:
     return outcome
 
 
+PREFLIGHT_WAIT = 5.0
+
+
+def preflight_launcher() -> str | None:
+    """Decide on one ping whether the staging run may start: the refusal text, else None. It makes one exchange with a running launcher, never
+    starts one and never retries, so it creates no attempt, allocation or run (A161, A182)."""
+    client = launcher.load_client(TEST_REGISTRY, start=False)
+    limit = client.config.timings.slow_exchange
+    begun = time.monotonic()
+    try:
+        client.bounded_call("ping", {}, {"kind": "any"}, client.next_id(), PREFLIGHT_WAIT)
+    except (FileNotFoundError, ConnectionRefusedError):
+        return (
+            f"refused before any build: the launcher is not running (nothing answers at {client.config.socket_path}). "
+            "Start it with `.venv/bin/python -m orchestration.launcher status`, then run again."
+        )
+    except (launcher.ClientError, OSError) as error:
+        spent = time.monotonic() - begun
+        what = f"did not answer a ping within {PREFLIGHT_WAIT:g} s ({spent:.2f} s spent)" if isinstance(error, TimeoutError) else f"failed a ping ({error})"
+    else:
+        spent = time.monotonic() - begun
+        if spent <= limit:
+            return None
+        what = f"took {spent:.2f} s to answer one ping (limit {limit:g} s)"
+    try:
+        size = f"{client.config.registry.state_file.stat().st_size / 1e6:.1f} MB"
+    except OSError:
+        size = "of unknown size"
+    return (
+        f"refused before any build: the launcher {what}. registry.json is {size}. One fix to try is compaction: the launcher moves finished records "
+        "older than 1 hour to its history folder once the file passes 1 MB (docs/lakehouse_usage.md, Registry history)."
+    )
+
+
 def main() -> int:
     """Run the fixture cases (unless --real-only), then the real stage when asked, and write the report."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -6579,6 +6616,10 @@ def main() -> int:
     args = parser.parse_args()
     global TEST_REGISTRY
     TEST_REGISTRY = catalog.TEST_REGISTRY = args.test_registry
+    refusal = preflight_launcher()
+    if refusal:
+        sys.stderr.write(refusal + "\n")
+        return 2
     real = args.real or args.real_only or args.real_once
     mode = "iteration" if args.real_once or args.real_only else ("full" if args.real else "fixture_only")
     dbt_at_start = dbt_tree_sha256()

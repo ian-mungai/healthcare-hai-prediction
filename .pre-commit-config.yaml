@@ -1,9 +1,6 @@
-# Pre-commit checks for this repository; README.md, Quality Checks, lists what each one enforces.
+# Pre-commit checks for this repository; docs/quality_checks.md lists what each one enforces.
 # Every hook is local and pinned: pre-commit, Ruff and MyPy come from requirements.txt in .venv, gitleaks and TFLint
-# from scripts/quality/install_tools.py in .tools. Hooks run on every commit (pre-commit stage); the full set
-# (manual stage) runs before a release or push with `pre-commit run --all-files --hook-stage manual`, and GitHub CI
-# runs that same command on every push and pull request, with the local_ci hook split out into parallel jobs that run
-# scripts/run_ci.sh in parts (.github/workflows/ci.yml).
+# from scripts/quality/install_tools.py in .tools. Before every push, run `pre-commit run --all-files --hook-stage manual`.
 # There are no other bypasses: do not use SKIP= or git commit --no-verify.
 default_install_hook_types: [pre-commit, commit-msg]
 default_stages: [pre-commit, manual]
@@ -80,10 +77,11 @@ repos:
         always_run: true
       - id: writing-check
         name: Prose follows the writing preferences
-        entry: .venv/bin/python -m scripts.quality.repo_checks writing-check
+        entry: .venv/bin/python -m scripts.quality.repo_checks writing-check --block dash --block slash
         language: system
         pass_filenames: false
         always_run: true
+        verbose: true
       - id: front-matter
         name: Documents carry valid front matter (title, description, last_updated)
         entry: .venv/bin/python -m scripts.quality.repo_checks front-matter
@@ -162,13 +160,21 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-commit]
-        files: ^(scripts/acquisition/|config/acquisition/|tests/test_source_registry\.py$|scripts/process\.py$|scripts/infrastructure/render_project_config\.py$|requirements\.txt$|\.github/workflows/ci\.yml$)
+        files: ^(scripts/acquisition/|config/acquisition/|tests/test_source_registry\.py$|tests/fixtures/registry_additions_bronze_lineage\.csv$|scripts/process\.py$|scripts/quality/typecheck\.py$|config/quality/mypy_runtimes\.json$|scripts/infrastructure/render_project_config\.py$|requirements\.txt$|\.github/workflows/ci\.yml$)
+      - id: local_ci_affected
+        name: Run local CI for the staged paths
+        entry: env CI_SCOPE=staged bash scripts/run_ci.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
       - id: local_ci
-        name: Run local CI
+        name: Run the full local CI
         entry: bash scripts/run_ci.sh
         language: system
         pass_filenames: false
         always_run: true
+        stages: [manual]
       - id: commit-msg
         name: Conventional Commits and no AI attribution
         entry: .venv/bin/python -m scripts.quality.repo_checks commit-msg

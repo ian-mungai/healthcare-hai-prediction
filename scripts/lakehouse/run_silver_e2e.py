@@ -301,7 +301,11 @@ class Run:
     launches: int = 0
     scratch: Path | None = None
     scratch_state: dict[str, Any] = field(default_factory=lambda: {"errors": [], "absent": None, "attempted": False})
-    allocation_released: bool | None = None
+    allocation_release: launcher.ReleaseOutcome | None = None
+
+    @property
+    def allocation_released(self) -> bool | None:
+        return None if self.allocation_release is None else self.allocation_release is launcher.ReleaseOutcome.RELEASED
 
     def enter(self, phase: str) -> None:
         self.phase = phase
@@ -316,6 +320,7 @@ class Run:
 
         The launcher owns each quality container: an attempt reaches an end reason only after its container is removed and proved absent, and the
         launcher refuses to release the allocation while an attempt of it is open, so ``allocation_released`` is true only after every container is gone.
+        A retained or unresolved release (a lost connection to the launcher) is reported as such and fails the cleanup.
         """
         try:
             self.scratch_state = {**remove_tree(self.scratch), "attempted": True} if self.scratch else {"errors": [], "absent": True, "attempted": False}
@@ -323,7 +328,14 @@ class Run:
             self.scratch_state = {"errors": [f"{type(error).__name__}: {error}"], "absent": None, "attempted": True}
         ended = all("reason" in item for item in self.attempts)
         ok = not self.scratch_state["errors"] and self.scratch_state["absent"] is not False and ended and self.allocation_released is not False
-        return {"ok": ok, "attempts": self.attempts, "scratch": self.scratch_state, "allocation_released": self.allocation_released}
+        outcome = None if self.allocation_release is None else self.allocation_release.value
+        return {
+            "ok": ok,
+            "attempts": self.attempts,
+            "scratch": self.scratch_state,
+            "allocation_released": self.allocation_released,
+            "allocation_release": outcome,
+        }
 
     def finalize(self, started: float) -> Path | None:
         """Clean up, then write the report; the report is written even when a cleanup fails."""
@@ -694,11 +706,11 @@ def fixture_stage(run: Run, args: argparse.Namespace) -> None:
         package_fixture.ACTIVE.remove(run.session)
         if not inherited:
             try:
-                client.release_allocation(allocation)
-                run.allocation_released = True
+                run.allocation_release = client.release_allocation(allocation)
             except (launcher.ClientError, OSError) as error:
-                run.allocation_released = False
+                run.allocation_release = launcher.ReleaseOutcome.UNRESOLVED
                 stage["allocation"]["release_error"] = str(error)
+            stage["allocation"]["release"] = run.allocation_release.value
 
 
 def fixture_cases(run: Run, args: argparse.Namespace, session: package_fixture.Session, stage: dict[str, Any]) -> None:

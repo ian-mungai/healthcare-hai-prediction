@@ -40,6 +40,7 @@ mlruns/
 *.joblib
 *.parquet
 *.csv
+!tests/fixtures/registry_additions_bronze_lineage.csv
 # The reviewed dbt seeds are committed; repo_checks.py declares their folder.
 !dbt/seeds/*.csv
 !dbt/seeds/gold/*.csv

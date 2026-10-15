@@ -1,10 +1,10 @@
 ---
-title: Quality Checks
+title: Quality checks
 description: Every repository check the pre-commit hooks and CI run, what each blocks and how to run it on its own.
-last_updated: 2026-10-13
+last_updated: 2026-10-15
 ---
 
-# Quality Checks
+# Quality checks
 
 - **Secrets and credential files:** gitleaks scans the staged index; `.env`
   (but not `.env.example`), Terraform state and saved plans, keys and cloud
@@ -44,6 +44,18 @@ last_updated: 2026-10-13
   each rule was enabled. Run it with
   `.venv/bin/python -m scripts.quality.repo_checks writing-check` (`--warn`
   reports without failing).
+
+  Three more kinds report in all prose: em and en dashes (`dash`), semicolons
+  (`semicolon`) and slashes between words such as `and/or` (`slash`). They warn
+  by default: each finding prints with a `WARN` prefix and the check exits
+  with code 0. `--block <kind>` makes one kind block (`--block dash --block
+  slash`) once a whole-repository run shows no finding of that kind. Any other
+  kind name is a usage error. The `.writing_allowlist` entry type is the kind
+  name, so `semicolon docs/*.md -- <reason>` keeps the semicolons of those
+  files. In a declared article an em dash is one `em dash in article text`
+  finding, not also a `dash` warning. The hook and the local CI command pass
+  `--block dash --block slash`, so dashes and slashes block there and semicolons warn. A whole-repository run without
+  `--block` lists them, one `WARN` line each.
 - **Markdown syntax:** `markdownlint-cli2` checks every staged Markdown file
   outside `data/` against the Conventional Docs baseline in
   `.markdownlint-cli2.jsonc` (dash bullets, ATX headings, sequential numbered
@@ -58,15 +70,19 @@ last_updated: 2026-10-13
   the full message by the `commit-msg` hook and, in GitHub Actions, for every
   pushed commit. AI credit and agent-session lines are rejected; human
   co-authors and factual tool mentions are allowed. Detection uses an explicit
-  agent/vendor list, so new forms need a failing sample before the check is
+  agent and vendor list, so new forms need a failing sample before the check is
   extended. Review pull request text separately; a Git hook cannot read it.
 - **Docs match the code:** every environment variable the code reads is listed
   in `.env.example` and every variable listed there is read by code, a script,
   a workflow or a template. Local commits require an ignored `.documentation_review.json`, a per-document
-  review outcome bound to the staged snapshot. Draft it with
+  review outcome bound to the complete staged source and configuration snapshot. Before the first release tag,
+  the document inventory is `README.md` only. Other documents, including explicit extra formats, do not require
+  per-commit review during development. A version tag such as `v1.0.0` restores the full inventory and requires
+  its review. Other tags do not change the inventory. Draft the record with
   `.venv/bin/python -m scripts.quality.documentation_review prepare --reviewer <name> --reviewed-at <UTC>`
-  after staging, then fill each outcome and note locally. Read in full every changed or new document and every
-  unchanged one that the staged change affects. After a staged change, `prepare --refresh --carry-forward` keeps the
+  after staging, then fill each outcome and note locally. Read the README in full during development.
+  Once released, read in full every changed or new document and every unchanged one that the staged change affects.
+  After a staged change, `prepare --refresh --carry-forward` keeps the
   outcome of each document whose staged content is unchanged and whose earlier entry is valid, with the earlier
   review time in its note; set it back to `pending` if the change affects it. Never stage
   this record. The local hook validates its freshness against the index and rejects
@@ -110,16 +126,32 @@ last_updated: 2026-10-13
   reports without failing).
 - **Lint settings:** Ruff keeps rule sets `E`, `F`, `I`, `B`, `UP`, `S`, `SIM`
   and `T20` at line length 160 with no ignore or exclude settings; MyPy keeps
-  `--check-untyped-defs` and `--disallow-untyped-defs`. The only allowed
+  `--check-untyped-defs` and `--disallow-untyped-defs`. The settings check covers every nonignored MyPy TOML and
+  INI profile, module overrides and literal command flags. A command cannot select a generated or dynamic profile.
+  `scripts/quality/typecheck.py` checks every host-compatible Python source. Dependency-bound leaves and their required
+  types are listed in `config/quality/mypy_runtimes.json`. This is the only hand-written exclusion list. The selector
+  derives their transitive local importers, including package initialization. Calls such as `importlib.import_module`
+  are not imports for this purpose, because MyPy does not follow them. It reports
+  each as pending with the cause "imports a pending module". The leaves and their importers remain pending until their
+  dependencies and types are available. Every host run checks that the leaf set equals the files with import diagnostics
+  in an unrestricted MyPy run. An extra leaf, a missing leaf or any other type diagnostic fails the check.
+  The acquisition and orchestration host scopes use this same inventory without import suppressions.
+  Run a declared runtime with
+  `.venv/bin/python -m scripts.quality.typecheck --runtime <name> --check-untyped-defs --disallow-untyped-defs`
+  in its compatible environment. The only allowed
   suppression is Ruff `S603` in `scripts/process.py`, the one process launcher;
   other scripts start programs through it and run as modules
   (`.venv/bin/python -m scripts.quality.scan_secrets`). Tests use
   `tests/support.py` `check()` instead of `assert`.
 
+The strict command above prints the selected file count and every pending file with its cause for the chosen runtime.
+The check E2E runs the host, acquisition and orchestration scopes with separate empty MyPy caches and verifies synthetic
+import chains and manifest mismatches.
+
 **Acquisition checks** (`bash scripts/acquisition/run_checks.sh`) run Ruff, MyPy,
 registry validation, the acquisition regression tests and every offline E2E
 suite twice, with a 90% coverage gate that also counts collector command lines
-run as child processes. They take 12–14 minutes (up to 29 in CI), so they run only
+run as child processes. They take 12 to 14 minutes (up to 29 in CI), so they run only
 when acquisition code, configuration or their dependencies change: through the
 `acquisition-checks` pre-commit hook and in a separate GitHub Actions "Acquisition
 Checks" job (30-minute limit, LFS checkout, pinned Terraform). The CI job uses the
@@ -145,5 +177,73 @@ point (`scripts/quality/run_checks_e2e.py` and
 `scripts/quality/run_documentation_review_e2e.py`); both run in local CI.
 Every detection check was run on the whole repository before it was enabled,
 with no false positives, so they block from the start. The writing check blocked
-only after the existing prose was corrected. The unused code, dependency and file
+only after the existing prose was corrected. Its dash and slash kinds block since the prose was corrected on
+Oct 15 2026. Its semicolon kind warns until a whole-repository run has no semicolon finding. The unused code, dependency and file
 checks blocked only after their findings were deleted or listed with a reason.
+
+## How the checks run
+
+CI checks Ruff formatting and security rules, MyPy, outgoing-source secret
+scanning, repository checks, configuration and quality E2E, retained regression
+safeguards, Terraform mock tests, TFLint, Checkov and `trivy config` (its
+embedded checks only, run offline). Pre-commit scans the actual staged index,
+including changes hidden by a clean working copy, before local CI. The source
+scan excludes ignored acquisition data; neither scan sends files to an external
+service. Secret values and matching source fragments are omitted from scanner
+diagnostics.
+
+Pre-commit (`pre-commit` and `commit-msg` stages) and `scripts/run_ci.sh`
+enforce these repository rules at the pinned versions. On a commit the
+`local_ci_affected` hook runs `scripts/run_ci.sh` for the staged paths. The full
+set (`.venv/bin/pre-commit run --all-files --hook-stage manual`, whose
+`local_ci` hook runs the full local CI) runs before every release or push.
+GitHub CI runs the manual stage on every push and pull request as parallel
+jobs: the hooks without `local_ci` (file-based hooks check the changed files of
+the range), then `scripts/run_ci.sh` as `CI_PART=core` and, when a change
+touches a path the launcher reads, the launcher E2E in two shards
+(`CI_PART=launcher`, `LAUNCHER_SHARD=K/2`), each for the groups the range
+touches (`CI_SCOPE=range`). Without a usable range (a manual run, the first push
+of a branch or rewritten history) every check runs. Each job caches only what a
+lock file or hash checks again before use (npm packages, Terraform providers,
+the dbt package archive and the SQLFluff packages); the Python environment is
+built fresh from `requirements.txt` without a pip cache. Its timeout is about
+twice its measured time. Locally `scripts/run_ci.sh` runs every part: the gates
+first, then the launcher E2E and then the independent check groups, which run
+concurrently. It prints each step's seconds (GitHub CI adds them to the job
+summary). In the full set gitleaks scans every outgoing source file instead of
+the staged index. The acquisition checks
+run in their own CI job and through their hook only when acquisition files
+change. The full local CI also runs them. Run them directly before a release
+with `bash scripts/acquisition/run_checks.sh`.
+
+The checks cover secrets and credential files, data files (allowed only in `tests/fixtures/` and `dbt/seeds/`), a
+privacy scan of every non-ignored file, prose style, Markdown syntax, front matter, commit messages, documentation that
+matches the code, removed names, unused code, dependencies and files, lint settings and Docker calls outside the
+launcher. Each has a failing and a passing sample run in local CI. Local commits need an ignored
+`.documentation_review.json`, a review of `README.md` before the first release tag and the full document inventory
+from that tag onward, bound to the complete staged snapshot
+(`.venv/bin/python -m scripts.quality.documentation_review prepare`). There are no bypasses:
+never use `SKIP=` or `git commit --no-verify`. If a check blocks a valid change,
+fix the check or ask the repository owner.
+
+`CI_SCOPE` selects the check groups: `full` (the default: every group, the acquisition gate included), `staged` (the
+commit hook) or `range` with `RANGE_START` and `RANGE_END` (GitHub CI). `CI_LIST_ONLY=1` prints which groups would run
+and why. It runs nothing. The groups and the paths they depend on are in `config/quality/ci_groups.json`. A path that
+no group lists and that is not passive selects every applicable group. Markdown outside `dbt/`, anything under `docs/`,
+`.gitignore` and `.gitattributes` are passive: they do not select every group, but a group whose list matches one still
+runs. A change of passive paths that no group lists runs no group. The privacy, secret, credential, data-file,
+writing, Markdown lint and documentation gates always run. They run in every scope and every part, also when no group
+is selected. The Markdown lint gate checks every Markdown document the markdownlint hook checks, so a change to any file
+markdownlint reads (its configuration in any folder, a file a configuration extends or the pin) cannot skip it. The
+acquisition gate is the exception: it runs only in the full scope and its own hook and CI job cover commits and pushes.
+A change to `.sqlfluff` or the SQLFluff pins lints every dbt model and test (the `sql_style` group).
+
+Each CI run retains configuration evidence under `data/e2e/configuration/` and
+quality evidence under `data/e2e/quality/`. E2E reports include source hashes,
+expected and observed process outcomes, repeat commands and tested limits.
+GitHub Actions retains these synthetic artifacts for 14 days. Local TFLint
+needs permission to start its bundled plugin; a sandbox denial is a blocked
+check, not a passing result.
+
+Before every commit, stage the intended files by name, then draft, complete and
+retain the ignored local documentation review record (see Docs match the code above).

@@ -58,7 +58,7 @@ SAVED = (
     "int_hospital_ownership_history",
 )
 # The 7 emptied models: the 4 formula models and the 3 control-map models whose casts move into kept models.
-FORMULAS = ("int_cost_report_measures", "int_impact_measures", "int_mup_measures", "int_occmix_measures")
+FORMULAS: tuple[str, ...] = ("int_cost_report_measures", "int_impact_measures", "int_mup_measures", "int_occmix_measures")
 FORMULAS += ("int_registry_measure_windows", "int_validation_measure_windows", "int_validation_program_values")
 # Macros only the archived models call; shared macros stay in dbt/macros/ and are recorded as blob pointers.
 OWN_MACROS = ("care_compare_alignment.sql", "hai_outcome_columns.sql", "hospital_alignment.sql", "scd2.sql", "cmi_years.sql")

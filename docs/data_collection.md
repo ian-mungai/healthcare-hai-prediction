@@ -1,7 +1,7 @@
 ---
 title: Data Collection
 description: How the source data was collected and stored, with the commands that repeat or recheck each step.
-last_updated: 2026-10-10
+last_updated: 2026-10-15
 ---
 
 # Data Collection
@@ -60,9 +60,9 @@ Each API collector has a plan builder, a collector and a synthetic end-to-end su
 
 | Source | Scope collected | Plan | Collect | End-to-end suite |
 | --- | --- | --- | --- | --- |
-| BLS Local Area Unemployment Statistics | County unemployment, employment and labor force, monthly and annual, 1990–2025: 520 requests | `build_bls_api_plan` | `collect_bls_api --fetch --execute --limit 520` | `run_bls_api_e2e` |
-| Census ACS 5-year profiles, 2005–2009 | DP02, DP02PR, DP03, DP04 and DP05, every county and Puerto Rico municipio | `build_census_acs_api_plan` | `collect_census_acs_api --fetch --execute --limit 5` | `run_census_acs_api_e2e` |
-| HUD USPS ZIP crosswalk, 2021 Q1–2025 Q4 | ZIP-to-county, nationwide, one request per quarter | `build_hud_api_plan` | `collect_hud_api --fetch --execute` | `run_hud_api_e2e` |
+| BLS Local Area Unemployment Statistics | County unemployment, employment and labor force, monthly and annual, 1990 to 2025: 520 requests | `build_bls_api_plan` | `collect_bls_api --fetch --execute --limit 520` | `run_bls_api_e2e` |
+| Census ACS 5-year profiles, 2005 to 2009 | DP02, DP02PR, DP03, DP04 and DP05, every county and Puerto Rico municipio | `build_census_acs_api_plan` | `collect_census_acs_api --fetch --execute --limit 5` | `run_census_acs_api_e2e` |
+| HUD USPS ZIP crosswalk, 2021 Q1 to 2025 Q4 | ZIP-to-county, nationwide, one request per quarter | `build_hud_api_plan` | `collect_hud_api --fetch --execute` | `run_hud_api_e2e` |
 | CMS Mapping Medicare Disparities | The condition-years in its queue | `run_mmd_api_collection` builds its queue | `run_mmd_api_collection --execute --output <report>` or `collect_mmd_api --measure-id <id> --year <year> --fetch --execute` | `run_mmd_api_e2e` |
 
 Prefix every module name with `.venv/bin/python -m scripts.acquisition.`, for example:
@@ -133,13 +133,13 @@ Four collections could only be saved by hand in a browser. In each case the stor
 | --- | --- | --- | --- |
 | CMS Mapping Medicare Disparities exports (52 stored) | Collected before the MMD API route was built | Export each listed condition, year and geography from the MMD tool as CSV | `store_mmd_export --download <file> --template <receipt> --condition <name> --measure-id <id> --year <year> --domain <domain> --geography <County or State/Territory> --execute` |
 | Census ACS table exports (16 stored) | Some tables and years are only offered as data.census.gov downloads | Download the table for all counties with all fields, for the listed five-year vintages | `store_census_export --download <file.zip> --table <id> --years <years>` |
-| CDC WONDER county mortality, 1999–2024 (6 stored) | WONDER's API serves national data only; county results come only from its query form | Run the Underlying Cause of Death form grouped by county and year, with crude rates, zero and suppressed values shown and totals off. Save the export unchanged | `build_wonder_plan`, then `store_wonder_export --execute` |
-| HUD ZIP-to-county workbooks, 2010 Q1–2020 Q4 (44 stored) | The HUD API covers whole-country requests only from 2021 Q1. The crosswalk files site has no fixed file links and scripting its login is not assumed to be allowed | Log in to the [HUD crosswalk files site](https://www.huduser.gov/apps/public/uspscrosswalk/login), choose **ZIP-COUNTY** and each quarter, select **Download** and save the file unchanged to Downloads | `build_hud_xlsx_plan`, then `store_hud_xlsx --execute` |
+| CDC WONDER county mortality, 1999 to 2024 (6 stored) | WONDER's API serves national data only; county results come only from its query form | Run the Underlying Cause of Death form grouped by county and year, with crude rates, zero and suppressed values shown and totals off. Save the export unchanged | `build_wonder_plan`, then `store_wonder_export --execute` |
+| HUD ZIP-to-county workbooks, 2010 Q1 to 2020 Q4 (44 stored) | The HUD API covers whole-country requests only from 2021 Q1. The crosswalk files site has no fixed file links and scripting its login is not assumed to be allowed | Log in to the [HUD crosswalk files site](https://www.huduser.gov/apps/public/uspscrosswalk/login), choose **ZIP-COUNTY** and each quarter, select **Download** and save the file unchanged to Downloads | `build_hud_xlsx_plan`, then `store_hud_xlsx --execute` |
 
 **HUD workbook route in detail.** The 44 downloads are listed with their size, SHA-256 and origin in `data/acquisition_planning/hud_zip_county_2010_2020_downloads.json` (local record, not in the repository). `build_hud_xlsx_plan` turns that list into a locked plan (`config/acquisition/hud_xlsx_plan_2010q1_2020q4.json`) that records each quarter's hash and county geography: 2000 Census counties through 2011 Q4 and 2010 Census counties from 2012 Q1. `store_hud_xlsx` then checks each quarter on its own:
 
 - the file in Downloads has HUD's origin and the planned hash;
-- the workbook has one sheet, the exact six columns, text ZIP and county codes, numeric ratios, no formulas or shared strings, unique ZIP–county pairs and every state and DC;
+- the workbook has one sheet, the exact six columns, text ZIP and county codes, numeric ratios, no formulas or shared strings, unique ZIP and county pairs and every state and DC;
 - the original is copied write-once and a CSV in the same layout as the API quarters is written beside it.
 
 A quarter that fails is held and named; the others continue. Once a quarter is copied, the Downloads file is no longer needed. The failure analysis written before the code is in [HUD Crosswalk Workbooks](acquisition_design.md#hud-crosswalk-workbooks), items 27 to 45.
@@ -154,7 +154,7 @@ A quarter that fails is held and named; the others continue. Once a quarter is c
 .venv/bin/python -m scripts.acquisition.run_hud_xlsx_e2e --output <new_report.json>
 ```
 
-**WONDER route in detail.** WONDER does not offer county age-adjusted rates, so the measure is deaths, population and crude rate per 100,000 with 95% limits and standard error; age is handled by other predictors. The 1999–2020 database (older race categories) and the 2018–2024 database (single race) overlap in 2018–2020. WONDER cannot export 1999–2020 in one file, so that database is exported as 1999–2005, 2006–2012 and 2013–2019. `store_wonder_export` checks each file's WONDER origin (with the session identifier removed), the exact query record in its notes, the header, the planned years, at least 3,100 counties a year, every state and DC, unique county-years and the published flags. It refuses any count of 1–9 deaths. The plan, findings and failure modes are in [CDC WONDER Exports](acquisition_design.md#cdc-wonder-exports).
+**WONDER route in detail.** WONDER does not offer county age-adjusted rates, so the measure is deaths, population and crude rate per 100,000 with 95% limits and standard error; age is handled by other predictors. The 1999 to 2020 database (older race categories) and the 2018 to 2024 database (single race) overlap in 2018 to 2020. WONDER cannot export 1999 to 2020 in one file, so that database is exported as 1999 to 2005, 2006 to 2012 and 2013 to 2019. `store_wonder_export` checks each file's WONDER origin (with the session identifier removed), the exact query record in its notes, the header, the planned years, at least 3,100 counties a year, every state and DC, unique county-years and the published flags. It refuses any count of 1 to 9 deaths. The plan, findings and failure modes are in [CDC WONDER Exports](acquisition_design.md#cdc-wonder-exports).
 
 ```sh
 .venv/bin/python -m scripts.acquisition.build_wonder_plan               # once, from data/acquisition_planning/wonder_downloads.json
@@ -174,7 +174,43 @@ These steps need a person. Everything else runs from the scripts above.
 
 ## Privacy Handling
 
-A few sources contain personal names or contact details. The README's [Data section](../README.md#data) sets the rules; in short:
+A few sources contain personal names or contact details. These rules apply:
+
+Published hospital-level datasets are public reference data subject to their
+source terms. Public availability does not remove personal-data safeguards.
+Any source containing personal names or contact details
+is classified as Confidential and requires a documented ingestion exception.
+
+For the HCAI exception, the untouched download stays local with
+owner-only access. Only the privacy-filtered derivative and non-personal
+references or provenance may enter the project's private S3 storage. The
+derivative remains under privacy and modeling review; redaction does not
+establish formal anonymization or clinical validity. Raw retention duration
+remains unresolved. The development Mac uses FileVault; that host check
+does not establish compliance or resolve retention requirements.
+
+The data bucket carries its own `DataClassification` tag of Confidential.
+Redacted derivatives are not formally
+anonymized. Hospital chief executives in HCAI annual financial files and state
+officials' work contacts in a CMS contacts table are treated as Confidential:
+originals stay local and only redacted copies belong in S3. S3 holds no
+Excel or contact originals: 293 such versions were removed, 75 of them replaced by
+redacted copies. Retirement records cover all 293, storage reconciliation passes
+and no deletion grant remains.
+Operational evidence stays in ignored local
+folders; this status does not clear privacy or modeling holds. The project no
+longer uses the HRSA Area Health Resources Files: their license limits sharing
+the data with third parties, so the five measures built on them were dropped and
+all 399 stored versions were deleted and verified.
+
+Tests use generic synthetic data. Real personal values must never appear in
+fixtures, logs, tutorials, published artifacts or commits. Acquisition inputs,
+operational evidence and the detailed exception record remain untracked.
+
+The live S3 verification tool is the sole opt-in exception
+to synthetic-only verification. Normal CI does not run it or contact AWS.
+
+In practice:
 
 - The unchanged download stays on the local machine with owner-only access.
 - `abstract_public_business_csv --policy <policy> --source-url <url> --input <original> --output <derivative>` writes a privacy-filtered copy; only that copy goes to S3.
@@ -187,9 +223,9 @@ A few sources contain personal names or contact details. The README's [Data sect
   ```
 
   The offline recheck rebuilds each stored CSV from its local original, so it needs the originals until they are deleted at closeout.
-- **HCAI hospital annual utilization 2018–2025** (eight annual workbooks, 2025 preliminary) has its own collector, `store_hcai_util`. It downloads each workbook through the reviewed signed redirect into `data/datasets/historical_acquisition/hcai_util_2018_2025/private_original/` (owner-only; local record, not in the repository) and stores one abstracted CSV per sheet: personal columns, individual-owner details, copied names and stray contact details are replaced with `[REDACTED]`. Plan: `config/acquisition/hcai_util_2018_2025_plan.json`; failure modes: [HCAI Utilization](acquisition_design.md#hcai-utilization). Same commands as the owners collector, with `store_hcai_util`.
-- **ONC meaningful-use attestations 2011–2017** (`store_onc_mu`) downloads `MU_REPORT.csv` into `data/datasets/historical_acquisition/onc_mu_attestation/private_original/` (owner-only; local record, not in the repository) and stores hospital rows only, without the clinician-only `Specialty` column; clinician rows never leave this Mac. Plan: `config/acquisition/onc_mu_hospital_plan.json`.
-- **ACS derived history** (`collect_census_acs_detailed`) collects B17001 (2010–2016), B16001 and B16004 (2009–2015) through the Census API with the runtime-only key, then derives poverty % for 2010–2011 and the limited-English total for 2009–2015. Derived values are stored only after exact checks: B17001 against the stored S1701 exports (2012–2016) and B16001 against B16004 in the same years. Plan: `config/acquisition/census_acs_detailed_plan.json`; method: [Census ACS Detailed Tables and Derived History](acquisition_design.md#census-acs-detailed-tables-and-derived-history). Run it like the other collectors (`--fetch`, `--execute` or neither for an offline recheck).
+- **HCAI hospital annual utilization 2018 to 2025** (eight annual workbooks, 2025 preliminary) has its own collector, `store_hcai_util`. It downloads each workbook through the reviewed signed redirect into `data/datasets/historical_acquisition/hcai_util_2018_2025/private_original/` (owner-only; local record, not in the repository) and stores one abstracted CSV per sheet: personal columns, individual-owner details, copied names and stray contact details are replaced with `[REDACTED]`. Plan: `config/acquisition/hcai_util_2018_2025_plan.json`; failure modes: [HCAI Utilization](acquisition_design.md#hcai-utilization). Same commands as the owners collector, with `store_hcai_util`.
+- **ONC meaningful-use attestations 2011 to 2017** (`store_onc_mu`) downloads `MU_REPORT.csv` into `data/datasets/historical_acquisition/onc_mu_attestation/private_original/` (owner-only; local record, not in the repository) and stores hospital rows only, without the clinician-only `Specialty` column; clinician rows never leave this Mac. Plan: `config/acquisition/onc_mu_hospital_plan.json`.
+- **ACS derived history** (`collect_census_acs_detailed`) collects B17001 (2010 to 2016), B16001 and B16004 (2009 to 2015) through the Census API with the runtime-only key, then derives poverty % for 2010 to 2011 and the limited-English total for 2009 to 2015. Derived values are stored only after exact checks: B17001 against the stored S1701 exports (2012 to 2016) and B16001 against B16004 in the same years. Plan: `config/acquisition/census_acs_detailed_plan.json`; method: [Census ACS Detailed Tables and Derived History](acquisition_design.md#census-acs-detailed-tables-and-derived-history). Run it like the other collectors (`--fetch`, `--execute` or neither for an offline recheck).
 - **Held sources released by an access record, not by terms.** HCAI is on access hold in the locked registry. Storage accepts it only when the receipt binds, by SHA-256, the record `config/acquisition/access_releases_20260929.json`; the terms-acceptance record for HUD and WONDER is unchanged.
 
 ## Checking Stored Data
@@ -203,12 +239,12 @@ A few sources contain personal names or contact details. The README's [Data sect
 
 Data dictionaries, record layouts and codebooks are stored as reference documents under each collection's `references/` prefix, never as data. They explain the published columns. The bronze data dictionaries in the lakehouse take their column descriptions and published types from them; the Care Compare dictionaries give names and types only. The HRSA shortage-area detail files `BCD_HPSA_FCT_DET_PC.csv` and `MUA_DET.csv` are the exception: they are data stored with the dictionary role; corrected manifests give them the data role. Bronze loads them as data tables (see [Storage Changes After Collection](#storage-changes-after-collection)).
 
-**Stored with the data:** the 30 Care Compare dictionary editions inside the HAI archives; one edition each of the CMS cost-report, All Owners, Change of Ownership, Enrollments, Provider of Services (`P.QWB.POSQ.OTHER.LAYOUT.MAR23.pdf`) and 2013–2016 Medicare inpatient dictionaries; the CMS geographic variation, hospital service area and MMD documentation; some IPPS and occupational-mix layouts; the HCAI finance documentation; ACS table notes; the HRSA nursing survey codebook and the HPSA and MUA metadata workbooks; and the Massachusetts technical appendix.
+**Stored with the data:** the 30 Care Compare dictionary editions inside the HAI archives; one edition each of the CMS cost-report, All Owners, Change of Ownership, Enrollments, Provider of Services (`P.QWB.POSQ.OTHER.LAYOUT.MAR23.pdf`) and 2013 to 2016 Medicare inpatient dictionaries; the CMS geographic variation, hospital service area and MMD documentation; some IPPS and occupational-mix layouts; the HCAI finance documentation; ACS table notes; the HRSA nursing survey codebook and the HPSA and MUA metadata workbooks; and the Massachusetts technical appendix.
 
 **Collected with the history route:** 56 more files through `history_routes` with the reference role, each with a receipt and S3 readback. For CMS datasets on data.cms.gov, each release names its dictionary in the `describedBy` field of the public catalog, `https://data.cms.gov/data.json`, which is saved as the evidence page:
 
 - CMS: the older All Owners (4), Change of Ownership (4) and Enrollments (3) editions and the clinical-laboratory Provider of Services layout.
-- Census: SAIPE state and county layouts for every stored year (31) and SAHIE layouts for 2005–2007 and 2008–2024. The county adjacency pages for 2010 and 2023–2026 hold that file's record layout.
+- Census: SAIPE state and county layouts for every stored year (31) and SAHIE layouts for 2005 to 2007 and 2008 to 2024. The county adjacency pages for 2010 and 2023 to 2026 hold that file's record layout.
 - USDA RUCA and RUCC documentation pages and the CDC PLACES data dictionary.
 - The Medicare inpatient by provider (2017+) and by provider and service dictionaries, found through each release's `resourcesAPI` link in `data.json`. Also the HHS hospital capacity column definitions (`columns.json`).
 
@@ -278,7 +314,7 @@ At the end of the collection stage:
 3. Done (see [Recovered History Provenance](#recovered-history-provenance)): confirm the unmatched history folders above and record which command built each.
 4. Done with registry revision 2: update the source registry to the API-first route order and retire the temporary route overlay.
 5. Update this guide with the final counts.
-6. Delete the local originals that name individuals (the CMS owners originals, the unredacted HCAI 2012–2017 and 2018–2025 originals and the ONC meaningful-use original) after the user confirms the exact list, then record their retirement so the offline rechecks accept their absence.
+6. Delete the local originals that name individuals (the CMS owners originals, the unredacted HCAI 2012 to 2017 and 2018 to 2025 originals and the ONC meaningful-use original) after the user confirms the exact list, then record their retirement so the offline rechecks accept their absence.
 
 ### Clean-Checkout Recheck
 
@@ -302,7 +338,7 @@ The five configuration documents contain neutral external-note labels and masked
 
 The local evidence index contains 2,990 capture candidates across 47 source IDs. These include superseded, audit and derived records; they are not 2,990 publisher requests or model-eligible observations. `config/acquisition/collection_closeout.json` records per-source candidate and unique snapshot counts. All 2,990 receipt-file hashes match the inventory taken before the cleanup; this checks receipt immutability, not a fresh S3 readback or a rebuild of every object.
 
-Stored collection scope remains: HUD ZIP-to-county for all 64 quarters of 2010–2025; 520 BLS requests; six WONDER exports covering 1999–2024; 62 CMS ownership-change/enrollment releases and 44 company-owner releases; HCAI annual files for 2018–2025; the separate ONC meaningful-use hospital series for 2011–2017; and the ACS poverty 2010–2011 and limited-English 2009–2015 derivations. The 21 detailed ACS source tables plus one derived snapshot retain their 12 exact published-table comparisons. These are acquisition coverage statements; definitions, suppression, revision, geography and model eligibility still require downstream review.
+Stored collection scope remains: HUD ZIP-to-county for all 64 quarters of 2010 to 2025; 520 BLS requests; six WONDER exports covering 1999 to 2024; 62 CMS ownership-change/enrollment releases and 44 company-owner releases; HCAI annual files for 2018 to 2025; the separate ONC meaningful-use hospital series for 2011 to 2017; and the ACS poverty 2010 to 2011 and limited-English 2009 to 2015 derivations. The 21 detailed ACS source tables plus one derived snapshot retain their 12 exact published-table comparisons. These are acquisition coverage statements; definitions, suppression, revision, geography and model eligibility still require downstream review.
 
 ### Recovered History Provenance
 
@@ -321,15 +357,15 @@ The filename table above is the filename-matching audit. The recovered manifests
 
 ### Current Decisions and Reviewed Fingerprints
 
-Registry revision 2 distinguishes retained historical reviews from effective current decisions. Dropped controls show a current `dropped` decision; C259 states the crude rate definition. Earlier control fields remain under `historical_preserved_controls`. ACS derivation completion, the separate ONC hospital-only series and completed AHRF removal are recorded explicitly. The current exclusion policy rejects AHRF, AHA, LEAP, HASC, NDNQI, APIC and CLH in capture, historical planning, batch/archive execution and storage, including attempts using legacy plans. Passing that exclusion check does not grant a route, privacy, terms or model approval. The retired temporary route overlay stays as provenance; revision 2 carries the API-first order and current decisions.
+Registry revision 2 distinguishes retained historical reviews from effective current decisions. Dropped controls show a current `dropped` decision; C259 states the crude rate definition. Earlier control fields remain under `historical_preserved_controls`. ACS derivation completion, the separate ONC hospital-only series and completed AHRF removal are recorded explicitly. The current exclusion policy rejects AHRF, AHA, LEAP, HASC, NDNQI, APIC and CLH in capture, historical planning, batch and archive execution and storage, including attempts using legacy plans. Passing that exclusion check does not grant a route, privacy, terms or model approval. The retired temporary route overlay stays as provenance; revision 2 carries the API-first order and current decisions.
 
-Nine reviewed code-version documents use typed `file`/`sha256` pairs instead of API-named dictionary keys. A strict reader accepts old and new forms without adding approvals. The migration record pins the normalized preconversion documents and repeatable E2E checks prove all historical approval maps unchanged. The original documents are retained privately outside Git. Complete secret scans of acquisition code and configuration report no leaks without scanner exemptions.
+Nine reviewed code-version documents use typed `file` and `sha256` pairs instead of API-named dictionary keys. A strict reader accepts old and new forms without adding approvals. The migration record pins the normalized preconversion documents and repeatable E2E checks prove all historical approval maps unchanged. The original documents are retained privately outside Git. Complete secret scans of acquisition code and configuration report no leaks without scanner exemptions.
 
 The existing regression tests pass from a disposable copy containing code, tests and configuration, with no `data/` or environment file. Historical MMD replay and registry migration separately require retained originals and the private legacy archive. This is a clean-copy regression check, not a full publisher redownload, fresh S3 readback or proof of model eligibility.
 
 The acquisition test entry point runs the synthetic integrated suites twice, with durable per-suite artifacts. The regression-only route fixture is overridden with the real collection layout. All 16 retained Census browser exports regenerate identical registry, lock and plan files against their exact legacy parents. This is an offline metadata check; rebuilding every source object and fresh S3 reconciliation remain final-stage work.
 
-The synthetic CMS/HCAI/ONC E2E drivers use minimal public metadata fixtures under `config/acquisition/e2e_inputs`; those contain URLs, periods, schema headers and file/sheet metadata, with publisher contacts removed. They contain no source rows. ACS scope checking reads its locked config plan rather than requiring ignored dictionary files. Cleanup implementation and verification boundaries are recorded in `data/acquisition_planning/closeout_20260929/cleanup_result.md` (local record, not in the repository).
+The synthetic CMS/HCAI/ONC E2E drivers use minimal public metadata fixtures under `config/acquisition/e2e_inputs`; those contain URLs, periods, schema headers and file and sheet metadata, with publisher contacts removed. They contain no source rows. ACS scope checking reads its locked config plan rather than requiring ignored dictionary files. Cleanup implementation and verification boundaries are recorded in `data/acquisition_planning/closeout_20260929/cleanup_result.md` (local record, not in the repository).
 
 ### Coverage Gate and Code Versions
 
@@ -364,9 +400,9 @@ Not verified here: live publisher downloads (the final bounded redownload, run 3
 
 The full redownload queue in `data/redownload_checks/20260929/` (local record, not in the repository) holds 3,002 entries and 2,992 active acquisition units. The harness requires a passing separate independent review bound to `data/redownload_checks/20260929/controls.json` before execution state or requests. That snapshot binds runtime code, pinned dependencies, the queue and operational plans/locks/terms/privacy/job inputs, the code-version lists the collectors read, the subprocess launcher and the hash of local runtime settings, without copying any credential value. New code versions are therefore listed before the controls are frozen, so the review covers them.
 
-Persistent request and byte reservations prevent restart from resetting attempts or captured-byte budgets. BLS original and fresh roots share a quota lock; 429 stops before retry or body capture on the real HTTP boundaries. The run root is owner-only, every staging path is checked for symlinks/overlap and private retention records whole original directories plus file hashes, including failed attempts. Byte accounting conservatively includes received bytes and additional persisted copies; interrupted allocations remain charged. Only control ledgers, inventories and outcomes are excluded. This can stop before 128 GiB of physical source payload and never increases the ceiling.
+Persistent request and byte reservations prevent restart from resetting attempts or captured-byte budgets. BLS original and fresh roots share a quota lock; 429 stops before retry or body capture on the real HTTP boundaries. The run root is owner-only, every staging path is checked for symlinks and overlap and private retention records whole original directories plus file hashes, including failed attempts. Byte accounting conservatively includes received bytes and additional persisted copies; interrupted allocations remain charged. Only control ledgers, inventories and outcomes are excluded. This can stop before 128 GiB of physical source payload and never increases the ceiling.
 
-ZIP comparisons reject duplicate/unsafe names and bound decompression before streaming member hashes. Collector comparisons bind hashes to logical artifact identities, including an explicit mapping for the 52 MMD browser-to-API exports. Manual origin/time/content checks remain local evidence: they do not independently prove a fresh publisher request, so live manual exports still need their download evidence.
+ZIP comparisons reject duplicate or unsafe names and bound decompression before streaming member hashes. Collector comparisons bind hashes to logical artifact identities, including an explicit mapping for the 52 MMD browser-to-API exports. Manual origin, time and content checks remain local evidence: they do not independently prove a fresh publisher request, so live manual exports still need their download evidence.
 
 **Content, not download date.** The same content downloaded on any date matches only where the format names exactly which value carries the build time: an Office file's core properties. Files named `.zip`, `.xlsx` or `.docx` that begin with a zip header compare entry by entry, directories included; every archive, member and directory comment compares by bytes. Census table notes and WONDER exports compare by bytes, so a new access or query date is flagged for review. Any file that starts with a byte-order mark compares by bytes. An Office file's member `docProps/core.xml` compares as its raw text with only its own created and modified times masked (`document_build_time`). This applies only when the root is the Office core-properties element, the `cp`, `dcterms` and `xsi` prefixes are bound to their Office namespaces wherever they are declared and each time is typed `dcterms:W3CDTF` and is a real UTC time. A safe parse only confirms which elements carry them. Every other file, saved web pages included, compares by bytes. A stored copy is compared only after its SHA-256 matches its receipt; otherwise the result is flagged for review. Any other difference stays `changed_needs_review`. Each result lists its `excluded_parts` and the report counts matches by part. A manual file counts only when its recorded origin is the unit's own address, with only the fragment and a session identifier removed; a changed file from that address is kept and flagged for review instead of left waiting. A WONDER export without the planned bytes runs the collector's origin and export checks inside the harness and is then compared with the stored export by bytes. [Redownload Checks](acquisition_design.md#redownload-checks).
 

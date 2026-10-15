@@ -52,6 +52,7 @@ SCENARIOS = (
     "extra_format",
     "unsafe_extra_path",
     "prepare_retry",
+    "prepare_retry_reordered",
     "prepare_draft",
     "empty_document_inventory",
     "unmerged_index",
@@ -65,6 +66,18 @@ SCENARIOS = (
     "carry_forward_prefix_only_notes",
     "carry_forward_needs_refresh",
     "record_not_ignored",
+    "development_inventory",
+    "development_untracked_document",
+    "development_extra_format",
+    "development_source_changed",
+    "development_readme_changed",
+    "development_symlink_readme",
+    "development_missing_review",
+    "development_nonrelease_tag",
+    "first_release_missing_review",
+    "first_release_prerelease_build",
+    "first_release_prepare_refresh",
+    "first_release_reviewed",
 )
 GOOD = {
     "valid",
@@ -73,9 +86,24 @@ GOOD = {
     "unstaged_document_edit",
     "extra_format",
     "prepare_retry",
+    "prepare_retry_reordered",
     "nothing_staged",
     "empty_document_inventory",
     "carry_forward_kept",
+    "development_inventory",
+    "development_untracked_document",
+    "development_extra_format",
+    "development_nonrelease_tag",
+    "first_release_prepare_refresh",
+    "first_release_reviewed",
+}
+REASONS = {
+    "development_source_changed": "staged files changed since review",
+    "development_readme_changed": "staged files changed since review",
+    "development_symlink_readme": "documentation links/submodules are unsupported",
+    "development_missing_review": "missing review outcome",
+    "first_release_missing_review": "missing review outcome",
+    "first_release_prerelease_build": "missing review outcome",
 }
 PROVENANCE = "Carried forward from the review at 2026-09-26T00:00:00Z (blob unchanged): "
 
@@ -85,7 +113,13 @@ def git(repo: Path, *args: str) -> str:
     return run_command("git", args, cwd=repo, check=True).stdout
 
 
-def fixture(repo: Path) -> None:
+def tag_snapshot(repo: Path, name: str) -> None:
+    tree = git(repo, "write-tree").strip()
+    commit = git(repo, "commit-tree", tree, "-m", "test: synthetic tagged snapshot").strip()
+    git(repo, "tag", name, commit)
+
+
+def fixture(repo: Path, released: bool = True) -> None:
     """Copy the actual production hook configuration into a synthetic project, using existing pinned tools."""
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.name", "documentation review test")
@@ -99,6 +133,8 @@ def fixture(repo: Path) -> None:
     (repo / "README.md").write_text("# Example\n\nThe command returns one.\n")
     (repo / "app.py").write_text("VALUE = 1\n")
     git(repo, "add", ".pre-commit-config.yaml", "scripts", "README.md", "app.py")
+    if released:
+        tag_snapshot(repo, "v1.0.0")
 
 
 def evidence(repo: Path, extra: bool) -> dict[str, object]:
@@ -178,7 +214,20 @@ def run_case(scenario: str) -> tuple[bool, str]:
     """Run the actual hook twice where needed; distinguish a policy rejection from a broken hook."""
     with tempfile.TemporaryDirectory(prefix="documentation_review_e2e_") as folder:
         repo = Path(folder)
-        fixture(repo)
+        fixture(repo, released=not scenario.startswith(("development_", "first_release_")))
+        if scenario.startswith(("development_", "first_release_")):
+            (repo / "docs").mkdir()
+            (repo / "docs/schema.json").write_text('{"description": "Synthetic documentation"}\n')
+            (repo / "guide.rst").write_text("Synthetic guide\n")
+            (repo / "LICENSE").write_text("Synthetic license\n")
+            git(repo, "add", "docs/schema.json", "guide.rst", "LICENSE")
+        if scenario == "development_untracked_document":
+            (repo / "docs/untracked.md").write_text("Synthetic untracked guide\n")
+        if scenario == "development_extra_format":
+            (repo / "manual.custom").write_text("Synthetic extra document\n")
+            git(repo, "add", "manual.custom")
+        if scenario == "development_nonrelease_tag":
+            tag_snapshot(repo, "build-123")
         if scenario == "empty_document_inventory":
             git(repo, "rm", "-q", "--cached", "README.md")
             (repo / "README.md").unlink()
@@ -189,6 +238,9 @@ def run_case(scenario: str) -> tuple[bool, str]:
         if scenario == "conventional_document_missing":
             (repo / "LICENSE").write_text("Synthetic license document\n")
             git(repo, "add", "LICENSE")
+        if scenario == "prepare_retry_reordered":
+            (repo / "LICENSE").write_text("Synthetic license document\n")
+            git(repo, "add", "LICENSE")
         if scenario == "extra_format":
             (repo / "manual.custom").write_text("Custom documentation\n")
             git(repo, "add", "manual.custom")
@@ -197,7 +249,31 @@ def run_case(scenario: str) -> tuple[bool, str]:
             (repo / "README.md").symlink_to("app.py")
             git(repo, "add", "README.md")
         record = evidence(repo, scenario == "extra_format")
+        if scenario == "prepare_retry_reordered":
+            documents = cast(list[dict[str, str]], record["documents"])
+            documents.append(
+                {"path": "LICENSE", "blob": git(repo, "rev-parse", ":LICENSE").strip(), "outcome": "current", "notes": "Reviewed the synthetic license text."}
+            )
         mutate(repo, scenario, record)
+        if scenario == "development_extra_format":
+            record["extra_documents"] = ["manual.custom"]
+        if scenario == "development_source_changed":
+            mutate(repo, "source_changed", record)
+        if scenario == "development_readme_changed":
+            mutate(repo, "document_changed", record)
+        if scenario == "development_missing_review":
+            record["documents"] = []
+        if scenario == "development_symlink_readme":
+            (repo / "README.md").unlink()
+            (repo / "README.md").symlink_to("app.py")
+            git(repo, "add", "README.md")
+        if scenario.startswith("first_release_"):
+            tag_snapshot(repo, "v1.0.0-rc.1+build.7" if scenario == "first_release_prerelease_build" else "v1.0.0")
+        if scenario == "first_release_reviewed":
+            documents = cast(list[dict[str, str]], record["documents"])
+            for path in ("docs/schema.json", "guide.rst", "LICENSE"):
+                blob = git(repo, "rev-parse", f":{path}").strip()
+                documents.append({"path": path, "blob": blob, "outcome": "current", "notes": "Reviewed the synthetic release documentation."})
         content = json.dumps(record, indent=2) + "\n"
         if scenario == "invalid_json":
             content = "not JSON\n"
@@ -210,9 +286,31 @@ def run_case(scenario: str) -> tuple[bool, str]:
 
         if scenario == "tracked_record":
             git(repo, "add", "-f", RECORD)
+        if scenario == "first_release_prepare_refresh":
+            command = [
+                "-m",
+                "scripts.quality.documentation_review",
+                "prepare",
+                "--reviewer",
+                "synthetic reviewer",
+                "--reviewed-at",
+                "2026-09-27T00:00:00Z",
+                "--refresh",
+            ]
+            prepared = run_command(str(repo / ".venv/bin/python"), command, cwd=repo)
+            if prepared.returncode:
+                return False, prepared.stdout + prepared.stderr
+            draft = json.loads((repo / RECORD).read_text())
+            if {item["path"] for item in draft["documents"]} != {"README.md", "LICENSE", "guide.rst", "docs/schema.json"}:
+                return False, "the first release must restore the full inventory even when staged blobs are unchanged"
+            for item in draft["documents"]:
+                if item["outcome"] != "pending" or item["notes"]:
+                    return False, "release refresh must draft pending review outcomes"
+                item.update(outcome="current", notes="Reviewed the synthetic release documentation.")
+            (repo / RECORD).write_text(json.dumps(draft, indent=2) + "\n")
         if scenario == "unstaged_document_edit":
             (repo / "README.md").write_text("Unstaged text is not the committed document.\n")
-        if scenario == "prepare_retry":
+        if scenario in {"prepare_retry", "prepare_retry_reordered"}:
             args = ["-m", "scripts.quality.documentation_review", "prepare", "--reviewer", "synthetic E2E reviewer", "--reviewed-at", "2026-09-26T00:00:00Z"]
             before = (repo / RECORD).read_bytes()
             first_run = run_command(str(repo / ".venv/bin/python"), args, cwd=repo)
@@ -270,7 +368,13 @@ def run_case(scenario: str) -> tuple[bool, str]:
         output = result.stdout + result.stderr
         expected = scenario in GOOD
         valid_pass = result.returncode == 0 and "documentation review: PASS" in output
-        valid_rejection = result.returncode != 0 and "documentation review: BLOCK" in output and "Traceback" not in output
+        valid_rejection = (
+            result.returncode != 0
+            and "documentation review: BLOCK" in output
+            and "docs/quality_checks.md" in output
+            and REASONS.get(scenario, "") in output
+            and "Traceback" not in output
+        )
         return (valid_pass if expected else valid_rejection), output
 
 

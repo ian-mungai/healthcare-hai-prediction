@@ -14,9 +14,9 @@ result is applied only while the attempt is still in the phase the operation exp
 a specification only: the launcher builds each container's create specification from the parsed ``docker-compose.yaml``,
 the template table and validated values, and records the SHA-256 of that effective specification.
 
-``provenance_vars(run)`` and ``seal(run)`` are the frozen interfaces the provenance package fills; until then they
-refuse ``real_dbt``. Failure modes 910 to 919 are in plans/wave2_20261011/d1_design.md section 15 and
-plans/wp/l1a_failure_modes.md.
+``provenance_vars(run)`` and ``seal(run)`` are the frozen interfaces that scripts/lakehouse/provenance.py fills: a ``real_dbt``
+launch needs recorded pins and a complete snapshot, and a gold-eligible build is sealed (D1 section 10).
+Failure modes 910 to 919 are in plans/wave2_20261011/d1_design.md section 15 and plans/wp/l1a_failure_modes.md.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import enum
 import errno
 import fcntl
 import hashlib
@@ -31,6 +32,7 @@ import hmac
 import http.client
 import importlib
 import json
+import logging
 import os
 import pwd
 import queue
@@ -55,6 +57,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from scripts.lakehouse import dbt_package_archive, memory_budget, pins, run_lock
+from scripts.lakehouse import provenance as build_provenance
 from scripts.process import run_command
 
 PROTOCOL = 1
@@ -68,6 +71,26 @@ LABEL_ATTEMPT = "hai.attempt"
 LABEL_OP = "hai.op"
 LABEL_PROBE = "hai.probe"
 LABEL_SERVICE = "hai.service"
+LABEL_STACK = "hai.stack"
+LABEL_ORCH_SERVICE = "hai.orch_service"
+ORCHESTRATION_STACK = "orchestration"
+ORCHESTRATION_OWNER = "stack:orchestration"
+ORCHESTRATION_COMPOSE = "services/orchestration/docker-compose.orchestration.yaml"
+ORCHESTRATION_ORDER = ("postgres", "airflow-migrate", "airflow-apiserver", "airflow-scheduler", "airflow-dag-processor", "airflow-triggerer")
+ORCHESTRATION_FINITE = frozenset({"airflow-migrate"})
+ORCHESTRATION_MEMORY: dict[str, tuple[str, float, int]] = {
+    "postgres": ("POSTGRES", 0.03, 256 * 1024**2),
+    "airflow-apiserver": ("APISERVER", 0.05, 1024**3),
+    "airflow-scheduler": ("SCHEDULER", 0.08, 2 * 1024**3),
+    "airflow-dag-processor": ("DAG_PROCESSOR", 0.04, 1024**3),
+    "airflow-triggerer": ("TRIGGERER", 0.02, 512 * 1024**2),
+}
+ORCHESTRATION_SCHEDULER_BASE = 1024**3
+ORCHESTRATION_WORKER_MEMORY = 256 * 1024**2
+ORCHESTRATION_STATE_FOLDERS = ("metadata", "session")
+ORCHESTRATION_DUMPS = ("metadata", "xcom")
+ORCHESTRATION_UP_PARAMETERS = ("state", "api_port", "checkout")
+PINNED_REFERENCE = re.compile(r"[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9._-]{1,128})?@sha256:[a-f0-9]{64}")
 DEADLINE_ENTRYPOINT = "/opt/hai/deadline_run"
 # The entrypoint passes its timing state to itself through this variable; a job or an image that sets it could forge that state.
 DEADLINE_RELAY_VARIABLE = "HAI_DEADLINE_RELAY_B"
@@ -84,9 +107,16 @@ SECRET_NAME = re.compile(r"(PASSWORD|SECRET|TOKEN)", re.IGNORECASE)
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}")
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 MAX_LINE = 1 << 20
+SESSION_BUFFER_LIMIT = 128 * 1024
+INPUT_CHUNK = 16 * 1024
 DEFAULT_IMAGE_LABEL = "hai.deadline_entrypoint"
 DEFAULT_IMAGE_IMPLEMENTATION = "hai.deadline_implementation"
 CAPTURE_LIMIT = 32 * 1024 * 1024
+EXCHANGE_BUDGET = 1.0
+EXCHANGE_BUDGET_CAP = 4.0
+PROBE_BUDGET = 1.0
+LIVENESS_CODES = ("unavailable", "unresponsive")
+CLIENT_LOG = logging.getLogger("launcher.client")
 
 
 class LauncherError(Exception):
@@ -106,7 +136,13 @@ class Degraded(LauncherError):
 
 @dataclass(frozen=True)
 class Timings:
-    """Every wait the launcher uses; a test registry may shorten them, the real registry uses the defaults."""
+    """Every wait the launcher uses; a test registry may shorten them, the real registry uses the defaults.
+
+    ``compact_threshold`` is a size in bytes: above it, finished records older than ``compact_floor`` seconds move to the archive. A client
+    fails after ``gone_after`` seconds of refused connections or ``stuck_after`` seconds without a liveness reply, and logs an exchange that
+    takes longer than ``slow_exchange`` seconds beyond the wait it asked for. After such a failure its cleanup (replaying an ambiguous submit,
+    cancelling, releasing) has ``cleanup_budget`` seconds in all.
+    """
 
     create_timeout: float = 120.0
     probe_timeout: float = 10.0
@@ -122,6 +158,14 @@ class Timings:
     cancel_settle: float = 75.0
     # How long a client keeps retrying a submit or status exchange that times out (a launcher busy on a loaded machine) before failing.
     poll_patience: float = 180.0
+    history_retain: float = 86400.0
+    compact_every: float = 600.0
+    compact_threshold: int = 1_000_000
+    compact_floor: float = 3600.0
+    stuck_after: float = 30.0
+    gone_after: float = 1.0
+    slow_exchange: float = 0.5
+    cleanup_budget: float = 20.0
 
 
 @dataclass(frozen=True)
@@ -526,6 +570,19 @@ class DockerApi:
                 return None
             raise
 
+    def pull(self, repository: str, digest: str) -> None:
+        """Pull an image by its digest; the reply is a stream of progress lines and an ``error`` line is a failure."""
+        status, data = self.request("POST", f"/images/create?fromImage={_quote(repository, safe='/')}&tag={_quote(digest)}", timeout=3600)
+        if status != 200:
+            raise DockerError(status, data.decode(errors="replace")[:200])
+        for line in data.decode(errors="replace").splitlines():
+            try:
+                progress = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(progress, dict) and progress.get("error"):
+                raise DockerError(500, str(progress["error"])[:200])
+
     def image_history(self, reference: str) -> list[dict[str, Any]]:
         """An image's layer history."""
         return list(self.call("GET", f"/images/{_quote(reference, safe='/:@')}/history") or [])
@@ -793,6 +850,13 @@ def effective_config(body: Mapping[str, Any], defaults: Mapping[str, Any]) -> di
     }
 
 
+def hardening(host: Mapping[str, Any], spec: Mapping[str, Any] | None = None) -> dict[str, list[str]]:
+    """The dropped capabilities and security options of a container. A specification keeps them only when they are set, so a specification
+    recorded before they existed keeps its digest; an inspected container is read for the names its specification holds."""
+    found = {"cap_drop": sorted(host.get("CapDrop") or []), "security_opt": sorted(host.get("SecurityOpt") or [])}
+    return {name: value for name, value in found.items() if (value if spec is None else name in spec)}
+
+
 def projection(
     body: Mapping[str, Any], key: bytes, secret_env: frozenset[str], secret_cmd: Sequence[int], defaults: Mapping[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -806,6 +870,7 @@ def projection(
         [container, binding["HostIp"], binding["HostPort"]] for container, bindings in (host.get("PortBindings") or {}).items() for binding in bindings
     )
     return {
+        **hardening(host),
         "image": body["Image"],
         "image_id": str(defaults.get("id", "")),
         "entrypoint": effective["entrypoint"],
@@ -844,6 +909,7 @@ def inspected_projection(info: Mapping[str, Any], spec: Mapping[str, Any], key: 
     labels = {name: value for name, value in sorted((config.get("Labels") or {}).items()) if name in spec["labels"]}
     health = config.get("Healthcheck") or {}
     return {
+        **hardening(host, spec),
         "image": config.get("Image"),
         "image_id": str(info.get("Image") or ""),
         "entrypoint": [str(item) for item in config.get("Entrypoint") or []],
@@ -909,6 +975,7 @@ TEMPLATES: dict[str, Template] = {
             run_domains=("transform",),
             run_modes=("real",),
         ),
+        Template("sealed_consumer", "quality", True, ("run",), default_seconds=3600, max_seconds=7200, run_domains=("transform",), run_modes=("real",)),
         Template("fixture_dbt", "analytics-dbt", True, ("alloc", "run"), guard="reader", default_seconds=3600, run_modes=("fixture", "publish_fixture")),
         Template("fixture_init", "analytics-dbt", True, ("alloc",), default_seconds=900),
         Template("duckdb_helper", "analytics-dbt", True, ("alloc",), default_seconds=900),
@@ -919,6 +986,9 @@ TEMPLATES: dict[str, Template] = {
         Template("spark_write", "spark", True, ("run",), needs_catalog=True, default_seconds=43200, run_modes=("real",)),
         Template("spark_e2e", "spark", True, ("alloc",), default_seconds=7200),
         Template("catalog_service", None, False, ("service",)),
+        Template("orchestration_service", None, False, ("stack",)),
+        Template("orchestration_check", None, True, ("alloc",), default_seconds=900, max_seconds=3600),
+        Template("orchestration_dump", None, True, ("alloc",), default_seconds=900, max_seconds=1800),
         Template("probe", "analytics", True, ("diagnostic",), default_seconds=60, max_seconds=60),
     )
 }
@@ -964,6 +1034,7 @@ SPARK_JOBS: dict[str, dict[str, Any]] = {
     "bronze_e2e": {"template": "spark_e2e", "module": "scripts.lakehouse.run_bronze_e2e", "writes": ("data/e2e/bronze",), "aws": False, "grammar": {}},
     "pins_e2e": {"template": "spark_e2e", "module": "scripts.lakehouse.run_pins_e2e", "writes": ("data/e2e/pins",), "aws": False, "grammar": {}},
 }
+SEALED_READERS = ("duckdb_helper", "quality_validate")
 DBT_COMMANDS = ("build", "run", "seed", "snapshot", "test", "run-operation", "ls", "parse", "compile", "debug")
 DBT_OPTIONS_VALUES = {"--select": "many", "-s": "many", "--exclude": "many", "--selector": "one", "--indirect-selection": "choice"}
 DBT_OPTIONS_FLAGS = ("--full-refresh", "--fail-fast", "-x")
@@ -1075,10 +1146,18 @@ def validate_duckdb_flags(flags: Sequence[str]) -> list[str]:
     return list(flags)
 
 
+def resolve_checked(path: Path, what: str) -> Path:
+    """``path`` resolved; a symlink loop (``RuntimeError`` on Python 3.12, ``OSError`` later) refuses the mount: what lies behind it cannot be checked."""
+    try:
+        return path.resolve()
+    except (RuntimeError, OSError) as error:
+        raise LauncherError(f"{what}: {path} is a symlink loop or cannot be resolved, so it cannot be checked", "mount") from error
+
+
 def inside(path: Path, roots: Sequence[Path]) -> bool:
-    """True when the resolved path is equal to or inside one of the roots."""
-    resolved = path.resolve()
-    return any(resolved == root.resolve() or resolved.is_relative_to(root.resolve()) for root in roots)
+    """True when the resolved path is equal to or inside one of the roots; a path or a root that cannot be resolved refuses the mount."""
+    target, folders = resolve_checked(path, "path"), [resolve_checked(root, "allowed root") for root in roots]
+    return any(target == folder or target.is_relative_to(folder) for folder in folders)
 
 
 # A mount source is searched this far for a secrets folder; a larger tree is refused rather than admitted unchecked.
@@ -1109,6 +1188,11 @@ def identities(path: Path) -> set[tuple[int, int]]:
     return {found for found in (identity(candidate) for candidate in (path, *path.parents)) if found is not None}
 
 
+def resolved_in(source: Path, path: Path) -> Path:
+    """``path`` resolved for the check of the mount source ``source``; a loop refuses the mount."""
+    return resolve_checked(path, f"mount source {source}")
+
+
 def held_secrets(source: Path) -> Path | None:
     """The first secrets folder (any letter case) at any depth below a source folder, nearest first.
 
@@ -1120,13 +1204,13 @@ def held_secrets(source: Path) -> Path | None:
     """
     if not source.is_dir():
         return None
-    root = source.resolve()
+    root = resolved_in(source, source)
     queue, visited, seen = [source], {identity(root)}, 0
     while queue:
         folder = queue.pop(0)
         try:
             entries = sorted(os.scandir(folder), key=lambda entry: entry.name)
-            parent_names = {folded(folder)[-1:], folded(folder.resolve())[-1:]}  # the lexical and the resolved folder name
+            parent_names = {folded(folder)[-1:], folded(resolved_in(source, folder))[-1:]}
         except OSError as error:
             raise LauncherError(f"mount source {source}: {folder} cannot be read to check for a secrets folder ({error})", "mount") from error
         for entry in entries:
@@ -1135,7 +1219,7 @@ def held_secrets(source: Path) -> Path | None:
                 spellings = [(*parent, entry.name.casefold()) for parent in parent_names]
                 if entry.is_symlink():
                     with contextlib.suppress(OSError):  # a link to a secrets folder inside the source, whatever the link is named
-                        target = child.resolve()
+                        target = resolved_in(source, child)
                         if target == root or target.is_relative_to(root):
                             spellings.append(folded(target)[-2:])
                 if any(secrets_part(spelling) for spelling in spellings):
@@ -1143,7 +1227,7 @@ def held_secrets(source: Path) -> Path | None:
             if not entry.is_dir(follow_symlinks=True):
                 continue
             if entry.is_symlink():
-                target = child.resolve()
+                target = resolved_in(source, child)
                 if not (target == root or target.is_relative_to(root)):
                     continue
             key = identity(child)
@@ -1206,10 +1290,13 @@ class Renderer:
             "query_reader": self.render_query_reader,
             "ui_reader": self.render_ui_reader,
             "real_dbt": self.render_real_dbt,
+            "sealed_consumer": self.render_sealed_consumer,
             "spark_read": self.render_spark_read,
             "spark_write": self.render_spark_write,
             "spark_e2e": self.render_spark_e2e,
             "probe": self.render_probe,
+            "orchestration_check": self.render_orchestration_check,
+            "orchestration_dump": self.render_orchestration_dump,
         }
 
     def network_name(self, registry_id: str) -> str:
@@ -1254,7 +1341,7 @@ class Renderer:
             worktrees = main / "data" / "worktrees"
             if worktrees.is_dir():
                 found += sorted(entry for entry in worktrees.iterdir() if entry.is_dir())
-        return list(dict.fromkeys(path.resolve() for path in found))
+        return list(dict.fromkeys(resolve_checked(path, "checkout") for path in found))
 
     def check_mounts(self, mounts: Sequence[Mount]) -> None:
         """Refuse a source that equals, is inside or contains the token root or any checkout's secrets folder (D1 section 7 item 3).
@@ -1268,7 +1355,7 @@ class Renderer:
             source = Path(mount.source)
             if mount.source in exact_credentials and not mount.read_only:
                 raise LauncherError("a credential mount must be read-only", "mount")
-            resolved = source.resolve()
+            resolved = resolve_checked(source, f"mount source {mount.source}")
             # The path as given is checked before it is resolved, so a link named ``secrets`` cannot pass as the folder it points to.
             if secrets_part(folded(source.absolute())) or secrets_part(folded(resolved)):
                 raise LauncherError(f"mount source {mount.source} lies in a secrets folder", "mount")
@@ -1278,7 +1365,7 @@ class Renderer:
                 raise LauncherError(f"mount source {mount.source} contains a secrets folder ({held})", "mount")
             source_id, source_line = identity(resolved), identities(resolved)
             for guarded in protected:
-                target = guarded.resolve()
+                target = resolve_checked(guarded, f"protected folder {guarded.name}")
                 # Compared by spelling in one letter case and by file identity, so a case variant or another name for the same folder still matches.
                 spelled = folded(resolved)[: len(folded(target))] == folded(target) or folded(target)[: len(folded(resolved))] == folded(resolved)
                 target_id = identity(target)
@@ -1323,6 +1410,9 @@ class Renderer:
         secrets: Mapping[str, str] | None = None,
         tmpfs: Sequence[str] = (),
         hostname: str = "",
+        user: str = "",
+        cap_drop: Sequence[str] = (),
+        security_opt: Sequence[str] = (),
     ) -> Rendered:
         """The Engine API create body, with the deadline entrypoint in front of a finite job's command."""
         self.check_mounts(mounts)
@@ -1362,6 +1452,12 @@ class Renderer:
             body["HostConfig"]["Tmpfs"] = dict.fromkeys(tmpfs, "rw,mode=1777,size=64m")
         if workdir:
             body["WorkingDir"] = workdir
+        if user:
+            body["User"] = user
+        if cap_drop:
+            body["HostConfig"]["CapDrop"] = list(cap_drop)
+        if security_opt:
+            body["HostConfig"]["SecurityOpt"] = list(security_opt)
         if tty or open_stdin:
             body.update({"Tty": tty, "OpenStdin": open_stdin, "StdinOnce": False, "AttachStdin": open_stdin, "AttachStdout": True, "AttachStderr": True})
         if ports:
@@ -1454,31 +1550,63 @@ class Renderer:
         )
 
     def render_duckdb_helper(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
-        """Read-only ``duckdb`` queries on named files, no network."""
-        self.only_params(inp, ("mounts", "database", "init", "sql", "flags"))
+        """Read-only ``duckdb`` queries on named files, no network. With ``sealed_run`` the database is the run's sealed copy and the container's
+        entrypoint checks it before ``duckdb`` runs (D1 section 10 item 6)."""
+        self.only_params(inp, ("mounts", "database", "init", "sql", "flags", build_provenance.SEALED_RUN_PARAM))
+        sealed = build_provenance.SEALED_RUN_PARAM in inp.params
+        if sealed and inp.params.get("database"):
+            raise LauncherError("a reader of a sealed run takes no database: it reads the sealed copy", "args")
         mounts = [self.resources_mount()]
         container_roots = []
-        for entry in inp.params["mounts"]:
+        for entry in inp.params.get("mounts", []) if sealed else inp.params["mounts"]:
             host = self.allowed(str(entry["host"]), "mount host")
             target = container_path(str(entry["container"]), "/workspace/")
+            if sealed and (target + "/").startswith("/workspace/sealed/"):
+                raise LauncherError("a mount may not cover the sealed copy", "args")
             mounts.append(Mount(str(host.resolve()), target, True))
             container_roots.append(target)
         command: list[str] = []
-        if inp.params.get("database"):
+        if sealed:
+            command = [self.SEALED_DATABASE, "-readonly"]
+        elif inp.params.get("database"):
             command = [container_path(str(inp.params["database"]), "/workspace/"), "-readonly"]
         command += ["-cmd", ".read /opt/analytics/resources.sql"]
         if inp.params.get("init"):
             command += ["-init", container_path(str(inp.params["init"]), "/workspace/")]
         command += [*validate_duckdb_flags(inp.params.get("flags") or ["-csv", "-noheader"]), "-c", str(inp.params["sql"])]
         env = self.allocation_env(inp, ("JOB_MEMORY_LIMIT", "DUCKDB_MEMORY_LIMIT", "JOB_THREADS"))
-        return self.assemble(inp, name, self.image("analytics-dbt"), ["duckdb"], command, env, mounts, int(inp.values["JOB_MEMORY_LIMIT"]), "none")
+        entrypoint = ["duckdb"]
+        if sealed:
+            entrypoint, command, extra = self.sealed_reader(inp, entrypoint, command)
+            mounts += extra
+        return self.assemble(inp, name, self.image("analytics-dbt"), entrypoint, command, env, mounts, int(inp.values["JOB_MEMORY_LIMIT"]), "none")
+
+    SEALED_DATABASE = "/workspace/sealed/build.duckdb"
+    SEALED_CHECK = 'python "$1" consume --sealed "$2" --expected-sha256 "$3" --expected-marker "$4" --print-result && shift 4 && exec "$@"'
+
+    def sealed_reader(self, inp: RenderInput, entrypoint: Sequence[str], command: Sequence[str]) -> tuple[list[str], list[str], list[Mount]]:
+        """Put a reader behind the consumer entrypoint: the same container hashes the sealed copy it attached, prints the check as the first line of
+        standard error and runs the reader only if the digest and the marker are the recorded ones (D1 section 10 item 6).
+
+        Returns the entrypoint, the command and the mounts (the sealed copy and the entrypoint's code, both read-only). The launcher takes the digest and the
+        expected marker from its own record of the sealed run; the caller names only the run.
+        """
+        digest = inp.provenance.get(build_provenance.VARIABLE_SEALED_SHA, "")
+        expected = inp.provenance.get(build_provenance.VARIABLE_SEALED_EXPECTED, "")
+        if inp.run_folder is None or not build_provenance.SHA256.fullmatch(digest) or not expected:
+            raise LauncherError("a reader of a sealed run needs the sealed run", "spec")
+        mounts = [
+            Mount(str(inp.run_folder / build_provenance.SEALED_FOLDER / f"{digest}.duckdb"), self.SEALED_DATABASE, True),
+            Mount(str(self.checkout / "scripts/lakehouse/provenance.py"), "/opt/hai/provenance.py", True),
+        ]
+        return ["sh", "-c", self.SEALED_CHECK, "sh"], ["/opt/hai/provenance.py", self.SEALED_DATABASE, digest, expected, *entrypoint, *command], mounts
 
     def render_dbt_deps(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
         """``dbt deps`` from the lock file into the shared package folder, the only writable mount."""
         self.only_params(inp, ("packages_host", "project_host"))
         packages = self.allowed(str(inp.params["packages_host"]), "packages_host")
         project = Path(str(inp.params.get("project_host") or self.checkout / "dbt"))
-        if project.resolve() not in (self.checkout.resolve() / "dbt", self.main.resolve() / "dbt"):
+        if resolve_checked(project, "project_host") not in (self.checkout.resolve() / "dbt", self.main.resolve() / "dbt"):
             raise LauncherError("project_host must be dbt/ of this checkout or the main checkout", "args")
         env = {
             **self.allocation_env(inp, ("JOB_THREADS",)),
@@ -1532,20 +1660,29 @@ class Renderer:
         )
 
     def render_quality_validate(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
-        """The Great Expectations validation of a build file, no network."""
-        self.only_params(inp, ("database", "suites_host", "suites_hosts", "baselines_host", "out_host", "build_root"))
+        """The Great Expectations validation of a build file, no network. With ``sealed_run`` the build file is the run's sealed copy and the container's
+        entrypoint checks it before the validation runs (D1 section 10 item 6)."""
+        self.only_params(inp, ("database", "suites_host", "suites_hosts", "baselines_host", "out_host", "build_root", build_provenance.SEALED_RUN_PARAM))
+        sealed = build_provenance.SEALED_RUN_PARAM in inp.params
+        if sealed and ("database" in inp.params or "build_root" in inp.params):
+            raise LauncherError("a validation of a sealed run takes no database and no build_root: it reads the sealed copy", "args")
         values = self.compose_values(self.service_names("quality"), inp.values)
         mounts = self.compose.mounts("quality", values)
         build_mount = next(mount for mount in mounts if mount.target == "/workspace/build")
-        if inp.params.get("build_root"):
+        if sealed:
+            mounts = [mount for mount in mounts if mount is not build_mount]
+        elif inp.params.get("build_root"):
             # A fixture case's own folder instead of the shared build folder, still read-only (the gold fixture stage).
             replacement = Mount(str(self.allowed(str(inp.params["build_root"]), "build_root").resolve()), "/workspace/build", True)
             mounts = [replacement if mount is build_mount else mount for mount in mounts]
             build_mount = replacement
-        database = Path(str(inp.params["database"]))
-        if not inside(database, [Path(build_mount.source)]):
-            raise LauncherError(f"database {database} is outside the build folder", "args")
-        relative = str(database.resolve().relative_to(Path(build_mount.source).resolve()))
+        if sealed:
+            database_argument = self.SEALED_DATABASE
+        else:
+            database = Path(str(inp.params["database"]))
+            if not inside(database, [Path(build_mount.source)]):
+                raise LauncherError(f"database {database} is outside the build folder", "args")
+            database_argument = f"/workspace/build/{database.resolve().relative_to(Path(build_mount.source).resolve())}"
         contracts = self.checkout / "data_contracts" / "great_expectations"
         # One suite folder (``suites_host``) or several (``suites_hosts``: the silver atomic suites and the gold suites in one validation).
         if ("suites_host" in inp.params) == ("suites_hosts" in inp.params):
@@ -1562,7 +1699,7 @@ class Renderer:
         ]
         command = [
             "--database",
-            f"/workspace/build/{relative}",
+            database_argument,
             "--suites",
             *targets,
             "--baselines",
@@ -1572,6 +1709,9 @@ class Renderer:
         ]
         env = self.allocation_env(inp, ("DUCKDB_MEMORY_LIMIT", "JOB_THREADS"))
         entrypoint = ["python", "-m", "scripts.lakehouse.silver_quality"]
+        if sealed:
+            entrypoint, command, sealed_mounts = self.sealed_reader(inp, entrypoint, command)
+            extra += sealed_mounts
         return self.assemble(
             inp, name, self.image("quality"), entrypoint, command, env, [*mounts, *extra], int(inp.values["JOB_MEMORY_LIMIT"]), "none", workdir="/workspace"
         )
@@ -1663,6 +1803,37 @@ class Renderer:
             int(inp.values["JOB_MEMORY_LIMIT"]),
             self.network_name(registry_id),
             workdir="/workspace/dbt",
+        )
+
+    def render_sealed_consumer(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """A consumer of the sealed build: the sealed copy read-only, no network; its entrypoint hashes the mounted file first (D1 section 10 item 6)."""
+        self.only_params(inp, ())
+        if list(inp.args) != ["verify"]:
+            raise LauncherError("sealed_consumer takes the single argument verify", "args")
+        digest = inp.provenance.get(build_provenance.VARIABLE_SEALED_SHA, "")
+        if inp.run_folder is None or not build_provenance.SHA256.fullmatch(digest):
+            raise LauncherError("sealed_consumer needs a sealed run", "spec")
+        results = inp.run_folder / "consumer"
+        results.mkdir(parents=True, exist_ok=True)
+        values = self.compose_values(self.service_names("quality"), inp.values)
+        mounts = [mount for mount in self.compose.mounts("quality", values) if mount.target == "/workspace/scripts"]
+        mounts.append(Mount(str(inp.run_folder / build_provenance.SEALED_FOLDER / f"{digest}.duckdb"), "/workspace/sealed/build.duckdb", True))
+        mounts.append(Mount(str(results), "/workspace/out", False))
+        env = {**self.allocation_env(inp, ("DUCKDB_MEMORY_LIMIT", "JOB_THREADS")), **inp.provenance}
+        command = [
+            "consume",
+            "--sealed",
+            "/workspace/sealed/build.duckdb",
+            "--expected-sha256",
+            digest,
+            "--result",
+            f"/workspace/out/{inp.launch_id}-a{inp.attempt_n}.json",
+            "--expected-marker",
+            inp.provenance[build_provenance.VARIABLE_SEALED_EXPECTED],
+        ]
+        entrypoint = ["python", "-m", "scripts.lakehouse.provenance"]
+        return self.assemble(
+            inp, name, self.image("quality"), entrypoint, command, env, mounts, int(inp.values["JOB_MEMORY_LIMIT"]), "none", workdir="/workspace"
         )
 
     def spark_mounts(self, job: str, inp: RenderInput) -> list[Mount]:
@@ -1788,6 +1959,113 @@ class Renderer:
             secrets=secrets_in_use,
         )
 
+    def orchestration_network_name(self, registry_id: str) -> str:
+        """The launcher-created network of the orchestration stack."""
+        return f"hai-{registry_id[:8]}-orch-net"
+
+    def orchestration_values(self, inp: RenderInput) -> dict[str, str]:
+        """The interpolation values of the orchestration Compose model: the launcher's validated settings only, never the environment."""
+        values = {name: str(value) for name, value in inp.values.items() if name.startswith("HAI_ORCH_") or name == "JOB_MEMORY_LIMIT"}
+        values["HAI_ORCH_UID"] = str(os.getuid())
+        return values
+
+    def orchestration_hardening(self, raw: Mapping[str, Any], values: Mapping[str, str]) -> dict[str, Any]:
+        """The user, dropped capabilities and security options a service of the orchestration model names."""
+        return {
+            "user": interpolate(str(raw["user"]), values) if raw.get("user") else "",
+            "cap_drop": [str(item) for item in raw.get("cap_drop") or []],
+            "security_opt": [str(item) for item in raw.get("security_opt") or []],
+        }
+
+    def render_orchestration_service(self, inp: RenderInput, service: str, registry_id: str) -> Rendered:
+        """One orchestration service container from the orchestration Compose model (the second service stack, failure mode 933)."""
+        values = self.orchestration_values(inp)
+        raw = self.compose.service(service)
+        env = self.compose.environment(service, values)
+        command = [interpolate(str(part), values) for part in raw.get("command") or []]
+        mounts = self.compose.mounts(service, values)
+        for mount in mounts:
+            if mount.target in ("/var/lib/postgresql/data", "/opt/airflow/logs"):
+                Path(mount.source).mkdir(mode=0o700, parents=True, exist_ok=True)
+        ports = []
+        for entry in raw.get("ports") or []:
+            host_ip, host_port, container_port = interpolate(str(entry), values).split(":")
+            ports.append((host_ip, int(host_port), int(container_port)))
+        finite = service in ORCHESTRATION_FINITE
+        entrypoint = list(raw.get("entrypoint") or (inp.image_entrypoint if finite else []))
+        return self.assemble(
+            inp,
+            f"hai-{registry_id[:8]}-svc-orch-{service}",
+            self.image(service),
+            entrypoint,
+            command,
+            env,
+            mounts,
+            self.compose.memory(service, values),
+            self.orchestration_network_name(registry_id),
+            ports=ports,
+            healthcheck=self.compose.healthcheck(service),
+            aliases=[service],
+            finite=finite,
+            extra_labels={LABEL_STACK: ORCHESTRATION_STACK, LABEL_ORCH_SERVICE: service},
+            **self.orchestration_hardening(raw, values),
+        )
+
+    def render_orchestration_check(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """The offline check in the Airflow image: no argument, no parameter, no network, read-only repository mounts (failure mode 934)."""
+        self.only_params(inp, ())
+        if inp.args:
+            raise LauncherError("template orchestration_check takes no arguments", "args")
+        values = {"HAI_ORCH_REPO": str(self.checkout), "HAI_ORCH_UID": str(os.getuid()), "JOB_MEMORY_LIMIT": inp.values["JOB_MEMORY_LIMIT"]}
+        raw = self.compose.service("airflow-check")
+        return self.assemble(
+            inp,
+            name,
+            self.image("airflow-check"),
+            [str(item) for item in raw["entrypoint"]],
+            [interpolate(str(part), values) for part in raw["command"]],
+            self.compose.environment("airflow-check", values),
+            self.compose.mounts("airflow-check", values),
+            self.compose.memory("airflow-check", values),
+            "none",
+            **self.orchestration_hardening(raw, values),
+        )
+
+    def render_orchestration_dump(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """A read-only logical look at the stack's metadata database: ``metadata`` dumps every table, ``xcom`` the XCom rows. The job runs in the thin
+        Airflow image on the stack's network, reads the connection string from the read-only metadata folder and writes only to the state folder's dumps
+        folder (failure mode 932b)."""
+        self.only_params(inp, ("state",))
+        if len(inp.args) != 1 or inp.args[0] not in ORCHESTRATION_DUMPS:
+            raise LauncherError(f"template orchestration_dump takes one argument: {' or '.join(ORCHESTRATION_DUMPS)}", "args")
+        state = self.allowed(str(inp.params["state"]), "state")
+        missing = [folder for folder in ORCHESTRATION_STATE_FOLDERS if not (state / folder).is_dir()]
+        if not state.is_dir() or missing:
+            raise LauncherError(f"state folder {str(state)!r} does not exist or lacks {', '.join(missing)}", "args")
+        values = {
+            "HAI_ORCH_REPO": str(self.checkout),
+            "HAI_ORCH_STATE": str(state.resolve()),
+            "HAI_ORCH_UID": str(os.getuid()),
+            "JOB_MEMORY_LIMIT": inp.values["JOB_MEMORY_LIMIT"],
+        }
+        raw = self.compose.service("airflow-dump")
+        mounts = self.compose.mounts("airflow-dump", values)
+        for mount in mounts:
+            if mount.target == "/out":
+                Path(mount.source).mkdir(mode=0o700, parents=True, exist_ok=True)
+        return self.assemble(
+            inp,
+            name,
+            self.image("airflow-dump"),
+            [str(item) for item in raw["entrypoint"]],
+            [*(interpolate(str(part), values) for part in raw["command"]), inp.args[0]],
+            self.compose.environment("airflow-dump", values),
+            mounts,
+            self.compose.memory("airflow-dump", values),
+            self.orchestration_network_name(registry_id),
+            **self.orchestration_hardening(raw, values),
+        )
+
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Provenance interfaces, frozen for the provenance package (D1 sections 10 and 14)
@@ -1795,13 +2073,31 @@ class Renderer:
 
 
 def provenance_vars(run: Mapping[str, Any]) -> dict[str, str]:
-    """The provenance variables a ``real_dbt`` launch of ``run`` carries. Frozen interface: refuses until the provenance package fills it."""
-    raise LauncherError(f"real_dbt is refused for run {run.get('run_id')}: provenance_vars is not filled yet", "provenance")
+    """The provenance variables a ``real_dbt`` launch of ``run`` carries (D1 section 10); a missing or unrecorded value refuses."""
+    from scripts.lakehouse import provenance
+
+    try:
+        return provenance.variables(run)
+    except provenance.ProvenanceError as error:
+        raise LauncherError(f"real_dbt is refused for run {run.get('run_id')}: {error}", "provenance") from error
 
 
 def seal(run: Mapping[str, Any]) -> dict[str, Any]:
-    """Make the sealed copy of a gold-eligible build of ``run``. Frozen interface: refuses until the provenance package fills it."""
-    raise LauncherError(f"run {run.get('run_id')} cannot be sealed: seal is not filled yet", "provenance")
+    """Make the sealed copy of a gold-eligible build of ``run`` and return its completion record (D1 section 10 item 5)."""
+    from scripts.lakehouse import provenance
+
+    try:
+        return provenance.seal_build(run)
+    except provenance.ProvenanceError as error:
+        raise LauncherError(f"run {run.get('run_id')} cannot be sealed: {error}", "provenance") from error
+
+
+def consumer_vars(run: Mapping[str, Any]) -> dict[str, str]:
+    """The environment of a consumer of the run's sealed copy; a run that is not sealed refuses."""
+    try:
+        return build_provenance.consumer_variables(run)
+    except build_provenance.ProvenanceError as error:
+        raise LauncherError(f"run {run.get('run_id')} has no sealed copy: {error}", "provenance") from error
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -1862,16 +2158,44 @@ class Conn:
         self.buffer = b""
         self.closed = False
         self.session: Session | None = None
+        self.outbuf = bytearray()
+        self.interest = selectors.EVENT_READ
+        self.notify: Callable[[Conn], None] | None = None
 
     def send(self, message: Mapping[str, Any]) -> None:
-        """Send one JSON line; a failure closes the connection."""
+        """Send one JSON line; a failure closes the connection.
+
+        A connection with a session, or with output still waiting, never blocks the loop: the line joins ``outbuf`` and the loop sends it when
+        the socket accepts bytes.
+        """
         if self.closed:
             return
-        try:
-            self.sock.settimeout(5)
-            self.sock.sendall(json.dumps(message).encode() + b"\n")
-        except OSError:
-            self.closed = True
+        line = json.dumps(message).encode() + b"\n"
+        if self.session is None and not self.outbuf:
+            try:
+                self.sock.settimeout(5)
+                self.sock.sendall(line)
+            except OSError:
+                self.closed = True
+            return
+        self.outbuf += line
+        self.flush()
+
+    def flush(self) -> None:
+        """Send as much of ``outbuf`` as the socket accepts without blocking, then tell the loop which events the socket needs."""
+        if not self.closed:
+            try:
+                self.sock.setblocking(False)
+                while self.outbuf:
+                    del self.outbuf[: self.sock.send(self.outbuf)]
+            except BlockingIOError:
+                pass
+            except OSError:
+                self.closed = True
+        if self.closed:
+            self.outbuf.clear()
+        if self.notify is not None:
+            self.notify(self)
 
 
 @dataclass
@@ -1886,6 +2210,8 @@ class Session:
     policy: str
     detached: bool = False
     pending: bytes = b""
+    pending_in: bytearray = field(default_factory=bytearray)
+    interest: int = selectors.EVENT_READ
 
 
 @dataclass
@@ -1950,6 +2276,9 @@ METHODS: dict[str, MethodSpec] = {
     "deregister_set": MethodSpec(("any",), owner_flag=False),
     "catalog_up": MethodSpec(("any",)),
     "catalog_down": MethodSpec(("any",)),
+    "orchestration_up": MethodSpec(("any",)),
+    "orchestration_down": MethodSpec(("any",)),
+    "pull": MethodSpec(("any",)),
     "docker_restart": MethodSpec(("any",), owner_flag=True),
     "shutdown": MethodSpec(("any",), owner_flag=True),
 }
@@ -1962,12 +2291,70 @@ def new_id(prefix: str) -> str:
 
 def finite_attempt(attempt: Mapping[str, Any]) -> bool:
     """One finite predicate for ordinary jobs and one-shot catalog services, shared by every deadline gate."""
+    if attempt["template"] == "orchestration_service":
+        return attempt["params"].get("service") in ORCHESTRATION_FINITE
     return TEMPLATES[attempt["template"]].finite or (attempt["template"] == "catalog_service" and attempt["params"].get("service") in FINITE_SERVICES)
 
 
 def is_open(attempt: Mapping[str, Any]) -> bool:
     """True while an attempt has not ended."""
     return attempt["phase"] != "ended"
+
+
+ARCHIVE_FOLDER = "history"
+ARCHIVE_STALLED_WRITES = 3
+
+
+def write_all(fd: int, data: bytes) -> None:
+    """Write every byte of ``data``: a short write continues with the rest, an interrupted write repeats and a call that makes no progress fails."""
+    view, stalled = memoryview(data), 0
+    while view:
+        try:
+            count = os.write(fd, view)
+        except InterruptedError:
+            continue
+        if count <= 0:
+            stalled += 1
+            if stalled >= ARCHIVE_STALLED_WRITES:
+                raise OSError(errno.EIO, "a write made no progress")
+            continue
+        stalled = 0
+        view = view[count:]
+
+
+def read_exact(fd: int, length: int, offset: int) -> bytes:
+    """Read ``length`` bytes at ``offset``; fewer bytes than the file holds there is an error."""
+    found = b""
+    while len(found) < length:
+        chunk = os.pread(fd, min(length - len(found), 1 << 20), offset + len(found))
+        if not chunk:
+            raise OSError(errno.EIO, "the file is shorter than its size")
+        found += chunk
+    return found
+
+
+def archive_recover_tail(fd: int) -> int:
+    """Cut an incomplete last line off an archive file and return the size that is left: every append ends in a newline, so a tail without one
+    is the remains of an append that did not finish, and its records are still in the registry."""
+    size = os.fstat(fd).st_size
+    end = size
+    while end > 0:
+        begin = max(0, end - (1 << 16))
+        index = read_exact(fd, end - begin, begin).rfind(b"\n")
+        if index >= 0:
+            end = begin + index + 1
+            break
+        end = begin
+    if end != size:
+        os.ftruncate(fd, end)
+        os.fsync(fd)
+    return end
+
+
+def archive_verify(fd: int, start: int, data: bytes) -> None:
+    """The file holds exactly ``data`` after its first ``start`` bytes."""
+    if os.fstat(fd).st_size != start + len(data) or read_exact(fd, len(data), start) != data:
+        raise OSError(errno.EIO, "the archive file differs from the bytes written")
 
 
 class Launcher:
@@ -2010,11 +2397,17 @@ class Launcher:
         self.scan_wall: dict[int, float] = {}
         self.bound: dict[str, str] = {}
         self.last_maintenance = 0.0
+        self.last_compact = 0.0
+        self.maintained: tuple[int, str] | None = None
+        self.compacted_at: tuple[int, str] | None = None
+        self.create_deadlines: list[tuple[str, float]] = []
+        self.orphan_retries: list[tuple[str, str]] = []
         self.last_failure: dict[str, float] = {}
         self.spawn_epoch: dict[str, int] = {}
         self.waiter_principals: dict[tuple[int, str], dict[str, Any]] = {}
         self.read_waiters: dict[str, tuple[Conn, str]] = {}
         self.release_requests: dict[str, tuple[str, str, str]] = {}
+        self.pull_requests: dict[str, str] = {}
         self.attach_info: dict[str, tuple[str, str, bool, str]] = {}
         self.names_seen: dict[str, str] = {}
         self.foreign: list[str] = []
@@ -2052,11 +2445,18 @@ class Launcher:
             "health": self.on_health,
             "netremove": self.on_netremove,
             "catalogconfirm": self.on_catalogconfirm,
+            "orchlimits": self.on_orchlimits,
+            "orchhealth": self.on_orchhealth,
+            "orchnetcreate": self.on_orchnetcreate,
+            "orchnetremove": self.on_orchnetremove,
+            "orchconfirm": self.on_orchconfirm,
+            "pull": self.on_pull,
             "restartcheck": self.on_restartcheck,
             "restartcmd": self.on_restartcmd,
             "restartping": self.on_restartping,
             "copy": self.on_copy,
             "rmcopy": self.on_rmcopy,
+            "seal": self.on_seal,
             "attach": self.on_attach,
         }
         self.handlers: dict[str, Callable[[Ctx], Any]] = {
@@ -2086,6 +2486,9 @@ class Launcher:
             "deregister_set": self.m_deregister_set,
             "catalog_up": self.m_catalog_up,
             "catalog_down": self.m_catalog_down,
+            "orchestration_up": self.m_orchestration_up,
+            "orchestration_down": self.m_orchestration_down,
+            "pull": self.m_pull,
             "docker_restart": self.m_docker_restart,
             "shutdown": self.m_shutdown,
         }
@@ -2199,7 +2602,7 @@ class Launcher:
         """
         with self.tx() as state:
             for record in state["requests"].values():
-                if record["state"] == "pending" and record.get("method") in ("release", "release_allocation"):
+                if record["state"] == "pending" and record.get("method") in ("release", "release_allocation", "pull"):
                     # The record and its payload hash stay: the same request ID with the same payload runs again, a changed payload is refused.
                     record["state"] = "interrupted"
             for allocation in state["allocations"].values():
@@ -2258,8 +2661,27 @@ class Launcher:
             self.shutdown_resources()
         return 0
 
+    def drain_seals(self) -> None:
+        """Wait until every seal worker has returned and publish each result through ``on_seal`` (D1 section 10 item 5, review delta 2 finding 9).
+
+        A seal worker copies into the run's folder and cannot be cancelled (the frozen ``seal`` interface). A launcher that gave up the registry lock first
+        would let a replacement find no worker in its own ``inflight`` set, discard the seal record, finish a recovery and accept a release while the old
+        worker still writes. The lock and the seal's open-work protection therefore stay until the worker has stopped, and ``seal_stale`` still decides what
+        publishes. Nothing else is applied. The wait has no limit: the process cannot end before its workers do (the interpreter joins them at exit), and a
+        hard kill ends a worker with its process. A reply to ``shutdown`` is not proof that the worker ended; the process exit is.
+        """
+        while any(key.startswith("seal:") for key in self.inflight):
+            try:
+                tag, key, payload = self.messages.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            self.inflight.discard(key)
+            if tag == "seal":
+                with contextlib.suppress(run_lock.RegistryError, OSError):
+                    self.on_seal(key, *payload)
+
     def shutdown_resources(self) -> None:
-        """Close every socket and thread the launcher opened."""
+        """Close every socket and thread the launcher opened; the registry lock goes last, after every seal worker has returned."""
         self.running = False
         if self.stream is not None:
             self.stream.close()
@@ -2270,6 +2692,7 @@ class Launcher:
             with contextlib.suppress(OSError):
                 self.listener.close()
         self.cfg.socket_path.unlink(missing_ok=True)
+        self.drain_seals()
         self.pool.shutdown(wait=False, cancel_futures=True)
         try:
             with self.tx() as state:
@@ -2285,16 +2708,22 @@ class Launcher:
     def loop(self) -> None:
         """The single-threaded loop: sockets, worker messages and timers, until stopped."""
         while self.running:
-            for key, _ in self.selector.select(timeout=self.timings.tick):
+            for key, mask in self.selector.select(timeout=self.timings.tick):
                 if key.data == "listener":
                     self.accept()
                 elif key.data == "wake":
                     with contextlib.suppress(BlockingIOError):
                         os.read(self.wake_read, 4096)
                 elif key.data == "session_docker":
-                    self.session_docker_ready(key.fileobj)
+                    self.session_docker_event(key.fileobj, mask)
                 elif isinstance(key.data, Conn):
-                    self.read_conn(key.data)
+                    if mask & selectors.EVENT_WRITE:
+                        key.data.flush()
+                        if key.data.closed:
+                            self.close_conn(key.data)
+                            continue
+                    if mask & selectors.EVENT_READ:
+                        self.read_conn(key.data)
             self.guarded(self.drain_messages)
             self.guarded(self.timers)
             self.guarded(self.process_dirty)
@@ -2338,6 +2767,7 @@ class Launcher:
             return
         sock.setblocking(False)
         conn = Conn(sock, peer)
+        conn.notify = self.update_conn
         self.conns[sock.fileno()] = conn
         self.selector.register(sock, selectors.EVENT_READ, conn)
 
@@ -2346,6 +2776,7 @@ class Launcher:
         if conn.closed and conn.sock.fileno() == -1:
             return
         conn.closed = True
+        conn.outbuf.clear()
         with contextlib.suppress(KeyError, ValueError, OSError):
             self.selector.unregister(conn.sock)
         self.conns.pop(conn.sock.fileno(), None)
@@ -2353,7 +2784,40 @@ class Launcher:
             conn.sock.close()
         if conn.session is not None:
             conn.session.detached = True
+            conn.session.pending_in.clear()
+            self.update_session(conn.session)
         self.waiters = [w for w in self.waiters if w.conn is not conn]
+
+    def watch(self, sock: socket.socket, data: Any, have: int, wanted: int) -> int:
+        """Change the events a registered socket is selected for (none removes it) and return the new set."""
+        if wanted != have and sock.fileno() != -1:
+            with contextlib.suppress(KeyError, ValueError, OSError):
+                if have and wanted:
+                    self.selector.modify(sock, wanted, data)
+                elif wanted:
+                    self.selector.register(sock, wanted, data)
+                else:
+                    self.selector.unregister(sock)
+        return wanted
+
+    def update_conn(self, conn: Conn) -> None:
+        """A client connection is read unless its session's input to Docker is backed up and written while output waits in ``outbuf``."""
+        if conn.sock.fileno() == -1 or conn.sock.fileno() not in self.conns:
+            return
+        backed_up = conn.session is not None and len(conn.session.pending_in) >= SESSION_BUFFER_LIMIT
+        wanted = (0 if backed_up else selectors.EVENT_READ) | (selectors.EVENT_WRITE if conn.outbuf else 0)
+        conn.interest = self.watch(conn.sock, conn, conn.interest, wanted)
+        if conn.session is not None:
+            self.update_session(conn.session)
+
+    def update_session(self, session: Session) -> None:
+        """The Docker side of a session is read unless the client's output is backed up and written while input waits."""
+        docker = session.docker_socket
+        if docker.fileno() == -1 or self.sessions.get(docker.fileno()) is not session:
+            return
+        backed_up = len(session.conn.outbuf) >= SESSION_BUFFER_LIMIT
+        wanted = (0 if backed_up else selectors.EVENT_READ) | (selectors.EVENT_WRITE if session.pending_in else 0)
+        session.interest = self.watch(docker, "session_docker", session.interest, wanted)
 
     def read_conn(self, conn: Conn) -> None:
         """Read what a client sent and handle each complete line."""
@@ -2385,6 +2849,9 @@ class Launcher:
             method = str(request["method"])
         except (ValueError, KeyError, TypeError):
             conn.send({"ok": False, "error": "malformed request", "code": "protocol"})
+            return
+        if method == "live":
+            conn.send({"id": request_id, "ok": True, "result": {"live": True, "pid": os.getpid(), "status": self.status}})
             return
         try:
             result = self.dispatch(conn, request, request_id, method)
@@ -2619,6 +3086,7 @@ class Launcher:
         self.networks_seen = sorted(str(n.get("Name")) for n in listing["networks"])
         self.settle_unresolved_creates(listing["seq"])
         self.settle_network_ops(listing["networks"])
+        self.settle_orchestration_network_ops(listing["networks"])
         self.dirty.update(self.bound.values())
         self.dirty.update(self.open_attempt_ids())
         if self.status != "serving":
@@ -2835,6 +3303,9 @@ class Launcher:
         kind, _, ident = owner.partition(":")
         if owner == DIAGNOSTIC_OWNER:
             return not self.stream_acked and self.probe is not None and self.probe["attempt"] == attempt["id"]
+        if kind == "stack":
+            stack = state["launcher"].get("orchestration") or {}
+            return stack.get("phase") in ("starting", "up") and not state["launcher"].get("restart")
         if kind == "service":
             catalog = state["launcher"].get("catalog") or {}
             # A launcher outside the catalog's checkout sends no positive catalog-service operation; cleanup stays allowed (A86, review C3a-1).
@@ -2879,6 +3350,22 @@ class Launcher:
         """A renderer for a validated checkout."""
         return Renderer(self.cfg, self.compose_for(checkout), checkout, self.main_checkout, self.key)
 
+    def orchestration_compose_for(self, checkout: Path) -> ComposeModel:
+        """The orchestration Compose model of a checkout, parsed once per file hash."""
+        path = checkout / ORCHESTRATION_COMPOSE
+        if not path.is_file():
+            raise LauncherError(f"{checkout} has no {ORCHESTRATION_COMPOSE}", "spec")
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest not in self.compose_models:
+            self.compose_models[digest] = ComposeModel(path)
+        return self.compose_models[digest]
+
+    def renderer_of(self, template_name: str, checkout: Path) -> Renderer:
+        """The renderer of a template: the orchestration templates read the orchestration Compose model, the others the lakehouse one."""
+        if template_name.startswith("orchestration_"):
+            return Renderer(self.cfg, self.orchestration_compose_for(checkout), checkout, self.main_checkout, self.key)
+        return self.renderer_for(checkout)
+
     def check_checkout(self, text: str) -> Path:
         """A request's checkout: an absolute folder of this repository (the registry's main checkout or one of its worktrees)."""
         path = Path(text)
@@ -2919,12 +3406,12 @@ class Launcher:
     def owner_name(self, attempt: Mapping[str, Any]) -> str:
         """The owner part of a container name."""
         kind, _, ident = str(attempt["owner"]).partition(":")
-        return {"run": ident, "alloc": ident, "service": "svc", "launcher": "diag"}.get(kind, "x")
+        return {"run": ident, "alloc": ident, "service": "svc", "stack": "orch", "launcher": "diag"}.get(kind, "x")
 
     def render_attempt(self, state: Mapping[str, Any], attempt: Mapping[str, Any], op_id: str, extra: Mapping[str, str] | None) -> Rendered:
         """Render an attempt's create specification from its template and recorded values."""
         template = TEMPLATES[attempt["template"]]
-        renderer = self.renderer_for(Path(attempt["checkout"]))
+        renderer = self.renderer_of(attempt["template"], Path(attempt["checkout"]))
         labels = self.labels_for(attempt, op_id, extra)
         provenance: dict[str, str] = {}
         snapshot = run_folder = None
@@ -2938,8 +3425,14 @@ class Launcher:
                 if pointer is None:
                     raise LauncherError("the run has no complete snapshot", "spec")
                 snapshot = run_folder / "snapshots" / str(pointer)
+            if attempt["template"] == "sealed_consumer":
+                provenance = consumer_vars(state["runs"][ident])
             if attempt["template"] == "spark_read":
                 run_folder = run_folder
+        if attempt["template"] in SEALED_READERS and build_provenance.SEALED_RUN_PARAM in attempt["params"]:
+            sealed_id = str(attempt["params"][build_provenance.SEALED_RUN_PARAM])
+            provenance = self.sealed_reader_vars(state, sealed_id)
+            run_folder = self.cfg.runs_root / sealed_id
         inp = RenderInput(
             attempt["template"],
             self.owner_name(attempt),
@@ -2959,14 +3452,20 @@ class Launcher:
         )
         if template.name == "catalog_service":
             return renderer.render_service(inp, str(attempt["params"]["service"]), self.registry_id)
+        if template.name == "orchestration_service":
+            return renderer.render_orchestration_service(inp, str(attempt["params"]["service"]), self.registry_id)
         return renderer.render(inp, self.registry_id)
 
     def image_reference(self, attempt: Mapping[str, Any]) -> str:
         """The image the attempt's template runs (as a test registry may rename it)."""
         template = TEMPLATES[attempt["template"]]
-        renderer = self.renderer_for(Path(attempt["checkout"]))
-        if template.name == "catalog_service":
+        renderer = self.renderer_of(attempt["template"], Path(attempt["checkout"]))
+        if template.name in ("catalog_service", "orchestration_service"):
             return renderer.image(str(attempt["params"]["service"]))
+        if template.name == "orchestration_check":
+            return renderer.image("airflow-check")
+        if template.name == "orchestration_dump":
+            return renderer.image("airflow-dump")
         return renderer.image(template.service or "analytics")
 
     def resolve_image(self, reference: str) -> dict[str, Any] | None:
@@ -3153,11 +3652,20 @@ class Launcher:
             run = state["runs"].get(owner.partition(":")[2]) if owner.startswith("run:") else None
             allocation = state["allocations"].get(owner.partition(":")[2]) if owner.startswith("alloc:") else None
             gone = (run is not None and run["state"] != "held") or (allocation is not None and allocation["state"] != "held")
-            if gone or (run is None and allocation is None and not owner.startswith("service:")):
+            if gone or (run is None and allocation is None and not owner.startswith(("service:", "stack:"))):
                 a["cancel_intent"] = {"reason": "owner_not_held", "at": utc_now()}
             return
         if not self.docker_ok or self.status != "serving" and owner != DIAGNOSTIC_OWNER:
             return
+        if a["template"] == "real_dbt" and owner.startswith("run:") and build_provenance.is_serialized(a["args"]):
+            held = state["runs"].get(owner.partition(":")[2])
+            blocker = build_provenance.dispatch_blocker(held, a, state["attempts"].values()) if held is not None else None
+            if blocker == "sealed":
+                a["cancel_intent"] = {"reason": "sealed", "at": utc_now()}
+                return
+            if blocker:
+                a["waiting_on"] = blocker
+                return
         if owner.startswith("alloc:"):
             allocation = state["allocations"][owner.partition(":")[2]]
             active = sum(1 for other in state["attempts"].values() if other["owner"] == owner and other["phase"] in ACTIVE_PHASES)
@@ -3179,11 +3687,24 @@ class Launcher:
                 return
         elif owner.startswith("service:") and a["plan_env"] is None:
             a["plan_env"] = dict(state["launcher"]["catalog"].get("limits", {}))
-        if not a.get("prepared") and owner != DIAGNOSTIC_OWNER and not owner.startswith("service:"):
+        elif owner.startswith("stack:") and a["plan_env"] is None:
+            a["plan_env"] = dict(state["launcher"]["orchestration"].get("settings", {}))
+        if not a.get("prepared") and owner != DIAGNOSTIC_OWNER and not owner.startswith(("service:", "stack:")):
             if not a.get("preparing"):
                 a["preparing"] = True
                 actions.append(lambda: self.spawn(f"prepare:{a['id']}", "prepare", self.prepare_attempt, a["id"], dict(a), False, {}))
             return
+        if a["template"] == "real_dbt" and owner.startswith("run:") and build_provenance.is_mutating(a["args"]) and not a.get("cleared"):
+            building = state["runs"][owner.partition(":")[2]]
+            try:
+                build_provenance.clear_build_artifacts(building)
+            except build_provenance.ProvenanceError as error:
+                self.finish_attempt(state, a, "create_failed", f"provenance: {error}")
+                return
+            a["cleared"] = True
+            building["build_state"] = "open"
+            for key in ("completion", "seal_error", "build_attempt", "build_binding"):
+                building.pop(key, None)
         self.start_create(state, a, actions)  # False: the image's defaults are being read; the attempt stays queued
 
     CAPACITY_VALID = 10.0
@@ -3607,9 +4128,106 @@ class Launcher:
                 self.finish_attempt(state, a, self.intent_reason(a))
                 if a["reason"] == "exited" and a.get("exit_code") == 0 and a["template"] == "spark_read" and a["args"][:1] == ["pin"]:
                     self.record_pins(state, a)
+                if a["reason"] == "exited" and a.get("exit_code") == 0 and a["template"] == "real_dbt" and build_provenance.is_full_build(a["args"]):
+                    self.begin_seal(state, a)
             else:
                 a["cleanup"]["step"] = "remove"
         self.dirty.add(attempt_id)
+
+    def begin_seal(self, state: dict[str, Any], a: dict[str, Any]) -> None:
+        """A full build ended with exit code 0: the run is ``sealing`` until ``seal`` has decided (D1 section 10 item 5).
+
+        The run records which attempt wrote the build, in which generation and with which arguments; ``seal`` certifies that attempt only. The seal is an
+        operation recorded with the run (``seal``: ID, attempt, generation, binding): it is open work of the run until its worker has returned, and its
+        result is published only while the run still is what the record says (``seal_stale``).
+        """
+        run = state["runs"][a["owner"].partition(":")[2]]
+        run["build_state"] = "sealing"
+        run["build_attempt"] = a["id"]
+        run["build_binding"] = build_provenance.binding(a)
+        run["seal"] = {"id": new_id("sl"), "attempt": a["id"], "generation": int(run.get("generation", 1)), "binding": run["build_binding"]}
+        self.spawn(f"seal:{run['run_id']}:{run['seal']['id']}", "seal", self.seal_worker, dict(run))
+
+    def seal_worker(self, run: Mapping[str, Any]) -> dict[str, Any]:
+        """Worker: the frozen ``seal`` interface; a refusal comes back as an error. A test registry's ``seal_hold`` file holds it (two minutes at most)."""
+        hold = self.registry.path / "seal_hold"
+        deadline = time.monotonic() + 120
+        while self.registry.kind == "test" and hold.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return seal(run)
+
+    @staticmethod
+    def seal_stale(run: Mapping[str, Any], record: Any) -> str | None:
+        """None while the run still is what its seal record says; else why the seal no longer applies (D1 section 10 items 4 and 5, review delta 1 finding 8).
+
+        The run must still be sealing, held or finalizing, in the generation the seal began in, with the same build attempt and binding.
+        """
+        if not isinstance(record, Mapping):
+            return "the run holds no record of the seal"
+        if run.get("build_state") != "sealing":
+            return f"the run is {run.get('build_state')}, not sealing"
+        if run.get("state") not in ("held", "finalizing"):
+            return f"the run is {run.get('state')}"
+        if int(run.get("generation", 1)) != record.get("generation"):
+            return f"the run is in generation {run.get('generation', 1)}; the seal began in generation {record.get('generation')}"
+        if run.get("build_attempt") != record.get("attempt") or run.get("build_binding") != record.get("binding"):
+            return "the run names another build than the seal"
+        return None
+
+    @staticmethod
+    def discard_seal(run: dict[str, Any], reason: str) -> None:
+        """Close a seal that no longer applies: no completion, an open build and the reason."""
+        run.pop("seal", None)
+        run.pop("completion", None)
+        run.update({"build_state": "open", "seal_error": f"the seal was discarded: {reason}"})
+
+    def on_seal(self, key: str, outcome: str, value: Any) -> None:
+        """The seal worker returned. In one registry transaction the seal is closed and its result is published only if ``seal_stale`` finds the run as the
+        record says; otherwise the older seal publishes nothing (a completion record and the ``sealed`` state, or the reason and an open build)."""
+        _, run_id, seal_id = key.split(":", 2)
+        with self.tx() as state:
+            run = state["runs"].get(run_id)
+            record = run.get("seal") if run is not None else None
+            if run is None or not isinstance(record, Mapping) or record.get("id") != seal_id:
+                return
+            reason = self.seal_stale(run, record)
+            if reason is None and outcome == "ok" and (value.get("build_attempt"), value.get("build_generation")) != (record["attempt"], record["generation"]):
+                reason = "the sealed build is not the one the seal began with"
+            if reason is not None:
+                self.discard_seal(run, reason)
+                return
+            run.pop("seal")
+            if outcome == "ok":
+                run.update({"completion": value, "build_state": "sealed"})
+                run.pop("seal_error", None)
+            else:
+                run.update({"build_state": "open", "seal_error": str(value)})
+                run.pop("completion", None)
+
+    @staticmethod
+    def sealed_reader_vars(state: Mapping[str, Any], run_id: str) -> dict[str, str]:
+        """The sealed digest and expected marker of a run's sealed copy for a reader behind the consumer entrypoint; the launcher reads them from its own
+        record, a caller supplies only the run ID."""
+        run = state["runs"].get(run_id)
+        if run is None:
+            raise LauncherError(f"run {run_id} does not exist", "provenance")
+        return consumer_vars(run)
+
+    def advance_seals(self, state: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        """A seal that no worker of this launcher is running (the launcher died) is resumed while it still applies and discarded when it does not; the step
+        is idempotent."""
+        for run_id, run in state["runs"].items():
+            record = run.get("seal")
+            if record is None and run.get("build_state") != "sealing":
+                continue
+            key = f"seal:{run_id}:{record.get('id') if isinstance(record, Mapping) else ''}"
+            if key in self.inflight:
+                continue
+            reason = self.seal_stale(run, record)
+            if reason is not None:
+                self.discard_seal(run, reason)
+            else:
+                actions.append(partial(self.spawn, key, "seal", self.seal_worker, dict(run)))
 
     def safe_read(self, run_id: str, name: str, limit: int = 1 << 20) -> bytes:
         """Read a run file component by component from the runs root with ``O_NOFOLLOW`` along ``runs/<run_id>/<name>`` (D1 section 10 item 2)."""
@@ -3765,6 +4383,11 @@ class Launcher:
 
     def docker_dispose(self, container_id: str) -> None:
         """Worker: stop and remove a container."""
+        info = self.docker.inspect(container_id)
+        if info is None:
+            return
+        if ((info.get("Config") or {}).get("Labels") or {}).get(LABEL_REGISTRY) != self.registry_id:
+            raise LauncherError("refusing to dispose of a container without this registry's label", "ownership")
         self.docker.stop(container_id, 1)
         self.docker.remove(container_id)
 
@@ -3800,27 +4423,172 @@ class Launcher:
                 if a is not None and is_open(a):
                     self.finish_attempt(state, a, "create_failed", "no container appeared within the create timeout and a fresh scan found none")
 
+    def registry_snapshot(self) -> tuple[tuple[int, str], bytes]:
+        """One read of registry.json: its bytes with their size and SHA-256.
+
+        Any outside write that changes a byte changes the signature, whatever it does to the inode or the times, and the signature describes exactly
+        the bytes returned with it.
+        """
+        data = self.registry.state_file.read_bytes()
+        return (len(data), hashlib.sha256(data).hexdigest()), data
+
+    def read_open_operations(self, data: bytes) -> None:
+        """Parse the registry snapshot ``data`` and keep what the timed work needs from its open operations."""
+        state = run_lock.parse_state(data, self.registry_id, self.registry.state_file.name)
+        if state["schema_version"] != run_lock.LAUNCHER_SCHEMA:
+            raise run_lock.RegistryError(f"{self.registry.state_file.name} is not valid: launcher schema required")
+        operations = state["operations"].values()
+        open_ops = [op for op in operations if op["state"] == "open"]
+        self.create_deadlines = [(op["op_id"], op["dispatched_at"] + self.timings.create_timeout) for op in open_ops if op["kind"] == "create"]
+        self.orphan_retries = [(op["op_id"], op["container_id"]) for op in open_ops if op["kind"] == "orphan" and op.get("container_id")]
+
     def maintenance(self, now: float) -> None:
-        """Timed work that needs the registry: scans for expired creates, orphan retries and the owners' managers."""
+        """Timed work: scans for expired creates, orphan retries and the move of old records. The registry is parsed only when its file changed.
+
+        Above ``compact_threshold`` bytes the move takes records older than ``compact_floor`` and is tried once per change of the file; the
+        periodic pass every ``compact_every`` chooses the age by the current size, so records that age with no change still move.
+        """
         if not self.docker_ok or self.status == "starting":
             return
         if now - self.last_maintenance < 0.5:
             return
         self.last_maintenance = now
-        wanted_scan = False
-        retry: list[tuple[str, str]] = []
-        with self.tx(write=False) as state:
-            for op in state["operations"].values():
-                if op["state"] != "open":
-                    continue
-                if op["kind"] == "create" and time.time() > op["dispatched_at"] + self.timings.create_timeout and f"op:{op['op_id']}" not in self.inflight:
-                    wanted_scan = True
-                if op["kind"] == "orphan" and f"op:{op['op_id']}" not in self.inflight and op.get("container_id"):
-                    retry.append((op["op_id"], op["container_id"]))
-        if wanted_scan and not any(k.startswith("scan:") for k in self.inflight):
+        signature, snapshot = self.registry_snapshot()
+        if signature != self.maintained:
+            self.read_open_operations(snapshot)
+            self.maintained = signature
+        wall = time.time()
+        expired = any(wall > deadline and f"op:{op_id}" not in self.inflight for op_id, deadline in self.create_deadlines)
+        if expired and not any(k.startswith("scan:") for k in self.inflight):
             self.start_scan()
-        for op_id, container_id in retry:
-            self.spawn(f"op:{op_id}", "orphan", self.docker_dispose, container_id)
+        for op_id, container_id in self.orphan_retries:
+            if f"op:{op_id}" not in self.inflight:
+                self.spawn(f"op:{op_id}", "orphan", self.docker_dispose, container_id)
+        over = signature[0] > self.timings.compact_threshold
+        if now - self.last_compact >= self.timings.compact_every:
+            self.last_compact = now
+            self.compacted_at = signature
+            self.compact_history(self.timings.compact_floor if over else self.timings.history_retain)
+        elif over and signature != self.compacted_at:
+            self.compacted_at = signature
+            self.compact_history(self.timings.compact_floor)
+
+    def history_to_move(self, state: Mapping[str, Any], retain: float | None = None) -> list[tuple[str, str, Any]]:
+        """The terminal records older than ``retain`` seconds (default ``history_retain``), as (collection, key, record) (failure modes RH1 to RH10 and RH20).
+
+        An attempt moves only when it ended, none of its operations is open and its owner is a released or failed allocation that nothing live
+        names: no later submit can then reuse its attempt number in a container name. Its settled operations and its container record move with
+        it, unless the inventory still lists the container. An allocation that an attempt in the registry, a registration, a reader, a session or a
+        reservation names stays (RH5 and RH20): the selection drops such an allocation, which keeps the attempts it owns, and repeats until nothing
+        more is dropped. Done requests and reservation events move by age; open work never moves.
+        """
+        cutoff = time.time() - (self.timings.history_retain if retain is None else retain)
+
+        def old(text: Any) -> bool:
+            try:
+                return datetime.fromisoformat(str(text)).timestamp() < cutoff
+            except (TypeError, ValueError):
+                return False
+
+        live = json.dumps([state.get(name, {}) for name in ("registrations", "readers", "sessions", "reservations")])
+        open_ops = {op["attempt"] for op in state["operations"].values() if op["state"] == "open"}
+        by_owner: dict[str, list[dict[str, Any]]] = {}
+        named_by: dict[str, set[str]] = {}
+        for attempt in state["attempts"].values():
+            by_owner.setdefault(str(attempt["owner"]), []).append(attempt)
+            if attempt.get("attempt_alloc"):
+                named_by.setdefault(str(attempt["attempt_alloc"]), set()).add(attempt["id"])
+        chosen: dict[str, list[dict[str, Any]]] = {}
+        for alloc_id, allocation in state["allocations"].items():
+            owned = by_owner.get(f"alloc:{alloc_id}", [])
+            if allocation["state"] not in ("released", "failed") or f'"{alloc_id}"' in live:
+                continue
+            if any(a["phase"] != "ended" or a["id"] in open_ops or not old(a.get("ended_at")) for a in owned) or not (
+                owned or old(allocation.get("created_at"))
+            ):
+                continue
+            chosen[alloc_id] = owned
+        while True:
+            moving = {a["id"] for owned in chosen.values() for a in owned}
+            dropped = [alloc_id for alloc_id in chosen if named_by.get(alloc_id, set()) - moving]
+            if not dropped:
+                break
+            for alloc_id in dropped:
+                del chosen[alloc_id]
+        moved: list[tuple[str, str, Any]] = []
+        attempts: set[str] = set()
+        for alloc_id, owned in chosen.items():
+            attempts.update(a["id"] for a in owned)
+            moved += [("attempts", a["id"], a) for a in owned]
+            moved.append(("allocations", alloc_id, state["allocations"][alloc_id]))
+        moved += [("operations", key, op) for key, op in state["operations"].items() if op["state"] == "settled" and op.get("attempt") in attempts]
+        for container_id, record in state["containers"].items():
+            present = container_id in self.inventory and self.inventory[container_id].get("state") != "absent"
+            if record.get("attempt") in attempts and not present:
+                moved.append(("containers", container_id, record))
+        moved += [("requests", key, record) for key, record in state["requests"].items() if record["state"] == "done" and old(record.get("at"))]
+        moved += [
+            ("reservation_history", f"{event.get('reservation_id')}@{event.get('at')}", event) for event in state["reservation_history"] if old(event.get("at"))
+        ]
+        return moved
+
+    def compact_history(self, retain: float | None = None) -> None:
+        """Move terminal records older than ``retain`` seconds out of the registry into its append-only archive, so a transaction rewrites less.
+
+        The archive lines are written and flushed before the registry is rewritten: a crash between the two repeats lines, never loses a record.
+        """
+        with self.tx(write=False) as state:
+            if not self.history_to_move(state, retain):
+                return
+        with self.tx() as state:
+            moved = self.history_to_move(state, retain)
+            if not moved:
+                return
+            self.archive_history(moved)
+            for collection, key, _record in moved:
+                if collection != "reservation_history":
+                    state[collection].pop(key, None)
+            gone = {id(record) for collection, _, record in moved if collection == "reservation_history"}
+            state["reservation_history"] = [event for event in state["reservation_history"] if id(event) not in gone]
+
+    def archive_history(self, moved: list[tuple[str, str, Any]]) -> None:
+        """Append the moved records to ``history/<UTC date>.jsonl`` beside the registry (owner-only) and make them durable before the caller removes them.
+
+        Every byte is written (a short write continues, an interrupted one repeats, a write that makes no progress fails), synced and read back; a
+        failed append is cut back to the size before it. An incomplete last line left by a crash is cut off before the next batch is added, so a
+        later batch never joins it. The registry folder is synced after the history folder exists: a new folder's entry is durable before the
+        registry is replaced. A link in place of the folder or the day file is refused.
+        """
+        at = utc_now()
+        data = "".join(json.dumps({"collection": c, "key": k, "archived_at": at, "record": r}, sort_keys=True) + "\n" for c, k, r in moved).encode()
+        registry_fd = os.open(self.registry.path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(ARCHIVE_FOLDER, 0o700, dir_fd=registry_fd)
+            folder_fd = os.open(ARCHIVE_FOLDER, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=registry_fd)
+            try:
+                os.fsync(registry_fd)
+                fd = os.open(f"{datetime.now(UTC):%Y%m%d}.jsonl", os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600, dir_fd=folder_fd)
+                try:
+                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                        raise OSError(errno.EPERM, "the archive file is not a regular file")
+                    os.fchmod(fd, 0o600)
+                    start = archive_recover_tail(fd)
+                    try:
+                        write_all(fd, data)
+                        os.fsync(fd)
+                        os.fsync(folder_fd)
+                        archive_verify(fd, start, data)
+                    except Exception:
+                        with contextlib.suppress(OSError):
+                            os.ftruncate(fd, start)
+                        raise
+                finally:
+                    os.close(fd)
+            finally:
+                os.close(folder_fd)
+        finally:
+            os.close(registry_fd)
 
     # -- methods: status, runs, allocations, submit, cancel (D1 sections 3, 5 and 6) ----------------------------------
 
@@ -3849,6 +4617,7 @@ class Launcher:
                 "registry_id": self.registry_id,
                 "foreign_legacy_containers": list(self.foreign),
                 "catalog": state["launcher"].get("catalog"),
+                "orchestration": state["launcher"].get("orchestration"),
                 "barrier": state["launcher"].get("barrier"),
                 "restart": state["launcher"].get("restart"),
                 "open_attempts": sum(1 for a in state["attempts"].values() if is_open(a)),
@@ -3895,9 +4664,26 @@ class Launcher:
                 raise LauncherError("no such attempt", "refused")
             self.require_owner(state, conn, principal, attempt["owner"])
             return {key: value for key, value in attempt.items() if key not in ("params",)}
+        if what == "submission":
+            if principal.get("kind") != "run":
+                raise LauncherError("status of a submission needs the run's token", "principal")
+            key = f"run:{principal.get('run_id')}|submit|{record_id}"
+            created = next((a for a in state["attempts"].values() if a["request"] == key), None)
+            return {"found": created is not None, "attempt": None if created is None else {k: v for k, v in created.items() if k != "params"}}
         if what == "catalog":
             return dict(state["launcher"].get("catalog") or {"phase": "down"})
+        if what == "orchestration":
+            return self.orchestration_view(state)
         raise LauncherError(f"unknown status target {what!r}", "args")
+
+    def orchestration_view(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        """The orchestration stack's record with each service's attempt phase, and the objects the launcher knows of it (no secret is in it)."""
+        stack = dict(state["launcher"].get("orchestration") or {"phase": "down"})
+        stack["service_phases"] = {
+            service: {"phase": state["attempts"][attempt_id]["phase"], "reason": state["attempts"][attempt_id]["reason"]}
+            for service, attempt_id in (stack.get("services") or {}).items()
+        }
+        return stack
 
     def require_owner(self, state: Mapping[str, Any], conn: Conn, principal: Mapping[str, Any], owner: str) -> None:
         """The principal must be the owner of ``owner``: the run's token, or the allocation's holder or a descendant (D1 section 3)."""
@@ -3965,9 +4751,13 @@ class Launcher:
         return PENDING
 
     def m_image(self, ctx: Ctx) -> Any:
-        """The local ID of the image a Compose service names (the kit records it with its baselines)."""
+        """The local ID of the image a Compose service names (the kit records it with its baselines); ``compose`` may name the orchestration model."""
         checkout = self.check_checkout(str(ctx.params.get("checkout") or self.cfg.root))
-        reference = self.renderer_for(checkout).image(str(ctx.params.get("service", "")))
+        compose = ctx.params.get("compose", "lakehouse")
+        if compose not in ("lakehouse", "orchestration"):
+            raise LauncherError("compose must be lakehouse or orchestration", "args")
+        renderer = self.renderer_of("orchestration_check" if compose == "orchestration" else "", checkout)
+        reference = renderer.image(str(ctx.params.get("service", "")))
         key = f"imageread:{id(ctx.conn)}:{ctx.request_id}"
         self.read_waiters[key] = (ctx.conn, ctx.request_id)
         history = bool(ctx.params.get("history"))
@@ -4099,6 +4889,8 @@ class Launcher:
         kind, _, ident = owner_prefix.partition(":")
         if kind == "run":
             found += [f"registration {r}" for r in state["runs"][ident]["registrations"]]
+            if state["runs"][ident].get("seal"):
+                found.append(f"seal {state['runs'][ident]['seal']['id']}")
         if kind == "alloc":
             found += [f"registration {r['id']}" for r in state["registrations"].values() if r["allocation"] == ident]
         return found
@@ -4175,8 +4967,10 @@ class Launcher:
                 run_lock.set_state(state, run_id, "failed_retained")
         self.advance_allocations(state, actions)
         self.advance_catalog(state, actions)
+        self.advance_orchestration(state, actions)
         self.advance_restart(state, actions)
         self.advance_copies(state, actions)
+        self.advance_seals(state, actions)
 
     # allocations ------------------------------------------------------------------------------------------------
 
@@ -4329,7 +5123,7 @@ class Launcher:
         params = ctx.params
         template_name = str(params.get("template"))
         template = TEMPLATES.get(template_name)
-        if template is None or template_name in ("probe", "catalog_service"):
+        if template is None or template_name in ("probe", "catalog_service", "orchestration_service"):
             raise LauncherError(f"template {template_name!r} cannot be submitted by a client", "refused")
         owner = self.owner_of(ctx)
         kind, _, ident = owner.partition(":")
@@ -4338,6 +5132,11 @@ class Launcher:
         launch_id = str(params.get("launch_id", ""))
         if not IDENTIFIER.fullmatch(launch_id):
             raise LauncherError("launch_id must be a plain identifier", "args")
+        sealed_run = (params.get("params") or {}).get(build_provenance.SEALED_RUN_PARAM)
+        if sealed_run is not None:
+            if template_name not in SEALED_READERS or not isinstance(sealed_run, str) or not RUN_ID.fullmatch(sealed_run):
+                raise LauncherError(f"{build_provenance.SEALED_RUN_PARAM} takes a run ID and only {', '.join(SEALED_READERS)} accept it", "args")
+            self.sealed_reader_vars(ctx.state, sealed_run)
         if kind == "run":
             run = ctx.state["runs"][ident]
             if run["state"] != "held":
@@ -4345,8 +5144,15 @@ class Launcher:
             problem = self.template_problem(ctx.state, owner, template_name, dict(params.get("params") or {}))
             if problem:
                 raise LauncherError(problem, "refused")
+            raw_args = [str(a) for a in params.get("args", [])]
             if template_name == "real_dbt":
                 provenance_vars(run)
+                if build_provenance.is_mutating(raw_args) and run.get("build_state") == "sealed":
+                    raise LauncherError(f"run {ident} is sealed; a mutating launch is refused", "refused")
+            if template_name == "sealed_consumer":
+                if raw_args != ["verify"]:
+                    raise LauncherError("sealed_consumer takes the single argument verify", "args")
+                consumer_vars(run)
         else:
             allocation = ctx.state["allocations"][ident]
             if allocation["state"] != "held":
@@ -4360,6 +5166,8 @@ class Launcher:
             raise LauncherError("foreign legacy containers exist; the owner reconciles them first", "refused")
         if ctx.state["launcher"].get("restart"):
             raise LauncherError("a Docker restart is running", "refused")
+        if template_name == "orchestration_dump" and (ctx.state["launcher"].get("orchestration") or {}).get("phase") != "up":
+            raise LauncherError("the orchestration stack is not up; the dump needs its database", "refused")
         if template.needs_catalog:
             if ctx.state["launcher"].get("barrier"):
                 raise LauncherError("a catalog teardown barrier is held", "refused")
@@ -4384,14 +5192,20 @@ class Launcher:
 
     def dry_render(self, state: Mapping[str, Any], owner: str, template_name: str, args: list[str], params: dict[str, Any], checkout: Path) -> None:
         """Validate arguments, parameters and mounts by rendering with placeholder values; nothing is recorded."""
-        renderer = self.renderer_for(checkout)
+        renderer = self.renderer_of(template_name, checkout)
         kind, _, ident = owner.partition(":")
         run_folder = None
         if kind == "run":
             run_folder = self.cfg.runs_root / ident
-        if template_name == "real_dbt":
+        if template_name in ("real_dbt", "sealed_consumer"):
             return
-        inp = RenderInput(template_name, ident, "dry", 1, 1, "op-dry", self.PLACEHOLDER_ENV, int(time.time()) + 60, args, params, {}, None, run_folder, {})
+        provenance: dict[str, str] = {}
+        if build_provenance.SEALED_RUN_PARAM in params:
+            run_folder = self.cfg.runs_root / "dry"
+            provenance = {build_provenance.VARIABLE_SEALED_SHA: "0" * 64, build_provenance.VARIABLE_SEALED_EXPECTED: "{}"}
+        inp = RenderInput(
+            template_name, ident, "dry", 1, 1, "op-dry", self.PLACEHOLDER_ENV, int(time.time()) + 60, args, params, {}, None, run_folder, provenance
+        )
         renderer.render(inp, self.registry_id)
 
     def guard_folder(self, template: Template, params: Mapping[str, Any]) -> str | None:
@@ -4692,7 +5506,7 @@ class Launcher:
             container_id = attempt["container_id"]
             actions.append(lambda: self.spawn(f"health:{service}", "health", self.read_health, container_id))
 
-    def record_network_op(self, state: dict[str, Any], kind: str, network: str | None = None) -> str:
+    def record_network_op(self, state: dict[str, Any], kind: str, network: str | None = None, name: str | None = None) -> str:
         """Record a network operation with the identity it acts on (the network name, and the ID for a removal)."""
         op_id = new_id("op")
         state["operations"][op_id] = {
@@ -4704,7 +5518,7 @@ class Launcher:
             "dispatched_at": time.time(),
             "state": "open",
             "result": None,
-            "network_name": self.renderer_network_name(),
+            "network_name": name or self.renderer_network_name(),
             "network": network,
         }
         return op_id
@@ -4821,7 +5635,8 @@ class Launcher:
     def catalog_absent(self) -> bool:
         """Worker: True when no catalog service container and no catalog network exist."""
         containers = [c for c in self.docker.containers(label=LABEL_SERVICE) if (c.get("Labels") or {}).get(LABEL_REGISTRY) == self.registry_id]
-        return not containers and not self.docker.networks(self.network_label())
+        networks = [n for n in self.docker.networks(self.network_label()) if (n.get("Labels") or {}).get(LABEL_STACK) != ORCHESTRATION_STACK]
+        return not containers and not networks
 
     def on_netremove(self, key: str, outcome: str, value: Any) -> None:
         """The network is gone: confirm absence next."""
@@ -4870,6 +5685,373 @@ class Launcher:
         ctx.state["launcher"]["barrier"] = {"phase": "stopping", "at": utc_now()}
         catalog.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})
         return {"phase": "tearing_down"}
+
+    def orchestration_record(self, state: dict[str, Any]) -> dict[str, Any]:
+        """The orchestration stack's state in the registry."""
+        return state["launcher"].setdefault("orchestration", {"phase": "down", "services": {}})
+
+    def orchestration_network_name(self) -> str:
+        """The orchestration stack's network, apart from the catalog's."""
+        return f"hai-{self.registry_id[:8]}-orch-net"
+
+    def orchestration_state_folder(self, checkout: Path, text: Any) -> str:
+        """The stack's state folder: absolute, inside ``data/orchestration/`` of the checkout or the main checkout (or a test registry's named
+        folder), outside any secrets folder and holding the metadata and session folders the supervisor wrote."""
+        if not isinstance(text, str) or not Path(text).is_absolute():
+            raise LauncherError("state must be an absolute folder", "args")
+        candidate = Path(text)
+        if secrets_part(folded(candidate)) or secrets_part(folded(candidate.resolve())):
+            raise LauncherError(f"state {text!r} lies in a secrets folder", "mount")
+        roots = [checkout / "data" / "orchestration", self.main_checkout / "data" / "orchestration", *self.cfg.allowed_roots]
+        if not inside(candidate, roots):
+            raise LauncherError(f"state {text!r} is outside the allowed folders", "args")
+        resolved = candidate.resolve()
+        if not resolved.is_dir():
+            raise LauncherError(f"state folder {text!r} does not exist", "args")
+        missing = [name for name in ORCHESTRATION_STATE_FOLDERS if not (resolved / name).is_dir()]
+        if missing:
+            raise LauncherError(f"state folder {text!r} lacks {', '.join(missing)}", "args")
+        return str(resolved)
+
+    def m_orchestration_up(self, ctx: Ctx) -> dict[str, Any]:
+        """Start the orchestration stack: the network, PostgreSQL, the migration and the four Airflow services, each waited for in order."""
+        params = ctx.params
+        unknown = sorted(set(params) - set(ORCHESTRATION_UP_PARAMETERS))
+        if unknown:
+            raise LauncherError(f"orchestration_up has no parameter {', '.join(unknown)}", "args")
+        port = params.get("api_port")
+        if type(port) is not int or not 1024 <= port <= 65535:
+            raise LauncherError("api_port must be an integer from 1024 to 65535", "args")
+        checkout = self.check_checkout(str(params.get("checkout") or self.cfg.root))
+        if not (checkout / ORCHESTRATION_COMPOSE).is_file():
+            raise LauncherError(f"{checkout} has no {ORCHESTRATION_COMPOSE}", "args")
+        folder = self.orchestration_state_folder(checkout, params.get("state"))
+        stack = self.orchestration_record(ctx.state)
+        if stack["phase"] == "tearing_down":
+            raise LauncherError("the orchestration stack is being torn down", "refused")
+        if ctx.state["launcher"].get("restart"):
+            raise LauncherError("a Docker restart is running", "refused")
+        if self.foreign:
+            raise LauncherError("foreign legacy containers exist; the owner reconciles them first", "refused")
+        if stack["phase"] in ("up", "starting"):
+            wanted = {"checkout": str(checkout), "state": folder, "api_port": port}
+            if {name: stack.get(name) for name in wanted} != wanted:
+                raise LauncherError("the orchestration stack is up with other parameters; orchestration_down first", "refused")
+            return {"phase": stack["phase"]}
+        ctx.state["launcher"]["orchestration"] = {
+            "phase": "starting",
+            "step": "limits",
+            "services": {},
+            "error": "",
+            "network": None,
+            "settings": {},
+            "health": {},
+            "checkout": str(checkout),
+            "state": folder,
+            "api_port": port,
+            "started_at": utc_now(),
+        }
+        own = f"hai-{self.registry_id[:8]}-svc-orch-"
+        growth = {name: limit for name, limit in self.growth_reserve_map(ctx.state).items() if not name.startswith(own)}
+        self.spawn("orch:limits", "orchlimits", self.compute_orchestration_limits, growth)
+        return {"phase": "starting"}
+
+    def compute_orchestration_limits(self, growth: dict[str, int]) -> dict[str, Any]:
+        """Worker: each service's limit as its share of the plan's free memory, with the LocalExecutor parallelism the scheduler's limit allows.
+
+        One resource snapshot gives the plan; the services run at the same time, so the sum of their limits (each raised to its minimum) must fit the
+        plan's free memory, or the start is refused here, before any network or container exists."""
+        plan = memory_budget.launch_plan(self.reader(), growth)
+        limits = {service: memory_budget.service_limit(plan.budget, share, minimum) for service, (_, share, minimum) in ORCHESTRATION_MEMORY.items()}
+        total = sum(limits.values())
+        if total > plan.budget.free:
+            need, have = total / memory_budget.GIB, plan.budget.free / memory_budget.GIB
+            raise memory_budget.BudgetError(f"the orchestration services need {need:.2f} GiB at the same time and the plan holds {have:.2f} GiB free")
+        workers = (limits["airflow-scheduler"] - ORCHESTRATION_SCHEDULER_BASE) // ORCHESTRATION_WORKER_MEMORY
+        return {"limits": limits, "parallelism": max(1, min(int(plan.threads), int(workers)))}
+
+    def on_orchlimits(self, key: str, outcome: str, value: Any) -> None:
+        """The limits are known: record them with the launcher's validated settings, register the services' limits and create the network."""
+        with self.tx() as state:
+            stack = self.orchestration_record(state)
+            if stack["phase"] != "starting":
+                return
+            if outcome != "ok":
+                self.fail_orchestration(stack, f"no memory limit for the orchestration services: {value}")
+                return
+            settings = {
+                "HAI_ORCH_REPO": stack["checkout"],
+                "HAI_ORCH_STATE": stack["state"],
+                "HAI_ORCH_API_PORT": str(stack["api_port"]),
+                "HAI_ORCH_PARALLELISM": str(value["parallelism"]),
+            }
+            for service, (name, _, _) in ORCHESTRATION_MEMORY.items():
+                settings[f"HAI_ORCH_MEM_{name}"] = str(value["limits"][service])
+                state["services"][f"orch-{service}"] = int(value["limits"][service])
+            stack["settings"] = settings
+            stack["step"] = "network"
+
+    def fail_orchestration(self, stack: dict[str, Any], message: str) -> None:
+        """A failed start tears the started services down and leaves the stack down."""
+        stack.update({"phase": "tearing_down", "after": "down", "error": message, "stop_step": "network"})
+
+    def stack_attempt(self, state: dict[str, Any], stack: dict[str, Any], service: str) -> dict[str, Any]:
+        """The service's attempt, created on first use."""
+        attempt_id = stack["services"].get(service)
+        if attempt_id is not None:
+            return state["attempts"][attempt_id]
+        seconds = 900 if service in ORCHESTRATION_FINITE else 10**7
+        attempt = self.new_attempt(
+            state,
+            ORCHESTRATION_OWNER,
+            "orchestration_service",
+            f"orch-{service}",
+            [],
+            {"service": service},
+            request="launcher",
+            checkout=stack["checkout"],
+            seconds=seconds,
+        )
+        stack["services"][service] = attempt["id"]
+        return attempt
+
+    def advance_orchestration(self, state: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        """Startup and teardown of the orchestration stack as a recorded state machine, beside the catalog's and sharing none of its records."""
+        stack = state["launcher"].get("orchestration")
+        if not stack or not self.docker_ok or self.status != "serving":
+            return
+        if stack["phase"] == "starting" and stack.get("step") not in (None, "limits"):
+            self.advance_orchestration_start(state, stack, actions)
+        elif stack["phase"] == "tearing_down":
+            self.advance_orchestration_stop(state, stack, actions)
+        elif stack["phase"] == "up":
+            ended = [
+                service
+                for service, attempt_id in stack["services"].items()
+                if service not in ORCHESTRATION_FINITE and state["attempts"][attempt_id]["phase"] == "ended"
+            ]
+            stack["degraded"] = f"{', '.join(sorted(ended))} ended" if ended else ""
+
+    def advance_orchestration_start(self, state: dict[str, Any], stack: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        """The network, then PostgreSQL, the migration and each Airflow service in order; a long-running service must be healthy first."""
+        step = stack["step"]
+        if step == "network":
+            op = next((o for o in state["operations"].values() if o["kind"] == "orch_network_create" and o["state"] == "open"), None)
+            if op is None:
+                op_id = self.record_network_op(state, "orch_network_create", name=self.orchestration_network_name())
+            elif f"op:{op['op_id']}" in self.inflight:
+                return
+            else:
+                op_id = op["op_id"]
+            name, labels = self.orchestration_network_name(), {LABEL_REGISTRY: self.registry_id, LABEL_STACK: ORCHESTRATION_STACK}
+            actions.append(lambda: self.spawn(f"op:{op_id}", "orchnetcreate", self.create_network, name, labels))
+            return
+        if step not in ORCHESTRATION_ORDER:
+            return
+        service = step
+        attempt = self.stack_attempt(state, stack, service)
+        following = ORCHESTRATION_ORDER[ORCHESTRATION_ORDER.index(service) + 1 :]
+        if attempt["phase"] == "ended":
+            if service in ORCHESTRATION_FINITE and attempt["reason"] == "exited" and attempt.get("exit_code") == 0:
+                stack["step"] = following[0]
+                return
+            self.fail_orchestration(stack, f"{service} ended: {attempt['reason']} (exit {attempt.get('exit_code')}) {attempt.get('detail', '')}".strip())
+            return
+        if service in ORCHESTRATION_FINITE or attempt["phase"] != "started":
+            return
+        if stack["health"].get(service) == "healthy":
+            if following:
+                stack["step"] = following[0]
+            else:
+                stack.update({"phase": "up", "step": "done", "up_at": utc_now()})
+            return
+        started = stack.setdefault("waiting_since", {}).setdefault(service, time.time())
+        if time.time() - started > self.timings.health_wait:
+            self.fail_orchestration(stack, f"{service} was not healthy within {self.timings.health_wait:.0f} s")
+            return
+        container_id = attempt["container_id"]
+        actions.append(lambda: self.spawn(f"orchhealth:{service}", "orchhealth", self.read_health, container_id))
+
+    def on_orchhealth(self, key: str, outcome: str, value: Any) -> None:
+        """Record a stack service's health."""
+        if outcome != "ok":
+            return
+        with self.tx() as state:
+            self.orchestration_record(state).setdefault("health", {})[key.split(":", 1)[1]] = value
+
+    def on_orchnetcreate(self, key: str, outcome: str, value: Any) -> None:
+        """The stack's network exists: PostgreSQL starts next."""
+        op_id = key.split(":", 1)[1]
+        if outcome == "docker" and value.status == 0:
+            return
+        with self.tx() as state:
+            stack = self.orchestration_record(state)
+            op = state["operations"].get(op_id)
+            if op is None or op["state"] != "open":
+                return
+            self.settle_op(state, op_id, "created" if outcome == "ok" else f"failed: {value}")
+            if stack["phase"] == "tearing_down" and outcome == "ok":
+                stack["network"] = value
+                return
+            if stack["phase"] != "starting":
+                return
+            if outcome != "ok":
+                self.fail_orchestration(stack, f"cannot create the orchestration network: {value}")
+                return
+            stack.update({"network": value, "step": ORCHESTRATION_ORDER[0]})
+            state["containers"]["network:" + str(value)] = {"kind": "network", "at": utc_now()}
+
+    def settle_orchestration_network_ops(self, networks: Sequence[Mapping[str, Any]]) -> None:
+        """Settle open orchestration network operations from a scan: a create whose network exists, a removal whose network is gone."""
+        name = self.orchestration_network_name()
+        found = [str(n["Id"]) for n in networks if n.get("Name") == name]
+        with self.tx() as state:
+            stack = self.orchestration_record(state)
+            for op in list(state["operations"].values()):
+                if op["state"] != "open" or op["kind"] not in ("orch_network_create", "orch_network_remove"):
+                    continue
+                if op["kind"] == "orch_network_create" and found:
+                    self.settle_op(state, op["op_id"], "created", evidence="scan")
+                    if stack["phase"] == "starting":
+                        stack.update({"network": found[0], "step": ORCHESTRATION_ORDER[0]})
+                        state["containers"]["network:" + found[0]] = {"kind": "network", "at": utc_now()}
+                    elif stack["phase"] == "tearing_down":
+                        stack["network"] = found[0]
+                elif op["kind"] == "orch_network_remove" and not found:
+                    self.settle_op(state, op["op_id"], "removed", evidence="scan")
+                    if stack["phase"] == "tearing_down":
+                        stack.update({"network": None, "stop_step": "confirm"})
+
+    def advance_orchestration_stop(self, state: dict[str, Any], stack: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        """Stop the Airflow services together, then PostgreSQL, remove the network, then confirm absence before the stack is down."""
+        for group in (tuple(s for s in ORCHESTRATION_ORDER if s != "postgres"), ("postgres",)):
+            open_attempts = [
+                state["attempts"][stack["services"][s]] for s in group if s in stack["services"] and is_open(state["attempts"][stack["services"][s]])
+            ]
+            for attempt in open_attempts:
+                if not attempt["cancel_intent"]:
+                    attempt["cancel_intent"] = {"reason": "orchestration_down", "at": utc_now()}
+            if open_attempts:
+                return
+        step = stack.get("stop_step", "network")
+        create = next((o for o in state["operations"].values() if o["kind"] == "orch_network_create" and o["state"] == "open"), None)
+        if step == "network" and create is not None:
+            if f"op:{create['op_id']}" not in self.inflight:
+                op_id = create["op_id"]
+                name, labels = self.orchestration_network_name(), {LABEL_REGISTRY: self.registry_id, LABEL_STACK: ORCHESTRATION_STACK}
+                actions.append(lambda: self.spawn(f"op:{op_id}", "orchnetcreate", self.create_network, name, labels))
+            return
+        if step == "network":
+            network = stack.get("network")
+            op = next((o for o in state["operations"].values() if o["kind"] == "orch_network_remove" and o["state"] == "open"), None)
+            if network is None:
+                stack["stop_step"] = "confirm"
+                return
+            if op is None:
+                op_id = self.record_network_op(state, "orch_network_remove", network, name=self.orchestration_network_name())
+            elif f"op:{op['op_id']}" in self.inflight:
+                return
+            else:
+                op_id = op["op_id"]
+                network = op.get("network") or network
+            actions.append(lambda: self.spawn(f"op:{op_id}", "orchnetremove", self.docker.remove_network, network))
+        elif step == "confirm":
+            actions.append(lambda: self.spawn("orch:confirm", "orchconfirm", self.orchestration_absent))
+
+    def orchestration_absent(self) -> bool:
+        """Worker: True when no container and no network of the orchestration stack exist, in any state."""
+        label = f"{LABEL_STACK}={ORCHESTRATION_STACK}"
+        containers = [c for c in self.docker.containers(label=label) if (c.get("Labels") or {}).get(LABEL_REGISTRY) == self.registry_id]
+        networks = [n for n in self.docker.networks(label) if (n.get("Labels") or {}).get(LABEL_REGISTRY) == self.registry_id]
+        return not containers and not networks
+
+    def on_orchnetremove(self, key: str, outcome: str, value: Any) -> None:
+        """The stack's network is gone: confirm absence next."""
+        op_id = key.split(":", 1)[1]
+        if outcome == "docker" and value.status == 0:
+            return
+        with self.tx() as state:
+            op = state["operations"].get(op_id)
+            if op is None or op["state"] != "open":
+                return
+            self.settle_op(state, op_id, "removed" if outcome == "ok" else f"failed: {value}")
+            stack = self.orchestration_record(state)
+            if outcome == "ok" and stack["phase"] == "tearing_down":
+                stack.update({"network": None, "stop_step": "confirm"})
+
+    def on_orchconfirm(self, key: str, outcome: str, value: Any) -> None:
+        """Absence shown by an all-state listing: the stack is down and its limits are released."""
+        if outcome != "ok" or not value:
+            return
+        with self.tx() as state:
+            stack = self.orchestration_record(state)
+            if stack["phase"] != "tearing_down":
+                return
+            state["launcher"]["orchestration"] = {"phase": "down", "services": {}, "error": stack.get("error", ""), "down_at": utc_now()}
+            for service in ORCHESTRATION_MEMORY:
+                state["services"].pop(f"orch-{service}", None)
+
+    def m_orchestration_down(self, ctx: Ctx) -> dict[str, Any]:
+        """Stop the Airflow services, then PostgreSQL, remove the network and confirm that nothing of the stack remains."""
+        stack = self.orchestration_record(ctx.state)
+        if stack["phase"] in ("down", "tearing_down"):
+            return {"phase": stack["phase"]}
+        stack.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})
+        return {"phase": "tearing_down"}
+
+    def template_images(self) -> set[str]:
+        """Every image reference the Compose models of the launcher's own checkout name: what the templates can run."""
+        found: set[str] = set()
+        for path in (self.cfg.root / "docker-compose.yaml", self.cfg.root / ORCHESTRATION_COMPOSE):
+            if path.is_file():
+                found |= {str(service["image"]) for service in ComposeModel(path).services.values() if service.get("image")}
+        return found
+
+    def m_pull(self, ctx: Ctx) -> Any:
+        """Pull one image by its digest. The reference must be pinned by digest and named by a template's Compose service; a tag, an unnamed
+        digest, a locally built image or any option is refused."""
+        unknown = sorted(set(ctx.params) - {"reference"})
+        if unknown:
+            raise LauncherError(f"pull has no parameter {', '.join(unknown)}", "args")
+        reference = ctx.params.get("reference")
+        if not isinstance(reference, str) or len(reference) > 300:
+            raise LauncherError("reference must be an image reference", "args")
+        if "@sha256:" not in reference:
+            raise LauncherError(f"image {reference!r} is not pinned by digest; only digest-pinned images are pulled", "refused")
+        if not PINNED_REFERENCE.fullmatch(reference):
+            raise LauncherError(f"{reference!r} is not a plain digest-pinned image reference", "args")
+        if reference not in self.template_images():
+            raise LauncherError(f"no template names image {reference}", "refused")
+        repository = reference.partition("@")[0].partition(":")[0]
+        digest = reference.partition("@")[2]
+        key = f"pull:{ctx.key}"
+        self.pull_requests[key] = ctx.key
+        self.spawn(key, "pull", self.pull_image, repository, digest)
+        return PENDING
+
+    def pull_image(self, repository: str, digest: str) -> dict[str, Any]:
+        """Worker: pull by digest unless the image is present, and show that it is present afterwards."""
+        pinned = f"{repository}@{digest}"
+        before = self.docker.image(pinned)
+        if before is not None:
+            return {"reference": pinned, "pulled": False, "id": str(before.get("Id", ""))}
+        self.docker.pull(repository, digest)
+        after = self.docker.image(pinned)
+        if after is None:
+            raise LauncherError(f"image {pinned} is not present after the pull", "failed")
+        return {"reference": pinned, "pulled": True, "id": str(after.get("Id", ""))}
+
+    def on_pull(self, key: str, outcome: str, value: Any) -> None:
+        """A pull ended: answer the request."""
+        request_key = self.pull_requests.pop(key, "")
+        if not request_key:
+            return
+        if outcome == "ok":
+            self.complete_request(request_key, value)
+        elif outcome == "docker" and value.status == 0:
+            self.complete_request(request_key, {}, Degraded(f"Docker does not answer: {value.message}"))
+        else:
+            self.complete_request(request_key, {}, LauncherError(f"pull failed: {value}", "failed"))
 
     def m_docker_restart(self, ctx: Ctx) -> Any:
         """Restart Docker Desktop to free the VM's memory, only when nothing of this registry and nothing foreign runs (D1 section 8 item 4)."""
@@ -5168,6 +6350,7 @@ class Launcher:
             if outcome == "ok":
                 value.close()
             return
+        value.setblocking(False)
         session = Session(conn, attempt_id, container_id, value, tty, policy)
         conn.session = session
         self.sessions[value.fileno()] = session
@@ -5177,6 +6360,27 @@ class Launcher:
             if attempt is not None:
                 attempt["session_seen"] = time.time()
         conn.send({"id": request_id, "ok": True, "result": {"attached": True, "tty": tty}})
+
+    def session_docker_event(self, sock: Any, mask: int) -> None:
+        """Docker is ready: send the input that waits for it, then relay its output."""
+        session = self.sessions.get(sock.fileno())
+        if session is None:
+            return
+        if mask & selectors.EVENT_WRITE:
+            self.session_send_input(session)
+        if mask & selectors.EVENT_READ and self.sessions.get(sock.fileno()) is session:
+            self.session_docker_ready(sock)
+
+    def session_send_input(self, session: Session) -> None:
+        """Send as much waiting input to Docker as its socket accepts without blocking."""
+        try:
+            while session.pending_in:
+                del session.pending_in[: session.docker_socket.send(session.pending_in)]
+        except BlockingIOError:
+            pass
+        except OSError:
+            session.pending_in.clear()
+        self.update_conn(session.conn)
 
     def session_docker_ready(self, sock: Any) -> None:
         """Output from the container: relay it to the client."""
@@ -5212,17 +6416,20 @@ class Launcher:
             except ValueError:
                 continue
             if "in" in message:
-                with contextlib.suppress(OSError):
-                    session.docker_socket.sendall(base64.b64decode(message["in"]))
+                with contextlib.suppress(ValueError, TypeError):
+                    session.pending_in += base64.b64decode(message["in"])
             elif message.get("signal") == "INT":
                 if session.policy == "forward":
-                    with contextlib.suppress(OSError):
-                        session.docker_socket.sendall(b"\x03")
+                    session.pending_in += b"\x03"
                 else:
                     self.cancel_attempt_by_session(session)
             elif message.get("detach"):
                 self.end_session(session, "detached", detach=True)
                 return
+        if len(conn.buffer) > MAX_LINE:
+            self.close_conn(conn)
+            return
+        self.session_send_input(session)
 
     def cancel_attempt_by_session(self, session: Session) -> None:
         """A session's Ctrl-C under the ``cancel`` policy persists a cancel intent."""
@@ -5243,8 +6450,10 @@ class Launcher:
             if known is session:
                 self.sessions.pop(fileno, None)
         session.detached = True
+        session.pending_in.clear()
         session.conn.session = None
         session.conn.send({"closed": reason, "detached": detach})
+        self.update_conn(session.conn)
 
     def session_timers(self, now: float) -> None:
         """A detached or lost session keeps the container for the idle limit, then cancels the attempt (D1 section 9 item 3)."""
@@ -5288,6 +6497,13 @@ def resolve_config(test_registry: str | None, cwd: Path | None = None) -> Config
             settings = json.loads(test_file.read_text())
         timing_values: dict[str, Any] = {key: int(value) if key == "stop_grace" else float(value) for key, value in dict(settings.get("timings", {})).items()}
         timings = replace(Timings(), **timing_values)
+        if timings.history_retain <= timings.poll_patience:
+            raise LauncherError(f"history_retain ({timings.history_retain} s) must exceed poll_patience ({timings.poll_patience} s)", "config")
+        if timings.compact_floor <= timings.poll_patience:
+            raise LauncherError(f"compact_floor ({timings.compact_floor} s) must exceed poll_patience ({timings.poll_patience} s)", "config")
+        for name in ("compact_threshold", "stuck_after", "gone_after", "slow_exchange", "cleanup_budget"):
+            if getattr(timings, name) <= 0:
+                raise LauncherError(f"{name} ({getattr(timings, name)}) must be positive", "config")
         folder = registry.path / "test_state"
         return Config(
             registry=registry,
@@ -5325,6 +6541,15 @@ class ClientError(Exception):
         super().__init__(message)
         self.code = code
 
+    @property
+    def transport(self) -> bool:
+        """True when the connection to the launcher failed (it is gone or does not answer), not when the launcher refused the request."""
+        return self.code in LIVENESS_CODES
+
+    def describe(self, what: str) -> str:
+        """The error for a person: ``the launcher refused <what>: ...``, or for a lost connection ``the launcher did not answer <what>: ... [code]``."""
+        return f"the launcher did not answer {what}: {self} [{self.code}]" if self.transport else f"the launcher refused {what}: {self}"
+
 
 @dataclass
 class AttemptResult:
@@ -5341,6 +6566,87 @@ class AttemptResult:
     def ok(self) -> bool:
         """True when the attempt ran and exited with code 0."""
         return self.reason == "exited" and self.exit_code == 0
+
+
+class ReleaseOutcome(enum.StrEnum):
+    """What ``LauncherClient.release_allocation`` achieved.
+
+    ``RELEASED``: the launcher confirmed the release. ``RETAINED``: after a lost connection the work of the allocation was not settled within
+    ``cleanup_budget``, so no release was requested and the launcher releases the allocation once its holder is gone. ``UNRESOLVED``: the work was
+    settled and the release request got no answer, so whether the allocation is released is not known.
+    """
+
+    RELEASED = "released"
+    RETAINED = "retained"
+    UNRESOLVED = "unresolved"
+
+
+NO_PRINCIPAL = "any:"
+
+
+def principal_key(principal: Mapping[str, Any] | None) -> str:
+    """What names a principal in a client's records: its kind with its allocation or run ID, or ``NO_PRINCIPAL`` for an exchange without one."""
+    if not principal or principal.get("kind", "any") == "any":
+        return NO_PRINCIPAL
+    return f"{principal['kind']}:{principal.get('alloc_id') or principal.get('run_id') or ''}"
+
+
+class Patience:
+    """What one waiting client has seen of the launcher: whether it answers, whether it makes progress and how long an exchange may take.
+
+    A launcher that refuses connections for ``gone_after`` seconds is gone. A launcher that answers a liveness request is making progress; one that
+    stays silent for ``stuck_after`` seconds is stuck. Otherwise the client keeps trying until ``poll_patience`` runs out. A timed-out exchange
+    doubles the next exchange's budget up to ``EXCHANGE_BUDGET_CAP``; a quick exchange resets it.
+    """
+
+    def __init__(self, client: LauncherClient, principal: Mapping[str, Any]) -> None:
+        self.client = client
+        self.principal = principal
+        self.timings = client.config.timings
+        self.failing_since: float | None = None
+        self.gone_since: float | None = None
+        self.last_progress = time.monotonic()
+        self.learned = EXCHANGE_BUDGET
+
+    def budget(self, settle_deadline: float | None = None) -> float:
+        """Seconds the next exchange may take: one second once a pool's settle limit counts, else the learned budget within the progress limit."""
+        if settle_deadline is not None:
+            return max(0.05, min(EXCHANGE_BUDGET, settle_deadline - time.monotonic()))
+        return max(0.5, min(self.learned, self.timings.stuck_after - (time.monotonic() - self.last_progress)))
+
+    def call(self, method: str, params: dict[str, Any], principal: dict[str, Any], request_id: str, budget: float) -> Any:
+        """One bounded exchange; a reply counts as progress."""
+        begun = time.monotonic()
+        result = self.client.bounded_call(method, params, principal, request_id, budget)
+        self.client.forget_failure(self.principal)
+        self.failing_since = self.gone_since = None
+        self.last_progress = time.monotonic()
+        if self.last_progress - begun < self.timings.slow_exchange:
+            self.learned = EXCHANGE_BUDGET
+        return result
+
+    def failed(self, error: BaseException, attempt_id: str | None = None) -> None:
+        """After a failed exchange: raise the error that ends the wait, or return so the caller tries again."""
+        now = time.monotonic()
+        self.failing_since = now if self.failing_since is None else self.failing_since
+        state = self.client.probe(PROBE_BUDGET)
+        if state == "gone":
+            self.gone_since = now if self.gone_since is None else self.gone_since
+            if now - self.gone_since >= self.timings.gone_after:
+                raise self.client.note_failure(
+                    ClientError(f"the launcher is not running: nothing answers at {self.client.config.socket_path}", "unavailable"), self.principal, attempt_id
+                ) from error
+        else:
+            self.gone_since = None
+            if state == "alive":
+                self.last_progress = time.monotonic()
+            elif time.monotonic() - self.last_progress >= self.timings.stuck_after:
+                raise self.client.note_failure(
+                    ClientError(f"the launcher is alive but made no progress for {self.timings.stuck_after:g} s", "unresponsive"), self.principal, attempt_id
+                ) from error
+            self.learned = min(self.learned * 2, EXCHANGE_BUDGET_CAP)
+        if now - self.failing_since >= self.timings.poll_patience:
+            raise self.client.note_failure(error, self.principal, attempt_id)
 
 
 class LauncherClient:
@@ -5360,6 +6666,9 @@ class LauncherClient:
         self.cancel_persisted_at: float | None = None
         self.socket_factory: Callable[..., socket.socket] = socket.socket
         self.launch_nonce = ""  # passed to a launcher this client starts, so the client can recognize it later
+        self.lost: dict[str, float | None] = {}
+        self.lost_lock = threading.Lock()
+        self.abandoned: set[str] = set()
 
     # -- connection ------------------------------------------------------------------------------------------------
 
@@ -5443,6 +6752,15 @@ class LauncherClient:
         self, method: str, params: dict[str, Any] | None = None, principal: dict[str, Any] | None = None, request_id: str | None = None, timeout: float = 120.0
     ) -> Any:
         """One request and its reply; a refusal raises ``ClientError``."""
+        try:
+            result = self.send(method, params, principal, request_id, timeout)
+        except (ClientError, OSError) as error:
+            self.note_failure(error, principal)
+            raise
+        self.forget_failure(principal)
+        return result
+
+    def send(self, method: str, params: dict[str, Any] | None, principal: dict[str, Any] | None, request_id: str | None, timeout: float) -> Any:
         request_id = request_id or self.next_id()
         deadline = time.monotonic() + 60
         while True:
@@ -5457,8 +6775,104 @@ class LauncherClient:
                 sock.close()
             time.sleep(0.2)
 
+    def note_exchange(self, method: str, params: Mapping[str, Any], seconds: float, outcome: str) -> None:
+        asked = float(params.get("wait") or 0.0) if method == "status" else 0.0
+        if seconds - asked > self.config.timings.slow_exchange:
+            CLIENT_LOG.warning("launcher exchange %s %s %.2f s%s", method, outcome, seconds, f" (asked to wait {asked:.2f} s)" if asked else "")
+
+    def note_failure[E: BaseException](self, error: E, principal: Mapping[str, Any] | None, attempt_id: str | None = None) -> E:
+        """Remember a lost connection for the principal whose exchange failed, so its cleanup is bounded; any other error is passed through unchanged.
+
+        The record of a principal (its key, with the cleanup deadline once set) stays until its own work is settled: another worker's exchange does
+        not clear it or move its deadline. With ``attempt_id``, the accepted attempt whose wait failed is marked abandoned in the same lock interval,
+        so a sibling's success cannot clear the failure before the attempt's cleanup is recorded.
+        """
+        if isinstance(error, OSError) or (isinstance(error, ClientError) and error.transport):
+            with self.live_lock, self.lost_lock:
+                if attempt_id is not None and attempt_id in self.live:
+                    self.abandoned.add(attempt_id)
+                self.lost.setdefault(principal_key(principal), None)
+        return error
+
+    def forget_failure(self, principal: Mapping[str, Any] | None) -> None:
+        """An exchange of this principal succeeded, which ends a failure with no principal and the principal's own unless work of it was left open.
+
+        Left open means an ambiguous submit or an attempt that its worker's wait gave up on.
+        """
+        key = principal_key(principal)
+        with self.live_lock, self.lost_lock:
+            owes = any(principal_key(owner) == key for _, owner in self.pending_submits.values()) or any(
+                principal_key(self.live[attempt_id]) == key for attempt_id in self.abandoned if attempt_id in self.live
+            )
+            self.lost.pop(NO_PRINCIPAL, None)
+            if not owes:
+                self.lost.pop(key, None)
+
+    def lost_contact(self, principal: Mapping[str, Any] | None) -> bool:
+        """True when this principal (or an exchange with none) lost the connection to the launcher and no interrupted pool owns the cleanup."""
+        if self.cancelling or self.cancel_unresolved.is_set():
+            return False
+        with self.lost_lock:
+            return principal_key(principal) in self.lost or NO_PRINCIPAL in self.lost
+
+    def cleanup_deadline(self, principal: Mapping[str, Any]) -> float:
+        """When the cleanup of this principal must end: ``cleanup_budget`` after its first cleanup step, whatever other workers complete."""
+        key = principal_key(principal)
+        with self.lost_lock:
+            key = key if key in self.lost else NO_PRINCIPAL
+            until = self.lost.get(key)
+            if until is None:
+                until = time.monotonic() + self.config.timings.cleanup_budget
+                if key in self.lost:
+                    self.lost[key] = until
+            return until
+
+    def probe(self, seconds: float) -> str:
+        """Send a liveness request, which the launcher answers without reading its registry, and log it like any exchange.
+
+        Returns ``"gone"`` when nothing listens at the socket, ``"alive"`` when any reply arrived within ``seconds`` and ``"silent"`` otherwise.
+        """
+        begun = time.monotonic()
+        state = self.probe_once(seconds)
+        outcome = {"alive": "took", "silent": "got no reply after", "gone": "found no listener after"}[state]
+        self.note_exchange("live", {}, time.monotonic() - begun, outcome)
+        return state
+
+    def probe_once(self, seconds: float) -> str:
+        deadline = time.monotonic() + seconds
+        message = {"v": PROTOCOL, "id": self.next_id(), "method": "live", "params": {}, "principal": {"kind": "any"}}
+        try:
+            with self.open_socket(seconds) as sock:
+                sock.settimeout(max(0.05, deadline - time.monotonic()))
+                sock.sendall(json.dumps(message).encode() + b"\n")
+                buffer = b""
+                while b"\n" not in buffer:
+                    if time.monotonic() >= deadline:
+                        return "silent"
+                    sock.settimeout(max(0.05, deadline - time.monotonic()))
+                    chunk = sock.recv(65536)
+                    if not chunk:
+                        return "silent"
+                    buffer += chunk
+        except (FileNotFoundError, ConnectionRefusedError):
+            return "gone"
+        except OSError:
+            return "silent"
+        return "alive"
+
     def exchange(self, sock: socket.socket, method: str, params: dict[str, Any], principal: dict[str, Any], request_id: str, timeout: float) -> Any:
         """Send a request on an open socket and read its reply; ``timeout`` bounds the whole exchange, not each read."""
+        begun = time.monotonic()
+        outcome = "took"
+        try:
+            return self.exchange_within(sock, method, params, principal, request_id, timeout)
+        except TimeoutError:
+            outcome = "timed out after"
+            raise
+        finally:
+            self.note_exchange(method, params, time.monotonic() - begun, outcome)
+
+    def exchange_within(self, sock: socket.socket, method: str, params: dict[str, Any], principal: dict[str, Any], request_id: str, timeout: float) -> Any:
         deadline = time.monotonic() + timeout
 
         def remaining() -> float:
@@ -5507,9 +6921,98 @@ class LauncherClient:
             raise ClientError(str(record.get("error", f"allocation {reply['alloc_id']} is {record['state']}")), "budget")
         return str(reply["alloc_id"])
 
-    def release_allocation(self, alloc_id: str) -> None:
-        """Release an allocation."""
-        self.call("release_allocation", {}, self.principal_alloc(alloc_id), timeout=120)
+    def release_allocation(self, alloc_id: str) -> ReleaseOutcome:
+        """Release an allocation and report what happened (``ReleaseOutcome``).
+
+        Without a lost connection this is an ordinary call, and a refusal raises. After a lost connection the work of the allocation is settled first
+        (see ``settle``) and the release is one bounded request; that path never raises, so the original failure reaches the caller.
+        """
+        principal = self.principal_alloc(alloc_id)
+        if not self.lost_contact(principal):
+            self.call("release_allocation", {}, principal, timeout=120)
+            return ReleaseOutcome.RELEASED
+        budget = self.config.timings.cleanup_budget
+        deadline = self.cleanup_deadline(principal)
+        if not self.settle(principal):
+            CLIENT_LOG.warning("allocation %s retained: its work was not settled within %g s of the launcher failure", alloc_id, budget)
+            return ReleaseOutcome.RETAINED
+        try:
+            self.cleanup_exchange("release_allocation", {}, principal, self.next_id(), deadline)
+        except (ClientError, OSError) as error:
+            CLIENT_LOG.warning(
+                "allocation %s release unresolved: no confirmation within %g s of the launcher failure (%s)",
+                alloc_id,
+                budget,
+                error.code if isinstance(error, ClientError) else type(error).__name__,
+            )
+            return ReleaseOutcome.UNRESOLVED
+        with self.lost_lock:
+            self.lost.pop(principal_key(principal), None)
+        return ReleaseOutcome.RELEASED
+
+    def cleanup_exchange(self, method: str, params: dict[str, Any], principal: dict[str, Any], request_id: str, deadline: float) -> Any:
+        """One exchange with the existing socket that ends by ``deadline``; it never starts a launcher."""
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError(f"{method}: the cleanup budget is spent")
+        return self.bounded_call(method, params, principal, request_id, min(EXCHANGE_BUDGET, left))
+
+    def cleanup_call(self, method: str, params: dict[str, Any], principal: dict[str, Any], timeout: float = 120.0) -> Any:
+        """A request that undoes earlier work: an ordinary call, or after a lost connection one bounded exchange whose failure is logged, not raised."""
+        if not self.lost_contact(principal):
+            return self.call(method, params, principal, timeout=timeout)
+        try:
+            return self.cleanup_exchange(method, params, principal, self.next_id(), self.cleanup_deadline(principal))
+        except (ClientError, OSError) as error:
+            CLIENT_LOG.warning(
+                "launcher cleanup %s failed after a launcher failure (%s)", method, error.code if isinstance(error, ClientError) else type(error).__name__
+            )
+            return None
+
+    def settle(self, principal: dict[str, Any]) -> bool:
+        """After a lost connection, settle the work of one principal inside its cleanup deadline; True when nothing of it is ambiguous or open.
+
+        An ambiguous submit is replayed under its own request ID: a refusal drops it, a reply gives its attempt. Each open attempt is cancelled and
+        awaited. Work of other principals on this client is not touched.
+        """
+        if not self.lost_contact(principal):
+            return True
+        deadline = self.cleanup_deadline(principal)
+        key = principal_key(principal)
+        cancelled: set[str] = set()
+        while time.monotonic() < deadline:
+            with self.live_lock:
+                pending = {request_id: item for request_id, item in self.pending_submits.items() if principal_key(item[1]) == key}
+                attempts = [attempt_id for attempt_id, owner in self.live.items() if principal_key(owner) == key]
+            if not pending and not attempts:
+                return True
+            for request_id, (payload, owner) in pending.items():
+                try:
+                    reply = self.cleanup_exchange("submit", payload, owner, request_id, deadline)
+                except ClientError as error:
+                    if not error.transport:
+                        with self.live_lock:
+                            self.pending_submits.pop(request_id, None)
+                    continue
+                except OSError:
+                    continue
+                with self.live_lock:
+                    self.pending_submits.pop(request_id, None)
+                    self.live[str(reply["attempt_id"])] = owner
+            for attempt_id in attempts:
+                try:
+                    record = self.cleanup_exchange("status", {"what": "attempt", "id": attempt_id}, principal, self.next_id(), deadline)
+                    if record.get("phase") == "ended":
+                        with self.live_lock:
+                            self.live.pop(attempt_id, None)
+                            self.abandoned.discard(attempt_id)
+                    elif attempt_id not in cancelled:
+                        self.cleanup_exchange("cancel", {"attempt_id": attempt_id}, principal, f"cleanup-cancel-{attempt_id}", deadline)
+                        cancelled.add(attempt_id)
+                except (ClientError, OSError):
+                    continue
+            time.sleep(0.05)
+        return False
 
     def run_attempt(
         self,
@@ -5539,22 +7042,24 @@ class LauncherClient:
             if self.cancelling:
                 raise ClientError("the pool is cancelling; no further submits", "cancelled")
             self.pending_submits[request_id] = (payload, principal)
-        patience_end = time.monotonic() + self.config.timings.poll_patience
+        patience = Patience(self, principal)
         while True:
             try:
-                reply = self.bounded_call("submit", payload, principal, request_id, 1.0)
+                reply = patience.call("submit", payload, principal, request_id, patience.budget())
                 break
             except ClientError as error:
                 if error.code != "unavailable":
                     with self.live_lock:
                         self.pending_submits.pop(request_id, None)
                     raise
-                if self.cancelling or time.monotonic() >= patience_end:
+                if self.cancelling:
                     raise
-            except OSError:
+                patience.failed(error)
+            except OSError as error:
                 # The request may already be persisted. Keep its exact identity for cancel_open to replay and reconcile.
-                if self.cancelling or time.monotonic() >= patience_end:
+                if self.cancelling:
                     raise
+                patience.failed(error)
             # The same request ID again: the launcher returns the persisted reply instead of creating a second attempt.
             time.sleep(0.2)
         attempt_id = str(reply["attempt_id"])
@@ -5565,7 +7070,6 @@ class LauncherClient:
             self.cancel_open()
         ended = False
         unreachable = False
-        failing_since: float | None = None
         try:
             while True:
                 if self.cancel_unresolved.is_set():
@@ -5581,11 +7085,10 @@ class LauncherClient:
                         else "an attempt did not end within cancel_settle after the cancellations persisted"
                     )
                     self.record_unresolved(unresolved, [], reason)
-                # A short socket wait lets an interrupted pool exit through the bounded unresolved path; it never outlasts the settle limit.
-                budget = 1.0 if settle_deadline is None else max(0.05, min(1.0, settle_deadline - time.monotonic()))
+                budget = patience.budget(settle_deadline)
                 failure: BaseException | None = None
                 try:
-                    record = self.bounded_call(
+                    record = patience.call(
                         "status",
                         {"what": "attempt", "id": attempt_id, "wait": min(0.2, budget / 2), "until": {"field": "phase", "values": ["ended"]}},
                         principal,
@@ -5600,13 +7103,9 @@ class LauncherClient:
                     failure = error
                 unreachable = failure is not None
                 if failure is not None and not self.cancelling and not self.cancel_unresolved.is_set():
-                    # A slow or briefly unreachable launcher: keep polling until the patience runs out, then fail visibly.
-                    failing_since = failing_since if failing_since is not None else time.monotonic()
-                    if time.monotonic() - failing_since >= self.config.timings.poll_patience:
-                        raise failure
+                    patience.failed(failure, attempt_id)
                     time.sleep(0.2)
                     continue
-                failing_since = None
                 if failure is not None:
                     if not self.cancelling or self.cancel_unresolved.is_set():
                         raise failure
@@ -5623,9 +7122,11 @@ class LauncherClient:
                     ended = True
                     break
         finally:
-            if ended:
-                with self.live_lock:
+            with self.live_lock:
+                if ended:
                     self.live.pop(attempt_id, None)
+                else:
+                    self.abandoned.add(attempt_id)
         return self.result_of(record)
 
     def settle_deadline(self) -> float | None:
@@ -5718,7 +7219,7 @@ def parser() -> argparse.ArgumentParser:
     commands = cli.add_subparsers(dest="command", required=True)
     commands.add_parser("serve", help="run the launcher in the foreground")
     status = commands.add_parser("status", help="print the launcher, registry or a record")
-    status.add_argument("--what", default="launcher", choices=("launcher", "registry", "catalog", "protected_sets"))
+    status.add_argument("--what", default="launcher", choices=("launcher", "registry", "catalog", "orchestration", "protected_sets"))
     commands.add_parser("plan", help="print the memory plan the launcher computes now")
     commands.add_parser("catalog-up", help="start the catalog services and wait")
     commands.add_parser("catalog-down", help="stop the catalog services and wait")
@@ -5726,12 +7227,20 @@ def parser() -> argparse.ArgumentParser:
     restart.add_argument("--owner", action="store_true", required=True)
     commands.add_parser("shutdown", help="stop the launcher").add_argument("--owner", action="store_true", required=True)
     commands.add_parser(
-        "dbt", help="dbt: `deps` runs the dbt_deps template; any other command needs a real run (refused until provenance is filled)"
+        "dbt", help="dbt: `deps` runs the dbt_deps template; any other command needs a real run with recorded pins and a complete snapshot"
     ).add_argument("args", nargs="*")
-    commands.add_parser("query", help="an interactive DuckDB shell on the bronze tables (query_reader)").add_argument("args", nargs="*")
+    query = commands.add_parser(
+        "query",
+        help="an interactive DuckDB shell on the bronze tables (query_reader)",
+        description="Open a DuckDB shell on the bronze tables, or run one statement. Every word after `query` goes to DuckDB unchanged.",
+        epilog=f"supported DuckDB arguments: -c SQL (run one statement and exit) and the output flags {' '.join(DUCKDB_QUERY_FLAGS)}.\n"
+        "A file or pipe on standard input is the shell's input.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    query.add_argument("args", nargs="*", metavar="DUCKDB_ARG", help="-c SQL and the output flags above")
     commands.add_parser("ui", help="the DuckDB UI on 127.0.0.1:4213 (ui_reader)")
     run = commands.add_parser("run", help="take an allocation, run one attempt of a template and print its output")
-    run.add_argument("--template", required=True, choices=sorted(set(TEMPLATES) - {"probe", "catalog_service"}))
+    run.add_argument("--template", required=True, choices=sorted(set(TEMPLATES) - {"probe", "catalog_service", "orchestration_service"}))
     run.add_argument("--launch-id", default=None)
     run.add_argument("--param", action="append", default=[], metavar="NAME=JSON")
     run.add_argument("--seconds", type=int)
@@ -5740,9 +7249,30 @@ def parser() -> argparse.ArgumentParser:
     return cli
 
 
+def passthrough_split(argv: list[str]) -> tuple[list[str], list[str] | None]:
+    """Split ``argv`` at the ``query`` command: the words after it go to DuckDB unchanged (argparse cannot pass a leading ``-c`` through)."""
+    index = 0
+    while index < len(argv) and argv[index].startswith("-"):
+        if argv[index] == "--test-registry":
+            index += 2
+        elif argv[index].startswith("--test-registry="):
+            index += 1
+        else:
+            return argv, None
+    if index < len(argv) and argv[index] == "query":
+        tail = argv[index + 1 :]
+        if tail[:1] in (["-h"], ["--help"]):
+            return argv, None
+        return argv[: index + 1], tail[1:] if tail[:1] == ["--"] else tail
+    return argv, None
+
+
 def main() -> int:
     """Run one command; refusals exit 3, errors 4, a degraded launcher 5."""
-    args = parser().parse_args()
+    head, passthrough = passthrough_split(sys.argv[1:])
+    args = parser().parse_args(head)
+    if passthrough is not None:
+        args.args = passthrough
     try:
         if args.command == "serve":
             return Launcher(resolve_config(args.test_registry)).serve()
@@ -5769,7 +7299,7 @@ def main() -> int:
             return run_command_line(client, args)
     except ClientError as error:
         sys.stderr.write(f"launcher: {error} [{error.code}]\n")
-        return DEGRADED_EXIT if error.code in ("degraded", "unavailable") else REFUSED_EXIT
+        return DEGRADED_EXIT if error.transport or error.code == "degraded" else REFUSED_EXIT
     except (run_lock.Refused, LauncherError) as error:
         sys.stderr.write(f"refused: {error}\n")
         return REFUSED_EXIT
@@ -5811,10 +7341,11 @@ def dbt_command(client: LauncherClient, arguments: list[str]) -> int:
         code = result.exit_code if result.exit_code is not None else ERROR_EXIT
     except ClientError as error:
         sys.stderr.write(f"launcher: {error} [{error.code}]\n")
-        code = REFUSED_EXIT
+        code = DEGRADED_EXIT if error.transport else REFUSED_EXIT
     finally:
         if code:
-            client.call("mark", {"state": "failed_retained"}, principal)
+            client.settle(principal)
+            client.cleanup_call("mark", {"state": "failed_retained"}, principal)
         else:
             record = client.config.runs_root / run_id / "run_record.json"
             record.parent.mkdir(parents=True, exist_ok=True)
@@ -5860,63 +7391,124 @@ def interactive_command(client: LauncherClient, kind: str, arguments: list[str])
     finally:
         if attempt_id:
             with contextlib.suppress(ClientError):
-                client.call("cancel", {"attempt_id": attempt_id}, principal)
-                client.wait_for("attempt", attempt_id, "phase", ("ended",), principal, 120)
-        client.call("deregister_reader", {"registration_id": registration}, principal)
+                client.cleanup_call("cancel", {"attempt_id": attempt_id}, principal)
+                if not client.lost_contact(principal):
+                    client.wait_for("attempt", attempt_id, "phase", ("ended",), principal, 120)
+        client.cleanup_call("deregister_reader", {"registration_id": registration}, principal)
         client.release_allocation(allocation)
 
 
 def relay_session(client: LauncherClient, principal: dict[str, Any], attempt_id: str, tty: bool) -> None:
-    """Relay the terminal to a session: input goes to the launcher, output comes back, Ctrl-C is a session message, never a raw signal."""
+    """Relay the terminal to a session: input goes to the launcher, output comes back, Ctrl-C is a session message, never a raw signal.
+
+    Input is read in chunks of ``INPUT_CHUNK`` bytes only while less than ``SESSION_BUFFER_LIMIT`` waits to be sent, and the socket is written
+    only when it accepts bytes, so output keeps draining while a large input is sent (failure modes SR1 to SR5). A standard input that cannot
+    be watched (``/dev/null`` on macOS, any regular file on Linux) is read in the same loop, one chunk per pass.
+    """
     import termios
 
     sock = client.connect()
-    request = {"v": PROTOCOL, "id": client.next_id(), "method": "session", "params": {"attempt_id": attempt_id}, "principal": principal}
-    sock.sendall(json.dumps(request).encode() + b"\n")
-    reply = json.loads(sock.makefile().readline())
-    if not reply.get("ok"):
-        raise ClientError(str(reply.get("error")), str(reply.get("code", "refused")))
     saved = termios.tcgetattr(sys.stdin.fileno()) if tty else None
     selector = selectors.DefaultSelector()
-    selector.register(sock, selectors.EVENT_READ, "launcher")
-    selector.register(sys.stdin, selectors.EVENT_READ, "stdin")
-    if tty:
-        import tty as tty_module
+    outgoing, buffer = bytearray(), b""
+    stdin_open, stdin_registered, launcher_events = True, False, selectors.EVENT_READ
 
-        tty_module.setraw(sys.stdin.fileno())
-    buffer = b""
+    def relay_lines() -> bool:
+        """Write the output of every complete line in ``buffer``; True once the launcher says the session is closed."""
+        nonlocal buffer
+        while b"\n" in buffer:
+            line, buffer = buffer.split(b"\n", 1)
+            message = json.loads(line)
+            if "out" in message:
+                sys.stdout.buffer.write(base64.b64decode(message["out"]))
+                sys.stdout.buffer.flush()
+            elif "closed" in message:
+                return True
+        return False
+
     try:
+        request = {"v": PROTOCOL, "id": client.next_id(), "method": "session", "params": {"attempt_id": attempt_id}, "principal": principal}
+        sock.sendall(json.dumps(request).encode() + b"\n")
+        while b"\n" not in buffer:
+            chunk = sock.recv(65536)
+            if not chunk:
+                raise ClientError("the launcher closed the connection before it answered", "unavailable")
+            buffer += chunk
+        first, _, buffer = buffer.partition(b"\n")
+        reply = json.loads(first)
+        if not reply.get("ok"):
+            raise ClientError(str(reply.get("error")), str(reply.get("code", "refused")))
+        sock.setblocking(False)
+        selector.register(sock, launcher_events, "launcher")
+        try:
+            selector.register(sys.stdin, selectors.EVENT_READ, "stdin")
+            watched = stdin_registered = True
+        except (OSError, ValueError):
+            watched = False
+        if tty:
+            import tty as tty_module
+
+            tty_module.setraw(sys.stdin.fileno())
+        if relay_lines():
+            return
         while True:
-            for key, _ in selector.select():
+            room = stdin_open and len(outgoing) < SESSION_BUFFER_LIMIT
+            if watched and room != stdin_registered:
+                if room:
+                    selector.register(sys.stdin, selectors.EVENT_READ, "stdin")
+                else:
+                    selector.unregister(sys.stdin)
+                stdin_registered = room
+            wanted = selectors.EVENT_READ | (selectors.EVENT_WRITE if outgoing else 0)
+            if wanted != launcher_events:
+                selector.modify(sock, wanted, "launcher")
+                launcher_events = wanted
+            for key, mask in selector.select(timeout=0 if room and not watched else None):
                 if key.data == "stdin":
-                    data = os.read(sys.stdin.fileno(), 4096)
-                    if not data:
-                        selector.unregister(sys.stdin)
-                        continue
-                    if tty:
-                        sock.sendall(json.dumps({"in": base64.b64encode(data).decode()}).encode() + b"\n")
+                    data = os.read(sys.stdin.fileno(), INPUT_CHUNK)
+                    if data:
+                        outgoing += session_input_line(data, tty)
                     else:
-                        message = {"signal": "INT"} if data == b"\x03" else {"in": base64.b64encode(data).decode()}
-                        sock.sendall(json.dumps(message).encode() + b"\n")
+                        stdin_open = False
                     continue
-                chunk = sock.recv(65536)
-                if not chunk:
-                    return
-                buffer += chunk
-                while b"\n" in buffer:
-                    line, buffer = buffer.split(b"\n", 1)
-                    message = json.loads(line)
-                    if "out" in message:
-                        sys.stdout.buffer.write(base64.b64decode(message["out"]))
-                        sys.stdout.buffer.flush()
-                    elif "closed" in message:
+                if mask & selectors.EVENT_WRITE:
+                    try:
+                        del outgoing[: sock.send(outgoing)]
+                    except BlockingIOError:
+                        pass
+                    except (BrokenPipeError, ConnectionResetError):
+                        outgoing.clear()
+                        stdin_open = False
+                if mask & selectors.EVENT_READ:
+                    try:
+                        chunk = sock.recv(65536)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
                         return
+                    buffer += chunk
+                    if relay_lines():
+                        return
+            if room and not watched:
+                data = os.read(sys.stdin.fileno(), INPUT_CHUNK)
+                if data:
+                    outgoing += session_input_line(data, tty)
+                else:
+                    stdin_open = False
     except KeyboardInterrupt:
+        sock.settimeout(5)
         sock.sendall(json.dumps({"signal": "INT"}).encode() + b"\n")
     finally:
         if saved is not None:
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, saved)
+        selector.close()
         sock.close()
+
+
+def session_input_line(data: bytes, tty: bool) -> bytes:
+    """One line of the session protocol for a chunk of input; outside a terminal a lone Ctrl-C is the interrupt signal."""
+    message = {"signal": "INT"} if data == b"\x03" and not tty else {"in": base64.b64encode(data).decode()}
+    return json.dumps(message).encode() + b"\n"
 
 
 def run_command_line(client: LauncherClient, args: argparse.Namespace) -> int:
@@ -5925,12 +7517,24 @@ def run_command_line(client: LauncherClient, args: argparse.Namespace) -> int:
     for item in args.param:
         name, _, value = item.partition("=")
         params[name] = json.loads(value)
+    template = TEMPLATES[args.template]
+    if template.needs_catalog:
+        client.call("catalog_up")
+        record = client.wait_for("catalog", "", "phase", ("up", "down"), {"kind": "any"}, 900)
+        if record.get("phase") != "up":
+            sys.stderr.write(f"launcher: the catalog did not start: {record.get('error')}\n")
+            return ERROR_EXIT
     alloc_id = client.allocate(args.workers)
+    principal = client.principal_alloc(alloc_id)
+    registration = ""
     try:
-        result = client.run_attempt(
-            client.principal_alloc(alloc_id), args.template, args.launch_id or f"cli-{uuid.uuid4().hex[:8]}", args.args, params, seconds=args.seconds
-        )
+        if template.reader:
+            registration = str(client.call("register_reader", {}, principal)["registration_id"])
+        result = client.run_attempt(principal, args.template, args.launch_id or f"cli-{uuid.uuid4().hex[:8]}", args.args, params, seconds=args.seconds)
     finally:
+        if registration:
+            client.settle(principal)
+            client.cleanup_call("deregister_reader", {"registration_id": registration}, principal)
         client.release_allocation(alloc_id)
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)

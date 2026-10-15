@@ -228,13 +228,27 @@ models:
     description: >
       Every row of the selected case-mix index files and sheets (label families in the cmi_families variable), split
       into fields (failure modes 293, 295 and 299).
+      The grain is bronze table, member checksum, sheet name and source row number. Text files use an empty sheet name.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          name: int_cmi_file_rows_unique_grain
+          arguments:
+            combination_of_columns: [bronze_table, member_sha256, sheet_name, line_number]
     columns:
+      - name: bronze_table
+        description: Bronze text-line or worksheet-row table that supplies the source row.
+        data_tests: [not_null]
       - name: member_sha256
         description: SHA-256 of the file.
+        data_tests: [not_null]
+      - name: sheet_name
+        description: Worksheet name, or an empty string for a text file.
         data_tests: [not_null]
       - name: line_number
         description: Line or sheet row number.
         data_tests: [not_null]
+      - name: field_values
+        description: Parsed text fields or worksheet cells in source order.
 
   - name: int_cmi_file_layouts
     description: >
@@ -383,6 +397,36 @@ models:
       Every row of the selected IPPS impact public use files of the reviewed families (impact_families), split into fields:
       tab-separated text on tabs, other text as comma-separated values with quoted fields, sheet rows by cell; variable
       description and layout sheets are not read (failure modes 342, 344 and 348).
+      The grain is bronze table, member checksum, sheet name, source row number, family, rule fiscal year and rule stage.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          name: int_impact_file_rows_unique_grain
+          arguments:
+            combination_of_columns: [bronze_table, member_sha256, sheet_name, line_number, family, rule_fiscal_year, rule_stage]
+    columns:
+      - name: bronze_table
+        description: Bronze text-line or worksheet-row table that supplies the source row.
+        data_tests: [not_null]
+      - name: member_sha256
+        description: SHA-256 of the source file.
+        data_tests: [not_null]
+      - name: sheet_name
+        description: Worksheet name, or an empty string for a text file.
+        data_tests: [not_null]
+      - name: line_number
+        description: Source text line or worksheet row number.
+        data_tests: [not_null]
+      - name: field_values
+        description: Parsed text fields or worksheet cells in source order.
+      - name: family
+        description: Reviewed impact-file family assigned to this copy's label.
+        data_tests: [not_null]
+      - name: rule_fiscal_year
+        description: Payment-rule fiscal year assigned to this copy's label.
+        data_tests: [not_null]
+      - name: rule_stage
+        description: Payment-rule stage assigned to this copy's label.
+        data_tests: [not_null]
 
   - name: int_impact_file_layouts
     description: >
@@ -1162,7 +1206,13 @@ models:
   - name: int_validation_window_holds
     description: >
       Group D measure rows the window models leave out, with the reason and row count; kept apart from int_cc_window_holds.
+      The grain is bronze table, hold reason, held entity, held measure and nullable window dates, identified by hold_key.
     columns:
+      - name: hold_key
+        description: Null-safe MD5 of the bronze table, hold reason, entity, measure and window dates.
+        data_tests: [unique, not_null]
+      - name: bronze_table
+        description: Bronze validation table that supplies the held rows.
       - name: hold_reason
         description: no_key, unparsed_date, label_held, undated_release, same_date_conflict or repeated_in_file.
         data_tests:
@@ -1170,6 +1220,18 @@ models:
           - accepted_values:
               arguments:
                 values: [no_key, unparsed_date, label_held, undated_release, same_date_conflict, repeated_in_file]
+      - name: entity_id
+        description: Held hospital CCN, or null when the row has no usable entity or measure key.
+      - name: measure_id
+        description: Held measure identifier, or null when the row has no usable entity or measure key.
+      - name: window_start
+        description: Window start for release conflicts and repeated rows. Null for row-level holds.
+      - name: window_end
+        description: Window end for release conflicts and repeated rows. Null for row-level holds.
+      - name: row_count
+        description: Number of source rows represented by this hold.
+      - name: member_sha256s
+        description: Sorted distinct checksums of the source files represented by this hold.
 
   - name: int_hac_program_years
     description: >
@@ -1257,14 +1319,29 @@ models:
     description: >
       One row naming the dbt run that wrote the build file and the DuckDB version that wrote it, built after the kept
       models it names (amendment A28). Great Expectations validation (scripts/lakehouse/silver.py validate) refuses a
-      build file without it and binds its result to this row (silver step 6, failure modes 639, 646 and 647).
+      build file without it and binds its result to this row (silver step 6, failure modes 639, 646 and 647). On a real
+      build the launcher passes the run, the dbt tree hash, the bronze pins and the Git revision; a missing or
+      unrecorded value stops compilation, and the on-run-end hook keeps the row only after a gold-eligible build
+      (scripts/lakehouse/provenance.py, D1 section 10). Fixture and lint builds read unrecorded for the four provenance columns.
     columns:
       - name: dbt_invocation_id
         description: The dbt invocation that built this file.
         data_tests: [unique, not_null]
       - name: git_revision
-        description: The git revision passed as the dbt variable git_revision, or unrecorded.
+        description: The Git revision of the checkout on a real build; the dbt variable git_revision, or unrecorded, on a fixture build.
         data_tests: [not_null]
       - name: duckdb_version
         description: version() of the DuckDB that wrote the file.
+        data_tests: [not_null]
+      - name: run_id
+        description: The launcher run that built this file.
+        data_tests: [not_null]
+      - name: dbt_tree_sha256
+        description: The launcher's hash of the run's snapshot of the dbt project and its packages.
+        data_tests: [not_null]
+      - name: bronze_pins_sha256
+        description: SHA-256 of the run's pins.json, the bronze snapshot IDs the build read.
+        data_tests: [not_null]
+      - name: pins_json
+        description: The text of the run's pins.json; its SHA-256 is bronze_pins_sha256.
         data_tests: [not_null]

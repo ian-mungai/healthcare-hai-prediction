@@ -3,29 +3,32 @@
 Run from the repository root: ``.venv/bin/python -m scripts.quality.repo_checks <check> [paths ...]``. Each finding
 names the file and line, the rule, how to fix it and what to do when the rule seems wrong; any finding exits 1. A check
 that cannot run raises and exits non-zero, so it fails closed. There are no bypasses. Markers the checks look for are
-assembled from fragments, so this file does not flag itself. The rules are listed in README.md under Quality Checks.
+assembled from fragments, so this file does not flag itself. The rules are listed in docs/quality_checks.md.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
+import configparser
 import datetime
 import fnmatch
 import importlib
 import json
 import os
 import re
+import shlex
 import sys
 import tempfile
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from scripts.process import run_command
 
-POLICY = "README.md, Quality Checks"
+POLICY = "docs/quality_checks.md"
 ASK = "if the rule seems wrong here, stop and ask the repository owner; there are no bypasses (no SKIP= or --no-verify)"
 
 CREDENTIAL_NAMES = ("*.tfstate", "*.tfstate.backup", "*.tfplan", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ecdsa", "id_ed25519", "credentials")
@@ -139,7 +142,7 @@ PRIVACY_PATTERNS = {
 }
 RESERVED_DOMAINS = (".invalid", ".test", ".localhost", ".example", "example.com", "example.org", "example.net")
 ENV_VALUE_KEYS = re.compile(r"PROFILE|BUCKET|ACCOUNT|ARN|ENDPOINT|HOST|EMAIL|USER")
-WRITING_RULE = f"{POLICY}: writing check (Oxford comma, date format, time-bound words; em dashes in declared article files)"
+WRITING_RULE = f"{POLICY}: writing check (Oxford comma, date format, time-bound words, dashes, semicolons, slashes; em dashes in declared article files)"
 WRITING_ALLOWLIST = ".writing_allowlist"
 # Checked in prose only: code spans, fenced blocks, front matter, URLs and link targets are masked first.
 WRITING_PATTERNS = {
@@ -157,8 +160,12 @@ WRITING_PATTERNS = {
         "state the fact without the time word, or tie it to a version, commit or issue",
     ),
     "em-dash": ("em dash in article text", re.compile("\u2014"), "use a colon, comma, parentheses or a new sentence"),
+    "dash": ("em or en dash in prose", re.compile("[\u2013\u2014]"), "end the sentence or use a comma"),
+    "semicolon": ("semicolon in prose", re.compile(r";(?!\w)"), "split the text into two sentences"),
+    "slash": ("slash between words in prose", re.compile(r"(?<![\w./~-])[a-z]+/[a-z]+(?![\w/.-])"), 'write "a, b or both" instead of "a/b" or "and/or"'),
 }
 ARTICLE_ONLY = {"em-dash"}
+WARN_FIRST = {"dash", "semicolon", "slash"}
 
 
 @dataclass
@@ -268,12 +275,71 @@ def lint_settings() -> list[Finding]:
         findings.append(
             Finding("pyproject.toml", f"Ruff loosening keys present: {', '.join(loosening)}", f"{POLICY}: lint settings", "remove them and fix the code")
         )
-    mypy_loosening = sorted(MYPY_LOOSENING_KEYS & set(tool.get("mypy", {})))
-    if mypy_loosening:
-        findings.append(Finding("pyproject.toml", f"MyPy loosening keys present: {', '.join(mypy_loosening)}", f"{POLICY}: lint settings", "remove them"))
+    findings.extend(mypy_profiles())
+    findings.extend(mypy_commands())
     ci = Path(CI_SCRIPT).read_text()
-    if not any(re.search(r"\bmypy\b", line) and all(flag in line for flag in MYPY_FLAGS) for line in ci.splitlines()):
+    if not any(re.search(r"\b(?:mypy|scripts\.quality\.typecheck)\b", line) and all(flag in line for flag in MYPY_FLAGS) for line in ci.splitlines()):
         findings.append(Finding(CI_SCRIPT, f"MyPy no longer runs with {' and '.join(MYPY_FLAGS)}", f"{POLICY}: lint settings", "restore both flags"))
+    return findings
+
+
+def mypy_profiles() -> list[Finding]:
+    """Inspect all committed or nonignored TOML and INI MyPy profiles, including module overrides."""
+    findings = []
+    for path in git("ls-files", "--cached", "--others", "--exclude-standard", "*.toml", "*.ini", "*.cfg").splitlines():
+        content = Path(path).read_text()
+        if not re.search(r"\[(?:tool\.mypy\b|mypy(?:\]|-))", content):
+            continue
+        if path.endswith(".toml"):
+            settings = tomllib.loads(content).get("tool", {}).get("mypy", {})
+            profiles = [("tool.mypy", settings), *(("tool.mypy.overrides", item) for item in settings.get("overrides", []))]
+        else:
+            config = configparser.ConfigParser(interpolation=None)
+            config.read_string(content)
+            profiles = [(name, dict(config[name])) for name in config.sections() if name == "mypy" or name.startswith("mypy-")]
+        for name, settings in profiles:
+            if loosened := sorted(MYPY_LOOSENING_KEYS & set(settings)):
+                findings.append(
+                    Finding(path, f"MyPy loosening keys in {name}: {', '.join(loosened)}", f"{POLICY}: lint settings", "remove them and fix the code")
+                )
+    return findings
+
+
+def mypy_command(path: str, line: int, arguments: Sequence[str | None], files: set[str]) -> list[Finding]:
+    findings = []
+    banned = {"--" + key.replace("_", "-") for key in MYPY_LOOSENING_KEYS}
+    if any(argument and argument.split("=", 1)[0] in banned for argument in arguments):
+        findings.append(Finding(f"{path}:{line}", "MyPy loosening command flags present", f"{POLICY}: lint settings", "remove them and fix the code"))
+    for index, argument in enumerate(arguments):
+        if argument == "--config-file" or (argument and argument.startswith("--config-file=")):
+            config = arguments[index + 1] if argument == "--config-file" and index + 1 < len(arguments) else argument.removeprefix("--config-file=")
+            if config not in files:
+                findings.append(
+                    Finding(
+                        f"{path}:{line}",
+                        "MyPy configuration must name a committed profile instead of a generated or dynamic file",
+                        f"{POLICY}: lint settings",
+                        "use pyproject.toml or a committed MyPy profile so every profile is checked",
+                    )
+                )
+    return findings
+
+
+def mypy_commands() -> list[Finding]:
+    """Check every literal MyPy command and require explicit configuration files to be in the inspected inventory."""
+    files = set(git("ls-files", "--cached", "--others", "--exclude-standard").splitlines())
+    findings = []
+    for path in sorted(files):
+        if path.endswith(".sh"):
+            for number, line in enumerate(Path(path).read_text().splitlines(), 1):
+                if re.search(r"\b(?:mypy|scripts\.quality\.typecheck)\b", line) and not line.lstrip().startswith("#"):
+                    findings.extend(mypy_command(path, number, shlex.split(line.rstrip("\\"), comments=True), files))
+        elif path.endswith(".py"):
+            for node in ast.walk(ast.parse(Path(path).read_text())):
+                if isinstance(node, (ast.List, ast.Tuple)):
+                    arguments = [item.value if isinstance(item, ast.Constant) and isinstance(item.value, str) else None for item in node.elts]
+                    if "mypy" in arguments or "scripts.quality.typecheck" in arguments:
+                        findings.extend(mypy_command(path, node.lineno, arguments, files))
     return findings
 
 
@@ -868,12 +934,9 @@ def prose_lines(text: str) -> list[tuple[int, str]]:
     return lines
 
 
-def writing_check(articles: list[str]) -> list[Finding]:
-    """Prose in Markdown follows the writing preferences; em dashes are checked in declared article files only.
-
-    The declared data folders hold synthetic fixtures and are skipped; ignored files (data/, local evidence) never reach it.
-    """
+def writing_check(articles: list[str], block: list[str]) -> tuple[list[Finding], list[Finding]]:
     allowed, findings = read_allowlist(WRITING_ALLOWLIST, list(WRITING_PATTERNS), WRITING_RULE, "why this text is kept as is")
+    warnings: list[Finding] = []
     for path in sorted(set(git("ls-files", "--cached", "--others", "--exclude-standard").splitlines())):
         article = any(fnmatch.fnmatch(path, glob) for glob in articles)
         if not (path.endswith(".md") or article) or path.startswith(DATA_FOLDERS) or not os.path.isfile(path):
@@ -882,9 +945,13 @@ def writing_check(articles: list[str]) -> list[Finding]:
             for kind, (description, pattern, fix) in WRITING_PATTERNS.items():
                 if kind in ARTICLE_ONLY and not article:
                     continue
-                if pattern.search(line) and not any(kind == entry_kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
-                    findings.append(Finding(f"{path}:{number}", description, WRITING_RULE, fix))
-    return findings
+                text = re.sub(r"&#?\w+;", " ", line) if kind in WARN_FIRST else line
+                if kind == "dash" and article:
+                    text = text.replace("\u2014", "")
+                if pattern.search(text) and not any(kind == entry_kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
+                    target = warnings if kind in WARN_FIRST and kind not in block else findings
+                    target.append(Finding(f"{path}:{number}", description, WRITING_RULE, fix))
+    return findings, warnings
 
 
 FRONT_RULE = "bundle standards/documents.md#3-metadata (sections 3.1, 3.2): document front matter"
@@ -982,10 +1049,14 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="privacy-scan: every file Git does not ignore, the default scope; ignored files are never scanned")
     parser.add_argument("--warn", action="store_true", help="report findings without failing: a check's warn period before it blocks")
     parser.add_argument("--articles", action="append", default=[], metavar="GLOB", help="writing-check: files that hold article text (em dashes)")
+    parser.add_argument("--block", action="append", default=[], choices=sorted(WARN_FIRST), help="writing-check: make a warn-first kind block")
     args = parser.parse_args()
     if args.check == "writing-check":
-        findings = writing_check(args.articles)
-        return warn(findings) if args.warn else report(findings)
+        findings, warnings = writing_check(args.articles, args.block)
+        if args.warn:
+            return warn(findings + warnings)
+        warn(warnings)
+        return report(findings)
     if args.check == "privacy-scan":
         findings, unreviewed = privacy_scan()
         for line in unreviewed:

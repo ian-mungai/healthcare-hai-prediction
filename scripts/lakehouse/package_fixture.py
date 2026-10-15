@@ -100,7 +100,7 @@ class Session:
         try:
             return self.client.run_attempt(self.principal, template, launch, args, params, checkout=ROOT, seconds=TIMEOUT)
         except launcher.ClientError as error:
-            raise FixtureError(f"the launcher refused {template}: {error}") from error
+            raise FixtureError(error.describe(template)) from error
 
 
 def image_id() -> str:

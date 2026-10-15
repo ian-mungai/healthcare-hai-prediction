@@ -275,7 +275,7 @@ def job(name: str, job_args: list[str]) -> None:
         )
         result = run_job(link, kind, name, template, job_args)
     except launcher.ClientError as error:
-        raise CatalogError(f"the launcher refused job {name}: {error}") from error
+        raise CatalogError(error.describe(f"job {name}")) from error
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)
     if not result.ok:
@@ -312,8 +312,9 @@ def run_job(link: launcher.LauncherClient, kind: str, name: str, template: str, 
         record = link.config.runs_root / run_id / "job_record.json"
         record.parent.mkdir(parents=True, exist_ok=True)
         record.write_text(json.dumps({"run_id": run_id}))
-        link.call("finalize", {}, principal)
-        link.call("release", {"record": str(record)}, principal, timeout=300)
+        link.settle(principal)
+        link.cleanup_call("finalize", {}, principal)
+        link.cleanup_call("release", {"record": str(record)}, principal, timeout=300)
 
 
 def down() -> None:

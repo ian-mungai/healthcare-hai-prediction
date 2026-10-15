@@ -1,0 +1,5 @@
+# The orchestration runtime is the official Airflow image pinned by digest in services/orchestration/Dockerfile and
+# config/orchestration/platform.json, with the deadline entrypoint added and nothing installed. scripts/orchestration/offline_checks.py
+# checks every distribution installed in the built image against the release's constraints file, constraints-3.12.txt beside this file
+# (source URL and SHA-256 in config/orchestration/platform.json).
+apache-airflow==3.3.2  # dynamic: the DAG files and scripts/orchestration/in_image_checks.py import airflow inside the image
