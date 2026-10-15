@@ -138,9 +138,10 @@ jobs:
   acquisition:
     name: Acquisition Checks
     runs-on: ubuntu-24.04
-    # Every offline E2E suite runs twice: 12-14 minutes locally, up to 29 minutes here. It runs only when the range
-    # changes a path the acquisition-checks hook watches (about 1 minute otherwise); see the run step.
-    timeout-minutes: 30
+    # Every offline E2E suite runs twice with the coverage gate: about 20 minutes locally and over 29 minutes here
+    # (measured Oct 15 2026). It runs only when the range changes a path the acquisition-checks hook watches (about
+    # 1 minute otherwise); see the run step.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
