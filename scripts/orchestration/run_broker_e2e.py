@@ -99,8 +99,6 @@ class BrokerEnv(Env):
         self.brokers: list[Broker] = []
         self.listeners: list[Listener] = []
 
-    # Inventory
-
     def fixture_row(self, args: list[str], **extra: Any) -> dict[str, Any]:
         """A broker row that forwards to the launcher's ``fixture_dbt`` template."""
         params = {
@@ -129,10 +127,7 @@ class BrokerEnv(Env):
         """Write the test inventory the broker and its child processes load."""
         self.inventory_path.write_text(json.dumps(document or self.inventory(), indent=2))
 
-    # Brokers
-
     def client_for_broker(self) -> InstrumentedClient:
-        """An instrumented client of this case's launcher."""
         return InstrumentedClient(self.config, start=True)
 
     def new_broker(self, **extra: Any) -> Broker:
@@ -153,7 +148,6 @@ class BrokerEnv(Env):
         self.daemon.script = lambda container: (0.2, 0) if "hai.probe" in container["Config"]["Labels"] else None
 
     def request(self, template: str = "silver_build", run_id: str = RUN, mode: str = "fixture", attempt: int = 1) -> SubmissionRequest:
-        """A submission request."""
         return SubmissionRequest(template, run_id, mode, attempt)
 
     def wait_state(self, broker: Broker, handle: Handle, wanted: tuple[State, ...], seconds: float = 30) -> Any:
@@ -204,7 +198,6 @@ def case(name: str, **settings: Any) -> Callable[[Case], Case]:
 
 
 def wire(broker: Broker) -> InstrumentedClient:
-    """The broker's instrumented launcher client."""
     client = broker.client
     if not isinstance(client, InstrumentedClient):
         raise TypeError("the case built a broker without an instrumented client")
@@ -221,12 +214,10 @@ def refusal_of(function: Callable[[], Any]) -> BaseException | None:
 
 
 def ledger_lines(env: BrokerEnv, run_id: str = RUN) -> list[dict[str, Any]]:
-    """The run's ledger lines."""
     return Ledger(env.paths.ledger).read(run_id)
 
 
 def events(env: BrokerEnv, submission_id: str, run_id: str = RUN) -> list[str]:
-    """The ledger events of one submission."""
     return [line["event"] for line in ledger_lines(env, run_id) if line["submission_id"] == submission_id]
 
 
@@ -240,9 +231,6 @@ def run_record_file(env: BrokerEnv, run_id: str) -> str:
 def attempts_of(env: BrokerEnv, launch: str = "") -> list[dict[str, Any]]:
     """The launcher's attempts of run owners (not probes)."""
     return [a for a in env.state()["attempts"].values() if a["owner"].startswith("run:") and launch in a["launch_id"]]
-
-
-# --- 925: only the launcher touches Docker -------------------------------------------------------------------------------------------
 
 
 @case("no_direct_docker")
@@ -277,9 +265,6 @@ def no_direct_docker(env: BrokerEnv) -> dict[str, bool]:
         "the broker child submitted through the launcher": result.returncode == 0 and len(env.creates("-a1")) == 1,
         "no docker program was started by the broker child": not marker.exists(),
     }
-
-
-# --- 926, 928: the launcher decides about runs --------------------------------------------------------------------------------------
 
 
 @case("released_run_refused")
@@ -409,9 +394,6 @@ def broker_holds_no_reservation(env: BrokerEnv) -> dict[str, bool]:
     }
 
 
-# --- 927: supervision across a Docker outage ----------------------------------------------------------------------------------------
-
-
 @case("outage_during_job")
 def outage_during_job(env: BrokerEnv) -> dict[str, bool]:
     """927: during a Docker outage the broker reports the launcher as unavailable, never a stale running state; when Docker returns the launcher
@@ -445,7 +427,7 @@ def outage_during_job(env: BrokerEnv) -> dict[str, bool]:
     final = soft_wait(ended, 60)
     attempt = attempts_of(env, "sub-")[0]
     ledger: dict[str, Any] = {}
-    with contextlib.suppress(Exception):  # the submission may not have finished
+    with contextlib.suppress(Exception):
         ledger = broker.record(handle)
     return {
         "the broker said the launcher was unavailable during the outage": bool(seen) and "launcher" in str(seen[0]),
@@ -457,9 +439,6 @@ def outage_during_job(env: BrokerEnv) -> dict[str, bool]:
     }
 
 
-# --- 929: idempotence ---------------------------------------------------------------------------------------------------------------
-
-
 @case("duplicate_submission")
 def duplicate_submission(env: BrokerEnv) -> dict[str, bool]:
     """929: the same request twice, one after the other and at once, gives one launcher attempt, one container and one ledger intent."""
@@ -468,7 +447,7 @@ def duplicate_submission(env: BrokerEnv) -> dict[str, bool]:
     broker.start()
     request = env.request("gold_build", attempt=1)
     first = broker.submit(request)
-    second = refusal_of(lambda: broker.submit(request))  # None: accepted; the handle is the same one
+    second = refusal_of(lambda: broker.submit(request))
     handles: list[Handle] = []
 
     def submit_again() -> None:
@@ -528,7 +507,6 @@ def crash_after_intent(env: BrokerEnv) -> dict[str, bool]:
     again = broker.submit(request)
     forwarded_once = len(attempts_of(env, "sub-")) == 1 and len(env.creates("-a1")) == 1
     broker.close()
-    # a second submission whose row is edited between its intent and its forwarding
     second = env.request("silver_build", attempt=1)
     env.child("submit-once", "--template", "silver_build", "--run", RUN, "--mode", "fixture", "--attempt", "1", "--crash-at", "after_intent")
     edited = env.inventory()
@@ -550,7 +528,8 @@ def crash_after_intent(env: BrokerEnv) -> dict[str, bool]:
 def cancel_after_lost_submit_reply(env: BrokerEnv) -> dict[str, bool]:
     """929b: the launcher accepts a submit and its reply is lost, so the broker has no forward cache. A cancel must reconcile the submission's request
     identity through the launcher and cancel the attempt it names; with the launcher unreachable the outcome stays unresolved (503, no ledger line); a
-    submission that has only its intent is cancelled the same way."""
+    submission that has only its intent is cancelled the same way. 929d (``lost_replies_stay_unresolved``): the same for a lost reply that is
+    ``unresponsive``."""
     env.hold_jobs()
     broker = env.new_broker()
     broker.start()
@@ -587,7 +566,6 @@ def cancel_after_lost_submit_reply(env: BrokerEnv) -> dict[str, bool]:
     launch = broker_module.launch_id_of(request.submission_id)
     attempts_before = len(attempts_of(env, launch))
     creates_before = len(env.creates(launch))
-    # A submission with only its intent: the launcher never saw it.
     other = env.request("gold_build", attempt=1)
     with broker.ledger.locked(RUN):
         row = broker.row_for(other)
@@ -596,7 +574,9 @@ def cancel_after_lost_submit_reply(env: BrokerEnv) -> dict[str, bool]:
     other_handle = Handle(other.submission_id, other.container_name)
     other_final = soft_wait(lambda: (s := broker.status(other_handle)).state == State.CANCELLED and s, 30)
     other_lines = events(env, other.submission_id)
+    unresponsive = lost_replies_stay_unresolved(env, broker, port, token)
     return {
+        **unresponsive,
         "the submit reply was lost and the launcher holds the attempt": submit_code == 503 and accepted is not None,
         "the broker has no forward cache": cache_missing,
         "a cancel while the launcher is unreachable is answered 503": down_code == 503,
@@ -611,6 +591,81 @@ def cancel_after_lost_submit_reply(env: BrokerEnv) -> dict[str, bool]:
         "a submission with only its intent is cancelled": other_code == 200 and other_final is not None and other_final.exit_code == 143,
         "its ledger starts with the intent and ends with finished": other_lines[0] == "intent" and other_lines[-1] == "finished",
         "no job container of either is left running": not [c for c in env.labelled() if c["State"]["Running"] and "hai.probe" not in c["Config"]["Labels"]],
+    }
+
+
+def lose_reply_of(broker: Broker, method: str, what: str | None = None) -> contextlib.AbstractContextManager[Any]:
+    """The launcher handles each ``method`` request (of the ``what`` view, when named) and the client then reports ``unresponsive``: the reply is lost."""
+    original = broker.client.call
+
+    def call(name: str, params: dict[str, Any] | None = None, *args: Any, **kwargs: Any) -> Any:
+        answer = original(name, params, *args, **kwargs)
+        if name == method and (what is None or (params or {}).get("what") == what):
+            raise launcher.ClientError("synthetic: the launcher is alive but stopped answering", "unresponsive")
+        return answer
+
+    return mock.patch.object(broker.client, "call", call)
+
+
+def start_through_listener(env: BrokerEnv, broker: Broker, port: int, token: str, request: SubmissionRequest) -> tuple[Handle, dict[str, Any]]:
+    """Submit through the listener with nothing lost, and wait for the broker to report the job running; the handle and the launcher's attempt."""
+    handle = Handle(request.submission_id, request.container_name)
+    try_post(port, token, "/v1/submit", json.dumps(request.as_dict()).encode())
+    soft_wait(lambda: state_of(broker, handle) == State.RUNNING, 15)
+    return handle, next(iter(attempts_of(env, broker_module.launch_id_of(request.submission_id))), {})
+
+
+def lost_replies_stay_unresolved(env: BrokerEnv, broker: Broker, port: int, token: str) -> dict[str, bool]:
+    """929d: ``unresponsive`` is a transport error, like ``unavailable``: the launcher may have acted and the broker cannot know. A lost ``submit`` reply
+    is answered 503 with only the intent in the ledger, and the same submission is then recovered once, with no second attempt; a lost ``status`` or
+    ``cancel`` reply is answered 503 and writes nothing, and repeating the call settles it. Each operation has its own submission."""
+    submitted = env.request("silver_build", attempt=2)
+    launch = broker_module.launch_id_of(submitted.submission_id)
+    body = json.dumps(submitted.as_dict()).encode()
+    with lose_reply_of(broker, "submit"):
+        lost_code, _ = try_post(port, token, "/v1/submit", body)
+    after_lost = events(env, submitted.submission_id)
+    held = env.wait(lambda: next(iter(attempts_of(env, launch)), None), 10, "the launcher holds the attempt whose submit reply was lost")
+    again_code, _ = try_post(port, token, "/v1/submit", body)
+    recovered = soft_wait(lambda: state_of(broker, Handle(submitted.submission_id, submitted.container_name)) == State.RUNNING, 15)
+    recovered_events = events(env, submitted.submission_id)
+    one_attempt = len(attempts_of(env, launch)) == 1 and len(env.creates(launch)) == 1
+    stop_attempt(env, held["id"])
+
+    watched = env.request("silver_build", attempt=3)
+    _, watched_attempt = start_through_listener(env, broker, port, token, watched)
+    watched_body = json.dumps({"submission_id": watched.submission_id}).encode()
+    before_status = events(env, watched.submission_id)
+    with lose_reply_of(broker, "status", "attempt"):
+        status_code, _ = try_post(port, token, "/v1/status", watched_body)
+    after_status = events(env, watched.submission_id)
+    status_again, status_view = try_post(port, token, "/v1/status", watched_body)
+    if watched_attempt:
+        stop_attempt(env, watched_attempt["id"])
+
+    to_cancel = env.request("silver_build", attempt=4)
+    cancel_handle, cancel_attempt = start_through_listener(env, broker, port, token, to_cancel)
+    cancelled_body = json.dumps({"submission_id": to_cancel.submission_id}).encode()
+    before_cancel = events(env, to_cancel.submission_id)
+    with lose_reply_of(broker, "cancel"):
+        cancel_code, _ = try_post(port, token, "/v1/cancel", cancelled_body)
+    after_cancel = events(env, to_cancel.submission_id)
+    cancel_again, _ = try_post(port, token, "/v1/cancel", cancelled_body)
+    final = cancelled_status(broker, cancel_handle)
+    return {
+        "a lost submit reply (unresponsive) is answered 503": lost_code == 503,
+        "a lost submit reply leaves only the intent in the ledger": after_lost == ["intent"],
+        "the same submit is accepted again": again_code == 200,
+        "the recovery reads the attempt the launcher holds: running, intent then started": recovered is not None and recovered_events == ["intent", "started"],
+        "the recovery made no second attempt or container": one_attempt,
+        "the status of a running job is intent then started (control)": before_status == ["intent", "started"] and watched_attempt != {},
+        "a lost status reply (unresponsive) is answered 503": status_code == 503,
+        "a lost status reply writes nothing": after_status == before_status,
+        "repeating the status settles it": status_again == 200 and status_view.get("state") == State.RUNNING.value,
+        "a running job to cancel is intent then started (control)": before_cancel == ["intent", "started"] and cancel_attempt != {},
+        "a lost cancel reply (unresponsive) is answered 503": cancel_code == 503,
+        "a lost cancel reply writes nothing": after_cancel == before_cancel,
+        "repeating the cancel is accepted and ends the job as cancelled with exit 143": cancel_again == 200 and final is not None and final.exit_code == 143,
     }
 
 
@@ -661,7 +716,6 @@ def noop_crash_recovery(env: BrokerEnv) -> dict[str, bool]:
 
     noop_status = {name: status_of(Handle(r.submission_id, r.container_name)) for name, r in request.items()}
     records = {name: (env.paths.records / RUN / f"{r.container_name}.json").is_file() for name, r in request.items()}
-    # A no-op whose row became a launcher row, and a launcher row that became a no-op.
     again = env.request("pin_bronze", attempt=2)
     launched = env.request("silver_build", attempt=1)
     leave_intent(env, again)
@@ -772,7 +826,7 @@ def cancel_after_inventory_drift(env: BrokerEnv) -> dict[str, bool]:
         accepted, cache_missing, submit_code = lose_submit_reply(env, request, session)
         drift_inventory(env, change)
         fresh = env.new_broker()
-        with contextlib.suppress(Exception):  # a restart that raises is judged by the checks below, not by an error of the case
+        with contextlib.suppress(Exception):
             fresh.start()
         port = env.listener_for(fresh, session).port
         handle = Handle(request.submission_id, request.container_name)
@@ -795,7 +849,6 @@ def cancel_after_inventory_drift(env: BrokerEnv) -> dict[str, bool]:
             f"{label}: the broker reports cancelled with exit 143": final is not None and final.exit_code == 143,
         }
         env.stop_brokers()
-    # A lookup the launcher cannot answer: nothing is decided, and the same calls work once it can.
     env.write_inventory()
     request = env.request("silver_build", attempt=3)
     accepted, cache_missing, submit_code = lose_submit_reply(env, request, session)
@@ -848,7 +901,6 @@ def cancel_after_inventory_drift(env: BrokerEnv) -> dict[str, bool]:
         "unresolved lookup: the launcher's attempt received the cancel": ended.get("cancel_intent") is not None,
     }
     env.stop_brokers()
-    # A submission the launcher never saw: the changed row still refuses it, and the launcher holds no attempt for it.
     env.write_inventory()
     never = env.request("silver_build", attempt=4)
     leave_intent(env, never)
@@ -980,7 +1032,6 @@ def cancel_after_token_store_loss(env: BrokerEnv) -> dict[str, bool]:
                 f"{label}: the launcher holds no attempt for it": not attempts_of(env, broker_module.launch_id_of(request.submission_id)),
             }
             env.stop_brokers()
-    # Never sent, row unchanged, token folder unsearchable: the broker cannot read the token it needs to send, and that is no refusal.
     number += 1
     env.write_inventory()
     request = env.request("silver_build", attempt=number)
@@ -1150,7 +1201,6 @@ def cancel_after_marker_ancestor_loss(env: BrokerEnv) -> dict[str, bool]:
                 checks[f"{label}: the replacement folder held the ledger and no marker"] = seen.get("replacement_has_no_marker") is True
             env.stop_brokers()
     env.stop_brokers()
-    # Never sent: the intent alone is on disk, so the row decides, and the lost folders do not matter.
     for level in FORWARD_LOSSES:
         for drift, change in DRIFTS:
             number += 1
@@ -1599,9 +1649,6 @@ def first_intent_publication_failure(env: BrokerEnv) -> dict[str, bool]:
     }
 
 
-# --- 930: callers cannot override the launch ----------------------------------------------------------------------------------------
-
-
 def post(
     port: int, token: str | None, path: str, body: bytes, extra: dict[str, str] | None = None, method: str = "POST", timeout: float = 10.0
 ) -> tuple[int, dict[str, Any]]:
@@ -1815,9 +1862,6 @@ def broker_templates_schema(env: BrokerEnv) -> dict[str, bool]:
     return results
 
 
-# --- 931: the listener --------------------------------------------------------------------------------------------------------------
-
-
 @case("listener_auth")
 def listener_auth(env: BrokerEnv) -> dict[str, bool]:
     """931: no token, a wrong token, a malformed header and a token of the wrong length are refused with 401 before any launcher request."""
@@ -1890,8 +1934,8 @@ def listener_limits(env: BrokerEnv) -> dict[str, bool]:
 @case("malformed_content_length")
 def malformed_content_length(env: BrokerEnv) -> dict[str, bool]:
     """931b: a Content-Length that is not a plain number below the limit is refused (400 or 413) before any read, an unauthenticated one with 401; a
-    failure inside a handler is answered 500; nothing reaches stderr, not the token and not a traceback; the broker log holds no token; the listener serves
-    a valid request before and after."""
+    failure inside a handler is answered 500; a failure inside an operation's dispatch is answered 500 and logged with the operation's name; nothing
+    reaches stderr, not the token and not a traceback; the broker log holds no token; the listener serves a valid request before and after."""
     broker = env.new_broker()
     broker.start()
     token = "tok" + os.urandom(16).hex()
@@ -1917,18 +1961,23 @@ def malformed_content_length(env: BrokerEnv) -> dict[str, bool]:
         unauthenticated = try_post(port, None, "/v1/health", b"{}", {"Content-Length": token}, timeout=3)[0]
         with mock.patch.object(broker_module.secrets, "compare_digest", side_effect=RuntimeError("synthetic failure " + token)):
             forced = try_post(port, token, "/v1/health", b"{}", timeout=3)[0]
+        with mock.patch.object(broker_module, "dispatch", side_effect=RuntimeError("synthetic dispatch failure " + token)):
+            dispatch_failed = try_post(port, token, "/v1/health", b"{}", timeout=3)[0]
         time.sleep(0.3)
     text = captured.getvalue()
     control_after = try_post(port, token, "/v1/health", b"{}")[0]
     log_file = env.paths.private / "broker.log"
+    log_text = log_file.read_text() if log_file.is_file() else ""
     return {
         "a valid request is served before the bad ones": control_before == 200,
         **{f"{name} is refused with 400 or 413": status in (400, 413) for name, status in answers.items()},
         "an unauthenticated request with a bad length is refused with 401": unauthenticated == 401,
         "a failure inside a handler is answered 500": forced == 500,
+        "a failure inside an operation's dispatch is answered 500": dispatch_failed == 500,
+        "the dispatch failure is logged with the operation's name": "internal_error health RuntimeError" in log_text,
         "nothing reaches stderr with the session token": token not in text,
-        "no traceback reaches stderr": "Traceback" not in text and "ValueError" not in text,
-        "the broker log holds no session token": not log_file.exists() or token not in log_file.read_text(),
+        "no traceback reaches stderr": "Traceback" not in text and "ValueError" not in text and "RuntimeError" not in text,
+        "the broker log holds no session token": token not in log_text,
         "no launcher request was sent for any of them": len(wire(broker).methods) == before,
         "a valid request is served after the bad ones": control_after == 200,
     }
@@ -1948,7 +1997,7 @@ def log_write_outage(env: BrokerEnv) -> dict[str, bool]:
     control_before = try_post(port, token, "/v1/health", b"{}")[0]
     refusal = {**env.request().as_dict(), "attempt": token}
     log_file.unlink(missing_ok=True)
-    log_file.mkdir()  # opening a folder for appending fails, as a full disk or a permission failure does
+    log_file.mkdir()
     captured = io.StringIO()
     with contextlib.redirect_stderr(captured):
         during = try_post(port, token, "/v1/health", b"{}", timeout=3)[0]
@@ -1990,7 +2039,6 @@ def token_never_logged(env: BrokerEnv) -> dict[str, bool]:
     client = BrokerClient(f"http://127.0.0.1:{listener.port}", token)
     handle = client.submit(env.request("gold_build", attempt=1))
     run_token = broker.principal(RUN)["token"]
-    # the token in a path, in a body field and in the header of a refused call
     bodies = [
         post(listener.port, token, f"/v1/{token}", b"{}"),
         post(listener.port, token, "/v1/submit", json.dumps({**env.request(attempt=2).as_dict(), "note": token}).encode()),
@@ -2027,7 +2075,7 @@ def listener_loopback_only(env: BrokerEnv) -> dict[str, bool]:
         except BrokerError:
             bind_refusals[host] = True
         except OSError:
-            bind_refusals[host] = False  # the host could not even be bound, but the listener did not refuse it for being non-loopback
+            bind_refusals[host] = False
         else:
             candidate.server.server_close()
             bind_refusals[host] = False
@@ -2043,9 +2091,6 @@ def listener_loopback_only(env: BrokerEnv) -> dict[str, bool]:
         "the IPv6 loopback is not served either": not v6_loopback_open,
         "the loopback accepts a call with the token": post(listener.port, "e" * 64, "/v1/health", b"{}")[0] == 200,
     }
-
-
-# --- 932: the ledger ----------------------------------------------------------------------------------------------------------------
 
 
 @case("ledger_fsync_order")
@@ -2332,7 +2377,6 @@ def sentinel_scan_failed_job(env: BrokerEnv) -> dict[str, bool]:
     }
 
 
-# Every case, listed so that a case that loses its decorator cannot go unnoticed: the runner checks the list against the registry.
 ALL_CASES = (
     no_direct_docker,
     released_run_refused,
@@ -2431,7 +2475,7 @@ def run_cases(selected: list[str], verbose: bool = False) -> int:
 
 
 def main() -> int:
-    """Parse arguments and run."""
+    """The command-line entry point: ``--case NAME`` (repeatable) picks cases, ``--checks`` prints every check; returns 0 when every case passed, else 1."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--case", action="append", default=[], choices=sorted(CASES))
     parser.add_argument("--checks", action="store_true", help="print every check of every case, not only the failed ones")

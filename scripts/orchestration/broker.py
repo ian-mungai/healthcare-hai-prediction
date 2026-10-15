@@ -57,19 +57,15 @@ ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_FILE = ROOT / "config" / "orchestration" / "platform.json"
 TEMPLATES_FILE = ROOT / "config" / "orchestration" / "broker_templates.json"
 TEMPLATES_SCHEMA = ROOT / "config" / "orchestration" / "broker_templates.schema.json"
-# The launcher's run domain for the Airflow transform DAG.
 DOMAIN = "transform"
 MAX_BODY_BYTES = 4096
-# A request handler gives up on a peer that sends nothing for this long, so a stalled connection cannot hold a thread for ever.
 HANDLER_TIMEOUT_SECONDS = 15.0
 CONTENT_LENGTH = re.compile(r"[0-9]{1,18}")
 CRASH_POINTS = ("after_intent", "after_forward")
 REDACTED = "[redacted]"
 OPERATIONS = ("health", "submit", "status", "cancel", "logs", "record")
 OFFLINE = "offline"
-# Launcher refusals that mean "try again later": the submission stays pending and the listener answers 503.
-TRANSIENT_CODES = ("degraded", "unavailable", "internal")
-# An attempt that ended without an exit code of its own still needs the integer the ledger schema asks for.
+TRANSIENT_CODES = ("degraded", "internal")
 END_CODES = {"timeout": 124, "cancelled": 143, "fenced": 143, "create_failed": 125}
 UNKNOWN_END = 125
 START_WAIT_SECONDS = 15.0
@@ -93,7 +89,7 @@ class BrokerPaths:
 
     @property
     def ledger(self) -> Path:
-        """The ledger folder."""
+        """The folder with one ``<run_id>.jsonl`` ledger file per run, the folder a ``Ledger`` is opened on."""
         return self.state / "ledger"
 
     @property
@@ -148,12 +144,10 @@ def write_private(path: Path, text: str, root: Path | None = None) -> None:
 
 
 def canonical(value: Any) -> str:
-    """The canonical JSON text hashed for a payload."""
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def sha256_text(text: str) -> str:
-    """The SHA-256 of a text."""
     return hashlib.sha256(text.encode()).hexdigest()
 
 
@@ -163,7 +157,7 @@ def request_id_of(submission_id: str, operation: str = "submit") -> str:
 
 
 def launch_id_of(submission_id: str) -> str:
-    """The launcher's logical-launch identifier of a submission."""
+    """The launch ID the launcher files the submission's attempts under; it depends only on the submission ID, so a caller can look the attempt up itself."""
     return f"sub-{sha256_text(submission_id)[:24]}"
 
 
@@ -245,8 +239,6 @@ class Broker:
         self._guard = threading.Lock()
         self._lock_file: Any = None
 
-    # Lifecycle
-
     def start(self) -> dict[str, Any]:
         """Hold the one-broker lock, then bring every unfinished submission up to date with the launcher."""
         self.paths.private.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -271,8 +263,6 @@ class Broker:
             self._lock_file.close()
             self._lock_file = None
 
-    # Logging and redaction
-
     def redact(self, text: str) -> str:
         """Replace every secret the broker knows (the session token and each run token it has used) with a marker."""
         with self._guard:
@@ -292,8 +282,6 @@ class Broker:
         self.paths.private.mkdir(parents=True, exist_ok=True, mode=0o700)
         with (self.paths.private / "broker.log").open("a") as handle:
             handle.write(self.redact(f"{now()} {event} {detail}".rstrip()) + "\n")
-
-    # Rows and payloads
 
     def row_for(self, request: SubmissionRequest) -> dict[str, Any]:
         """The mode's row, or the refusal with its reason: unknown name, unsupported mode, a class other than offline, no launcher row."""
@@ -327,14 +315,13 @@ class Broker:
             payload["timeout_seconds"] = target["timeout_seconds"]
         return payload
 
-    # Launcher calls
-
     def call(self, method: str, params: dict[str, Any], principal: dict[str, Any] | None = None, request_id: str | None = None) -> Any:
-        """One launcher request; an unreachable or degraded launcher is ``LauncherUnavailable``, a definite refusal stays ``ClientError``."""
+        """One launcher request; a transport error (the launcher is gone or stopped answering, so the outcome is unknown) and a degraded launcher are
+        ``LauncherUnavailable``, a definite refusal stays ``ClientError``."""
         try:
             return self.client.call(method, params, principal, request_id)
         except launcher.ClientError as error:
-            if error.code in TRANSIENT_CODES:
+            if error.transport or error.code in TRANSIENT_CODES:
                 raise LauncherUnavailable(f"the launcher is not available ({error.code}): {error}") from None
             raise
         except (OSError, TimeoutError, ValueError) as error:
@@ -406,14 +393,11 @@ class Broker:
         answer: dict[str, Any] = json.loads(path.read_text())
         return answer
 
-    # Ledger helpers
-
     def append(self, line: dict[str, Any]) -> dict[str, Any]:
         """Append one validated, fsynced ledger line."""
         return self.ledger.append(line)
 
     def lines_of(self, request: SubmissionRequest) -> list[dict[str, Any]]:
-        """The submission's ledger lines."""
         return self.ledger.submissions(request.run_id).get(request.submission_id, [])
 
     def crash(self, point: str) -> None:
@@ -467,8 +451,6 @@ class Broker:
         )
         self.log("finished", f"{request.submission_id} exit {exit_code}")
 
-    # Submissions
-
     def submit(self, request: SubmissionRequest) -> Handle:
         """Refuse, return the existing handle or forward once."""
         errors = sorted(self.requests_schema.iter_errors(request.as_dict()), key=str)
@@ -482,12 +464,12 @@ class Broker:
                     if lines[-1]["event"] not in ("finished", "failed_closed"):
                         self.advance_locked(request)
                     return handle
-                row = self.row_for(request)  # a refused request leaves no line: nothing was accepted
+                row = self.row_for(request)
                 payload = None if row["no_op"] else self.payload_of(request, row)
                 try:
                     self.write_intent(request, row, payload)
                 except LedgerUnavailable as error:
-                    raise LauncherUnavailable(str(error)) from None  # the intent line is kept: the same submit is repeated
+                    raise LauncherUnavailable(str(error)) from None
                 self.crash("after_intent")
                 if row["no_op"]:
                     self.finish(request, 0, no_op=True, reason=row["reason"])
@@ -505,7 +487,6 @@ class Broker:
             view = self.call("status", {"what": "launcher"})
             if view.get("status") == "serving":
                 return
-            # A launcher that has just started refuses work until its probe and scan are done; a short wait is not an outage.
             if view.get("status") != "starting" or time.monotonic() > deadline:
                 raise LauncherUnavailable(f"the launcher is {view.get('status')}: {view.get('degraded_reason') or 'not serving'}")
             time.sleep(0.2)
@@ -522,7 +503,7 @@ class Broker:
         if forward is None:
             forward = self.forward_locked(request, lines[0])
             if forward is None:
-                return  # the launcher refused it, and the refusal is recorded
+                return
         self.apply_attempt(request, forward)
 
     def recorded_as_noop(self, request: SubmissionRequest, intent: dict[str, Any]) -> bool:
@@ -587,14 +568,14 @@ class Broker:
             self.append_end(request, str(error))
             return None
         if row["no_op"]:
-            self.fail_changed_row(request)  # the intent holds a launcher payload's identity, and the row is a no-op now
+            self.fail_changed_row(request)
             return None
         payload = self.payload_of(request, row)
         if sha256_text(canonical(payload)) != intent["spec_sha256"]:
             self.fail_changed_row(request)
             return None
         try:
-            self.record_dispatch(request)  # durable, with its folders, before the send
+            self.record_dispatch(request)
             answer = self.call("submit", payload, principal, request_id_of(request.submission_id))
         except launcher.ClientError as error:
             self.append_end(request, f"{error} [{error.code}]")
@@ -616,7 +597,6 @@ class Broker:
         self.finish(request, UNKNOWN_END, refused=True, reason=reason)
 
     def attempt_of(self, request: SubmissionRequest, forward: dict[str, Any]) -> dict[str, Any]:
-        """The launcher's record of the submission's attempt."""
         principal = self.principal(request.run_id)
         record: dict[str, Any] = self.call("status", {"what": "attempt", "id": forward["attempt_id"]}, principal)
         return record
@@ -653,8 +633,6 @@ class Broker:
             )
             return
         reason = str(attempt["reason"])
-        # The attempt's own exit code stands for a job that exited; for a stop (deadline, cancel, fence) or a failed create the reason names the code,
-        # and the launcher's raw exit code stays in the record.
         exit_code = attempt.get("exit_code") if reason == "exited" else END_CODES.get(reason, attempt.get("exit_code"))
         if exit_code is None:
             exit_code = END_CODES.get(reason, UNKNOWN_END)
@@ -677,8 +655,6 @@ class Broker:
         write_private(path, self.redact(text))
         return path
 
-    # Reconciliation
-
     def reconcile(self) -> dict[str, Any]:
         """Bring every unfinished submission up to date: ask the launcher about each, send the ones it has not seen, read the others' attempts."""
         summary: dict[str, Any] = {"updated": [], "pending": [], "ledger_errors": []}
@@ -698,8 +674,6 @@ class Broker:
                 summary["ledger_errors"].append(f"{run_id}: {error}")
                 self.log("reconcile_error", f"{run_id} {error}")
         return summary
-
-    # Interface operations
 
     def _lines(self, handle: Handle) -> tuple[SubmissionRequest, list[dict[str, Any]]]:
         """The ledger lines of one handle, or a refusal."""
@@ -754,7 +728,7 @@ class Broker:
                 lines = self.lines_of(request)
                 if lines[-1]["event"] not in ("finished", "failed_closed"):
                     if self.recorded_as_noop(request, lines[0]):
-                        self.complete_noop(request)  # a no-op has no attempt to cancel
+                        self.complete_noop(request)
                     else:
                         self.require_serving()
                         forward = self.read_forward(request) or self.forward_locked(request, lines[0])
@@ -780,8 +754,6 @@ class Broker:
             raise SubmissionRefused(f"submission {handle.submission_id} has not finished")
         return dict(last)
 
-    # Run control (owner and tests; Airflow reaches none of it)
-
     def finalize_run(self, run_id: str) -> dict[str, Any]:
         """Move a held run to ``finalizing`` through the launcher."""
         result: dict[str, Any] = self.call("finalize", {}, self.principal(run_id))
@@ -803,7 +775,6 @@ def handle_for(payload: dict[str, Any]) -> Handle:
 
 
 def status_body(status: Status) -> dict[str, Any]:
-    """A status as JSON."""
     handle = {"submission_id": status.handle.submission_id, "container_name": status.handle.container_name}
     return {"handle": handle, "state": status.state.value, "exit_code": status.exit_code, "record_path": status.record_path}
 
@@ -869,7 +840,7 @@ class Listener:
             def do_POST(self) -> None:
                 try:
                     self.handle_post()
-                except Exception as exc:  # nothing a request does may reach the server's own error output, which prints exception text
+                except Exception as exc:
                     record("internal_error", f"{self.command} {type(exc).__name__}")
                     with contextlib.suppress(Exception):
                         self.answer(500, {"error": "internal"})
@@ -900,7 +871,7 @@ class Listener:
                     self.answer(400, {"error": "refused", "message": broker.redact(str(exc))})
                 except LauncherUnavailable as exc:
                     self.answer(503, {"error": "launcher unavailable", "message": broker.redact(str(exc))})
-                except Exception as exc:  # the listener answers 500 and logs; it must not die
+                except Exception as exc:
                     record("internal_error", f"{operation} {type(exc).__name__}: {exc}")
                     self.answer(500, {"error": "internal"})
 
@@ -916,7 +887,7 @@ class Listener:
 
     @property
     def port(self) -> int:
-        """The bound port."""
+        """The local port the server is bound to; the port the system assigned when the listener was created with port 0."""
         return int(self.server.server_address[1])
 
     def start(self) -> None:
@@ -955,9 +926,6 @@ def dispatch(broker: Broker, operation: str, payload: dict[str, Any]) -> dict[st
             raise SubmissionRefused("tail must be an integer from 1 to 10000")
         return {"logs": broker.logs(handle, tail)}
     return {"record": broker.record(handle)}
-
-
-# Command line
 
 
 def build(test_registry: str | None, templates: str | None, crash_at: str | None = None) -> Broker:

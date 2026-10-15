@@ -51,7 +51,6 @@ TOOLS_PYTHON = ROOT / ".tools" / "sqlfluff" / "bin" / "python"
 TOOLS_DBT = ROOT / ".tools" / "sqlfluff" / "bin" / "dbt"
 INTERFACE_HASH = "1b2ddecae18c84d32d26669ac460a04d601b0a4557b8d9dfb115d878229fe3d7"
 RELEASE_COPY_TEST = "release_copy_consistency_dim_release_"
-# The dbt commands whose task runs the models and the hooks: they write the build file, run_results.json and manifest.json.
 TASKS = ("build", "run", "seed", "snapshot", "test")
 
 Case = Callable[[Env], dict[str, bool]]
@@ -129,9 +128,6 @@ class E2E(Env):
         return super().close()
 
 
-# -- the fake daemon's containers -----------------------------------------------------------------------------------------------------
-
-
 class Fakes:
     """What the fake daemon does for each template: pins, dbt builds and consumer checks. A build takes the next entry of ``builds``."""
 
@@ -199,7 +195,6 @@ class Fakes:
         )
         command = args[0] if args else ""
         if command not in TASKS:
-            # compile writes the manifest of its own invocation; debug and ls write no artifact and leave the build file alone.
             if command in ("compile", "parse"):
                 (folder / "target").mkdir(parents=True, exist_ok=True)
                 (folder / "target" / "manifest.json").write_text(json.dumps({"metadata": {"invocation_id": invocation}}))
@@ -265,7 +260,7 @@ class Fakes:
         command = list(container["Config"].get("Cmd") or [])
         sealed = self.mount(container, "/workspace/sealed/build.duckdb")
         module = provenance()
-        descriptor = os.open(str(sealed), os.O_RDONLY)  # the mounted object is the file as it is at this moment
+        descriptor = os.open(str(sealed), os.O_RDONLY)
         self.consumer["attached"].set()
 
         def check() -> None:
@@ -293,7 +288,7 @@ class Fakes:
         command = list(container["Config"].get("Cmd") or [])
         environment = dict(item.split("=", 1) for item in container["Config"].get("Env") or [])
         module = provenance()
-        descriptor = os.open(str(sealed), os.O_RDONLY)  # the mounted object is the file as it is at this moment
+        descriptor = os.open(str(sealed), os.O_RDONLY)
         self.consumer["attached"].set()
 
         def check() -> None:
@@ -310,9 +305,6 @@ class Fakes:
             self.env.daemon.finish(container, 0 if result["matched"] and result["marker"]["matched"] else 3)
 
         threading.Thread(target=check, name="fake-consumer", daemon=True).start()
-
-
-# -- a recorded run -------------------------------------------------------------------------------------------------------------------
 
 
 def prepare(
@@ -404,7 +396,6 @@ def traced_paths(*prefixes: str, before: Callable[[str, str], None] | None = Non
             if isinstance(path, str | bytes | os.PathLike) and not paused:
                 text = os.fsdecode(path)
                 if name == "open" and before is not None and (relative or text.startswith(prefixes)):
-                    # What the hook itself does to the folder is not a call of the code under test.
                     paused.append(True)
                     try:
                         before(name, text)
@@ -431,9 +422,6 @@ def traced_paths(*prefixes: str, before: Callable[[str, str], None] | None = Non
         yield calls
 
 
-# -- cases: the frozen interfaces -----------------------------------------------------------------------------------------------------
-
-
 @case("interface_frozen", "unpatched")
 def interface_frozen(env: Env) -> dict[str, bool]:
     """Check the launcher's provenance and sealing signatures against the frozen interface digest."""
@@ -444,9 +432,6 @@ def interface_frozen(env: Env) -> dict[str, bool]:
         "the interface hash equals the frozen hash": hashlib.sha256(signatures.encode()).hexdigest() == INTERFACE_HASH,
         "each signature line exists once": all(sum(line.startswith(f"def {name}(") for line in lines) == 1 for name in ("provenance_vars", "seal")),
     }
-
-
-# -- cases: provenance values and refusals --------------------------------------------------------------------------------------------
 
 
 @case("provenance_values")
@@ -470,7 +455,6 @@ def provenance_values(env: Env) -> dict[str, bool]:
         "HAI_BUILD_GIT_REVISION": head,
         "HAI_PROVENANCE_REQUIRED": "1",
     }
-    # The arguments and parameters of a real_dbt launch are validated when its container is rendered: the attempt ends before any container exists.
     by_args = dbt_submit(env, run, "b2", ["build", "--vars", "{HAI_BUILD_RUN_ID: x}"])
     body = {"template": "real_dbt", "launch_id": "b3", "args": ["build"], "params": {"provenance": {"HAI_BUILD_RUN_ID": "x"}}, "checkout": str(ROOT)}
     by_params = env.client().call("submit", body, run)
@@ -518,7 +502,6 @@ def provenance_refusals(env: Env) -> dict[str, bool]:
     def refusal(label: str, text: str, mapping: dict[str, Any] | None = None) -> None:
         checks[label] = has(raises(lambda: module.variables(mapping if mapping is not None else entry)), text)
 
-    # The snapshot changes after the copy.
     target = next(path for path in sorted((folder / "project").rglob("*.sql")))
     original = target.read_bytes()
     with writable(target):
@@ -539,7 +522,6 @@ def provenance_refusals(env: Env) -> dict[str, bool]:
     refusal("a link in the snapshot refuses", "link")
     with writable(folder / "project"):
         linked.unlink()
-    # The pins change after the record, or are reached through a link.
     pins = runs / "pins.json"
     pins_original = pins.read_bytes()
     pins.write_text(json.dumps({"x": "1"}))
@@ -558,7 +540,6 @@ def provenance_refusals(env: Env) -> dict[str, bool]:
     runs.unlink()
     aside.rename(runs)
     checks["the restored files are accepted again"] = raises(lambda: module.variables(entry)) is None
-    # Records that are missing.
     refusal("no recorded pins refuse", "no recorded pins", {k: v for k, v in entry.items() if k != "pins_sha256"})
     refusal("no snapshot pointer refuses", "no complete snapshot", {**entry, "snapshot": None})
     refusal("a fixture run refuses", "not a real transform run", {**entry, "mode": "fixture"})
@@ -574,7 +555,6 @@ def provenance_refusals(env: Env) -> dict[str, bool]:
     del state["copies"][entry["snapshot"]]
     (clone / "registry.json").write_text(json.dumps(state))
     refusal("a missing copy record refuses", "has no record", {**entry, "registry_path": str(clone)})
-    # The Git revision.
     nogit = env.temp / "nogit"
     nogit.mkdir()
     refusal("a checkout without a Git revision refuses", "Git revision", {**entry, "checkout": str(nogit)})
@@ -587,7 +567,6 @@ def provenance_refusals(env: Env) -> dict[str, bool]:
     (nogit / ".git" / "packed-refs").write_text(f"# pack-refs\n{commit} refs/heads/main\n")
     (nogit / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
     checks["a packed ref is read"] = raises(lambda: module.variables({**entry, "checkout": str(nogit)})) is None
-    # The launcher refuses at submit with the code provenance and creates nothing.
     with writable(pins):
         pins.write_text(json.dumps({"x": "1"}))
     submit_error = expect_error(lambda: dbt_submit(env, run, "bad", ["build"]))
@@ -619,9 +598,6 @@ def provenance_selection_bypass(env: Env) -> dict[str, bool]:
     accepted = expect_error(lambda: dbt_submit(env, run, "after", ["build", "--select", "int_hai_state_windows"]))
     checks["the same selected build is accepted once pins are recorded"] = accepted is None
     return checks
-
-
-# -- cases: the write queue and the seal (need the launcher patch) --------------------------------------------------------------------
 
 
 @case("writer_serialized", "patched")
@@ -1277,7 +1253,6 @@ def seal_graceful_stop(env: Env) -> dict[str, bool]:
         checks["the sealed folder does not change after the release"] = at_release is not None and sealed_names(env) == at_release
     finally:
         (env.registry / "seal_hold").unlink(missing_ok=True)
-        # The original process is the one that may outlive a failed case; the replacement answers on the socket and ``env.close`` stops it.
         with contextlib.suppress(CaseFailure):
             env.wait(lambda: not env.alive(original), 30, "the original launcher ends")
         if env.alive(original):
@@ -1439,9 +1414,6 @@ def seal_clone_replaced_path(env: Env) -> dict[str, bool]:
     return checks
 
 
-# -- cases: the consumer --------------------------------------------------------------------------------------------------------------
-
-
 def consumer_run(env: Env, fakes: Fakes, run: dict[str, Any], launch: str) -> dict[str, Any]:
     """Submit a consumer of the sealed run."""
     body = {"template": "sealed_consumer", "launch_id": launch, "args": ["verify"], "params": {}, "checkout": str(ROOT)}
@@ -1473,7 +1445,6 @@ def consumer_digest(env: Env) -> dict[str, bool]:
         found = list((run_folder(env) / "consumer").glob(f"{launch}-a1.json"))
         return dict(json.loads(found[0].read_text())) if found else {}
 
-    # Replaced between create and start.
     gate = env.daemon.add_gate("start", "before", lambda context: context["labels"].get("hai.template") == "sealed_consumer")
     fakes.consumer["proceed"].set()
     reply = consumer_run(env, fakes, run, "c1")
@@ -1486,7 +1457,6 @@ def consumer_digest(env: Env) -> dict[str, bool]:
     checks["replaced before start: the container was created before the replacement"] = created == 1
     checks["replaced before start: the in-container digest differs"] = result.get("matched") is False and result.get("sha256") != completion["sha256"]
     checks["replaced before start: the result is rejected and the container fails"] = not module.accepts_result(result, completion) and ended["exit_code"] == 3
-    # Restored before start.
     replace_file(sealed_file, original)
     fakes.consumer["proceed"].set()
     gate = env.daemon.add_gate("start", "before", lambda context: context["labels"].get("hai.template") == "sealed_consumer")
@@ -1498,7 +1468,6 @@ def consumer_digest(env: Env) -> dict[str, bool]:
     ended = env.wait_ended(reply["attempt_id"], 30)
     result = result_of("c2")
     checks["restored before start: the digest matches and the result is accepted"] = module.accepts_result(result, completion) and ended["exit_code"] == 0
-    # Replaced after attachment: the mounted object is the one attached at start.
     fakes.consumer["proceed"].clear()
     fakes.consumer["attached"].clear()
     reply = consumer_run(env, fakes, run, "c3")
@@ -1509,7 +1478,6 @@ def consumer_digest(env: Env) -> dict[str, bool]:
     result = result_of("c3")
     checks["replaced after attachment: the mounted object is unchanged and accepted"] = module.accepts_result(result, completion) and ended["exit_code"] == 0
     replace_file(sealed_file, original)
-    # The marker row.
     fakes.consumer["marker"] = "wrong"
     reply = consumer_run(env, fakes, run, "c4")
     fakes.consumer["proceed"].set()
@@ -1518,7 +1486,6 @@ def consumer_digest(env: Env) -> dict[str, bool]:
     checks["a marker of another run is rejected"] = (
         not module.accepts_result(result, completion) and ended["exit_code"] == 3 and result["marker"]["matched"] is False
     )
-    # The create specification.
     body = env.daemon.create_bodies[next(c["name"] for c in creates(env, "-c2-"))]
     mounts = {m["Target"]: m for m in body["HostConfig"]["Mounts"]}
     checks["the specification mounts the sealed copy read-only and nothing of the build folder"] = (
@@ -1656,7 +1623,6 @@ def reader_behind_consumer(env: Env) -> dict[str, bool]:
     fakes.consumer["pins_json"] = (run_folder(env) / "pins.json").read_text()
     session = AllocSession(env)
     checks: dict[str, bool] = {}
-    # A valid object: the control.
     fakes.consumer["proceed"].set()
     rows, reason = read_with(session, completion)
     checks["control: the reader's rows come back for the untouched copy"] = rows == [["1", "2"]] and reason is None
@@ -1677,7 +1643,6 @@ def reader_behind_consumer(env: Env) -> dict[str, bool]:
         and not any("staging" in str(m.get("Source")) or m["Target"] == "/workspace/in" for m in body["HostConfig"]["Mounts"])
     )
     checks["the specification has no network"] = body["HostConfig"]["NetworkMode"] == "none"
-    # Replaced between create and start: the reader's own container hashes what it attached.
     gate = env.daemon.add_gate("start", "before", lambda context: context["labels"].get("hai.template") == "duckdb_helper")
     outcome: list[Any] = []
     thread = threading.Thread(target=lambda: outcome.append(read_with(session, completion)), name="reader-replaced")
@@ -1689,7 +1654,6 @@ def reader_behind_consumer(env: Env) -> dict[str, bool]:
     checks["replaced before start: the caller is stopped and gets no rows"] = bool(outcome) and outcome[0][0] is None
     checks["replaced before start: the check of the attached object is what rejected it"] = bool(outcome) and has(outcome[0][1], "attached hashes")
     replace_file(sealed_file, original)
-    # Restored before start: accepted.
     gate = env.daemon.add_gate("start", "before", lambda context: context["labels"].get("hai.template") == "duckdb_helper")
     outcome = []
     thread = threading.Thread(target=lambda: outcome.append(read_with(session, completion)), name="reader-restored")
@@ -1700,7 +1664,6 @@ def reader_behind_consumer(env: Env) -> dict[str, bool]:
     gate.release()
     thread.join(60)
     checks["restored before start: the rows come back"] = bool(outcome) and outcome[0][0] == [["1", "2"]]
-    # Replaced after attachment: the reader's mounted object is unchanged.
     fakes.consumer["proceed"].clear()
     fakes.consumer["attached"].clear()
     outcome = []
@@ -1712,7 +1675,6 @@ def reader_behind_consumer(env: Env) -> dict[str, bool]:
     thread.join(60)
     checks["replaced after attachment: the rows come back from the attached object"] = bool(outcome) and outcome[0][0] == [["1", "2"]]
     replace_file(sealed_file, original)
-    # A marker of another run, and a caller that stops at the first rejection.
     fakes.consumer["marker"] = "wrong"
     before = session.calls
     stopped: list[str | None] = []
@@ -1723,7 +1685,6 @@ def reader_behind_consumer(env: Env) -> dict[str, bool]:
             break
     fakes.consumer["marker"] = "good"
     checks["a marker of another run is rejected and the caller stops at once"] = len(stopped) == 1 and session.calls == before + 1
-    # Launcher refusals.
     client = env.client()
 
     sent = [0]
@@ -1815,7 +1776,6 @@ class StubSession:
             "marker": {"checked": True, "matched": accepted, "different": []},
         }
         line = module.RESULT_PREFIX + json.dumps(checked) + "\n"
-        # A rejected check comes with a reader that exited 0 and printed rows: only the comparison with the completion stops the caller.
         self.outcome = SimpleNamespace(ok=True, exit_code=0, stdout=stdout, stderr=line, reason="exited")
         self.calls: list[dict[str, Any]] = []
 
@@ -1849,7 +1809,6 @@ def gold_wiring(env: Env) -> dict[str, bool]:
     checks["a rejected check raises"] = has(reason, "attached hashes")
     checks["the second chunk was never sent"] = len(bad.calls) == 1
 
-    # seal_check stops the stage when the consumer container rejects the copy.
     originals = (gold.staging.launcher_client, module.sealed_completion, module.run_consumer)
     state: dict[str, bool] = {"accepted": False}
 
@@ -1875,7 +1834,6 @@ def gold_wiring(env: Env) -> dict[str, bool]:
         returned == completion and outcome["checks"]["real_sealed_consumer_accepts"] is True
     )
 
-    # silver.validate reads the sealed copy through the same check.
     manifest = env.work / "manifest.json"
     manifest.write_text(json.dumps({"nodes": {}}))
     contracts = ROOT / "data_contracts" / "great_expectations"
@@ -1917,7 +1875,7 @@ def gold_wiring(env: Env) -> dict[str, bool]:
             silver.launcher.load_client = saved
 
     accepted_error = validate(True)
-    time.sleep(1.1)  # the validation names its record folder by the second
+    time.sleep(1.1)
     rejected_error = validate(False)
     checks["control: the validation of an accepted sealed copy returns its record"] = not isinstance(accepted_error, BaseException)
     checks["a validation whose check is rejected stops with an error"] = isinstance(rejected_error, silver.SilverError)
@@ -2088,9 +2046,6 @@ def no_token_exposure(env: Env) -> dict[str, bool]:
     }
 
 
-# -- cases: the dbt side --------------------------------------------------------------------------------------------------------------
-
-
 class Dbt:
     """The pinned host dbt on a minimal copy of the project in a scratch folder: ``compile`` and ``run-operation`` against in-memory DuckDB."""
 
@@ -2218,7 +2173,6 @@ def marker_macros(env: Env) -> dict[str, bool]:
     }.items():
         code, values, _ = dbt.values({**valid, name: bad})
         checks[f"{name} malformed stops compilation"] = code != 0 and values is None
-    # The marker model compiles with the values and stops without them.
     code, output = dbt.run(["compile", "--select", "int_silver_build_marker"], valid)
     compiled = next((dbt.folder / "target" / "compiled").rglob("int_silver_build_marker.sql"), None)
     text = compiled.read_text() if compiled else ""
@@ -2231,7 +2185,6 @@ def marker_macros(env: Env) -> dict[str, bool]:
     checks["the marker does not compile without the pins digest"] = code != 0
     code, output = dbt.run(["compile", "--select", "int_silver_build_marker"])
     checks["a lint compile needs no values"] = code == 0
-    # Which builds may keep the marker.
     ok = [{"status": "success"}, {"status": "pass"}]
     cases = {
         "a full build of successes and passes is eligible": (ok, "build", [], True),
@@ -2247,7 +2200,6 @@ def marker_macros(env: Env) -> dict[str, bool]:
     for label, (results, which, selection, expected) in cases.items():
         code, output = dbt.operation("show_eligible", {"results": results, "which": which, "selection": selection})
         checks[label] = code == 0 and f"ELIGIBLE={expected}" in output
-    # The hooks against a table.
     code, output = dbt.operation("marker_cycle", {"finalize": False}, valid)
     checks["the start hook drops the marker of a real build"] = code == 0 and "MARKER_ROWS=0" in output
     code, output = dbt.operation("marker_cycle", {"finalize": False}, {})
@@ -2317,10 +2269,9 @@ def hook_command_coverage(env: Env) -> dict[str, bool]:
     checks["every command the launcher admits was tried"] = {arguments[0] for arguments in commands.values()} | {"run-operation"} == set(launcher.DBT_COMMANDS)
     try:
         classes = [module.HOOKED, module.OPERATION, module.CONNECTING, module.INERT]
-    except AttributeError:  # a module without the classes (the round 1 delivery) fails the check below, not the case
+    except AttributeError:
         classes = []
     checks["every admitted command is in exactly one class of the module"] = sorted(sum(classes, ())) == sorted(launcher.DBT_COMMANDS)
-    # The end hook writes the marker of an eligible build; here no model builds it.
     hook_only = Dbt(env.work / "dbt_hook_only", marker_model=False)
     code, output = hook_only.run(["build"], valid, "scratch")
     state = hook_only.operation("marker_state", None, valid, "scratch")[1]
@@ -2344,8 +2295,6 @@ def hook_command_coverage(env: Env) -> dict[str, bool]:
     checks["a build with an exclusion leaves no marker"] = excluded == 0 and "MARKER_TABLES=0" in excluded_state
     again, _ = hook_only.run(["build"], valid, "scratch")
     checks["control: the full build writes the marker again"] = again == 0 and "MARKER_ROWS=1" in hook_only.operation("marker_state", None, valid, "scratch")[1]
-    # The release copy-consistency test warns by design and stays enabled (A42, A46): a real dbt build whose only result that is not a success or a pass is that
-    # test's warning leaves no marker, so it cannot be sealed; the same build without the warning writes it.
     warning = hook_only.folder / "project" / "tests" / f"{RELEASE_COPY_TEST}.sql"
     warning.write_text("{{ config(severity='warn') }}\nselect 1 as x\n")
     warned, warned_output = hook_only.run(["build"], valid, "scratch")
@@ -2395,7 +2344,6 @@ def marker_project_compile(env: Env) -> dict[str, bool]:
     }
 
 
-# Every case, listed so a case that loses its decorator cannot go unnoticed: ``run_cases`` checks the list against the registry.
 ALL_CASES = (
     interface_frozen,
     provenance_values,
@@ -2440,9 +2388,6 @@ ALL_CASES = (
     hook_command_coverage,
     marker_project_compile,
 )
-
-
-# -- the runner -----------------------------------------------------------------------------------------------------------------------
 
 
 def wanted(kind: str, patched: bool, proposals: bool) -> bool:

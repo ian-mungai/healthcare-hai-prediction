@@ -71,8 +71,6 @@ LABEL_ATTEMPT = "hai.attempt"
 LABEL_OP = "hai.op"
 LABEL_PROBE = "hai.probe"
 LABEL_SERVICE = "hai.service"
-# The orchestration stack (Airflow and its metadata database) is a second service stack with labels of its own, so the catalog's absence
-# check and teardown never see its containers or its network.
 LABEL_STACK = "hai.stack"
 LABEL_ORCH_SERVICE = "hai.orch_service"
 ORCHESTRATION_STACK = "orchestration"
@@ -80,7 +78,6 @@ ORCHESTRATION_OWNER = "stack:orchestration"
 ORCHESTRATION_COMPOSE = "services/orchestration/docker-compose.orchestration.yaml"
 ORCHESTRATION_ORDER = ("postgres", "airflow-migrate", "airflow-apiserver", "airflow-scheduler", "airflow-dag-processor", "airflow-triggerer")
 ORCHESTRATION_FINITE = frozenset({"airflow-migrate"})
-# Each long-running service's share of the plan's free memory and its minimum; the migration runs with the API server's limit.
 ORCHESTRATION_MEMORY: dict[str, tuple[str, float, int]] = {
     "postgres": ("POSTGRES", 0.03, 256 * 1024**2),
     "airflow-apiserver": ("APISERVER", 0.05, 1024**3),
@@ -88,11 +85,9 @@ ORCHESTRATION_MEMORY: dict[str, tuple[str, float, int]] = {
     "airflow-dag-processor": ("DAG_PROCESSOR", 0.04, 1024**3),
     "airflow-triggerer": ("TRIGGERER", 0.02, 512 * 1024**2),
 }
-# LocalExecutor workers run inside the scheduler: its base and each worker's memory give the parallelism.
 ORCHESTRATION_SCHEDULER_BASE = 1024**3
 ORCHESTRATION_WORKER_MEMORY = 256 * 1024**2
 ORCHESTRATION_STATE_FOLDERS = ("metadata", "session")
-# The closed arguments of the orchestration_dump template: the whole logical dump, or the XCom rows.
 ORCHESTRATION_DUMPS = ("metadata", "xcom")
 ORCHESTRATION_UP_PARAMETERS = ("state", "api_port", "checkout")
 PINNED_REFERENCE = re.compile(r"[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9._-]{1,128})?@sha256:[a-f0-9]{64}")
@@ -991,11 +986,8 @@ TEMPLATES: dict[str, Template] = {
         Template("spark_write", "spark", True, ("run",), needs_catalog=True, default_seconds=43200, run_modes=("real",)),
         Template("spark_e2e", "spark", True, ("alloc",), default_seconds=7200),
         Template("catalog_service", None, False, ("service",)),
-        # The orchestration stack's services run for the stack's life (the migration is a finite one); the offline check is a finite job of an
-        # allocation on no network, in the thin Airflow image (services/orchestration/Dockerfile).
         Template("orchestration_service", None, False, ("stack",)),
         Template("orchestration_check", None, True, ("alloc",), default_seconds=900, max_seconds=3600),
-        # A read-only logical look at the metadata database for the sentinel scan: a finite job in the thin Airflow image on the stack's network.
         Template("orchestration_dump", None, True, ("alloc",), default_seconds=900, max_seconds=1800),
         Template("probe", "analytics", True, ("diagnostic",), default_seconds=60, max_seconds=60),
     )
@@ -2000,7 +1992,6 @@ class Renderer:
             host_ip, host_port, container_port = interpolate(str(entry), values).split(":")
             ports.append((host_ip, int(host_port), int(container_port)))
         finite = service in ORCHESTRATION_FINITE
-        # A finite service runs behind the deadline entrypoint, which needs the program to run: the Compose entrypoint, else the image's own.
         entrypoint = list(raw.get("entrypoint") or (inp.image_entrypoint if finite else []))
         return self.assemble(
             inp,
@@ -2686,7 +2677,7 @@ class Launcher:
                 continue
             self.inflight.discard(key)
             if tag == "seal":
-                with contextlib.suppress(run_lock.RegistryError, OSError):  # the record stays; the next launcher resumes the seal or discards it
+                with contextlib.suppress(run_lock.RegistryError, OSError):
                     self.on_seal(key, *payload)
 
     def shutdown_resources(self) -> None:
@@ -3704,8 +3695,6 @@ class Launcher:
                 actions.append(lambda: self.spawn(f"prepare:{a['id']}", "prepare", self.prepare_attempt, a["id"], dict(a), False, {}))
             return
         if a["template"] == "real_dbt" and owner.startswith("run:") and build_provenance.is_mutating(a["args"]) and not a.get("cleared"):
-            # Before each mutating launch the build is open, the completion record is cleared (D1 section 10 item 4) and the results of every
-            # earlier launch are removed, so a seal can only certify what this launch writes.
             building = state["runs"][owner.partition(":")[2]]
             try:
                 build_provenance.clear_build_artifacts(building)
@@ -4676,8 +4665,6 @@ class Launcher:
             self.require_owner(state, conn, principal, attempt["owner"])
             return {key: value for key, value in attempt.items() if key not in ("params",)}
         if what == "submission":
-            # The attempt that one of the run's own ``submit`` requests created, found by the request ID the client sent. A client whose reply was lost
-            # (or that has lost its record of the answer) learns what the launcher accepted from this, and not from anything it has stored itself.
             if principal.get("kind") != "run":
                 raise LauncherError("status of a submission needs the run's token", "principal")
             key = f"run:{principal.get('run_id')}|submit|{record_id}"
@@ -5699,8 +5686,6 @@ class Launcher:
         catalog.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})
         return {"phase": "tearing_down"}
 
-    # -- the orchestration stack: a second service stack beside the catalog (Airflow and its metadata database) ---------
-
     def orchestration_record(self, state: dict[str, Any]) -> dict[str, Any]:
         """The orchestration stack's state in the registry."""
         return state["launcher"].setdefault("orchestration", {"phase": "down", "services": {}})
@@ -5766,7 +5751,6 @@ class Launcher:
             "api_port": port,
             "started_at": utc_now(),
         }
-        # The growth reserve of the services already registered (the catalog's) is held back, as for every other plan; the stack's own are not.
         own = f"hai-{self.registry_id[:8]}-svc-orch-"
         growth = {name: limit for name, limit in self.growth_reserve_map(ctx.state).items() if not name.startswith(own)}
         self.spawn("orch:limits", "orchlimits", self.compute_orchestration_limits, growth)
@@ -5858,7 +5842,7 @@ class Launcher:
             elif f"op:{op['op_id']}" in self.inflight:
                 return
             else:
-                op_id = op["op_id"]  # an open operation without a request in flight (a restart, a lost reply): the create is idempotent by name
+                op_id = op["op_id"]
             name, labels = self.orchestration_network_name(), {LABEL_REGISTRY: self.registry_id, LABEL_STACK: ORCHESTRATION_STACK}
             actions.append(lambda: self.spawn(f"op:{op_id}", "orchnetcreate", self.create_network, name, labels))
             return
@@ -5904,10 +5888,10 @@ class Launcher:
             stack = self.orchestration_record(state)
             op = state["operations"].get(op_id)
             if op is None or op["state"] != "open":
-                return  # a scan already settled it
+                return
             self.settle_op(state, op_id, "created" if outcome == "ok" else f"failed: {value}")
             if stack["phase"] == "tearing_down" and outcome == "ok":
-                stack["network"] = value  # settled during a teardown: the teardown removes it
+                stack["network"] = value
                 return
             if stack["phase"] != "starting":
                 return
@@ -5932,7 +5916,7 @@ class Launcher:
                         stack.update({"network": found[0], "step": ORCHESTRATION_ORDER[0]})
                         state["containers"]["network:" + found[0]] = {"kind": "network", "at": utc_now()}
                     elif stack["phase"] == "tearing_down":
-                        stack["network"] = found[0]  # the teardown removes it
+                        stack["network"] = found[0]
                 elif op["kind"] == "orch_network_remove" and not found:
                     self.settle_op(state, op["op_id"], "removed", evidence="scan")
                     if stack["phase"] == "tearing_down":
@@ -5952,7 +5936,6 @@ class Launcher:
         step = stack.get("stop_step", "network")
         create = next((o for o in state["operations"].values() if o["kind"] == "orch_network_create" and o["state"] == "open"), None)
         if step == "network" and create is not None:
-            # A create left open by a start that never finished (a restart, a lost reply): settle it first, by name, so the network is known and removed.
             if f"op:{create['op_id']}" not in self.inflight:
                 op_id = create["op_id"]
                 name, labels = self.orchestration_network_name(), {LABEL_REGISTRY: self.registry_id, LABEL_STACK: ORCHESTRATION_STACK}
@@ -5969,7 +5952,7 @@ class Launcher:
             elif f"op:{op['op_id']}" in self.inflight:
                 return
             else:
-                op_id = op["op_id"]  # resumed after a restart or a lost reply: removing a network that is gone is not an error
+                op_id = op["op_id"]
                 network = op.get("network") or network
             actions.append(lambda: self.spawn(f"op:{op_id}", "orchnetremove", self.docker.remove_network, network))
         elif step == "confirm":
@@ -5990,7 +5973,7 @@ class Launcher:
         with self.tx() as state:
             op = state["operations"].get(op_id)
             if op is None or op["state"] != "open":
-                return  # a scan already settled it
+                return
             self.settle_op(state, op_id, "removed" if outcome == "ok" else f"failed: {value}")
             stack = self.orchestration_record(state)
             if outcome == "ok" and stack["phase"] == "tearing_down":
@@ -6015,8 +5998,6 @@ class Launcher:
             return {"phase": stack["phase"]}
         stack.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})
         return {"phase": "tearing_down"}
-
-    # -- image pull (failure mode 934) -------------------------------------------------------------------------------
 
     def template_images(self) -> set[str]:
         """Every image reference the Compose models of the launcher's own checkout name: what the templates can run."""

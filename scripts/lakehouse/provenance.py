@@ -40,12 +40,9 @@ VARIABLE_PINS_SHA = "HAI_BUILD_PINS_SHA256"
 VARIABLE_PINS_JSON = "HAI_BUILD_PINS_JSON"
 VARIABLE_REVISION = "HAI_BUILD_GIT_REVISION"
 VARIABLE_REQUIRED = "HAI_PROVENANCE_REQUIRED"
-# The variables of a consumer container (the sealed copy's identity and what its marker must say).
 VARIABLE_SEALED_SHA = "HAI_SEALED_SHA256"
 VARIABLE_SEALED_EXPECTED = "HAI_SEALED_EXPECTED"
-# The parameter that puts a reader template behind the consumer entrypoint: the launcher resolves the run's sealed copy and digest itself.
 SEALED_RUN_PARAM = "sealed_run"
-# The first line of standard error of a reader behind the entrypoint: the check of the object that reader's container attached.
 RESULT_PREFIX = "HAI_SEALED_RESULT "
 
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -64,7 +61,6 @@ HOOKED = ("build", "run", "seed", "snapshot", "test")
 OPERATION = ("run-operation",)  # changes the build without a hook; the launcher admits no macro for it (RUN_OPERATION_ALLOWLIST is empty)
 CONNECTING = ("compile", "debug")  # may open the build file, so they wait for a writer, but they change nothing
 INERT = ("ls", "parse")  # never open the build file
-# The options that select part of a build; a build with one of them cannot be sealed.
 SELECTION_OPTIONS = ("--select", "-s", "--exclude", "--selector")
 PASSING = ("success", "pass")
 READ_LIMIT = 1 << 20
@@ -75,9 +71,6 @@ DIRECTORY_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
 
 class ProvenanceError(Exception):
     """A provenance value is missing, malformed or not the recorded one, or a build cannot be sealed. The launcher reports it with the code ``provenance``."""
-
-
-# -- the run's files ------------------------------------------------------------------------------------------------------------------
 
 
 def registry_folder(run: Mapping[str, Any]) -> Path:
@@ -292,9 +285,6 @@ def is_full_build(args: Sequence[str]) -> bool:
     return command_of(args) == "build" and not any(str(token).split("=", 1)[0] in SELECTION_OPTIONS for token in args[1:])
 
 
-# -- the recorded values --------------------------------------------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class Recorded:
     """The provenance values of a run, each read from a launcher record and checked again against the files."""
@@ -400,9 +390,6 @@ def variables(run: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
-# -- the write queue and the build state (D1 section 10 item 4) -----------------------------------------------------------------------
-
-
 def dispatch_blocker(run: Mapping[str, Any], attempt: Mapping[str, Any], attempts: Iterable[Mapping[str, Any]]) -> str | None:
     """None when this queued serialized ``real_dbt`` attempt may be created now; ``"sealed"`` when the run is sealed and the attempt is mutating (it ends);
     else why it waits (a seal in progress may still fail, which reopens the run).
@@ -470,9 +457,6 @@ def clear_build_artifacts(run: Mapping[str, Any]) -> None:
                     raise ProvenanceError(f"{name} of run {run_id} cannot be removed: {error.strerror or type(error).__name__}") from error
         finally:
             os.close(target)
-
-
-# -- the sealed copy (D1 section 10 item 5) -------------------------------------------------------------------------------------------
 
 
 def gold_eligible_invocation(folder: int, run_id: str) -> str:
@@ -709,9 +693,6 @@ def accepts_result(result: Mapping[str, Any], completion: Mapping[str, Any]) -> 
     )
 
 
-# -- helpers for the callers of the launcher (the staging and gold runners) ----------------------------------------------------------------
-
-
 def request_snapshot(client: Any, principal: Mapping[str, Any], run_id: str, checkout: Path, packages_host: Path, timeout: float = 600.0) -> str:
     """Ask the launcher for the run's snapshot and wait until the copy is complete; returns the copy ID. The request is idempotent, so it is repeated."""
     deadline = time.monotonic() + timeout
@@ -808,9 +789,6 @@ def run_consumer(client: Any, principal: Mapping[str, Any], run_id: str, launch_
     name = f"{launch_id}-a{outcome.record['n']}.json"
     result = json.loads(read_run_file(runs_root(entry), run_id, ("consumer", name)))
     return accepts_result(result, completion)
-
-
-# -- the consumer entrypoint, inside the container ------------------------------------------------------------------------------------
 
 
 def read_marker_row(path: str) -> dict[str, str]:

@@ -6,7 +6,7 @@ of known content, unusable ranges, staged changes (a deletion and a rename inclu
 invalid input. Real runs of the CI entry check that the unconditional gates run in every part (also with an empty selection)
 and before the launcher E2E, that a failing gate fails every part, that the full Markdown lint runs as a gate in every scope
 and that the entry plan alone (``CI_LIST_ONLY=1``) runs nothing. One case runs this runner under a real pre-commit hook that
-inherits an alternate ``GIT_INDEX_FILE`` and checks that the caller's index, staged diff and working files survive. Failure
+inherits an alternate ``GIT_INDEX_FILE``, ``GIT_DIR`` and ``GIT_WORK_TREE`` and checks that the caller's index, staged diff and working files survive. Failure
 modes CS1 to CS31 (plans, local). The report goes to data/e2e/ci_groups/<UTC>_<pid>/report.json with the revision, the SHA-256
 of the files under test and the tool versions; the run fails when a file under test changes while it runs.
 
@@ -71,6 +71,24 @@ MARKDOWN_PROBES = ("ci_groups_probe.MD", "ci_groups_probe_two.Markdown")
 CORE = ["python_lint", "lakehouse_checks", "orchestration_checks", "repository_code_checks", "configuration_checks", "sql_style", "terraform_checks"]
 PART_GROUPS = {"core": CORE, "launcher": ["launcher"], "all": [*CORE, "launcher", "acquisition"]}
 PASS_LINES = {"core": "All local CI checks passed", "all": "All local CI checks passed", "launcher": "The launcher part passed."}
+LAKEHOUSE_SCRIPT = ["python_lint", "lakehouse_checks", "orchestration_checks", "repository_code_checks"]
+QUALITY_SCRIPT = ["python_lint", "orchestration_checks", "repository_code_checks", "configuration_checks"]
+QUALITY_CONFIG = ["lakehouse_checks", "orchestration_checks", "repository_code_checks", "configuration_checks"]
+ORCHESTRATION_SHARED = {
+    "scripts/lakehouse/run_lock.py": LAKEHOUSE_SCRIPT,
+    "scripts/lakehouse/fake_docker.py": LAKEHOUSE_SCRIPT,
+    "scripts/lakehouse/run_launcher_e2e.py": LAKEHOUSE_SCRIPT,
+    "scripts/lakehouse/pins.py": LAKEHOUSE_SCRIPT,
+    "scripts/lakehouse/provenance.py": LAKEHOUSE_SCRIPT,
+    "scripts/lakehouse/memory_budget.py": LAKEHOUSE_SCRIPT,
+    "scripts/lakehouse/dbt_package_archive.py": LAKEHOUSE_SCRIPT,
+    "scripts/lakehouse/__init__.py": LAKEHOUSE_SCRIPT,
+    "docker-compose.yaml": ["lakehouse_checks", "orchestration_checks"],
+    "scripts/quality/typecheck.py": QUALITY_SCRIPT,
+    "scripts/quality/docker_calls.py": QUALITY_SCRIPT,
+    "scripts/quality/repo_checks.py": QUALITY_SCRIPT,
+    "config/quality/docker_calls_reviewed.json": QUALITY_CONFIG,
+}
 MARKDOWNLINT = ROOT / ".tools" / "markdownlint-cli2" / "node_modules" / ".bin" / "markdownlint-cli2"
 
 
@@ -305,7 +323,7 @@ def caller_state(work: Path, index: Path) -> dict[str, str]:
         "unstaged_diff": git(work, "diff", env=env),
     }
     state |= {f"file {name}": sha256_of(work / name) for name in ("README.md", ".gitattributes")}
-    state["index_sha256"] = sha256_of(index)  # last: the diffs above may refresh the index's cached file data
+    state["index_sha256"] = sha256_of(index)
     return state
 
 
@@ -319,7 +337,7 @@ def inherited_context_case(work: Path, out: Path, scratch: Path, name: str, hook
     readme.write_text(readme.read_text(encoding="utf-8") + "unstaged line\n", encoding="utf-8")
     attributes = work / ".gitattributes"
     attributes.write_text(attributes.read_text(encoding="utf-8") + "# unstaged only\n", encoding="utf-8")
-    caller_state(work, index)  # settle the index's cached file data before the snapshot
+    caller_state(work, index)
     before = caller_state(work, index)
     config = scratch / f"{name}.yaml"
     entry = json.dumps(hook_entry)
@@ -328,7 +346,13 @@ def inherited_context_case(work: Path, out: Path, scratch: Path, name: str, hook
         "        pass_filenames: false\n        always_run: true\n        stages: [manual]\n",
         encoding="utf-8",
     )
-    hook_env = {**os.environ, **env, "PRE_COMMIT_HOME": str(scratch / f"{name}.pre_commit_home")}
+    hook_env = {
+        **os.environ,
+        **env,
+        "GIT_DIR": git(work, "rev-parse", "--absolute-git-dir").strip(),
+        "GIT_WORK_TREE": str(work),
+        "PRE_COMMIT_HOME": str(scratch / f"{name}.pre_commit_home"),
+    }
     try:
         result = run_command(
             str(ROOT / ".venv" / "bin" / "pre-commit"),
@@ -443,7 +467,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             work,
             "type_manifest_selects_types",
             ["--scope", "paths", "--path", "config/quality/mypy_runtimes.json", "--part", "core"],
-            ["python_lint", "lakehouse_checks", "repository_code_checks", "configuration_checks"],
+            ["python_lint", "lakehouse_checks", "orchestration_checks", "repository_code_checks", "configuration_checks"],
         ),
         selection_case(work, "launcher_part_skips_docs", ["--scope", "paths", "--path", "docs/data_collection.md", "--part", "launcher"], []),
         selection_case(work, "full_scope_runs_all", ["--scope", "full", "--part", "all"], [*CORE, "launcher", "acquisition"], "full scope"),
@@ -481,6 +505,10 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         staged_case(work, "deleted_file_counts", [["rm", "--quiet", "--cached", "infra/iam/main.tf"]], ["configuration_checks", "terraform_checks"]),
         staged_case(work, "renamed_file_counts_old_name", [["mv", "infra/iam/main.tf", "docs/renamed_main.tf"]], ["configuration_checks", "terraform_checks"]),
     ]
+    cases += [
+        selection_case(work, f"orchestration_shared_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "core"], groups)
+        for path, groups in ORCHESTRATION_SHARED.items()
+    ]
     code, _, _ = select(work, "--scope", "bogus")
     cases.append({"case": "invalid_scope_refused", "passed": code == 2, "exit": code})
     code, _, _ = select(work, "--scope", "full", "--part", "bogus")
@@ -516,7 +544,7 @@ def real_run_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]
 
 
 def main() -> int:
-    clear_git_environment()  # a hook's GIT_INDEX_FILE, GIT_DIR and GIT_WORK_TREE must never reach the scratch repositories
+    clear_git_environment()
     selection_only = "--selection-only" in sys.argv[1:]
     out = ROOT / "data" / "e2e" / "ci_groups" / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{os.getpid()}"
     out.mkdir(parents=True)

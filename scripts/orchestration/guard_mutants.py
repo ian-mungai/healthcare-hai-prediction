@@ -26,7 +26,6 @@ IN_IMAGE = "scripts/orchestration/in_image_checks.py"
 LAUNCHER = "orchestration/launcher.py"
 
 
-# The line of ``Supervisor.start`` that reports a cleanup that did not finish.
 CLEANUP_REPORT = (
     '                sys.stderr.write("supervisor: the cleanup after the failed start did not finish:\\n"'
     ' + "".join(f"  {item}\\n" for item in outcome["errors"]))'
@@ -130,7 +129,6 @@ def mutants() -> dict[str, Mutant]:
     )
     stub = "def {name}({arguments}) -> {result}:\n    return {value}"
     found = [
-        # broker
         Mutant(
             "docker_call_in_broker",
             "the broker runs a docker program before it forwards",
@@ -321,7 +319,6 @@ def mutants() -> dict[str, Mutant]:
                 ),
             ),
         ),
-        # sentinel scan
         Mutant(
             "scan_skips_unreadable",
             "an unreadable file is skipped without a trace",
@@ -384,7 +381,6 @@ def mutants() -> dict[str, Mutant]:
                 ),
             ),
         ),
-        # listener log outage
         Mutant(
             "log_failure_raises",
             "a failed log write raises into the request handler and the server's error hook",
@@ -396,7 +392,6 @@ def mutants() -> dict[str, Mutant]:
                 ),
             ),
         ),
-        # inventory drift
         Mutant(
             "lookup_skipped",
             "the present row decides a submission before the launcher is asked about its original request",
@@ -418,7 +413,6 @@ def mutants() -> dict[str, Mutant]:
                 ),
             ),
         ),
-        # token store loss
         Mutant(
             "token_existence_as_proof",
             "a token file that is missing or cannot be searched is read as proof that the broker never sent the submission",
@@ -473,12 +467,11 @@ def mutants() -> dict[str, Mutant]:
             (
                 Edit(
                     BROKER,
-                    block("            self.record_dispatch(request)  # durable, with its folders, before the send"),
+                    block("            self.record_dispatch(request)"),
                     block("            pass"),
                 ),
             ),
         ),
-        # dispatch marker ancestors
         Mutant(
             "marker_in_forward_subtree",
             "the dispatch marker lies in the forwards folder, a subtree that is independent of the ledger",
@@ -518,7 +511,7 @@ def mutants() -> dict[str, Mutant]:
                         "                try:",
                         "                    self.write_intent(request, row, payload)",
                         "                except LedgerUnavailable as error:",
-                        "                    raise LauncherUnavailable(str(error)) from None  # the intent line is kept: the same submit is repeated",
+                        "                    raise LauncherUnavailable(str(error)) from None",
                     ),
                     block("                self.write_intent(request, row, payload)"),
                 ),
@@ -535,7 +528,6 @@ def mutants() -> dict[str, Mutant]:
                 ),
             ),
         ),
-        # supervisor teardown outcome
         Mutant(
             "teardown_error_dropped",
             "a teardown request or wait that fails is not listed under errors",
@@ -580,7 +572,6 @@ def mutants() -> dict[str, Mutant]:
                 ),
             ),
         ),
-        # supervisor
         Mutant(
             "session_files_world_readable",
             "the session files are readable by everyone",
@@ -644,7 +635,6 @@ def mutants() -> dict[str, Mutant]:
                 ),
             ),
         ),
-        # offline checks
         Mutant(
             "compose_check_off",
             "the Compose file check finds nothing",
@@ -703,7 +693,6 @@ def mutants() -> dict[str, Mutant]:
                 ),
             ),
         ),
-        # launcher (stack)
         Mutant(
             "api_published_on_all_interfaces",
             "the API server publishes its port on every interface",
@@ -926,8 +915,6 @@ GUARDS: dict[str, dict[str, tuple[Guard, ...]]] = {
     },
 }
 
-# Cases that have no mutant because their evidence is a log of the case on the round 2 tree, from before the change that guards them
-# (``plans/wp/a1_logs/r3/<finding>_<case>_before_fix.log``). ``run_failing_first --check`` holds every runner case to this table or to ``GUARDS``.
 BEFORE_FIX: dict[str, tuple[str, ...]] = {
     "broker": ("malformed_content_length", "cancel_after_lost_submit_reply", "noop_crash_recovery"),
     "supervisor": ("supervisor_listener_start_failure", "supervisor_teardown_independent"),
