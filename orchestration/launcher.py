@@ -69,6 +69,31 @@ LABEL_ATTEMPT = "hai.attempt"
 LABEL_OP = "hai.op"
 LABEL_PROBE = "hai.probe"
 LABEL_SERVICE = "hai.service"
+# The orchestration stack (Airflow and its metadata database) is a second service stack with labels of its own, so the catalog's absence
+# check and teardown never see its containers or its network.
+LABEL_STACK = "hai.stack"
+LABEL_ORCH_SERVICE = "hai.orch_service"
+ORCHESTRATION_STACK = "orchestration"
+ORCHESTRATION_OWNER = "stack:orchestration"
+ORCHESTRATION_COMPOSE = "services/orchestration/docker-compose.orchestration.yaml"
+ORCHESTRATION_ORDER = ("postgres", "airflow-migrate", "airflow-apiserver", "airflow-scheduler", "airflow-dag-processor", "airflow-triggerer")
+ORCHESTRATION_FINITE = frozenset({"airflow-migrate"})
+# Each long-running service's share of the plan's free memory and its minimum; the migration runs with the API server's limit.
+ORCHESTRATION_MEMORY: dict[str, tuple[str, float, int]] = {
+    "postgres": ("POSTGRES", 0.03, 256 * 1024**2),
+    "airflow-apiserver": ("APISERVER", 0.05, 1024**3),
+    "airflow-scheduler": ("SCHEDULER", 0.08, 2 * 1024**3),
+    "airflow-dag-processor": ("DAG_PROCESSOR", 0.04, 1024**3),
+    "airflow-triggerer": ("TRIGGERER", 0.02, 512 * 1024**2),
+}
+# LocalExecutor workers run inside the scheduler: its base and each worker's memory give the parallelism.
+ORCHESTRATION_SCHEDULER_BASE = 1024**3
+ORCHESTRATION_WORKER_MEMORY = 256 * 1024**2
+ORCHESTRATION_STATE_FOLDERS = ("metadata", "session")
+# The closed arguments of the orchestration_dump template: the whole logical dump, or the XCom rows.
+ORCHESTRATION_DUMPS = ("metadata", "xcom")
+ORCHESTRATION_UP_PARAMETERS = ("state", "api_port", "checkout")
+PINNED_REFERENCE = re.compile(r"[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9._-]{1,128})?@sha256:[a-f0-9]{64}")
 DEADLINE_ENTRYPOINT = "/opt/hai/deadline_run"
 # The entrypoint passes its timing state to itself through this variable; a job or an image that sets it could forge that state.
 DEADLINE_RELAY_VARIABLE = "HAI_DEADLINE_RELAY_B"
@@ -527,6 +552,19 @@ class DockerApi:
                 return None
             raise
 
+    def pull(self, repository: str, digest: str) -> None:
+        """Pull an image by its digest; the reply is a stream of progress lines and an ``error`` line is a failure."""
+        status, data = self.request("POST", f"/images/create?fromImage={_quote(repository, safe='/')}&tag={_quote(digest)}", timeout=3600)
+        if status != 200:
+            raise DockerError(status, data.decode(errors="replace")[:200])
+        for line in data.decode(errors="replace").splitlines():
+            try:
+                progress = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(progress, dict) and progress.get("error"):
+                raise DockerError(500, str(progress["error"])[:200])
+
     def image_history(self, reference: str) -> list[dict[str, Any]]:
         """An image's layer history."""
         return list(self.call("GET", f"/images/{_quote(reference, safe='/:@')}/history") or [])
@@ -794,6 +832,13 @@ def effective_config(body: Mapping[str, Any], defaults: Mapping[str, Any]) -> di
     }
 
 
+def hardening(host: Mapping[str, Any], spec: Mapping[str, Any] | None = None) -> dict[str, list[str]]:
+    """The dropped capabilities and security options of a container. A specification keeps them only when they are set, so a specification
+    recorded before they existed keeps its digest; an inspected container is read for the names its specification holds."""
+    found = {"cap_drop": sorted(host.get("CapDrop") or []), "security_opt": sorted(host.get("SecurityOpt") or [])}
+    return {name: value for name, value in found.items() if (value if spec is None else name in spec)}
+
+
 def projection(
     body: Mapping[str, Any], key: bytes, secret_env: frozenset[str], secret_cmd: Sequence[int], defaults: Mapping[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -807,6 +852,7 @@ def projection(
         [container, binding["HostIp"], binding["HostPort"]] for container, bindings in (host.get("PortBindings") or {}).items() for binding in bindings
     )
     return {
+        **hardening(host),
         "image": body["Image"],
         "image_id": str(defaults.get("id", "")),
         "entrypoint": effective["entrypoint"],
@@ -845,6 +891,7 @@ def inspected_projection(info: Mapping[str, Any], spec: Mapping[str, Any], key: 
     labels = {name: value for name, value in sorted((config.get("Labels") or {}).items()) if name in spec["labels"]}
     health = config.get("Healthcheck") or {}
     return {
+        **hardening(host, spec),
         "image": config.get("Image"),
         "image_id": str(info.get("Image") or ""),
         "entrypoint": [str(item) for item in config.get("Entrypoint") or []],
@@ -921,6 +968,12 @@ TEMPLATES: dict[str, Template] = {
         Template("spark_write", "spark", True, ("run",), needs_catalog=True, default_seconds=43200, run_modes=("real",)),
         Template("spark_e2e", "spark", True, ("alloc",), default_seconds=7200),
         Template("catalog_service", None, False, ("service",)),
+        # The orchestration stack's services run for the stack's life (the migration is a finite one); the offline check is a finite job of an
+        # allocation on no network, in the thin Airflow image (services/orchestration/Dockerfile).
+        Template("orchestration_service", None, False, ("stack",)),
+        Template("orchestration_check", None, True, ("alloc",), default_seconds=900, max_seconds=3600),
+        # A read-only logical look at the metadata database for the sentinel scan: a finite job in the thin Airflow image on the stack's network.
+        Template("orchestration_dump", None, True, ("alloc",), default_seconds=900, max_seconds=1800),
         Template("probe", "analytics", True, ("diagnostic",), default_seconds=60, max_seconds=60),
     )
 }
@@ -1214,6 +1267,8 @@ class Renderer:
             "spark_write": self.render_spark_write,
             "spark_e2e": self.render_spark_e2e,
             "probe": self.render_probe,
+            "orchestration_check": self.render_orchestration_check,
+            "orchestration_dump": self.render_orchestration_dump,
         }
 
     def network_name(self, registry_id: str) -> str:
@@ -1327,6 +1382,9 @@ class Renderer:
         secrets: Mapping[str, str] | None = None,
         tmpfs: Sequence[str] = (),
         hostname: str = "",
+        user: str = "",
+        cap_drop: Sequence[str] = (),
+        security_opt: Sequence[str] = (),
     ) -> Rendered:
         """The Engine API create body, with the deadline entrypoint in front of a finite job's command."""
         self.check_mounts(mounts)
@@ -1366,6 +1424,12 @@ class Renderer:
             body["HostConfig"]["Tmpfs"] = dict.fromkeys(tmpfs, "rw,mode=1777,size=64m")
         if workdir:
             body["WorkingDir"] = workdir
+        if user:
+            body["User"] = user
+        if cap_drop:
+            body["HostConfig"]["CapDrop"] = list(cap_drop)
+        if security_opt:
+            body["HostConfig"]["SecurityOpt"] = list(security_opt)
         if tty or open_stdin:
             body.update({"Tty": tty, "OpenStdin": open_stdin, "StdinOnce": False, "AttachStdin": open_stdin, "AttachStdout": True, "AttachStderr": True})
         if ports:
@@ -1867,6 +1931,114 @@ class Renderer:
             secrets=secrets_in_use,
         )
 
+    def orchestration_network_name(self, registry_id: str) -> str:
+        """The launcher-created network of the orchestration stack."""
+        return f"hai-{registry_id[:8]}-orch-net"
+
+    def orchestration_values(self, inp: RenderInput) -> dict[str, str]:
+        """The interpolation values of the orchestration Compose model: the launcher's validated settings only, never the environment."""
+        values = {name: str(value) for name, value in inp.values.items() if name.startswith("HAI_ORCH_") or name == "JOB_MEMORY_LIMIT"}
+        values["HAI_ORCH_UID"] = str(os.getuid())
+        return values
+
+    def orchestration_hardening(self, raw: Mapping[str, Any], values: Mapping[str, str]) -> dict[str, Any]:
+        """The user, dropped capabilities and security options a service of the orchestration model names."""
+        return {
+            "user": interpolate(str(raw["user"]), values) if raw.get("user") else "",
+            "cap_drop": [str(item) for item in raw.get("cap_drop") or []],
+            "security_opt": [str(item) for item in raw.get("security_opt") or []],
+        }
+
+    def render_orchestration_service(self, inp: RenderInput, service: str, registry_id: str) -> Rendered:
+        """One orchestration service container from the orchestration Compose model (the second service stack, failure mode 933)."""
+        values = self.orchestration_values(inp)
+        raw = self.compose.service(service)
+        env = self.compose.environment(service, values)
+        command = [interpolate(str(part), values) for part in raw.get("command") or []]
+        mounts = self.compose.mounts(service, values)
+        for mount in mounts:
+            if mount.target in ("/var/lib/postgresql/data", "/opt/airflow/logs"):
+                Path(mount.source).mkdir(mode=0o700, parents=True, exist_ok=True)
+        ports = []
+        for entry in raw.get("ports") or []:
+            host_ip, host_port, container_port = interpolate(str(entry), values).split(":")
+            ports.append((host_ip, int(host_port), int(container_port)))
+        finite = service in ORCHESTRATION_FINITE
+        # A finite service runs behind the deadline entrypoint, which needs the program to run: the Compose entrypoint, else the image's own.
+        entrypoint = list(raw.get("entrypoint") or (inp.image_entrypoint if finite else []))
+        return self.assemble(
+            inp,
+            f"hai-{registry_id[:8]}-svc-orch-{service}",
+            self.image(service),
+            entrypoint,
+            command,
+            env,
+            mounts,
+            self.compose.memory(service, values),
+            self.orchestration_network_name(registry_id),
+            ports=ports,
+            healthcheck=self.compose.healthcheck(service),
+            aliases=[service],
+            finite=finite,
+            extra_labels={LABEL_STACK: ORCHESTRATION_STACK, LABEL_ORCH_SERVICE: service},
+            **self.orchestration_hardening(raw, values),
+        )
+
+    def render_orchestration_check(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """The offline check in the Airflow image: no argument, no parameter, no network, read-only repository mounts (failure mode 934)."""
+        self.only_params(inp, ())
+        if inp.args:
+            raise LauncherError("template orchestration_check takes no arguments", "args")
+        values = {"HAI_ORCH_REPO": str(self.checkout), "HAI_ORCH_UID": str(os.getuid()), "JOB_MEMORY_LIMIT": inp.values["JOB_MEMORY_LIMIT"]}
+        raw = self.compose.service("airflow-check")
+        return self.assemble(
+            inp,
+            name,
+            self.image("airflow-check"),
+            [str(item) for item in raw["entrypoint"]],
+            [interpolate(str(part), values) for part in raw["command"]],
+            self.compose.environment("airflow-check", values),
+            self.compose.mounts("airflow-check", values),
+            self.compose.memory("airflow-check", values),
+            "none",
+            **self.orchestration_hardening(raw, values),
+        )
+
+    def render_orchestration_dump(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """A read-only logical look at the stack's metadata database: ``metadata`` dumps every table, ``xcom`` the XCom rows. The job runs in the thin
+        Airflow image on the stack's network, reads the connection string from the read-only metadata folder and writes only to the state folder's dumps
+        folder (failure mode 932b)."""
+        self.only_params(inp, ("state",))
+        if len(inp.args) != 1 or inp.args[0] not in ORCHESTRATION_DUMPS:
+            raise LauncherError(f"template orchestration_dump takes one argument: {' or '.join(ORCHESTRATION_DUMPS)}", "args")
+        state = self.allowed(str(inp.params["state"]), "state")
+        missing = [folder for folder in ORCHESTRATION_STATE_FOLDERS if not (state / folder).is_dir()]
+        if not state.is_dir() or missing:
+            raise LauncherError(f"state folder {str(state)!r} does not exist or lacks {', '.join(missing)}", "args")
+        values = {
+            "HAI_ORCH_REPO": str(self.checkout),
+            "HAI_ORCH_STATE": str(state.resolve()),
+            "HAI_ORCH_UID": str(os.getuid()),
+            "JOB_MEMORY_LIMIT": inp.values["JOB_MEMORY_LIMIT"],
+        }
+        raw = self.compose.service("airflow-dump")
+        mounts = self.compose.mounts("airflow-dump", values)
+        for mount in mounts:
+            if mount.target == "/out":
+                Path(mount.source).mkdir(mode=0o700, parents=True, exist_ok=True)
+        return self.assemble(
+            inp,
+            name,
+            self.image("airflow-dump"),
+            [str(item) for item in raw["entrypoint"]],
+            [*(interpolate(str(part), values) for part in raw["command"]), inp.args[0]],
+            self.compose.environment("airflow-dump", values),
+            mounts,
+            self.compose.memory("airflow-dump", values),
+            self.orchestration_network_name(registry_id),
+            **self.orchestration_hardening(raw, values),
+        )
+
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Provenance interfaces, frozen for the provenance package (D1 sections 10 and 14)
@@ -2047,6 +2219,9 @@ METHODS: dict[str, MethodSpec] = {
     "deregister_set": MethodSpec(("any",), owner_flag=False),
     "catalog_up": MethodSpec(("any",)),
     "catalog_down": MethodSpec(("any",)),
+    "orchestration_up": MethodSpec(("any",)),
+    "orchestration_down": MethodSpec(("any",)),
+    "pull": MethodSpec(("any",)),
     "docker_restart": MethodSpec(("any",), owner_flag=True),
     "shutdown": MethodSpec(("any",), owner_flag=True),
 }
@@ -2059,6 +2234,8 @@ def new_id(prefix: str) -> str:
 
 def finite_attempt(attempt: Mapping[str, Any]) -> bool:
     """One finite predicate for ordinary jobs and one-shot catalog services, shared by every deadline gate."""
+    if attempt["template"] == "orchestration_service":
+        return attempt["params"].get("service") in ORCHESTRATION_FINITE
     return TEMPLATES[attempt["template"]].finite or (attempt["template"] == "catalog_service" and attempt["params"].get("service") in FINITE_SERVICES)
 
 
@@ -2112,6 +2289,7 @@ class Launcher:
         self.waiter_principals: dict[tuple[int, str], dict[str, Any]] = {}
         self.read_waiters: dict[str, tuple[Conn, str]] = {}
         self.release_requests: dict[str, tuple[str, str, str]] = {}
+        self.pull_requests: dict[str, str] = {}
         self.attach_info: dict[str, tuple[str, str, bool, str]] = {}
         self.names_seen: dict[str, str] = {}
         self.foreign: list[str] = []
@@ -2149,6 +2327,12 @@ class Launcher:
             "health": self.on_health,
             "netremove": self.on_netremove,
             "catalogconfirm": self.on_catalogconfirm,
+            "orchlimits": self.on_orchlimits,
+            "orchhealth": self.on_orchhealth,
+            "orchnetcreate": self.on_orchnetcreate,
+            "orchnetremove": self.on_orchnetremove,
+            "orchconfirm": self.on_orchconfirm,
+            "pull": self.on_pull,
             "restartcheck": self.on_restartcheck,
             "restartcmd": self.on_restartcmd,
             "restartping": self.on_restartping,
@@ -2184,6 +2368,9 @@ class Launcher:
             "deregister_set": self.m_deregister_set,
             "catalog_up": self.m_catalog_up,
             "catalog_down": self.m_catalog_down,
+            "orchestration_up": self.m_orchestration_up,
+            "orchestration_down": self.m_orchestration_down,
+            "pull": self.m_pull,
             "docker_restart": self.m_docker_restart,
             "shutdown": self.m_shutdown,
         }
@@ -2297,7 +2484,7 @@ class Launcher:
         """
         with self.tx() as state:
             for record in state["requests"].values():
-                if record["state"] == "pending" and record.get("method") in ("release", "release_allocation"):
+                if record["state"] == "pending" and record.get("method") in ("release", "release_allocation", "pull"):
                     # The record and its payload hash stay: the same request ID with the same payload runs again, a changed payload is refused.
                     record["state"] = "interrupted"
             for allocation in state["allocations"].values():
@@ -2737,6 +2924,7 @@ class Launcher:
         self.networks_seen = sorted(str(n.get("Name")) for n in listing["networks"])
         self.settle_unresolved_creates(listing["seq"])
         self.settle_network_ops(listing["networks"])
+        self.settle_orchestration_network_ops(listing["networks"])
         self.dirty.update(self.bound.values())
         self.dirty.update(self.open_attempt_ids())
         if self.status != "serving":
@@ -2953,6 +3141,9 @@ class Launcher:
         kind, _, ident = owner.partition(":")
         if owner == DIAGNOSTIC_OWNER:
             return not self.stream_acked and self.probe is not None and self.probe["attempt"] == attempt["id"]
+        if kind == "stack":
+            stack = state["launcher"].get("orchestration") or {}
+            return stack.get("phase") in ("starting", "up") and not state["launcher"].get("restart")
         if kind == "service":
             catalog = state["launcher"].get("catalog") or {}
             # A launcher outside the catalog's checkout sends no positive catalog-service operation; cleanup stays allowed (A86, review C3a-1).
@@ -2997,6 +3188,22 @@ class Launcher:
         """A renderer for a validated checkout."""
         return Renderer(self.cfg, self.compose_for(checkout), checkout, self.main_checkout, self.key)
 
+    def orchestration_compose_for(self, checkout: Path) -> ComposeModel:
+        """The orchestration Compose model of a checkout, parsed once per file hash."""
+        path = checkout / ORCHESTRATION_COMPOSE
+        if not path.is_file():
+            raise LauncherError(f"{checkout} has no {ORCHESTRATION_COMPOSE}", "spec")
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest not in self.compose_models:
+            self.compose_models[digest] = ComposeModel(path)
+        return self.compose_models[digest]
+
+    def renderer_of(self, template_name: str, checkout: Path) -> Renderer:
+        """The renderer of a template: the orchestration templates read the orchestration Compose model, the others the lakehouse one."""
+        if template_name.startswith("orchestration_"):
+            return Renderer(self.cfg, self.orchestration_compose_for(checkout), checkout, self.main_checkout, self.key)
+        return self.renderer_for(checkout)
+
     def check_checkout(self, text: str) -> Path:
         """A request's checkout: an absolute folder of this repository (the registry's main checkout or one of its worktrees)."""
         path = Path(text)
@@ -3037,12 +3244,12 @@ class Launcher:
     def owner_name(self, attempt: Mapping[str, Any]) -> str:
         """The owner part of a container name."""
         kind, _, ident = str(attempt["owner"]).partition(":")
-        return {"run": ident, "alloc": ident, "service": "svc", "launcher": "diag"}.get(kind, "x")
+        return {"run": ident, "alloc": ident, "service": "svc", "stack": "orch", "launcher": "diag"}.get(kind, "x")
 
     def render_attempt(self, state: Mapping[str, Any], attempt: Mapping[str, Any], op_id: str, extra: Mapping[str, str] | None) -> Rendered:
         """Render an attempt's create specification from its template and recorded values."""
         template = TEMPLATES[attempt["template"]]
-        renderer = self.renderer_for(Path(attempt["checkout"]))
+        renderer = self.renderer_of(attempt["template"], Path(attempt["checkout"]))
         labels = self.labels_for(attempt, op_id, extra)
         provenance: dict[str, str] = {}
         snapshot = run_folder = None
@@ -3083,14 +3290,20 @@ class Launcher:
         )
         if template.name == "catalog_service":
             return renderer.render_service(inp, str(attempt["params"]["service"]), self.registry_id)
+        if template.name == "orchestration_service":
+            return renderer.render_orchestration_service(inp, str(attempt["params"]["service"]), self.registry_id)
         return renderer.render(inp, self.registry_id)
 
     def image_reference(self, attempt: Mapping[str, Any]) -> str:
         """The image the attempt's template runs (as a test registry may rename it)."""
         template = TEMPLATES[attempt["template"]]
-        renderer = self.renderer_for(Path(attempt["checkout"]))
-        if template.name == "catalog_service":
+        renderer = self.renderer_of(attempt["template"], Path(attempt["checkout"]))
+        if template.name in ("catalog_service", "orchestration_service"):
             return renderer.image(str(attempt["params"]["service"]))
+        if template.name == "orchestration_check":
+            return renderer.image("airflow-check")
+        if template.name == "orchestration_dump":
+            return renderer.image("airflow-dump")
         return renderer.image(template.service or "analytics")
 
     def resolve_image(self, reference: str) -> dict[str, Any] | None:
@@ -3277,7 +3490,7 @@ class Launcher:
             run = state["runs"].get(owner.partition(":")[2]) if owner.startswith("run:") else None
             allocation = state["allocations"].get(owner.partition(":")[2]) if owner.startswith("alloc:") else None
             gone = (run is not None and run["state"] != "held") or (allocation is not None and allocation["state"] != "held")
-            if gone or (run is None and allocation is None and not owner.startswith("service:")):
+            if gone or (run is None and allocation is None and not owner.startswith(("service:", "stack:"))):
                 a["cancel_intent"] = {"reason": "owner_not_held", "at": utc_now()}
             return
         if not self.docker_ok or self.status != "serving" and owner != DIAGNOSTIC_OWNER:
@@ -3312,7 +3525,9 @@ class Launcher:
                 return
         elif owner.startswith("service:") and a["plan_env"] is None:
             a["plan_env"] = dict(state["launcher"]["catalog"].get("limits", {}))
-        if not a.get("prepared") and owner != DIAGNOSTIC_OWNER and not owner.startswith("service:"):
+        elif owner.startswith("stack:") and a["plan_env"] is None:
+            a["plan_env"] = dict(state["launcher"]["orchestration"].get("settings", {}))
+        if not a.get("prepared") and owner != DIAGNOSTIC_OWNER and not owner.startswith(("service:", "stack:")):
             if not a.get("preparing"):
                 a["preparing"] = True
                 actions.append(lambda: self.spawn(f"prepare:{a['id']}", "prepare", self.prepare_attempt, a["id"], dict(a), False, {}))
@@ -4092,6 +4307,7 @@ class Launcher:
                 "registry_id": self.registry_id,
                 "foreign_legacy_containers": list(self.foreign),
                 "catalog": state["launcher"].get("catalog"),
+                "orchestration": state["launcher"].get("orchestration"),
                 "barrier": state["launcher"].get("barrier"),
                 "restart": state["launcher"].get("restart"),
                 "open_attempts": sum(1 for a in state["attempts"].values() if is_open(a)),
@@ -4138,9 +4354,28 @@ class Launcher:
                 raise LauncherError("no such attempt", "refused")
             self.require_owner(state, conn, principal, attempt["owner"])
             return {key: value for key, value in attempt.items() if key not in ("params",)}
+        if what == "submission":
+            # The attempt that one of the run's own ``submit`` requests created, found by the request ID the client sent. A client whose reply was lost
+            # (or that has lost its record of the answer) learns what the launcher accepted from this, and not from anything it has stored itself.
+            if principal.get("kind") != "run":
+                raise LauncherError("status of a submission needs the run's token", "principal")
+            key = f"run:{principal.get('run_id')}|submit|{record_id}"
+            created = next((a for a in state["attempts"].values() if a["request"] == key), None)
+            return {"found": created is not None, "attempt": None if created is None else {k: v for k, v in created.items() if k != "params"}}
         if what == "catalog":
             return dict(state["launcher"].get("catalog") or {"phase": "down"})
+        if what == "orchestration":
+            return self.orchestration_view(state)
         raise LauncherError(f"unknown status target {what!r}", "args")
+
+    def orchestration_view(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        """The orchestration stack's record with each service's attempt phase, and the objects the launcher knows of it (no secret is in it)."""
+        stack = dict(state["launcher"].get("orchestration") or {"phase": "down"})
+        stack["service_phases"] = {
+            service: {"phase": state["attempts"][attempt_id]["phase"], "reason": state["attempts"][attempt_id]["reason"]}
+            for service, attempt_id in (stack.get("services") or {}).items()
+        }
+        return stack
 
     def require_owner(self, state: Mapping[str, Any], conn: Conn, principal: Mapping[str, Any], owner: str) -> None:
         """The principal must be the owner of ``owner``: the run's token, or the allocation's holder or a descendant (D1 section 3)."""
@@ -4208,9 +4443,13 @@ class Launcher:
         return PENDING
 
     def m_image(self, ctx: Ctx) -> Any:
-        """The local ID of the image a Compose service names (the kit records it with its baselines)."""
+        """The local ID of the image a Compose service names (the kit records it with its baselines); ``compose`` may name the orchestration model."""
         checkout = self.check_checkout(str(ctx.params.get("checkout") or self.cfg.root))
-        reference = self.renderer_for(checkout).image(str(ctx.params.get("service", "")))
+        compose = ctx.params.get("compose", "lakehouse")
+        if compose not in ("lakehouse", "orchestration"):
+            raise LauncherError("compose must be lakehouse or orchestration", "args")
+        renderer = self.renderer_of("orchestration_check" if compose == "orchestration" else "", checkout)
+        reference = renderer.image(str(ctx.params.get("service", "")))
         key = f"imageread:{id(ctx.conn)}:{ctx.request_id}"
         self.read_waiters[key] = (ctx.conn, ctx.request_id)
         history = bool(ctx.params.get("history"))
@@ -4420,6 +4659,7 @@ class Launcher:
                 run_lock.set_state(state, run_id, "failed_retained")
         self.advance_allocations(state, actions)
         self.advance_catalog(state, actions)
+        self.advance_orchestration(state, actions)
         self.advance_restart(state, actions)
         self.advance_copies(state, actions)
         self.advance_seals(state, actions)
@@ -4575,7 +4815,7 @@ class Launcher:
         params = ctx.params
         template_name = str(params.get("template"))
         template = TEMPLATES.get(template_name)
-        if template is None or template_name in ("probe", "catalog_service"):
+        if template is None or template_name in ("probe", "catalog_service", "orchestration_service"):
             raise LauncherError(f"template {template_name!r} cannot be submitted by a client", "refused")
         owner = self.owner_of(ctx)
         kind, _, ident = owner.partition(":")
@@ -4618,6 +4858,8 @@ class Launcher:
             raise LauncherError("foreign legacy containers exist; the owner reconciles them first", "refused")
         if ctx.state["launcher"].get("restart"):
             raise LauncherError("a Docker restart is running", "refused")
+        if template_name == "orchestration_dump" and (ctx.state["launcher"].get("orchestration") or {}).get("phase") != "up":
+            raise LauncherError("the orchestration stack is not up; the dump needs its database", "refused")
         if template.needs_catalog:
             if ctx.state["launcher"].get("barrier"):
                 raise LauncherError("a catalog teardown barrier is held", "refused")
@@ -4642,7 +4884,7 @@ class Launcher:
 
     def dry_render(self, state: Mapping[str, Any], owner: str, template_name: str, args: list[str], params: dict[str, Any], checkout: Path) -> None:
         """Validate arguments, parameters and mounts by rendering with placeholder values; nothing is recorded."""
-        renderer = self.renderer_for(checkout)
+        renderer = self.renderer_of(template_name, checkout)
         kind, _, ident = owner.partition(":")
         run_folder = None
         if kind == "run":
@@ -4956,7 +5198,7 @@ class Launcher:
             container_id = attempt["container_id"]
             actions.append(lambda: self.spawn(f"health:{service}", "health", self.read_health, container_id))
 
-    def record_network_op(self, state: dict[str, Any], kind: str, network: str | None = None) -> str:
+    def record_network_op(self, state: dict[str, Any], kind: str, network: str | None = None, name: str | None = None) -> str:
         """Record a network operation with the identity it acts on (the network name, and the ID for a removal)."""
         op_id = new_id("op")
         state["operations"][op_id] = {
@@ -4968,7 +5210,7 @@ class Launcher:
             "dispatched_at": time.time(),
             "state": "open",
             "result": None,
-            "network_name": self.renderer_network_name(),
+            "network_name": name or self.renderer_network_name(),
             "network": network,
         }
         return op_id
@@ -5085,7 +5327,8 @@ class Launcher:
     def catalog_absent(self) -> bool:
         """Worker: True when no catalog service container and no catalog network exist."""
         containers = [c for c in self.docker.containers(label=LABEL_SERVICE) if (c.get("Labels") or {}).get(LABEL_REGISTRY) == self.registry_id]
-        return not containers and not self.docker.networks(self.network_label())
+        networks = [n for n in self.docker.networks(self.network_label()) if (n.get("Labels") or {}).get(LABEL_STACK) != ORCHESTRATION_STACK]
+        return not containers and not networks
 
     def on_netremove(self, key: str, outcome: str, value: Any) -> None:
         """The network is gone: confirm absence next."""
@@ -5134,6 +5377,379 @@ class Launcher:
         ctx.state["launcher"]["barrier"] = {"phase": "stopping", "at": utc_now()}
         catalog.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})
         return {"phase": "tearing_down"}
+
+    # -- the orchestration stack: a second service stack beside the catalog (Airflow and its metadata database) ---------
+
+    def orchestration_record(self, state: dict[str, Any]) -> dict[str, Any]:
+        """The orchestration stack's state in the registry."""
+        return state["launcher"].setdefault("orchestration", {"phase": "down", "services": {}})
+
+    def orchestration_network_name(self) -> str:
+        """The orchestration stack's network, apart from the catalog's."""
+        return f"hai-{self.registry_id[:8]}-orch-net"
+
+    def orchestration_state_folder(self, checkout: Path, text: Any) -> str:
+        """The stack's state folder: absolute, inside ``data/orchestration/`` of the checkout or the main checkout (or a test registry's named
+        folder), outside any secrets folder and holding the metadata and session folders the supervisor wrote."""
+        if not isinstance(text, str) or not Path(text).is_absolute():
+            raise LauncherError("state must be an absolute folder", "args")
+        candidate = Path(text)
+        if secrets_part(folded(candidate)) or secrets_part(folded(candidate.resolve())):
+            raise LauncherError(f"state {text!r} lies in a secrets folder", "mount")
+        roots = [checkout / "data" / "orchestration", self.main_checkout / "data" / "orchestration", *self.cfg.allowed_roots]
+        if not inside(candidate, roots):
+            raise LauncherError(f"state {text!r} is outside the allowed folders", "args")
+        resolved = candidate.resolve()
+        if not resolved.is_dir():
+            raise LauncherError(f"state folder {text!r} does not exist", "args")
+        missing = [name for name in ORCHESTRATION_STATE_FOLDERS if not (resolved / name).is_dir()]
+        if missing:
+            raise LauncherError(f"state folder {text!r} lacks {', '.join(missing)}", "args")
+        return str(resolved)
+
+    def m_orchestration_up(self, ctx: Ctx) -> dict[str, Any]:
+        """Start the orchestration stack: the network, PostgreSQL, the migration and the four Airflow services, each waited for in order."""
+        params = ctx.params
+        unknown = sorted(set(params) - set(ORCHESTRATION_UP_PARAMETERS))
+        if unknown:
+            raise LauncherError(f"orchestration_up has no parameter {', '.join(unknown)}", "args")
+        port = params.get("api_port")
+        if type(port) is not int or not 1024 <= port <= 65535:
+            raise LauncherError("api_port must be an integer from 1024 to 65535", "args")
+        checkout = self.check_checkout(str(params.get("checkout") or self.cfg.root))
+        if not (checkout / ORCHESTRATION_COMPOSE).is_file():
+            raise LauncherError(f"{checkout} has no {ORCHESTRATION_COMPOSE}", "args")
+        folder = self.orchestration_state_folder(checkout, params.get("state"))
+        stack = self.orchestration_record(ctx.state)
+        if stack["phase"] == "tearing_down":
+            raise LauncherError("the orchestration stack is being torn down", "refused")
+        if ctx.state["launcher"].get("restart"):
+            raise LauncherError("a Docker restart is running", "refused")
+        if self.foreign:
+            raise LauncherError("foreign legacy containers exist; the owner reconciles them first", "refused")
+        if stack["phase"] in ("up", "starting"):
+            wanted = {"checkout": str(checkout), "state": folder, "api_port": port}
+            if {name: stack.get(name) for name in wanted} != wanted:
+                raise LauncherError("the orchestration stack is up with other parameters; orchestration_down first", "refused")
+            return {"phase": stack["phase"]}
+        ctx.state["launcher"]["orchestration"] = {
+            "phase": "starting",
+            "step": "limits",
+            "services": {},
+            "error": "",
+            "network": None,
+            "settings": {},
+            "health": {},
+            "checkout": str(checkout),
+            "state": folder,
+            "api_port": port,
+            "started_at": utc_now(),
+        }
+        # The growth reserve of the services already registered (the catalog's) is held back, as for every other plan; the stack's own are not.
+        own = f"hai-{self.registry_id[:8]}-svc-orch-"
+        growth = {name: limit for name, limit in self.growth_reserve_map(ctx.state).items() if not name.startswith(own)}
+        self.spawn("orch:limits", "orchlimits", self.compute_orchestration_limits, growth)
+        return {"phase": "starting"}
+
+    def compute_orchestration_limits(self, growth: dict[str, int]) -> dict[str, Any]:
+        """Worker: each service's limit as its share of the plan's free memory, with the LocalExecutor parallelism the scheduler's limit allows.
+
+        One resource snapshot gives the plan; the services run at the same time, so the sum of their limits (each raised to its minimum) must fit the
+        plan's free memory, or the start is refused here, before any network or container exists."""
+        plan = memory_budget.launch_plan(self.reader(), growth)
+        limits = {service: memory_budget.service_limit(plan.budget, share, minimum) for service, (_, share, minimum) in ORCHESTRATION_MEMORY.items()}
+        total = sum(limits.values())
+        if total > plan.budget.free:
+            need, have = total / memory_budget.GIB, plan.budget.free / memory_budget.GIB
+            raise memory_budget.BudgetError(f"the orchestration services need {need:.2f} GiB at the same time and the plan holds {have:.2f} GiB free")
+        workers = (limits["airflow-scheduler"] - ORCHESTRATION_SCHEDULER_BASE) // ORCHESTRATION_WORKER_MEMORY
+        return {"limits": limits, "parallelism": max(1, min(int(plan.threads), int(workers)))}
+
+    def on_orchlimits(self, key: str, outcome: str, value: Any) -> None:
+        """The limits are known: record them with the launcher's validated settings, register the services' limits and create the network."""
+        with self.tx() as state:
+            stack = self.orchestration_record(state)
+            if stack["phase"] != "starting":
+                return
+            if outcome != "ok":
+                self.fail_orchestration(stack, f"no memory limit for the orchestration services: {value}")
+                return
+            settings = {
+                "HAI_ORCH_REPO": stack["checkout"],
+                "HAI_ORCH_STATE": stack["state"],
+                "HAI_ORCH_API_PORT": str(stack["api_port"]),
+                "HAI_ORCH_PARALLELISM": str(value["parallelism"]),
+            }
+            for service, (name, _, _) in ORCHESTRATION_MEMORY.items():
+                settings[f"HAI_ORCH_MEM_{name}"] = str(value["limits"][service])
+                state["services"][f"orch-{service}"] = int(value["limits"][service])
+            stack["settings"] = settings
+            stack["step"] = "network"
+
+    def fail_orchestration(self, stack: dict[str, Any], message: str) -> None:
+        """A failed start tears the started services down and leaves the stack down."""
+        stack.update({"phase": "tearing_down", "after": "down", "error": message, "stop_step": "network"})
+
+    def stack_attempt(self, state: dict[str, Any], stack: dict[str, Any], service: str) -> dict[str, Any]:
+        """The service's attempt, created on first use."""
+        attempt_id = stack["services"].get(service)
+        if attempt_id is not None:
+            return state["attempts"][attempt_id]
+        seconds = 900 if service in ORCHESTRATION_FINITE else 10**7
+        attempt = self.new_attempt(
+            state,
+            ORCHESTRATION_OWNER,
+            "orchestration_service",
+            f"orch-{service}",
+            [],
+            {"service": service},
+            request="launcher",
+            checkout=stack["checkout"],
+            seconds=seconds,
+        )
+        stack["services"][service] = attempt["id"]
+        return attempt
+
+    def advance_orchestration(self, state: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        """Startup and teardown of the orchestration stack as a recorded state machine, beside the catalog's and sharing none of its records."""
+        stack = state["launcher"].get("orchestration")
+        if not stack or not self.docker_ok or self.status != "serving":
+            return
+        if stack["phase"] == "starting" and stack.get("step") not in (None, "limits"):
+            self.advance_orchestration_start(state, stack, actions)
+        elif stack["phase"] == "tearing_down":
+            self.advance_orchestration_stop(state, stack, actions)
+        elif stack["phase"] == "up":
+            ended = [
+                service
+                for service, attempt_id in stack["services"].items()
+                if service not in ORCHESTRATION_FINITE and state["attempts"][attempt_id]["phase"] == "ended"
+            ]
+            stack["degraded"] = f"{', '.join(sorted(ended))} ended" if ended else ""
+
+    def advance_orchestration_start(self, state: dict[str, Any], stack: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        """The network, then PostgreSQL, the migration and each Airflow service in order; a long-running service must be healthy first."""
+        step = stack["step"]
+        if step == "network":
+            op = next((o for o in state["operations"].values() if o["kind"] == "orch_network_create" and o["state"] == "open"), None)
+            if op is None:
+                op_id = self.record_network_op(state, "orch_network_create", name=self.orchestration_network_name())
+            elif f"op:{op['op_id']}" in self.inflight:
+                return
+            else:
+                op_id = op["op_id"]  # an open operation without a request in flight (a restart, a lost reply): the create is idempotent by name
+            name, labels = self.orchestration_network_name(), {LABEL_REGISTRY: self.registry_id, LABEL_STACK: ORCHESTRATION_STACK}
+            actions.append(lambda: self.spawn(f"op:{op_id}", "orchnetcreate", self.create_network, name, labels))
+            return
+        if step not in ORCHESTRATION_ORDER:
+            return
+        service = step
+        attempt = self.stack_attempt(state, stack, service)
+        following = ORCHESTRATION_ORDER[ORCHESTRATION_ORDER.index(service) + 1 :]
+        if attempt["phase"] == "ended":
+            if service in ORCHESTRATION_FINITE and attempt["reason"] == "exited" and attempt.get("exit_code") == 0:
+                stack["step"] = following[0]
+                return
+            self.fail_orchestration(stack, f"{service} ended: {attempt['reason']} (exit {attempt.get('exit_code')}) {attempt.get('detail', '')}".strip())
+            return
+        if service in ORCHESTRATION_FINITE or attempt["phase"] != "started":
+            return
+        if stack["health"].get(service) == "healthy":
+            if following:
+                stack["step"] = following[0]
+            else:
+                stack.update({"phase": "up", "step": "done", "up_at": utc_now()})
+            return
+        started = stack.setdefault("waiting_since", {}).setdefault(service, time.time())
+        if time.time() - started > self.timings.health_wait:
+            self.fail_orchestration(stack, f"{service} was not healthy within {self.timings.health_wait:.0f} s")
+            return
+        container_id = attempt["container_id"]
+        actions.append(lambda: self.spawn(f"orchhealth:{service}", "orchhealth", self.read_health, container_id))
+
+    def on_orchhealth(self, key: str, outcome: str, value: Any) -> None:
+        """Record a stack service's health."""
+        if outcome != "ok":
+            return
+        with self.tx() as state:
+            self.orchestration_record(state).setdefault("health", {})[key.split(":", 1)[1]] = value
+
+    def on_orchnetcreate(self, key: str, outcome: str, value: Any) -> None:
+        """The stack's network exists: PostgreSQL starts next."""
+        op_id = key.split(":", 1)[1]
+        if outcome == "docker" and value.status == 0:
+            return
+        with self.tx() as state:
+            stack = self.orchestration_record(state)
+            op = state["operations"].get(op_id)
+            if op is None or op["state"] != "open":
+                return  # a scan already settled it
+            self.settle_op(state, op_id, "created" if outcome == "ok" else f"failed: {value}")
+            if stack["phase"] == "tearing_down" and outcome == "ok":
+                stack["network"] = value  # settled during a teardown: the teardown removes it
+                return
+            if stack["phase"] != "starting":
+                return
+            if outcome != "ok":
+                self.fail_orchestration(stack, f"cannot create the orchestration network: {value}")
+                return
+            stack.update({"network": value, "step": ORCHESTRATION_ORDER[0]})
+            state["containers"]["network:" + str(value)] = {"kind": "network", "at": utc_now()}
+
+    def settle_orchestration_network_ops(self, networks: Sequence[Mapping[str, Any]]) -> None:
+        """Settle open orchestration network operations from a scan: a create whose network exists, a removal whose network is gone."""
+        name = self.orchestration_network_name()
+        found = [str(n["Id"]) for n in networks if n.get("Name") == name]
+        with self.tx() as state:
+            stack = self.orchestration_record(state)
+            for op in list(state["operations"].values()):
+                if op["state"] != "open" or op["kind"] not in ("orch_network_create", "orch_network_remove"):
+                    continue
+                if op["kind"] == "orch_network_create" and found:
+                    self.settle_op(state, op["op_id"], "created", evidence="scan")
+                    if stack["phase"] == "starting":
+                        stack.update({"network": found[0], "step": ORCHESTRATION_ORDER[0]})
+                        state["containers"]["network:" + found[0]] = {"kind": "network", "at": utc_now()}
+                    elif stack["phase"] == "tearing_down":
+                        stack["network"] = found[0]  # the teardown removes it
+                elif op["kind"] == "orch_network_remove" and not found:
+                    self.settle_op(state, op["op_id"], "removed", evidence="scan")
+                    if stack["phase"] == "tearing_down":
+                        stack.update({"network": None, "stop_step": "confirm"})
+
+    def advance_orchestration_stop(self, state: dict[str, Any], stack: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        """Stop the Airflow services together, then PostgreSQL, remove the network, then confirm absence before the stack is down."""
+        for group in (tuple(s for s in ORCHESTRATION_ORDER if s != "postgres"), ("postgres",)):
+            open_attempts = [
+                state["attempts"][stack["services"][s]] for s in group if s in stack["services"] and is_open(state["attempts"][stack["services"][s]])
+            ]
+            for attempt in open_attempts:
+                if not attempt["cancel_intent"]:
+                    attempt["cancel_intent"] = {"reason": "orchestration_down", "at": utc_now()}
+            if open_attempts:
+                return
+        step = stack.get("stop_step", "network")
+        create = next((o for o in state["operations"].values() if o["kind"] == "orch_network_create" and o["state"] == "open"), None)
+        if step == "network" and create is not None:
+            # A create left open by a start that never finished (a restart, a lost reply): settle it first, by name, so the network is known and removed.
+            if f"op:{create['op_id']}" not in self.inflight:
+                op_id = create["op_id"]
+                name, labels = self.orchestration_network_name(), {LABEL_REGISTRY: self.registry_id, LABEL_STACK: ORCHESTRATION_STACK}
+                actions.append(lambda: self.spawn(f"op:{op_id}", "orchnetcreate", self.create_network, name, labels))
+            return
+        if step == "network":
+            network = stack.get("network")
+            op = next((o for o in state["operations"].values() if o["kind"] == "orch_network_remove" and o["state"] == "open"), None)
+            if network is None:
+                stack["stop_step"] = "confirm"
+                return
+            if op is None:
+                op_id = self.record_network_op(state, "orch_network_remove", network, name=self.orchestration_network_name())
+            elif f"op:{op['op_id']}" in self.inflight:
+                return
+            else:
+                op_id = op["op_id"]  # resumed after a restart or a lost reply: removing a network that is gone is not an error
+                network = op.get("network") or network
+            actions.append(lambda: self.spawn(f"op:{op_id}", "orchnetremove", self.docker.remove_network, network))
+        elif step == "confirm":
+            actions.append(lambda: self.spawn("orch:confirm", "orchconfirm", self.orchestration_absent))
+
+    def orchestration_absent(self) -> bool:
+        """Worker: True when no container and no network of the orchestration stack exist, in any state."""
+        label = f"{LABEL_STACK}={ORCHESTRATION_STACK}"
+        containers = [c for c in self.docker.containers(label=label) if (c.get("Labels") or {}).get(LABEL_REGISTRY) == self.registry_id]
+        networks = [n for n in self.docker.networks(label) if (n.get("Labels") or {}).get(LABEL_REGISTRY) == self.registry_id]
+        return not containers and not networks
+
+    def on_orchnetremove(self, key: str, outcome: str, value: Any) -> None:
+        """The stack's network is gone: confirm absence next."""
+        op_id = key.split(":", 1)[1]
+        if outcome == "docker" and value.status == 0:
+            return
+        with self.tx() as state:
+            op = state["operations"].get(op_id)
+            if op is None or op["state"] != "open":
+                return  # a scan already settled it
+            self.settle_op(state, op_id, "removed" if outcome == "ok" else f"failed: {value}")
+            stack = self.orchestration_record(state)
+            if outcome == "ok" and stack["phase"] == "tearing_down":
+                stack.update({"network": None, "stop_step": "confirm"})
+
+    def on_orchconfirm(self, key: str, outcome: str, value: Any) -> None:
+        """Absence shown by an all-state listing: the stack is down and its limits are released."""
+        if outcome != "ok" or not value:
+            return
+        with self.tx() as state:
+            stack = self.orchestration_record(state)
+            if stack["phase"] != "tearing_down":
+                return
+            state["launcher"]["orchestration"] = {"phase": "down", "services": {}, "error": stack.get("error", ""), "down_at": utc_now()}
+            for service in ORCHESTRATION_MEMORY:
+                state["services"].pop(f"orch-{service}", None)
+
+    def m_orchestration_down(self, ctx: Ctx) -> dict[str, Any]:
+        """Stop the Airflow services, then PostgreSQL, remove the network and confirm that nothing of the stack remains."""
+        stack = self.orchestration_record(ctx.state)
+        if stack["phase"] in ("down", "tearing_down"):
+            return {"phase": stack["phase"]}
+        stack.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})
+        return {"phase": "tearing_down"}
+
+    # -- image pull (failure mode 934) -------------------------------------------------------------------------------
+
+    def template_images(self) -> set[str]:
+        """Every image reference the Compose models of the launcher's own checkout name: what the templates can run."""
+        found: set[str] = set()
+        for path in (self.cfg.root / "docker-compose.yaml", self.cfg.root / ORCHESTRATION_COMPOSE):
+            if path.is_file():
+                found |= {str(service["image"]) for service in ComposeModel(path).services.values() if service.get("image")}
+        return found
+
+    def m_pull(self, ctx: Ctx) -> Any:
+        """Pull one image by its digest. The reference must be pinned by digest and named by a template's Compose service; a tag, an unnamed
+        digest, a locally built image or any option is refused."""
+        unknown = sorted(set(ctx.params) - {"reference"})
+        if unknown:
+            raise LauncherError(f"pull has no parameter {', '.join(unknown)}", "args")
+        reference = ctx.params.get("reference")
+        if not isinstance(reference, str) or len(reference) > 300:
+            raise LauncherError("reference must be an image reference", "args")
+        if "@sha256:" not in reference:
+            raise LauncherError(f"image {reference!r} is not pinned by digest; only digest-pinned images are pulled", "refused")
+        if not PINNED_REFERENCE.fullmatch(reference):
+            raise LauncherError(f"{reference!r} is not a plain digest-pinned image reference", "args")
+        if reference not in self.template_images():
+            raise LauncherError(f"no template names image {reference}", "refused")
+        repository = reference.partition("@")[0].partition(":")[0]
+        digest = reference.partition("@")[2]
+        key = f"pull:{ctx.key}"
+        self.pull_requests[key] = ctx.key
+        self.spawn(key, "pull", self.pull_image, repository, digest)
+        return PENDING
+
+    def pull_image(self, repository: str, digest: str) -> dict[str, Any]:
+        """Worker: pull by digest unless the image is present, and show that it is present afterwards."""
+        pinned = f"{repository}@{digest}"
+        before = self.docker.image(pinned)
+        if before is not None:
+            return {"reference": pinned, "pulled": False, "id": str(before.get("Id", ""))}
+        self.docker.pull(repository, digest)
+        after = self.docker.image(pinned)
+        if after is None:
+            raise LauncherError(f"image {pinned} is not present after the pull", "failed")
+        return {"reference": pinned, "pulled": True, "id": str(after.get("Id", ""))}
+
+    def on_pull(self, key: str, outcome: str, value: Any) -> None:
+        """A pull ended: answer the request."""
+        request_key = self.pull_requests.pop(key, "")
+        if not request_key:
+            return
+        if outcome == "ok":
+            self.complete_request(request_key, value)
+        elif outcome == "docker" and value.status == 0:
+            self.complete_request(request_key, {}, Degraded(f"Docker does not answer: {value.message}"))
+        else:
+            self.complete_request(request_key, {}, LauncherError(f"pull failed: {value}", "failed"))
 
     def m_docker_restart(self, ctx: Ctx) -> Any:
         """Restart Docker Desktop to free the VM's memory, only when nothing of this registry and nothing foreign runs (D1 section 8 item 4)."""
@@ -5982,7 +6598,7 @@ def parser() -> argparse.ArgumentParser:
     commands = cli.add_subparsers(dest="command", required=True)
     commands.add_parser("serve", help="run the launcher in the foreground")
     status = commands.add_parser("status", help="print the launcher, registry or a record")
-    status.add_argument("--what", default="launcher", choices=("launcher", "registry", "catalog", "protected_sets"))
+    status.add_argument("--what", default="launcher", choices=("launcher", "registry", "catalog", "orchestration", "protected_sets"))
     commands.add_parser("plan", help="print the memory plan the launcher computes now")
     commands.add_parser("catalog-up", help="start the catalog services and wait")
     commands.add_parser("catalog-down", help="stop the catalog services and wait")
@@ -5995,7 +6611,7 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("query", help="an interactive DuckDB shell on the bronze tables (query_reader)").add_argument("args", nargs="*")
     commands.add_parser("ui", help="the DuckDB UI on 127.0.0.1:4213 (ui_reader)")
     run = commands.add_parser("run", help="take an allocation, run one attempt of a template and print its output")
-    run.add_argument("--template", required=True, choices=sorted(set(TEMPLATES) - {"probe", "catalog_service"}))
+    run.add_argument("--template", required=True, choices=sorted(set(TEMPLATES) - {"probe", "catalog_service", "orchestration_service"}))
     run.add_argument("--launch-id", default=None)
     run.add_argument("--param", action="append", default=[], metavar="NAME=JSON")
     run.add_argument("--seconds", type=int)

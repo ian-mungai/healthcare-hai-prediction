@@ -36,6 +36,7 @@ PARTS = {"all", "core", "launcher"}
 ORDER = (
     "python_lint",
     "lakehouse_checks",
+    "orchestration_checks",
     "repository_code_checks",
     "configuration_checks",
     "sql_style",

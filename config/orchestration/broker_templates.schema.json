@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthcare-hai-prediction.invalid/orchestration/broker_templates.schema.json",
+  "title": "Broker templates",
+  "description": "config/orchestration/broker_templates.json: for each Airflow-visible template name and mode, the network class, whether the mode is an intentional no-op and the launcher template the broker forwards it to, with its fixed arguments and parameters. The broker is a client of the launcher: it never describes a container (image, mounts, environment, user, limits); the launcher's closed template table does. A mode with neither a no-op nor a launcher row is refused with its reason.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "templates"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "templates": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]{1,40}$"},
+      "minProperties": 1,
+      "additionalProperties": {"$ref": "#/$defs/template"}
+    }
+  },
+  "$defs": {
+    "class": {"enum": ["offline", "lakehouse_read", "lakehouse_write", "collector", "training", "serving"]},
+    "placeholder_text": {"type": "string", "pattern": "^([^{}]|\\{(run_id|mode|run_dir|build_file)\\})*$"},
+    "value": {
+      "oneOf": [
+        {"$ref": "#/$defs/placeholder_text"},
+        {"type": "boolean"},
+        {"type": "integer"},
+        {"type": "array", "items": {"$ref": "#/$defs/value"}},
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/value"}}
+      ]
+    },
+    "launcher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["template", "args", "params"],
+      "properties": {
+        "template": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$"},
+        "args": {"type": "array", "items": {"$ref": "#/$defs/placeholder_text"}},
+        "params": {"type": "object", "additionalProperties": {"$ref": "#/$defs/value"}},
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 86400}
+      }
+    },
+    "mode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "no_op"],
+      "properties": {
+        "class": {"$ref": "#/$defs/class"},
+        "no_op": {"type": "boolean"},
+        "launcher": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/launcher"}]},
+        "reason": {"type": "string", "minLength": 10}
+      },
+      "oneOf": [
+        {"description": "an intentional no-op: no launcher row, the reason recorded", "properties": {"no_op": {"const": true}}, "required": ["reason"], "not": {"required": ["launcher"]}},
+        {"description": "forwarded to a launcher template", "properties": {"no_op": {"const": false}, "launcher": {"type": "object"}}, "required": ["launcher"], "not": {"required": ["reason"]}},
+        {"description": "no launcher row (yet): refused with this reason", "properties": {"no_op": {"const": false}, "launcher": {"type": "null"}}, "required": ["launcher", "reason"]}
+      ]
+    },
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["purpose", "modes"],
+      "properties": {
+        "purpose": {"type": "string", "minLength": 10},
+        "modes": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"enum": ["fixture", "publish_fixture", "real"]},
+          "additionalProperties": {"$ref": "#/$defs/mode"}
+        }
+      }
+    }
+  }
+}

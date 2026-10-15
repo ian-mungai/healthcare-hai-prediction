@@ -30,6 +30,14 @@
       "^features/",
       "^docker-compose\\.yaml$"
     ],
+    "orchestration_checks": [
+      "^scripts/orchestration/",
+      "^orchestration/",
+      "^dags/",
+      "^config/orchestration/",
+      "^data_contracts/orchestration/",
+      "^services/orchestration/"
+    ],
     "repository_code_checks": [
       "\\.(py|sh)$",
       "^scripts/quality/",

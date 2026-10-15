@@ -1,0 +1,295 @@
+"""The host supervisor of the orchestration session: a client of the launcher that starts the stack, supplies the broker and owns teardown
+(Airflow plan sections 2 and 8; D1 section 5 item 6; failure modes 925, 933 and 934).
+
+Run from the main checkout with the launcher's Docker running:
+
+    .venv/bin/python -m scripts.orchestration.supervisor up       # one foreground session; Ctrl-C tears it down
+    .venv/bin/python -m scripts.orchestration.supervisor down     # teardown after a session that did not end cleanly
+    .venv/bin/python -m scripts.orchestration.supervisor status   # the stack's record from the launcher; never a secret
+
+``up`` pulls PostgreSQL by its digest through the launcher when it is absent and requires the Airflow image that
+``services/orchestration/Dockerfile`` builds. It writes this session's broker token (32 random bytes, owner-only, never an environment variable) and
+the metadata secrets under the ignored ``data/orchestration/airflow/``, starts the broker and its loopback listener, then asks the launcher for
+``orchestration_up``: the launcher sizes every service from the memory free at that moment, starts PostgreSQL, runs the migration as a finite
+service under the deadline entrypoint and starts the four Airflow services, each after the one before is healthy. The supervisor then waits until
+the API reports every component healthy. Any failure on the way asks the launcher for ``orchestration_down`` and removes the session token. The
+supervisor makes no Docker call and never stops the catalog or restarts Docker. ``down`` and the teardown at the end of ``up`` return 3 until the
+launcher confirms that the stack is down: a failed request or wait, or any other phase, is listed as an error. Tests pass
+``--test-registry <folder>/registry`` with their own ports; the session E2Es are ``run_supervisor_e2e`` (fake daemon) and ``run_real_e2e`` (real Docker).
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import http.client
+import json
+import secrets
+import signal
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+from orchestration import launcher
+from scripts.lakehouse import run_lock
+from scripts.orchestration.broker import (
+    PLATFORM_FILE,
+    TEMPLATES_FILE,
+    Broker,
+    BrokerError,
+    BrokerPaths,
+    LauncherUnavailable,
+    Listener,
+    load_templates,
+    resolve_paths,
+    write_private,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+COMPONENTS = ("metadatabase", "scheduler", "triggerer", "dag_processor")
+ROTATED_SECRETS = ("jwt_secret", "api_secret_key")
+PULL_SECONDS = 3600.0
+
+
+class SupervisorError(Exception):
+    """The session cannot start or stop safely; the message names the step."""
+
+
+class Supervisor:
+    """One orchestration session: the broker and its listener, and the launcher's orchestration stack."""
+
+    def __init__(
+        self,
+        paths: BrokerPaths,
+        platform: dict[str, Any],
+        client: launcher.LauncherClient,
+        *,
+        api_port: int | None = None,
+        broker_port: int | None = None,
+        readiness_seconds: int = 420,
+        fail_at: str | None = None,
+        templates_file: Path = TEMPLATES_FILE,
+        repo_root: Path = ROOT,
+    ) -> None:
+        """Other ports or a failure point only with a test registry."""
+        if paths.registry.kind != "test" and any(value is not None for value in (api_port, broker_port, fail_at)):
+            raise SupervisorError("other ports and failure points are test-only")
+        self.paths = paths
+        self.platform = platform
+        self.client = client
+        self.api_port = api_port or int(platform["listeners"]["airflow_api"]["port"])
+        self.broker_host = str(platform["listeners"]["broker"]["host"])
+        self.broker_port = broker_port if broker_port is not None else int(platform["listeners"]["broker"]["port"])
+        self.readiness_seconds = readiness_seconds
+        self.fail_at = fail_at
+        self.templates_file = templates_file
+        self.repo_root = repo_root
+        self.state = paths.state / "airflow"
+        self.broker: Broker | None = None
+        self.listener: Listener | None = None
+        self.token = ""
+        self.evidence: dict[str, Any] = {}
+
+    # Launcher calls
+
+    def call(self, method: str, params: dict[str, Any] | None = None, timeout: float = 120.0) -> Any:
+        """One launcher request; a refusal or an outage is a ``SupervisorError`` naming the request."""
+        try:
+            return self.client.call(method, params, timeout=timeout)
+        except launcher.ClientError as error:
+            raise SupervisorError(f"the launcher refused {method}: {error} [{error.code}]") from None
+        except (OSError, TimeoutError) as error:
+            raise SupervisorError(f"the launcher did not answer {method}: {type(error).__name__}") from None
+
+    def stack(self) -> dict[str, Any]:
+        """The launcher's record of the stack."""
+        record: dict[str, Any] = self.call("status", {"what": "orchestration"})
+        return record
+
+    def wait_for_stack(self, phases: tuple[str, ...], seconds: float) -> dict[str, Any]:
+        """Wait until the stack record reaches one of the phases or the time ends; a launcher refusal or outage is a ``SupervisorError``, as in ``call``."""
+        try:
+            return self.client.wait_for("orchestration", "", "phase", phases, {"kind": "any"}, seconds)
+        except launcher.ClientError as error:
+            raise SupervisorError(f"the launcher refused the wait for the stack: {error} [{error.code}]") from None
+        except (OSError, TimeoutError) as error:
+            raise SupervisorError(f"the launcher did not answer the wait for the stack: {type(error).__name__}") from None
+
+    # Preparation
+
+    def check_images(self) -> dict[str, Any]:
+        """PostgreSQL by digest (pulled through the launcher when absent) and the locally built Airflow image."""
+        pulled = self.call("pull", {"reference": self.platform["metadata_database"]["image"]}, timeout=PULL_SECONDS)
+        try:
+            airflow = self.client.call("image", {"service": "airflow-check", "compose": "orchestration", "checkout": str(self.repo_root)})
+        except launcher.ClientError as error:
+            raise SupervisorError(
+                f"the Airflow image {self.platform['airflow']['image']} is not on this machine: build it once with the command in "
+                f"{self.platform['airflow']['dockerfile']} ({error})"
+            ) from None
+        labels = (airflow["inspect"].get("Config") or {}).get("Labels") or {}
+        if any(labels.get(name) != value for name, value in self.platform["airflow"]["labels"].items()):
+            raise SupervisorError("the Airflow image does not carry the deadline entrypoint labels")
+        return {"postgres": pulled, "airflow": {"image": self.platform["airflow"]["image"], "id": airflow["id"]}}
+
+    def prepare_state(self, token: str, broker_port: int) -> None:
+        """Folders, metadata secrets (owner-only files read through Airflow's ``_CMD`` options) and this session's token and broker URL."""
+        for folder in ("postgres", "logs", "metadata", "session"):
+            (self.state / folder).mkdir(parents=True, exist_ok=True, mode=0o700)
+        metadata = self.state / "metadata"
+        password_file = metadata / "db_password"
+        if not password_file.exists():
+            write_private(password_file, secrets.token_urlsafe(32))
+            write_private(metadata / "fernet_key", base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())
+        password = password_file.read_text().strip()
+        write_private(metadata / "sql_alchemy_conn", f"postgresql+psycopg2://airflow:{password}@postgres:5432/airflow")
+        for name in ROTATED_SECRETS:
+            write_private(metadata / name, secrets.token_urlsafe(48))
+        write_private(self.state / "session" / "broker_token", token + "\n")
+        write_private(self.state / "session" / "client.json", json.dumps({"url": f"http://host.docker.internal:{broker_port}"}) + "\n")
+
+    # Session
+
+    def start(self) -> dict[str, Any]:
+        """Start the whole session or leave nothing of it running."""
+        current = self.stack()
+        if current.get("phase") != "down":
+            raise SupervisorError(f"the orchestration stack is {current.get('phase')}; run down first")
+        self.evidence["images"] = self.check_images()
+        self.token = secrets.token_bytes(32).hex()
+        try:
+            self.broker = Broker(self.paths, load_templates(self.templates_file), self.client, repo_root=self.repo_root)
+            self.evidence["reconcile"] = self.broker.start()
+            self.listener = Listener(self.broker, self.broker_host, self.broker_port, self.token)
+            self.listener.start()
+            self.prepare_state(self.token, self.listener.port)
+            self.call("orchestration_up", {"state": str(self.state), "api_port": self.api_port, "checkout": str(self.repo_root)})
+            started = time.monotonic()
+            record = self.wait_for_stack(("up", "down"), self.readiness_seconds)
+            self.evidence["start"] = {"seconds": round(time.monotonic() - started, 1), "phase": record.get("phase")}
+            if record.get("phase") != "up":
+                raise SupervisorError(
+                    f"the launcher could not start the stack: {record.get('error') or 'no result within ' + str(self.readiness_seconds) + ' s'}"
+                )
+            self.evidence["settings"] = {name: value for name, value in record.get("settings", {}).items() if name.startswith(("HAI_ORCH_MEM", "HAI_ORCH_PAR"))}
+            if self.fail_at == "after_airflow_start":
+                raise SupervisorError("test failure point after_airflow_start")
+            self.evidence["health"] = self.ready()
+        except BaseException:
+            outcome = self.teardown()
+            if outcome.get("errors"):
+                sys.stderr.write("supervisor: the cleanup after the failed start did not finish:\n" + "".join(f"  {item}\n" for item in outcome["errors"]))
+            raise
+        return self.evidence
+
+    def ready(self) -> dict[str, Any]:
+        """Poll the API's health endpoint until every component reports healthy."""
+        deadline = time.monotonic() + self.readiness_seconds
+        last: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            connection = http.client.HTTPConnection("127.0.0.1", self.api_port, timeout=10)
+            try:
+                connection.request("GET", "/api/v2/monitor/health")
+                response = connection.getresponse()
+                last = json.loads(response.read()) if response.status == 200 else {"status": response.status}
+            except (OSError, http.client.HTTPException, ValueError) as exc:
+                last = {"error": type(exc).__name__}
+            finally:
+                connection.close()
+            if all((last.get(component) or {}).get("status") == "healthy" for component in COMPONENTS):
+                return {component: last[component]["status"] for component in COMPONENTS}
+            time.sleep(3)
+        raise SupervisorError(f"Airflow not healthy after {self.readiness_seconds} s: {json.dumps(last)[:300]}")
+
+    def failure(self, step: str, error: BaseException) -> str:
+        """One teardown failure as a line: the step, the exception type and its text without this session's token."""
+        text = f"{type(error).__name__}: {error}"
+        return f"{step}: {(text.replace(self.token, '[redacted]') if self.token else text)[:300]}"
+
+    def teardown(self) -> dict[str, Any]:
+        """Stop the listener and the broker, delete the session files and ask the launcher to take the stack down.
+
+        Every step runs even when an earlier one failed, so a failure never leaves the stack up or the token on disk. The failures are listed under
+        ``errors``; a listener or broker that failed to stop is kept, so a second teardown tries it again. The stack is one of the steps: a request or a
+        wait that fails and any phase other than ``down`` are errors too, so the result is clean only when the launcher confirms the stack is down."""
+        result: dict[str, Any] = {}
+        errors: list[str] = []
+        if self.listener is not None:
+            try:
+                self.listener.stop()
+                self.listener = None
+            except Exception as error:
+                errors.append(self.failure("listener", error))
+        if self.broker is not None:
+            try:
+                self.broker.close()
+                self.broker = None
+            except Exception as error:
+                errors.append(self.failure("broker", error))
+        session = self.state / "session"
+        for name in ("broker_token", "client.json"):
+            try:
+                (session / name).unlink(missing_ok=True)
+            except OSError as error:
+                errors.append(self.failure(f"session file {name}", error))
+        try:
+            self.call("orchestration_down")
+            record = self.wait_for_stack(("down",), 600)
+            result["stack"] = {"phase": record.get("phase"), "error": record.get("error", "")}
+            if record.get("phase") != "down":
+                errors.append(f"stack: the launcher reports phase {record.get('phase')}, not down; run down again")
+        except SupervisorError as error:
+            result["stack"] = {"phase": "unknown", "error": str(error)}
+            errors.append(self.failure("stack", error))
+        if errors:
+            result["errors"] = errors
+        return result
+
+
+def build(test_registry: str | None) -> Supervisor:
+    """A supervisor for the real registry or a test one."""
+    paths = resolve_paths(test_registry)
+    platform: dict[str, Any] = json.loads(PLATFORM_FILE.read_text())
+    return Supervisor(paths, platform, launcher.load_client(test_registry))
+
+
+def main() -> int:
+    """Run one command; ``up`` holds the session in the foreground until SIGINT or SIGTERM."""
+    cli = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    cli.add_argument("--test-registry", help="a test registry folder named registry; its parent holds the test state")
+    commands = cli.add_subparsers(dest="command", required=True)
+    commands.add_parser("up", help="start the session and hold it until Ctrl-C")
+    commands.add_parser("down", help="tear down the stack and delete the session token")
+    commands.add_parser("status", help="print the launcher's record of the stack")
+    args = cli.parse_args()
+    try:
+        supervisor = build(args.test_registry)
+        if args.command == "status":
+            result: Any = supervisor.stack()
+        elif args.command == "down":
+            result = supervisor.teardown()
+        else:
+            stop = threading.Event()
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                signal.signal(signum, lambda *_: stop.set())
+            evidence = supervisor.start()
+            sys.stdout.write(json.dumps({"ready": True, "api": f"http://127.0.0.1:{supervisor.api_port}", **evidence}, indent=2, default=str) + "\n")
+            sys.stdout.flush()
+            try:
+                stop.wait()
+            finally:
+                result = supervisor.teardown()
+    except (SupervisorError, BrokerError, LauncherUnavailable, run_lock.RegistryError) as exc:
+        sys.stderr.write(f"supervisor: {exc}\n")
+        return 3
+    sys.stdout.write(json.dumps(result, indent=2, default=str) + "\n")
+    if isinstance(result, dict) and result.get("errors"):
+        sys.stderr.write("supervisor: teardown finished with errors; run down again\n" + "".join(f"  {item}\n" for item in result["errors"]))
+        return 3
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

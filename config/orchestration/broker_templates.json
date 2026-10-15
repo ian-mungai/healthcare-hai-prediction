@@ -1,0 +1,260 @@
+{
+  "schema_version": 1,
+  "templates": {
+    "pin_bronze": {
+      "purpose": "Record the snapshot ID of every bronze table the build reads (step 3)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": true,
+          "reason": "the fixture mode has no bronze to pin or verify, so the step records why it did nothing"
+        },
+        "publish_fixture": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "silver_build": {
+      "purpose": "Build the kept silver models into the run's build file at the pinned bronze snapshots (step 4)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "publish_fixture": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "silver_validate": {
+      "purpose": "Run the atomic silver Great Expectations contracts on the build file and record its SHA-256 (step 5)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "gold_build": {
+      "purpose": "Build the gold dimensions, bridges and facts on the same build file after rechecking its SHA-256 (step 6)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "gold_validate": {
+      "purpose": "Run the gold Great Expectations suites (step 7)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "cross_layer_checks": {
+      "purpose": "Reconcile gold with silver while silver still exists (step 8)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "verify_bronze": {
+      "purpose": "Check that the bronze heads still equal the pinned snapshots before any publish (step 9)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": true,
+          "reason": "the fixture mode has no bronze to pin or verify, so the step records why it did nothing"
+        },
+        "publish_fixture": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "publish_candidates": {
+      "purpose": "Write each gold table with MERGE INTO and record the new snapshot IDs as candidates (step 10)",
+      "modes": {
+        "publish_fixture": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "reconcile_candidates": {
+      "purpose": "Compare counts and fingerprints of exactly the candidate snapshots with the build (step 11)",
+      "modes": {
+        "publish_fixture": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "catalog_backup": {
+      "purpose": "Write the catalog backup and read it back (step 12)",
+      "modes": {
+        "publish_fixture": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "commit_publish": {
+      "purpose": "Write the publish_runs row naming the candidate snapshot set, last (step 13)",
+      "modes": {
+        "publish_fixture": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "gold_maintenance": {
+      "purpose": "Expire gold snapshots and compact files, keeping every registered or reserved snapshot set (gold_maintenance_dag)",
+      "modes": {
+        "publish_fixture": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "sense_markers": {
+      "purpose": "Read the approved bronze snapshot manifest and the gold publish_runs head for sensing_dag (decision O5)",
+      "modes": {
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    }
+  }
+}

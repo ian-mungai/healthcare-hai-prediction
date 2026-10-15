@@ -108,6 +108,15 @@ lakehouse_checks() {
   "$python_bin" -m scripts.orchestration.run_contracts_e2e
 }
 
+orchestration_checks() {
+  "$python_bin" -m scripts.orchestration.run_stack_e2e
+  "$python_bin" -m scripts.orchestration.run_broker_e2e
+  "$python_bin" -m scripts.orchestration.run_supervisor_e2e
+  # The offline checks skip the built Airflow image, which a CI runner does not have.
+  "$python_bin" -m scripts.orchestration.offline_checks --no-image
+  "$python_bin" -m scripts.orchestration.run_failing_first --check
+}
+
 repository_code_checks() {
   git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks suppressions
   git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks subprocess-imports
@@ -177,7 +186,7 @@ terraform_checks() {
 }
 
 groups=()
-for group in python_lint lakehouse_checks repository_code_checks configuration_checks sql_style terraform_checks; do
+for group in python_lint lakehouse_checks orchestration_checks repository_code_checks configuration_checks sql_style terraform_checks; do
   if is_selected "$group"; then
     groups+=("$group")
   fi

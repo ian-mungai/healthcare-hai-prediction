@@ -40,6 +40,15 @@
       "requirements": ["services/quality/requirements.txt"],
       "code": ["scripts/lakehouse/silver_quality.py"]
     },
+    "orchestration": {
+      "reason": "The DAG files, the in-image checks and the metadata dump run inside the Airflow image that services/orchestration/Dockerfile builds from the official image (Airflow plan section 11.1).",
+      "requirements": ["services/orchestration/requirements.txt"],
+      "code": ["dags/*.py", "scripts/orchestration/in_image_checks.py", "scripts/orchestration/db_dump.py"],
+      "provided": {
+        "airflow": "the official Airflow image pinned by digest in services/orchestration/Dockerfile",
+        "psycopg2": "the PostgreSQL driver of the official Airflow image (psycopg2-binary in its constraints file)"
+      }
+    },
     "sqlfluff": {
       "reason": "A tool environment (.tools/sqlfluff) with no project code.",
       "requirements": ["scripts/quality/sqlfluff/requirements.txt"],

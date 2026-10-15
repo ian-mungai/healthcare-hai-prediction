@@ -41,7 +41,7 @@ REQUIREMENTS = "7a967b2"
 ZERO = "0" * 40
 MISSING = "0123456789abcdef0123456789abcdef01234567"
 MARKDOWN_PROBES = ("ci_groups_probe.MD", "ci_groups_probe_two.Markdown")
-CORE = ["python_lint", "lakehouse_checks", "repository_code_checks", "configuration_checks", "sql_style", "terraform_checks"]
+CORE = ["python_lint", "lakehouse_checks", "orchestration_checks", "repository_code_checks", "configuration_checks", "sql_style", "terraform_checks"]
 PART_GROUPS = {"core": CORE, "launcher": ["launcher"], "all": [*CORE, "launcher", "acquisition"]}
 PASS_LINES = {"core": "All local CI checks passed", "all": "All local CI checks passed", "launcher": "The launcher part passed."}
 MARKDOWNLINT = ROOT / ".tools" / "markdownlint-cli2" / "node_modules" / ".bin" / "markdownlint-cli2"
@@ -378,7 +378,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             work,
             "launcher_path",
             ["--scope", "paths", "--path", "orchestration/launcher.py", "--part", "all"],
-            ["lakehouse_checks", "repository_code_checks", "launcher"],
+            ["lakehouse_checks", "orchestration_checks", "repository_code_checks", "launcher"],
         ),
         selection_case(work, "launcher_part_skips_docs", ["--scope", "paths", "--path", "docs/data_collection.md", "--part", "launcher"], []),
         selection_case(work, "full_scope_runs_all", ["--scope", "full", "--part", "all"], [*CORE, "launcher", "acquisition"], "full scope"),

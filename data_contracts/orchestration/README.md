@@ -23,9 +23,12 @@ package tests.
   with different code, specification or inputs is a new run with a new run ID.
 - **Submission ID:** `<run_id>:<template>:<mode>:<attempt>`. A repeated request with the same ID returns the same
   handle and starts nothing.
-- **Container name:** `hai-<run_id>-<template>-<attempt>`, so a second create of one submission fails instead of
-  starting a duplicate. Containers carry the labels `hai.run_id`, `hai.template`, `hai.attempt`,
-  `hai.submission_id` and `hai.spec_sha256`; the run lock fences a run by its `hai.run_id` label.
+- **Container name:** the launcher names every container `hai-<registry ID prefix>-<owner>-<launch ID>-a<attempt>`.
+  For a broker submission the launch ID is `sub-` with 24 hexadecimal characters of the submission ID's SHA-256. The
+  launcher request ID is `brk-submit-` with 40 of them, so a repeated submit returns the launcher's first answer
+  instead of starting a duplicate. Containers carry the launcher's labels, among them `hai.registry_id`, `hai.launch`
+  and `hai.attempt`. A container that still carries the earlier `hai.run_id` label blocks a registry migration until
+  it is removed.
 
 ## Run Directory and Build File
 
@@ -42,11 +45,15 @@ package tests.
 - **Location:** `data/orchestration/ledger/<run_id>.jsonl` in the main checkout, beside the run registry.
 - **Durability:** the broker appends one line, then fsyncs the file before the action the line announces; the folder is
   fsynced when a ledger is created. Lines are never rewritten.
-- **Order per submission:** `intent` (before any container exists), then `started` (after create) or `adopted` (after a
-  broker restart finds the named container), then `finished` (before the container is removed). `failed_closed` stops
-  the submission for the owner when reconciliation finds two containers or a different specification hash.
-- **Recovery:** before any dispatch the broker reconciles every unfinished intent with Docker by container name: a
-  match is adopted, no match is dispatched once and an ambiguous match fails closed.
+- **Order per submission:** `intent` (before the launcher is asked), then `started` once the launcher's attempt has a
+  container, then `finished` when the attempt ended. `failed_closed` stops the submission for the owner when the broker
+  template row changed since the intent was written or the created container differs from its specification. The
+  ledger format still accepts `adopted`; the broker does not write it.
+- **Recovery:** before any dispatch the broker reconciles every unfinished intent through the launcher's authenticated
+  `submission` lookup by the request ID it sent. A found attempt is reconciled before the row can end the submission.
+  Not found means the launcher never accepted it: the row decides, then the submission is sent once. A launcher that
+  cannot answer leaves the submission pending: status and cancel answer 503 and nothing terminal is written. No
+  absence on disk, such as a missing marker or folder, ever counts as "never sent".
 
 ## Modes and Classes
 
