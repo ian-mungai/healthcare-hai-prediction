@@ -9,7 +9,7 @@ models:
       plans/staging_dedup_20261003/failure_modes.md; 204 to 209,
       data/lakehouse_planning/dedup_20261003/failure_modes.md).
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: copy_key
         description: Bronze table and object key, the model's key.

@@ -129,7 +129,7 @@ models:
   - name: dim_change_type
     description: One row per (change of ownership type code system, code) as published, plus the unknown member.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: change_type_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -867,7 +867,7 @@ models:
   - name: dim_owner_role
     description: One row per (owner role code system, code) as published, plus the unknown member.
     meta:
-      classification: Confidential
+      classification: Public
     columns:
       - name: owner_role_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes

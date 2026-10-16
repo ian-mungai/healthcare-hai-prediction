@@ -253,11 +253,13 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: accounts_receivable
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: allowable_dsh_percentage
         description: The silver column of the same name, unchanged.
         meta:
@@ -267,6 +269,7 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: combined_outpatient_inpatient_total_charges
         description: The silver column of the same name, unchanged.
         meta:
@@ -276,6 +279,7 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: disproportionate_share_adjustment
         description: The silver column of the same name, unchanged.
         meta:
@@ -297,16 +301,19 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: general_fund_balance
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: hospital_number_of_beds_for_adults_peds
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: hospital_total_bed_days_available_for_adults_peds
         description: The silver column of the same name, unchanged.
         meta:
@@ -356,31 +363,37 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: investments
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: land
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: land_improvements
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: leasehold_improvements
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: less_allowances_for_uncollectible_notes_and_accounts_receivable
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: less_contractual_allowance_and_discounts_on_patients_accounts
         description: The silver column of the same name, unchanged.
         meta:
@@ -390,6 +403,7 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: managed_care_simulated_payments
         description: The silver column of the same name, unchanged.
         meta:
@@ -403,11 +417,13 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: mortgage_payable
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: net_income
         description: The silver column of the same name, unchanged.
         meta:
@@ -421,41 +437,49 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: notes_payable
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: notes_receivable
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: number_of_beds_total_for_all_subproviders
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: other_assets
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: other_current_assets
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: other_current_liabilities
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: other_long_term_liabilities
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: outlier_payments_for_discharges
         description: The silver column of the same name, unchanged.
         meta:
@@ -477,11 +501,13 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: prepaid_expenses
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: reporting_days
         description: The silver column of the same name, unchanged.
         meta:
@@ -491,6 +517,7 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: stand_alone_chip_charges
         description: The silver column of the same name, unchanged.
         meta:
@@ -500,6 +527,7 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: total_days_title_v
         description: The silver column of the same name, unchanged.
         meta:
@@ -521,11 +549,13 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: total_fund_balances
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: total_ime_payment
         description: The silver column of the same name, unchanged.
         meta:
@@ -539,16 +569,19 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: total_long_term_liabilities
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: total_other_assets
         description: The silver column of the same name, unchanged.
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: total_other_expenses
         description: The silver column of the same name, unchanged.
         meta:
@@ -570,6 +603,7 @@ models:
         meta:
           additivity: semi_additive
           additive_across: [hospital]
+          additivity_note: sum across hospitals only after choosing one report and period per hospital
       - name: wage_related_costs_core
         description: The silver column of the same name, unchanged.
         meta:

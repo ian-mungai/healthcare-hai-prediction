@@ -43,6 +43,9 @@ BRONZE_SOURCE = "bronze"
 CLASSES = ("Public", "Confidential")
 FACT_TYPES = ("transaction", "periodic_snapshot", "accumulating_snapshot")
 ADDITIVITY = ("additive", "semi_additive", "non_additive")
+ONC_SOURCES = frozenset({"bronze.onc_pi_attestations_csv", "bronze.onc_pi_chpl_linkage_csv"})
+LOADER_LINEAGE_COLUMNS = frozenset({"_object_key", "_member_sha256"})
+COST_REPORT_NOTE = "sum across hospitals only after choosing one report and period per hospital"
 DBT_PATHS = (
     ("model-paths", "models"),
     ("seed-paths", "seeds"),
@@ -788,7 +791,11 @@ def source_columns(entry: Entry, key: str) -> dict[str, frozenset[str]]:
         return known
     columns = entry.meta.get("confidential_columns")
     if columns == "all" or not isinstance(columns, list) or not valid_confidential_columns(columns):
-        return {**known, "*": frozenset({f"{key}.*"})}
+        protected = frozenset({f"{key}.*"})
+        known = {column: protected for column in known}
+        if columns == "all" and key in ONC_SOURCES:
+            known.update({column: frozenset() for column in LOADER_LINEAGE_COLUMNS})
+        return {**known, "*": protected}
     return {**known, **{column: frozenset({f"{key}.{column}"}) for column in columns}}
 
 
@@ -1092,24 +1099,67 @@ class ColumnLineage:
             result.setdefault(output_name, set()).update(origins)
             if output_name.startswith("__expression_") and origins:
                 result.setdefault("*", set()).update(origins)
+        predicate_refs = {
+            id(reference)
+            for predicate in selectable.selectable.recursive_crawl(
+                "where_clause", "having_clause", "join_on_condition", no_recursive_seg_type=["select_statement", "with_compound_statement", "set_expression"]
+            )
+            for reference in predicate.recursive_crawl(
+                "column_reference", no_recursive_seg_type=["select_statement", "with_compound_statement", "set_expression"]
+            )
+        }
+        predicate_correlation = not self.is_correlated_source(query)
         for reference in info.reference_buffer:
             if not reference.is_type("wildcard_identifier"):
-                self.reference_origins(reference, bindings, relations, result, outer_names, outer_columns)
+                self.reference_origins(
+                    reference,
+                    bindings,
+                    relations,
+                    result,
+                    outer_names,
+                    outer_columns,
+                    allow_correlation=predicate_correlation and id(reference) in predicate_refs,
+                )
         return result
+
+    @staticmethod
+    def scope_ancestors(query: Any) -> Iterator[tuple[Any, Any]]:
+        """Cross CTE bodies through their WITH owner before visiting the enclosing query scopes."""
+        while query.parent is not None:
+            while query.cte_definition_segment is not None and query.parent is not None:
+                query = query.parent
+            parent = query.parent
+            if parent is None:
+                return
+            yield query, parent
+            query = parent
+
+    @staticmethod
+    def is_correlated_source(query: Any) -> bool:
+        """Keep FROM-derived queries conservative even when their outer reference is in a predicate."""
+        for scope, parent in ColumnLineage.scope_ancestors(query):
+            for selectable in parent.selectables:
+                info = selectable.select_info
+                if info is not None and any(
+                    child is scope.selectables[0].selectable
+                    for alias in info.table_aliases
+                    for child in alias.from_expression_element.recursive_crawl("select_statement", "with_compound_statement", "set_expression")
+                ):
+                    return True
+        return False
 
     def outer_scope(self, query: Any) -> tuple[set[str], set[str]]:
         names: set[str] = set()
         columns: set[str] = set()
-        while query.parent is not None and query.cte_definition_segment is None:
-            parent = query.parent
+        for scope, parent in self.scope_ancestors(query):
             for selectable in parent.selectables:
-                if not any(child is query.selectables[0].selectable for child in selectable.selectable.recursive_crawl("select_statement")):
+                if not any(child is scope.selectables[0].selectable for child in selectable.selectable.recursive_crawl("select_statement")):
                     continue
                 info = selectable.select_info
                 if info is None:
                     continue
                 for alias in info.table_aliases:
-                    if any(child is query.selectables[0].selectable for child in alias.from_expression_element.recursive_crawl("select_statement")):
+                    if any(child is scope.selectables[0].selectable for child in alias.from_expression_element.recursive_crawl("select_statement")):
                         break
                     names.add(alias.ref_str.lower())
                     if alias.object_reference is not None:
@@ -1125,16 +1175,19 @@ class ColumnLineage:
                         )
                         if nested is not None:
                             columns.update(self.query_outputs(self.query_type.from_segment(nested, query.dialect, parent=parent)))
-            query = parent
         return names, columns
 
-    def column_origins(self, name: str, relations: list[RelationBinding], aliases: dict[str, set[str]], outer_columns: set[str]) -> set[str]:
+    def column_origins(
+        self, name: str, relations: list[RelationBinding], aliases: dict[str, set[str]], outer_columns: set[str], *, allow_correlation: bool = False
+    ) -> set[str]:
         if any(name in row.columns for row in relations):
-            return {origin for row in relations for origin in row.columns.get(name, set()) | row.columns.get("*", set())}
+            return {origin for row in relations for origin in row.columns.get(name, row.columns.get("*", set()))}
         if name in aliases:
             unknown = relations[0].unknown if len(relations) == 1 else {origin for row in relations for values in row.columns.values() for origin in values}
             return aliases[name] | unknown
         if name in outer_columns or "*" in outer_columns or not relations:
+            if allow_correlation:
+                return set()
             raise UnsupportedSQL("correlated source or column without a local relation")
         if len(relations) == 1:
             return relations[0].unknown
@@ -1148,8 +1201,10 @@ class ColumnLineage:
         aliases: dict[str, set[str]],
         outer_names: set[str],
         outer_columns: set[str],
+        *,
+        allow_correlation: bool = False,
     ) -> set[str]:
-        """Attribute a reference to its candidate relations and reject visible outer-scope dependencies."""
+        """Attribute candidate relations, allowing predicate-only outer references outside FROM sources."""
         parts = [part.part.strip('"').lower() for part in reference.iter_raw_references()]
         if not parts or len(parts) > 2:
             raise UnsupportedSQL("struct or multipart column reference")
@@ -1159,9 +1214,15 @@ class ColumnLineage:
             if parts[0] in bindings:
                 return self.column_origins(parts[1], bindings[parts[0]], {}, set())
             if parts[0] in outer_names:
+                if allow_correlation:
+                    return set()
                 raise UnsupportedSQL("correlated source")
-            return self.column_origins(parts[0], relations, aliases, outer_columns)
-        return self.column_origins(parts[0], relations, aliases, outer_columns)
+            return self.column_origins(parts[0], relations, aliases, outer_columns, allow_correlation=allow_correlation)
+        if parts[0] in outer_names and parts[0] not in aliases and not any(parts[0] in row.columns for row in relations):
+            if allow_correlation:
+                return set()
+            raise UnsupportedSQL("correlated source")
+        return self.column_origins(parts[0], relations, aliases, outer_columns, allow_correlation=allow_correlation)
 
 
 def lineage_worker(request: Path) -> int:
@@ -1493,6 +1554,9 @@ def check(project: Project) -> list[Problem]:
             if declared.get("additivity") == "semi_additive" and not lists_axes(axes):
                 message = f"{model.name}.{column} is semi_additive but meta.additive_across is {axes!r}; it must list the axes the measure sums across"
                 add("additive-across", entry, message, entry.column_lines.get(column))
+            if model.name == "fct_cost_report" and declared.get("additivity") == "semi_additive" and declared.get("additivity_note") != COST_REPORT_NOTE:
+                message = f"{model.name}.{column} is semi_additive but meta.additivity_note must be {COST_REPORT_NOTE!r}"
+                add("additivity-note", entry, message, entry.column_lines.get(column))
         for column in project.measures.get(model.name, ()):
             if "additivity" not in entry.columns.get(column, {}):
                 add("additivity", entry, f"measure column {model.name}.{column} has no meta.additivity", entry.column_lines.get(column))

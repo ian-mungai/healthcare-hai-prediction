@@ -233,6 +233,10 @@ sources:
           - name: _row_number
             description: Row position within the file, from 1.
             data_tests: [not_null]
+          - name: role_code_owner
+            description: Publisher owner role code.
+          - name: role_text_owner
+            description: Publisher owner role label.
       - name: cms_change_of_ownership
         description: Hospital Change of Ownership files, every stored copy.
         meta:
@@ -259,6 +263,10 @@ sources:
           - name: _row_number
             description: Row position within the file, from 1.
             data_tests: [not_null]
+          - name: chow_type_code
+            description: Publisher change of ownership type code.
+          - name: chow_type_text
+            description: Publisher change of ownership type label.
       - name: cms_cc_timely_and_effective_care_hospital
         description: Care Compare timely and effective care hospital files, every stored copy.
         meta:
@@ -348,7 +356,7 @@ sources:
         meta:
           classification: Confidential
           confidential_columns: all
-          confidential_columns_reason: Every column is confidential until an ONC publisher dictionary is stored.
+          confidential_columns_reason: Every publisher column is confidential until an ONC publisher dictionary is stored; loader lineage _object_key and _member_sha256 are exempt (A273).
           proposed_confidential_columns:
             - npi
             - specialty
@@ -368,7 +376,7 @@ sources:
         meta:
           classification: Confidential
           confidential_columns: all
-          confidential_columns_reason: Every column is confidential until an ONC publisher dictionary is stored.
+          confidential_columns_reason: Every publisher column is confidential until an ONC publisher dictionary is stored; loader lineage _object_key and _member_sha256 are exempt (A273).
           proposed_confidential_columns:
             - facility_id
             - facility_name

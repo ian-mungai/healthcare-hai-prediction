@@ -51,7 +51,9 @@ ONC_PROPOSALS = {
     "onc_pi_attestations_csv": ("npi", "specialty"),
     "onc_pi_chpl_linkage_csv": ("facility_id", "facility_name", "address", "city_town", "zip_code", "telephone_number", "developer_name"),
 }
-ALL_COLUMNS_REASON = "Every column is confidential until an ONC publisher dictionary is stored."
+ALL_COLUMNS_REASON = (
+    "Every publisher column is confidential until an ONC publisher dictionary is stored; loader lineage _object_key and _member_sha256 are exempt (A273)."
+)
 LINEAGE_ENTRY = "  - name: stg_bronze__file_copies\n    description: Staged lineage.\n    meta:\n      classification: Public\n"
 LINEAGE_SELECT = "select _object_key as object_key, count(distinct _member_sha256) as checksum_count, count(*) as row_count"
 LINEAGE_FROM = "from {{ source('bronze', 'raw_owner') }}\ngroup by _object_key\n"
@@ -227,7 +229,6 @@ def review_probes() -> list[Case]:
         "p07": "select to_json(raw_owner) as j from {{ source('bronze', 'raw_owner') }}\n",
         "p24": "select l.x from {{ source('bronze', 'raw_owner') }} as r, lateral (select r.owner_name as x) as l\n",
         "implicit_correlated": "select l.x from {{ source('bronze', 'raw_owner') }} as r, (select r.owner_name as x) as l\n",
-        "correlated_filter": "select r.state from {{ source('bronze', 'raw_owner') }} r where exists (select 1 where r.owner_name is not null)\n",
         "correlated_local": "select l.x from {{ source('bronze', 'raw_owner') }} r, (select r.owner_name as x from {{ source('bronze', 'raw_public') }} p) l\n",
         "correlated_local_unqualified": (
             "select l.x from {{ source('bronze', 'raw_owner') }} r, (select owner_name as x from {{ source('bronze', 'raw_public') }} p) l\n"
@@ -409,6 +410,193 @@ def review_round5_cases() -> list[Case]:
     return cases
 
 
+def owner_followup_cases() -> list[Case]:
+    """Exercise the publisher-only rule, cost-report notes and predicate-only correlation."""
+    cases = []
+    note = "sum across hospitals only after choosing one report and period per hospital"
+    for table in ONC_PROPOSALS:
+        for route, sql in {
+            "model": "select _object_key, _member_sha256 from {{ ref('stg_raw_owner') }}\n",
+            "cte": "with s as (select * from {{ source('bronze', '__table__') }}) select _object_key, _member_sha256 from s\n",
+        }.items():
+            cases.append(Case(f"owner84_{table}_public_lineage_{route}", code=0, files=onc_read(table, sql.replace("__table__", table))))
+        for class_name in ("Public", "Confidential"):
+            cases.append(
+                Case(
+                    f"owner84_{table}_{class_name.lower()}_lineage",
+                    code=0,
+                    files=onc_read(
+                        table,
+                        "select _object_key as object_key, count(distinct _member_sha256) as checksum_count "
+                        "from {{ source('bronze', '__table__') }} group by _object_key\n".replace("__table__", table),
+                        class_name,
+                    ),
+                )
+            )
+            control = class_name == "Confidential"
+            cases.append(
+                Case(
+                    f"owner84_{table}_{class_name.lower()}_declared_publisher",
+                    "" if control else "[class-inheritance]",
+                    "" if control else f"bronze.{table}",
+                    code=0 if control else 1,
+                    files=onc_read(table, "select state from {{ source('bronze', '__table__') }}\n".replace("__table__", table), class_name),
+                )
+            )
+            cases.append(
+                Case(
+                    f"owner84_{table}_{class_name.lower()}_publisher_alias",
+                    "" if control else "[class-inheritance]",
+                    "" if control else f"bronze.{table}",
+                    code=0 if control else 1,
+                    files=onc_read(
+                        table, "select product_name as _object_key from {{ source('bronze', '__table__') }}\n".replace("__table__", table), class_name
+                    ),
+                )
+            )
+    cost_files = {path.replace("fct_demo", "fct_cost_report"): text.replace("fct_demo", "fct_cost_report") for path, text in BASE.items()}
+    cost_files[FACTS] = cost_files[FACTS].replace("additivity: additive\n", "additivity: semi_additive\n          additive_across: [hospital]\n")
+    for suffix, restriction in (("missing", ""), ("wrong", "sum across hospitals"), ("control", note)):
+        files = dict(cost_files)
+        if restriction:
+            files[FACTS] = files[FACTS].replace("additive_across: [hospital]\n", f"additive_across: [hospital]\n          additivity_note: {restriction}\n")
+        control = suffix == "control"
+        cases.append(
+            Case(
+                "owner87_cost_note_" + suffix,
+                "" if control else "[additivity-note]",
+                "" if control else "fct_cost_report.amount",
+                files=files,
+                delete=("dbt/models/gold/facts/fct_demo.sql",),
+                code=0 if control else 1,
+            )
+        )
+    queries = {
+        "where": "select r.state from {{ source('bronze', 'raw_owner') }} r where exists (select 1 where r.owner_name is not null)",
+        "having": (
+            "select r.state from {{ source('bronze', 'raw_owner') }} r group by r.state "
+            "having exists (select 1 from {{ source('bronze', 'raw_owner') }} s where s.state = r.state)"
+        ),
+        "join_on": (
+            "select r.state from {{ source('bronze', 'raw_owner') }} r join {{ source('bronze', 'raw_public') }} p "
+            "on exists (select 1 where r.owner_name is not null)"
+        ),
+        "where_unqualified": (
+            "select r.state from {{ source('bronze', 'raw_owner') }} r where exists "
+            "(select 1 from {{ source('bronze', 'raw_public') }} p where owner_name is not null)"
+        ),
+        "select_list": "select (select r.owner_name) as x from {{ source('bronze', 'raw_owner') }} r",
+        "source_predicate": (
+            "select l.state from {{ source('bronze', 'raw_owner') }} r, "
+            "(select p.state from {{ source('bronze', 'raw_public') }} p where r.owner_name is not null) l"
+        ),
+    }
+    for name, sql in queries.items():
+        for class_name in ("Public", "Confidential"):
+            leak = name in {"select_list", "source_predicate"} and class_name == "Public"
+            cases.append(
+                Case(
+                    f"owner94_{name}_{class_name.lower()}",
+                    "[class-inheritance]" if leak else "",
+                    "bronze.raw_owner.owner_name" if leak else "",
+                    code=1 if leak else 0,
+                    files=mixed_read(sql + "\n", class_name),
+                )
+            )
+    cms_sql = "select role_text_owner from {{ ref('stg_raw_owner') }}\n"
+    for class_name in ("Public", "Confidential"):
+        control = class_name == "Confidential"
+        cases.append(
+            Case(
+                f"owner126_cms_undeclared_staging_{class_name.lower()}",
+                "" if control else "[class-inheritance]",
+                "" if control else "bronze.raw_owner.owner_name",
+                files=mixed_read(cms_sql, class_name),
+                code=0 if control else 1,
+            )
+        )
+    declared = mixed_read(cms_sql)
+    declared[SOURCES] = BASE[SOURCES].replace(
+        "          - name: _member_sha256\n        meta:\n          classification: Confidential",
+        "          - name: _member_sha256\n          - name: role_text_owner\n        meta:\n          classification: Confidential",
+    )
+    cases.append(Case("owner126_cms_declared_staging_public", code=0, files=declared))
+    return cases
+
+
+def review_round7_cases() -> list[Case]:
+    """Pair CTE-body correlation leaks with controls and retain the local EXISTS conservative boundary."""
+    queries = {
+        "p01": "select l.z from __owner__ r, (with c as (select r.owner_name as z from __public__ p) select z from c) l",
+        "p02": "select l.z from __owner__ r join (with c as (select r.owner_name as z from __public__ p) select z from c) l on true",
+        "p03": "select l.z from __owner__ r, (with c as (select owner_name as z from __public__ p) select z from c) l",
+        "p04": "select l.z from __owner__ r, (with c as (select upper(r.owner_name) as z from __public__ p) select z from c) l",
+        "p05": "select l.z from __owner__ r, (select d.z from (with c as (select r.owner_name as z from __public__ p) select z from c) d) l",
+        "p06": "select l.z from __owner__ r, (with c as (select r.owner_name as w from __public__ p), d as (select w as z from c) select z from d) l",
+        "p07": "select l.z from __owner__ as outer_t, (with c as (select outer_t.owner_name as z from __public__ p) select z from c) l",
+        "p08": "select l.z from {{ ref('stg_raw_owner') }} r, (with c as (select r.owner_name as z from __public__ p) select z from c) l",
+        "e03": "select l.state from __owner__ r, (with c as (select p.state from __public__ p where r.owner_name is not null) select state from c) l",
+        "nested_cte": ("select l.z from __owner__ r, (with c as (with d as (select r.owner_name as z from __public__ p) select z from d) select z from c) l"),
+        "nested_cte_filter": (
+            "select l.state from __owner__ r, (with c as (with d as (select p.state from __public__ p where r.owner_name is not null) "
+            "select state from d) select state from c) l"
+        ),
+        "c03": "select l.state from __owner__ r, (select p.state from __public__ p where exists (select 1 where p.id is not null)) l",
+        "c04": "select l.state from __public__ r, (select p.state from __public__ p where exists (select 1 where p.id is not null)) l",
+    }
+    cases = []
+    for name, sql in queries.items():
+        sql = sql.replace("__owner__", "{{ source('bronze', 'raw_owner') }}").replace("__public__", "{{ source('bronze', 'raw_public') }}") + "\n"
+        for class_name in ("Public", "Confidential"):
+            block = class_name == "Public" and name != "c04"
+            cases.append(
+                Case(
+                    f"review7_{name}_{class_name.lower()}",
+                    "[class-inheritance]" if block else "",
+                    "bronze.raw_owner.owner_name" if block else "",
+                    files=mixed_read(sql, class_name),
+                    code=1 if block else 0,
+                )
+            )
+    return cases
+
+
+def review_round8_cases() -> list[Case]:
+    """Pair bare outer-row leaks with controls that preserve local names and filter-only correlation."""
+    queries = {
+        "p01": "select l.z from __owner__ r, (select r as z from __public__ p) l",
+        "p02": "select l.z from __owner__ r, (select to_json(r) as z from __public__ p) l",
+        "p03": "select l.z from __owner__ r, (with c as (select to_json(r) as z from __public__ p) select z from c) l",
+        "p04": "select l.z from __owner__ r, (with c as (select r as z from __public__ p) select z from c) l",
+        "p05": "select l.z from __owner__, (select raw_owner as z from __public__ p) l",
+        "p06": "select l.z from (select owner_name from __owner__) r, (select r as z from __public__ p) l",
+        "p07": "select l.z from __owner__ r, (select p.state, r as z from __public__ p) l",
+        "p08": "select l.z from __owner__ r, (select coalesce(r, null) as z from __public__ p) l",
+        "local_column": "select l.z from __owner__ r, (select r as z from __public__ p) l",
+        "earlier_alias": "select l.z from __owner__ r, (select 'fixed' as r, r as z from __public__ p) l",
+        "cte_shadow": "select l.z from __owner__ r, (with r as (select p.state as z from __public__ p) select z from r) l",
+        "filter_only": "select r.state from __owner__ r where exists (select 1 from __public__ p where r is not null)",
+    }
+    cases = []
+    for name, sql in queries.items():
+        sql = sql.replace("__owner__", "{{ source('bronze', 'raw_owner') }}").replace("__public__", "{{ source('bronze', 'raw_public') }}") + "\n"
+        for class_name in ("Public", "Confidential"):
+            block = class_name == "Public" and name.startswith("p")
+            files = mixed_read(sql, class_name)
+            if name == "local_column":
+                files[SOURCES] = BASE[SOURCES].replace("          - name: state\n", "          - name: state\n          - name: r\n", 1)
+            cases.append(
+                Case(
+                    f"review8_{name}_{class_name.lower()}",
+                    "[class-inheritance]" if block else "",
+                    "bronze.raw_owner.owner_name" if block else "",
+                    files=files,
+                    code=1 if block else 0,
+                )
+            )
+    return cases
+
+
 def make_cases() -> list[Case]:
     """Return independent synthetic cases with the expected hook result and its required diagnostic."""
     unlisted = "dbt/models/silver/staging/stg_unlisted.sql"
@@ -417,6 +605,9 @@ def make_cases() -> list[Case]:
     )
     return [
         Case("control", code=0),
+        *review_round8_cases(),
+        *review_round7_cases(),
+        *owner_followup_cases(),
         *review_round5_cases(),
         *review_round4_cases(),
         *scoped_resolution_cases(),

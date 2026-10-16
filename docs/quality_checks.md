@@ -263,6 +263,7 @@ It blocks in these cases. The rule name in brackets starts each problem line.
 - A measure column of a gold fact has no `meta.additivity` on its column entry (`additivity`). The gold contract supplies the inventory: every numeric fact column
   except the date-part columns (`DATE_PARTS`, for example `data_year`) and lineage counts (`LINEAGE_COUNTS`, for example `source_row_number`).
 - A column labeled `semi_additive` has no nonempty list of axis names in `meta.additive_across` (`additive-across`).
+- A semi-additive `fct_cost_report` column lacks the exact restriction in `meta.additivity_note`: `sum across hospitals only after choosing one report and period per hospital` (`additivity-note`).
 - A fact model has no contract entry or a contract fact has no model (`fact-contract`).
 - A model, source table or macro is defined twice or two SQL files share a model name (`duplicate-entry`).
 - A `ref`, `source` or macro call cannot be resolved (`unresolved-reference`). This includes unresolved callable aliases and unknown context calls.
@@ -279,11 +280,14 @@ Relations are registered by their unqualified table name and alias. Earlier sele
 Declared columns resolve before earlier aliases. An earlier alias also retains the possible origins of an undeclared real column with the same name:
 one candidate relation adds its unknown-column policy. Several candidates add their combined confidential origins.
 An unknown name with one candidate relation uses that relation's policy:
-a Public source contributes no confidential origin, an explicit-list source protects only listed names and an all-column source protects every name.
+a Public source contributes no confidential origin, an explicit-list source protects only listed names and an all-column source protects every publisher name.
+For the two ONC sources, loader lineage `_object_key` and `_member_sha256` are exempt under A273. The exemption applies at the source boundary;
+a publisher field renamed to either loader name retains its confidential origins.
 An unknown model or CTE output retains the union of that relation's confidential output origins. With several candidate relations and no declared match,
 an unknown name retains their combined confidential origins for that reference. Registering both a table name and its alias does not duplicate the relation.
-A two-part reference without a local relation qualifier uses the first part as its struct-column name. Visible outer references remain unsupported.
-Table functions in FROM, lateral sources, correlated subqueries, dotted function calls, positional column references and other unsupported SQL constructs require whole-model conservative handling.
+A two-part reference without a local relation qualifier uses the first part as its struct-column name. Correlated references used only in WHERE, HAVING or JOIN ON do not contribute to output origins.
+Correlated FROM sources and select-list references remain unsupported, including a FROM source whose outer reference occurs in its predicate.
+Table functions in FROM, lateral sources, correlated sources or select-list references, dotted function calls, positional column references and other unsupported SQL constructs require whole-model conservative handling.
 A construct the check cannot trace propagates every named confidential column from its input models' outputs to every output.
 That input set includes declared references and known relations found in parsed SQL. Compilation or SQL-parse failures retain all named confidential source columns.
 A SQL analysis exception retains all named confidential source columns for the affected model and lets the worker continue checking other models.
@@ -292,7 +296,7 @@ The lineage report names each such model and its reason. The compiler and parser
 Write the documented ingestion exception on every Confidential source, collection and table override.
 
 `meta.additive_across` lists allowed aggregation axes, for example `[hospital]`. The check requires the list and does not restrict axis names.
-`meta.additivity_note` carries a free-text restriction. Cost-report stocks require one selected report and period per hospital before summing across hospitals.
+`meta.additivity_note` carries a free-text restriction. Every semi-additive `fct_cost_report` measure requires the exact note above: choose one report and period per hospital before summing across hospitals.
 WONDER population sums hold one database fixed and exclude repeated-export and held rows.
 
 The same module provides `scan-personal-data --manifest <manifest.json> --output <report.json> [--inventory <inventory.json>]`
