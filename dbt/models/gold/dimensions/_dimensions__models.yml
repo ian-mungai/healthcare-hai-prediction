@@ -3,6 +3,8 @@ version: 2
 models:
   - name: bridge_county_neighbor
     description: One row per county, neighbor and vintage as Census publishes it, with every silver column unchanged.
+    meta:
+      classification: Public
     columns:
       - name: edge_key
         description: The row key of the silver model.
@@ -16,6 +18,8 @@ models:
   - name: bridge_measure_control
     description: 'Many-to-many of a measure identity (with its value column), a vintage range and a registry control: one row per bridge seed
       row with a non-empty measure key. The only gold model where registry controls meet the data.'
+    meta:
+      classification: Public
     columns:
       - name: measure_sk
         description: Key of dim_measure.
@@ -74,6 +78,8 @@ models:
               - shortage_measures_bridge
   - name: bridge_zip_county
     description: One row per ZIP code, county and USPS quarter as HUD publishes it, with every silver column unchanged.
+    meta:
+      classification: Public
     columns:
       - name: hud_row_key
         description: The row key of the silver model.
@@ -87,6 +93,8 @@ models:
   - name: dim_census_tract
     description: One row per 11-digit census tract GEOID, plus the unknown member (natural key '<unknown>'). Read from the RUCA tract rows and
       the HPSA geography IDs that are 11 digits; any other HPSA ID takes the unknown member in the fact.
+    meta:
+      classification: Public
     columns:
       - name: census_tract_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -120,6 +128,8 @@ models:
                 space: regexp_matches(natural_key, '^[0-9]{11}$')
   - name: dim_change_type
     description: One row per (change of ownership type code system, code) as published, plus the unknown member.
+    meta:
+      classification: Confidential
     columns:
       - name: change_type_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -157,6 +167,8 @@ models:
               - code
   - name: dim_condition
     description: One row per (MMD condition code system, code) as published, plus the unknown member.
+    meta:
+      classification: Public
     columns:
       - name: condition_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -195,6 +207,8 @@ models:
   - name: dim_county
     description: One row per 5-character county FIPS that a fact's county key carries, plus the unknown member (natural key '<unknown>'). The
       Connecticut planning region and the retired Alaska code flag are deferred (amendment A36).
+    meta:
+      classification: Public
     columns:
       - name: county_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -252,6 +266,8 @@ models:
   - name: dim_date
     description: One row per day from the earliest to the latest DATE source date of the facts, plus the unknown member. The natural key is the
       date.
+    meta:
+      classification: Confidential
     columns:
       - name: date_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -291,6 +307,8 @@ models:
       - dim_date_attributes
   - name: dim_demographic_group
     description: One row per (demographic group code system, code) as published, plus the unknown member.
+    meta:
+      classification: Public
     columns:
       - name: demographic_group_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -328,6 +346,8 @@ models:
               - code
   - name: dim_drg
     description: One row per (diagnosis-related group code system, code) as published, plus the unknown member.
+    meta:
+      classification: Public
     columns:
       - name: drg_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -365,6 +385,8 @@ models:
               - code
   - name: dim_ehr_product
     description: One row per (ONC CHPL product code system, code) as published, plus the unknown member.
+    meta:
+      classification: Confidential
     columns:
       - name: ehr_product_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -403,6 +425,8 @@ models:
   - name: dim_enrollment
     description: One row per enrollment ID that a fact's enrollment key carries, plus the unknown member (natural key '<unknown>'). The natural
       key is the only attribute.
+    meta:
+      classification: Confidential
     columns:
       - name: enrollment_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -439,6 +463,8 @@ models:
                 space: 'true'
   - name: dim_footnote
     description: One row per (Care Compare footnote code system, code) as published, plus the unknown member.
+    meta:
+      classification: Public
     columns:
       - name: footnote_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -477,6 +503,8 @@ models:
   - name: dim_hospital
     description: One row per hospital CCN (6-character text) that a fact's hospital key carries, plus the unknown member. A state or national
       entity ID is not a hospital and takes the unknown member.
+    meta:
+      classification: Confidential
     columns:
       - name: hospital_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -711,6 +739,8 @@ models:
                   - release_date
   - name: dim_measure
     description: One row per measure identity (fact, measure_key, value_column), plus the unknown member.
+    meta:
+      classification: Public
     columns:
       - name: measure_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -800,6 +830,8 @@ models:
   - name: dim_owner_organization
     description: One row per 10-digit owner associate ID that a fact's owner key carries, plus the unknown member (natural key '<unknown>'). Names
       and flags stay on each release row.
+    meta:
+      classification: Confidential
     columns:
       - name: owner_organization_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -834,6 +866,8 @@ models:
                 space: regexp_matches(natural_key, '^[0-9]{10}$')
   - name: dim_owner_role
     description: One row per (owner role code system, code) as published, plus the unknown member.
+    meta:
+      classification: Confidential
     columns:
       - name: owner_role_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -872,6 +906,8 @@ models:
   - name: dim_registry_control
     description: One row per registry control of revision 3 (base registry and append-only additions), plus the unknown member. The family and
       the closeout decision are deferred (amendment A36).
+    meta:
+      classification: Public
     columns:
       - name: registry_control_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -906,6 +942,8 @@ models:
         description: The review decision carried on the control's bridge seed rows; null for a control with no bridge row.
   - name: dim_release
     description: One row per stored file (member_sha256), plus the unknown member.
+    meta:
+      classification: Public
     columns:
       - name: release_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -951,6 +989,8 @@ models:
             enabled: '{{ var(''check_release_copy_conflicts'', false) }}'
   - name: dim_rurality_code
     description: One row per (rurality code code system, code) as published, plus the unknown member.
+    meta:
+      classification: Public
     columns:
       - name: rurality_code_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -989,6 +1029,8 @@ models:
   - name: dim_source
     description: One row per stored dataset, plus the unknown member (natural key '<unknown>'). The publisher and the label are deferred (amendment
       A36).
+    meta:
+      classification: Public
     columns:
       - name: source_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -1020,6 +1062,8 @@ models:
   - name: dim_state
     description: One row per 2-letter postal state code that a fact's state key carries, plus the unknown member (natural key '<unknown>'). A
       value that is not two upper-case letters is not a member and takes the unknown member in the facts.
+    meta:
+      classification: Confidential
     columns:
       - name: state_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes
@@ -1067,6 +1111,8 @@ models:
   - name: dim_zip
     description: One row per 5-digit ZIP code that a fact's ZIP key carries, plus the unknown member (natural key '<unknown>'). A value that is
       not five digits is not a member and takes the unknown member in the facts.
+    meta:
+      classification: Confidential
     columns:
       - name: zip_sk
         description: 'Surrogate key: the md5 of the natural key''s text. The unknown member''s key is md5(''<unknown>''), the value a fact takes

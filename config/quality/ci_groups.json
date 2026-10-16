@@ -29,6 +29,8 @@
       "^config/",
       "^services/",
       "^features/",
+      "^scripts/quality/(model_metadata|run_model_metadata_e2e)\\.py$",
+      "^scripts/quality/(install_sqlfluff\\.py|sqlfluff/requirements\\.txt)$",
       "^docker-compose\\.yaml$"
     ],
     "orchestration_checks": [

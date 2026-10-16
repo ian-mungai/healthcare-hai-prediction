@@ -231,6 +231,90 @@ only after the existing prose was corrected. Its dash and slash kinds block sinc
 Oct 15 2026. Its semicolon kind warns until a whole-repository run has no semicolon finding. The unused code, dependency and file
 checks blocked only after their findings were deleted or listed with a reason.
 
+## Model metadata
+
+`scripts/quality/model_metadata.py` reads the dbt YAML and SQL in every folder that `dbt/dbt_project.yml` lists for models, seeds, analyses, tests, macros and snapshots
+(`.yml` and `.yaml`), the gold contract `data_contracts/lakehouse/gold_contract.json` and the bronze table map `config/lakehouse/bronze_tables.json`.
+The installed `.tools/sqlfluff` environment compiles models through its dbt templater with a private in-memory `lint` profile. SQLFluff parses the compiled SQL.
+Compilation uses the installed dbt packages, writes temporary artifacts and starts no build or container. It needs no catalog, credentials or network.
+The `model-metadata` hook runs when a dbt YAML or SQL file, a macro, the contract, the table map or the check itself changes.
+
+Run `.venv/bin/python -m scripts.quality.model_metadata`. It exits 0 when the project is clean, 1 for a problem and 2 when it cannot read the project,
+for example after a malformed YAML, JSON or Jinja file. A cannot-run report names the file, line, cause, repair and who to ask. It prints no traceback.
+Add `--lineage-report <report.json>` to retain output-column origins, compiled SQL hashes and the conservative-model list.
+
+It blocks in these cases. The rule name in brackets starts each problem line.
+
+- A source table has no `meta.classification` (`source-class`). A model has no `meta.classification` or no YAML entry (`model-class`).
+- A model marked Public outputs a named confidential source column, including a rename or a derived expression (`class-inheritance`).
+  `Confidential` is higher than `Public`. Reading a Confidential table alone does not raise the model's class.
+- A Confidential source has no nonempty `meta.confidential_columns` list of explicit column names or the explicit value `all`. All-column mode requires
+  a nonempty `meta.confidential_columns_reason`. Every source column then carries a confidential origin, including renamed or derived outputs.
+  `meta.proposed_confidential_columns` records candidate columns for later review and never narrows an active `all` declaration. A Public source declares confidential columns,
+  or a model tries to declare its own confidential columns (`confidential-columns`). These declarations belong on sources.
+- A source or model declares obsolete `meta.classification_override` or `meta.lineage_columns` metadata (`lineage-override`).
+  Output lineage determines classification. No model identity, reason or self-declared column list grants an exemption.
+- A Confidential dbt source, bronze collection, bronze table override or loader table has no `exception` (`exception`). On a dbt source it is `meta.exception`.
+  It names the documented ingestion exception.
+- A bronze table has no class, a dbt source in the `bronze` namespace is lower than its bronze table or a source has no bronze table (`bronze-class`).
+  The table map's `classification` object holds `collections`, `loader_tables` and an optional table-level `classification` override.
+- A gold fact (a `fct_` model under `dbt/models/gold`) has no `meta.fact_type` (`fact-type`).
+- A measure column of a gold fact has no `meta.additivity` on its column entry (`additivity`). The gold contract supplies the inventory: every numeric fact column
+  except the date-part columns (`DATE_PARTS`, for example `data_year`) and lineage counts (`LINEAGE_COUNTS`, for example `source_row_number`).
+- A column labeled `semi_additive` has no nonempty list of axis names in `meta.additive_across` (`additive-across`).
+- A fact model has no contract entry or a contract fact has no model (`fact-contract`).
+- A model, source table or macro is defined twice or two SQL files share a model name (`duplicate-entry`).
+- A `ref`, `source` or macro call cannot be resolved (`unresolved-reference`). This includes unresolved callable aliases and unknown context calls.
+- A value is outside its set (`allowed-values`). Classes are `Public` and `Confidential`. Fact types are `transaction`, `periodic_snapshot` and
+  `accumulating_snapshot`. Additivity is `additive`, `semi_additive` and `non_additive`.
+
+Reference discovery statically evaluates Jinja variables, loops, macro arguments, return macros and project variables, including macros in subfolders.
+It resolves `builtins.ref`, `builtins.source` and qualified project calls. Only explicitly supported calls and methods count as having no dependencies.
+`dbt_utils.get_column_values` is the supported package macro. The statements `include`, `extends` and `import` are rejected.
+Sources are keyed by source name and table name. Seeds hold Public or Synthetic data and cannot raise a class.
+
+Parsed lineage follows output expressions, aliases, CTEs, supported wildcards and positional union branches. Each source occurrence has its own parsed position.
+Relations are registered by their unqualified table name and alias. Earlier select aliases resolve within the same select list.
+Declared columns resolve before earlier aliases. An earlier alias also retains the possible origins of an undeclared real column with the same name:
+one candidate relation adds its unknown-column policy. Several candidates add their combined confidential origins.
+An unknown name with one candidate relation uses that relation's policy:
+a Public source contributes no confidential origin, an explicit-list source protects only listed names and an all-column source protects every name.
+An unknown model or CTE output retains the union of that relation's confidential output origins. With several candidate relations and no declared match,
+an unknown name retains their combined confidential origins for that reference. Registering both a table name and its alias does not duplicate the relation.
+A two-part reference without a local relation qualifier uses the first part as its struct-column name. Visible outer references remain unsupported.
+Table functions in FROM, lateral sources, correlated subqueries, dotted function calls, positional column references and other unsupported SQL constructs require whole-model conservative handling.
+A construct the check cannot trace propagates every named confidential column from its input models' outputs to every output.
+That input set includes declared references and known relations found in parsed SQL. Compilation or SQL-parse failures retain all named confidential source columns.
+A SQL analysis exception retains all named confidential source columns for the affected model and lets the worker continue checking other models.
+Class-inheritance messages append the conservative reason when one applies. The lineage report also retains the type and text of caught analysis exceptions.
+The lineage report names each such model and its reason. The compiler and parser worker has a 90-second deadline and reports an exceeded deadline with the wait duration. An unresolved compiled relation blocks the check.
+Write the documented ingestion exception on every Confidential source, collection and table override.
+
+`meta.additive_across` lists allowed aggregation axes, for example `[hospital]`. The check requires the list and does not restrict axis names.
+`meta.additivity_note` carries a free-text restriction. Cost-report stocks require one selected report and period per hospital before summing across hospitals.
+WONDER population sums hold one database fixed and exclude repeated-export and held rows.
+
+The same module provides `scan-personal-data --manifest <manifest.json> --output <report.json> [--inventory <inventory.json>]`
+for explicitly listed local CSV, JSON, JSONL, NDJSON or text exports.
+The manifest has a `tables` list. Each entry names a `collection`, a `table` and a nonempty `files` list of export paths. Relative paths resolve from the manifest.
+An optional `columns` list declares the table's schema names. Otherwise the first CSV file's header supplies them. JSON keys outside this list become `field_N`
+in emitted paths, including lowercase keys that look like identifiers. Nested unknown keys are replaced too. Text exports use the fixed `line_text` column.
+An inventory is a JSON object with a nonempty `tables` list of `collection` and `table` pairs. Duplicate pairs or a missing inventoried table make the scan incomplete.
+Without `--inventory`, `complete` confirms only that the listed files were read. It does not prove that every table was listed.
+Only listed files are scanned. Supply the full approved export inventory to assess a collection. Unsupported or unreadable files make the report incomplete.
+The scanner cannot read Parquet, spreadsheets, PDFs, binary documents, archives or database table storage directly; they need a supported local text export.
+Findings contain column paths, pattern kinds, their basis and counts. No stored value is emitted. The patterns flag possible names, addresses, identifiers,
+dates of birth, emails and phone numbers in text or column names. They can flag organizational text and can miss personal data without a supported pattern.
+A result with no matches is a pattern result, not formal anonymization or collection-wide clearance. The scanner refuses symlink exports and report paths that overlap inputs.
+It exits 0 for no matches, 1 for possible personal data and 2 for incomplete scanning. JSON files over 64 MiB need a streaming JSONL export.
+
+When a rule seems wrong, ask the owner for the change. Never skip the hook.
+`.venv/bin/python -m scripts.quality.run_model_metadata_e2e` checks bad and good samples through the real hook and direct CLI.
+The full run also tests the scanner on synthetic exports, including value-free reports, malformed inputs and repeat runs.
+It writes `data/e2e/model_metadata/<UTC>_<pid>/report.json`. `--case <NAME>` runs one metadata case.
+`--checker` and `--hook-config` select another checker or hook configuration, for example a mutant with one rule removed.
+`scan-personal-data --output-directory <folder>` runs only the scanner fixtures through the E2E module.
+
 ## How the checks run
 
 CI checks Ruff formatting and security rules, MyPy, outgoing-source secret

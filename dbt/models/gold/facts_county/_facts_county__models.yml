@@ -3,6 +3,9 @@ version: 2
 models:
   - name: fct_acs_county_value
     description: One row per row of int_acs_county_values, every silver column unchanged, then the surrogate keys; silver test assert_county_context_values_cast checks the published values.
+    meta:
+      classification: Public
+      fact_type: periodic_snapshot
     columns:
       - name: acs_value_key
         description: The row key of the silver model.
@@ -27,6 +30,10 @@ models:
               arguments:
                 to: ref('dim_release')
                 field: release_sk
+      - name: value_number
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
     data_tests:
       - dbt_utils.equality:
           name: equal_content_fct_acs_county_value
@@ -68,6 +75,9 @@ models:
             expression: typeof(missing_token) = 'VARCHAR'
   - name: fct_bls_county_series
     description: One row per row of int_bls_county_series, every silver column unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
+    meta:
+      classification: Public
+      fact_type: periodic_snapshot
     columns:
       - name: bls_row_key
         description: The row key of the silver model.
@@ -92,6 +102,10 @@ models:
               arguments:
                 to: ref('dim_release')
                 field: release_sk
+      - name: value_number
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
     data_tests:
       - dbt_utils.equality:
           name: equal_content_fct_bls_county_series
@@ -136,6 +150,9 @@ models:
             expression: typeof(missing_token) = 'VARCHAR'
   - name: fct_gv_county_value
     description: One row per row of int_gv_county_values, every silver column unchanged, then the surrogate keys; silver test assert_county_health_values_cast checks the published values.
+    meta:
+      classification: Public
+      fact_type: periodic_snapshot
     columns:
       - name: gv_value_key
         description: The row key of the silver model.
@@ -160,6 +177,10 @@ models:
               arguments:
                 to: ref('dim_release')
                 field: release_sk
+      - name: value_number
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
     data_tests:
       - dbt_utils.equality:
           name: equal_content_fct_gv_county_value
@@ -198,6 +219,9 @@ models:
             expression: typeof(missing_token) = 'VARCHAR'
   - name: fct_hpsa_component
     description: One row per row of int_hpsa_components, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
+    meta:
+      classification: Public
+      fact_type: periodic_snapshot
     columns:
       - name: hpsa_row_key
         description: The row key of the silver model.
@@ -222,6 +246,10 @@ models:
               arguments:
                 to: ref('dim_release')
                 field: release_sk
+      - name: hpsa_score
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
     data_tests:
       - dbt_utils.equality:
           name: equal_content_fct_hpsa_component
@@ -303,6 +331,9 @@ models:
             expression: typeof(county_token) = 'VARCHAR'
   - name: fct_hsa_zip_cases
     description: One row per row of int_hsa_zip_cases, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
+    meta:
+      classification: Confidential
+      fact_type: periodic_snapshot
     columns:
       - name: hsa_row_key
         description: The row key of the silver model.
@@ -327,6 +358,18 @@ models:
               arguments:
                 to: ref('dim_zip')
                 field: zip_sk
+      - name: total_cases
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: additive
+      - name: total_charges
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: additive
+      - name: total_days_of_care
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: additive
     data_tests:
       - dbt_utils.equality:
           name: equal_content_fct_hsa_zip_cases
@@ -375,6 +418,9 @@ models:
             expression: typeof(zip_published) = 'VARCHAR'
   - name: fct_hud_zip_county_hold
     description: One row per row of int_hud_zip_county_holds, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
+    meta:
+      classification: Confidential
+      fact_type: periodic_snapshot
     columns:
       - name: hud_row_key
         description: The row key of the silver model.
@@ -429,6 +475,9 @@ models:
             expression: typeof(geoid_published) = 'VARCHAR'
   - name: fct_mmd_prevalence
     description: One row per row of int_mmd_prevalence, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
+    meta:
+      classification: Public
+      fact_type: periodic_snapshot
     columns:
       - name: mmd_row_key
         description: The row key of the silver model.
@@ -453,6 +502,10 @@ models:
               arguments:
                 to: ref('dim_release')
                 field: release_sk
+      - name: value_number
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
     data_tests:
       - dbt_utils.equality:
           name: equal_content_fct_mmd_prevalence
@@ -494,6 +547,9 @@ models:
             expression: typeof(value_published) = 'VARCHAR'
   - name: fct_mua_component
     description: One row per row of int_mua_components, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
+    meta:
+      classification: Public
+      fact_type: periodic_snapshot
     columns:
       - name: mua_row_key
         description: The row key of the silver model.
@@ -518,6 +574,10 @@ models:
               arguments:
                 to: ref('dim_release')
                 field: release_sk
+      - name: imu_score
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
     data_tests:
       - dbt_utils.equality:
           name: equal_content_fct_mua_component
@@ -599,6 +659,9 @@ models:
             expression: typeof(county_token) = 'VARCHAR'
   - name: fct_places_county_value
     description: One row per row of int_places_county_values, every silver column unchanged, then the surrogate keys; silver test assert_county_health_values_cast checks the published values.
+    meta:
+      classification: Public
+      fact_type: periodic_snapshot
     columns:
       - name: places_row_key
         description: The row key of the silver model.
@@ -623,6 +686,23 @@ models:
               arguments:
                 to: ref('dim_release')
                 field: release_sk
+      - name: data_value
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: high_confidence_limit
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: low_confidence_limit
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: total_population
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: semi_additive
+          additive_across: [county]
     data_tests:
       - dbt_utils.equality:
           name: equal_content_fct_places_county_value
@@ -667,6 +747,9 @@ models:
             expression: typeof(data_value_published) = 'VARCHAR'
   - name: fct_ruca_code
     description: One row per row of int_ruca_codes, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
+    meta:
+      classification: Public
+      fact_type: periodic_snapshot
     columns:
       - name: ruca_row_key
         description: The row key of the silver model.
@@ -738,6 +821,9 @@ models:
             expression: typeof(secondary_published) = 'VARCHAR'
   - name: fct_rucc_county
     description: One row per row of int_rucc_county_codes, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
+    meta:
+      classification: Confidential
+      fact_type: periodic_snapshot
     columns:
       - name: rucc_key
         description: The row key of the silver model.
@@ -771,6 +857,11 @@ models:
               arguments:
                 to: ref('dim_state')
                 field: state_sk
+      - name: population
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: semi_additive
+          additive_across: [county]
     data_tests:
       - dbt_utils.equality:
           name: equal_content_fct_rucc_county
@@ -816,6 +907,9 @@ models:
             expression: typeof(population_published) = 'VARCHAR'
   - name: fct_sahie_county_value
     description: One row per row of int_sahie_county_rows, every silver column unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
+    meta:
+      classification: Public
+      fact_type: periodic_snapshot
     columns:
       - name: sahie_row_key
         description: The row key of the silver model.
@@ -840,6 +934,69 @@ models:
               arguments:
                 to: ref('dim_release')
                 field: release_sk
+      - name: estimate_year
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: nipr
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: semi_additive
+          additive_across: [county]
+      - name: nui
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: semi_additive
+          additive_across: [county]
+      - name: pctui
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: pctui_moe
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: nic
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: semi_additive
+          additive_across: [county]
+      - name: nic_moe
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: nipr_moe
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: nui_moe
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: pctelig
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: pctelig_moe
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: pctic
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: pctic_moe
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: pctliic
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: pctliic_moe
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
     data_tests:
       - dbt_utils.equality:
           name: equal_content_fct_sahie_county_value
@@ -890,6 +1047,9 @@ models:
             expression: typeof(estimate_year) = 'INTEGER'
   - name: fct_saipe_county_estimate
     description: One row per row of int_saipe_county_estimates, every silver column unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
+    meta:
+      classification: Public
+      fact_type: periodic_snapshot
     columns:
       - name: saipe_row_key
         description: The row key of the silver model.
@@ -914,6 +1074,97 @@ models:
               arguments:
                 to: ref('dim_release')
                 field: release_sk
+      - name: estimate_year
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: median_household_income
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: median_household_income_lb90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: median_household_income_ub90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_all_count
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: semi_additive
+          additive_across: [county]
+      - name: poverty_all_pct
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_all_pct_lb90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_all_pct_ub90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_0_17_count
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: semi_additive
+          additive_across: [county]
+      - name: poverty_0_17_count_lb90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_0_17_count_ub90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_0_17_pct
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_0_17_pct_lb90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_0_17_pct_ub90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_5_17_related_count
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: semi_additive
+          additive_across: [county]
+      - name: poverty_5_17_related_count_lb90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_5_17_related_count_ub90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_5_17_related_pct
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_5_17_related_pct_lb90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_5_17_related_pct_ub90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_all_count_lb90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: poverty_all_count_ub90
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
     data_tests:
       - dbt_utils.equality:
           name: equal_content_fct_saipe_county_estimate
@@ -962,6 +1213,9 @@ models:
             expression: typeof(estimate_year) = 'INTEGER'
   - name: fct_svi_county_value
     description: One row per row of int_svi_county_values, every silver column unchanged, then the surrogate keys; silver test assert_county_context_values_cast checks the published values.
+    meta:
+      classification: Public
+      fact_type: periodic_snapshot
     columns:
       - name: svi_value_key
         description: The row key of the silver model.
@@ -986,6 +1240,10 @@ models:
               arguments:
                 to: ref('dim_release')
                 field: release_sk
+      - name: value_number
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
     data_tests:
       - dbt_utils.equality:
           name: equal_content_fct_svi_county_value
@@ -1023,6 +1281,9 @@ models:
             expression: typeof(missing_token) = 'VARCHAR'
   - name: fct_wonder_county_deaths
     description: One row per row of int_wonder_county_deaths, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
+    meta:
+      classification: Public
+      fact_type: periodic_snapshot
     columns:
       - name: wonder_row_key
         description: The row key of the silver model.
@@ -1047,6 +1308,32 @@ models:
               arguments:
                 to: ref('dim_release')
                 field: release_sk
+      - name: crude_rate
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: crude_rate_lower_95
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: crude_rate_standard_error
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: crude_rate_upper_95
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: non_additive
+      - name: deaths
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: additive
+      - name: population
+        description: The silver column of the same name, unchanged.
+        meta:
+          additivity: semi_additive
+          additive_across: [county]
+          additivity_note: sum across counties only within one database, excluding repeated-export and held rows
     data_tests:
       - dbt_utils.equality:
           name: equal_content_fct_wonder_county_deaths

@@ -157,6 +157,12 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: model-metadata
+        name: dbt sources and models carry classes, gold facts carry fact types and measures carry additivity
+        entry: .venv/bin/python -m scripts.quality.model_metadata
+        language: system
+        pass_filenames: false
+        files: ^(dbt/.*\.(ya?ml|sql)|data_contracts/lakehouse/gold_contract\.json|config/lakehouse/bronze_tables\.json|scripts/(process\.py|quality/(model_metadata\.py|install_sqlfluff\.py|sqlfluff/requirements\.txt)))$
       - id: documentation-review
         name: All documentation reviewed for the staged revision
         entry: .venv/bin/python -m scripts.quality.documentation_review check
@@ -215,7 +221,7 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-commit]
-        files: ^(scripts/acquisition/|config/acquisition/|tests/test_source_registry\.py$|tests/fixtures/registry_additions_bronze_lineage\.csv$|scripts/process\.py$|scripts/quality/typecheck\.py$|config/quality/mypy_runtimes\.json$|scripts/infrastructure/render_project_config\.py$|requirements\.txt$|\.github/workflows/ci\.yml$)
+        files: ^(scripts/acquisition/|config/acquisition/|config/lakehouse/bronze_tables\.json$|tests/test_source_registry\.py$|tests/fixtures/registry_additions_bronze_lineage\.csv$|scripts/process\.py$|scripts/quality/typecheck\.py$|config/quality/mypy_runtimes\.json$|scripts/infrastructure/render_project_config\.py$|requirements\.txt$|\.github/workflows/ci\.yml$)
       - id: local_ci_affected
         name: Run local CI for the staged paths
         entry: env CI_SCOPE=staged bash scripts/run_ci.sh

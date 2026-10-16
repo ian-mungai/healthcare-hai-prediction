@@ -553,7 +553,13 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             work,
             "sqlfluff_pins_select_sql_style",
             ["--scope", "paths", "--path", "scripts/quality/sqlfluff/requirements.txt", "--part", "core"],
-            ["repository_code_checks", "configuration_checks", "sql_style"],
+            ["lakehouse_checks", "repository_code_checks", "configuration_checks", "sql_style"],
+        ),
+        selection_case(
+            work,
+            "sqlfluff_installer_selects_metadata_checks",
+            ["--scope", "paths", "--path", "scripts/quality/install_sqlfluff.py", "--part", "core"],
+            ["python_lint", "lakehouse_checks", "repository_code_checks", "configuration_checks", "sql_style"],
         ),
         selection_case(
             work,
@@ -603,6 +609,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
     cases += [
         acquisition_selection_case(work, "scripts/quality/typecheck.py", True),
         acquisition_selection_case(work, "config/quality/mypy_runtimes.json", True),
+        acquisition_selection_case(work, "config/lakehouse/bronze_tables.json", True),
         acquisition_selection_case(work, "docs/quality_checks.md", False),
     ]
     return cases
