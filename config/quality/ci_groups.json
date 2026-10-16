@@ -36,6 +36,7 @@
       "^scripts/orchestration/",
       "^orchestration/",
       "^dags/",
+      "^tests/orchestration/",
       "^config/orchestration/",
       "^data_contracts/orchestration/",
       "^services/orchestration/",

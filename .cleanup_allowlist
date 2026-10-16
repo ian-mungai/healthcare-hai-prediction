@@ -66,3 +66,4 @@ dbt scripts/lakehouse/archive_saved_models.py -- the archive tool lists the save
 unused-code scripts/lakehouse/fake_docker.py -- http.server calls the do_* hooks, log_message and address_string and reads protocol_version, daemon_threads and close_connection
 unused-code scripts/orchestration/broker.py -- http.server calls the do_* hooks, handle_error and log_message and reads server_version, sys_version, timeout and daemon_threads
 unused-code scripts/orchestration/run_supervisor_e2e.py -- http.server calls the do_* hooks and log_message of the stand-in health endpoint
+orphan tests/orchestration/fixtures/tiny/* -- dbt loads every model, test and property file of the project it is given; the transform E2E copies the folder as one project

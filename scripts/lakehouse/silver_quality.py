@@ -1,7 +1,8 @@
 """Validate the silver build file with Great Expectations before it is published (silver step 6).
 
-Runs inside the quality image (``hai-quality``), started by ``scripts/lakehouse/silver.py validate``. It opens the build
-file read-only, checks the build marker, compiles the committed JSON suites of every folder it is given (the silver
+Runs inside the quality image (``hai-quality``), started by ``scripts/lakehouse/silver.py validate``. It copies the build
+file to a private temporary folder, reports the copy's SHA-256 in the result and runs every suite on that copy. It opens the
+copy read-only, checks the build marker, compiles the committed JSON suites of every folder it is given (the silver
 atomic suites and the gold suites) into Great Expectations objects in one ephemeral context, validates every table the
 suites name (SQL pushdown) and writes one result with counts only: no data value leaves the build file. A table a suite
 names but the build lacks is a structural failure of its expectations, not a crash. A band under ``proposed_values`` in the
@@ -14,10 +15,15 @@ plans/silver_processed_zone_20261009/plan.md and 853 to 857 in plans/wp/r3_failu
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -59,6 +65,38 @@ def keep_connection() -> None:
     dialects = engine_module._PERSISTED_CONNECTION_DIALECTS
     if "duckdb" not in dialects:
         engine_module._PERSISTED_CONNECTION_DIALECTS = (*dialects, DuckDBDialect("duckdb"))
+
+
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+@contextmanager
+def private_copy(database: Path) -> Iterator[tuple[Path, str]]:
+    """Copy the build file into a folder that only this container can reach and yield the copy with its SHA-256.
+
+    Every suite reads the copy, so the SHA-256 names the bytes that were validated whatever happens to the original afterwards. The copy is hashed again
+    when the block ends and a copy that changed raises ``QualityError``.
+    """
+    with tempfile.TemporaryDirectory(prefix="build_") as folder:
+        copy = Path(folder) / database.name
+        try:
+            shutil.copyfile(database, copy)
+            copy.chmod(0o400)
+            digest = sha256_of(copy)
+        except OSError as error:
+            raise QualityError(f"the build file cannot be copied and hashed: {type(error).__name__}") from error
+        yield copy, digest
+        try:
+            unchanged = sha256_of(copy) == digest
+        except OSError as error:
+            raise QualityError(f"the private copy of the build file cannot be read again: {type(error).__name__}") from error
+        if not unchanged:
+            raise QualityError("the private copy of the build file changed while it was validated")
 
 
 def read_marker(database: Path) -> dict[str, str]:
@@ -246,7 +284,9 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
-        record = validate(args.database, args.suites, args.baselines)
+        with private_copy(args.database) as (copy, digest):
+            record = validate(copy, args.suites, args.baselines)
+        record["build_file_sha256"] = digest
     except QualityError as error:
         args.output.write_text(json.dumps({"error": str(error)}, indent=2) + "\n")
         sys.stderr.write(f"silver quality: stopped: {error}\n")

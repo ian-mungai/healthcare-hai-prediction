@@ -38,7 +38,7 @@
     "quality": {
       "reason": "Great Expectations validation of the silver build file runs in the quality image (scripts/lakehouse/silver.py validate starts it).",
       "requirements": ["services/quality/requirements.txt"],
-      "code": ["scripts/lakehouse/silver_quality.py"]
+      "code": ["scripts/lakehouse/silver_quality.py", "scripts/lakehouse/gold_reconcile.py"]
     },
     "orchestration": {
       "reason": "The DAG files, the in-image checks and the metadata dump run inside the Airflow image that services/orchestration/Dockerfile builds from the official image (Airflow plan section 11.1).",

@@ -812,6 +812,10 @@ def remove_mapping(document: dict[str, Any]) -> None:
     document["templates"]["silver_build"]["modes"]["fixture"].update(launcher=None, reason="synthetic mapping removed")
 
 
+def map_to_control(document: dict[str, Any]) -> None:
+    document["templates"]["silver_build"]["modes"]["fixture"] = copy.deepcopy(document["templates"]["release_rejected"]["modes"]["fixture"])
+
+
 @case("cancel_after_inventory_drift")
 def cancel_after_inventory_drift(env: BrokerEnv) -> dict[str, bool]:
     """929d: the launcher accepts a submit, its reply is lost, the broker stops, the inventory row changes (other arguments, then no mapping) and the broker
@@ -820,7 +824,11 @@ def cancel_after_inventory_drift(env: BrokerEnv) -> dict[str, bool]:
     env.hold_jobs()
     session = "d" * 64
     checks: dict[str, bool] = {}
-    for label, attempt, change in (("changed arguments", 1, change_arguments), ("removed mapping", 2, remove_mapping)):
+    for label, attempt, change in (
+        ("changed arguments", 1, change_arguments),
+        ("removed mapping", 2, remove_mapping),
+        ("mapped to a control row", 3, map_to_control),
+    ):
         env.write_inventory()
         request = env.request("silver_build", attempt=attempt)
         accepted, cache_missing, submit_code = lose_submit_reply(env, request, session)
@@ -850,7 +858,7 @@ def cancel_after_inventory_drift(env: BrokerEnv) -> dict[str, bool]:
         }
         env.stop_brokers()
     env.write_inventory()
-    request = env.request("silver_build", attempt=3)
+    request = env.request("silver_build", attempt=4)
     accepted, cache_missing, submit_code = lose_submit_reply(env, request, session)
     drift_inventory(env, remove_mapping)
     asked = env.client_for_broker()
@@ -902,7 +910,7 @@ def cancel_after_inventory_drift(env: BrokerEnv) -> dict[str, bool]:
     }
     env.stop_brokers()
     env.write_inventory()
-    never = env.request("silver_build", attempt=4)
+    never = env.request("silver_build", attempt=5)
     leave_intent(env, never)
     drift_inventory(env, remove_mapping)
     last = env.new_broker()
@@ -917,7 +925,7 @@ def cancel_after_inventory_drift(env: BrokerEnv) -> dict[str, bool]:
 
 
 TOKEN_STORES = ("missing token file", "unsearchable token folder", "accessible token")
-DRIFTS = (("changed arguments", change_arguments), ("removed mapping", remove_mapping))
+DRIFTS = (("changed arguments", change_arguments), ("removed mapping", remove_mapping), ("mapped to a control row", map_to_control))
 
 
 def hide_token_store(kind: str, root: Path, run_id: str, aside: Path) -> Callable[[], None]:
@@ -1741,6 +1749,8 @@ def unmapped_template_refused(env: BrokerEnv) -> dict[str, bool]:
     for name in FROZEN_NAMES:
         template = broker.templates[name]
         for mode, row in template["modes"].items():
+            if row.get("launcher") or row.get("control"):
+                continue
             error = refusal_of(partial(broker.submit, env.request(name, mode=mode, attempt=1)))
             if row["no_op"]:
                 results[f"{name}/{mode}: a no-op is recorded without a launcher request"] = error is None

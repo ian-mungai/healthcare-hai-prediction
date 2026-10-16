@@ -443,6 +443,8 @@ def collect(platform: dict[str, Any], sections: set[str], test_registry: str | N
             dags = image["dags"]
             results["every DAG file imports in the image with no error or cycle"] = {"ok": not dags["import_errors"] and bool(dags["dag_ids"]), **dags}
             results.update({f"graph (Airflow objects): {name}": case for name, case in image["graph_cases"].items()})
+            transform = image["transform_graph"]
+            results["transform_dag passes the graph validator (Airflow object)"] = {"ok": transform["present"] and not transform["violations"], **transform}
             pins = image["constraints"]
             tools_ok = all(tool["ok"] for tool in pins["build_tools"].values())
             release_ok = not pins.get("release_problems") and set(pins.get("release", {})) == set(platform["airflow"]["release_packages"])

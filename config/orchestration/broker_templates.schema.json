@@ -17,7 +17,7 @@
   },
   "$defs": {
     "class": {"enum": ["offline", "lakehouse_read", "lakehouse_write", "collector", "training", "serving"]},
-    "placeholder_text": {"type": "string", "pattern": "^([^{}]|\\{(run_id|mode|run_dir|build_file)\\})*$"},
+    "placeholder_text": {"type": "string", "pattern": "^([^{}]|\\{(run_id|mode|run_dir|build_file|checkout)\\})*$"},
     "value": {
       "oneOf": [
         {"$ref": "#/$defs/placeholder_text"},
@@ -31,11 +31,42 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["template", "args", "params"],
+      "dependentRequired": {"records_build_file": ["build_file_result"], "build_file_result": ["records_build_file"]},
       "properties": {
         "template": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$"},
         "args": {"type": "array", "items": {"$ref": "#/$defs/placeholder_text"}},
         "params": {"type": "object", "additionalProperties": {"$ref": "#/$defs/value"}},
-        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 86400}
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "records_build_file": {"$ref": "#/$defs/placeholder_text"},
+        "build_file_result": {"$ref": "#/$defs/placeholder_text"},
+        "requires_build_file": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["validated_by", "file"],
+          "properties": {
+            "validated_by": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$"},
+            "file": {"$ref": "#/$defs/placeholder_text"}
+          }
+        }
+      }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action"],
+      "properties": {
+        "action": {"enum": ["acquire", "record", "gate_accepted", "gate_rejected", "release_accepted", "release_rejected"]},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "seed": {"$ref": "#/$defs/placeholder_text"},
+            "folders": {"type": "array", "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,40}$"}, "minItems": 1},
+            "record_file": {"$ref": "#/$defs/placeholder_text"},
+            "build_files": {"type": "array", "items": {"$ref": "#/$defs/placeholder_text"}, "minItems": 1},
+            "expected_states": {"type": "object", "additionalProperties": {"enum": ["success", "skipped"]}, "minProperties": 1}
+          }
+        }
       }
     },
     "mode": {
@@ -46,12 +77,14 @@
         "class": {"$ref": "#/$defs/class"},
         "no_op": {"type": "boolean"},
         "launcher": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/launcher"}]},
+        "control": {"$ref": "#/$defs/control"},
         "reason": {"type": "string", "minLength": 10}
       },
       "oneOf": [
-        {"description": "an intentional no-op: no launcher row, the reason recorded", "properties": {"no_op": {"const": true}}, "required": ["reason"], "not": {"required": ["launcher"]}},
-        {"description": "forwarded to a launcher template", "properties": {"no_op": {"const": false}, "launcher": {"type": "object"}}, "required": ["launcher"], "not": {"required": ["reason"]}},
-        {"description": "no launcher row (yet): refused with this reason", "properties": {"no_op": {"const": false}, "launcher": {"type": "null"}}, "required": ["launcher", "reason"]}
+        {"description": "an intentional no-op: no launcher row, the reason recorded", "properties": {"no_op": {"const": true}}, "required": ["reason"], "not": {"anyOf": [{"required": ["launcher"]}, {"required": ["control"]}]}},
+        {"description": "forwarded to a launcher template", "properties": {"no_op": {"const": false}, "launcher": {"type": "object"}}, "required": ["launcher"], "not": {"anyOf": [{"required": ["reason"]}, {"required": ["control"]}]}},
+        {"description": "no launcher row (yet): refused with this reason", "properties": {"no_op": {"const": false}, "launcher": {"type": "null"}}, "required": ["launcher", "reason"], "not": {"required": ["control"]}},
+        {"description": "a run-control action the broker performs itself on the launcher's run methods", "properties": {"no_op": {"const": false}}, "required": ["control"], "not": {"anyOf": [{"required": ["launcher"]}, {"required": ["reason"]}]}}
       ]
     },
     "template": {

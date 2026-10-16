@@ -113,6 +113,7 @@ orchestration_checks() {
   "$python_bin" -m scripts.orchestration.run_stack_e2e
   "$python_bin" -m scripts.orchestration.run_broker_e2e
   "$python_bin" -m scripts.orchestration.run_supervisor_e2e
+  "$python_bin" -m scripts.orchestration.run_transform_broker_e2e
   # The offline checks skip the built Airflow image, which a CI runner does not have.
   "$python_bin" -m scripts.orchestration.offline_checks --no-image
   "$python_bin" -m scripts.orchestration.run_failing_first --check

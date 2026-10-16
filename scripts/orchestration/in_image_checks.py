@@ -6,6 +6,7 @@ read-only and runs ``python in_image_checks.py``. It prints one JSON object:
 - ``dags``: every file in the DAG folder imported by Airflow's DagBag; import errors and cycles are listed.
 - ``graph_cases``: synthetic DAGs built from real Airflow operators; the section 5 reference graph must pass the
   ``transform_dag`` validator and each mutation must fail with its rule.
+- ``transform_graph``: the validator on the real ``transform_dag`` object that Airflow imported from the DAG folder.
 - ``constraints``: every installed distribution is either in the Airflow 3.3.2 constraints file at the pinned version, or one of the pip and uv build
   tools at the version the image records, or in the exact release set of ``config/orchestration/platform.json`` at its own pinned version. Nothing is
   exempt by name prefix: any other distribution, an extra provider or the task SDK included, is reported as unpinned.
@@ -43,6 +44,19 @@ def dags() -> dict[str, Any]:
     bag = DagBag(dag_folder=str(DAG_FOLDER))
     files = sorted(path.name for path in DAG_FOLDER.glob("*.py"))
     return {"files": files, "dag_ids": sorted(bag.dag_ids), "import_errors": {Path(path).name: text[-400:] for path, text in bag.import_errors.items()}}
+
+
+def transform_graph() -> dict[str, Any]:
+    """The graph validator on the real ``transform_dag``; every rule it breaks is listed."""
+    dag = DagBag(dag_folder=str(DAG_FOLDER)).dags.get("transform_dag")
+    if dag is None:
+        return {"present": False, "violations": []}
+    violations = validate_transform_graph(graph_from_dag(dag))
+    return {
+        "present": True,
+        "tasks": sorted(dag.task_dict),
+        "violations": [{"rule": item.rule, "task": item.task, "detail": item.detail} for item in violations],
+    }
 
 
 def build(
@@ -152,7 +166,8 @@ def main() -> int:
     """Print every result as JSON."""
     argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args()
     tools = {name: os.environ.get(variable, "") for name, variable in (("pip", "AIRFLOW_PIP_VERSION"), ("uv", "AIRFLOW_UV_VERSION"))}
-    sys.stdout.write("IN_IMAGE " + json.dumps({"dags": dags(), "graph_cases": graph_cases(), "constraints": constraints(tools)}) + "\n")
+    report = {"dags": dags(), "graph_cases": graph_cases(), "transform_graph": transform_graph(), "constraints": constraints(tools)}
+    sys.stdout.write("IN_IMAGE " + json.dumps(report) + "\n")
     return 0
 
 

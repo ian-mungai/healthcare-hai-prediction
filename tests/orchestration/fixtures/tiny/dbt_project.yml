@@ -1,0 +1,9 @@
+name: tiny
+version: "1.0.0"
+config-version: 2
+profile: tiny
+model-paths: ["models"]
+test-paths: ["tests"]
+flags:
+  send_anonymous_usage_stats: false
+  use_colors: false
