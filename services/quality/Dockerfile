@@ -2,6 +2,8 @@
 # and duckdb-engine. Kept apart from the analytics image so dbt does not carry pandas, SciPy and Altair.
 # The base image is pinned by digest and the wheels by hash; nothing is fetched at validation time.
 FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS deadline
+# hai is the services/hai named build context passed by docker-compose.yaml additional_contexts.
+# hadolint ignore=DL3022
 COPY --from=hai deadline_run.go /src/deadline_run.go
 WORKDIR /src
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /deadline_run deadline_run.go
@@ -18,7 +20,7 @@ ENV GX_ANALYTICS_ENABLED=false
 
 # Run as an unprivileged user; the code, suites and build file are mounted at run time.
 RUN useradd --create-home --uid 10003 quality
-USER quality
+USER 10003
 WORKDIR /workspace
 
 # The deadline entrypoint every finite job runs under (D1 section 5 item 1); the label lets the launcher refuse an image without it.

@@ -12,7 +12,7 @@ py="$repo/.venv/bin/python"
 clean="$(mktemp -d)/repo"
 mkdir -p "$clean"
 chmod 700 "$(dirname "$clean")"
-cd "$repo"
+cd "$repo" || exit 1
 git ls-files -z --cached --others --exclude-standard | rsync -a --from0 --files-from=- "$repo/" "$clean/"
 # Git LFS files are real files in this working copy, so the copy holds their contents.
 ln -s "$repo/.venv" "$clean/.venv"
@@ -23,7 +23,7 @@ printf '{"clean_copy_files": %s}\n' "$(git -C "$clean" ls-files | wc -l | tr -d 
 record() { printf '{"stage": "%s", "step": "%s", "exit": %s}\n' "$1" "$2" "$3" >>"$out/results.jsonl"; }
 
 # Stage A: the gate in a copy with no data/ folder. SKIP_STAGE_A=1 reruns stage B only.
-cd "$clean"
+cd "$clean" || exit 1
 if [[ "${SKIP_STAGE_A:-0}" != "1" ]]; then
   PYTHON_BIN="$py" bash scripts/acquisition/run_checks.sh >"$out/A_run_checks.log" 2>&1
   record A run_checks $?

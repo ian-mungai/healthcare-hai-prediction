@@ -30,6 +30,8 @@ COPIED = [
     ".writing_allowlist",
     ".markdownlint-cli2.jsonc",
     ".sqlfluff",
+    ".yamllint",
+    "config/quality_tools.json",
     "dbt/dbt_project.yml",
     "dbt/profiles.yml",
     "scripts/run_ci.sh",
@@ -995,6 +997,11 @@ def run_typecheck_cold_case() -> tuple[bool, str]:
     return all(ok for ok, _ in results), "\n".join(output for _, output in results)
 
 
+def run_lint_coverage_case() -> tuple[bool, str]:
+    result = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.run_lint_coverage_e2e"], cwd=ROOT, timeout=1200)
+    return result.returncode == 0, result.stdout + result.stderr
+
+
 def main() -> int:
     """Run every case and report the ones whose hook did not behave as expected."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -1024,6 +1031,7 @@ def main() -> int:
             ("typecheck import closure", run_typecheck_import_case),
             ("typecheck pending manifest", run_typecheck_manifest_case),
             ("typecheck cold caches", run_typecheck_cold_case),
+            ("source lint coverage", run_lint_coverage_case),
         ):
             extra += 1
             ok, output = runner()

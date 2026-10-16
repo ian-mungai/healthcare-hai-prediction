@@ -1,11 +1,58 @@
 ---
 title: Quality checks
 description: Every repository check the pre-commit hooks and CI run, what each blocks and how to run it on its own.
-last_updated: 2026-10-15
+last_updated: 2026-10-16
 ---
 
 # Quality checks
 
+- **Python lint and formatting:** Ruff checks every nonignored first-party Python source from the Git inventory,
+  including `dags/`, `orchestration/` and service code. Both lint and formatting use the existing `pyproject.toml`
+  settings. The `ruff` hook and the CI source gate use `.venv/bin/python -m scripts.quality.lint_sources ruff`.
+  Paths remain separate arguments, including hidden files and names with spaces. Source symlinks are rejected.
+- **Shell syntax:** the `shell-syntax` hook checks every nonignored shell source with its declared interpreter's
+  syntax-only mode. Shell suffixes and declared shell scripts without a suffix are inventoried. Script bodies never run.
+- **Language linters:** ShellCheck 0.11.0 checks tracked shell sources. actionlint 1.7.12 checks Actions workflows.
+  It validates local `action.yml` metadata only through the workflow's `uses:` reference. Shell scripts and expressions
+  inside composite steps are not linted. yamllint 1.38.0 checks tracked YAML, including `action.yml` and `.yamllint` itself and treats duplicate keys
+  as errors. Hadolint 2.15.1 checks every tracked Dockerfile. gofmt and go vet use installed Go 1.27.1, with vet targeting
+  Linux amd64 and arm64 for the Linux-only programs. No Go toolchain or module is downloaded. The native tool archives
+  and raw binaries are checksum-pinned in `config/quality_tools.json`. `scripts/quality/install_tools.py --tool <NAME>`
+  selects one native tool without reinstalling the others. yamllint is pinned in `requirements.txt`.
+  `.venv/bin/python -m scripts.quality.lint_sources <CHECK>` runs each tool through the same entry point as its hook.
+  `<NAME>` is `shellcheck`, `actionlint` or `hadolint` for these native tools. `<CHECK>` is the hook ID shown above,
+  with `gofmt` and `go-vet` for Go. Unsupported input, missing tools and rule violations fail visibly.
+- **Build contexts:** the `build-contexts` hook checks every Dockerfile `COPY --from=` reference against an earlier
+  stage or the building service's `docker-compose.yaml` `additional_contexts`. Airflow is built separately, so
+  `services/orchestration/Dockerfile` uses the `--build-context` declarations in its header's build command instead.
+  A missing Airflow header command or one with no contexts fails. No build command executes. The check supports the
+  project's Dockerfile layout and fails visibly on unsupported escape directives or heredocs.
+- **Hadolint exceptions:** DL3022 is ignored only at the five `COPY --from=hai` instructions. The build-context check
+  verifies their named context independently. DL3008 is ignored only for Spark's apt-install instruction: packages
+  follow the Ubuntu archive on the build day. Dated snapshot pins are a lead-managed issue-register action for the next
+  image build. Spark's final stage uses Bash with pipefail, keeping all three checksum pipelines. Its changed runtime
+  behavior remains unverified until that image build. No Hadolint rule is ignored globally.
+- **SQL style:** SQLFluff uses the pinned environment under `.tools/sqlfluff`. Active `dbt/models/`, `dbt/tests/`
+  and `dbt/macros/` use DuckDB with the dbt templater. `services/analytics/resources.sql` uses raw DuckDB and the Polaris
+  schema SQL uses raw PostgreSQL. `services/analytics/bronze.sql` is listed as excluded from SQLFluff: it is a DuckDB CLI
+  init script whose LOAD, CREATE SECRET and ATTACH statements are outside the pinned grammar. Its source stays unchanged.
+  The 6 SQL files of `tests/orchestration/fixtures/tiny` are listed as excluded too: they form the synthetic dbt project of
+  the transform scheduler E2E, which builds and checks them.
+  The 41 listed `features/` SQL files are deferred: they are saved for the feature phase
+  and are not built by dbt, as described in `docs/feature_phase_saved.md`. They must be linted when that phase brings
+  them into a dbt project. A tracked SQL file outside the active paths and explicit deferred or excluded lists fails.
+  `.venv/bin/python -m scripts.quality.lint_sources sql` runs these profiles without executing SQL. dbt packages are
+  a compilation prerequisite. Macro bodies are style-checked only through the models and tests that use them.
+  A fresh local dbt parse supplies the macro call graph. Each project macro must have a caller recorded in the manifest:
+  a model, singular or YAML generic test, project on-run-start or on-run-end hook or another macro. A recorded call does not
+  prove that the caller executes. Hook-only and YAML-only macro bodies are not directly style-checked by this command.
+  Unused macros and unreadable or inconsistent inventories fail. Invalid Jinja fails compilation.
+  SQLFluff skips a file over its 20,000-byte limit with only a warning. The SQL lint fails when that happens to any
+  actively linted model, test or service SQL file. A skipped macro file stays covered through its callers. The limit stays.
+  No wrapper model or separate project is created.
+  DuckDB dot-command lines in `resources.sql` are replaced with comments in temporary lint copies, preserving line numbers and source
+  bytes. Only the two `getenv` SET lines in `services/analytics/resources.sql` ignore PRS because the pinned parser
+  cannot parse that valid DuckDB syntax. A style error elsewhere still fails. Other parse errors remain failures.
 - **Secrets and credential files:** gitleaks scans the staged index; `.env`
   (but not `.env.example`), Terraform state and saved plans, keys and cloud
   credential files are blocked.
@@ -175,7 +222,10 @@ skips it.
 Each check has a bad and a good sample run through the real `pre-commit` entry
 point (`scripts/quality/run_checks_e2e.py` and
 `scripts/quality/run_documentation_review_e2e.py`); both run in local CI.
-Every detection check was run on the whole repository before it was enabled,
+The source lint cases also run through `scripts/quality/run_lint_coverage_e2e.py`, which retains complete positive and
+negative hook logs under `data/e2e/lint_coverage/`. Its `--mutant` mode verifies that a dispatcher which does no checking
+fails the same cases. The samples are synthetic. No script body, SQL statement or container runs in that suite.
+The repository policy checks were run on the whole repository before they were enabled,
 with no false positives, so they block from the start. The writing check blocked
 only after the existing prose was corrected. Its dash and slash kinds block since the prose was corrected on
 Oct 15 2026. Its semicolon kind warns until a whole-repository run has no semicolon finding. The unused code, dependency and file
@@ -231,12 +281,18 @@ commit hook) or `range` with `RANGE_START` and `RANGE_END` (GitHub CI). `CI_LIST
 and why. It runs nothing. The groups and the paths they depend on are in `config/quality/ci_groups.json`. A path that
 no group lists and that is not passive selects every applicable group. Markdown outside `dbt/`, anything under `docs/`,
 `.gitignore` and `.gitattributes` are passive: they do not select every group, but a group whose list matches one still
-runs. A change of passive paths that no group lists runs no group. The privacy, secret, credential, data-file,
-writing, Markdown lint and documentation gates always run. They run in every scope and every part, also when no group
+runs. A change of passive paths that no group lists selects no conditional group. The `sql_style` group runs in every
+full and range run (the run before a push and GitHub CI). On commits it runs when a listed SQL input changes:
+`dbt/`, `.sqlfluff`, `features/` and `services/` SQL, the dbt package archive configuration and the SQLFluff pins and
+installer.
+The source, privacy, secret, credential, data-file, writing, Markdown lint and documentation gates always run.
+They run in every scope and every part, also when no conditional group
 is selected. The Markdown lint gate checks every Markdown document the markdownlint hook checks, so a change to any file
 markdownlint reads (its configuration in any folder, a file a configuration extends or the pin) cannot skip it. The
 acquisition gate is the exception: it runs only in the full scope and its own hook and CI job cover commits and pushes.
-A change to `.sqlfluff` or the SQLFluff pins lints every dbt model and test (the `sql_style` group).
+The `sql_style` group inventories every tracked SQL file and checks each active source with its runtime profile.
+Files copied by the repository check E2E runners select `repository_code_checks`, including `README.md`, this guide,
+`.env.example`, the dbt project and profile files and the copied intermediate-model YAML fixture.
 
 Each CI run retains configuration evidence under `data/e2e/configuration/` and
 quality evidence under `data/e2e/quality/`. E2E reports include source hashes,

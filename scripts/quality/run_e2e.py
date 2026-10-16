@@ -127,6 +127,68 @@ def installation_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
     (destination / "bin/gitleaks").write_bytes(b"corrupted synthetic executable")
     cases.append({"name": "reject_corrupt_existing_binary", **run(command, ROOT, expected=1)})
 
+    raw = archives / "gitleaks.bin"
+    raw_content = b"synthetic raw executable fixture; never executed\n"
+    raw.write_bytes(raw_content)
+    raw_tools = copy.deepcopy(tools)
+    raw_release = raw_tools["gitleaks"]["releases"][selected_platform]
+    raw_release.update(url=f"https://github.com/example_org/example_tool/releases/download/v1.2.3/{raw.name}", format="binary", sha256="0" * 64)
+    raw_manifest = workspace / "raw_manifest.json"
+    raw_destination = workspace / "raw_installed"
+    raw_command = [str(raw_manifest) if arg == str(manifest) else str(raw_destination) if arg == str(destination) else arg for arg in command]
+    raw_manifest.write_text(json.dumps({"schema_version": 1, "tools": raw_tools}), encoding="utf-8")
+    cases.append({"name": "reject_raw_binary_hash_mismatch", **run(raw_command, ROOT, expected=1)})
+    check(not raw_destination.exists(), "Rejected raw binary created an installation")
+    raw_release["sha256"] = digest(raw)
+    raw_manifest.write_text(json.dumps({"schema_version": 1, "tools": raw_tools}), encoding="utf-8")
+    cases.append({"name": "install_verified_raw_binary", **run(raw_command, ROOT)})
+    check((raw_destination / "bin/gitleaks").read_bytes() == raw_content, "Raw executable bytes differ")
+    receipt = json.loads((raw_destination / "receipts/gitleaks.json").read_text())
+    check(receipt["archive_sha256"] == digest(raw) and receipt["binary_sha256"] == digest(raw), "Raw binary receipt differs")
+
+    nested = archives / "nested-gitleaks.tar.gz"
+    nested_content = b"synthetic nested executable fixture; never executed\n"
+    with tarfile.open(nested, "w:gz") as archive:
+        for name, content in (("gitleaks", b"unselected decoy"), ("release/bin/gitleaks", nested_content)):
+            member = tarfile.TarInfo(name)
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+    nested_tools = copy.deepcopy(tools)
+    nested_tools["gitleaks"]["releases"][selected_platform].update(
+        url=f"https://github.com/example_org/example_tool/releases/download/v1.2.3/{nested.name}", sha256=digest(nested), member="release/bin/gitleaks"
+    )
+    nested_manifest = workspace / "nested_manifest.json"
+    nested_manifest.write_text(json.dumps({"schema_version": 1, "tools": nested_tools}), encoding="utf-8")
+    nested_destination = workspace / "nested_installed"
+    nested_command = [str(nested_manifest) if arg == str(manifest) else str(nested_destination) if arg == str(destination) else arg for arg in command]
+    outcome = run(nested_command, ROOT)
+    check((nested_destination / "bin/gitleaks").read_bytes() == nested_content, "Installer ignored the selected nested member")
+    check(not (nested_destination / "release").exists(), "Installer extracted publisher paths")
+    cases.append({"name": "install_selected_nested_tar_member", **outcome})
+
+    selected_archives = workspace / "selected_archives"
+    selected_archives.mkdir()
+    shutil.copyfile(archives / "gitleaks.tar.gz", selected_archives / "gitleaks.tar.gz")
+    selected_destination = workspace / "selected_installed"
+    for name, content in (("bin/tflint", b"existing unselected binary"), ("receipts/tflint.json", b"existing unselected receipt")):
+        path = selected_destination / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    untouched = {
+        name: (digest(selected_destination / name), (selected_destination / name).stat().st_mtime_ns) for name in ("bin/tflint", "receipts/tflint.json")
+    }
+    selected_command = [
+        str(selected_destination) if arg == str(destination) else str(selected_archives) if arg == str(archives) else arg for arg in command
+    ] + ["--tool", "gitleaks"]
+    outcome = run(selected_command, ROOT)
+    check(
+        untouched == {name: (digest(selected_destination / name), (selected_destination / name).stat().st_mtime_ns) for name in untouched},
+        "Selecting one tool changed another tool or receipt",
+    )
+    check((selected_destination / "bin/gitleaks").read_bytes() == b"synthetic executable fixture; never executed\n", "Selected executable bytes differ")
+    check(not (selected_destination / "bin/trivy").exists(), "Unselected tool was installed")
+    cases.append({"name": "tool_selection_preserves_unselected_installation", **outcome})
+
     # A matching hash must not make an archive's symbolic-link executable acceptable.
     malicious = archives / "gitleaks.tar.gz"
     with tarfile.open(malicious, "w:gz") as archive:

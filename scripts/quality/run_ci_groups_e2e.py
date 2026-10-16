@@ -37,10 +37,13 @@ COPIED = (
     ".github/workflows/ci.yml",
     ".markdownlint-cli2.jsonc",
     ".pre-commit-config.yaml",
+    ".sqlfluff",
+    ".yamllint",
     "README.md",
     "config/quality/ci_groups.json",
     "config/quality/docker_calls_reviewed.json",
     "config/quality/mypy_runtimes.json",
+    "config/quality_tools.json",
     "dbt/models/silver/intermediate/_intermediate__models.yml",
     "docs/quality_checks.md",
     "scripts/acquisition/run_checks.sh",
@@ -52,9 +55,11 @@ COPIED = (
     "scripts/orchestration/broker.py",
     "scripts/orchestration/offline_checks.py",
     "scripts/quality/ci_groups.py",
+    "scripts/quality/lint_sources.py",
     "scripts/quality/documentation_review.py",
     "scripts/quality/repo_checks.py",
     "scripts/quality/run_checks_e2e.py",
+    "scripts/quality/run_lint_coverage_e2e.py",
     RUNNER,
     "scripts/quality/run_documentation_review_e2e.py",
     "scripts/quality/typecheck.py",
@@ -113,6 +118,11 @@ def select(work: Path, *args: str) -> tuple[int, dict[str, Any] | None, str]:
 
 
 def selection_case(work: Path, name: str, args: list[str], want_run: list[str], want_reason: str = "") -> dict[str, Any]:
+    part = args[args.index("--part") + 1] if "--part" in args else "all"
+    scope = args[args.index("--scope") + 1] if "--scope" in args else ""
+    if part != "launcher":
+        unconditional = {"sql_style"} if scope in {"full", "range"} else set()
+        want_run = [group for group in PART_GROUPS[part] if group in {*want_run, *unconditional}]
     code, plan, error = select(work, *args)
     run = plan["run"] if plan else None
     reason = plan["reason"] if plan else ""
@@ -177,10 +187,12 @@ def docs_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     checks = {
         "exit_zero": code == 0,
         "reached_the_end": PASS_LINES[part] in log,
-        "every_group_skipped_with_reason": all(f"skipped {group}:" in log for group in PART_GROUPS[part]),
+        "conditional_groups_skipped_with_reason": all(
+            f"skipped {group}:" in log for group in PART_GROUPS[part] if group not in {"repository_code_checks", "sql_style"}
+        ),
         "gates_ran": re.search(r"^gates: \d+ s$", log, re.MULTILINE) is not None,
         "markdown_lint_ran": "markdownlint-cli2 v" in log,
-        "no_group_ran": "\n== " not in log,
+        "required_groups_only": re.findall(r"^== (\w+) ==$", log, re.MULTILINE) == (["repository_code_checks", "sql_style"] if part != "launcher" else []),
         "summary_has_durations": "| Step | Seconds |" in text and re.search(r"^\| gates \| \d+ \|$", text, re.MULTILINE) is not None,
     }
     return {"case": name, "passed": all(checks.values()), "checks": checks, "exit": code}
@@ -421,7 +433,12 @@ def acquisition_selection_case(work: Path, path: str, wanted: bool) -> dict[str,
 
 def selection_cases(work: Path) -> list[dict[str, Any]]:
     cases = [
-        selection_case(work, "docs_only_range_selects_none", ["--scope", "range", "--from", f"{DOCS_ONLY}^", "--to", DOCS_ONLY, "--part", "core"], []),
+        selection_case(
+            work,
+            "docs_fixture_range_selects_reader_checks",
+            ["--scope", "range", "--from", f"{DOCS_ONLY}^", "--to", DOCS_ONLY, "--part", "core"],
+            ["repository_code_checks"],
+        ),
         selection_case(
             work,
             "infra_range",
@@ -472,7 +489,10 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         selection_case(work, "launcher_part_skips_docs", ["--scope", "paths", "--path", "docs/data_collection.md", "--part", "launcher"], []),
         selection_case(work, "full_scope_runs_all", ["--scope", "full", "--part", "all"], [*CORE, "launcher", "acquisition"], "full scope"),
         selection_case(
-            work, "markdown_only_change_selects_none", ["--scope", "paths", "--path", "README.md", "--path", "docs/project_notes.md", "--part", "core"], []
+            work,
+            "readme_selects_reader_checks",
+            ["--scope", "paths", "--path", "README.md", "--path", "docs/project_notes.md", "--part", "core"],
+            ["repository_code_checks"],
         ),
         selection_case(
             work,
@@ -488,7 +508,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         ),
         selection_case(
             work,
-            "nested_markdown_config_selects_none",
+            "nested_markdown_config_selects_no_group",
             ["--scope", "paths", "--path", "docs/.markdownlint.json", "--path", "docs/guides/.markdownlint-cli2.yaml", "--part", "core"],
             [],
         ),
@@ -502,8 +522,75 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             ["configuration_checks", "terraform_checks"],
             unstaged="dbt/dbt_project.yml",
         ),
+        staged_case(
+            work,
+            "staged_dbt_change_selects_sql_style",
+            [["update-index", "--add", "--cacheinfo", f"100644,{git(work, 'rev-parse', 'HEAD:dbt/dbt_project.yml').strip()},dbt/staged_copy.yml"]],
+            ["lakehouse_checks", "sql_style"],
+        ),
         staged_case(work, "deleted_file_counts", [["rm", "--quiet", "--cached", "infra/iam/main.tf"]], ["configuration_checks", "terraform_checks"]),
         staged_case(work, "renamed_file_counts_old_name", [["mv", "infra/iam/main.tf", "docs/renamed_main.tf"]], ["configuration_checks", "terraform_checks"]),
+    ]
+    cases += [
+        *(
+            selection_case(work, f"copied_input_{path}", ["--scope", "paths", "--path", path, "--part", "core"], wanted)
+            for path, wanted in (
+                (".env.example", ["repository_code_checks", "configuration_checks"]),
+                ("dbt/dbt_project.yml", ["lakehouse_checks", "repository_code_checks", "sql_style"]),
+                ("dbt/profiles.yml", ["lakehouse_checks", "repository_code_checks", "sql_style"]),
+                ("README.md", ["repository_code_checks"]),
+                ("dbt/models/silver/intermediate/_intermediate__models.yml", ["lakehouse_checks", "repository_code_checks", "sql_style"]),
+                ("docs/quality_checks.md", ["repository_code_checks"]),
+            )
+        ),
+        selection_case(
+            work,
+            "dbt_archive_config_selects_sql_style",
+            ["--scope", "paths", "--path", "config/lakehouse/dbt_package_archive.json", "--part", "core"],
+            ["lakehouse_checks", "configuration_checks", "sql_style"],
+        ),
+        selection_case(
+            work,
+            "sqlfluff_pins_select_sql_style",
+            ["--scope", "paths", "--path", "scripts/quality/sqlfluff/requirements.txt", "--part", "core"],
+            ["repository_code_checks", "configuration_checks", "sql_style"],
+        ),
+        selection_case(
+            work,
+            "range_keeps_sql_style_without_sql_change",
+            ["--scope", "range", "--from", f"{INFRA_ONLY}^", "--to", INFRA_ONLY, "--part", "core"],
+            ["configuration_checks", "sql_style", "terraform_checks"],
+        ),
+        selection_case(
+            work,
+            "new_python_folder_selects_types",
+            ["--scope", "paths", "--path", "new_folder/source.py", "--part", "core"],
+            ["python_lint", "repository_code_checks"],
+        ),
+        selection_case(
+            work,
+            "service_sql_selects_runtime_style",
+            ["--scope", "paths", "--path", "services/analytics/resources.sql", "--part", "core"],
+            ["lakehouse_checks", "sql_style"],
+        ),
+        selection_case(
+            work,
+            "feature_sql_selects_inventory",
+            ["--scope", "paths", "--path", "features/macros/hospital_alignment.sql", "--part", "core"],
+            ["lakehouse_checks", "sql_style"],
+        ),
+        selection_case(
+            work,
+            "yaml_profile_selects_hook_e2e",
+            ["--scope", "paths", "--path", ".yamllint", "--part", "core"],
+            ["repository_code_checks"],
+        ),
+        selection_case(
+            work,
+            "native_pins_select_install_and_hook_e2e",
+            ["--scope", "paths", "--path", "config/quality_tools.json", "--part", "core"],
+            ["lakehouse_checks", "repository_code_checks", "configuration_checks", "terraform_checks"],
+        ),
     ]
     cases += [
         selection_case(work, f"orchestration_shared_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "core"], groups)

@@ -7,6 +7,8 @@
 # Build once from the repository root, with the base and builder images present (the digests below):
 #   docker build --tag hai-airflow:3.3.2-python3.12 --build-context hai=services/hai services/orchestration
 FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS deadline
+# hai is the services/hai named build context passed by the build command above.
+# hadolint ignore=DL3022
 COPY --from=hai deadline_run.go /src/deadline_run.go
 WORKDIR /src
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /deadline_run deadline_run.go

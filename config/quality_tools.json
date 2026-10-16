@@ -45,6 +45,73 @@
           "format": "tar.gz"
         }
       }
+    },
+    "shellcheck": {
+      "version": "0.11.0",
+      "checksum_source": "https://github.com/koalaman/shellcheck/releases/tag/v0.11.0",
+      "releases": {
+        "darwin_arm64": {
+          "url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.darwin.aarch64.tar.gz",
+          "sha256": "339b930feb1ea764467013cc1f72d09cd6b869ebf1013296ba9055ab2ffbd26f",
+          "format": "tar.gz",
+          "member": "shellcheck-v0.11.0/shellcheck"
+        },
+        "linux_amd64": {
+          "url": "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.gz",
+          "sha256": "b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6",
+          "format": "tar.gz",
+          "member": "shellcheck-v0.11.0/shellcheck"
+        }
+      }
+    },
+    "actionlint": {
+      "version": "1.7.12",
+      "checksum_source": "https://github.com/rhysd/actionlint/releases/tag/v1.7.12",
+      "releases": {
+        "darwin_arm64": {
+          "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_arm64.tar.gz",
+          "sha256": "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f",
+          "format": "tar.gz"
+        },
+        "linux_amd64": {
+          "url": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz",
+          "sha256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
+          "format": "tar.gz"
+        }
+      }
+    },
+    "hadolint": {
+      "version": "2.15.1",
+      "checksum_source": "https://github.com/hadolint/hadolint/releases/tag/v2.15.1",
+      "releases": {
+        "darwin_arm64": {
+          "url": "https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-macos-arm64",
+          "sha256": "5c09f3213f8e40406abe048233d985eebef336d4a6a20021be47fadb6cf480a2",
+          "format": "binary"
+        },
+        "linux_amd64": {
+          "url": "https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-x86_64",
+          "sha256": "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507",
+          "format": "binary"
+        }
+      }
+    },
+    "yamllint": {
+      "version": "1.38.0",
+      "installer": "requirements.txt",
+      "checksum_source": "https://pypi.org/project/yamllint/1.38.0/#files",
+      "releases": {
+        "darwin_arm64": {
+          "url": "https://files.pythonhosted.org/packages/05/92/aed08e68de6e6a3d7c2328ce7388072cd6affc26e2917197430b646aed02/yamllint-1.38.0-py3-none-any.whl",
+          "sha256": "fc394a5b3be980a4062607b8fdddc0843f4fa394152b6da21722f5d59013c220",
+          "format": "wheel"
+        },
+        "linux_amd64": {
+          "url": "https://files.pythonhosted.org/packages/05/92/aed08e68de6e6a3d7c2328ce7388072cd6affc26e2917197430b646aed02/yamllint-1.38.0-py3-none-any.whl",
+          "sha256": "fc394a5b3be980a4062607b8fdddc0843f4fa394152b6da21722f5d59013c220",
+          "format": "wheel"
+        }
+      }
     }
   }
 }

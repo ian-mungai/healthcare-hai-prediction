@@ -7,7 +7,7 @@ clean="$1"; out="$(mkdir -p "$2" && cd "$2" && pwd)"
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 py="$repo/.venv/bin/python"
 mkdir -p "$out"
-cd "$clean"
+cd "$clean" || exit 1
 PYTHON_BIN="$py" bash scripts/acquisition/run_checks.sh >"$out/run_checks.log" 2>&1
 printf '{"suite": "run_checks", "exit": %s}\n' "$?" >>"$out/results.jsonl"
 for suite in bls_api census_acs_api census_acs_detailed cms_owners code_versions hcai_util hud_api hud_xlsx mmd_api onc_mu privacy registry_additions registry_migration wonder_export; do

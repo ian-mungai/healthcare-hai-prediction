@@ -9,8 +9,11 @@ GitHub CI and local commits use the same lists. Scopes:
 - ``paths``: the paths given with ``--path`` (to see what a change would run).
 
 A path in ``global`` or a path that no group lists and that is not ``passive`` selects every group. Renames count with both
-names. The unconditional gates (privacy, secrets, credential and data files, writing, the Markdown lint and the
-documentation review) are not groups: scripts/run_ci.sh runs them in every scope.
+names. Groups in ``always`` run in every applicable part because their inputs cannot be completely enumerated. Groups in
+``always_except_commits`` run unconditionally in the ``full`` and ``range`` scopes (the run before a push and GitHub CI) and
+follow their path list in the ``staged`` and ``paths`` scopes (commits).
+The unconditional source, privacy, secret, credential, data-file, writing, Markdown and documentation gates are not
+groups: scripts/run_ci.sh runs them in every scope.
 
     .venv/bin/python -m scripts.quality.ci_groups plan --scope range --from <sha> --to <sha> --part core [--format shell]
 
@@ -48,7 +51,7 @@ ORDER = (
 
 def load() -> dict[str, Any]:
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
-    unknown = (set(config["groups"]) | set(config["full_only"])) - set(ORDER)
+    unknown = (set(config["groups"]) | set(config["full_only"]) | set(config.get("always", [])) | set(config.get("always_except_commits", []))) - set(ORDER)
     if unknown:
         raise ValueError(f"unknown groups in {CONFIG}: {', '.join(sorted(unknown))}")
     return config
@@ -101,7 +104,12 @@ def plan(scope: str, part: str, start: str = "", end: str = "", paths: list[str]
                 run.append(group)
             else:
                 skip[group] = "runs only in the full scope (its own hook and CI job cover commits)"
-        elif changed is None or any(re.search(pattern, path) for path in changed for pattern in config["groups"][group]):
+        elif (
+            group in config.get("always", [])
+            or (group in config.get("always_except_commits", []) and scope in {"full", "range"})
+            or changed is None
+            or any(re.search(pattern, path) for path in changed for pattern in config["groups"][group])
+        ):
             run.append(group)
         else:
             skip[group] = "no changed path is on its list"

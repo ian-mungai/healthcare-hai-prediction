@@ -2,6 +2,8 @@
 # (D1 section 5 item 1). The tool image has no Python, so the entrypoint is the static Go program services/hai/deadline_run.go
 # (standard library only), built here and copied in. The build context named "hai" is services/hai (see docker-compose.yaml).
 FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS deadline
+# hai is the services/hai named build context passed by docker-compose.yaml additional_contexts.
+# hadolint ignore=DL3022
 COPY --from=hai deadline_run.go /src/deadline_run.go
 WORKDIR /src
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /deadline_run deadline_run.go
