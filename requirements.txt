@@ -6,6 +6,11 @@ mypy==2.3.1  # tool: type checker run by pre-commit
 pre-commit==4.6.2  # tool: hook runner
 checkov==3.3.19  # tool: Terraform policy scan
 types-jsonschema==4.26.0.20260518  # tool: type stubs for MyPy
+types-defusedxml==0.7.0.20260504  # tool: type stubs for MyPy (defusedxml)
+boto3-stubs==1.35.49  # tool: type stubs for MyPy (boto3, matches boto3)
+botocore-stubs==1.35.99  # tool: type stubs for MyPy (botocore, matches botocore)
+types-awscrt==0.37.0  # tool: required by botocore-stubs
+types-s3transfer==0.19.2  # tool: required by boto3-stubs
 pyyaml==6.0.3  # dynamic: imported by name in repo_checks.load_yaml (front-matter check) and package_fixture.check; pre-commit installs the same version.
 vulture==2.16  # tool: unused-code check
 deptry==0.25.1  # tool: unused-dependencies check

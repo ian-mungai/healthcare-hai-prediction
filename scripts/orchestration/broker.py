@@ -199,7 +199,9 @@ def load_templates(path: Path = TEMPLATES_FILE) -> dict[str, Any]:
         for mode, row in template["modes"].items():
             if "control" in row:
                 if row["class"] not in (OFFLINE,):
-                    raise BrokerError(f"{name}/{mode}: network class {row['class']} cannot run; only offline runs")
+                    raise BrokerError(
+                        f"{name}/{mode}: network class {row['class']} cannot run; the broker runs only the offline class until network allow lists are enforced"
+                    )
                 try:
                     run_control.check_row(name, mode, row["control"])
                 except ValueError as error:
@@ -209,7 +211,9 @@ def load_templates(path: Path = TEMPLATES_FILE) -> dict[str, Any]:
             if row_launcher is None:
                 continue
             if row["class"] != OFFLINE:
-                raise BrokerError(f"{name}/{mode}: network class {row['class']} cannot launch; only offline runs (amendment A18)")
+                raise BrokerError(
+                    f"{name}/{mode}: network class {row['class']} cannot launch; the broker runs only the offline class until network allow lists are enforced"
+                )
             known = launcher.TEMPLATES.get(row_launcher["template"])
             if known is None or "run" not in known.owners or row_launcher["template"] in ("probe", "catalog_service", "orchestration_service"):
                 raise BrokerError(f"{name}/{mode}: the launcher has no template {row_launcher['template']} that a run can submit")
@@ -315,7 +319,8 @@ class Broker:
             raise SubmissionRefused(f"template {request.template} does not support mode {request.mode}")
         if row["class"] != OFFLINE:
             raise SubmissionRefused(
-                f"template {request.template} in mode {request.mode} needs the network class {row['class']}; only the class offline runs (amendment A18)"
+                f"template {request.template} in mode {request.mode} needs the network class {row['class']}; "
+                "the broker runs only the offline class until network allow lists are enforced"
             )
         if row.get("control") is not None:
             return dict(row)

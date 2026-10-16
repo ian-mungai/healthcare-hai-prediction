@@ -200,7 +200,7 @@ def control_rows_schema(env: Env) -> dict[str, bool]:
     results["a no-op flag with a control is refused"] = mutated(
         lambda t: row(t).update(no_op=True, reason="not a real reason"), "is not valid under any of the given schemas"
     )
-    results["a class other than offline is refused"] = mutated(lambda t: row(t).update({"class": "lakehouse_write"}), "only offline runs")
+    results["a class other than offline is refused"] = mutated(lambda t: row(t).update({"class": "lakehouse_write"}), "the broker runs only the offline class")
     results["a placeholder outside the five is refused"] = mutated(lambda t: row(t)["control"]["params"].update(record_file="{home}/x.json"), "does not match")
     return results
 

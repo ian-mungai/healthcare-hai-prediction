@@ -185,9 +185,14 @@ For the HCAI exception, the untouched download stays local with
 owner-only access. Only the privacy-filtered derivative and non-personal
 references or provenance may enter the project's private S3 storage. The
 derivative remains under privacy and modeling review; redaction does not
-establish formal anonymization or clinical validity. Raw retention duration
-remains unresolved. The development Mac uses FileVault; that host check
-does not establish compliance or resolve retention requirements.
+establish formal anonymization or clinical validity. Each untouched original
+that names individuals (the HCAI annual financial files and the CMS contacts
+table) is kept until its redacted copy is accepted into bronze, then for a
+90-day grace period, then deleted. Its SHA-256, source URL and download date
+are kept, because the sources are public and can be downloaded again.
+Deletions run in batches the lead lists with exact paths, each approved by
+the owner. The development Mac uses FileVault; that host check does not
+establish compliance on its own.
 
 The data bucket carries its own `DataClassification` tag of Confidential.
 Redacted derivatives are not formally

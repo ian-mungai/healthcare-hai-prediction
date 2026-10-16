@@ -8,14 +8,6 @@
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
     },
-    "scripts/acquisition/one_off/storage_dedup/delete_duplicate_versions.py": {
-      "runtime": "host_stubs",
-      "reason": "Skipping analyzing \"botocore.exceptions\": module is installed, but missing library stubs or py.typed marker; Skipping analyzing \"boto3\": module is installed, but missing library stubs or py.typed marker"
-    },
-    "scripts/acquisition/redownload.py": {
-      "runtime": "host_stubs",
-      "reason": "Library stubs not installed for \"defusedxml\""
-    },
     "scripts/lakehouse/bronze.py": {
       "runtime": "spark",
       "reason": "Cannot find implementation or library stub for module named \"pyspark.sql.functions\"; Cannot find implementation or library stub for module named \"pyspark.sql\"; Skipping analyzing \"boto3\": module is installed, but missing library stubs or py.typed marker"
@@ -31,10 +23,6 @@
     "scripts/lakehouse/file_readers.py": {
       "runtime": "spark",
       "reason": "Library stubs not installed for \"openpyxl\"; Library stubs not installed for \"xlrd\"; Cannot find implementation or library stub for module named \"pyreadstat\"; Cannot find implementation or library stub for module named \"pdfplumber\""
-    },
-    "scripts/lakehouse/retired_objects.py": {
-      "runtime": "host_stubs",
-      "reason": "Skipping analyzing \"boto3\": module is installed, but missing library stubs or py.typed marker"
     },
     "scripts/lakehouse/run_bronze_e2e.py": {
       "runtime": "spark",

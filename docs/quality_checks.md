@@ -125,7 +125,8 @@ last_updated: 2026-10-16
   review outcome bound to the complete staged source and configuration snapshot. Before the first release tag,
   the document inventory is `README.md` only. Other documents, including explicit extra formats, do not require
   per-commit review during development. A version tag such as `v1.0.0` restores the full inventory and requires
-  its review. Other tags do not change the inventory. Draft the record with
+  its review. Other tags do not change the inventory. The review reads local tags, so commit from a full clone
+  that has the release tags. Draft the record with
   `.venv/bin/python -m scripts.quality.documentation_review prepare --reviewer <name> --reviewed-at <UTC>`
   after staging, then fill each outcome and note locally. Read the README in full during development.
   Once released, read in full every changed or new document and every unchanged one that the staged change affects.

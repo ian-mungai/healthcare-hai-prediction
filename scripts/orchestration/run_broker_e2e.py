@@ -1757,7 +1757,7 @@ def unmapped_template_refused(env: BrokerEnv) -> dict[str, bool]:
             elif row["class"] != "offline":
                 results[f"{name}/{mode}: class {row['class']} is refused for the class"] = isinstance(
                     error, SubmissionRefused
-                ) and "only the class offline" in str(error)
+                ) and "the broker runs only the offline class" in str(error)
             else:
                 results[f"{name}/{mode}: refused because no launcher row exists"] = isinstance(error, SubmissionRefused) and "no launcher template runs" in str(
                     error
@@ -1790,7 +1790,7 @@ def non_offline_class_refused(env: BrokerEnv) -> dict[str, bool]:
     broker.start()
     error = refusal_of(lambda: broker.submit(env.request("silver_build", attempt=1)))
     return {
-        "a forwarding row with another class does not load": load_error is not None and "only offline" in str(load_error),
+        "a forwarding row with another class does not load": load_error is not None and "runs only the offline class" in str(load_error),
         "a submission in another class is refused with the class named": isinstance(error, SubmissionRefused) and "lakehouse_read" in str(error),
         "nothing was sent to the launcher": not env.creates() and "submit" not in wire(broker).methods,
     }
