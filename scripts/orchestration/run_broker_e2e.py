@@ -77,6 +77,7 @@ class InstrumentedClient(launcher.LauncherClient):
         super().__init__(config, start)
         self.methods: list[str] = []
         self.before: Callable[[str, dict[str, Any]], None] | None = None
+        self.submission_replies: list[dict[str, Any]] = []
 
     def call(
         self, method: str, params: dict[str, Any] | None = None, principal: dict[str, Any] | None = None, request_id: str | None = None, timeout: float = 120.0
@@ -84,7 +85,16 @@ class InstrumentedClient(launcher.LauncherClient):
         self.methods.append(method)
         if self.before is not None:
             self.before(method, params or {})
-        return super().call(method, params, principal, request_id, timeout)
+        if method != "status" or (params or {}).get("what") != "submission":
+            return super().call(method, params, principal, request_id, timeout)
+        try:
+            reply = super().call(method, params, principal, request_id, timeout)
+        except launcher.ClientError as error:
+            self.submission_replies.append({"error": error.code})
+            raise
+        attempt = reply.get("attempt") or {}
+        self.submission_replies.append({"found": reply.get("found"), "phase": attempt.get("phase"), "reason": attempt.get("reason")})
+        return reply
 
 
 class BrokerEnv(Env):
@@ -94,6 +104,7 @@ class BrokerEnv(Env):
         super().__init__(name, report, **settings)
         self.paths = BrokerPaths(run_lock.Registry(self.registry, "test"), self.temp)
         self.case_dir, self.packages_dir = self.case_folders("case")
+        self.evidence: dict[str, Any] = {}
         self.inventory_path = self.work / "broker_templates.json"
         self.write_inventory()
         self.brokers: list[Broker] = []
@@ -1207,6 +1218,14 @@ def cancel_after_marker_ancestor_loss(env: BrokerEnv) -> dict[str, bool]:
             }
             if loss_kind == "replace":
                 checks[f"{label}: the replacement folder held the ledger and no marker"] = seen.get("replacement_has_no_marker") is True
+            env.evidence[label] = {
+                "events": after,
+                "updated": summary.get("updated"),
+                "start_error": summary.get("error"),
+                "submission_replies": wire(fresh).submission_replies,
+                "loss": {key: bool(value) for key, value in seen.items()},
+                "attempt": {"phase": ended.get("phase"), "reason": ended.get("reason")},
+            }
             env.stop_brokers()
     env.stop_brokers()
     for level in FORWARD_LOSSES:
@@ -2445,7 +2464,8 @@ def run_case(name: str, report: Path) -> dict[str, Any]:
     leftovers = env.close()
     checks["nothing of the case is left over"] = not leftovers
     passed = bool(checks) and all(checks.values()) and not error
-    return {"case": name, "passed": passed, "checks": checks, "error": error, "leftovers": leftovers, "seconds": round(time.monotonic() - started, 1)}
+    result = {"case": name, "passed": passed, "checks": checks, "error": error, "leftovers": leftovers, "seconds": round(time.monotonic() - started, 1)}
+    return result | ({"evidence": env.evidence} if env.evidence else {})
 
 
 def run_cases(selected: list[str], verbose: bool = False) -> int:
@@ -2466,6 +2486,9 @@ def run_cases(selected: list[str], verbose: bool = False) -> int:
                 sys.stdout.write(f"      {'ok' if ok else 'FAILED'}: {check}\n")
             elif not ok:
                 sys.stdout.write(f"      failed: {check}\n")
+                scenario = result.get("evidence", {}).get(check.split(": ", 1)[0])
+                if scenario is not None:
+                    sys.stdout.write(f"      evidence: {json.dumps(scenario, sort_keys=True)[:2000]}\n")
         if result["error"]:
             sys.stdout.write(f"      error: {result['error'].splitlines()[0]}\n")
     summary = {
