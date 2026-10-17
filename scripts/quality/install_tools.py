@@ -50,20 +50,23 @@ def archive_bytes(release: dict[str, Any], directory: Path | None) -> bytes:
         raise ValueError("Expected a GitHub release asset")
     if not re.fullmatch(r"[a-f0-9]{64}", release["sha256"]):
         raise ValueError("Invalid archive hash")
+    limit = MAX_BINARY if release["format"] == "binary" else MAX_ARCHIVE
     if directory is not None:
         with (directory / Path(url.path).name).open("rb") as source:
-            content = source.read(MAX_ARCHIVE + 1)
+            content = source.read(limit + 1)
     else:
         opener = urllib.request.build_opener(HTTPSRedirect())
         with opener.open(release["url"], timeout=60) as response:
-            content = response.read(MAX_ARCHIVE + 1)
-    if len(content) > MAX_ARCHIVE or sha256(content) != release["sha256"]:
+            content = response.read(limit + 1)
+    if len(content) > limit or sha256(content) != release["sha256"]:
         raise ValueError("Archive size or SHA-256 mismatch")
     return content
 
 
 def binary_bytes(content: bytes, kind: str, name: str) -> bytes:
     """Read one named regular member; never write publisher-controlled archive paths."""
+    if kind == "binary":
+        return content
     if kind == "tar.gz":
         with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as archive:
             members = [item for item in archive.getmembers() if item.name == name]
@@ -111,21 +114,28 @@ def publish(path: Path, content: bytes, mode: int) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def install(manifest: Path, destination: Path, archives: Path | None) -> None:
+def install(manifest: Path, destination: Path, archives: Path | None, tools: list[str] | None = None) -> None:
     """Validate every asset before publishing binaries and deterministic receipts."""
     config = json.loads(manifest.read_text(encoding="utf-8"))
-    if config["schema_version"] != 1 or set(config["tools"]) != {"gitleaks", "tflint", "trivy"}:
+    native = {"gitleaks", "tflint", "trivy", "shellcheck", "actionlint", "hadolint"}
+    names = set(config["tools"])
+    if config["schema_version"] != 1 or not {"gitleaks", "tflint", "trivy"} <= names or names - native - {"yamllint"}:
         raise ValueError("Unsupported tool manifest")
+    selected_tools = names & native if tools is None else set(tools)
+    if not selected_tools or not selected_tools <= names & native:
+        raise ValueError("Unknown native tool selection")
     architecture = {"x86_64": "amd64", "AMD64": "amd64"}.get(platform.machine(), platform.machine())
     selected = f"{platform.system().lower()}_{architecture}"
     pending: list[tuple[Path, bytes, int]] = []
     if any(path.is_symlink() for path in (destination, destination / "bin", destination / "receipts")):
         raise ValueError("Symlink installation directories are not allowed")
     for name, tool in sorted(config["tools"].items()):
+        if name not in selected_tools:
+            continue
         if not re.fullmatch(r"\d+\.\d+\.\d+", tool["version"]):
             raise ValueError("Stable tool version required")
         release = tool["releases"][selected]
-        content = binary_bytes(archive_bytes(release, archives), release["format"], name)
+        content = binary_bytes(archive_bytes(release, archives), release["format"], release.get("member", name))
         if not content or len(content) > MAX_BINARY:
             raise ValueError("Invalid executable size")
         receipt = {"version": tool["version"], "platform": selected, "archive_sha256": release["sha256"], "binary_sha256": sha256(content)}
@@ -148,10 +158,11 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, default=ROOT / "config/quality_tools.json")
     parser.add_argument("--destination", type=Path, default=ROOT / ".tools")
     parser.add_argument("--archive-directory", type=Path)
+    parser.add_argument("--tool", action="append", help="install only this native tool (repeat to select more)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
-        install(args.manifest, args.destination, args.archive_directory)
+        install(args.manifest, args.destination, args.archive_directory, args.tool)
     except (OSError, ValueError, KeyError, TypeError, tarfile.TarError, zipfile.BadZipFile, urllib.error.URLError) as error:
         LOGGER.error("event=quality_install status=failed error_type=%s", type(error).__name__)
         raise SystemExit(1) from None

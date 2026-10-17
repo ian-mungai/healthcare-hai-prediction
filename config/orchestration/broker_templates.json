@@ -1,6 +1,48 @@
 {
   "schema_version": 1,
   "templates": {
+    "acquire_run": {
+      "purpose": "Take the transform lock for the run, make the run folder and copy the fixture seed into it (step 1)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "acquire",
+            "params": {
+              "seed": "{checkout}/data/orchestration/fixture_seed",
+              "folders": [
+                "quality_silver",
+                "quality_gold",
+                "quality_cross"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "catalog_up": {
+      "purpose": "Start the catalog and register the run as a catalog user (step 2)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": true,
+          "reason": "the fixture mode reads a fixture bronze database, so no catalog starts and no catalog user is registered"
+        },
+        "publish_fixture": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
     "pin_bronze": {
       "purpose": "Record the snapshot ID of every bronze table the build reads (step 3)",
       "modes": {
@@ -29,8 +71,23 @@
         "fixture": {
           "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "fixture_dbt",
+            "args": [
+              "build",
+              "--select",
+              "resource_type:seed",
+              "+path:models/silver",
+              "--indirect-selection",
+              "cautious"
+            ],
+            "params": {
+              "case_host": "{run_dir}",
+              "case_container": "/workspace/out/case",
+              "packages_host": "{checkout}/data/analytics/dbt/dbt_packages"
+            },
+            "timeout_seconds": 3600
+          }
         },
         "publish_fixture": {
           "class": "lakehouse_read",
@@ -47,13 +104,25 @@
       }
     },
     "silver_validate": {
-      "purpose": "Run the atomic silver Great Expectations contracts on the build file and record its SHA-256 (step 5)",
+      "purpose": "Run the atomic silver Great Expectations contracts on the build file and record its SHA-256 and the run (step 5)",
       "modes": {
         "fixture": {
           "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "quality_validate",
+            "args": [],
+            "params": {
+              "database": "{run_dir}/staging.duckdb",
+              "build_root": "{run_dir}",
+              "suites_host": "{checkout}/data_contracts/great_expectations/suites",
+              "baselines_host": "{checkout}/data_contracts/great_expectations/fixture_baselines.json",
+              "out_host": "{run_dir}/quality_silver"
+            },
+            "timeout_seconds": 3600,
+            "records_build_file": "{run_dir}/staging.duckdb",
+            "build_file_result": "{run_dir}/quality_silver/result.json"
+          }
         },
         "publish_fixture": {
           "class": "offline",
@@ -75,8 +144,26 @@
         "fixture": {
           "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "fixture_dbt",
+            "args": [
+              "build",
+              "--select",
+              "path:models/gold",
+              "--indirect-selection",
+              "cautious"
+            ],
+            "params": {
+              "case_host": "{run_dir}",
+              "case_container": "/workspace/out/case",
+              "packages_host": "{checkout}/data/analytics/dbt/dbt_packages"
+            },
+            "timeout_seconds": 3600,
+            "requires_build_file": {
+              "validated_by": "silver_validate",
+              "file": "{run_dir}/staging.duckdb"
+            }
+          }
         },
         "publish_fixture": {
           "class": "offline",
@@ -98,8 +185,18 @@
         "fixture": {
           "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "quality_validate",
+            "args": [],
+            "params": {
+              "database": "{run_dir}/staging.duckdb",
+              "build_root": "{run_dir}",
+              "suites_host": "{checkout}/data_contracts/great_expectations/gold",
+              "baselines_host": "{checkout}/data_contracts/great_expectations/fixture_baselines.json",
+              "out_host": "{run_dir}/quality_gold"
+            },
+            "timeout_seconds": 3600
+          }
         },
         "publish_fixture": {
           "class": "offline",
@@ -116,13 +213,26 @@
       }
     },
     "cross_layer_checks": {
-      "purpose": "Reconcile gold with silver while silver still exists (step 8)",
+      "purpose": "Reconcile every gold fact with its silver model row for row and by content, and run the silver and gold suites on the same build file (step 8)",
       "modes": {
         "fixture": {
           "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "quality_reconcile",
+            "args": [],
+            "params": {
+              "database": "{run_dir}/staging.duckdb",
+              "build_root": "{run_dir}",
+              "suites_hosts": [
+                "{checkout}/data_contracts/great_expectations/suites",
+                "{checkout}/data_contracts/great_expectations/gold"
+              ],
+              "baselines_host": "{checkout}/data_contracts/great_expectations/fixture_baselines.json",
+              "out_host": "{run_dir}/quality_cross"
+            },
+            "timeout_seconds": 3600
+          }
         },
         "publish_fixture": {
           "class": "offline",
@@ -157,6 +267,26 @@
           "no_op": false,
           "launcher": null,
           "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "publish_branch": {
+      "purpose": "Record the branch by mode: publish modes continue to step 10 and the fixture mode goes to skip_publish (step 9a)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": true,
+          "reason": "the branch is the DAG's decision by mode; the step records which path the run takes"
+        }
+      }
+    },
+    "skip_publish": {
+      "purpose": "Record why steps 10 to 13 are skipped in the fixture mode",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": true,
+          "reason": "the fixture mode publishes nothing, so steps 10 to 13 are skipped by the branch"
         }
       }
     },
@@ -225,6 +355,142 @@
           "no_op": false,
           "launcher": null,
           "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "run_record": {
+      "purpose": "Write the durable run record and move the run to finalizing; the build file and the lock are kept (step 14)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "record",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json"
+            }
+          }
+        }
+      }
+    },
+    "catalog_release": {
+      "purpose": "Deregister the run as a catalog user and stop the catalog when no user remains (step 15)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": true,
+          "reason": "the fixture mode registered no catalog user, so nothing is deregistered"
+        },
+        "publish_fixture": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": null,
+          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "final_gate_accepted": {
+      "purpose": "Write the accepted result of the final gate and the DAG run's predecessor states into the run record (step 16)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "pin_bronze": "success",
+                "silver_build": "success",
+                "silver_validate": "success",
+                "gold_build": "success",
+                "gold_validate": "success",
+                "cross_layer_checks": "success",
+                "verify_bronze": "success",
+                "publish_branch": "success",
+                "skip_publish": "success",
+                "publish_candidates": "skipped",
+                "reconcile_candidates": "skipped",
+                "catalog_backup": "skipped",
+                "commit_publish": "skipped",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "final_gate_rejected": {
+      "purpose": "Write the rejected result of the final gate and the DAG run's predecessor states into the run record (step 16)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "pin_bronze": "success",
+                "silver_build": "success",
+                "silver_validate": "success",
+                "gold_build": "success",
+                "gold_validate": "success",
+                "cross_layer_checks": "success",
+                "verify_bronze": "success",
+                "publish_branch": "success",
+                "skip_publish": "success",
+                "publish_candidates": "skipped",
+                "reconcile_candidates": "skipped",
+                "catalog_backup": "skipped",
+                "commit_publish": "skipped",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "release_accepted": {
+      "purpose": "After an accepted gate, stop what is open, delete the build files and release the lock (step 17)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "release_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "build_files": [
+                "{run_dir}/staging.duckdb",
+                "{run_dir}/staging.duckdb.wal"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "release_rejected": {
+      "purpose": "After a rejected gate, stop what is open, keep the build files and keep the lock as failed_retained (step 17)",
+      "modes": {
+        "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "release_rejected"
+          }
         }
       }
     },

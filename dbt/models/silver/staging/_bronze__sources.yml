@@ -8,6 +8,8 @@ sources:
     tables:
       - name: stored_copies
         description: Every stored copy of each bronze table's files, loaded or not, with its lineage (failure mode 206).
+        meta:
+          classification: Public
         columns:
           - name: table_name
             description: The bronze table the copy belongs to.
@@ -23,6 +25,8 @@ sources:
             data_tests: [not_null]
       - name: cms_hai_hospital
         description: HAI hospital tables, every stored copy of each release.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -35,6 +39,8 @@ sources:
             data_tests: [not_null]
       - name: cms_hai_state
         description: HAI state tables, every stored copy of each release.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -47,6 +53,8 @@ sources:
             data_tests: [not_null]
       - name: cms_hai_national
         description: HAI national tables, every stored copy of each release.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -59,6 +67,8 @@ sources:
             data_tests: [not_null]
       - name: cms_hospital_cost_reports
         description: HCRIS hospital cost-report CSVs, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -71,6 +81,8 @@ sources:
             data_tests: [not_null]
       - name: cms_ipps_text_lines
         description: IPPS and CMI text files, one row per line.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -83,6 +95,8 @@ sources:
             data_tests: [not_null]
       - name: cms_ipps_sheet_rows
         description: IPPS and CMI workbooks, one row per sheet row.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -95,6 +109,8 @@ sources:
             data_tests: [not_null]
       - name: cms_ipps_sas
         description: The IPPS SAS file, one row per record.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -107,6 +123,8 @@ sources:
             data_tests: [not_null]
       - name: cms_occupational_mix_text_lines
         description: Occupational-mix text files, one row per line.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -119,6 +137,8 @@ sources:
             data_tests: [not_null]
       - name: cms_occupational_mix_text_lines_utf16
         description: The seven UTF-16 FY 2017 final-rule occupational-mix text files, one row per line (BRZ-017).
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -131,6 +151,8 @@ sources:
             data_tests: [not_null]
       - name: cms_occupational_mix_sheet_rows
         description: Occupational-mix workbooks, one row per sheet row.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -143,6 +165,8 @@ sources:
             data_tests: [not_null]
       - name: cms_provider_of_services
         description: Provider of Services files (hospital and other facilities), every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -155,6 +179,8 @@ sources:
             data_tests: [not_null]
       - name: cms_cc_hospital_general_information
         description: Care Compare Hospital General Information files, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -167,6 +193,8 @@ sources:
             data_tests: [not_null]
       - name: cms_hospital_enrollments
         description: Hospital Enrollments files, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -179,6 +207,22 @@ sources:
             data_tests: [not_null]
       - name: cms_hospital_owners
         description: Hospital All Owners files, every stored copy.
+        meta:
+          classification: Confidential
+          confidential_columns:
+            - associate_id_owner
+            - first_name_owner
+            - middle_name_owner
+            - last_name_owner
+            - title_owner
+            - organization_name_owner
+            - doing_business_as_name_owner
+            - address_line_1_owner
+            - address_line_2_owner
+            - city_owner
+            - zip_code_owner
+            - other_type_text_owner
+          exception: "Personal original kept locally with owner-only access; only the redacted copy is stored (docs/data_collection.md, Privacy Handling)"
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -189,8 +233,26 @@ sources:
           - name: _row_number
             description: Row position within the file, from 1.
             data_tests: [not_null]
+          - name: role_code_owner
+            description: Publisher owner role code.
+          - name: role_text_owner
+            description: Publisher owner role label.
       - name: cms_change_of_ownership
         description: Hospital Change of Ownership files, every stored copy.
+        meta:
+          classification: Confidential
+          confidential_columns:
+            - enrollment_id_buyer
+            - enrollment_id_seller
+            - associate_id_buyer
+            - associate_id_seller
+            - npi_buyer
+            - npi_seller
+            - organization_name_buyer
+            - organization_name_seller
+            - doing_business_as_name_buyer
+            - doing_business_as_name_seller
+          exception: "Stored whole in the Confidential bucket; the publisher dictionary does not rule out an individual buyer or seller (docs/data_collection.md, Privacy Handling)"
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -201,8 +263,14 @@ sources:
           - name: _row_number
             description: Row position within the file, from 1.
             data_tests: [not_null]
+          - name: chow_type_code
+            description: Publisher change of ownership type code.
+          - name: chow_type_text
+            description: Publisher change of ownership type label.
       - name: cms_cc_timely_and_effective_care_hospital
         description: Care Compare timely and effective care hospital files, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -215,6 +283,8 @@ sources:
             data_tests: [not_null]
       - name: cms_cc_maternal_health_hospital
         description: Care Compare maternal health hospital files, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -227,6 +297,8 @@ sources:
             data_tests: [not_null]
       - name: cms_cc_hcahps_hospital
         description: Care Compare HCAHPS hospital files, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -239,6 +311,8 @@ sources:
             data_tests: [not_null]
       - name: cms_medicare_inpatient_by_provider
         description: Medicare inpatient hospitals by provider (provider summary per data year), every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -251,6 +325,8 @@ sources:
             data_tests: [not_null]
       - name: cms_medicare_inpatient_by_drg
         description: Medicare inpatient hospitals by provider and DRG per data year, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -263,6 +339,8 @@ sources:
             data_tests: [not_null]
       - name: hhs_capacity_csv
         description: HHS COVID-19 reported patient impact and hospital capacity by facility, weekly, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -275,6 +353,14 @@ sources:
             data_tests: [not_null]
       - name: onc_pi_attestations_csv
         description: ONC hospital Medicare and Medicaid EHR incentive attestations, program years 2011 to 2017, every stored copy.
+        meta:
+          classification: Confidential
+          confidential_columns: all
+          confidential_columns_reason: Every publisher column is confidential until an ONC publisher dictionary is stored; loader lineage _object_key and _member_sha256 are exempt (A273).
+          proposed_confidential_columns:
+            - npi
+            - specialty
+          exception: "Personal original kept locally with owner-only access; only the redacted copy is stored (docs/data_collection.md, Privacy Handling)"
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -287,6 +373,19 @@ sources:
             data_tests: [not_null]
       - name: onc_pi_chpl_linkage_csv
         description: ONC hospital Promoting Interoperability to certified-product (CHPL) linkage, every stored copy.
+        meta:
+          classification: Confidential
+          confidential_columns: all
+          confidential_columns_reason: Every publisher column is confidential until an ONC publisher dictionary is stored; loader lineage _object_key and _member_sha256 are exempt (A273).
+          proposed_confidential_columns:
+            - facility_id
+            - facility_name
+            - address
+            - city_town
+            - zip_code
+            - telephone_number
+            - developer_name
+          exception: "Stored whole in the Confidential bucket; no publisher dictionary is stored to rule out personal fields (docs/data_collection.md, Privacy Handling)"
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -299,6 +398,8 @@ sources:
             data_tests: [not_null]
       - name: hud_zip_county
         description: HUD-USPS ZIP-to-county crosswalk, one CSV per USPS quarter 2010 to 2025, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -311,6 +412,8 @@ sources:
             data_tests: [not_null]
       - name: hud_zip_county_sheet_rows
         description: HUD ZIP-to-county workbooks of 2010 to 2020, sheet rows as published; twins of the quarterly CSVs, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -323,6 +426,8 @@ sources:
             data_tests: [not_null]
       - name: county_adjacency
         description: Census county adjacency files 2023 to 2026, one row per county and neighbor, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -335,6 +440,8 @@ sources:
             data_tests: [not_null]
       - name: county_adjacency_2010_text_lines
         description: "Census 2010 county adjacency file as text lines: a county's lead line, then its neighbors on continuation lines."
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -347,6 +454,8 @@ sources:
             data_tests: [not_null]
       - name: rucc
         description: USDA ERS 2023 Rural-Urban Continuum Codes, long format (one row per county and attribute), every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -359,6 +468,8 @@ sources:
             data_tests: [not_null]
       - name: rucc_sheet_rows
         description: USDA ERS Rural-Urban Continuum Code workbooks 1974 to 2023, sheet rows as published.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -371,6 +482,8 @@ sources:
             data_tests: [not_null]
       - name: ruca_tracts_2020
         description: USDA ERS 2020 Rural-Urban Commuting Area codes by census tract, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -383,6 +496,8 @@ sources:
             data_tests: [not_null]
       - name: ruca_zip_2020
         description: USDA ERS 2020 Rural-Urban Commuting Area codes by ZIP code, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -395,6 +510,8 @@ sources:
             data_tests: [not_null]
       - name: ruca_zip_2010
         description: USDA ERS 2010 Rural-Urban Commuting Area codes by ZIP code, ZIP codes wrapped in apostrophes, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -407,6 +524,8 @@ sources:
             data_tests: [not_null]
       - name: ruca_sheet_rows
         description: USDA ERS Rural-Urban Commuting Area workbooks 1990 to 2020, sheet rows as published.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -419,6 +538,8 @@ sources:
             data_tests: [not_null]
       - name: cms_hsa_csv
         description: CMS Hospital Service Area files 2015 to 2025 with Medicare cases, days and charges per provider and beneficiary ZIP code, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -431,6 +552,8 @@ sources:
             data_tests: [not_null]
       - name: svi
         description: CDC/ATSDR Social Vulnerability Index county files, editions 2000 to 2022, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -443,6 +566,8 @@ sources:
             data_tests: [not_null]
       - name: acs_dp02
         description: ACS 5-year table DP02 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -455,6 +580,8 @@ sources:
             data_tests: [not_null]
       - name: acs_dp03
         description: ACS 5-year table DP03 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -467,6 +594,8 @@ sources:
             data_tests: [not_null]
       - name: acs_dp04
         description: ACS 5-year table DP04 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -479,6 +608,8 @@ sources:
             data_tests: [not_null]
       - name: acs_dp05
         description: ACS 5-year table DP05 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -491,6 +622,8 @@ sources:
             data_tests: [not_null]
       - name: acs_s0101
         description: ACS 5-year table S0101 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -503,6 +636,8 @@ sources:
             data_tests: [not_null]
       - name: acs_s0601
         description: ACS 5-year table S0601 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -515,6 +650,8 @@ sources:
             data_tests: [not_null]
       - name: acs_s1701
         description: ACS 5-year table S1701 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -527,6 +664,8 @@ sources:
             data_tests: [not_null]
       - name: acs_s2503
         description: ACS 5-year table S2503 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -539,6 +678,8 @@ sources:
             data_tests: [not_null]
       - name: acs_s2701
         description: ACS 5-year table S2701 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -551,6 +692,8 @@ sources:
             data_tests: [not_null]
       - name: acs_b16005
         description: ACS 5-year table B16005 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -563,6 +706,8 @@ sources:
             data_tests: [not_null]
       - name: acs_b19013
         description: ACS 5-year table B19013 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -575,6 +720,8 @@ sources:
             data_tests: [not_null]
       - name: acs_b25070
         description: ACS 5-year table B25070 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -587,6 +734,8 @@ sources:
             data_tests: [not_null]
       - name: acs_b25091
         description: ACS 5-year table B25091 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -599,6 +748,8 @@ sources:
             data_tests: [not_null]
       - name: acs_b26001
         description: ACS 5-year table B26001 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -611,6 +762,8 @@ sources:
             data_tests: [not_null]
       - name: acs_c16001
         description: ACS 5-year table C16001 exported from data.census.gov for every county, one file per vintage, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -623,6 +776,8 @@ sources:
             data_tests: [not_null]
       - name: acs_summary_b16005
         description: ACS 5-year summary file of table B16005 for every geography, 2018 to 2024, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -635,6 +790,8 @@ sources:
             data_tests: [not_null]
       - name: acs_summary_b19013
         description: ACS 5-year summary file of table B19013 for every geography, 2018 to 2024, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -647,6 +804,8 @@ sources:
             data_tests: [not_null]
       - name: acs_summary_b25070
         description: ACS 5-year summary file of table B25070 for every geography, 2018 to 2024, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -659,6 +818,8 @@ sources:
             data_tests: [not_null]
       - name: acs_summary_b25091
         description: ACS 5-year summary file of table B25091 for every geography, 2018 to 2024, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -671,6 +832,8 @@ sources:
             data_tests: [not_null]
       - name: acs_summary_b26001
         description: ACS 5-year summary file of table B26001 for every geography, 2018 to 2024, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -683,6 +846,8 @@ sources:
             data_tests: [not_null]
       - name: acs_summary_c16001
         description: ACS 5-year summary file of table C16001 for every geography, 2018 to 2024, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -695,6 +860,8 @@ sources:
             data_tests: [not_null]
       - name: column_map
         description: Each loaded object's columns with the header and the label the publisher printed, as bronze read them.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: The loaded object the column belongs to.
@@ -704,6 +871,8 @@ sources:
             data_tests: [not_null]
       - name: saipe_text_lines
         description: Census SAIPE state and county estimate files, 1989 to 2024, fixed-width text lines, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -716,6 +885,8 @@ sources:
             data_tests: [not_null]
       - name: sahie
         description: Census SAHIE county and state estimates, 2006 to 2024, after each file's preamble, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -728,6 +899,8 @@ sources:
             data_tests: [not_null]
       - name: bls_laus
         description: BLS Local Area Unemployment Statistics county series from the BLS API, one file per request, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -740,12 +913,16 @@ sources:
             data_tests: [not_null]
       - name: file_preambles
         description: The note lines bronze skipped before a file's header, with their line numbers (SAHIE category definitions).
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: The loaded object the lines belong to.
             data_tests: [not_null]
       - name: places
         description: CDC PLACES county releases 2020 to 2025, long format (one row per county, measure, value type and data year), every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -758,6 +935,8 @@ sources:
             data_tests: [not_null]
       - name: cms_geographic_variation_csv
         description: CMS Medicare Geographic Variation public use file 2014 to 2024, national, state and county rows, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -770,6 +949,8 @@ sources:
             data_tests: [not_null]
       - name: wonder_county_mortality
         description: CDC WONDER underlying cause of death county-year exports, bridged-race 1999 to 2020 and single-race 2018 to 2024, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -782,6 +963,8 @@ sources:
             data_tests: [not_null]
       - name: cms_mmd_csv
         description: CMS Mapping Medicare Disparities fee-for-service prevalence, one file per control, year and geography, 2012 to 2023, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -794,6 +977,8 @@ sources:
             data_tests: [not_null]
       - name: hrsa_hpsa_detail
         description: HRSA primary-care Health Professional Shortage Area components (BCD_HPSA_FCT_DET_PC.csv), every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -806,6 +991,8 @@ sources:
             data_tests: [not_null]
       - name: hrsa_mua_detail
         description: HRSA Medically Underserved Area and Population components (MUA_DET.csv), every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -818,6 +1005,8 @@ sources:
             data_tests: [not_null]
       - name: cms_cc_unplanned_hospital_visits_hospital
         description: Care Compare unplanned hospital visits by hospital (dataset 632h-zaca and its earlier releases), every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -830,6 +1019,8 @@ sources:
             data_tests: [not_null]
       - name: cms_cc_complications_and_deaths_hospital
         description: Care Compare complications and deaths by hospital (dataset ynj2-r877 and its earlier releases), every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -842,6 +1033,8 @@ sources:
             data_tests: [not_null]
       - name: cms_cc_hospital_readmissions_reduction_program_hospital
         description: Care Compare Hospital Readmissions Reduction Program by hospital (dataset 9n3s-kdb3 and the fiscal-year releases), every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -854,6 +1047,8 @@ sources:
             data_tests: [not_null]
       - name: cms_cc_hac_reduction_program_hospital
         description: Care Compare HAC Reduction Program by hospital and fiscal year (dataset yq43-i98g and the fiscal-year releases), every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.
@@ -866,6 +1061,8 @@ sources:
             data_tests: [not_null]
       - name: cms_cc_hvbp_tps
         description: Care Compare Hospital Value-Based Purchasing Total Performance Score by hospital and fiscal year, every stored copy.
+        meta:
+          classification: Public
         columns:
           - name: _object_key
             description: Hash of the S3 key, version ID and member path; identifies one loaded object.

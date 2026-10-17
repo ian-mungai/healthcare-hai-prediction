@@ -1,6 +1,188 @@
 {
   "version": 1,
   "namespace": "bronze",
+  "classification": {
+    "collections": {
+      "cms/hospitals": {
+        "class": "Public",
+        "reason": "CMS Care Compare hospital, state and national measure files. Rows describe facilities and measures. Facility addresses and phone numbers are organizational."
+      },
+      "cms/provider_of_services": {
+        "class": "Public",
+        "reason": "Provider of Services layout: 473 field names, none names a person. The name, address and phone fields describe the facility. The clinical laboratory table is facility records."
+      },
+      "cms/hospital_cost_reports": {
+        "class": "Public",
+        "reason": "HCRIS cost-report files. Hospital-level financial data with no personal field documented."
+      },
+      "cms/hospital_ownership": {
+        "class": "Confidential",
+        "reason": "The Hospital All Owners files name individual owners and the stored copy is the privacy-filtered derivative. The collection also holds the Change of Ownership and Enrollments files and the dictionaries, which have table overrides.",
+        "exception": "Personal original kept locally with owner-only access; only the redacted copy is stored (docs/data_collection.md, Privacy Handling)"
+      },
+      "cms/medicare_inpatient": {
+        "class": "Public",
+        "reason": "Provider-level and DRG summaries of Medicare inpatient stays with small cells suppressed. No patient rows."
+      },
+      "cms/ipps": {
+        "class": "Public",
+        "reason": "IPPS rule tables. Hospital-level payment and wage data with no personal field documented."
+      },
+      "cms/occupational_mix": {
+        "class": "Public",
+        "reason": "Occupational-mix survey files. Hospital-level wage and hours data with no personal field documented."
+      },
+      "bls/local_area_unemployment": {
+        "class": "Public",
+        "reason": "Aggregate county statistics from a public statistical release. No person-level rows."
+      },
+      "census/acs": {
+        "class": "Public",
+        "reason": "Aggregate county statistics from a public statistical release. No person-level rows."
+      },
+      "census/saipe": {
+        "class": "Public",
+        "reason": "Aggregate county statistics from a public statistical release. No person-level rows."
+      },
+      "census/sahie": {
+        "class": "Public",
+        "reason": "Aggregate county statistics from a public statistical release. No person-level rows."
+      },
+      "census/county_adjacency": {
+        "class": "Public",
+        "reason": "Codes and ratios that classify geography. No people."
+      },
+      "usda/rural_urban_continuum": {
+        "class": "Public",
+        "reason": "Codes and ratios that classify geography. No people."
+      },
+      "usda/rural_urban_commuting": {
+        "class": "Public",
+        "reason": "Codes and ratios that classify geography. No people."
+      },
+      "hud/usps_crosswalk": {
+        "class": "Public",
+        "reason": "ZIP-to-county crosswalk ratios and published documents. No people."
+      },
+      "cdc/social_vulnerability": {
+        "class": "Public",
+        "reason": "Aggregate county statistics from a public statistical release. No person-level rows."
+      },
+      "cdc/places": {
+        "class": "Public",
+        "reason": "Aggregate county statistics from a public statistical release. No person-level rows."
+      },
+      "cdc/wonder_mortality": {
+        "class": "Public",
+        "reason": "County-year death counts with small counts suppressed. Aggregate."
+      },
+      "cms/mapping_medicare_disparities": {
+        "class": "Public",
+        "reason": "County, state and national aggregate rates and counts. No people."
+      },
+      "cms/hospital_service_area": {
+        "class": "Public",
+        "reason": "Medicare case counts by provider and beneficiary ZIP code. Aggregate."
+      },
+      "cms/geographic_variation": {
+        "class": "Public",
+        "reason": "County, state and national aggregate rates and counts. No people."
+      },
+      "cms/chronic_conditions": {
+        "class": "Public",
+        "reason": "Publisher documents only, stored as document rows. No data rows."
+      },
+      "hhs/hospital_capacity": {
+        "class": "Public",
+        "reason": "Facility-level weekly capacity counts with small values suppressed. Facility fields are organizational."
+      },
+      "onc/promoting_interoperability": {
+        "class": "Confidential",
+        "reason": "The meaningful-use attestation file lists clinicians beside hospitals and the stored copy keeps hospital rows only. The collection also holds the CHPL linkage file, which has a table override.",
+        "exception": "Personal original kept locally with owner-only access; only the redacted copy is stored (docs/data_collection.md, Privacy Handling)"
+      },
+      "hrsa/shortage_areas": {
+        "class": "Public",
+        "reason": "Shortage-area designation components. Area records, no people."
+      },
+      "hrsa/nursing_workforce": {
+        "class": "Public",
+        "reason": "Nursing survey codebook and workbooks stored as document and sheet rows. Aggregate survey material."
+      },
+      "ahrq/patient_safety_indicators": {
+        "class": "Public",
+        "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
+      },
+      "nsi/retention_and_staffing": {
+        "class": "Public",
+        "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
+      },
+      "california_hcai/hospital_finance": {
+        "class": "Confidential",
+        "reason": "HCAI annual financial files name hospital chief executives. The untouched download stays local and only the privacy-filtered derivative is stored.",
+        "exception": "Personal original kept locally with owner-only access; only the redacted copy is stored (docs/data_collection.md, Privacy Handling)"
+      },
+      "california_hcai/hospital_utilization": {
+        "class": "Confidential",
+        "reason": "HCAI annual utilization workbooks. Personal columns and individual-owner details are replaced with [REDACTED] in the stored derivative.",
+        "exception": "Personal original kept locally with owner-only access; only the redacted copy is stored (docs/data_collection.md, Privacy Handling)"
+      },
+      "illinois/hospital_report_card": {
+        "class": "Public",
+        "reason": "State hospital report card. Facility-level statistics."
+      },
+      "texas_dshs/hospital_nurse_staffing": {
+        "class": "Public",
+        "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
+      },
+      "vermont_health/hospital_reports": {
+        "class": "Public",
+        "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
+      },
+      "iroquois_healthcare/workforce": {
+        "class": "Public",
+        "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
+      },
+      "mississippi_hospitals/workforce": {
+        "class": "Public",
+        "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
+      },
+      "massachusetts_chia/healthcare_workforce": {
+        "class": "Public",
+        "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
+      },
+      "maryland/nurse_support": {
+        "class": "Public",
+        "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
+      },
+      "new_york_health/hospital_infections": {
+        "class": "Public",
+        "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
+      },
+      "patientcarelink/nursing_workforce": {
+        "class": "Public",
+        "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
+      },
+      "california_cdph/infection_prevention": {
+        "class": "Public",
+        "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
+      }
+    },
+    "loader_tables": {
+      "stored_copies": {
+        "class": "Public",
+        "reason": "Bronze lineage table: file names, checksums, capture locations and release labels. No publisher data rows."
+      },
+      "column_map": {
+        "class": "Public",
+        "reason": "Bronze lineage table: file names, checksums and column labels. No publisher data rows."
+      },
+      "file_preambles": {
+        "class": "Public",
+        "reason": "Bronze lineage table: file names, checksums and note lines before the header row. No publisher data rows."
+      }
+    }
+  },
   "tables": [
     {
       "table": "cms_hai_hospital",
@@ -104,6 +286,11 @@
       "dictionary": {
         "table": "cms_hospital_ownership_dictionaries",
         "file_pattern": "(?i)CHOW_Data_Dictionary"
+      },
+      "classification": {
+        "class": "Confidential",
+        "reason": "Buyer and seller organization records. The dictionary does not rule out an individual buyer or seller (owner decision).",
+        "exception": "Stored whole in the Confidential bucket; the publisher dictionary does not rule out an individual buyer or seller (docs/data_collection.md, Privacy Handling)"
       }
     },
     {
@@ -138,6 +325,10 @@
       "dictionary": {
         "table": "cms_hospital_ownership_dictionaries",
         "file_pattern": "(?i)Enrollments_Data_Dictionary"
+      },
+      "classification": {
+        "class": "Public",
+        "reason": "Hospital enrollment records. Every field in the dictionary describes the hospital itself, with no person field."
       }
     },
     {
@@ -285,7 +476,11 @@
         "dictionary",
         "methodology",
         "reference"
-      ]
+      ],
+      "classification": {
+        "class": "Public",
+        "reason": "Publisher dictionaries read for column names and definitions only. No data rows."
+      }
     },
     {
       "table": "cms_medicare_inpatient_dictionaries",
@@ -1300,7 +1495,12 @@
       "encodings": [
         "utf-8",
         "cp1252"
-      ]
+      ],
+      "classification": {
+        "class": "Confidential",
+        "reason": "No publisher dictionary is stored for this file, so nothing rules out personal fields (owner decision).",
+        "exception": "Stored whole in the Confidential bucket; no publisher dictionary is stored to rule out personal fields (docs/data_collection.md, Privacy Handling)"
+      }
     },
     {
       "table": "hrsa_shortage_sheet_rows",

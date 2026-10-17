@@ -69,6 +69,7 @@ if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
 else
   "$python_bin" -m scripts.quality.documentation_review check
 fi
+"$python_bin" -m scripts.quality.lint_sources fast
 record gates $((SECONDS - started))
 
 launcher_e2e() {
@@ -90,8 +91,6 @@ e2e_output="${E2E_ARTIFACT_DIR:-$repo_root/data/e2e/configuration/$(date -u +%Y%
 quality_output="${QUALITY_ARTIFACT_DIR:-$repo_root/data/e2e/quality/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 
 python_lint() {
-  "$python_bin" -m ruff format --check scripts tests
-  "$python_bin" -m ruff check scripts tests
   "$python_bin" -m scripts.quality.typecheck --check-untyped-defs --disallow-untyped-defs
 }
 
@@ -104,6 +103,8 @@ lakehouse_checks() {
   # The silver suites must match the kept-model contract, the moved checks and the baselines they are generated from.
   "$python_bin" -m scripts.lakehouse.run_silver_e2e --check-suites
   "$python_bin" -m scripts.lakehouse.run_resource_checks
+  "$python_bin" -m scripts.quality.model_metadata
+  "$python_bin" -m scripts.quality.run_model_metadata_e2e
   "$python_bin" -m scripts.lakehouse.run_lock_e2e
   "$python_bin" -m scripts.lakehouse.run_provenance_e2e
   "$python_bin" -m scripts.orchestration.run_contracts_e2e
@@ -113,6 +114,7 @@ orchestration_checks() {
   "$python_bin" -m scripts.orchestration.run_stack_e2e
   "$python_bin" -m scripts.orchestration.run_broker_e2e
   "$python_bin" -m scripts.orchestration.run_supervisor_e2e
+  "$python_bin" -m scripts.orchestration.run_transform_broker_e2e
   # The offline checks skip the built Airflow image, which a CI runner does not have.
   "$python_bin" -m scripts.orchestration.offline_checks --no-image
   "$python_bin" -m scripts.orchestration.run_failing_first --check
@@ -136,7 +138,7 @@ configuration_checks() {
 
 
 sql_style() {
-  .tools/sqlfluff/bin/sqlfluff lint dbt/models dbt/tests
+  "$python_bin" -m scripts.quality.lint_sources sql
 }
 
 terraform_checks() {

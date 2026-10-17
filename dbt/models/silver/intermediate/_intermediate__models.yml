@@ -6,6 +6,8 @@ models:
       One HAI hospital row per entity, measure ID and measurement window, from the file with the latest stored release
       (BRZ-002; failure modes 230 to 236, plans/hai_windows_20261004/failure_modes.md). Windows whose
       latest release holds two rows are held in int_hai_window_holds instead.
+    meta:
+      classification: Public
     columns:
       - name: window_key
         description: Entity, measure ID, window start and window end, the model's key.
@@ -44,6 +46,8 @@ models:
       One HAI state row per entity, measure ID and measurement window, from the file with the latest stored release
       (BRZ-002; failure modes 230 to 236, plans/hai_windows_20261004/failure_modes.md). Windows whose
       latest release holds two rows are held in int_hai_window_holds instead.
+    meta:
+      classification: Public
     columns:
       - name: window_key
         description: Entity, measure ID, window start and window end, the model's key.
@@ -82,6 +86,8 @@ models:
       One HAI national row per entity, measure ID and measurement window, from the file with the latest stored release
       (BRZ-002; failure modes 230 to 236, plans/hai_windows_20261004/failure_modes.md). Windows whose
       latest release holds two rows are held in int_hai_window_holds instead.
+    meta:
+      classification: Public
     columns:
       - name: window_key
         description: Entity, measure ID, window start and window end, the model's key.
@@ -121,6 +127,8 @@ models:
       same_date_conflict (two files at the latest release date) or repeated_in_file (failure modes 232 to 235). A row hold
       keeps its window dates null and hold_reason says why; each hold has a null-safe hold_key and the sorted checksums of
       its files (failure modes 791 and 792).
+    meta:
+      classification: Public
     columns:
       - name: hold_key
         description: >
@@ -158,6 +166,8 @@ models:
       failure_modes.md). Codes are left-padded, the county is 5-character FIPS from both padded parts, counts, switches
       and dates are typed; values that do not fit their kind are null and fail assert_pos_values_cast. Every hospital
       row stays; the population flags let later models filter.
+    meta:
+      classification: Public
     columns:
       - name: snapshot_key
         description: CCN (or the raw provider number when it is not a valid CCN) and the snapshot's period end.
@@ -229,6 +239,8 @@ models:
       Every row of the selected case-mix index files and sheets (label families in the cmi_families variable), split
       into fields (failure modes 293, 295 and 299).
       The grain is bronze table, member checksum, sheet name and source row number. Text files use an empty sheet name.
+    meta:
+      classification: Public
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           name: int_cmi_file_rows_unique_grain
@@ -254,6 +266,8 @@ models:
     description: >
       One row per case-mix index file or sheet: header or headerless, and each field's position by exact header name
       from the cmi_layout_columns seed (failure modes 294, 295 and 297).
+    meta:
+      classification: Public
     columns:
       - name: layout_key
         description: Bronze table, file checksum and sheet name.
@@ -264,6 +278,8 @@ models:
       One row per CCN in each selected case-mix index file and each rule year and stage its copies are labelled with
       (failure modes 293 to 304). The CMI is the unadjusted one; the transfer-adjusted CMI and cases are separate columns
       and are never substituted (Decision 4). The data fiscal year comes only from the file's name, otherwise null.
+    meta:
+      classification: Public
     columns:
       - name: cmi_row_key
         description: Bronze table, file checksum, sheet, row, rule year and rule stage.
@@ -299,6 +315,8 @@ models:
       release, by the same window macros as the HAI windows; conflicts are held in int_cc_window_holds (failure modes 318
       to 322, plans/group_b_20261005/failure_modes_b1.md). Values stay as published text; score_number is the score where
       it is a plain number.
+    meta:
+      classification: Public
     columns:
       - name: window_key
         description: Entity, measure ID, window start and window end.
@@ -311,6 +329,8 @@ models:
       One Care Compare maternal health row per hospital, measure and measurement window, from the latest stored release
       (failure modes 318 to 322). The table has only facility_id, start_date and end_date; score_number is the score where
       it is a plain number.
+    meta:
+      classification: Public
     columns:
       - name: window_key
         description: Entity, measure ID, window start and window end.
@@ -324,6 +344,8 @@ models:
       the answer percent, linear mean, star rating, completed surveys and response rate each keep their own column and
       footnote (failure modes 318 to 322). The answer percent, completed surveys and response rate each have a number
       column that is set only for a plain number.
+    meta:
+      classification: Public
     columns:
       - name: window_key
         description: Entity, HCAHPS measure ID, window start and window end.
@@ -339,6 +361,8 @@ models:
     description: >
       Care Compare measure rows the window models leave out, with the reason and row count (failure modes 319 and 322),
       a null-safe hold_key and the sorted checksums of the files (failure modes 791 and 792).
+    meta:
+      classification: Public
     columns:
       - name: hold_reason
         description: no_key, unparsed_date, label_held, undated_release, same_date_conflict or repeated_in_file.
@@ -356,6 +380,8 @@ models:
       One Hospital General Information row per CCN and stored file, with the file's release date and the number of files
       on that date (failure modes 328 and 329). The overall rating (registry C284, excluded from the primary predictors) is
       an integer 1 to 5 or null with the text and footnote kept; emergency services is a boolean.
+    meta:
+      classification: Public
     columns:
       - name: release_key
         description: CCN and file checksum.
@@ -374,6 +400,8 @@ models:
       number of reports of its CCN in that fiscal year; the alignment step chooses between them. Amounts are typed and never
       scaled to 365 days. ZIP is the first 5 digits of a 5-digit ZIP, a ZIP with one trailing hyphen or a hyphenated ZIP+4,
       else null with zip_code_raw kept; rural_urban is urban for U, rural for R, else null with the raw code kept.
+    meta:
+      classification: Public
     columns:
       - name: rpt_rec_num
         description: The report record number.
@@ -398,6 +426,8 @@ models:
       tab-separated text on tabs, other text as comma-separated values with quoted fields, sheet rows by cell; variable
       description and layout sheets are not read (failure modes 342, 344 and 348).
       The grain is bronze table, member checksum, sheet name, source row number, family, rule fiscal year and rule stage.
+    meta:
+      classification: Public
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           name: int_impact_file_rows_unique_grain
@@ -433,6 +463,8 @@ models:
       One row per read impact file or sheet: the header row (the first of the first 5 rows naming a CCN column) and each
       field's position by exact header name from the impact_layout_columns seed (failure modes 343 to 347 and 352).
       assert_impact_files_have_layout fails for a file without one CCN column or with two columns for one field.
+    meta:
+      classification: Public
     columns:
       - name: layout_key
         description: Bronze table, file checksum and sheet name.
@@ -443,6 +475,8 @@ models:
       One row per hospital row of a readable impact file or sheet: a row after the header whose first field is a CCN (a
       5-digit workbook CCN gets its leading zero back), with the number of rows of that CCN in the release (failure modes
       350 and 351).
+    meta:
+      classification: Public
     columns:
       - name: hospital_row_key
         description: Bronze table, file checksum, sheet name and line number.
@@ -452,6 +486,8 @@ models:
     description: >
       One row per impact-file release and CCN held because the CCN appears in more than one row of the release; none of
       its rows is read (failure mode 351).
+    meta:
+      classification: Public
     columns:
       - name: hold_key
         description: File checksum, sheet name and CCN.
@@ -463,6 +499,8 @@ models:
       (failure modes 349 to 352). value_text is the published text (a SAS missing dot stays as text); value_number is set
       only for a plain number in a numeric field, or a plain number with a percent sign divided by 100. The wage index is
       mapped from FY 2011 only (346). Choosing a release for a hospital-year waits for the alignment step.
+    meta:
+      classification: Public
     columns:
       - name: value_key
         description: File checksum, sheet name, CCN and field.
@@ -476,6 +514,8 @@ models:
       One row per Medicare inpatient provider summary (CCN) and file, with the data year and release year from the file
       name (any case) and every numeric column typed; a blank (suppressed) value is null (failure modes 355 to 359). The
       chronic-condition shares are published from data year 2017.
+    meta:
+      classification: Public
     columns:
       - name: provider_key
         description: File checksum and CCN.
@@ -489,6 +529,8 @@ models:
       One row per Medicare inpatient provider, DRG and file, with the data and release years from the file name and the
       published discharges and averages typed; cells under 11 discharges are not published (failure modes 355, 356, 359
       and 362).
+    meta:
+      classification: Public
     columns:
       - name: drg_key
         description: File checksum, CCN and DRG code.
@@ -501,6 +543,8 @@ models:
       layout before April 2025, is null; flags_published says whether the file has the private-equity column. Dates and
       shares are typed (failure modes 365 to 371). Associate IDs that lost leading zeros are padded to 10 digits (failure
       mode 714). Choosing a release for a hospital-year waits for the alignment step.
+    meta:
+      classification: Confidential
     columns:
       - name: owner_row_key
         description: File checksum and source row number.
@@ -527,6 +571,8 @@ models:
       ccn_published keeps the published value and ccn_source names the route. A flag is true for Y and false for N; dates
       are typed; associate IDs that lost leading zeros are padded to 10 digits (failure modes 365, 366, 369 to 371, 619 to
       622 and 714).
+    meta:
+      classification: Public
     columns:
       - name: enrollment_key
         description: File checksum and enrollment ID.
@@ -554,6 +600,8 @@ models:
       party's enrollment state; the published values are kept and ccn_buyer_source and ccn_seller_source name the route
       (failure modes 365, 369 to 372 and 619 to 622). Associate IDs that lost leading zeros are padded to 10 digits (failure
       mode 714).
+    meta:
+      classification: Confidential
     columns:
       - name: chow_row_key
         description: File checksum and source row number.
@@ -589,6 +637,8 @@ models:
       kept row's release (repeated_in_release). Values are compared as published through row lineage, so associate IDs
       123 and 0123 differ. A release with the same published values is not held (decision 4, amendments A5 and A6; failure
       mode 799).
+    meta:
+      classification: Confidential
     columns:
       - name: hold_key
         description: >
@@ -619,6 +669,8 @@ models:
       negative value is null and listed in negative_fields. The CCN follows the B5a rule; a hospital without one keeps its
       hospital_pk and gets a CCN only from hhs_reviewed_ccn_matches. is_corrected and the coverage counts are kept
       (failure modes 375 to 379 and 681 to 683).
+    meta:
+      classification: Public
     columns:
       - name: week_key
         description: hospital_pk and collection week.
@@ -646,6 +698,8 @@ models:
       One row per hospital, program year, performance period and certified product of the ONC Promoting Interoperability
       linkage (2023 and 2024). The criterion is true for Y, false for N and null when blank; the telephone column is left
       out (failure modes 380 to 382).
+    meta:
+      classification: Confidential
     columns:
       - name: linkage_key
         description: Facility ID, program year, start and end dates and CHPL ID, joined by |.
@@ -658,6 +712,8 @@ models:
     description: >
       One row per hospital Medicare and Medicaid EHR incentive attestation, program years 2011 to 2017: a series apart
       from the CHPL linkage, with no registry control (failure mode 383).
+    meta:
+      classification: Confidential
     columns:
       - name: attestation_key
         description: File checksum and source row number.
@@ -672,6 +728,8 @@ models:
 
   - name: int_occmix_file_rows
     description: Selected occupational-mix rows with raw fields and source lineage. Public data. File and sheet selection preserve existing holds.
+    meta:
+      classification: Public
     columns:
       - name: source_row_key
         description: Bronze table, checksum, sheet and row number.
@@ -679,6 +737,8 @@ models:
 
   - name: int_occmix_file_layouts
     description: Exact normalized survey header positions per file and sheet. CBSA and S-3 layouts are distinct from survey layouts.
+    meta:
+      classification: Public
     columns:
       - name: layout_key
         description: Bronze table, checksum and sheet.
@@ -693,6 +753,8 @@ models:
       Payment rule years remain separate. Deleted records, invalid identifiers, invalid dates and duplicate
       provider-period rows keep their hold reason. The RN wage and the three paid-hour shares are formulas saved in
       features/. No source revision is selected for a hospital-period feature.
+    meta:
+      classification: Public
     columns:
       - name: survey_row_key
         description: Bronze table, checksum, sheet and source row number.
@@ -718,6 +780,8 @@ models:
       business, other and total address ratios typed separately. Rows whose code is not a county of the states, DC or
       territories are in int_hud_zip_county_holds. Connecticut is kept and flagged; joins exclude it later. Linkage only
       (L002): ZIP-to-county ratios are never inverted into county-to-ZIP weights.
+    meta:
+      classification: Public
     columns:
       - name: hud_row_key
         description: File checksum and source row number.
@@ -750,6 +814,8 @@ models:
     description: >
       HUD rows removed from int_hud_zip_county_quarters because their code is not a county (two-digit island codes and
       99999). Kept so typed plus held rows equal the bronze rows.
+    meta:
+      classification: Public
     columns:
       - name: hud_row_key
         description: File checksum and source row number.
@@ -769,6 +835,8 @@ models:
       Census county adjacency rows per vintage, 2010 and 2023 to 2026, as published: self-links flagged, islands kept
       with no neighbor, border length in meters from 2025. Linkage only (L004): no edge is removed, deduplicated or
       weighted; graph rules come later.
+    meta:
+      classification: Public
     columns:
       - name: edge_key
         description: File checksum and source row number.
@@ -802,6 +870,8 @@ models:
       Rural-Urban Continuum Codes per county and vintage (2013 and 2023) as text categories 1 to 9, with the published
       value, population and description. C198, conditional: codes are categories, the 2023 urban cutoff differs from
       2013, and the vintage is not a publication date.
+    meta:
+      classification: Public
     columns:
       - name: rucc_key
         description: File checksum and published county code.
@@ -830,6 +900,8 @@ models:
       Rural-Urban Commuting Area codes per census tract or ZIP code and vintage (2010 and 2020). C199 and its children,
       conditional: primary and secondary codes are categories, ZIP codes are postal codes and not ZCTAs, and RUCA 2020
       was published in 2025.
+    meta:
+      classification: Public
     columns:
       - name: ruca_row_key
         description: File checksum, sheet and source row number.
@@ -869,6 +941,8 @@ models:
       Hospital service area rows per data year: Medicare cases, days and charges per provider and beneficiary ZIP code,
       with suppression kept as flags. L001, linkage only: counts are hospital episodes, not residents, and visible cases
       are a subset of all cases.
+    meta:
+      classification: Public
     columns:
       - name: hsa_row_key
         description: File checksum and source row number.
@@ -897,6 +971,8 @@ models:
       ACS 5-year values per county, vintage and concept, 2010 to 2024, from the column the reviewed acs_variable_map names
       for that vintage. Missing tokens and sentinels are null with the token kept; coded medians keep their cap and a flag.
       Values are in each vintage's units and dollars. Staging picks no source and approves no predictor.
+    meta:
+      classification: Public
     columns:
       - name: acs_value_key
         description: File checksum, source row number and column.
@@ -920,6 +996,8 @@ models:
     description: >
       SVI values per county, edition and published field, long. -999 is null with the token kept. Field names stay as
       each edition publishes them; the 2000 edition's names differ from later editions.
+    meta:
+      classification: Public
     columns:
       - name: svi_value_key
         description: File checksum, source row number and field.
@@ -939,6 +1017,8 @@ models:
       SAIPE county estimates per year, 1989 to 2024: poverty counts and percents with 90% bounds and median household
       income with bounds, from the documented fixed positions. C200 and C201, conditional; annual SAIPE is not ACS
       five-year poverty, and dollars are nominal.
+    meta:
+      classification: Public
     columns:
       - name: saipe_row_key
         description: File checksum and source row number.
@@ -956,6 +1036,8 @@ models:
     description: >
       SAHIE county rows per year and published age, race, sex and income group, 2006 to 2024, with counts, percents and
       margins of error. C202, conditional: under-65 coverage is not all-age coverage, and groups are never combined.
+    meta:
+      classification: Public
     columns:
       - name: sahie_row_key
         description: File checksum and source row number.
@@ -975,6 +1057,8 @@ models:
       BLS LAUS county series values as captured, 1990 to 2025: unemployment rate, unemployed, employed and labor force by
       month and annual average, not seasonally adjusted, with footnote codes and the capture date as revision vintage.
       C177 and C177.02, conditional: never spliced with ACS or SVI.
+    meta:
+      classification: Public
     columns:
       - name: bls_row_key
         description: File checksum and source row number.
@@ -999,6 +1083,8 @@ models:
       measure-years that cover all 50 states and DC, the only ones the project uses. The 2020 release's rows take the code
       PLACES publishes for the same state and county name in its other releases; rows with neither are not typed
       (failure modes 623 to 625). PLACES controls C203 to C243, conditional; C242.02 held for definition.
+    meta:
+      classification: Public
     columns:
       - name: places_row_key
         description: File checksum and source row number.
@@ -1031,6 +1117,8 @@ models:
     description: >
       Medicare Geographic Variation county values per year, age level and published field, long, for every age level.
       '*' and 'NA' are null with the token kept. Controls C252 to C257 and children, conditional.
+    meta:
+      classification: Public
     columns:
       - name: gv_value_key
         description: File checksum, source row number, field and age level.
@@ -1050,6 +1138,8 @@ models:
       CDC WONDER all-cause deaths, population and crude rate per county, year and export, with each export's database
       (bridged race 1999 to 2020, single race 2018 to 2024). Identical repeats in a shorter export of the same database are
       held as repeated_in_wider_export. C259, crude definition: no age adjustment.
+    meta:
+      classification: Public
     columns:
       - name: wonder_row_key
         description: File checksum and source row number.
@@ -1076,6 +1166,8 @@ models:
       sexes, ages, races, eligibility and dual status), by the published condition label; the control in the file name is
       file_control, and the control map is a gold bridge. Zeros keep a possible-suppression flag. All 82 MMD controls
       (C258 and C258.01 to C258.81) are held for definition.
+    meta:
+      classification: Public
     columns:
       - name: mmd_row_key
         description: File checksum and source row number.
@@ -1104,6 +1196,8 @@ models:
       as tokens. Exact repeat rows are held as exact_repeat. Where the county is a token, a tract, subdivision or
       single-county ID in the published state gives its county, and a facility's postal code gives one through HUD
       (failure modes 626 to 628). C249 and C250, conditional.
+    meta:
+      classification: Public
     columns:
       - name: hpsa_row_key
         description: File checksum and source row number.
@@ -1136,6 +1230,8 @@ models:
       HRSA Medically Underserved Area and Population components as published at the capture, with IMU score and dates
       typed and XXXXX county codes kept as tokens. Exact repeat rows are held as exact_repeat. C251, conditional; MUA and
       MUP designations both kept with their type.
+    meta:
+      classification: Public
     columns:
       - name: mua_row_key
         description: File checksum and source row number.
@@ -1163,6 +1259,8 @@ models:
       Care Compare unplanned hospital visits per hospital, measure and window from the latest release, every measure ID as
       published (OP_32, OP_35, OP_36, READM and EDAC IDs); a reviewed renamed ID (OP-32) enters under the exact ID only where
       the hospital and window have no exact-ID row. Validation only; conflicts held in int_validation_window_holds.
+    meta:
+      classification: Public
     columns:
       - name: window_key
         description: Hospital, reviewed measure and window.
@@ -1178,6 +1276,8 @@ models:
       Care Compare complications and deaths per hospital, measure and window from the latest release: 30-day mortality, PSI
       and other IDs as published; a reviewed renamed ID follows the same rule as in int_cc_unplanned_visits_windows. PSI-90
       and PSI-13 are not predictors. Validation only.
+    meta:
+      classification: Public
     columns:
       - name: window_key
         description: Hospital, reviewed measure and window.
@@ -1193,6 +1293,8 @@ models:
       Hospital Readmissions Reduction Program per hospital, condition (measure_name, kept as measure_id) and performance
       window from the latest release: excess readmission ratio, predicted and expected rates, discharges and readmissions as
       published. A reviewed renamed condition follows the same rule as in int_cc_unplanned_visits_windows. Validation only.
+    meta:
+      classification: Public
     columns:
       - name: window_key
         description: Hospital, reviewed condition and window.
@@ -1207,6 +1309,8 @@ models:
     description: >
       Group D measure rows the window models leave out, with the reason and row count; kept apart from int_cc_window_holds.
       The grain is bronze table, hold reason, held entity, held measure and nullable window dates, identified by hold_key.
+    meta:
+      classification: Public
     columns:
       - name: hold_key
         description: Null-safe MD5 of the bronze table, hold reason, entity, measure and window dates.
@@ -1239,6 +1343,8 @@ models:
       Score (with its number), PSI-90 under either published name and the domain z-scores; the four measurement dates are
       dates beside their published text. The republished HAI SIRs are not staged. C285 comparison_only, C286
       exclude_primary; validation only.
+    meta:
+      classification: Public
     columns:
       - name: program_key
         description: Hospital and fiscal year.
@@ -1268,6 +1374,8 @@ models:
       release, with a number for every published score column (tokens and the reviewed odd value stay text with a null
       number); three older files take their reviewed year from vbp_file_fiscal_years. C287 and C288 exclude_primary;
       validation only.
+    meta:
+      classification: Public
     columns:
       - name: program_key
         description: Hospital and fiscal year.
@@ -1299,6 +1407,8 @@ models:
     description: >
       HAC Reduction and VBP rows the program-year models leave out, with the reason, row count, hold key and the sorted
       checksums of the files they come from.
+    meta:
+      classification: Public
     columns:
       - name: hold_key
         description: >
@@ -1323,6 +1433,8 @@ models:
       build the launcher passes the run, the dbt tree hash, the bronze pins and the Git revision; a missing or
       unrecorded value stops compilation, and the on-run-end hook keeps the row only after a gold-eligible build
       (scripts/lakehouse/provenance.py, D1 section 10). Fixture and lint builds read unrecorded for the four provenance columns.
+    meta:
+      classification: Public
     columns:
       - name: dbt_invocation_id
         description: The dbt invocation that built this file.

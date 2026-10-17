@@ -98,10 +98,71 @@ repos:
         exclude: ^data/
       - id: sqlfluff
         # Pinned SQLFluff with the dbt templater from scripts/quality/install_sqlfluff.py, in its own environment.
-        name: dbt SQL follows the SQL style (SQLFluff, dbt templater)
-        entry: .tools/sqlfluff/bin/sqlfluff lint
+        name: Active SQL follows its runtime dialect and templater (SQLFluff)
+        entry: .venv/bin/python -m scripts.quality.lint_sources sql
         language: system
-        files: ^dbt/(models|tests)/.*\.sql$
+        pass_filenames: false
+        files: (\.sql$|^\.sqlfluff$|^scripts/quality/(lint_sources\.py$|sqlfluff/))
+      - id: ruff
+        name: Every nonignored Python source passes Ruff and formatting
+        entry: .venv/bin/python -m scripts.quality.lint_sources ruff
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: shell-syntax
+        name: Every nonignored shell source passes declared-interpreter syntax
+        entry: .venv/bin/python -m scripts.quality.lint_sources shell-syntax
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: shellcheck
+        name: Tracked shell sources pass ShellCheck
+        entry: .venv/bin/python -m scripts.quality.lint_sources shellcheck
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: actionlint
+        name: Workflows and referenced local action metadata pass actionlint
+        entry: .venv/bin/python -m scripts.quality.lint_sources actionlint
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: yamllint
+        name: Tracked YAML passes the project profile with no duplicate keys
+        entry: .venv/bin/python -m scripts.quality.lint_sources yamllint
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: hadolint
+        name: Every tracked Dockerfile passes Hadolint
+        entry: .venv/bin/python -m scripts.quality.lint_sources hadolint
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: build-contexts
+        name: Dockerfile COPY references resolve to earlier stages or declared build contexts
+        entry: .venv/bin/python -m scripts.quality.lint_sources build-contexts
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: gofmt
+        name: Tracked Go sources match gofmt
+        entry: .venv/bin/python -m scripts.quality.lint_sources gofmt
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: go-vet
+        name: Tracked Go programs pass go vet
+        entry: .venv/bin/python -m scripts.quality.lint_sources go-vet
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: model-metadata
+        name: dbt sources and models carry classes, gold facts carry fact types and measures carry additivity
+        entry: .venv/bin/python -m scripts.quality.model_metadata
+        language: system
+        pass_filenames: false
+        files: ^(dbt/.*\.(ya?ml|sql)|data_contracts/lakehouse/gold_contract\.json|config/lakehouse/bronze_tables\.json|scripts/(process\.py|quality/(model_metadata\.py|install_sqlfluff\.py|sqlfluff/requirements\.txt)))$
       - id: documentation-review
         name: All documentation reviewed for the staged revision
         entry: .venv/bin/python -m scripts.quality.documentation_review check
@@ -143,7 +204,7 @@ repos:
         entry: .venv/bin/python -m scripts.quality.run_checks_e2e
         language: system
         pass_filenames: false
-        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|scan_secrets|install_markdownlint|install_sqlfluff))\.py|scripts/quality/(markdownlint|sqlfluff)/.*|\.sqlfluff|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist|\.markdownlint-cli2\.jsonc)$
+        files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|run_lint_coverage_e2e|lint_sources|scan_secrets|install_tools|install_markdownlint|install_sqlfluff))\.py|scripts/quality/(markdownlint|sqlfluff)/.*|config/quality_tools\.json|\.yamllint|\.sqlfluff|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist|\.markdownlint-cli2\.jsonc)$
       - id: test-documentation-review
         name: Documentation review accepts good evidence and rejects bad evidence
         entry: .venv/bin/python -m scripts.quality.run_documentation_review_e2e
@@ -160,7 +221,7 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-commit]
-        files: ^(scripts/acquisition/|config/acquisition/|tests/test_source_registry\.py$|tests/fixtures/registry_additions_bronze_lineage\.csv$|scripts/process\.py$|scripts/quality/typecheck\.py$|config/quality/mypy_runtimes\.json$|scripts/infrastructure/render_project_config\.py$|requirements\.txt$|\.github/workflows/ci\.yml$)
+        files: ^(scripts/acquisition/|config/acquisition/|config/lakehouse/bronze_tables\.json$|tests/test_source_registry\.py$|tests/fixtures/registry_additions_bronze_lineage\.csv$|scripts/process\.py$|scripts/quality/typecheck\.py$|config/quality/mypy_runtimes\.json$|scripts/infrastructure/render_project_config\.py$|requirements\.txt$|\.github/workflows/ci\.yml$)
       - id: local_ci_affected
         name: Run local CI for the staged paths
         entry: env CI_SCOPE=staged bash scripts/run_ci.sh

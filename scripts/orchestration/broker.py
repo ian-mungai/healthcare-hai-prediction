@@ -41,6 +41,7 @@ import secrets
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -61,7 +62,7 @@ DOMAIN = "transform"
 MAX_BODY_BYTES = 4096
 HANDLER_TIMEOUT_SECONDS = 15.0
 CONTENT_LENGTH = re.compile(r"[0-9]{1,18}")
-CRASH_POINTS = ("after_intent", "after_forward")
+CRASH_POINTS = ("after_intent", "after_forward", "after_record", "after_finalize", "after_delete")
 REDACTED = "[redacted]"
 OPERATIONS = ("health", "submit", "status", "cancel", "logs", "record")
 OFFLINE = "offline"
@@ -69,7 +70,14 @@ TRANSIENT_CODES = ("degraded", "internal")
 END_CODES = {"timeout": 124, "cancelled": 143, "fenced": 143, "create_failed": 125}
 UNKNOWN_END = 125
 START_WAIT_SECONDS = 15.0
-PLACEHOLDER_NAMES = ("run_id", "mode", "run_dir", "build_file")
+PLACEHOLDER_NAMES = ("run_id", "mode", "run_dir", "build_file", "checkout")
+CONTROL_INPUT = "control"
+RECORDS_INPUT = "records_build_file"
+REQUIRES_INPUT = "requires_build_file"
+VALIDATED_BY_INPUT = "validated_by"
+RESULT_INPUT = "build_file_result"
+VALIDATED_SHA_INPUT = "validated_sha256"
+CHECKPOINT_HASHES = (VALIDATED_SHA_INPUT,)
 
 
 class BrokerError(Exception):
@@ -176,8 +184,11 @@ def submission_request(submission_id: str) -> SubmissionRequest:
 def load_templates(path: Path = TEMPLATES_FILE) -> dict[str, Any]:
     """The broker templates, checked against their schema and against the launcher's closed table.
 
-    A mode that forwards to the launcher must have the network class ``offline`` and name a launcher template that a run can submit.
+    A mode that forwards to the launcher must have the network class ``offline`` and name a launcher template that a run can submit. A mode
+    with a ``control`` object (a run-control action the broker performs itself) must have the class ``offline``, a known action and exactly its parameters.
     """
+    from scripts.orchestration import run_control
+
     document: dict[str, Any] = json.loads(path.read_text())
     schema = json.loads(TEMPLATES_SCHEMA.read_text())
     Draft202012Validator.check_schema(schema)
@@ -186,11 +197,23 @@ def load_templates(path: Path = TEMPLATES_FILE) -> dict[str, Any]:
         raise BrokerError(f"{path.name}: {errors[0].message}")
     for name, template in document["templates"].items():
         for mode, row in template["modes"].items():
+            if "control" in row:
+                if row["class"] not in (OFFLINE,):
+                    raise BrokerError(
+                        f"{name}/{mode}: network class {row['class']} cannot run; the broker runs only the offline class until network allow lists are enforced"
+                    )
+                try:
+                    run_control.check_row(name, mode, row["control"])
+                except ValueError as error:
+                    raise BrokerError(str(error)) from None
+                continue
             row_launcher = row.get("launcher")
             if row_launcher is None:
                 continue
             if row["class"] != OFFLINE:
-                raise BrokerError(f"{name}/{mode}: network class {row['class']} cannot launch; only offline runs (amendment A18)")
+                raise BrokerError(
+                    f"{name}/{mode}: network class {row['class']} cannot launch; the broker runs only the offline class until network allow lists are enforced"
+                )
             known = launcher.TEMPLATES.get(row_launcher["template"])
             if known is None or "run" not in known.owners or row_launcher["template"] in ("probe", "catalog_service", "orchestration_service"):
                 raise BrokerError(f"{name}/{mode}: the launcher has no template {row_launcher['template']} that a run can submit")
@@ -198,7 +221,7 @@ def load_templates(path: Path = TEMPLATES_FILE) -> dict[str, Any]:
 
 
 def substitute(value: Any, values: dict[str, str]) -> Any:
-    """Fill ``{run_id}``, ``{mode}``, ``{run_dir}`` and ``{build_file}`` in a row's text, lists and objects; nothing else is substituted."""
+    """Fill ``{run_id}``, ``{mode}``, ``{run_dir}``, ``{build_file}`` and ``{checkout}`` in a row's text, lists and objects; nothing else is substituted."""
     if isinstance(value, str):
         for name in PLACEHOLDER_NAMES:
             value = value.replace("{" + name + "}", values[name])
@@ -222,8 +245,10 @@ class Broker:
         repo_root: Path = ROOT,
         runs_root: Path | None = None,
         crash_at: str | None = None,
+        dag_snapshot: Callable[[str, str], dict[str, Any]] | None = None,
     ) -> None:
-        """``crash_at`` exists for the E2E only and is refused outside a test registry."""
+        """``crash_at`` exists for the E2E only and is refused outside a test registry. ``dag_snapshot`` is the supervisor's read of the transform DAG run
+        for a run ID and mode; the gate control actions record what it returns."""
         if paths.registry.kind != "test" and crash_at is not None:
             raise BrokerError("crash points are test-only")
         self.paths = paths
@@ -235,6 +260,7 @@ class Broker:
         self.ledger = Ledger(paths.ledger)
         self.requests_schema = schema_validator("submission_request.schema.json")
         self._crash_at = crash_at
+        self.dag_snapshot = dag_snapshot
         self._secrets: set[str] = set()
         self._guard = threading.Lock()
         self._lock_file: Any = None
@@ -293,16 +319,31 @@ class Broker:
             raise SubmissionRefused(f"template {request.template} does not support mode {request.mode}")
         if row["class"] != OFFLINE:
             raise SubmissionRefused(
-                f"template {request.template} in mode {request.mode} needs the network class {row['class']}; only the class offline runs (amendment A18)"
+                f"template {request.template} in mode {request.mode} needs the network class {row['class']}; "
+                "the broker runs only the offline class until network allow lists are enforced"
             )
+        if row.get("control") is not None:
+            return dict(row)
         if not row["no_op"] and row.get("launcher") is None:
             raise SubmissionRefused(f"no launcher template runs {request.template} in mode {request.mode}: {row['reason']}")
         return dict(row)
 
-    def payload_of(self, request: SubmissionRequest, row: dict[str, Any]) -> dict[str, Any]:
-        """The launcher ``submit`` parameters of a submission: the row's fixed values with the four placeholders filled, nothing from the caller."""
+    def placeholder_values(self, request: SubmissionRequest) -> dict[str, str]:
+        """The five values a row's text may name: the run, the mode, the run folder, the build file and the checkout; nothing from the caller."""
         run_dir = self.runs_root / request.run_id
-        values = {"run_id": request.run_id, "mode": request.mode, "run_dir": str(run_dir), "build_file": str(run_dir / "build.duckdb")}
+        return {
+            "run_id": request.run_id,
+            "mode": request.mode,
+            "run_dir": str(run_dir),
+            "build_file": str(run_dir / "build.duckdb"),
+            "checkout": str(self.repo_root),
+        }
+
+    def payload_of(self, request: SubmissionRequest, row: dict[str, Any]) -> dict[str, Any]:
+        """The launcher ``submit`` parameters of a submission: the row's fixed values with the placeholders filled, nothing from the caller."""
+        if row.get("control") is not None:
+            return {"control": row["control"], "template": request.template}
+        values = self.placeholder_values(request)
         target = row["launcher"]
         payload: dict[str, Any] = {
             "template": target["template"],
@@ -415,12 +456,33 @@ class Broker:
                 **request.as_dict(),
                 "spec_sha256": sha256_text(canonical(payload if payload is not None else {"no_op": request.template})),
                 "code_sha256": self.templates_sha256,
-                "inputs": {},
+                "inputs": {CONTROL_INPUT: row["control"]["action"]} if row.get("control") is not None else self.checkpoint_inputs(request, row),
                 "reservation_id": None,
                 "reserved_memory_bytes": None,
                 "container_name": request.container_name,
             }
         )
+
+    def checkpoint_markers(self, request: SubmissionRequest, row: dict[str, Any]) -> dict[str, str]:
+        launcher_row = row.get("launcher") or {}
+        values = self.placeholder_values(request)
+        markers: dict[str, str] = {}
+        if launcher_row.get("records_build_file") is not None:
+            markers[RECORDS_INPUT] = str(substitute(launcher_row["records_build_file"], values))
+            markers[RESULT_INPUT] = str(substitute(launcher_row["build_file_result"], values))
+        required = launcher_row.get("requires_build_file")
+        if required is not None:
+            markers[REQUIRES_INPUT] = str(substitute(required["file"], values))
+            markers[VALIDATED_BY_INPUT] = str(required["validated_by"])
+        return markers
+
+    def checkpoint_inputs(self, request: SubmissionRequest, row: dict[str, Any]) -> dict[str, str]:
+        from scripts.orchestration import run_control
+
+        inputs = self.checkpoint_markers(request, row)
+        if REQUIRES_INPUT in inputs:
+            inputs[VALIDATED_SHA_INPUT] = run_control.validated_sha256(self, request, inputs[VALIDATED_BY_INPUT], inputs[REQUIRES_INPUT])
+        return inputs
 
     def finish(self, request: SubmissionRequest, exit_code: int, *, no_op: bool = False, record: dict[str, Any] | None = None, **extra: Any) -> None:
         """Write the submission's record file, then its ``finished`` line."""
@@ -474,6 +536,9 @@ class Broker:
                 if row["no_op"]:
                     self.finish(request, 0, no_op=True, reason=row["reason"])
                     return handle
+                if row.get("control") is not None:
+                    self.perform_control(request, row)
+                    return handle
                 self.advance_locked(request)
         except LedgerError as error:
             raise SubmissionRefused(f"ledger: {error}") from None
@@ -497,6 +562,9 @@ class Broker:
         lines = self.lines_of(request)
         if self.recorded_as_noop(request, lines[0]):
             self.complete_noop(request)
+            return
+        if self.recorded_as_control(lines[0]):
+            self.complete_control(request, lines[0])
             return
         self.require_serving()
         forward = self.read_forward(request)
@@ -535,6 +603,42 @@ class Broker:
             }
         )
 
+    def recorded_as_control(self, intent: dict[str, Any]) -> bool:
+        """True when the intent line was written for a run-control action, which the broker performs itself and never forwards. The intent decides, not
+        the template's present row: an inventory that now maps a submission that may have reached the launcher to a control row does not make it local work."""
+        return CONTROL_INPUT in intent["inputs"]
+
+    def complete_control(self, request: SubmissionRequest, intent: dict[str, Any]) -> None:
+        """Perform the action of a control submission whose intent survived a crash or a launcher outage; a row that is no longer that action fails closed."""
+        try:
+            row = self.row_for(request)
+        except SubmissionRefused:
+            self.fail_changed_row(request)
+            return
+        if row.get("control") is None or sha256_text(canonical(self.payload_of(request, row))) != intent["spec_sha256"]:
+            self.fail_changed_row(request)
+            return
+        self.perform_control(request, row)
+
+    def perform_control(self, request: SubmissionRequest, row: dict[str, Any]) -> None:
+        """Perform a control row's action (``scripts/orchestration/run_control.py``) and write its ``finished`` line: a refusal ends with exit code 125, a
+        failure with 1, and an unavailable launcher leaves the intent for a repeat of the same call. The caller holds the run's ledger lock."""
+        from scripts.orchestration import run_control
+
+        control = row["control"]
+        params = substitute(control.get("params", {}), self.placeholder_values(request))
+        try:
+            result = run_control.perform(self, request, control["action"], params)
+        except run_control.ControlRefused as error:
+            self.append_end(request, str(error))
+            return
+        except run_control.ControlFailed as error:
+            reason = self.redact(str(error))
+            self.log("control_failed", f"{request.submission_id} {reason}")
+            self.finish(request, 1, failed=True, reason=reason)
+            return
+        self.finish(request, 0, control=control["action"], **result)
+
     def accepted_forward(self, request: SubmissionRequest, principal: dict[str, Any]) -> dict[str, Any] | None:
         """The launcher's attempt for the submission's original ``submit`` request, or None when the launcher answers that it holds none.
 
@@ -567,12 +671,22 @@ class Broker:
         except SubmissionRefused as error:
             self.append_end(request, str(error))
             return None
-        if row["no_op"]:
+        if row["no_op"] or row.get("control") is not None:
             self.fail_changed_row(request)
             return None
         payload = self.payload_of(request, row)
         if sha256_text(canonical(payload)) != intent["spec_sha256"]:
             self.fail_changed_row(request)
+            return None
+        markers = self.checkpoint_markers(request, row)
+        if markers and markers != {key: value for key, value in intent["inputs"].items() if key not in CHECKPOINT_HASHES}:
+            self.fail_changed_row(request)
+            return None
+        from scripts.orchestration import run_control
+
+        problem = run_control.checkpoint_problem(intent["inputs"])
+        if problem is not None:
+            self.append_end(request, problem)
             return None
         try:
             self.record_dispatch(request)
@@ -642,7 +756,26 @@ class Broker:
             "launcher": {key: attempt.get(key) for key in ("id", "template", "n", "phase", "reason", "exit_code", "container_name", "detail", "ended_at")},
             "log_path": str(logs) if logs else None,
         }
-        self.finish(request, int(exit_code), record=summary, cancelled=cancelled, end_reason=reason)
+        from scripts.orchestration import run_control
+
+        extra: dict[str, Any] = {}
+        if int(exit_code) == 0:
+            try:
+                extra = self.validated_build(request, attempt)
+            except run_control.ControlFailed as error:
+                exit_code, extra = 1, {"failed": True, "reason": self.redact(str(error))}
+        self.finish(request, int(exit_code), record=summary, cancelled=cancelled, end_reason=reason, **extra)
+
+    def validated_build(self, request: SubmissionRequest, attempt: dict[str, Any]) -> dict[str, Any]:
+        """The ``build_file`` entry of a submission whose intent records the build file it validates: the SHA-256 the validator reported for the copy it
+        read and the run identity. The intent holds the file and the validator's result file; the entry is written only when the file on the host still has
+        that SHA-256 now that the job has ended."""
+        from scripts.orchestration import run_control
+
+        inputs = self.lines_of(request)[0]["inputs"]
+        if RECORDS_INPUT not in inputs:
+            return {}
+        return {"build_file": run_control.record_build_file(self, request, inputs[RECORDS_INPUT], inputs[RESULT_INPUT], str(attempt["id"]))}
 
     def saved_logs(self, request: SubmissionRequest, attempt: dict[str, Any]) -> Path | None:
         """Keep the launcher's saved output of an ended attempt, redacted; None when the launcher has none."""
@@ -729,6 +862,8 @@ class Broker:
                 if lines[-1]["event"] not in ("finished", "failed_closed"):
                     if self.recorded_as_noop(request, lines[0]):
                         self.complete_noop(request)
+                    elif self.recorded_as_control(lines[0]):
+                        self.complete_control(request, lines[0])
                     else:
                         self.require_serving()
                         forward = self.read_forward(request) or self.forward_locked(request, lines[0])

@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import csv
+import fcntl
 import hashlib
 import importlib
 import io
@@ -67,6 +68,7 @@ READ_LIMIT = 1 << 20
 RESULTS_LIMIT = 1 << 30
 COPY_CHUNK = 1 << 20
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
+SEAL_LOCK_SECONDS = 600  # A second seal of a run waits this long for the first to finish copying the build file.
 
 
 class ProvenanceError(Exception):
@@ -530,8 +532,30 @@ def sealed_directory(folder: int, run_id: str) -> int:
     return descriptor
 
 
+@contextlib.contextmanager
+def seal_lock(folder: int, run_id: str) -> Iterator[None]:
+    """Hold an exclusive lock on the held run folder for one seal, so two seals of a run (the launcher's seal worker and a direct caller) never overlap.
+
+    Without it the second seal removed the first one's temporary copy or made the sealed folder read-only before the first one's rename (WV3-015).
+    The second seal waits, then finds the sealed copy and returns the same record. A seal that waits more than ``SEAL_LOCK_SECONDS`` refuses.
+    """
+    deadline = time.monotonic() + SEAL_LOCK_SECONDS
+    while True:
+        try:
+            fcntl.flock(folder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise ProvenanceError(f"another seal of run {run_id} held its run folder for more than {SEAL_LOCK_SECONDS} s") from None
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        fcntl.flock(folder, fcntl.LOCK_UN)
+
+
 def drop_interrupted_copies(sealed: int) -> None:
-    """Remove the temporary copies an interrupted seal left in the held sealed folder (names ``.<hex>.clone``); a seal runs alone for its run."""
+    """Remove the temporary copies an interrupted seal left in the held sealed folder (names ``.<hex>.clone``); ``seal_lock`` keeps a seal alone for its run."""
     with os.scandir(sealed) as scanned:
         names = [item.name for item in scanned if item.name.startswith(".") and item.name.endswith(".clone")]
     for name in names:
@@ -551,7 +575,7 @@ def seal_build(run: Mapping[str, Any]) -> dict[str, Any]:
     bound = check_binding(run)
     root = runs_root(run)
     run_id = values.run_id
-    with held(root, (run_id,)) as folder:
+    with held(root, (run_id,)) as folder, seal_lock(folder, run_id):
         invocation = gold_eligible_invocation(folder, run_id)
         source = open_file(folder, BUILD_FILE, f"the build file of run {run_id}")
         try:

@@ -23,7 +23,8 @@ MYPY_FLAGS = ["--check-untyped-defs", "--disallow-untyped-defs"]
 
 
 def source_files() -> set[str]:
-    return set(run_command("git", ["ls-files", "--cached", "--others", "--exclude-standard", "*.py"], cwd=ROOT, check=True).stdout.splitlines())
+    listed = run_command("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "*.py"], cwd=ROOT, timeout=60, check=True).stdout
+    return set(listed.split("\0")) - {""}
 
 
 def imported_modules(tree: ast.AST, package: str) -> set[str]:
@@ -75,7 +76,10 @@ def targets(runtime: str, pending: dict[str, dict[str, str]]) -> tuple[list[str]
 
 def check_pending(pending: dict[str, dict[str, str]]) -> bool:
     result = run_command(
-        sys.executable, ["-m", "mypy", "--output=json", "--no-error-summary", "--no-incremental", *MYPY_FLAGS, *sorted(source_files())], cwd=ROOT, timeout=900
+        sys.executable,
+        ["-m", "mypy", "--output=json", "--no-error-summary", "--no-incremental", *MYPY_FLAGS, "--", *sorted(source_files())],
+        cwd=ROOT,
+        timeout=900,
     )
     diagnostics = [json.loads(line) for line in result.stdout.splitlines()]
     errors = [item for item in diagnostics if item["severity"] == "error"]
@@ -115,7 +119,7 @@ def main() -> int:
         )
         for path, reason in deferred.items():
             sys.stdout.write(f"pending {path}: {reason}\n")
-        result = run_command(sys.executable, ["-m", "mypy", *MYPY_FLAGS, *selected], cwd=ROOT, timeout=900)
+        result = run_command(sys.executable, ["-m", "mypy", *MYPY_FLAGS, "--", *selected], cwd=ROOT, timeout=900)
         sys.stdout.write(result.stdout)
         sys.stderr.write(result.stderr)
         if args.runtime == "host" and not check_pending(pending):

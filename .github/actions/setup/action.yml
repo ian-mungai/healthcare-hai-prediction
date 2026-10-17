@@ -1,5 +1,5 @@
 name: Set up the checks
-description: Terraform, Python, Node.js and the pinned project tools every CI check job needs.
+description: Terraform, Python, Node.js, Go and the pinned project tools every CI check job needs.
 
 # pip accepts a package found in a restored environment or cache as already satisfied, and requirements.txt has no
 # hashes, so the Python environment is built fresh; only the hash-pinned SQLFluff requirements use the pip cache.
@@ -26,6 +26,13 @@ runs:
         node-version: "22"
         cache: npm
         cache-dependency-path: scripts/quality/markdownlint/package-lock.json
+
+    # gofmt and go vet (scripts/quality/lint_sources.py) require exactly Go 1.27.1. The project has no go.sum, so no cache.
+    - name: Setup Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: "1.27.1"
+        cache: false
 
     - name: Restore the dbt package archive
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

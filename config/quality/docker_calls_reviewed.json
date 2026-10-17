@@ -295,7 +295,7 @@
       "occurrences": 1,
       "file_sha256": "8326208a4259e96c48245a2f16b838785141c2692345c5b09526bed9904fe465",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:e3c51db85252d94ae0ef664ea0bf056423954572f556aac8167128372f9f3680",
+        "orchestration/launcher.py": "sha256:c3b712449b433f72eccf40fe39fa016f8cdabf7cbe217825040c18d1f0465c18",
         "scripts/lakehouse/bronze.py": "sha256:5f6cc9d774f171feab17b72abaaf6b961ff1353b12902461a49ee0211e13f788",
         "scripts/lakehouse/catalog.py": "sha256:641e1e747a4760e17690f122209b138432d9a6fe44c5e5c71c2a5696df0d5771",
         "scripts/lakehouse/checksums.py": "sha256:33100f77c34e1196e98ffa8dbf464ddda1819314979ff9a0e9d0c6be618e6df4",
@@ -304,7 +304,8 @@
       "reason": "the duckdb helper passes DuckDB SQL text to scripts/lakehouse/query.sh after -c (SQL, not a shell command); query.sh asks the launcher's query template",
       "lines": [
         137
-      ]
+      ],
+      "ast_sha256": "fc898c77ed67a3ef5a6a4a8504ae896c8e6adff16e213f9d119c64742f211820"
     },
     {
       "path": "scripts/lakehouse/run_duckdb_view_e2e.py",
@@ -314,7 +315,7 @@
       "occurrences": 1,
       "file_sha256": "8326208a4259e96c48245a2f16b838785141c2692345c5b09526bed9904fe465",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:e3c51db85252d94ae0ef664ea0bf056423954572f556aac8167128372f9f3680",
+        "orchestration/launcher.py": "sha256:c3b712449b433f72eccf40fe39fa016f8cdabf7cbe217825040c18d1f0465c18",
         "scripts/lakehouse/bronze.py": "sha256:5f6cc9d774f171feab17b72abaaf6b961ff1353b12902461a49ee0211e13f788",
         "scripts/lakehouse/catalog.py": "sha256:641e1e747a4760e17690f122209b138432d9a6fe44c5e5c71c2a5696df0d5771",
         "scripts/lakehouse/checksums.py": "sha256:33100f77c34e1196e98ffa8dbf464ddda1819314979ff9a0e9d0c6be618e6df4",
@@ -323,7 +324,8 @@
       "reason": "the duckdb helper passes DuckDB SQL text to scripts/lakehouse/query.sh after -c (SQL, not a shell command); query.sh asks the launcher's query template",
       "lines": [
         144
-      ]
+      ],
+      "ast_sha256": "d6c78e23a47e40fdb4287cbd2e06f90169ca4ae32413f5d6f97ef8a21d3df461"
     },
     {
       "path": "scripts/lakehouse/run_duckdb_view_e2e.py",
@@ -333,7 +335,7 @@
       "occurrences": 1,
       "file_sha256": "8326208a4259e96c48245a2f16b838785141c2692345c5b09526bed9904fe465",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:e3c51db85252d94ae0ef664ea0bf056423954572f556aac8167128372f9f3680",
+        "orchestration/launcher.py": "sha256:c3b712449b433f72eccf40fe39fa016f8cdabf7cbe217825040c18d1f0465c18",
         "scripts/lakehouse/bronze.py": "sha256:5f6cc9d774f171feab17b72abaaf6b961ff1353b12902461a49ee0211e13f788",
         "scripts/lakehouse/catalog.py": "sha256:641e1e747a4760e17690f122209b138432d9a6fe44c5e5c71c2a5696df0d5771",
         "scripts/lakehouse/checksums.py": "sha256:33100f77c34e1196e98ffa8dbf464ddda1819314979ff9a0e9d0c6be618e6df4",
@@ -342,7 +344,8 @@
       "reason": "the duckdb helper passes DuckDB SQL text to scripts/lakehouse/query.sh after -c (SQL, not a shell command); query.sh asks the launcher's query template",
       "lines": [
         79
-      ]
+      ],
+      "ast_sha256": "61b0d6cdcad8576fe8a139e0cdb338f80e8f39df4f1c11f25114b8c46b53b15a"
     },
     {
       "path": "scripts/lakehouse/run_launcher_e2e.py",
@@ -350,9 +353,9 @@
       "code_sha256": "31df13bbd38b806ec10b83328e469066a44abb27722e6e02f3effa919c07c797",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "cc6aa480d1650e6745f57a7642045ae751a2cc7500571812c5a40c9c48993489",
+      "file_sha256": "0eb412392cbc00c683afa95cddcee06a81f8a038345fe1abd69bfe0f7225a075",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:e3c51db85252d94ae0ef664ea0bf056423954572f556aac8167128372f9f3680",
+        "orchestration/launcher.py": "sha256:c3b712449b433f72eccf40fe39fa016f8cdabf7cbe217825040c18d1f0465c18",
         "scripts/lakehouse/catalog.py": "sha256:641e1e747a4760e17690f122209b138432d9a6fe44c5e5c71c2a5696df0d5771",
         "scripts/lakehouse/dbt_package_archive.py": "sha256:a508b5d491d2b50fe617c587650285bf697d66563cd898430f738820ba0fed71",
         "scripts/lakehouse/fake_docker.py": "sha256:65d9756f7d3d5c1482ce3d92a25b19ce2f96275beaeec539ac89945b73181c6e",
@@ -369,7 +372,8 @@
       "reason": "detached_python runs a Python snippet given by a launcher E2E case (sys.executable -c); both callers' snippets call orchestration.launcher client methods only",
       "lines": [
         2495
-      ]
+      ],
+      "ast_sha256": "6bd7f080e4b205c76f72d55df58a69826cadb7a2d28df00dd1fed7b7e936f354"
     },
     {
       "path": "scripts/lakehouse/run_lock_e2e.py",
@@ -379,15 +383,16 @@
       "occurrences": 1,
       "file_sha256": "dd8eabf98f0f808050b9ff4b8da792a27338d263c06cea50de329aa5a74c8ab3",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:e3c51db85252d94ae0ef664ea0bf056423954572f556aac8167128372f9f3680",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:cc6aa480d1650e6745f57a7642045ae751a2cc7500571812c5a40c9c48993489",
+        "orchestration/launcher.py": "sha256:c3b712449b433f72eccf40fe39fa016f8cdabf7cbe217825040c18d1f0465c18",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:0eb412392cbc00c683afa95cddcee06a81f8a038345fe1abd69bfe0f7225a075",
         "scripts/lakehouse/run_lock.py": "sha256:db8f8a9ca0d9eae74da96979933cbdd002e671e933b6054372fba6e55e5e3225",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
       "reason": "the shell line is the quoted sys.executable and run_lock CLI arguments followed by true, from internal callers only",
       "lines": [
         46
-      ]
+      ],
+      "ast_sha256": "2c3cd6aaada8fc94288e434898456009b94a1ef64be446108c54c7e26ff8bb43"
     },
     {
       "path": "scripts/quality/install_sqlfluff.py",
@@ -402,21 +407,6 @@
       "reason": "base_python() is the interpreter recorded in pyvenv.cfg or sys.executable; it creates the sqlfluff virtual environment",
       "lines": [
         69
-      ]
-    },
-    {
-      "path": "scripts/quality/run_e2e.py",
-      "line": 141,
-      "code_sha256": "d40b7f65cacfada8124817951806e3a41dbd8b6aa8454118024581749e2bb2ff",
-      "problem": "whose program the check cannot prove",
-      "occurrences": 1,
-      "file_sha256": "651874e5a376b5a7c9bc983323a9ef502b68cfeba8ed2f06d8bcd7143a1f41a0",
-      "dependencies": {
-        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
-      },
-      "reason": "reruns the synthetic tool-archive installer command (sys.executable -m) with a changed destination argument",
-      "lines": [
-        141
       ]
     },
     {
@@ -452,6 +442,170 @@
         255,
         278
       ]
+    },
+    {
+      "path": "scripts/quality/lint_sources.py",
+      "line": 155,
+      "code_sha256": "f358f8cea2df557bf32cdaf6b4dc0246232da9aa20916194c11c4bbbbe384b12",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/repo_checks.py": "sha256:55bcc62e14cc27f954ef6d1bf5dcee70f414580a9aba23de833949f290ccb0bd"
+      },
+      "reason": "runs a pinned native linter from .tools/bin (shellcheck, actionlint or hadolint, named from config/quality_tools.json) with its version flag"
+    },
+    {
+      "path": "scripts/quality/lint_sources.py",
+      "line": 184,
+      "code_sha256": "965b2fb24fba80e1b4dc15abfb79a40639337d8a6bd307be3a3d50b9a3338de1",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/repo_checks.py": "sha256:55bcc62e14cc27f954ef6d1bf5dcee70f414580a9aba23de833949f290ccb0bd"
+      },
+      "reason": "runs a declared shell interpreter (sh, bash, dash, zsh or ksh only, from the source's shebang or extension) with -n to check syntax"
+    },
+    {
+      "path": "scripts/quality/lint_sources.py",
+      "line": 240,
+      "code_sha256": "fd40c94d9e9392559ff22762cc4cb941caae9d997df0daaab37ed1fdc83855f3",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/repo_checks.py": "sha256:55bcc62e14cc27f954ef6d1bf5dcee70f414580a9aba23de833949f290ccb0bd"
+      },
+      "reason": "runs the pinned SQLFluff from .tools/sqlfluff/bin with lint arguments"
+    },
+    {
+      "path": "scripts/quality/lint_sources.py",
+      "line": 255,
+      "code_sha256": "f8c56d974f57abe387f78f0bef9bbf3b8eef1ad258f002599ef6a36441d701a7",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 2,
+      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/repo_checks.py": "sha256:55bcc62e14cc27f954ef6d1bf5dcee70f414580a9aba23de833949f290ccb0bd"
+      },
+      "reason": "two calls whose first line is the same code: line 255 runs the pinned dbt from .tools/sqlfluff/bin with parse to read the macro call graph; line 324 runs the pinned SQLFluff from .tools/sqlfluff/bin on temporary masked copies of DuckDB CLI scripts"
+    },
+    {
+      "path": "scripts/quality/lint_sources.py",
+      "line": 351,
+      "code_sha256": "d75274826882b437b689d5b81193a2f97388dbc7fe9fa2dfe757f94933685050",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/repo_checks.py": "sha256:55bcc62e14cc27f954ef6d1bf5dcee70f414580a9aba23de833949f290ccb0bd"
+      },
+      "reason": "runs gofmt from the folder of the verified Go 1.27.1 program with -l"
+    },
+    {
+      "path": "scripts/quality/lint_sources.py",
+      "line": 526,
+      "code_sha256": "cff80cdc4d10023eadcab151ee1587c2fa228a6a33f7ddf690876b575403b4b5",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/repo_checks.py": "sha256:55bcc62e14cc27f954ef6d1bf5dcee70f414580a9aba23de833949f290ccb0bd"
+      },
+      "reason": "runs the private yamllint environment's Python, or the current interpreter, with -m yamllint --version"
+    },
+    {
+      "path": "scripts/quality/lint_sources.py",
+      "line": 530,
+      "code_sha256": "1893430c33b623d1bbcc9424e6727d2ca17af3dc51718382c93583a4e8bbdef9",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/repo_checks.py": "sha256:55bcc62e14cc27f954ef6d1bf5dcee70f414580a9aba23de833949f290ccb0bd"
+      },
+      "reason": "runs the private yamllint environment's Python, or the current interpreter, with -m yamllint on the selected sources"
+    },
+    {
+      "path": "scripts/quality/lint_sources.py",
+      "line": 534,
+      "code_sha256": "5a40e40360800053230faed6c6757add11e7596eff8d6184c10034c5b8532ec0",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/repo_checks.py": "sha256:55bcc62e14cc27f954ef6d1bf5dcee70f414580a9aba23de833949f290ccb0bd"
+      },
+      "reason": "runs a pinned native linter from .tools/bin (shellcheck, actionlint or hadolint) on the selected sources"
+    },
+    {
+      "path": "scripts/quality/run_e2e.py",
+      "line": 140,
+      "code_sha256": "04c06b7303d92911d832b3b9c112a8f64085320728d615867f21063678745014",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "4a1485d347b7dc005b551bb797cdfba5ed04accd4f8f73243943b9959e10f389",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "reason": "runs the synthetic tool installer command (sys.executable -m scripts.quality.install_tools) with a raw-binary manifest"
+    },
+    {
+      "path": "scripts/quality/run_e2e.py",
+      "line": 144,
+      "code_sha256": "37e86a837af86f100fc191ac9c394a5b53ca706deedc0e337748466a7a55d7e6",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "4a1485d347b7dc005b551bb797cdfba5ed04accd4f8f73243943b9959e10f389",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "reason": "runs the synthetic tool installer command (sys.executable -m scripts.quality.install_tools) with a raw-binary manifest"
+    },
+    {
+      "path": "scripts/quality/run_e2e.py",
+      "line": 164,
+      "code_sha256": "5153c28e335132f17886d69826d733a4fac8f775b179e97ae4d1ad1e0ba2528e",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "4a1485d347b7dc005b551bb797cdfba5ed04accd4f8f73243943b9959e10f389",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "reason": "runs the synthetic tool installer command (sys.executable -m scripts.quality.install_tools) with a nested-member manifest"
+    },
+    {
+      "path": "scripts/quality/run_e2e.py",
+      "line": 183,
+      "code_sha256": "31f8dd394225de0536b48c47435e8da927c12e7a0021123867cb07b1fd01e48e",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "4a1485d347b7dc005b551bb797cdfba5ed04accd4f8f73243943b9959e10f389",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "reason": "runs the synthetic tool installer command (sys.executable -m scripts.quality.install_tools) selecting one tool"
+    },
+    {
+      "path": "scripts/quality/run_e2e.py",
+      "line": 203,
+      "code_sha256": "d40b7f65cacfada8124817951806e3a41dbd8b6aa8454118024581749e2bb2ff",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "4a1485d347b7dc005b551bb797cdfba5ed04accd4f8f73243943b9959e10f389",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "reason": "runs the synthetic tool installer command (sys.executable -m scripts.quality.install_tools) with an unsafe archive"
     }
   ]
 }

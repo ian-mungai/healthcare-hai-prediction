@@ -1,5 +1,5 @@
 {
-  "note": "Paths each check group of scripts/run_ci.sh depends on (Python regular expressions over repository paths). GitHub CI and local commits select groups from the same lists through scripts/quality/ci_groups.py. A path in global selects every group; a path that no group lists and that is not passive also selects every group. The privacy, secret, credential, data-file, writing, Markdown lint and documentation gates are not groups: they run in every scope. Groups in full_only run only in the full scope (the local run before a push); the acquisition gate keeps its own path list in the acquisition-checks hook, which commits and GitHub CI use.",
+  "note": "Paths each check group of scripts/run_ci.sh depends on (Python regular expressions over repository paths). GitHub CI and local commits select groups from the same lists through scripts/quality/ci_groups.py. A path in global selects every group; a path that no group lists and that is not passive also selects every group. The privacy, secret, credential, data-file, writing, Markdown lint and documentation gates are not groups: they run in every scope. Groups in full_only run only in the full scope (the local run before a push); the acquisition gate keeps its own path list in the acquisition-checks hook, which commits and GitHub CI use. The fast source gates (Ruff, shell syntax, ShellCheck, actionlint, yamllint, Hadolint, gofmt and go vet) run unconditionally in every scope and part. Their configuration and source inventory cannot bypass a gate through path selection. SQL style runs in every full and range run (the run before a push and GitHub CI); on commits it runs when a listed SQL input changes: dbt/, .sqlfluff, features/ and services/ SQL, the dbt package archive config and the SQLFluff pins and installer.",
   "global": [
     "^scripts/run_ci\\.sh$",
     "^scripts/process\\.py$",
@@ -18,8 +18,7 @@
   ],
   "groups": {
     "python_lint": [
-      "^(scripts|tests)/.*\\.py$",
-      "^(orchestration|dags|services)/.*\\.py$",
+      "\\.py[iw]?$",
       "^config/quality/mypy_runtimes\\.json$"
     ],
     "lakehouse_checks": [
@@ -30,12 +29,15 @@
       "^config/",
       "^services/",
       "^features/",
+      "^scripts/quality/(model_metadata|run_model_metadata_e2e)\\.py$",
+      "^scripts/quality/(install_sqlfluff\\.py|sqlfluff/requirements\\.txt)$",
       "^docker-compose\\.yaml$"
     ],
     "orchestration_checks": [
       "^scripts/orchestration/",
       "^orchestration/",
       "^dags/",
+      "^tests/orchestration/",
       "^config/orchestration/",
       "^data_contracts/orchestration/",
       "^services/orchestration/",
@@ -48,9 +50,15 @@
       "\\.(py|sh)$",
       "^scripts/quality/",
       "^config/quality/",
+      "^\\.env\\.example$",
+      "^dbt/(dbt_project|profiles)\\.yml$",
+      "^dbt/models/silver/intermediate/_intermediate__models\\.yml$",
+      "^(README\\.md|docs/quality_checks\\.md)$",
       "^\\.(privacy|writing|cleanup)_allowlist$",
       "^\\.markdownlint-cli2\\.jsonc$",
-      "^\\.sqlfluff$"
+      "^\\.sqlfluff$",
+      "^\\.yamllint$",
+      "^config/quality_tools\\.json$"
     ],
     "configuration_checks": [
       "^scripts/(infrastructure|quality)/",
@@ -62,7 +70,10 @@
     "sql_style": [
       "^dbt/",
       "^\\.sqlfluff$",
-      "^scripts/quality/(install_sqlfluff\\.py$|sqlfluff/)"
+      "^scripts/quality/(install_sqlfluff\\.py$|sqlfluff/)",
+      "^(features|services)/.*\\.sql$",
+      "^scripts/quality/lint_sources\\.py$",
+      "^config/lakehouse/dbt_package_archive\\.json$"
     ],
     "terraform_checks": [
       "^infra/",
@@ -82,5 +93,9 @@
   },
   "full_only": [
     "acquisition"
+  ],
+  "always": [],
+  "always_except_commits": [
+    "sql_style"
   ]
 }

@@ -2,6 +2,8 @@
 # and dbt-core 1.11.15 with the dbt-duckdb 1.11.0 adapter for the staging models.
 # The base image is pinned by digest and the wheels by hash; extensions are fetched once here, never at query time.
 FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS deadline
+# hai is the services/hai named build context passed by docker-compose.yaml additional_contexts.
+# hadolint ignore=DL3022
 COPY --from=hai deadline_run.go /src/deadline_run.go
 WORKDIR /src
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /deadline_run deadline_run.go
@@ -19,7 +21,7 @@ ENV DBT_SEND_ANONYMOUS_USAGE_STATS=false \
 
 # Run as an unprivileged user; its home holds the extensions, and the code and AWS profile are mounted at run time.
 RUN useradd --create-home --uid 10002 analytics
-USER analytics
+USER 10002
 RUN duckdb -c "INSTALL iceberg; INSTALL httpfs; INSTALL avro; INSTALL aws; INSTALL ui;" \
     && duckdb -c "COPY (SELECT extension_name, extension_version, install_mode FROM duckdb_extensions() WHERE installed AND extension_name IN ('iceberg', 'httpfs', 'avro', 'aws', 'ui') ORDER BY 1) TO '/home/analytics/extensions.csv'" \
     && cat /home/analytics/extensions.csv

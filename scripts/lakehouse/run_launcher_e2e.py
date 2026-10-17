@@ -4438,6 +4438,48 @@ def render_templates(env: Env) -> dict[str, bool]:
         and f["entrypoint"] == wrapped(["python", "-m", "scripts.lakehouse.silver_quality"])
         and set(f["env"]) == {"DUCKDB_MEMORY_LIMIT", "JOB_THREADS", "HAI_DEADLINE_UTC"}
     )
+    gold_suites = ROOT / "data_contracts/great_expectations/gold"
+    f = render(
+        "quality_reconcile",
+        [],
+        {
+            "database": str(ROOT / "data/analytics/dbt/staging.duckdb"),
+            "suites_hosts": [str(suites), str(gold_suites)],
+            "baselines_host": str(baselines),
+            "out_host": str(case_folder),
+        },
+    )
+    out["quality_reconcile"] = (
+        f["image"] == compose.image("quality")
+        and f["network"] == "none"
+        and f["mounts"]
+        == compose_service_mounts("quality", home)
+        | {
+            (str(suites.resolve()), "/workspace/suites/s0", True),
+            (str(gold_suites.resolve()), "/workspace/suites/s1", True),
+            (str(baselines.resolve()), "/workspace/baselines.json", True),
+            (str(case_folder.resolve()), "/workspace/out", False),
+            (str((ROOT / "data_contracts/lakehouse").resolve()), "/workspace/data_contracts/lakehouse", True),
+        }
+        and f["entrypoint"] == wrapped(["python", "-m", "scripts.lakehouse.gold_reconcile"])
+        and f["cmd"]
+        == [
+            "--database",
+            "/workspace/build/staging.duckdb",
+            "--suites",
+            "/workspace/suites/s0",
+            "/workspace/suites/s1",
+            "--baselines",
+            "/workspace/baselines.json",
+            "--output",
+            "/workspace/out/result.json",
+        ]
+        and set(f["env"]) == {"DUCKDB_MEMORY_LIMIT", "JOB_THREADS", "HAI_DEADLINE_UTC"}
+        and f["env"]["DUCKDB_MEMORY_LIMIT"] == values["DUCKDB_MEMORY_LIMIT"]
+        and f["env"]["JOB_THREADS"] == values["JOB_THREADS"]
+        and f["memory"] == int(values["JOB_MEMORY_LIMIT"])
+        and f["init"] is True
+    )
     f = render("query_reader", ["-c", "select 1", "-csv"], {"tty": True})
     document = importlib.import_module("yaml").safe_load((ROOT / "docker-compose.yaml").read_text())["services"]
     out["query_reader"] = (
@@ -4563,6 +4605,7 @@ def render_templates(env: Env) -> dict[str, bool]:
         "duckdb_helper",
         "dbt_deps",
         "quality_validate",
+        "quality_reconcile",
         "query_reader",
         "ui_reader",
         "real_dbt",

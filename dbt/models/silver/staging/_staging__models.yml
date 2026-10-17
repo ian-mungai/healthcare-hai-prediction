@@ -8,6 +8,8 @@ models:
       loads. Every capture location stays listed (failure modes 167 to 171,
       plans/staging_dedup_20261003/failure_modes.md; 204 to 209,
       data/lakehouse_planning/dedup_20261003/failure_modes.md).
+    meta:
+      classification: Public
     columns:
       - name: copy_key
         description: Bronze table and object key, the model's key.
@@ -67,6 +69,8 @@ models:
     description: >
       One row per distinct stored file (bronze table and member SHA-256): its canonical copy, its copies and releases,
       its row count and any label hold (failure modes 166 to 172).
+    meta:
+      classification: Public
     columns:
       - name: file_key
         description: Bronze table and member SHA-256, the model's key.
@@ -109,6 +113,8 @@ models:
     description: >
       Bronze `cms_hai_hospital` with one copy of each stored file, read from its canonical object (failure mode 166). The data
       columns pass through as published; lakehouse.bronze_dictionary.cms_hai_hospital documents them. Typing comes in later staging work.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -128,6 +134,8 @@ models:
     description: >
       Bronze `cms_hai_state` with one copy of each stored file, read from its canonical object (failure mode 166). The data
       columns pass through as published; lakehouse.bronze_dictionary.cms_hai_state documents them. Typing comes in later staging work.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -147,6 +155,8 @@ models:
     description: >
       Bronze `cms_hai_national` with one copy of each stored file, read from its canonical object (failure mode 166). The data
       columns pass through as published; lakehouse.bronze_dictionary.cms_hai_national documents them. Typing comes in later staging work.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -166,6 +176,8 @@ models:
     description: >
       Bronze `cms_hospital_cost_reports` with one copy of each stored file, read from its canonical object (failure mode 166). The data
       columns pass through as published; lakehouse.bronze_dictionary.cms_hospital_cost_reports documents them. Typing comes in later staging work.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -185,6 +197,8 @@ models:
     description: >
       Bronze `cms_ipps_text_lines` with one copy of each stored file, read from its canonical object (failure mode 166). The data
       columns pass through as published; lakehouse.bronze_dictionary.cms_ipps_text_lines documents them. Typing comes in later staging work.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -205,6 +219,8 @@ models:
       Bronze `cms_ipps_sheet_rows` with one copy of each stored file, read from its canonical object (failure mode 166). The data
       columns pass through as published; lakehouse.bronze_dictionary.cms_ipps_sheet_rows documents them. Typing comes in later staging work.
       Intermediate models read only the sheets stg_bronze__sheet_selection selects (failure mode 278).
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -224,6 +240,8 @@ models:
     description: >
       Bronze `cms_ipps_sas` with one copy of each stored file, read from its canonical object (failure mode 166). The data
       columns pass through as published; lakehouse.bronze_dictionary.cms_ipps_sas documents them. Typing comes in later staging work.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -243,6 +261,8 @@ models:
     description: >
       Bronze `cms_occupational_mix_text_lines` with one copy of each stored file, read from its canonical object (failure mode 166). The data
       columns pass through as published; lakehouse.bronze_dictionary.cms_occupational_mix_text_lines documents them. Typing comes in later staging work.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -262,6 +282,8 @@ models:
     description: >
       Bronze `cms_occupational_mix_text_lines_utf16` with one copy of each stored file, read from its canonical object (failure mode 166). The data
       columns pass through as published; lakehouse.bronze_dictionary.cms_occupational_mix_text_lines_utf16 documents them. Typing comes in later staging work.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -282,6 +304,8 @@ models:
       Bronze `cms_occupational_mix_sheet_rows` with one copy of each stored file, read from its canonical object (failure mode 166). The data
       columns pass through as published; lakehouse.bronze_dictionary.cms_occupational_mix_sheet_rows documents them. Typing comes in later staging work.
       Intermediate models read only the sheets stg_bronze__sheet_selection selects (failure mode 278).
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -302,6 +326,8 @@ models:
       One row per loaded IPPS and occupational-mix object with its labels from the generated map
       (scripts/lakehouse/ipps_file_labels.py, seed ipps_occmix_copy_labels), read from its names and stored container,
       never from capture time (failure modes 178 to 182).
+    meta:
+      classification: Public
     columns:
       - name: copy_key
         description: Bronze table and object key, the model's key.
@@ -343,6 +369,8 @@ models:
     description: >
       One row per text/workbook twin pair (seed ipps_occmix_twins): the text layout, the workbook sheet that matches
       best, data rows on each side, matched rows, and the pair's status and preferred file (failure modes 183 to 190).
+    meta:
+      classification: Public
     columns:
       - name: twin_key
         description: Text and workbook checksums, the model's key.
@@ -382,6 +410,8 @@ models:
     description: >
       One row per distinct stored file: whether intermediate models may read it. Not selected while its labels are
       held, or when a twin pair excludes it (failure modes 172 and 187).
+    meta:
+      classification: Public
     columns:
       - name: file_key
         description: Bronze table and member SHA-256, the model's key.
@@ -407,6 +437,8 @@ models:
       One row per workbook sheet in the IPPS and occupational-mix sheet tables: whether intermediate models may read it.
       A twin-excluded workbook keeps every sheet that no selected text file of the same release covers row for row; all
       sheets of a selected workbook are selected and none of a held workbook (failure modes 267 to 278).
+    meta:
+      classification: Public
     columns:
       - name: sheet_key
         description: Bronze table, member SHA-256 and sheet name, the model's key.
@@ -443,6 +475,8 @@ models:
     description: >
       Bronze `cms_provider_of_services` with one copy of each stored file, read from its canonical object (failure mode 279): Provider of Services files (all provider categories); the hospital snapshots are typed in int_pos_hospital_snapshots.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_provider_of_services documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -458,6 +492,8 @@ models:
     description: >
       Bronze `cms_cc_hospital_general_information` with one copy of each stored file, read from its canonical object (failure mode 279): Care Compare Hospital General Information releases.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_cc_hospital_general_information documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -473,6 +509,8 @@ models:
     description: >
       Bronze `cms_hospital_enrollments` with one copy of each stored file, read from its canonical object (failure mode 279): Hospital Enrollments releases.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_hospital_enrollments documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -488,6 +526,8 @@ models:
     description: >
       Bronze `cms_hospital_owners` with one copy of each stored file, read from its canonical object (failure mode 279): Hospital All Owners releases.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_hospital_owners documents them.
+    meta:
+      classification: Confidential
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -503,6 +543,8 @@ models:
     description: >
       Bronze `cms_change_of_ownership` with one copy of each stored file, read from its canonical object (failure mode 279): Hospital Change of Ownership releases.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_change_of_ownership documents them.
+    meta:
+      classification: Confidential
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -518,6 +560,8 @@ models:
     description: >
       Bronze `cms_cc_timely_and_effective_care_hospital` with one copy of each stored file, read from its canonical object (failure mode 279): Care Compare timely and effective care releases; windows in int_cc_timely_effective_windows.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_cc_timely_and_effective_care_hospital documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -533,6 +577,8 @@ models:
     description: >
       Bronze `cms_cc_maternal_health_hospital` with one copy of each stored file, read from its canonical object (failure mode 279): Care Compare maternal health releases; windows in int_cc_maternal_windows.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_cc_maternal_health_hospital documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -548,6 +594,8 @@ models:
     description: >
       Bronze `cms_cc_hcahps_hospital` with one copy of each stored file, read from its canonical object (failure mode 279): Care Compare HCAHPS releases; windows in int_cc_hcahps_windows.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_cc_hcahps_hospital documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -563,6 +611,8 @@ models:
     description: >
       Bronze `cms_medicare_inpatient_by_provider` with one copy of each stored file, read from its canonical object (failure mode 279): the Medicare inpatient provider summaries; typed in int_mup_providers.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_medicare_inpatient_by_provider documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -578,6 +628,8 @@ models:
     description: >
       Bronze `cms_medicare_inpatient_by_drg` with one copy of each stored file, read from its canonical object (failure mode 279): the Medicare inpatient discharges by provider and DRG; typed in int_mup_drg_discharges.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_medicare_inpatient_by_drg documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -593,6 +645,8 @@ models:
     description: >
       Bronze `hhs_capacity_csv` with one copy of each stored file, read from its canonical object (failure mode 279): the HHS weekly hospital capacity rows; typed in int_hhs_capacity_weeks.
       The data columns pass through as published; lakehouse.bronze_dictionary.hhs_capacity_csv documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -608,6 +662,8 @@ models:
     description: >
       Bronze `onc_pi_attestations_csv` with one copy of each stored file, read from its canonical object (failure mode 279): the ONC EHR incentive attestations; typed in int_onc_attestation_rows.
       The data columns pass through as published; lakehouse.bronze_dictionary.onc_pi_attestations_csv documents them.
+    meta:
+      classification: Confidential
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -623,6 +679,8 @@ models:
     description: >
       Bronze `onc_pi_chpl_linkage_csv` with one copy of each stored file, read from its canonical object (failure mode 279): the ONC Promoting Interoperability to CHPL linkage rows; typed in int_onc_chpl_linkage_rows.
       The data columns pass through as published; lakehouse.bronze_dictionary.onc_pi_chpl_linkage_csv documents them.
+    meta:
+      classification: Confidential
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -638,6 +696,8 @@ models:
     description: >
       Bronze `hud_zip_county` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_hud_zip_county_quarters and int_hud_zip_county_holds.
       The data columns pass through as published; lakehouse.bronze_dictionary.hud_zip_county documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -653,6 +713,8 @@ models:
     description: >
       Bronze `hud_zip_county_sheet_rows` with one copy of each stored file, read from its canonical object (failure mode 418); not typed; the real E2E compares each workbook with its CSV twin (failure mode 404).
       The data columns pass through as published; lakehouse.bronze_dictionary.hud_zip_county_sheet_rows documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -668,6 +730,8 @@ models:
     description: >
       Bronze `county_adjacency` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_county_adjacency_edges.
       The data columns pass through as published; lakehouse.bronze_dictionary.county_adjacency documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -683,6 +747,8 @@ models:
     description: >
       Bronze `county_adjacency_2010_text_lines` with one copy of each stored file, read from its canonical object (failure mode 418); parsed in int_county_adjacency_edges.
       The data columns pass through as published; lakehouse.bronze_dictionary.county_adjacency_2010_text_lines documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -698,6 +764,8 @@ models:
     description: >
       Bronze `rucc` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_rucc_county_codes.
       The data columns pass through as published; lakehouse.bronze_dictionary.rucc documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -713,6 +781,8 @@ models:
     description: >
       Bronze `rucc_sheet_rows` with one copy of each stored file, read from its canonical object (failure mode 418); the 2013 sheet is typed in int_rucc_county_codes.
       The data columns pass through as published; lakehouse.bronze_dictionary.rucc_sheet_rows documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -728,6 +798,8 @@ models:
     description: >
       Bronze `ruca_tracts_2020` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_ruca_codes.
       The data columns pass through as published; lakehouse.bronze_dictionary.ruca_tracts_2020 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -743,6 +815,8 @@ models:
     description: >
       Bronze `ruca_zip_2020` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_ruca_codes.
       The data columns pass through as published; lakehouse.bronze_dictionary.ruca_zip_2020 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -758,6 +832,8 @@ models:
     description: >
       Bronze `ruca_zip_2010` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_ruca_codes.
       The data columns pass through as published; lakehouse.bronze_dictionary.ruca_zip_2010 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -773,6 +849,8 @@ models:
     description: >
       Bronze `ruca_sheet_rows` with one copy of each stored file, read from its canonical object (failure mode 418); the 2010 tract sheet is typed in int_ruca_codes.
       The data columns pass through as published; lakehouse.bronze_dictionary.ruca_sheet_rows documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -788,6 +866,8 @@ models:
     description: >
       Bronze `cms_hsa_csv` with one copy of each stored file, read from its canonical object (failure mode 418); typed in int_hsa_zip_cases.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_hsa_csv documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -803,6 +883,8 @@ models:
     description: >
       Bronze `svi` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_svi_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.svi documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -818,6 +900,8 @@ models:
     description: >
       Bronze `acs_dp02` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_dp02 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -833,6 +917,8 @@ models:
     description: >
       Bronze `acs_dp03` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_dp03 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -848,6 +934,8 @@ models:
     description: >
       Bronze `acs_dp04` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_dp04 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -863,6 +951,8 @@ models:
     description: >
       Bronze `acs_dp05` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_dp05 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -878,6 +968,8 @@ models:
     description: >
       Bronze `acs_s0101` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_s0101 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -893,6 +985,8 @@ models:
     description: >
       Bronze `acs_s0601` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_s0601 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -908,6 +1002,8 @@ models:
     description: >
       Bronze `acs_s1701` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_s1701 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -923,6 +1019,8 @@ models:
     description: >
       Bronze `acs_s2503` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_s2503 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -938,6 +1036,8 @@ models:
     description: >
       Bronze `acs_s2701` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_s2701 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -953,6 +1053,8 @@ models:
     description: >
       Bronze `acs_b16005` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_b16005 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -968,6 +1070,8 @@ models:
     description: >
       Bronze `acs_b19013` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_b19013 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -983,6 +1087,8 @@ models:
     description: >
       Bronze `acs_b25070` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_b25070 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -998,6 +1104,8 @@ models:
     description: >
       Bronze `acs_b25091` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_b25091 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1013,6 +1121,8 @@ models:
     description: >
       Bronze `acs_b26001` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_b26001 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1028,6 +1138,8 @@ models:
     description: >
       Bronze `acs_c16001` with one copy of each stored file, read from its canonical object (failure mode 433); typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_c16001 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1043,6 +1155,8 @@ models:
     description: >
       Bronze `acs_summary_b16005` with one copy of each stored file, read from its canonical object (failure mode 433); county rows typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_summary_b16005 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1058,6 +1172,8 @@ models:
     description: >
       Bronze `acs_summary_b19013` with one copy of each stored file, read from its canonical object (failure mode 433); county rows typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_summary_b19013 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1073,6 +1189,8 @@ models:
     description: >
       Bronze `acs_summary_b25070` with one copy of each stored file, read from its canonical object (failure mode 433); county rows typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_summary_b25070 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1088,6 +1206,8 @@ models:
     description: >
       Bronze `acs_summary_b25091` with one copy of each stored file, read from its canonical object (failure mode 433); county rows typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_summary_b25091 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1103,6 +1223,8 @@ models:
     description: >
       Bronze `acs_summary_b26001` with one copy of each stored file, read from its canonical object (failure mode 433); county rows typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_summary_b26001 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1118,6 +1240,8 @@ models:
     description: >
       Bronze `acs_summary_c16001` with one copy of each stored file, read from its canonical object (failure mode 433); county rows typed in int_acs_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.acs_summary_c16001 documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1133,6 +1257,8 @@ models:
     description: >
       Bronze `saipe_text_lines` with one copy of each stored file, read from its canonical object (failure mode 447); typed in int_saipe_county_estimates.
       The data columns pass through as published; lakehouse.bronze_dictionary.saipe_text_lines documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1148,6 +1274,8 @@ models:
     description: >
       Bronze `sahie` with one copy of each stored file, read from its canonical object (failure mode 447); typed in int_sahie_county_rows.
       The data columns pass through as published; lakehouse.bronze_dictionary.sahie documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1163,6 +1291,8 @@ models:
     description: >
       Bronze `bls_laus` with one copy of each stored file, read from its canonical object (failure mode 447); typed in int_bls_county_series.
       The data columns pass through as published; lakehouse.bronze_dictionary.bls_laus documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1178,6 +1308,8 @@ models:
     description: >
       Bronze `places` with one copy of each stored file, read from its canonical object (failure mode 461); typed in int_places_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.places documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1193,6 +1325,8 @@ models:
     description: >
       Bronze `cms_geographic_variation_csv` with one copy of each stored file, read from its canonical object (failure mode 461); county values typed in int_gv_county_values.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_geographic_variation_csv documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1208,6 +1342,8 @@ models:
     description: >
       Bronze `wonder_county_mortality` with one copy of each stored file, read from its canonical object (failure mode 461); typed in int_wonder_county_deaths.
       The data columns pass through as published; lakehouse.bronze_dictionary.wonder_county_mortality documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1223,6 +1359,8 @@ models:
     description: >
       Bronze `cms_mmd_csv` with one copy of each stored file, read from its canonical object (failure mode 483); typed in int_mmd_prevalence.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_mmd_csv documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1238,6 +1376,8 @@ models:
     description: >
       Bronze `hrsa_hpsa_detail` with one copy of each stored file, read from its canonical object (failure mode 483); typed in int_hpsa_components.
       The data columns pass through as published; lakehouse.bronze_dictionary.hrsa_hpsa_detail documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1253,6 +1393,8 @@ models:
     description: >
       Bronze `hrsa_mua_detail` with one copy of each stored file, read from its canonical object (failure mode 483); typed in int_mua_components.
       The data columns pass through as published; lakehouse.bronze_dictionary.hrsa_mua_detail documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1268,6 +1410,8 @@ models:
     description: >
       Bronze `cms_cc_unplanned_hospital_visits_hospital` with one copy of each stored file, read from its canonical object (failure mode 512); windows in int_cc_unplanned_visits_windows.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_cc_unplanned_hospital_visits_hospital documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1283,6 +1427,8 @@ models:
     description: >
       Bronze `cms_cc_complications_and_deaths_hospital` with one copy of each stored file, read from its canonical object (failure mode 512); windows in int_cc_complications_deaths_windows.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_cc_complications_and_deaths_hospital documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1298,6 +1444,8 @@ models:
     description: >
       Bronze `cms_cc_hospital_readmissions_reduction_program_hospital` with one copy of each stored file, read from its canonical object (failure mode 512); windows in int_cc_hrrp_windows.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_cc_hospital_readmissions_reduction_program_hospital documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1313,6 +1461,8 @@ models:
     description: >
       Bronze `cms_cc_hac_reduction_program_hospital` with one copy of each stored file, read from its canonical object (failure mode 522); program years in int_hac_program_years.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_cc_hac_reduction_program_hospital documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.
@@ -1328,6 +1478,8 @@ models:
     description: >
       Bronze `cms_cc_hvbp_tps` with one copy of each stored file, read from its canonical object (failure mode 522); program years in int_vbp_program_years.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_cc_hvbp_tps documents them.
+    meta:
+      classification: Public
     columns:
       - name: _object_key
         description: The canonical object the row was read from.

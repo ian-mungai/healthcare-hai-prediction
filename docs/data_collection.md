@@ -185,9 +185,14 @@ For the HCAI exception, the untouched download stays local with
 owner-only access. Only the privacy-filtered derivative and non-personal
 references or provenance may enter the project's private S3 storage. The
 derivative remains under privacy and modeling review; redaction does not
-establish formal anonymization or clinical validity. Raw retention duration
-remains unresolved. The development Mac uses FileVault; that host check
-does not establish compliance or resolve retention requirements.
+establish formal anonymization or clinical validity. Each untouched original
+that names individuals (the HCAI annual financial files and the CMS contacts
+table) is kept until its redacted copy is accepted into bronze, then for a
+90-day grace period, then deleted. Its SHA-256, source URL and download date
+are kept, because the sources are public and can be downloaded again.
+Deletions run in batches the lead lists with exact paths, each approved by
+the owner. The development Mac uses FileVault; that host check does not
+establish compliance on its own.
 
 The data bucket carries its own `DataClassification` tag of Confidential.
 Redacted derivatives are not formally
@@ -227,6 +232,25 @@ In practice:
 - **ONC meaningful-use attestations 2011 to 2017** (`store_onc_mu`) downloads `MU_REPORT.csv` into `data/datasets/historical_acquisition/onc_mu_attestation/private_original/` (owner-only; local record, not in the repository) and stores hospital rows only, without the clinician-only `Specialty` column; clinician rows never leave this Mac. Plan: `config/acquisition/onc_mu_hospital_plan.json`.
 - **ACS derived history** (`collect_census_acs_detailed`) collects B17001 (2010 to 2016), B16001 and B16004 (2009 to 2015) through the Census API with the runtime-only key, then derives poverty % for 2010 to 2011 and the limited-English total for 2009 to 2015. Derived values are stored only after exact checks: B17001 against the stored S1701 exports (2012 to 2016) and B16001 against B16004 in the same years. Plan: `config/acquisition/census_acs_detailed_plan.json`; method: [Census ACS Detailed Tables and Derived History](acquisition_design.md#census-acs-detailed-tables-and-derived-history). Run it like the other collectors (`--fetch`, `--execute` or neither for an offline recheck).
 - **Held sources released by an access record, not by terms.** HCAI is on access hold in the locked registry. Storage accepts it only when the receipt binds, by SHA-256, the record `config/acquisition/access_releases_20260929.json`; the terms-acceptance record for HUD and WONDER is unchanged.
+- **CMS Change of Ownership** (`cms_change_of_ownership`) is stored whole in the Confidential bucket, with no redacted derivative. Its publisher dictionary lists buyer and seller organization fields and does not rule out an individual buyer or seller, so the table is classified Confidential. Models are Confidential when their output carries a listed confidential column, including renamed or derived columns. Their class follows the content they output.
+- **ONC CHPL linkage** (`onc_pi_chpl_linkage_csv`) is stored whole in the Confidential bucket, with no redacted derivative. No publisher dictionary is stored for it, so nothing rules out personal fields and the table is classified Confidential. Until a publisher dictionary is stored, every publisher column is confidential. Models whose output carries any publisher column, including renamed or derived columns, are Confidential. The loader lineage columns `_object_key` and `_member_sha256` stay exempt under A273.
+
+For downstream models, classification follows the personal or identifying columns that reach the output, including renamed and derived columns.
+Each Confidential dbt source names those columns in `meta.confidential_columns`. A model that outputs none of them can be Public even when it reads a Confidential source.
+The [model metadata check](quality_checks.md#model-metadata) traces the compiled SQL and retains a conservative class when it cannot trace a construct.
+
+Both ONC sources, `onc_pi_attestations_csv` and `onc_pi_chpl_linkage_csv`, treat every publisher column as Confidential until an ONC publisher dictionary is stored.
+Their source metadata uses `confidential_columns: all` with a reason. The earlier two-column and seven-column candidate lists remain under
+`proposed_confidential_columns` for dictionary review; they do not limit the active protection of publisher columns.
+The loader lineage columns `_object_key` and `_member_sha256` are exempt under A273. A projection carrying only those columns can be Public.
+Renaming or deriving a publisher column does not grant that exemption.
+
+Collections awaiting a personal-data assessment retain their Confidential handling hold until their stored text and column names have been scanned.
+A table's existing class annotation does not release that hold. Scan only approved local table exports with
+`.venv/bin/python -m scripts.quality.model_metadata scan-personal-data --manifest <manifest.json> --output <report.json>`.
+The manifest must include every table and stored export in the intended collection. The report lists column paths, pattern kinds and counts, never values.
+An unreadable or unsupported export leaves the scan incomplete. A report with no supported-pattern matches does not establish formal anonymization.
+The scanner's fixture suite uses synthetic data. A real-data scan requires its own authorization and review of the complete export inventory.
 
 ## Checking Stored Data
 

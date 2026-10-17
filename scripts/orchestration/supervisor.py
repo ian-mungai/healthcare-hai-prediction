@@ -33,7 +33,10 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
+from orchestration.interface import SubmissionRefused, SubmissionRequest
 from scripts.lakehouse import run_lock
+from scripts.orchestration import run_control
+from scripts.orchestration.airflow_api import AirflowApi, AirflowApiError
 from scripts.orchestration.broker import (
     PLATFORM_FILE,
     TEMPLATES_FILE,
@@ -51,6 +54,14 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPONENTS = ("metadatabase", "scheduler", "triggerer", "dag_processor")
 ROTATED_SECRETS = ("jwt_secret", "api_secret_key")
 PULL_SECONDS = 3600.0
+TRANSFORM_DAG = "transform_dag"
+RECONCILE_SECONDS = 60.0
+RECONCILE_ATTEMPT = 99
+LIVE_RUN_STATES = ("queued", "running")
+GATE_TASK = "final_gate"
+ENDED_TASK_STATES = ("failed", "upstream_failed", "skipped", "removed")
+SNAPSHOT_SECONDS = 20.0
+SNAPSHOT_TOTAL_SECONDS = 60.0
 
 
 class SupervisorError(Exception):
@@ -86,6 +97,7 @@ class Supervisor:
         self.fail_at = fail_at
         self.templates_file = templates_file
         self.repo_root = repo_root
+        self.transform_dag = TRANSFORM_DAG
         self.state = paths.state / "airflow"
         self.broker: Broker | None = None
         self.listener: Listener | None = None
@@ -160,7 +172,7 @@ class Supervisor:
         self.evidence["images"] = self.check_images()
         self.token = secrets.token_bytes(32).hex()
         try:
-            self.broker = Broker(self.paths, load_templates(self.templates_file), self.client, repo_root=self.repo_root)
+            self.broker = Broker(self.paths, load_templates(self.templates_file), self.client, repo_root=self.repo_root, dag_snapshot=self.dag_snapshot)
             self.evidence["reconcile"] = self.broker.start()
             self.listener = Listener(self.broker, self.broker_host, self.broker_port, self.token)
             self.listener.start()
@@ -202,6 +214,83 @@ class Supervisor:
                 return {component: last[component]["status"] for component in COMPONENTS}
             time.sleep(3)
         raise SupervisorError(f"Airflow not healthy after {self.readiness_seconds} s: {json.dumps(last)[:300]}")
+
+    def dag_snapshot(self, run_id: str, mode: str) -> dict[str, Any]:
+        """One read of the transform DAG run that names ``run_id`` and ``mode`` in its configuration: its ID, its state and the state of each of its tasks.
+        ``{"unavailable": reason}`` when no DAG run or more than one names them or the API cannot answer, so no single DAG run is read. The whole read ends
+        within ``SNAPSHOT_TOTAL_SECONDS``, because the broker calls it while it holds the run's ledger lock."""
+        deadline = time.monotonic() + SNAPSHOT_TOTAL_SECONDS
+        try:
+            secret = (self.state / "metadata" / "jwt_secret").read_text().strip()
+            api = AirflowApi(self.api_port, secret, timeout=SNAPSHOT_SECONDS, deadline=deadline)
+            runs = [
+                item
+                for item in api.runs(self.transform_dag)
+                if (item.get("conf") or {}).get("run_id") == run_id and (item.get("conf") or {}).get("mode") == mode
+            ]
+            if len(runs) != 1:
+                return {"unavailable": f"{len(runs)} DAG runs of {self.transform_dag} name run {run_id} in mode {mode}, not one"}
+            dag_run_id = str(runs[0]["dag_run_id"])
+            tasks = api.task_states(self.transform_dag, dag_run_id)
+            if time.monotonic() >= deadline:
+                raise AirflowApiError("the deadline of the read passed")
+        except (AirflowApiError, OSError, KeyError, ValueError) as error:
+            return {"unavailable": f"the DAG run cannot be read: {type(error).__name__}: {str(error)[:200]}"}
+        return {"dag_run_id": dag_run_id, "dag_run_state": str(runs[0]["state"]), "tasks": tasks}
+
+    def reconcile_runs(self) -> dict[str, Any]:
+        """Move the transform run to ``failed_retained``, through the broker's ``release_rejected`` control row, when its DAG run has ended without the gate
+        having accepted it.
+
+        The finalization tasks do not run when a DAG run is marked failed or cancelled by hand, so the lock and any open attempt would outlive the run.
+        A run is reconciled only when it is held or finalizing under this broker, exactly one DAG run of the transform DAG names
+        it and its mode and that DAG run is not queued or running. A finalizing run is an accepted finalization, which the release task resumes, only when
+        its record holds an accepted gate result and the gate task of that DAG run succeeded: it is then left alone. A record that cannot be read, a gate
+        task whose state is not settled and a DAG run that cannot be read also leave the run alone. The lock is never released here: only the owner's
+        release frees a retained run."""
+        outcome: dict[str, Any] = {"reconciled": [], "left": {}}
+        if self.broker is None:
+            raise SupervisorError("the session has no broker")
+        try:
+            held = self.call("status", {"what": "registry"})["domains"].get("transform")
+        except KeyError:
+            outcome["left"]["registry"] = "the registry answer has no domains"
+            return outcome
+        if not held or held["state"] not in ("held", "finalizing") or held["holder"] != "broker":
+            return outcome
+        run_id, mode = str(held["run_id"]), str(held["mode"])
+        snapshot = self.dag_snapshot(run_id, mode)
+        if "unavailable" in snapshot:
+            outcome["left"][run_id] = snapshot["unavailable"]
+        elif snapshot["dag_run_state"] in LIVE_RUN_STATES:
+            outcome["left"][run_id] = "its DAG run is still live"
+        elif held["state"] == "finalizing" and self.release_pending(run_id, mode, snapshot["tasks"], outcome):
+            pass
+        else:
+            handle = self.broker.submit(SubmissionRequest("release_rejected", run_id, mode, RECONCILE_ATTEMPT))
+            outcome["reconciled"].append({"run_id": run_id, "submission_id": handle.submission_id, "dag_run_states": [snapshot["dag_run_state"]]})
+        return outcome
+
+    def release_pending(self, run_id: str, mode: str, tasks: dict[str, str | None], outcome: dict[str, Any]) -> bool:
+        """True, with the reason noted in ``outcome``, when the run's finalization is left for its release task: the record holds an accepted gate result and
+        the gate task succeeded, the record cannot be read or the gate task has not settled."""
+        if self.broker is None:
+            raise SupervisorError("the session has no broker")
+        try:
+            result = run_control.recorded_result(self.broker, run_id, mode)
+        except (OSError, run_control.ControlRefused) as error:
+            outcome["left"][run_id] = f"its run record cannot be read: {type(error).__name__}"
+            return True
+        if result != "accepted":
+            return False
+        gate_state = tasks.get(GATE_TASK)
+        if gate_state == "success":
+            outcome["left"][run_id] = "its finalization was accepted and its gate task succeeded; the release task resumes it"
+            return True
+        if gate_state in ENDED_TASK_STATES:
+            return False
+        outcome["left"][run_id] = f"its record is accepted and its gate task is {gate_state}: the gate's outcome is not settled"
+        return True
 
     def failure(self, step: str, error: BaseException) -> str:
         """One teardown failure as a line: the step, the exception type and its text without this session's token."""
@@ -255,6 +344,17 @@ def build(test_registry: str | None) -> Supervisor:
     return Supervisor(paths, platform, launcher.load_client(test_registry))
 
 
+def reconcile(supervisor: Supervisor) -> None:
+    """One reconciliation pass of the running session; a failure is reported on standard error and the next pass tries again."""
+    try:
+        outcome = supervisor.reconcile_runs()
+    except (SupervisorError, SubmissionRefused, LauncherUnavailable) as error:
+        sys.stderr.write(f"supervisor: the run reconciliation did not finish: {error}\n")
+        return
+    if outcome["reconciled"]:
+        sys.stderr.write(f"supervisor: retained {len(outcome['reconciled'])} run(s) whose DAG run ended: {json.dumps(outcome['reconciled'])}\n")
+
+
 def main() -> int:
     """Run one command; ``up`` holds the session in the foreground until SIGINT or SIGTERM."""
     cli = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -278,7 +378,8 @@ def main() -> int:
             sys.stdout.write(json.dumps({"ready": True, "api": f"http://127.0.0.1:{supervisor.api_port}", **evidence}, indent=2, default=str) + "\n")
             sys.stdout.flush()
             try:
-                stop.wait()
+                while not stop.wait(RECONCILE_SECONDS):
+                    reconcile(supervisor)
             finally:
                 result = supervisor.teardown()
     except (SupervisorError, BrokerError, LauncherUnavailable, run_lock.RegistryError) as exc:

@@ -19,7 +19,8 @@ jobs:
     name: Repository Hooks
     # Pinned: ubuntu-latest moves to Ubuntu 26 from Oct 19 2026; move deliberately after a green test run on the new image.
     runs-on: ubuntu-24.04
-    timeout-minutes: 22
+    # It passed 22 minutes on a pull request that changes this workflow. Resize it from a complete hosted run.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -65,7 +66,8 @@ jobs:
   local_ci:
     name: Local CI Core
     runs-on: ubuntu-24.04
-    timeout-minutes: 18
+    # About twice the measured hosted duration of 47 minutes.
+    timeout-minutes: 95
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6

@@ -980,6 +980,7 @@ TEMPLATES: dict[str, Template] = {
         Template("fixture_init", "analytics-dbt", True, ("alloc",), default_seconds=900),
         Template("duckdb_helper", "analytics-dbt", True, ("alloc",), default_seconds=900),
         Template("quality_validate", "quality", True, ("alloc", "run"), default_seconds=3600),
+        Template("quality_reconcile", "quality", True, ("alloc", "run"), default_seconds=3600),
         Template("query_reader", "analytics", False, ("alloc",), needs_catalog=True, reader=True, session="forward", default_seconds=43200),
         Template("ui_reader", "analytics-ui", False, ("alloc",), needs_catalog=True, reader=True, session="cancel", default_seconds=43200),
         Template("spark_read", "spark", True, ("run",), needs_catalog=True, default_seconds=7200, run_domains=("transform",)),
@@ -1287,6 +1288,7 @@ class Renderer:
             "duckdb_helper": self.render_duckdb_helper,
             "dbt_deps": self.render_dbt_deps,
             "quality_validate": self.render_quality_validate,
+            "quality_reconcile": self.render_quality_reconcile,
             "query_reader": self.render_query_reader,
             "ui_reader": self.render_ui_reader,
             "real_dbt": self.render_real_dbt,
@@ -1659,7 +1661,15 @@ class Renderer:
             tmpfs=("/scratch",),
         )
 
-    def render_quality_validate(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+    def render_quality_validate(
+        self,
+        inp: RenderInput,
+        template: Template,
+        name: str,
+        registry_id: str,
+        module: str = "scripts.lakehouse.silver_quality",
+        more_mounts: Sequence[Mount] = (),
+    ) -> Rendered:
         """The Great Expectations validation of a build file, no network. With ``sealed_run`` the build file is the run's sealed copy and the container's
         entrypoint checks it before the validation runs (D1 section 10 item 6)."""
         self.only_params(inp, ("database", "suites_host", "suites_hosts", "baselines_host", "out_host", "build_root", build_provenance.SEALED_RUN_PARAM))
@@ -1696,6 +1706,7 @@ class Renderer:
             *suites,
             Mount(str(self.allowed(str(inp.params["baselines_host"]), "baselines_host", (contracts,)).resolve()), "/workspace/baselines.json", True),
             Mount(str(self.allowed(str(inp.params["out_host"]), "out_host").resolve()), "/workspace/out", False),
+            *more_mounts,
         ]
         command = [
             "--database",
@@ -1708,13 +1719,19 @@ class Renderer:
             "/workspace/out/result.json",
         ]
         env = self.allocation_env(inp, ("DUCKDB_MEMORY_LIMIT", "JOB_THREADS"))
-        entrypoint = ["python", "-m", "scripts.lakehouse.silver_quality"]
+        entrypoint = ["python", "-m", module]
         if sealed:
             entrypoint, command, sealed_mounts = self.sealed_reader(inp, entrypoint, command)
             extra += sealed_mounts
         return self.assemble(
             inp, name, self.image("quality"), entrypoint, command, env, [*mounts, *extra], int(inp.values["JOB_MEMORY_LIMIT"]), "none", workdir="/workspace"
         )
+
+    def render_quality_reconcile(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """``quality_validate`` plus the per-fact reconciliation of the gold facts with their silver models, with the gold contract mounted read-only."""
+        contracts = self.checkout / "data_contracts"
+        contract = Mount(str(self.allowed(str(contracts / "lakehouse"), "contracts", (contracts,)).resolve()), "/workspace/data_contracts/lakehouse", True)
+        return self.render_quality_validate(inp, template, name, registry_id, "scripts.lakehouse.gold_reconcile", (contract,))
 
     def aws_environment(self, values: Mapping[str, str]) -> dict[str, str]:
         """The AWS profile variables of the analytics and Spark services."""
