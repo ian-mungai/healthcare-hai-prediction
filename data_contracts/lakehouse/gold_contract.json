@@ -95,6 +95,53 @@
       ],
       "package": "G2"
     },
+    "bridge_county_planning_region": {
+      "attributes": [
+        "old_county_fips",
+        "planning_region_fips",
+        "tract_count",
+        "member_sha256"
+      ],
+      "columns": [
+        {
+          "name": "old_county_fips",
+          "silver_column": "old_county_fips",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "planning_region_fips",
+          "silver_column": "planning_region_fips",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "tract_count",
+          "silver_column": "tract_count",
+          "type": "BIGINT"
+        },
+        {
+          "name": "member_sha256",
+          "silver_column": "member_sha256",
+          "type": "VARCHAR"
+        }
+      ],
+      "grain": "old county, planning region and RUCA tract file (member_sha256)",
+      "grain_columns": [
+        "old_county_fips",
+        "planning_region_fips",
+        "member_sha256"
+      ],
+      "inputs": [
+        "int_ruca_codes (vintage 2020 tract rows)"
+      ],
+      "keys": [
+        "old_county_fips",
+        "planning_region_fips"
+      ],
+      "nullable_columns": [
+        "planning_region_fips"
+      ],
+      "package": "G4"
+    },
     "bridge_measure_control": {
       "attributes": [],
       "columns": [
@@ -298,12 +345,15 @@
     },
     "dim_county": {
       "attributes": [
-        "county_fips"
+        "county_fips",
+        "in_latest_county_list",
+        "last_listed_vintage",
+        "first_unlisted_vintage"
       ],
       "grain": "5-character county FIPS",
       "inputs": [
         "published codes in the facts",
-        "int_pos_hospital_snapshots (Connecticut region)"
+        "int_county_adjacency_edges, int_rucc_county_codes and int_acs_county_values (the county lists per vintage)"
       ],
       "package": "G2"
     },
@@ -339,11 +389,13 @@
       "attributes": [
         "code_system",
         "code",
-        "code_label"
+        "code_label",
+        "identity_rule"
       ],
-      "grain": "published code",
+      "grain": "published code; one identity per code with the label of the latest release (held as unresolved, policy D1). A Medicare Inpatient data year is a calendar year that can combine two fiscal-year MS-DRG grouper versions, and each release chooses its own title version, so one code and one label can cover different definitions across data years",
       "inputs": [
-        "published code lists in the facts"
+        "published code lists in the facts",
+        "dbt/seeds/gold/identity_splits.csv (generated from the approved classification list)"
       ],
       "package": "G2"
     },
@@ -405,12 +457,16 @@
         "unit",
         "value_kind",
         "vintage_start",
-        "vintage_end"
+        "vintage_end",
+        "edition_start",
+        "edition_end",
+        "identity_rule"
       ],
-      "grain": "measure identity (gold plan 2.2)",
+      "grain": "measure identity (gold plan 2.2); one identity per label edition for a measure the identity-splits seed lists as redefined; a renamed or held measure keeps one identity with the label of its latest release. A renamed measure records a label change, not a change of its exclusion logic: OP_18b keeps one identity, which does not certify an unchanged psychiatric diagnosis code list and is not a claim of full numerical comparability across years",
       "inputs": [
         "every long fact's published measure ID or field",
-        "every wide fact's columns"
+        "every wide fact's columns",
+        "dbt/seeds/gold/identity_splits.csv (generated from the approved classification list)"
       ],
       "package": "G2"
     },
@@ -469,31 +525,40 @@
       "attributes": [
         "code_system",
         "code",
-        "code_label"
+        "code_label",
+        "edition_start",
+        "edition_end",
+        "identity_rule"
       ],
-      "grain": "published code",
+      "grain": "published code; one row per vintage edition for a code the identity-splits seed lists as redefined",
       "inputs": [
-        "published code lists in the facts"
+        "published code lists in the facts",
+        "dbt/seeds/gold/identity_splits.csv (generated from the approved classification list)"
       ],
       "package": "G2"
     },
     "dim_source": {
       "attributes": [
-        "dataset_id"
+        "dataset_id",
+        "publisher",
+        "label"
       ],
       "grain": "dataset",
       "inputs": [
-        "stg_bronze__file_copies"
+        "stg_bronze__file_copies",
+        "dbt/seeds/gold/source_labels.csv (generated from config/acquisition/registry_additions.json and config/acquisition/source_registry.json)"
       ],
       "package": "G2"
     },
     "dim_state": {
       "attributes": [
-        "state_code"
+        "state_code",
+        "state_fips"
       ],
       "grain": "state FIPS and postal code",
       "inputs": [
-        "published codes in the facts"
+        "published codes in the facts",
+        "int_rucc_county_codes (state and the first two characters of county_fips)"
       ],
       "package": "G2"
     },
@@ -512,7 +577,11 @@
     "md5(<natural key text>) for a surrogate key",
     "coalesce(<dimension>.<dimension>_sk, md5('<unknown>')) for the unknown member",
     "cast(<natural key> as varchar) inside a surrogate key",
-    "case only inside surrogate-key or unknown-member handling"
+    "case only inside surrogate-key or unknown-member handling",
+    "min and max over a label group's release date, data year or vintage, inside dim_rurality_code and dim_measure only",
+    "left(county_fips, 2) for the state FIPS prefix, inside dim_state only",
+    "min and max over county-list vintages and a membership test against the latest vintage's county list, inside dim_county only",
+    "count(*) of tract rows per old county and planning region, inside bridge_county_planning_region only"
   ],
   "expression_policy": {
     "date_roles": {
@@ -9528,6 +9597,14 @@
           "edge_key"
         ]
       },
+      "bridge_county_planning_region": {
+        "kind": "bridge",
+        "merge_key": [
+          "old_county_fips",
+          "planning_region_fips",
+          "member_sha256"
+        ]
+      },
       "bridge_measure_control": {
         "kind": "bridge",
         "merge_key": [
@@ -9946,7 +10023,7 @@
     "columns": "Every silver column lands once, under its silver name; no value is stored twice (failure mode 744). Controls appear only in bridge_measure_control.",
     "grain": "A fact's rows equal its silver model's rows; grain test on the silver unique key; rows and content fingerprint equal the silver model's over the silver columns (gold failure mode 743).",
     "lineage": "Facts read only their kept silver model, their dimensions and lookup seeds; a dimension or bridge reads only the inputs this contract lists for it, lookup seeds and gold models (failure mode 746; amendment A37).",
-    "surrogate_keys": "<dimension>_sk = md5 of the natural key's text in the dimension; a null or unmatched natural key takes the unknown member (failure mode 745).",
+    "surrogate_keys": "<dimension>_sk = md5 of the natural key's text in the dimension; a null or unmatched natural key takes the unknown member (failure mode 745). A natural key of several parts is concat_ws('|', parts): a null part is skipped, so a row with a null edition keeps the key it had before the edition column existed.",
     "unknown_member": "Each dimension has one row with natural key '<unknown>' and <dimension>_sk = md5('<unknown>'); the one exception is dim_date, whose unknown row has a null calendar_date (amendment A40); facts never carry a null foreign key."
   },
   "source": "silver_columns.json (wave 0 item 6) and plans/gold_20261010/plan.md draft 4",

@@ -15,9 +15,50 @@ models:
       - dbt_utils.equal_rowcount:
           arguments:
             compare_model: ref('int_county_adjacency_edges')
+  - name: bridge_county_planning_region
+    description: 'Many-to-many of an old Connecticut county and a planning region from the RUCA 2020 tract file: one row per old county, planning
+      region and tract file, with the number of tract rows. A tract with no 2023 county keeps a null planning region. Tract count is the only weight;
+      silver holds no tract population.'
+    meta:
+      classification: Public
+    columns:
+      - name: old_county_fips
+        description: The county FIPS the tract had in the 2020 file (Connecticut counties 09001 to 09015).
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_county')
+                field: county_fips
+      - name: planning_region_fips
+        description: The planning region the tract has in the 2023 county codes; null when the file gives the tract no 2023 county.
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_county')
+                field: county_fips
+      - name: tract_count
+        description: The number of tract rows of that old county and planning region in the file.
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              name: dbt_utils_expression_is_true_bridge_county_planning_region_tract_count_positive
+              arguments:
+                expression: '> 0'
+      - name: member_sha256
+        description: SHA-256 of the RUCA tract file the rows come from.
+        data_tests:
+          - not_null
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - old_county_fips
+              - planning_region_fips
+              - member_sha256
   - name: bridge_measure_control
     description: 'Many-to-many of a measure identity (with its value column), a vintage range and a registry control: one row per bridge seed
-      row with a non-empty measure key. The only gold model where registry controls meet the data.'
+      row with a non-empty measure key, expanded over the editions of a split measure. The only gold model where registry controls meet the data.'
     meta:
       classification: Public
     columns:
@@ -57,6 +98,7 @@ models:
               - registry_control_sk
               - vintage_start
               - vintage_end
+      - bridge_edition_branches
       - bridge_matches_seeds:
           name: bridge_matches_seeds_bridge_measure_control
           arguments:
@@ -205,8 +247,9 @@ models:
               - code_system
               - code
   - name: dim_county
-    description: One row per 5-character county FIPS that a fact's county key carries, plus the unknown member (natural key '<unknown>'). The
-      Connecticut planning region and the retired Alaska code flag are deferred (amendment A36).
+    description: One row per 5-character county FIPS that a fact's county key carries, plus the unknown member (natural key '<unknown>'). Three
+      attributes say whether the code is in the latest county list and, if it left the lists, when. There is no successor column. The Connecticut
+      planning regions are in bridge_county_planning_region.
     meta:
       classification: Public
     columns:
@@ -263,6 +306,17 @@ models:
                   - model: int_wonder_county_deaths
                     column: county_fips
                 space: length(natural_key) = 5
+      - name: in_latest_county_list
+        description: true when the county list of the latest adjacency vintage names the code; false for any other code. Null on the unknown member.
+        data_tests:
+          - not_null:
+              name: not_null_dim_county_in_latest_county_list_known_codes
+              config:
+                where: county_fips <> '<unknown>'
+      - name: last_listed_vintage
+        description: The latest vintage of any county list (adjacency counties and neighbors, RUCC, ACS) that names the code; null for a code no list names.
+      - name: first_unlisted_vintage
+        description: For a code outside the latest list, the first vintage of any county list after its last listed vintage; null for a code in the latest list or in no list.
   - name: dim_date
     description: One row per day from the earliest to the latest DATE source date of the facts, plus the unknown member. The natural key is the
       date.
@@ -345,7 +399,8 @@ models:
               - code_system
               - code
   - name: dim_drg
-    description: One row per (diagnosis-related group code system, code) as published, plus the unknown member.
+    description: One row per (diagnosis-related group code system, code) as published, plus the unknown member. A code keeps one identity with the label of
+      its latest release; the codes whose published meaning may have changed are held as unresolved in identity_splits.
     meta:
       classification: Public
     columns:
@@ -377,6 +432,14 @@ models:
           - not_null
       - name: code_label
         description: The label from the paired silver column where silver has one; else null.
+      - name: identity_rule
+        description: hold_single_latest for a code the owner holds as unresolved; null for a code with one label. A DRG code is never split.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - hold_single_latest
+                  - single_latest
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
@@ -738,7 +801,8 @@ models:
                 dates:
                   - release_date
   - name: dim_measure
-    description: One row per measure identity (fact, measure_key, value_column), plus the unknown member.
+    description: One row per measure identity (fact, measure_key, value_column), plus the unknown member. A measure whose published meaning changed
+      (identity_rule split) has one row per label edition; a measure with a renamed or held label keeps one row with its latest label.
     meta:
       classification: Public
     columns:
@@ -757,7 +821,7 @@ models:
               arguments:
                 natural_key: measure_identity
       - name: measure_identity
-        description: 'The identity text: fact, measure key and value column joined by a vertical bar.'
+        description: 'The identity text: fact, measure key, value column and, for a split measure, the edition start, joined by a vertical bar.'
         data_tests:
           - unique
           - not_null
@@ -785,7 +849,28 @@ models:
         description: First vintage the identity holds, from the seeds; null when none.
       - name: vintage_end
         description: Last vintage the identity holds, from the seeds; null when open.
+      - name: edition_start
+        description: For a split measure, the earliest release date of the edition's label, as text; null for a measure with one identity.
+      - name: edition_end
+        description: For a split measure, the latest release date of the edition's label, as text; null for a measure with one identity.
+      - name: identity_rule
+        description: The rule of the identity_splits seed (split, single_latest or hold_single_latest); null for a measure with one label.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - split
+                  - single_latest
+                  - hold_single_latest
     data_tests:
+      - dbt_utils.expression_is_true:
+          name: dbt_utils_expression_is_true_dim_measure_edition_columns_pair
+          arguments:
+            expression: (edition_start is null) = (edition_end is null)
+      - dbt_utils.expression_is_true:
+          name: dbt_utils_expression_is_true_dim_measure_edition_only_for_split
+          arguments:
+            expression: (edition_start is not null) = coalesce(identity_rule = 'split', false)
       - measure_attribute_branches
       - measure_attributes_match_silver:
           name: measure_attributes_match_silver_dim_measure
@@ -988,7 +1073,8 @@ models:
             severity: warn
             enabled: '{{ var(''check_release_copy_conflicts'', false) }}'
   - name: dim_rurality_code
-    description: One row per (rurality code code system, code) as published, plus the unknown member.
+    description: One row per (rurality code code system, code) as published, plus the unknown member. A RUCC code whose published meaning changed
+      between the 2013 and 2023 editions (identity_rule split) has one row per edition.
     meta:
       classification: Public
     columns:
@@ -1009,7 +1095,7 @@ models:
                 expected: '''<unknown>'''
           - surrogate_key_matches_natural_key:
               arguments:
-                natural_key: concat_ws('|', code_system, code)
+                natural_key: concat_ws('|', code_system, code, edition_start)
       - name: code_system
         description: The silver model and column the code comes from. The unknown member holds '<unknown>'.
         data_tests:
@@ -1019,16 +1105,38 @@ models:
         data_tests:
           - not_null
       - name: code_label
-        description: The label from the paired silver column where silver has one; else null.
+        description: The label from the paired silver column where silver has one; else null. For a split code, the label of the edition.
+      - name: edition_start
+        description: For a split code, the earliest vintage that carries the edition's label; null for a code with one identity.
+      - name: edition_end
+        description: For a split code, the latest vintage that carries the edition's label; null for a code with one identity.
+      - name: identity_rule
+        description: The rule of the identity_splits seed (split, single_latest or hold_single_latest); null for a code with one label.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - split
+                  - single_latest
+                  - hold_single_latest
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns:
               - code_system
               - code
+              - edition_start
+      - dbt_utils.expression_is_true:
+          name: dbt_utils_expression_is_true_dim_rurality_code_edition_columns_pair
+          arguments:
+            expression: (edition_start is null) = (edition_end is null)
+      - dbt_utils.expression_is_true:
+          name: dbt_utils_expression_is_true_dim_rurality_code_edition_only_for_split
+          arguments:
+            expression: (edition_start is not null) = coalesce(identity_rule = 'split', false)
   - name: dim_source
-    description: One row per stored dataset, plus the unknown member (natural key '<unknown>'). The publisher and the label are deferred (amendment
-      A36).
+    description: One row per stored dataset, plus the unknown member (natural key '<unknown>'). The publisher and label come from the source registry
+      through the source_labels seed; a dataset the registry lists as unplaced keeps a null publisher and label.
     meta:
       classification: Public
     columns:
@@ -1059,6 +1167,15 @@ models:
                   - model: stg_bronze__file_copies
                     column: dataset_id
                 space: 'true'
+      - name: publisher
+        description: The publisher of the registry source that places the dataset; null for a dataset the registry lists as unplaced and on the unknown member.
+      - name: label
+        description: The registry title of that source; null for a dataset the registry lists as unplaced and on the unknown member.
+    data_tests:
+      - dbt_utils.expression_is_true:
+          name: dbt_utils_expression_is_true_dim_source_publisher_and_label_together
+          arguments:
+            expression: (publisher is null) = (label is null)
   - name: dim_state
     description: One row per 2-letter postal state code that a fact's state key carries, plus the unknown member (natural key '<unknown>'). A
       value that is not two upper-case letters is not a member and takes the unknown member in the facts.
@@ -1108,6 +1225,18 @@ models:
                   - model: int_rucc_county_codes
                     column: state
                 space: regexp_matches(natural_key, '^[A-Z]{2}$')
+      - name: state_fips
+        description: The 2-character state FIPS code, from the county FIPS of the state's rows in int_rucc_county_codes. Null for a state with no such
+          row (CN and MX) and on the unknown member.
+        data_tests:
+          - unique
+    data_tests:
+      - dbt_utils.expression_is_true:
+          name: dbt_utils_expression_is_true_dim_state_state_fips_two_characters
+          arguments:
+            expression: length(state_fips) = 2
+          config:
+            where: state_fips is not null
   - name: dim_zip
     description: One row per 5-digit ZIP code that a fact's ZIP key carries, plus the unknown member (natural key '<unknown>'). A value that is
       not five digits is not a member and takes the unknown member in the facts.

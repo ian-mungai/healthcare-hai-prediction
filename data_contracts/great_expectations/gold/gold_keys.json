@@ -1650,6 +1650,24 @@
       "severity": "structural"
     },
     {
+      "id": "bridge_county_planning_region.grain",
+      "table": "bridge_county_planning_region",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"old_county_fips\", \"planning_region_fips\", \"member_sha256\" FROM {batch} GROUP BY \"old_county_fips\", \"planning_region_fips\", \"member_sha256\" HAVING count(*) > 1"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "bridge_county_planning_region.key_not_null",
+      "table": "bridge_county_planning_region",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT * FROM {batch} WHERE \"old_county_fips\" IS NULL OR \"member_sha256\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
       "id": "bridge_measure_control.grain",
       "table": "bridge_measure_control",
       "type": "UnexpectedRowsExpectation",

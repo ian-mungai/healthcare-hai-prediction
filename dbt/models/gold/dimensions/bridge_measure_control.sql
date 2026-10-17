@@ -1,6 +1,7 @@
 -- One row per bridge seed row with a non-empty measure key: the many-to-many of a measure identity (with its value column), a vintage range and a
--- registry control. It is the only gold model where registry controls meet the data. A closed control with an empty measure key stays in
--- dim_registry_control only [827] [744].
+-- registry control. A seed row of a measure that the identity_splits seed lists as split maps to every edition of the measure when its vintage range is
+-- empty and to the editions whose years overlap the range otherwise. It is the only gold model where registry controls meet the data. A closed control
+-- with an empty measure key stays in dim_registry_control only [827] [744] [941].
 {%- set bridge_seeds = [
     'registry_measure_sources_bridge',
     'cost_report_measures_bridge',
@@ -40,16 +41,19 @@ seed_rows as (
     {%- endfor %}
 ),
 
-keyed as (
+editions as (
     select
-        measure_control,
-        vintage_start,
-        vintage_end,
-        source_seed,
-        source_row,
-        md5(concat_ws('|', fact, measure_key, value_column)) as measure_sk,
-        md5(measure_control) as registry_control_sk
-    from seed_rows
+        fact,
+        measure_key,
+        value_column,
+        edition_start,
+        edition_end
+    from {{ ref('dim_measure') }}
+    where edition_start is not null
+),
+
+keyed as (
+    {{ gold_measure_control_rows('seed_rows', 'editions') }}
 )
 
 select

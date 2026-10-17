@@ -1194,6 +1194,10 @@ bridge_county_neighbor,edge_key,,false
 bridge_county_neighbor,is_self_link,,false
 bridge_county_neighbor,is_isolated,,false
 bridge_county_neighbor,is_connecticut,,false
+bridge_county_planning_region,old_county_fips,,false
+bridge_county_planning_region,planning_region_fips,,false
+bridge_county_planning_region,tract_count,,false
+bridge_county_planning_region,member_sha256,,false
 bridge_measure_control,measure_sk,,false
 bridge_measure_control,registry_control_sk,,false
 bridge_measure_control,measure_control,,false
@@ -1227,6 +1231,9 @@ dim_condition,code_system,,false
 dim_condition,code,,false
 dim_condition,code_label,,false
 dim_county,county_fips,,false
+dim_county,in_latest_county_list,,false
+dim_county,last_listed_vintage,,false
+dim_county,first_unlisted_vintage,,false
 dim_date,calendar_date,,false
 dim_date,iso_year,,false
 dim_date,iso_week,,false
@@ -1240,6 +1247,7 @@ dim_demographic_group,code_label,,false
 dim_drg,code_system,,false
 dim_drg,code,,false
 dim_drg,code_label,,false
+dim_drg,identity_rule,,false
 dim_ehr_product,code_system,,false
 dim_ehr_product,code,,false
 dim_ehr_product,code_label,,false
@@ -1259,6 +1267,9 @@ dim_measure,unit,,false
 dim_measure,value_kind,,false
 dim_measure,vintage_start,,false
 dim_measure,vintage_end,,false
+dim_measure,edition_start,,false
+dim_measure,edition_end,,false
+dim_measure,identity_rule,,false
 dim_owner_organization,associate_id,,false
 dim_owner_role,code_system,,false
 dim_owner_role,code,,false
@@ -1275,6 +1286,12 @@ dim_release,period_end,,false
 dim_rurality_code,code_system,,false
 dim_rurality_code,code,,false
 dim_rurality_code,code_label,,false
+dim_rurality_code,edition_start,,false
+dim_rurality_code,edition_end,,false
+dim_rurality_code,identity_rule,,false
 dim_source,dataset_id,,false
+dim_source,publisher,,false
+dim_source,label,,false
 dim_state,state_code,,false
+dim_state,state_fips,,false
 dim_zip,zip_code,,false
