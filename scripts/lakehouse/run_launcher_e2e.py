@@ -67,6 +67,8 @@ COMPOSE_ENV_NAMES = {
     "POLARIS_CLIENT_SECRET": "pcs-",
     "POLARIS_READER_CLIENT_ID": "reader-id",
     "POLARIS_READER_CLIENT_SECRET": "prs-",
+    "POLARIS_GOLD_WRITER_CLIENT_ID": "gold-writer-id",
+    "POLARIS_GOLD_WRITER_CLIENT_SECRET": "pgw-",
     "AWS_PROFILE": "fake-profile",
     "AWS_REGION": "us-fake-1",
     "POLARIS_MEMORY_LIMIT": "1024m",
@@ -4598,7 +4600,30 @@ def render_templates(env: Env) -> dict[str, bool]:
         and f["env"]["HAI_SEALED_SHA256"] == digest
         and not any("TOKEN" in name or "SECRET" in name for name in f["env"])
     )
-    # The orchestration templates read their own Compose model; scripts/orchestration/run_stack_e2e.py renders both.
+    sealed_sha = "a" * 64
+    completion: dict[str, Any] = {"sha256": sealed_sha, "file": f"sealed/{sealed_sha}.duckdb", "inode": 1, "device": 1}
+    (run_folder / "sealed").mkdir(exist_ok=True)
+    (run_folder / completion["file"]).write_bytes(b"sealed")
+    (run_folder / "publish").mkdir(exist_ok=True)
+    (run_folder / "publish" / "consumer_result.json").write_bytes(b"{}\n")
+    accepted = hashlib.sha256(b"{}\n").hexdigest()
+    f = render("gold_export", [], {}, run_folder=run_folder, completion=completion, run_mode="publish_fixture")
+    out["gold_export"] = (
+        f["network"] == "none"
+        and f["entrypoint"] == wrapped(["python", "-m", "scripts.lakehouse.gold_export"])
+        and f["cmd"] == ["--run", PINS_RUN, "--sealed-sha256", sealed_sha]
+        and not any(name.startswith(("AWS", "POLARIS")) for name in f["env"])
+    )
+    f = render(
+        "gold_publish", [], {"job": "commit_publish"}, run_folder=run_folder, completion=completion, run_mode="publish_fixture", accepted_result=accepted
+    )
+    out["gold_publish"] = (
+        f["network"] == network
+        and f["env"]["POLARIS_CLIENT_ID"] == secrets_file["POLARIS_GOLD_WRITER_CLIENT_ID"]
+        and f["env"]["POLARIS_CLIENT_SECRET"] == secrets_file["POLARIS_GOLD_WRITER_CLIENT_SECRET"]
+        and f["cmd"] == ["commit", "--run", PINS_RUN, "--mode", "publish_fixture", "--sealed-sha256", sealed_sha, "--accepted-result-sha256", accepted]
+        and f["entrypoint"] == wrapped(["python", "-m", "scripts.lakehouse.gold_publish"])
+    )
     out["every template of the table was rendered"] = set(launcher.TEMPLATES) - {"orchestration_service", "orchestration_check", "orchestration_dump"} <= {
         "fixture_dbt",
         "fixture_init",
@@ -4613,6 +4638,8 @@ def render_templates(env: Env) -> dict[str, bool]:
         "spark_read",
         "spark_write",
         "spark_e2e",
+        "gold_export",
+        "gold_publish",
         "catalog_service",
         "probe",
     }

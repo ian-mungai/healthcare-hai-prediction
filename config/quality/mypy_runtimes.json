@@ -24,6 +24,10 @@
       "runtime": "spark",
       "reason": "Library stubs not installed for \"openpyxl\"; Library stubs not installed for \"xlrd\"; Cannot find implementation or library stub for module named \"pyreadstat\"; Cannot find implementation or library stub for module named \"pdfplumber\""
     },
+    "scripts/lakehouse/gold_export.py": {
+      "runtime": "quality",
+      "reason": "Cannot find implementation or library stub for module named \"duckdb\""
+    },
     "scripts/lakehouse/run_bronze_e2e.py": {
       "runtime": "spark",
       "reason": "Library stubs not installed for \"openpyxl\""

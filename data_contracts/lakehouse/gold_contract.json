@@ -9507,6 +9507,441 @@
       }
     }
   },
+  "publish": {
+    "backup_prefix": "lakehouse/catalog_backups/",
+    "backup_prefix_note": "Owner decision of Oct 13 2026: one catalog backup per publish run under this prefix, named catalog_backup_<run ID>.json. Owner decision 5 allows S3 writes under it.",
+    "branch_prefix": "publish_",
+    "maintenance": {
+      "expire_after_days": 7,
+      "orphan_after_days": 7,
+      "retain_sets": 3
+    },
+    "namespaces": {
+      "publish_fixture": "gold_e2e",
+      "real": "gold"
+    },
+    "runs_table": "publish_runs",
+    "tables": {
+      "bridge_county_neighbor": {
+        "kind": "bridge",
+        "merge_key": [
+          "edge_key"
+        ]
+      },
+      "bridge_measure_control": {
+        "kind": "bridge",
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "bridge_zip_county": {
+        "kind": "bridge",
+        "merge_key": [
+          "hud_row_key"
+        ]
+      },
+      "dim_census_tract": {
+        "kind": "dimension",
+        "merge_key": [
+          "census_tract_sk"
+        ]
+      },
+      "dim_change_type": {
+        "kind": "dimension",
+        "merge_key": [
+          "change_type_sk"
+        ]
+      },
+      "dim_condition": {
+        "kind": "dimension",
+        "merge_key": [
+          "condition_sk"
+        ]
+      },
+      "dim_county": {
+        "kind": "dimension",
+        "merge_key": [
+          "county_sk"
+        ]
+      },
+      "dim_date": {
+        "kind": "dimension",
+        "merge_key": [
+          "date_sk"
+        ]
+      },
+      "dim_demographic_group": {
+        "kind": "dimension",
+        "merge_key": [
+          "demographic_group_sk"
+        ]
+      },
+      "dim_drg": {
+        "kind": "dimension",
+        "merge_key": [
+          "drg_sk"
+        ]
+      },
+      "dim_ehr_product": {
+        "kind": "dimension",
+        "merge_key": [
+          "ehr_product_sk"
+        ]
+      },
+      "dim_enrollment": {
+        "kind": "dimension",
+        "merge_key": [
+          "enrollment_sk"
+        ]
+      },
+      "dim_footnote": {
+        "kind": "dimension",
+        "merge_key": [
+          "footnote_sk"
+        ]
+      },
+      "dim_hospital": {
+        "kind": "dimension",
+        "merge_key": [
+          "hospital_sk"
+        ]
+      },
+      "dim_measure": {
+        "kind": "dimension",
+        "merge_key": [
+          "measure_sk"
+        ]
+      },
+      "dim_owner_organization": {
+        "kind": "dimension",
+        "merge_key": [
+          "owner_organization_sk"
+        ]
+      },
+      "dim_owner_role": {
+        "kind": "dimension",
+        "merge_key": [
+          "owner_role_sk"
+        ]
+      },
+      "dim_registry_control": {
+        "kind": "dimension",
+        "merge_key": [
+          "registry_control_sk"
+        ]
+      },
+      "dim_release": {
+        "kind": "dimension",
+        "merge_key": [
+          "release_sk"
+        ]
+      },
+      "dim_rurality_code": {
+        "kind": "dimension",
+        "merge_key": [
+          "rurality_code_sk"
+        ]
+      },
+      "dim_source": {
+        "kind": "dimension",
+        "merge_key": [
+          "source_sk"
+        ]
+      },
+      "dim_state": {
+        "kind": "dimension",
+        "merge_key": [
+          "state_sk"
+        ]
+      },
+      "dim_zip": {
+        "kind": "dimension",
+        "merge_key": [
+          "zip_sk"
+        ]
+      },
+      "fct_acs_county_value": {
+        "kind": "fact",
+        "merge_key": [
+          "acs_value_key"
+        ]
+      },
+      "fct_bls_county_series": {
+        "kind": "fact",
+        "merge_key": [
+          "bls_row_key"
+        ]
+      },
+      "fct_cc_window_hold": {
+        "kind": "fact",
+        "merge_key": [
+          "hold_key"
+        ]
+      },
+      "fct_cmi_observation": {
+        "kind": "fact",
+        "merge_key": [
+          "cmi_row_key"
+        ]
+      },
+      "fct_complications_deaths_window": {
+        "kind": "fact",
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "fct_cost_report": {
+        "kind": "fact",
+        "merge_key": [
+          "rpt_rec_num"
+        ]
+      },
+      "fct_enrollment_release": {
+        "kind": "fact",
+        "merge_key": [
+          "enrollment_key"
+        ]
+      },
+      "fct_gv_county_value": {
+        "kind": "fact",
+        "merge_key": [
+          "gv_value_key"
+        ]
+      },
+      "fct_hac_program_year": {
+        "kind": "fact",
+        "merge_key": [
+          "program_key"
+        ]
+      },
+      "fct_hai_hospital_window": {
+        "kind": "fact",
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "fct_hai_national_window": {
+        "kind": "fact",
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "fct_hai_state_window": {
+        "kind": "fact",
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "fct_hai_window_hold": {
+        "kind": "fact",
+        "merge_key": [
+          "hold_key"
+        ]
+      },
+      "fct_hcahps_window": {
+        "kind": "fact",
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "fct_hgi_release": {
+        "kind": "fact",
+        "merge_key": [
+          "release_key"
+        ]
+      },
+      "fct_hhs_capacity_week": {
+        "kind": "fact",
+        "merge_key": [
+          "week_key"
+        ]
+      },
+      "fct_hospital_owner_release": {
+        "kind": "fact",
+        "merge_key": [
+          "owner_row_key"
+        ]
+      },
+      "fct_hpsa_component": {
+        "kind": "fact",
+        "merge_key": [
+          "hpsa_row_key"
+        ]
+      },
+      "fct_hrrp_window": {
+        "kind": "fact",
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "fct_hsa_zip_cases": {
+        "kind": "fact",
+        "merge_key": [
+          "hsa_row_key"
+        ]
+      },
+      "fct_hud_zip_county_hold": {
+        "kind": "fact",
+        "merge_key": [
+          "hud_row_key"
+        ]
+      },
+      "fct_impact_hold": {
+        "kind": "fact",
+        "merge_key": [
+          "hold_key"
+        ]
+      },
+      "fct_ipps_impact_value": {
+        "kind": "fact",
+        "merge_key": [
+          "value_key"
+        ]
+      },
+      "fct_maternal_health_window": {
+        "kind": "fact",
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "fct_medicare_inpatient_drg": {
+        "kind": "fact",
+        "merge_key": [
+          "drg_key"
+        ]
+      },
+      "fct_medicare_inpatient_provider": {
+        "kind": "fact",
+        "merge_key": [
+          "provider_key"
+        ]
+      },
+      "fct_mmd_prevalence": {
+        "kind": "fact",
+        "merge_key": [
+          "mmd_row_key"
+        ]
+      },
+      "fct_mua_component": {
+        "kind": "fact",
+        "merge_key": [
+          "mua_row_key"
+        ]
+      },
+      "fct_occupational_mix_survey": {
+        "kind": "fact",
+        "merge_key": [
+          "survey_row_key"
+        ]
+      },
+      "fct_onc_attestation": {
+        "kind": "fact",
+        "merge_key": [
+          "attestation_key"
+        ]
+      },
+      "fct_onc_ehr_product": {
+        "kind": "fact",
+        "merge_key": [
+          "linkage_key"
+        ]
+      },
+      "fct_ownership_change": {
+        "kind": "fact",
+        "merge_key": [
+          "event_key"
+        ]
+      },
+      "fct_ownership_change_hold": {
+        "kind": "fact",
+        "merge_key": [
+          "hold_key"
+        ]
+      },
+      "fct_places_county_value": {
+        "kind": "fact",
+        "merge_key": [
+          "places_row_key"
+        ]
+      },
+      "fct_pos_snapshot": {
+        "kind": "fact",
+        "merge_key": [
+          "snapshot_key"
+        ]
+      },
+      "fct_ruca_code": {
+        "kind": "fact",
+        "merge_key": [
+          "ruca_row_key"
+        ]
+      },
+      "fct_rucc_county": {
+        "kind": "fact",
+        "merge_key": [
+          "rucc_key"
+        ]
+      },
+      "fct_sahie_county_value": {
+        "kind": "fact",
+        "merge_key": [
+          "sahie_row_key"
+        ]
+      },
+      "fct_saipe_county_estimate": {
+        "kind": "fact",
+        "merge_key": [
+          "saipe_row_key"
+        ]
+      },
+      "fct_svi_county_value": {
+        "kind": "fact",
+        "merge_key": [
+          "svi_value_key"
+        ]
+      },
+      "fct_timely_effective_care_window": {
+        "kind": "fact",
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "fct_unplanned_visits_window": {
+        "kind": "fact",
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "fct_validation_program_hold": {
+        "kind": "fact",
+        "merge_key": [
+          "hold_key"
+        ]
+      },
+      "fct_validation_window_hold": {
+        "kind": "fact",
+        "merge_key": [
+          "hold_key"
+        ]
+      },
+      "fct_vbp_program_year": {
+        "kind": "fact",
+        "merge_key": [
+          "program_key"
+        ]
+      },
+      "fct_wonder_county_deaths": {
+        "kind": "fact",
+        "merge_key": [
+          "wonder_row_key"
+        ]
+      }
+    },
+    "writer_principal": "gold_writer"
+  },
   "rules": {
     "columns": "Every silver column lands once, under its silver name; no value is stored twice (failure mode 744). Controls appear only in bridge_measure_control.",
     "grain": "A fact's rows equal its silver model's rows; grain test on the silver unique key; rows and content fingerprint equal the silver model's over the silver columns (gold failure mode 743).",
