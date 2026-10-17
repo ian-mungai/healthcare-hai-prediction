@@ -1357,6 +1357,56 @@ def release_copy_warning_refused(env: Env) -> dict[str, bool]:
     }
 
 
+@case("seal_concurrent", "unpatched")
+def seal_concurrent(env: Env) -> dict[str, bool]:
+    """WV3-015: two seals of one run at the same time (the launcher's seal worker and a direct caller) do not break each other. The second waits for the
+    first and returns the same sealed copy. The first seal pauses between its copy and its rename: there an unlocked second seal removed the first's
+    temporary copy or made the sealed folder read-only, so the first failed with FileNotFoundError or PermissionError."""
+    run, fakes = prepare(env, builds=[{"mode": "success", "seconds": 0.3}])
+    reply = dbt_submit(env, run, "full", ["build"])
+    env.wait_ended(reply["attempt_id"], 30)
+    entry = bound(env, run_record(env), reply["attempt_id"])
+    folder = run_folder(env)
+    digest = hashlib.sha256((folder / "staging.duckdb").read_bytes()).hexdigest()
+    module = provenance()
+    copy_of = module.copy_into
+    paused = threading.Event()
+    results: dict[str, Any] = {}
+
+    def slow_copy(source: int, sealed_folder: int, name: str) -> int:
+        """Pause the first seal once, after its temporary copy exists and before its rename."""
+        descriptor = copy_of(source, sealed_folder, name)
+        if threading.current_thread().name == "seal-first" and not paused.is_set():
+            paused.set()
+            time.sleep(1.0)
+        return descriptor
+
+    def seal_as(name: str) -> None:
+        try:
+            results[name] = launcher.seal(entry)
+        except Exception as error:
+            results[name] = error
+
+    with mock.patch.object(module, "copy_into", slow_copy):
+        first = threading.Thread(target=seal_as, args=("first",), name="seal-first")
+        first.start()
+        paused.wait(30)
+        second = threading.Thread(target=seal_as, args=("second",), name="seal-second")
+        second.start()
+        first.join(60)
+        second.join(60)
+    sealed = folder / "sealed"
+    records = [results.get(name) for name in ("first", "second")]
+    return {
+        "both threads ended": not first.is_alive() and not second.is_alive(),
+        "the first seal succeeded": isinstance(records[0], dict),
+        "the second seal succeeded": isinstance(records[1], dict),
+        "both name the build file's bytes": all(isinstance(record, dict) and record.get("sha256") == digest for record in records),
+        "no temporary copy is left": not any(item.name.endswith(".clone") for item in sealed.iterdir()),
+        "the sealed folder is read-only": stat.S_IMODE(sealed.stat().st_mode) == 0o555,
+    }
+
+
 @case("seal_clone_replaced_path", "unpatched")
 def seal_clone_replaced_path(env: Env) -> dict[str, bool]:
     """923 (D1 section 10 items 2 and 5, review delta 1 finding 4): once the seal holds its descriptors, a run folder or a sealed folder that is replaced by a
@@ -2362,6 +2412,7 @@ ALL_CASES = (
     stale_artifacts_test,
     seal_invocation_mismatch,
     seal_binding,
+    seal_concurrent,
     snapshot_link_swap,
     seal_descriptor_traversal,
     artifacts_cleared,
