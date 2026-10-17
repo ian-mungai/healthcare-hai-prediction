@@ -46,6 +46,8 @@ mlruns/
 !dbt/seeds/gold/*.csv
 # Formula recipes of the gold control split are committed.
 !features/recipes/*.csv
+# The approved identity classification list (codes, classes, statuses and public citations only) is committed.
+!config/lakehouse/identity_classification.csv
 *.jsonl
 
 # Data collection code, configuration and tests are tracked so CI can run the acquisition checks;

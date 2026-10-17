@@ -2244,11 +2244,17 @@ GROUP_C1 = (
         "RUCC__c23",
         "2023-rural-urban-continuum-codes.csv",
         sha("rc1"),
-        8,
+        14,
         records=(
             rucc("01001", "AL", "Autauga County", "Population_2020", "58805"),
             rucc("01001", "AL", "Autauga County", "RUCC_2023", "2"),
             rucc("01001", "AL", "Autauga County", "Description", "Metro - Counties in metro areas of 250,000 to 1 million population"),
+            rucc("01003", "AL", "Baldwin County", "Population_2020", "231767"),
+            rucc("01003", "AL", "Baldwin County", "RUCC_2023", "6"),
+            rucc("01003", "AL", "Baldwin County", "Description", "Nonmetro - Urban population of 5,000 to 20,000, adjacent to a metro area"),
+            rucc("09190", "CT", "Western Connecticut Planning Region", "Population_2020", "828000"),
+            rucc("09190", "CT", "Western Connecticut Planning Region", "RUCC_2023", "1"),
+            rucc("09190", "CT", "Western Connecticut Planning Region", "Description", "Metro - Counties in metro areas of 1 million population or more"),
             rucc("09120", "CT", "Greater Bridgeport Planning Region", "Population_2020", "902412"),
             rucc("09120", "CT", "Greater Bridgeport Planning Region", "RUCC_2023", "1"),
             rucc("09120", "CT", "Greater Bridgeport Planning Region", "Description", "Metro - Counties in metro areas of 1 million population or more"),
@@ -2262,11 +2268,12 @@ GROUP_C1 = (
         "RUCC__s13",
         "2013-rural-urban-continuum-codes.xls",
         sha("rs1"),
-        4,
+        5,
         content=(
             f"Rural-urban Continuum Code 2013:{RUCC_2013_HEADER}",
             "Rural-urban Continuum Code 2013:01001|AL|Autauga County|54571.0|2.0|Metro - Counties in metro areas of 250,000 to 1 million population",
             "Rural-urban Continuum Code 2013:02105|AK|Hoonah-Angoon Census Area|2150.0||",
+            "Rural-urban Continuum Code 2013:01003|AL|Baldwin County|182265.0|6.0|Nonmetro - Urban population of 2,500 to 19,999, adjacent to a metro area",
             "Documentation:Rural-urban continuum codes, 2013",
         ),
     ),
@@ -2288,10 +2295,12 @@ GROUP_C1 = (
         "RUCA__t20",
         "2020-rural-urban-commuting-area-codes-census-tracts.csv",
         sha("rt1"),
-        3,
+        5,
         records=(
             cc(tractfips20="01001020100", countyfips20="01001", countyfips23="01001", statefips20="01", primaryruca="1", secondaryruca="1"),
             cc(tractfips20="09001010101", countyfips20="09001", countyfips23="09190", statefips20="09", primaryruca="2", secondaryruca="2.1"),
+            cc(tractfips20="09001010102", countyfips20="09001", countyfips23="09120", statefips20="09", primaryruca="1", secondaryruca="1"),
+            cc(tractfips20="09001990000", countyfips20="09001", countyfips23="", statefips20="09", primaryruca="", secondaryruca=""),
             cc(tractfips20="01001990000", countyfips20="01001", countyfips23="01001", statefips20="01", primaryruca="99", secondaryruca="99"),
         ),
     ),
@@ -3177,6 +3186,105 @@ OM_ROWS = (
     "010009\tinvalid\t12/31/2022\t1200\t100\t20\t25\t5\t150\t12",
 )
 
+DATES_2021 = {"start_date": "01/01/2021", "end_date": "12/31/2021"}
+DATES_2024 = {"start_date": "01/01/2024", "end_date": "12/31/2024"}
+GROUP_G4 = (
+    Stored(
+        "cms_medicare_inpatient_by_drg",
+        "md2",
+        "CMS_MUP_DRG__b",
+        "MUP_INP_RY23_P03_V10_DY22_PrvSvc.CSV",
+        sha("md2"),
+        1,
+        records=(
+            cc(
+                rndrng_prvdr_ccn="010001",
+                drg_cd="068",
+                drg_desc="NONSPECIFIC CVA AND PRECEREBRAL OCCLUSION WITHOUT INFARCTION WITHOUT MCC",
+                tot_dschrgs="14",
+            ),
+        ),
+    ),
+    Stored(
+        "cms_medicare_inpatient_by_drg",
+        "md3",
+        "CMS_MUP_DRG__c",
+        "MUP_INP_RY26_P03_V10_DY24_PrvSvc.CSV",
+        sha("md3"),
+        1,
+        records=(cc(rndrng_prvdr_ccn="010001", drg_cd="068", drg_desc="PRECEREBRAL OCCLUSION WITHOUT INFARCTION WITHOUT MCC", tot_dschrgs="11"),),
+    ),
+    Stored(
+        "cms_cc_complications_and_deaths_hospital",
+        "de_g4a",
+        "2024-07-31",
+        "Complications_and_Deaths-Hospital_2024-07.csv",
+        sha("g4a"),
+        2,
+        records=(
+            cc(facility_id="010001", measure_id="PSI_08", measure_name="In-hospital fall with hip fracture rate", score="0.12", **DATES_2021),
+            cc(facility_id="010001", measure_id="PSI_09", measure_name="Perioperative hemorrhage or hematoma rate", score="3.10", **DATES_2021),
+        ),
+    ),
+    Stored(
+        "cms_cc_complications_and_deaths_hospital",
+        "de_g4b",
+        "2026-08-13",
+        "Complications_and_Deaths-Hospital_2026-08.csv",
+        sha("g4b"),
+        2,
+        records=(
+            cc(facility_id="010001", measure_id="PSI_08", measure_name="In-hospital fall-associated fracture rate", score="0.15", **DATES_2024),
+            cc(facility_id="010001", measure_id="PSI_09", measure_name="Postoperative hemorrhage or hematoma rate", score="2.90", **DATES_2024),
+        ),
+    ),
+    Stored(
+        "cms_cc_timely_and_effective_care_hospital",
+        "te_g4a",
+        "2022-10-06",
+        "Timely_and_Effective_Care-Hospital_2022-10.csv",
+        sha("g4c"),
+        2,
+        records=(
+            cc(
+                facility_id="010001",
+                measure_id="HCP_COVID_19",
+                measure_name="Percentage of healthcare personnel who completed COVID-19 primary vaccination series",
+                score="81",
+                **DATES_2021,
+            ),
+            cc(facility_id="010001", measure_id="ED_1b", measure_name="ED1", score="270", **DATES_2018),
+        ),
+    ),
+    Stored(
+        "cms_cc_timely_and_effective_care_hospital",
+        "te_g4b",
+        "2024-10-30",
+        "Timely_and_Effective_Care-Hospital_2024-10.csv",
+        sha("g4d"),
+        2,
+        records=(
+            cc(
+                facility_id="010001",
+                measure_id="HCP_COVID_19",
+                measure_name="Percentage of healthcare personnel who are up to date with COVID-19 vaccinations",
+                score="76",
+                **DATES_2024,
+            ),
+            cc(
+                facility_id="010001",
+                measure_id="ED_1b",
+                measure_name=(
+                    "Average (median) time patients spent in the emergency department, before they were admitted to the hospital as an inpatient "
+                    "A lower number of minutes is better"
+                ),
+                score="265",
+                **DATES_2020,
+            ),
+        ),
+    ),
+)
+
 BASE = (
     Stored(
         "cms_occupational_mix_sheet_rows",
@@ -3408,6 +3516,7 @@ BASE = (
     *GROUP_AL2,
     *GROUP_AL3B,
     *GROUP_AL5,
+    *GROUP_G4,
 )
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
@@ -5019,6 +5128,9 @@ def geography_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("2023", "09001", "", "", "957419.0", "true"),
             ("2013", "01001", "2", "2.0", "54571.0", "false"),
             ("2013", "02105", "", "", "2150.0", "false"),
+            ("2013", "01003", "6", "6.0", "182265.0", "false"),
+            ("2023", "01003", "6", "6", "231767.0", "false"),
+            ("2023", "09190", "1", "1", "828000.0", "true"),
         ]
     )
     checks["ruca_matches_expected"] = base.get("ruca") == sorted(
@@ -5026,6 +5138,8 @@ def geography_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("2020", "tract", "01001020100", "01001", "1", "1", "1", "1"),
             ("2020", "tract", "09001010101", "09001", "2", "2.1", "2", "2.1"),
             ("2020", "tract", "01001990000", "01001", "", "", "99", "99"),
+            ("2020", "tract", "09001010102", "09001", "1", "1", "1", "1"),
+            ("2020", "tract", "09001990000", "09001", "", "", "", ""),
             ("2020", "zip", "00501", "", "1", "1", "1", "1"),
             ("2020", "zip", "99950", "", "10", "10.3", "10", "10.3"),
             ("2010", "zip", "00501", "", "1", "1.1", "1", "1.1"),
@@ -5366,6 +5480,10 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("deaths", "010001", "PSI_90", "2022-01-01", "1.01", "de1"),
             ("deaths", "010001", "PSI_90_SAFETY", "2022-01-01", "0.99", "de1"),
             ("deaths", "010001", "PSI_13", "2022-01-01", "4.52", "de1"),
+            ("deaths", "010001", "PSI_08", "2021-01-01", "0.12", "g4a"),
+            ("deaths", "010001", "PSI_08", "2024-01-01", "0.15", "g4b"),
+            ("deaths", "010001", "PSI_09", "2021-01-01", "3.10", "g4a"),
+            ("deaths", "010001", "PSI_09", "2024-01-01", "2.90", "g4b"),
             ("hrrp", "010001", "READM-30-HF-HRRP", "2020-07-01", "1.0123", "hr1"),
             ("hrrp", "010003", "READM-30-AMI-HRRP", "2020-07-01", "N/A", "hr1"),
         ]
@@ -5386,6 +5504,10 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("deaths", "010001", "PSI_90", "PSI_90", "2022-01-01", "1.01"),
             ("deaths", "010001", "PSI_90_SAFETY", "PSI_90_SAFETY", "2022-01-01", "0.99"),
             ("deaths", "010001", "PSI_13", "PSI_13", "2022-01-01", "4.52"),
+            ("deaths", "010001", "PSI_08", "PSI_08", "2021-01-01", "0.12"),
+            ("deaths", "010001", "PSI_08", "PSI_08", "2024-01-01", "0.15"),
+            ("deaths", "010001", "PSI_09", "PSI_09", "2021-01-01", "3.1"),
+            ("deaths", "010001", "PSI_09", "PSI_09", "2024-01-01", "2.9"),
             ("hrrp", "010001", "READM-30-HF-HRRP", "READM-30-HF-HRRP", "2020-07-01", "1.0123"),
             ("hrrp", "010003", "READM-30-AMI-HRRP", "READM-30-AMI-HRRP", "2020-07-01", ""),
         ]
@@ -5721,6 +5843,10 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     # [318] to [322] Care Compare windows as for HAI: the latest release wins, conflicts and unparsed dates are held.
     checks["timely_windows_match_expected"] = base.get("timely") == [
         ("010001", "EDV", "2020-01-01", "2020-12-31", "Low", "", "z6"),
+        ("010001", "ED_1b", "2018-01-01", "2018-12-31", "270", "", "g4"),
+        ("010001", "ED_1b", "2020-01-01", "2020-12-31", "265", "", "g4"),
+        ("010001", "HCP_COVID_19", "2021-01-01", "2021-12-31", "81", "", "g4"),
+        ("010001", "HCP_COVID_19", "2024-01-01", "2024-12-31", "76", "", "g4"),
         ("010001", "OP_18b", "2018-01-01", "2018-12-31", "130", "", "z6"),
         ("010001", "OP_18b", "2020-01-01", "2020-12-31", "145", "", "z6"),
         ("010001", "OP_18b", "2022-01-01", "2022-12-31", "152", "310", "w2"),
@@ -5814,10 +5940,12 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("2024", "2026", "010001", "900.0", "1350.0", "", ""),
     ]
     checks["mup_drg_match_expected"] = base.get("mup_drg") == [
+        ("2022", "010001", "068", "14.0"),
         ("2023", "010001", "470", "100.0"),
         ("2023", "010001", "871", "60.0"),
         ("2023", "010001", "872", "30.0"),
         ("2023", "010005", "871", "12.0"),
+        ("2024", "010001", "068", "11.0"),
     ]
     # [360] to [363] Registry measures by the seed: C084 per race field, a suppressed count gives no row, a missing
     # denominator gives null, the sepsis share from DRG 870 to 872, held controls give no rows.

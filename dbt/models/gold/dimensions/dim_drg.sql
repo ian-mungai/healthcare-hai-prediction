@@ -1,6 +1,7 @@
 -- One row per (diagnosis-related group code system, code) as published, plus the unknown member. code_system names the silver model and column;
 -- code_label is the paired label column where silver has one, else null. A code with two different labels keeps the label of its latest data
--- year (amendment A48); a code with a label and a null label keeps the label [824] [750].
+-- year (amendment A48); a code with a label and a null label keeps the label [824] [750]. Every DRG code has one identity, whether or not
+-- its label changed; identity_rule says hold_single_latest for the codes the identity_splits seed holds as unresolved [940].
 {%- set code_systems = [
     {'model': 'int_mup_drg_discharges', 'code': 'drg_cd', 'label': 'drg_desc', 'order': 'data_year'},
 ] %}
@@ -59,19 +60,32 @@ ranked as (
     select * from unlabeled
 ),
 
-final as (
+identity_rules as (
     select
-        md5(concat_ws('|', code_system, code)) as drg_sk,
         code_system,
         code,
-        code_label
+        identity_rule
+    from {{ ref('identity_splits') }}
+    where dimension = 'dim_drg'
+),
+
+final as (
+    select
+        md5(concat_ws('|', ranked.code_system, ranked.code)) as drg_sk,
+        ranked.code_system,
+        ranked.code,
+        ranked.code_label,
+        identity_rules.identity_rule
     from ranked
+    left join identity_rules
+        on ranked.code_system = identity_rules.code_system and ranked.code = identity_rules.code
     union all
     select
         md5('<unknown>') as drg_sk,
         '<unknown>' as code_system,
         '<unknown>' as code,
-        cast(null as varchar) as code_label
+        cast(null as varchar) as code_label,
+        cast(null as varchar) as identity_rule
 )
 
 select * from final

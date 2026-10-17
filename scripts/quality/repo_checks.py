@@ -36,6 +36,7 @@ DATA_EXTENSIONS = {".csv", ".tsv", ".parquet", ".xlsx", ".xls", ".jsonl", ".ndjs
 # Folders declared for data files: synthetic test fixtures, the reviewed dbt seeds and the formula recipes, which hold file
 # labels and checksums from the S3 manifests and rule definitions, never source data values.
 DATA_FOLDERS = ("tests/fixtures/", "dbt/seeds/", "features/recipes/")
+DATA_FILES = ("config/lakehouse/identity_classification.csv",)
 MAX_BYTES = 5 * 1024 * 1024
 
 NOQA = re.compile(r"#\s*" + "no" + r"qa\b(?::\s*(?P<codes>[A-Z]+\d+(?:\s*,\s*[A-Z]+\d+)*))?(?P<rest>.*)", re.IGNORECASE)
@@ -213,10 +214,10 @@ def credential_files(paths: list[str]) -> list[Finding]:
 
 
 def data_files(paths: list[str]) -> list[Finding]:
-    """Block data files outside the declared folder and any file over 5 MB unless Git LFS stores it."""
+    """Block data files outside the declared folders and files and any file over 5 MB unless Git LFS stores it."""
     findings = []
     for path in paths:
-        if Path(path).suffix.lower() in DATA_EXTENSIONS and not path.startswith(DATA_FOLDERS):
+        if Path(path).suffix.lower() in DATA_EXTENSIONS and not (path.startswith(DATA_FOLDERS) or path in DATA_FILES):
             fix = f"keep data in S3; put synthetic samples in {', '.join(DATA_FOLDERS)}; never commit real personal data"
             findings.append(Finding(path, "data file outside the declared folder", f"{POLICY}: data files", fix))
         if os.path.getsize(path) > MAX_BYTES and "filter: lfs" not in git("check-attr", "filter", "--", path):

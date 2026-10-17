@@ -2,7 +2,9 @@
 -- non-empty measure key, plus, for each long fact, every distinct published measure key of its silver model paired with each value column the
 -- fact's bridge rows name. A column no bridge row names is not an identity. measure_label is the silver model's measure_name where it has one;
 -- unit is the value_unit of int_mmd_prevalence; value_kind is the type class of the silver column (number, text, boolean or date; a list of text
--- counts as text); the vintage range comes from the seeds [824] [828].
+-- counts as text); the vintage range comes from the seeds [824] [828]. A measure that the identity_splits seed lists as split (its published meaning
+-- changed) has one row per published name: edition_start and edition_end are the first and last release date that carry the name, and the identity text
+-- and key add the edition start. Every other row has a null edition and keeps the identity text and key it had before editions existed [940] [941].
 {%- set bridge_seeds = [
     'registry_measure_sources_bridge',
     'cost_report_measures_bridge',
@@ -356,8 +358,79 @@ value_kinds as (
     {%- endfor %}
 ),
 
-final as (
+identity_rules as (
+    select
+        fact,
+        code as measure_key,
+        identity_rule
+    from {{ ref('identity_splits') }}
+    where dimension = 'dim_measure'
+),
+
+-- One edition per published name of a split measure; the name's first and last release date bound it.
+editions as (
+    select
+        names_published.fact,
+        names_published.measure_key,
+        names_published.measure_name as edition_label,
+        cast(min(names_published.release_date) as varchar) as edition_start,
+        cast(max(names_published.release_date) as varchar) as edition_end
+    from names_published
+    inner join identity_rules
+        on names_published.fact = identity_rules.fact and names_published.measure_key = identity_rules.measure_key
+    where identity_rules.identity_rule = 'split' and names_published.release_date is not null
+    group by names_published.fact, names_published.measure_key, names_published.measure_name
+),
+
+base as (
     {{ gold_measure_rows('identities', 'names', 'units', 'value_kinds') }}
+),
+
+ordinary as (
+    select
+        base.measure_sk,
+        base.measure_identity,
+        base.fact,
+        base.measure_key,
+        base.value_column,
+        base.measure_label,
+        base.unit,
+        base.value_kind,
+        base.vintage_start,
+        base.vintage_end,
+        cast(null as varchar) as edition_start,
+        cast(null as varchar) as edition_end,
+        identity_rules.identity_rule
+    from base
+    left join identity_rules
+        on base.fact = identity_rules.fact and base.measure_key = identity_rules.measure_key
+    where identity_rules.identity_rule is distinct from 'split'
+),
+
+split_rows as (
+    select
+        md5(concat_ws('|', base.fact, base.measure_key, base.value_column, editions.edition_start)) as measure_sk,
+        concat_ws('|', base.fact, base.measure_key, base.value_column, editions.edition_start) as measure_identity,
+        base.fact,
+        base.measure_key,
+        base.value_column,
+        editions.edition_label as measure_label,
+        base.unit,
+        base.value_kind,
+        base.vintage_start,
+        base.vintage_end,
+        editions.edition_start,
+        editions.edition_end,
+        'split' as identity_rule
+    from base
+    inner join editions
+        on base.fact = editions.fact and base.measure_key = editions.measure_key
+),
+
+final as (
+    select * from ordinary
+    union all
+    select * from split_rows
     union all
     select
         md5('<unknown>') as measure_sk,
@@ -369,7 +442,10 @@ final as (
         cast(null as varchar) as unit,
         cast(null as varchar) as value_kind,
         cast(null as varchar) as vintage_start,
-        cast(null as varchar) as vintage_end
+        cast(null as varchar) as vintage_end,
+        cast(null as varchar) as edition_start,
+        cast(null as varchar) as edition_end,
+        cast(null as varchar) as identity_rule
 )
 
 select * from final

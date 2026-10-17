@@ -98,6 +98,9 @@ lakehouse_checks() {
   # Reference seeds of the gold control bridge, the formula recipes and the repeatable negative cases of their check.
   "$python_bin" -m scripts.lakehouse.bridge_references --check
   "$python_bin" -m scripts.lakehouse.run_bridge_references_e2e
+  "$python_bin" -m scripts.lakehouse.identity_splits --check
+  "$python_bin" -m scripts.lakehouse.source_labels --check
+  "$python_bin" -m scripts.lakehouse.run_identity_seeds_e2e
   # The gold Great Expectations suites must match the gold contract they are generated from.
   "$python_bin" -m scripts.lakehouse.gold_checks check-suites
   # The silver suites must match the kept-model contract, the moved checks and the baselines they are generated from.

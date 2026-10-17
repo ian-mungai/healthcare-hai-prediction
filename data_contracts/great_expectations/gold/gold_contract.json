@@ -2174,6 +2174,15 @@
       "severity": "structural"
     },
     {
+      "id": "bridge_county_planning_region.types",
+      "table": "bridge_county_planning_region",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('old_county_fips', 'VARCHAR'), ('planning_region_fips', 'VARCHAR'), ('tract_count', 'BIGINT'), ('member_sha256', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'bridge_county_planning_region' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
       "id": "bridge_measure_control.types",
       "table": "bridge_measure_control",
       "type": "UnexpectedRowsExpectation",
