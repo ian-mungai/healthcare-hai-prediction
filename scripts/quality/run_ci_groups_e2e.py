@@ -187,12 +187,11 @@ def docs_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     checks = {
         "exit_zero": code == 0,
         "reached_the_end": PASS_LINES[part] in log,
-        "conditional_groups_skipped_with_reason": all(
-            f"skipped {group}:" in log for group in PART_GROUPS[part] if group not in {"repository_code_checks", "sql_style"}
-        ),
+        "conditional_groups_skipped_with_reason": all(f"skipped {group}:" in log for group in PART_GROUPS[part] if group != "repository_code_checks"),
         "gates_ran": re.search(r"^gates: \d+ s$", log, re.MULTILINE) is not None,
         "markdown_lint_ran": "markdownlint-cli2 v" in log,
-        "required_groups_only": re.findall(r"^== (\w+) ==$", log, re.MULTILINE) == (["repository_code_checks", "sql_style"] if part != "launcher" else []),
+        # sql_style is selected by path in the staged scope (always_except_commits), so a README-only change skips it with a reason.
+        "required_groups_only": re.findall(r"^== (\w+) ==$", log, re.MULTILINE) == (["repository_code_checks"] if part != "launcher" else []),
         "summary_has_durations": "| Step | Seconds |" in text and re.search(r"^\| gates \| \d+ \|$", text, re.MULTILINE) is not None,
     }
     return {"case": name, "passed": all(checks.values()), "checks": checks, "exit": code}
