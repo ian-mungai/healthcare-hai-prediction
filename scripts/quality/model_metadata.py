@@ -33,6 +33,8 @@ from scripts.process import TimeoutExpired, run_command
 
 yaml: Any = importlib.import_module("yaml")
 
+# The lineage worker compiles and parses every model. The whole check took 49 s on the development Mac, and the worker passed 90 s on a hosted runner.
+LINEAGE_WORKER_SECONDS = 300
 ROOT = Path(__file__).resolve().parents[2]
 DOCUMENT = "docs/quality_checks.md#model-metadata"
 DBT_DIRECTORY = "dbt"
@@ -843,7 +845,9 @@ def compiled_lineage(
         if packages.is_dir():
             env["DBT_PACKAGES_INSTALL_PATH"] = str(packages)
         try:
-            result = run_command(str(runtime), ["-m", "scripts.quality.model_metadata", "--lineage-worker", str(request)], cwd=root, env=env, timeout=90)
+            result = run_command(
+                str(runtime), ["-m", "scripts.quality.model_metadata", "--lineage-worker", str(request)], cwd=root, env=env, timeout=LINEAGE_WORKER_SECONDS
+            )
         except TimeoutExpired as error:
             raise CannotRun(
                 ".tools/sqlfluff",

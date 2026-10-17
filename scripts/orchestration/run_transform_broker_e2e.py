@@ -12,16 +12,18 @@ effective specification of every container. No real Docker, catalog, AWS service
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import hashlib
 import json
 import os
 import shutil
+import stat
 import sys
 import tempfile
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -720,17 +722,28 @@ def build_file_checkpoint_from_intent(env: Env) -> dict[str, bool]:
     }
 
 
+@contextlib.contextmanager
+def undeletable_entries(folder: Path) -> Iterator[None]:
+    """Make the entries of ``folder`` undeletable for one step by removing its write bits; restore its mode after. Works on macOS and Linux (``chflags``
+    exists only on macOS). Root ignores folder modes, so a root run refuses instead of passing for the wrong reason."""
+    if os.geteuid() == 0:
+        raise RuntimeError("folder modes do not stop root from deleting files; run this case as a regular user")
+    mode = stat.S_IMODE(folder.stat().st_mode)
+    folder.chmod(mode & ~0o222)
+    try:
+        yield
+    finally:
+        folder.chmod(mode)
+
+
 @case("control_release_resume")
 def control_release_resume(env: Env) -> dict[str, bool]:
     broker = env.new_broker()
     broker.start()
     build = prepare_finalizing(env, broker)
-    run_command("chflags", ["uchg", str(build)], timeout=30)
-    try:
+    with undeletable_entries(build.parent):
         first = step(broker, "release_accepted", 1)
         state_after = lock_of(env)
-    finally:
-        run_command("chflags", ["nouchg", str(build)], timeout=30)
     second = step(broker, "release_accepted", 2)
     return {
         "the first release failed with exit code 1 and names the permission error": first.state == State.FAILED
