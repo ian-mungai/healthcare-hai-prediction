@@ -116,7 +116,7 @@ class BrokerEnv(Env):
             "case_host": str(self.case_dir),
             "case_container": "/workspace/out/case",
             "packages_host": str(self.packages_dir),
-            "dbt_vars": {"check_release_copy_conflicts": False},
+            "dbt_vars": {},
         }
         return {"class": "offline", "no_op": False, "launcher": {"template": "fixture_dbt", "args": args, "params": params, **extra}}
 
@@ -173,9 +173,10 @@ class BrokerEnv(Env):
     def child(self, *arguments: str, shim: Path | None = None) -> Any:
         """Run the broker as a child process on this case's registry with the test inventory."""
         environment = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR") if name in os.environ}
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
         if shim is not None:
             environment["PATH"] = f"{shim}{os.pathsep}{environment.get('PATH', '')}"
-        base = ["-m", "scripts.orchestration.broker", "--test-registry", str(self.registry), "--templates", str(self.inventory_path)]
+        base = ["-B", "-m", "scripts.orchestration.broker", "--test-registry", str(self.registry), "--templates", str(self.inventory_path)]
         return run_command(sys.executable, [*base, *arguments], cwd=ROOT, env=environment, timeout=180)
 
     def stop_brokers(self) -> None:

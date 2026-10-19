@@ -42,6 +42,7 @@ OUTPUTS = {
 class FakeS3(storage.AwsCli):
     def __init__(self) -> None:
         self.configuration = SETTINGS.copy()
+        self.storage_policy = {"enabled": False, "objects": {}, "evidence_objects": {}, "bootstrap_sha256": None}
         self.objects: dict[str, dict] = {}
         self.calls: list = []
         self.overrides: dict = {}

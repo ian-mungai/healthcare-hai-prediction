@@ -1,0 +1,64 @@
+version: 2
+
+models:
+  - name: stg_bronze__metadata
+    meta:
+      classification: Public
+    description: One complete pinned metadata generation containing observations and physical object index rows.
+    columns:
+      - name: metadata_key
+        description: Metadata kind and immutable observation identity.
+        data_tests: [unique, not_null]
+      - name: generation
+        description: SHA-256 of the complete metadata generation content.
+        data_tests: [not_null]
+      - name: kind
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [object, observation]
+  - name: stg_bronze__release_observations
+    meta:
+      classification: Public
+    description: >
+      One immutable manifest entry within the 70-table analytical scope declared by copy_tables,
+      including aliases, superseded manifests, retired versions and failed attempts. Additions to that family map join automatically.
+      The unfiltered bronze.file_metadata source contains observations for all 330 committed bronze tables.
+    columns:
+      - name: observation_id
+        description: SHA-256 of manifest key, exact manifest version and original entry position.
+        data_tests: [unique, not_null]
+      - name: member_sha256
+        data_tests: [not_null]
+      - name: object_key
+        description: Original capture and member-chain identity retained for seed reconciliation.
+        data_tests: [not_null]
+      - name: canonical_object_key
+        description: Immutable loaded logical key, null when the checksum has only retired or failed attempts.
+        data_tests:
+          - not_null:
+              config:
+                where: not is_retired and not is_failed_attempt
+      - name: release_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [publication_date, download_run_id, unresolved]
+      - name: is_retired
+        data_tests: [not_null]
+  - name: stg_bronze__physical_object_index
+    meta:
+      classification: Public
+    description: One immutable live physical object and canonical loaded identity per SHA-256.
+    columns:
+      - name: member_sha256
+        data_tests: [unique, not_null]
+      - name: canonical_object_key
+        data_tests: [not_null]
+      - name: canonical_observation_id
+        data_tests: [not_null]
+      - name: s3_key
+        data_tests: [not_null]
+      - name: s3_version_id
+        data_tests: [not_null]

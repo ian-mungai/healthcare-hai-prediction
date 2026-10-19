@@ -46,11 +46,9 @@ REPORTS = REPO_ROOT / "data/e2e/gold"
 BASELINES = REPO_ROOT / "data_contracts/great_expectations/baselines.json"
 GOLD_MODELS = "path:models/gold"
 BUILD_OK = ("success", "pass")
-# Amendment A42: the one test whose `warn` status passes (A40 item 2, severity warn, gated behind a dbt var the gate turns on). Its warning count is
-# recorded; a warn on any other node, and every fail, error, skip, absence or disabled state of a required check, still fails the run.
-WARN_TOLERATED = "release_copy_consistency_dim_release"
+RELEASE_COPY_TEST = "release_copy_consistency_dim_release"
 # dbt names a model-level generic test <test>_<model>_ (an empty column name leaves the trailing underscore); the lead names it without it.
-WARN_NAMES = frozenset({WARN_TOLERATED, WARN_TOLERATED + "_"})
+RELEASE_COPY_NAMES = frozenset({RELEASE_COPY_TEST, RELEASE_COPY_TEST + "_"})
 RELEASE_MODEL = "dim_release"
 # Amendment A39 item 2: facts whose silver model holds no rows in the fixture build, each with the reason. A fact named here may be empty in the
 # fixture stage only; the real stage has no exceptions. The gate adds an entry only after its own fixture run lists the empty fact.
@@ -356,8 +354,8 @@ def keyed_facts(contract: gold_checks.Contract, relations: gold_checks.Relations
 
 
 def accepted(name: str, status: str) -> bool:
-    """A node passed, or it is the one tolerated warning test and warned."""
-    return status in BUILD_OK or (name in WARN_NAMES and status == "warn")
+    """Return whether a required build node completed successfully."""
+    return status in BUILD_OK
 
 
 def not_passing(statuses: dict[str, str]) -> list[str]:
@@ -365,35 +363,30 @@ def not_passing(statuses: dict[str, str]) -> list[str]:
     return sorted(name for name, status in statuses.items() if not accepted(name, status))
 
 
-def warning_counts(run_results: Path) -> dict[str, int]:
-    """Failing-row counts of the nodes that warned, from a dbt run's ``run_results.json``; an absent file means no counts."""
-    if not run_results.is_file():
-        return {}
-    items = json.loads(run_results.read_text())["results"]
-    return {item["unique_id"].split(".")[2]: int(item.get("failures") or 0) for item in items if item["status"] == "warn"}
-
-
 def disabled_problems(manifest: dict[str, Any]) -> list[str]:
-    """The tolerated warning test, when the project declares it, must be enabled: a disabled required check fails."""
-    declared = [node for nodes in manifest.get("disabled", {}).values() for node in nodes if node["resource_type"] == "test" and node["name"] in WARN_NAMES]
-    return [f"{WARN_TOLERATED}: the required check is disabled"] if declared else []
+    """Report any disabled declaration of the required physical-copy check."""
+    declared = [
+        node for nodes in manifest.get("disabled", {}).values() for node in nodes if node["resource_type"] == "test" and node["name"] in RELEASE_COPY_NAMES
+    ]
+    return [f"{RELEASE_COPY_TEST}: the required check is disabled"] if declared else []
 
 
 def release_test_problems(manifest: dict[str, Any]) -> list[str]:
-    """Amendment A42: the build with dim_release must hold the active release-copy test attached to it with severity warn."""
+    """Require an enabled physical-copy check attached to dim_release with error severity."""
     found = [
         node
         for node in manifest["nodes"].values()
         if node["resource_type"] == "test"
-        and node["name"] in WARN_NAMES
+        and node["name"] in RELEASE_COPY_NAMES
         and str(node.get("attached_node", "")).rsplit(".", 1)[-1] == RELEASE_MODEL
-        and str(node.get("config", {}).get("severity", "")).lower() == "warn"
+        and str(node.get("config", {}).get("severity", "")).lower() == "error"
+        and node.get("config", {}).get("enabled", True) is True
     ]
-    return [] if found else [f"{WARN_TOLERATED}: no active test of that name is attached to {RELEASE_MODEL} with severity warn"]
+    return [] if found else [f"{RELEASE_COPY_TEST}: no active test of that name is attached to {RELEASE_MODEL} with error severity"]
 
 
 def gold_node_problems(manifest: dict[str, Any], statuses: dict[str, str], require_release_test: bool) -> list[str]:
-    """Every gold model and every test attached to a gold model was built or run, and passed (the tolerated test may warn)."""
+    """Require every gold model and attached test to complete successfully."""
     gold = set(gold_checks.gold_nodes(manifest))
     wanted = sorted(gold) + sorted(
         unique_id.split(".")[2]
@@ -519,15 +512,14 @@ def case_sql(case: package_fixture.Case, sql: str) -> None:
         raise package_fixture.FixtureError(f"mutation SQL failed: {result.stderr.strip()[-300:]}")
 
 
-def test_nodes(case: package_fixture.Case, tests: list[str], minimum_warnings: int, require_release_test: bool) -> tuple[list[str], dict[str, Any]]:
-    """Run the named tests of a case and judge their statuses with the runner's own rule (warn passes for the one tolerated test only) [A42]."""
+def test_nodes(case: package_fixture.Case, tests: list[str], require_release_test: bool) -> tuple[list[str], dict[str, Any]]:
+    """Run the named tests of a case and reject every status outside pass or success."""
     _code, _tail, raw = package_fixture.dbt(case, ["test", "--select", *tests])
     statuses = statuses_by_name(raw)
     manifest = json.loads((case.folder / "target/manifest.json").read_text())
-    counts = warning_counts(case.folder / "target/run_results.json")
     problems = not_passing(statuses) + disabled_problems(manifest) + ([] if statuses else ["no selected test ran"])
     problems += release_test_problems(manifest) if require_release_test else []
-    return problems, {"statuses": statuses, "warning_counts": counts, "warnings_ok": sum(counts.get(name, 0) for name in WARN_NAMES) >= minimum_warnings}
+    return problems, {"statuses": statuses}
 
 
 def contract_error_case(path: Path, fragment: str) -> dict[str, Any]:
@@ -572,10 +564,10 @@ def self_test(
                 failed.append("gold_suites_pass")
             extra: dict[str, Any] = {}
             if entry.get("tests"):
-                node_problems, extra = test_nodes(case, entry["tests"], entry.get("warn_count_min", 0), RELEASE_MODEL in mutated.model_names)
+                node_problems, extra = test_nodes(case, entry["tests"], RELEASE_MODEL in mutated.model_names)
                 if node_problems:
                     failed.append("dbt_nodes_pass")
-            outcome[name] = {"expected": wanted, "failed": sorted(failed), "ok": sorted(failed) == wanted and extra.get("warnings_ok", True), **extra}
+            outcome[name] = {"expected": wanted, "failed": sorted(failed), "ok": sorted(failed) == wanted, **extra}
         restore(overlays, added, project)
         if entry.get("restore"):
             code, restored = dbt_run(case, " ".join(entry["restore"]))
@@ -610,6 +602,33 @@ def inject(run: Run, args: argparse.Namespace, point: str) -> None:
         run.cleanups.append(("injected_cleanup", failing_cleanup))
 
 
+def fixture_copy_conflict(case: package_fixture.Case) -> dict[str, bool]:
+    """Require the real fixture dbt test to reject a second physical copy and pass after its removal."""
+    case_sql(
+        case,
+        """INSERT INTO stg_bronze__file_copies
+        SELECT copies.* REPLACE ('__synthetic_storage_duplicate__' AS s3_key, false AS is_canonical)
+        FROM stg_bronze__file_copies AS copies
+        INNER JOIN dim_release AS releases USING (member_sha256)
+        WHERE releases.member_sha256 != '<unknown>' LIMIT 1;""",
+    )
+    try:
+        code, _tail, statuses = package_fixture.dbt(case, ["test", "--select", "test_name:release_copy_consistency"])
+        named = statuses_by_name(statuses)
+        report = case.folder / "target/run_results.json"
+        if report.exists():
+            shutil.copyfile(report, case.folder / "storage_copy_conflict.run_results.json")
+        rejected = code != 0 and {status for name, status in named.items() if name in RELEASE_COPY_NAMES} == {"fail"}
+    finally:
+        case_sql(case, "DELETE FROM stg_bronze__file_copies WHERE s3_key = '__synthetic_storage_duplicate__';")
+    code, _tail, restored = package_fixture.dbt(case, ["test", "--select", "test_name:release_copy_consistency"])
+    restored_release = [status for name, status in statuses_by_name(restored).items() if name in RELEASE_COPY_NAMES]
+    return {
+        "fixture.physical_copy_conflict_fails": rejected,
+        "fixture.restored_physical_copy_test_passes": code == 0 and bool(restored_release) and all(status in BUILD_OK for status in restored_release),
+    }
+
+
 def fixture_stage(run: Run, args: argparse.Namespace, contract: gold_checks.Contract) -> None:
     """Build silver and gold on the fixture bronze and run every check; the whole stage holds one memory admission [843]."""
     overlays = [Path(item) for item in args.overlay]
@@ -622,7 +641,7 @@ def fixture_stage(run: Run, args: argparse.Namespace, contract: gold_checks.Cont
         stage["reservation"] = plan.allocation
         started = time.monotonic()
         run.enter("fixture:build")
-        case = package_fixture.make_case("gold_fixture", plan, [], gate=True)
+        case = package_fixture.make_case("gold_fixture", plan, [])
         run.cleanups.append(("remove_ge_output", lambda: shutil.rmtree(case.folder / "ge_out", ignore_errors=True)))
         project = case.folder / "project"
         for overlay in overlays:
@@ -630,7 +649,6 @@ def fixture_stage(run: Run, args: argparse.Namespace, contract: gold_checks.Cont
         code, tail, statuses = package_fixture.dbt(case, ["build"])
         failed = not_passing(statuses_by_name(statuses))
         run.checks["fixture_build_passes"] = code == 0 and bool(statuses) and not failed
-        stage["details"]["warnings"] = warning_counts(case.folder / "target/run_results.json")
         stage["details"]["not_passing"] = failed[:30]
         stage["details"]["build_nodes"] = len(statuses)
         if not statuses:
@@ -659,6 +677,8 @@ def fixture_stage(run: Run, args: argparse.Namespace, contract: gold_checks.Cont
             test = self_test(case, args.self_test, overlays, contract, backend, suites)
             stage["self_test"] = test
             run.checks.update({f"self_test.{name}": item["ok"] for name, item in test.items()})
+        run.enter("fixture:physical_copy_conflict")
+        run.checks.update(fixture_copy_conflict(case))
         stage["seconds"] = round(time.monotonic() - started, 1)
 
 
@@ -704,7 +724,6 @@ def real_stage(run: Run, contract: gold_checks.Contract, suites: Path, once: boo
             run.enter(f"real:{build}:build")
             code, statuses = staging.dbt_build(build, "lakehouse")
             failed = not_passing(statuses)
-            outcome.setdefault("warnings", {})[build] = warning_counts(staging.CASES / build / "target/run_results.json")
             outcome["checks"][f"{build}_build_passes"] = pinned["build_passed"] = code == 0 and bool(statuses) and not failed
             if pinned["build_passed"]:
                 run.enter(f"real:{build}:sealed")

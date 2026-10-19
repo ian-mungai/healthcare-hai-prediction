@@ -16,7 +16,7 @@
         "scripts/acquisition/collection_layout.py": "sha256:9b74b4bc5082fcf657217407687bd7e24b4a04bdd551d59c85b079b087792693",
         "scripts/acquisition/legacy_versions.py": "sha256:7a3f5f54f04f8a577f8f214a6bc0642b4095aa267d57156169ac0eca6eba264d",
         "scripts/acquisition/process.py": "sha256:19cd319a89b2821b718fe0ed8045a78c65d15ffda83e328ef7551bfedca90c48",
-        "scripts/acquisition/s3_store.py": "sha256:562840791cff4ce65da334c6c84bf64b839869e47216f410d58685bc350fc8c1",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/infrastructure/render_project_config.py": "sha256:7a599c31b2aa43f5e616f31db9f5a65f3c2dc08dd5bd5fa25f576f65530dfde2"
       },
@@ -41,7 +41,7 @@
         "scripts/acquisition/data_paths.py": "sha256:2113d95ad89c04c2d62ab988e4cafb5421d982ce8160918a8ced4529a5fa3b42",
         "scripts/acquisition/legacy_versions.py": "sha256:7a3f5f54f04f8a577f8f214a6bc0642b4095aa267d57156169ac0eca6eba264d",
         "scripts/acquisition/process.py": "sha256:19cd319a89b2821b718fe0ed8045a78c65d15ffda83e328ef7551bfedca90c48",
-        "scripts/acquisition/s3_store.py": "sha256:562840791cff4ce65da334c6c84bf64b839869e47216f410d58685bc350fc8c1",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/infrastructure/render_project_config.py": "sha256:7a599c31b2aa43f5e616f31db9f5a65f3c2dc08dd5bd5fa25f576f65530dfde2"
       },
@@ -68,7 +68,7 @@
         "scripts/acquisition/hud_api_transport.py": "sha256:6575f10e59b9c57b10ad61b6b6a0f79fac947acc6f6f41756d90291ce700cffe",
         "scripts/acquisition/legacy_versions.py": "sha256:7a3f5f54f04f8a577f8f214a6bc0642b4095aa267d57156169ac0eca6eba264d",
         "scripts/acquisition/process.py": "sha256:19cd319a89b2821b718fe0ed8045a78c65d15ffda83e328ef7551bfedca90c48",
-        "scripts/acquisition/s3_store.py": "sha256:562840791cff4ce65da334c6c84bf64b839869e47216f410d58685bc350fc8c1",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/infrastructure/render_project_config.py": "sha256:7a599c31b2aa43f5e616f31db9f5a65f3c2dc08dd5bd5fa25f576f65530dfde2"
       },
@@ -94,7 +94,7 @@
         "scripts/acquisition/hud_xlsx_contract.py": "sha256:aba8eb961541d527804488cd707cba98c5186a6d341728892700f56de6cbe45c",
         "scripts/acquisition/mmd_api_contract.py": "sha256:e83a6ad77e46bf211d8ed2e56e391c9576687214de6bed68d3282f1f05a1350a",
         "scripts/acquisition/redownload_controls.py": "sha256:97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7",
-        "scripts/acquisition/s3_store.py": "sha256:562840791cff4ce65da334c6c84bf64b839869e47216f410d58685bc350fc8c1",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/store_onc_mu.py": "sha256:235174be2c91eb87295eef9332721a212bb2650ed6d52e990fa5d2e5672e16bb",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
@@ -123,7 +123,7 @@
         "scripts/acquisition/hud_xlsx_contract.py": "sha256:aba8eb961541d527804488cd707cba98c5186a6d341728892700f56de6cbe45c",
         "scripts/acquisition/mmd_api_contract.py": "sha256:e83a6ad77e46bf211d8ed2e56e391c9576687214de6bed68d3282f1f05a1350a",
         "scripts/acquisition/redownload_controls.py": "sha256:97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7",
-        "scripts/acquisition/s3_store.py": "sha256:562840791cff4ce65da334c6c84bf64b839869e47216f410d58685bc350fc8c1",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/store_onc_mu.py": "sha256:235174be2c91eb87295eef9332721a212bb2650ed6d52e990fa5d2e5672e16bb",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
@@ -137,25 +137,25 @@
     },
     {
       "path": "scripts/acquisition/run_storage_records_e2e.py",
-      "line": 122,
+      "line": 96,
       "code_sha256": "d1b67767856a66cc1b58cbb3554064564c48816c6c3837dae0852166ea586785",
       "problem": "whose program the check cannot prove",
       "occurrences": 7,
       "file_sha256": "6d02232e96dcc790a97216fab37c173bb9986ece55f7f40eb5b83a6d2c9242c6",
       "dependencies": {
-        "scripts/acquisition/s3_store.py": "sha256:562840791cff4ce65da334c6c84bf64b839869e47216f410d58685bc350fc8c1",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/infrastructure/render_project_config.py": "sha256:7a599c31b2aa43f5e616f31db9f5a65f3c2dc08dd5bd5fa25f576f65530dfde2",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
       "lines": [
+        96,
         122,
         128,
         139,
         178,
         239,
-        249,
-        96
+        249
       ]
     },
     {
@@ -166,7 +166,7 @@
       "occurrences": 2,
       "file_sha256": "6d02232e96dcc790a97216fab37c173bb9986ece55f7f40eb5b83a6d2c9242c6",
       "dependencies": {
-        "scripts/acquisition/s3_store.py": "sha256:562840791cff4ce65da334c6c84bf64b839869e47216f410d58685bc350fc8c1",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/infrastructure/render_project_config.py": "sha256:7a599c31b2aa43f5e616f31db9f5a65f3c2dc08dd5bd5fa25f576f65530dfde2",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -184,7 +184,7 @@
       "occurrences": 2,
       "file_sha256": "6d02232e96dcc790a97216fab37c173bb9986ece55f7f40eb5b83a6d2c9242c6",
       "dependencies": {
-        "scripts/acquisition/s3_store.py": "sha256:562840791cff4ce65da334c6c84bf64b839869e47216f410d58685bc350fc8c1",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/infrastructure/render_project_config.py": "sha256:7a599c31b2aa43f5e616f31db9f5a65f3c2dc08dd5bd5fa25f576f65530dfde2",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -202,7 +202,7 @@
       "occurrences": 1,
       "file_sha256": "6d02232e96dcc790a97216fab37c173bb9986ece55f7f40eb5b83a6d2c9242c6",
       "dependencies": {
-        "scripts/acquisition/s3_store.py": "sha256:562840791cff4ce65da334c6c84bf64b839869e47216f410d58685bc350fc8c1",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/infrastructure/render_project_config.py": "sha256:7a599c31b2aa43f5e616f31db9f5a65f3c2dc08dd5bd5fa25f576f65530dfde2",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -213,11 +213,11 @@
     },
     {
       "path": "scripts/acquisition/s3_store.py",
-      "line": 86,
+      "line": 88,
       "code_sha256": "962a22937797ee9ea7002ee945cfd503ef912f7f9cbba903504e74f093ef4686",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "562840791cff4ce65da334c6c84bf64b839869e47216f410d58685bc350fc8c1",
+      "file_sha256": "08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
       "dependencies": {
         "scripts/acquisition/archive_review.py": "sha256:59a6b2660eb64c96c8003b6dc47b7a3535bc32b07627e99001aaca35157cb6f8",
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
@@ -227,6 +227,7 @@
         "scripts/acquisition/legacy_versions.py": "sha256:7a3f5f54f04f8a577f8f214a6bc0642b4095aa267d57156169ac0eca6eba264d",
         "scripts/acquisition/mapped_archives.py": "sha256:a19207a1fbb1825013dd06170d8338bc1718122ab2a69819d05ec1b34472aec4",
         "scripts/acquisition/redownload_controls.py": "sha256:97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/storage_controls.py": "sha256:587735aad5325b294459974a95d65d65d461c2141c3f34a85de35775c38a327f",
         "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
@@ -235,7 +236,7 @@
       },
       "reason": "AwsCli keeps cli_tools.run_argv as its default runner; every AwsCli.call builds a list that starts with the literal aws",
       "lines": [
-        86
+        88
       ]
     },
     {
@@ -263,7 +264,7 @@
       "file_sha256": "620b6d775214f2322720a2316544c80eef89504812ef329c92f6db737ce4957a",
       "dependencies": {
         "scripts/acquisition/collection_layout.py": "sha256:9b74b4bc5082fcf657217407687bd7e24b4a04bdd551d59c85b079b087792693",
-        "scripts/acquisition/s3_store.py": "sha256:562840791cff4ce65da334c6c84bf64b839869e47216f410d58685bc350fc8c1",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "tests/support.py": "sha256:d94c83009e222255d9076939b6826d80dcf6face84d56e9efdcd86fb14bbd11f"
       },
@@ -295,8 +296,8 @@
       "occurrences": 1,
       "file_sha256": "8326208a4259e96c48245a2f16b838785141c2692345c5b09526bed9904fe465",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:be75cff9b8792a4cf91f08bc2642c31414c72b73cd836d1e47851fd0e336ed7a",
-        "scripts/lakehouse/bronze.py": "sha256:5f6cc9d774f171feab17b72abaaf6b961ff1353b12902461a49ee0211e13f788",
+        "orchestration/launcher.py": "sha256:10facbd0c7fdac7e796c3540e448ab3013729ab85433255af7ff5e2ae6076ecb",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
         "scripts/lakehouse/catalog.py": "sha256:641e1e747a4760e17690f122209b138432d9a6fe44c5e5c71c2a5696df0d5771",
         "scripts/lakehouse/checksums.py": "sha256:33100f77c34e1196e98ffa8dbf464ddda1819314979ff9a0e9d0c6be618e6df4",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
@@ -315,8 +316,8 @@
       "occurrences": 1,
       "file_sha256": "8326208a4259e96c48245a2f16b838785141c2692345c5b09526bed9904fe465",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:be75cff9b8792a4cf91f08bc2642c31414c72b73cd836d1e47851fd0e336ed7a",
-        "scripts/lakehouse/bronze.py": "sha256:5f6cc9d774f171feab17b72abaaf6b961ff1353b12902461a49ee0211e13f788",
+        "orchestration/launcher.py": "sha256:10facbd0c7fdac7e796c3540e448ab3013729ab85433255af7ff5e2ae6076ecb",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
         "scripts/lakehouse/catalog.py": "sha256:641e1e747a4760e17690f122209b138432d9a6fe44c5e5c71c2a5696df0d5771",
         "scripts/lakehouse/checksums.py": "sha256:33100f77c34e1196e98ffa8dbf464ddda1819314979ff9a0e9d0c6be618e6df4",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
@@ -335,8 +336,8 @@
       "occurrences": 1,
       "file_sha256": "8326208a4259e96c48245a2f16b838785141c2692345c5b09526bed9904fe465",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:be75cff9b8792a4cf91f08bc2642c31414c72b73cd836d1e47851fd0e336ed7a",
-        "scripts/lakehouse/bronze.py": "sha256:5f6cc9d774f171feab17b72abaaf6b961ff1353b12902461a49ee0211e13f788",
+        "orchestration/launcher.py": "sha256:10facbd0c7fdac7e796c3540e448ab3013729ab85433255af7ff5e2ae6076ecb",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
         "scripts/lakehouse/catalog.py": "sha256:641e1e747a4760e17690f122209b138432d9a6fe44c5e5c71c2a5696df0d5771",
         "scripts/lakehouse/checksums.py": "sha256:33100f77c34e1196e98ffa8dbf464ddda1819314979ff9a0e9d0c6be618e6df4",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
@@ -353,18 +354,18 @@
       "code_sha256": "31df13bbd38b806ec10b83328e469066a44abb27722e6e02f3effa919c07c797",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "e9a41d0338351e3fde45175fd0fd5cb8e34927de034c1be5ba4fb85400fc51e5",
+      "file_sha256": "4b839d2bf5e59718fcf9eb6097ab6769b115cfaf393664fb252de2254daba2f3",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:be75cff9b8792a4cf91f08bc2642c31414c72b73cd836d1e47851fd0e336ed7a",
+        "orchestration/launcher.py": "sha256:10facbd0c7fdac7e796c3540e448ab3013729ab85433255af7ff5e2ae6076ecb",
         "scripts/lakehouse/catalog.py": "sha256:641e1e747a4760e17690f122209b138432d9a6fe44c5e5c71c2a5696df0d5771",
         "scripts/lakehouse/dbt_package_archive.py": "sha256:a508b5d491d2b50fe617c587650285bf697d66563cd898430f738820ba0fed71",
         "scripts/lakehouse/fake_docker.py": "sha256:65d9756f7d3d5c1482ce3d92a25b19ce2f96275beaeec539ac89945b73181c6e",
-        "scripts/lakehouse/package_fixture.py": "sha256:4f5458cb38e372620b7a5c0c1c3c6ca3658494c97768dc8b3c0e23bbadc6b70c",
-        "scripts/lakehouse/pins.py": "sha256:ee2e0fcef65e409e208298c4e48499b1919386056986139151e31e97d06ae616",
+        "scripts/lakehouse/package_fixture.py": "sha256:f3e8ba4a715ff09f1ac58bf787e9e25ff3e0a2cdd49f51c5d16694304022d2cf",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
         "scripts/lakehouse/run_lock.py": "sha256:db8f8a9ca0d9eae74da96979933cbdd002e671e933b6054372fba6e55e5e3225",
         "scripts/lakehouse/run_package_fixture_e2e.py": "sha256:b1f1dd9c87fe2f12fda0cc56b891c6484707696e9c6e26c3b7ce706dbc9938f5",
-        "scripts/lakehouse/run_silver_e2e.py": "sha256:7adf70750e8877312fe140238a8a2053739b9325a1c8637db25197983544d7e2",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:d5ffb8fd884f24177959fc35011d8a68fb22cb750f80ab8d707d4333fff08b23",
+        "scripts/lakehouse/run_silver_e2e.py": "sha256:42b24cb4912f8b9b83e0a218822b93f67ac244ee4bb17732ed0a2b4d485ebbf4",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
         "scripts/lakehouse/silver.py": "sha256:bc4240ba4aa26c8e679d4a76d280ccfb7df63490e4207d3562d851acbcd1f563",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/docker_calls.py": "sha256:ee3b124eaecceb3568ed78b821c057fb92763c963926996557c23459c6bce911"
@@ -383,8 +384,8 @@
       "occurrences": 1,
       "file_sha256": "dd8eabf98f0f808050b9ff4b8da792a27338d263c06cea50de329aa5a74c8ab3",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:be75cff9b8792a4cf91f08bc2642c31414c72b73cd836d1e47851fd0e336ed7a",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:e9a41d0338351e3fde45175fd0fd5cb8e34927de034c1be5ba4fb85400fc51e5",
+        "orchestration/launcher.py": "sha256:10facbd0c7fdac7e796c3540e448ab3013729ab85433255af7ff5e2ae6076ecb",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:4b839d2bf5e59718fcf9eb6097ab6769b115cfaf393664fb252de2254daba2f3",
         "scripts/lakehouse/run_lock.py": "sha256:db8f8a9ca0d9eae74da96979933cbdd002e671e933b6054372fba6e55e5e3225",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -549,11 +550,11 @@
     },
     {
       "path": "scripts/quality/run_e2e.py",
-      "line": 140,
+      "line": 146,
       "code_sha256": "04c06b7303d92911d832b3b9c112a8f64085320728d615867f21063678745014",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "4a1485d347b7dc005b551bb797cdfba5ed04accd4f8f73243943b9959e10f389",
+      "file_sha256": "6e3a55fe022639a8be717fe0c00899c958de471070ceaeebcda5d99a94b0bfff",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -561,11 +562,11 @@
     },
     {
       "path": "scripts/quality/run_e2e.py",
-      "line": 144,
+      "line": 150,
       "code_sha256": "37e86a837af86f100fc191ac9c394a5b53ca706deedc0e337748466a7a55d7e6",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "4a1485d347b7dc005b551bb797cdfba5ed04accd4f8f73243943b9959e10f389",
+      "file_sha256": "6e3a55fe022639a8be717fe0c00899c958de471070ceaeebcda5d99a94b0bfff",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -573,11 +574,11 @@
     },
     {
       "path": "scripts/quality/run_e2e.py",
-      "line": 164,
+      "line": 173,
       "code_sha256": "5153c28e335132f17886d69826d733a4fac8f775b179e97ae4d1ad1e0ba2528e",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "4a1485d347b7dc005b551bb797cdfba5ed04accd4f8f73243943b9959e10f389",
+      "file_sha256": "6e3a55fe022639a8be717fe0c00899c958de471070ceaeebcda5d99a94b0bfff",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -585,11 +586,11 @@
     },
     {
       "path": "scripts/quality/run_e2e.py",
-      "line": 183,
+      "line": 192,
       "code_sha256": "31f8dd394225de0536b48c47435e8da927c12e7a0021123867cb07b1fd01e48e",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "4a1485d347b7dc005b551bb797cdfba5ed04accd4f8f73243943b9959e10f389",
+      "file_sha256": "6e3a55fe022639a8be717fe0c00899c958de471070ceaeebcda5d99a94b0bfff",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -597,15 +598,665 @@
     },
     {
       "path": "scripts/quality/run_e2e.py",
-      "line": 203,
+      "line": 212,
       "code_sha256": "d40b7f65cacfada8124817951806e3a41dbd8b6aa8454118024581749e2bb2ff",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "4a1485d347b7dc005b551bb797cdfba5ed04accd4f8f73243943b9959e10f389",
+      "file_sha256": "6e3a55fe022639a8be717fe0c00899c958de471070ceaeebcda5d99a94b0bfff",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
       "reason": "runs the synthetic tool installer command (sys.executable -m scripts.quality.install_tools) with an unsafe archive"
+    },
+    {
+      "code_sha256": "cea51af81ad31da866b00bfa3d89cd75975f39dad3cced550e5d8fc50b4f6260",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 109,
+      "lines": [
+        109
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "whose program the check cannot prove",
+      "reason": "duckdb_binary() resolves only ROOT/.tools/bin/duckdb and checks the committed 1.5.6 pin. This call creates comparison_probe.duckdb under the runner-owned TemporaryDirectory and creates one synthetic_marker table. It uses -init /dev/null and a 30-second timeout. It is a file database, not an in-memory database. No shell or Docker API is used."
+    },
+    {
+      "code_sha256": "b864f3eac42ef73c72e3e0a2693616c4b4965a9e11d784251ad1bc15cb756e0a",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 110,
+      "lines": [
+        110
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "is used as a value",
+      "reason": "The comparison_uses_pinned_cli spy saves run_command as original and forwards exactly the program, arguments and keyword arguments chosen by storage_metadata_comparison.query. That module chooses the pinned duckdb_binary() and -readonly; the case asserts every forwarded program equals duckdb_binary() and every argument list contains -readonly. It reads only the runner-owned synthetic file database. No shell or Docker API is used."
+    },
+    {
+      "code_sha256": "fd1f9e336ab11fac06944ba4d1b2926ff6077564d1b64804113bfc1eaadd9e6e",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 114,
+      "lines": [
+        114
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "whose program the check cannot prove",
+      "reason": "The comparison_uses_pinned_cli spy saves run_command as original and forwards exactly the program, arguments and keyword arguments chosen by storage_metadata_comparison.query. That module chooses the pinned duckdb_binary() and -readonly; the case asserts every forwarded program equals duckdb_binary() and every argument list contains -readonly. It reads only the runner-owned synthetic file database. No shell or Docker API is used."
+    },
+    {
+      "code_sha256": "648c46d344dc7a53a19a1563eb241b65ff4cbece6eb3c67ccb0b94ed5e8fc269",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 718,
+      "lines": [
+        718,
+        1061
+      ],
+      "occurrences": 2,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "whose program the check cannot prove",
+      "reason": "duckdb_binary() resolves only ROOT/.tools/bin/duckdb and checks the committed 1.5.6 pin. This call uses :memory:, -json, -init /dev/null and synthetic SQL with a 30-second timeout. SQL may read only runner-owned synthetic fixture files; it does not open a retained file database. No shell, extension load, Docker command, socket or Engine API is used."
+    },
+    {
+      "code_sha256": "95dd581b1eaada383ceeffdc273e23526918dd2308cb1f85cd35d115bd67c150",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 721,
+      "lines": [
+        721
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "whose program the check cannot prove",
+      "reason": "duckdb_binary() resolves only ROOT/.tools/bin/duckdb and checks the committed 1.5.6 pin. This call uses :memory:, -json, -init /dev/null and synthetic SQL with a 30-second timeout. SQL may read only runner-owned synthetic fixture files; it does not open a retained file database. No shell, extension load, Docker command, socket or Engine API is used."
+    },
+    {
+      "code_sha256": "a26b388ab5da803e661e88dde435cb482811e34de84e93aad8ab2d9b78c39c2c",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 772,
+      "lines": [
+        772
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "is used as a value",
+      "reason": "In metadata_scope, original is the complete synthetic generation list returned by bronze_metadata.build, not the process function saved by the comparison spy in another scope. This site passes, iterates or indexes metadata values only. The conservative alias analysis reports the shared name original; no process starts at this site."
+    },
+    {
+      "code_sha256": "827292aec5c6ad85c5b6770761c279227f39da26427fe83eb757e8ae3b0ad333",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 774,
+      "lines": [
+        774
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "is used as a value",
+      "reason": "In metadata_scope, original is the complete synthetic generation list returned by bronze_metadata.build, not the process function saved by the comparison spy in another scope. This site passes, iterates or indexes metadata values only. The conservative alias analysis reports the shared name original; no process starts at this site."
+    },
+    {
+      "code_sha256": "e26a81d7996aee1bd619aa4e37f515f2a90fe5515a37805a095ebc461e4a40cb",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 777,
+      "lines": [
+        777
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "is used as a value",
+      "reason": "In metadata_scope, original is the complete synthetic generation list returned by bronze_metadata.build, not the process function saved by the comparison spy in another scope. This site passes, iterates or indexes metadata values only. The conservative alias analysis reports the shared name original; no process starts at this site."
+    },
+    {
+      "code_sha256": "229b8e273a73ec9df34e47d7e1cf66f576ae2c45ad99218e4510784c6e783acf",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 786,
+      "lines": [
+        786
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "is used as a value",
+      "reason": "In metadata_scope, original is the complete synthetic generation list returned by bronze_metadata.build, not the process function saved by the comparison spy in another scope. This site passes, iterates or indexes metadata values only. The conservative alias analysis reports the shared name original; no process starts at this site."
+    },
+    {
+      "code_sha256": "1a42ce7ff4f4bdfc54c3ac1538a16e4a99b723b8b51256f5e554ab4a5015d166",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 788,
+      "lines": [
+        788
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "is used as a value",
+      "reason": "In metadata_scope, original is the complete synthetic generation list returned by bronze_metadata.build, not the process function saved by the comparison spy in another scope. This site passes, iterates or indexes metadata values only. The conservative alias analysis reports the shared name original; no process starts at this site."
+    },
+    {
+      "code_sha256": "3b0686cb047227ddc9ba07aa8916b6dad462b0667235ee062f014d31858cc96b",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 834,
+      "lines": [
+        834
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "is used as a value",
+      "reason": "In metadata_retirements, original is a generation list returned by the local accepted helper, which calls bronze_metadata.build and validate_successor. This site passes that list back to accepted; no process starts. The conservative alias analysis confuses this local metadata value with the comparison spy original in another scope."
+    },
+    {
+      "code_sha256": "f2c881f3a19770199bd02753e2fc0e98faec063f2559bea3a238dc7bbcbd9d36",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 918,
+      "lines": [
+        918
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "whose program the check cannot prove",
+      "reason": "duckdb_binary() resolves only ROOT/.tools/bin/duckdb and checks the committed 1.5.6 pin. This call uses :memory:, -json, -init /dev/null and synthetic SQL with a 30-second timeout. SQL may read only runner-owned synthetic fixture files; it does not open a retained file database. No shell, extension load, Docker command, socket or Engine API is used."
+    },
+    {
+      "code_sha256": "a1d3de85faf84095a1a10d81d60068e637acb23bcf82237617c6159261c4a9cf",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 944,
+      "lines": [
+        944
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "whose program the check cannot prove",
+      "reason": "duckdb_binary() resolves only ROOT/.tools/bin/duckdb and checks the committed 1.5.6 pin. This call uses :memory:, -json, -init /dev/null and synthetic SQL with a 30-second timeout. SQL may read only runner-owned synthetic fixture files; it does not open a retained file database. No shell, extension load, Docker command, socket or Engine API is used."
+    },
+    {
+      "code_sha256": "84d911b519c6ff4a31c00c3221389fcc6b5d5756f2f39b5b89a9715dc8aeaa14",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 947,
+      "lines": [
+        947
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "whose program the check cannot prove",
+      "reason": "duckdb_binary() resolves only ROOT/.tools/bin/duckdb and checks the committed 1.5.6 pin. This call uses :memory:, -json, -init /dev/null and synthetic SQL with a 30-second timeout. SQL may read only runner-owned synthetic fixture files; it does not open a retained file database. No shell, extension load, Docker command, socket or Engine API is used."
+    },
+    {
+      "code_sha256": "ce026e5bea9a46c073de33729f1b2c41b307e48317673a09d4513b9a265626d1",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 976,
+      "lines": [
+        976
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "whose program the check cannot prove",
+      "reason": "duckdb_binary() resolves only ROOT/.tools/bin/duckdb and checks the committed 1.5.6 pin. This call, in the gate() helper of null_generation_sql_guard, uses :memory:, -json, -init /dev/null and the SQL that dbt/macros/file_metadata.sql renders (assert_file_metadata_generation) over a runner-owned synthetic metadata JSON file in which at most one field is set to NULL, with a 30-second timeout. It has no check=True, so a refusal comes back as the process result. SQL may read only that runner-owned synthetic file; it does not open a retained file database. No shell, extension load, Docker command, socket or Engine API is used."
+    },
+    {
+      "code_sha256": "f8c56d974f57abe387f78f0bef9bbf3b8eef1ad258f002599ef6a36441d701a7",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 1011,
+      "lines": [
+        1011,
+        1193,
+        1283
+      ],
+      "occurrences": 3,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "whose program the check cannot prove",
+      "reason": "duckdb_binary() resolves only ROOT/.tools/bin/duckdb and checks the committed 1.5.6 pin. This call uses :memory:, -json, -init /dev/null and synthetic SQL with a 30-second timeout. SQL may read only runner-owned synthetic fixture files; it does not open a retained file database. No shell, extension load, Docker command, socket or Engine API is used."
+    },
+    {
+      "code_sha256": "6dd021ab58597f33e292f66b3a0076b6d54d8565d2c0bfa5aaecfa2e4f8961b6",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 1092,
+      "lines": [
+        1092
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "is used as a value",
+      "reason": "In metadata_supersession, original is a literal synthetic manifest dictionary. This site serializes it with json.dumps or copies it with copy.deepcopy. It is not the comparison spy process alias in another scope, and no process starts at this site."
+    },
+    {
+      "code_sha256": "50ff933cd99a83b74ed4a247f6e52cb7173ff88d0c99e34db877ce0e5fcca602",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 1101,
+      "lines": [
+        1101
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "is used as a value",
+      "reason": "In metadata_supersession, original is a literal synthetic manifest dictionary. This site serializes it with json.dumps or copies it with copy.deepcopy. It is not the comparison spy process alias in another scope, and no process starts at this site."
+    },
+    {
+      "code_sha256": "4dd27b23892f8634c026aa81d2f2f090761c80451c40b896358d88ae650129bd",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 1202,
+      "lines": [
+        1202
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "is used as a value",
+      "reason": "In family_scope_guard, original is the list of table-name strings returned by the local tables helper. This site only compares that list with the expected list. It is not the comparison spy process alias in another scope; no process starts at this site."
+    },
+    {
+      "code_sha256": "c3f9ba562c1caf375fa46d0673969769db48769524adfba2404e2903dbc76003",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 1292,
+      "lines": [
+        1292
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "whose program the check cannot prove",
+      "reason": "duckdb_binary() resolves only ROOT/.tools/bin/duckdb and checks the committed 1.5.6 pin. This call uses :memory:, -json, -init /dev/null and synthetic SQL with a 30-second timeout. SQL may read only runner-owned synthetic fixture files; it does not open a retained file database. No shell, extension load, Docker command, socket or Engine API is used."
+    },
+    {
+      "code_sha256": "f70c6ad0b46a8e06984ed714f73a2574f12863da6f819efc30fd34bd7de7f264",
+      "dependencies": {
+        "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/acquisition/single_copy.py": "sha256:52982ab3c927e9537bb3512ff3945854da7a1ca1d850660768635136125b2d2b",
+        "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
+        "scripts/acquisition/tests/test_capture.py": "sha256:878e321c6fde2cfa4e3b423b793081f1080eef4238720c59dd03ae8870c5848d",
+        "scripts/acquisition/tests/test_s3_store.py": "sha256:c8c156dca197175291fadcda55933b60777adc5acc4fe29581a09171e9f1d14e",
+        "scripts/acquisition/transport.py": "sha256:5930a7ed656677d5d40ea65c7589dcf4dfe740f0340838521943348d11174852",
+        "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/dictionary.py": "sha256:a685e7043c234a913015b9a608ceee95b3868b94404043f6def8b3753074959d",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
+        "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:3e93d2b9aa3c58ab3223134770862947c2661a3e08bb929e7aa47f0f27167563",
+        "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "41f81e6bfe4d33565ce1f51f480ffde6cf0fe03af6523c164431a3d2140eb71f",
+      "line": 1293,
+      "lines": [
+        1293
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/run_storage_single_copy_e2e.py",
+      "problem": "whose program the check cannot prove",
+      "reason": "duckdb_binary() resolves only ROOT/.tools/bin/duckdb and checks the committed 1.5.6 pin. This call uses :memory:, -json, -init /dev/null and synthetic SQL with a 30-second timeout. SQL may read only runner-owned synthetic fixture files; it does not open a retained file database. No shell, extension load, Docker command, socket or Engine API is used."
+    },
+    {
+      "code_sha256": "bda28cce200d242000652fedd4ca25c9dab3401e2e861f1c109e2aa53398ed07",
+      "dependencies": {
+        "scripts/lakehouse/bronze_metadata.py": "sha256:d60de00bbbeb1993a58ef504a9747301d5486ce60252bad7b0f8e87e170061aa",
+        "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "file_sha256": "941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
+      "line": 40,
+      "lines": [
+        40
+      ],
+      "occurrences": 1,
+      "path": "scripts/lakehouse/storage_metadata_comparison.py",
+      "problem": "whose program the check cannot prove",
+      "reason": "duckdb_binary() resolves only ROOT/.tools/bin/duckdb and checks the committed 1.5.6 pin. This call uses -readonly on the retained local database, -json, -init /dev/null and metadata-only SQL. Timeout is 60 seconds. No shell, Docker command, socket or Engine API is used."
     }
   ]
 }

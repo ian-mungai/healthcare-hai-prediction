@@ -252,9 +252,16 @@ def load_overrides(path: Path = OVERRIDES) -> dict[tuple[str, str], dict[str, An
 
 
 def labels(objects: Iterable[Stored], overrides: dict[tuple[str, str], dict[str, Any]]) -> list[dict[str, str]]:
-    """Return every object's labels, sorted, and refuse an override that matches no object."""
+    """Return one identical label row per original key and refuse conflicting classifications or stale overrides."""
     items = list(objects)
-    rows = sorted((label(stored, overrides) for stored in items), key=lambda row: (row["bronze_table"], row["object_key"]))
+    by_key: dict[tuple[str, str], dict[str, str]] = {}
+    for stored in items:
+        row = label(stored, overrides)
+        key = (row["bronze_table"], row["object_key"])
+        if key in by_key and by_key[key] != row:
+            raise LabelError("one original object key maps to conflicting label rows")
+        by_key[key] = row
+    rows = [by_key[key] for key in sorted(by_key)]
     used = {(stored.snapshot_id, stored.member_chain[-1]) for stored in items}
     stale = sorted(set(overrides) - used)
     if stale:

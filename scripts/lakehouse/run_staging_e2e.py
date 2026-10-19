@@ -37,7 +37,6 @@ import csv
 import hashlib
 import io
 import json
-import re
 import secrets
 import shutil
 import sys
@@ -51,7 +50,16 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
-from scripts.lakehouse import catalog, geography_file_periods, ipps_file_labels, mmd_conditions, ownership_release_periods, pos_file_periods, provenance
+from scripts.lakehouse import (
+    bronze_metadata,
+    catalog,
+    geography_file_periods,
+    ipps_file_labels,
+    mmd_conditions,
+    ownership_release_periods,
+    pos_file_periods,
+    provenance,
+)
 
 REPO_ROOT = catalog.REPO_ROOT
 OUT = REPO_ROOT / "data/analytics/dbt"
@@ -139,7 +147,6 @@ HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
     "83b9668d22a23b40def50b64725f9674dcaa821d0b2db5e43215e672cad69a71": "BRZ-016",
 }
-NESTED_DATE = re.compile(r".*(\d{4}-\d{2}-\d{2})\.zip!")
 HAI_FILE = "Healthcare_Associated_Infections-Hospital.csv"
 
 
@@ -168,8 +175,9 @@ class Stored:
 
 
 def sha(label: str) -> str:
-    """Return a readable 64-character fake checksum."""
-    return (label * 64)[:64]
+    """Hash a synthetic payload label into a valid SHA-256 for the production metadata builder."""
+    candidate = (label * 64)[:64]
+    return candidate if len(candidate) == 64 and all(char in "0123456789abcdef" for char in candidate) else hashlib.sha256(label.encode()).hexdigest()
 
 
 # Displayed values in the text file (4 decimals, "$1,234.50") against full precision in the workbook [189]; data rows align
@@ -2716,7 +2724,7 @@ GROUP_C4 = (
         "gv_al4",
         "CMS_GV__al4",
         "2014-2024_Original_Medicare_Geographic_Variation_Public_Use_File.csv",
-        sha("q8"),
+        sha("gv_al4"),
         1,
         records=(gv_row("2020", "County", "01073", ma_prtcptn_rate="0.3"),),
     ),
@@ -2955,7 +2963,7 @@ GROUP_AL5 = (
         "ha_al5",
         "2022-12-01",
         "FY_2023_HAC_Reduction_Program_Hospital.csv",
-        sha("q6"),
+        sha("ha_al5"),
         1,
         records=(hac_row("010001", "2023", "4.0", "No", hai_measures_start_date="01/01/2021", hai_measures_end_date="12/31/2021"),),
     ),
@@ -3043,7 +3051,7 @@ GROUP_C5 = (
         "mm02_al4",
         "MMD_API_C258_02_2020__x",
         "mmd_ffs_county_c258_02_prevalence_2020.csv",
-        sha("q7"),
+        sha("mm02_al4"),
         1,
         records=(mmd_row("2020", ALZHEIMERS, "1073", "Jefferson County", "ALABAMA", "Urban", "10,000+", "11.0"),),
     ),
@@ -4158,7 +4166,16 @@ CREATE TABLE bronze.column_map AS SELECT * REPLACE (position::INTEGER AS positio
 CREATE TABLE bronze.stored_copies AS
     SELECT * REPLACE (byte_count::BIGINT AS byte_count, loaded::BOOLEAN AS loaded, retired::BOOLEAN AS retired)
     FROM read_csv(getvariable('copies_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.file_metadata AS
+    SELECT * FROM read_json(getvariable('metadata_json'), columns = {METADATA_COLUMNS});
+
+
 """
+METADATA_COLUMNS = ", ".join(
+    f"'{field}': '{'BIGINT' if field in bronze_metadata.BIGINT_FIELDS else 'BOOLEAN' if field in {'loaded', 'retired', 'failed_attempt'} else 'VARCHAR'}'"
+    for field in bronze_metadata.FIELDS
+)
+FIXTURE_SQL = FIXTURE_SQL.replace("{METADATA_COLUMNS}", "{" + METADATA_COLUMNS + "}")
 COPY_COLUMNS = (
     "table_name",
     "_object_key",
@@ -4193,16 +4210,77 @@ def copies_csv(objects: Iterable[Stored]) -> str:
     """Return the copies table as CSV: every stored copy with its lineage and whether bronze loads it [206]."""
     items = list(objects)
     loaded = loaded_keys(items)
+    keepers = {(item.table, item.sha): item.key for item in items if item.key in loaded}
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow(COPY_COLUMNS)
     for item in items:
         file_name = item.member.rsplit("!", 1)[-1].rsplit("/", 1)[-1]
         writer.writerow(
-            (item.table, item.key, item.sha, f"fixture/{item.key}.zip", f"v-{item.key}", "fixture", item.snapshot, "fixture_dataset", item.release)
+            (
+                item.table,
+                item.key,
+                item.sha,
+                f"fixture/{keepers[(item.table, item.sha)]}.zip",
+                f"v-{keepers[(item.table, item.sha)]}",
+                "fixture",
+                item.snapshot,
+                "fixture_dataset",
+                item.release,
+            )
             + ("", "fixture/manifest.json", "v-manifest", item.member, file_name, item.rows * 10, str(item.key in loaded).lower(), "false")
         )
     return buffer.getvalue()
+
+
+def fixture_metadata(objects: Iterable[Stored]) -> list[dict[str, Any]]:
+    """Use the real builder, including an exact alias and a retired observation with retained history."""
+    copies = list(csv.DictReader(io.StringIO(copies_csv(objects))))
+    items: list[dict[str, Any]] = []
+    for row in copies:
+        items.append(
+            {
+                "table": row["table_name"],
+                "observation_id": hashlib.sha256(json.dumps([row["table_name"], row["_object_key"]]).encode()).hexdigest(),
+                "object_key": row["_object_key"],
+                "sha256": row["sha256"],
+                "bucket": "synthetic-bucket",
+                "key": row["s3_key"],
+                "version_id": row["s3_version_id"],
+                "source_id": row["source_id"],
+                "snapshot_id": row["snapshot_id"],
+                "dataset_id": row["dataset_id"],
+                "release_id": row["release_id"],
+                "release_partition": row["release_partition"],
+                "manifest_key": row["manifest_key"],
+                "manifest_version_id": row["manifest_version_id"],
+                "manifest_sha256": "0" * 64,
+                "member_chain": row["member_path"].split("!"),
+                "file_name": row["file_name"],
+                "byte_count": int(row["byte_count"]),
+                "loaded": row["loaded"] == "true",
+                "retired": False,
+            }
+        )
+    physical_sizes = {row["sha256"]: row["byte_count"] for row in items if row["loaded"]}
+    for row in items:
+        row["byte_count"] = physical_sizes[row["sha256"]]
+    seed = next(row for row in items if row["table"] == "cms_hai_hospital" and row["loaded"])
+    items += [
+        {**seed, "observation_id": "synthetic-alias", "manifest_key": "fixture/alias/manifest.json", "loaded": False},
+        {
+            **seed,
+            "observation_id": "synthetic-retired",
+            "manifest_key": "fixture/retired/manifest.json",
+            "key": "fixture/retired.csv",
+            "version_id": "v-retired",
+            "loaded": False,
+            "retired": True,
+            "retirement_record_json": '{"redaction_reference":"synthetic"}',
+        },
+    ]
+    names = {row["table"] for row in items}
+    return bronze_metadata.build(names, [row for row in items if row["loaded"]], [{"copy": row} for row in items if not row["loaded"]], [], names)
 
 
 def fixture_csv(objects: Iterable[Stored]) -> str:
@@ -4346,11 +4424,9 @@ def geography_periods_csv(objects: Iterable[Stored], unlabelled: frozenset[str])
 
 
 def publication(item: Stored) -> tuple[str, str]:
-    """Return the expected publication release and its source [170]."""
-    if "!" not in item.member:
-        return item.release, "release_partition"
-    nested = NESTED_DATE.match(item.member)
-    return (nested.group(1), "nested_archive") if nested else (item.release, "container")
+    """Return publication labels through the same parser that records metadata."""
+    parsed = bronze_metadata.release_label(item.member, item.release)
+    return str(parsed["publication_release"]), str(parsed["release_source"])
 
 
 def expected(objects: Iterable[Stored]) -> dict[str, Any]:
@@ -4365,11 +4441,12 @@ def expected(objects: Iterable[Stored]) -> dict[str, Any]:
         (item.table, item.key, item.sha, *publication(item), str(canonical[(item.table, item.sha)] == item.key).lower())
         + (str(item.rows) if canonical[(item.table, item.sha)] == item.key else "",)
         for item in items
+        if canonical[(item.table, item.sha)] == item.key
     )
     files: dict[tuple[str, str], dict[str, Any]] = {}
     for item in items:
         entry = files.setdefault((item.table, item.sha), {"copies": 0, "rows": item.rows, "releases": set()})
-        entry["copies"] += 1
+        entry["copies"] = 1
         entry["releases"].add(publication(item)[0])
     file_rows = sorted(
         (table, digest, canonical[(table, digest)], str(entry["copies"]), str(entry["rows"]), "|".join(sorted(entry["releases"])), HELD.get(digest, ""))
@@ -4870,14 +4947,12 @@ def install_packages() -> None:
         raise SystemExit(f"dbt deps failed ({result.exit_code}): {(result.stdout + result.stderr)[-2000:]}")
 
 
-# Amendment A42: the gold release copy-consistency test warns by design (stored copies of one file can carry different release labels). Only
-# that test may warn; every other status except pass and success is a failure, and the runner records whether it warned.
-TOLERATED_WARN = "release_copy_consistency_dim_release_"
+RELEASE_COPY_TEST = "release_copy_consistency_dim_release_"
 
 
 def node_passes(name: str, status: str) -> bool:
-    """A node passed, or it is the one tolerated warn test and warned (amendment A42)."""
-    return status in ("pass", "success") or (status == "warn" and name == TOLERATED_WARN)
+    """Return whether a node completed successfully."""
+    return status in ("pass", "success")
 
 
 def dbt_build(case: str, target: str, project: bool = False) -> tuple[int, dict[str, str]]:
@@ -4944,7 +5019,9 @@ def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[st
     fixture_project(case_dir, objects, unlabelled)
     (case_dir / "bronze.csv").write_text(fixture_csv(objects))
     (case_dir / "copies.csv").write_text(copies_csv(objects))
+    (case_dir / "metadata.json").write_text(json.dumps(fixture_metadata(objects)))
     variables = f"SET VARIABLE fixture_csv = '{CONTAINER_OUT}/e2e/{case}/bronze.csv';\nSET VARIABLE copies_csv = '{CONTAINER_OUT}/e2e/{case}/copies.csv';\n"
+    variables += f"SET VARIABLE metadata_json = '{CONTAINER_OUT}/e2e/{case}/metadata.json';\n"
     for table in WIDE_COLUMNS:
         (case_dir / f"{table}.csv").write_text(wide_csv(objects, table))
         variables += f"SET VARIABLE {table}_csv = '{CONTAINER_OUT}/e2e/{case}/{table}.csv';\n"
@@ -5634,7 +5711,7 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     results = build_cases(jobs, workers)
     code, statuses = built(results, "base")
     checks["base_build_passes"] = code == 0 and bool(statuses) and all(node_passes(name, status) for name, status in statuses.items())
-    FIXTURE_EVIDENCE["base_tolerated_warn"] = statuses.get(TOLERATED_WARN)
+    FIXTURE_EVIDENCE["base_release_copy_status"] = statuses.get(RELEASE_COPY_TEST)
     base = model_outputs("base")
     checks["copies_match_expected"] = [tuple(row) for row in want["copies"]] == base.get("copies")
     checks["files_match_expected"] = [tuple(row) for row in want["files"]] == base.get("files")
@@ -6515,7 +6592,7 @@ def real_stage(once: bool = False) -> dict[str, Any]:
         with pinned_run(run, outcome) as pinned:
             code, statuses = dbt_build(run, "lakehouse")
             failed = sorted(name for name, status in statuses.items() if not node_passes(name, status))
-            outcome[f"{run}_tolerated_warn"] = statuses.get(TOLERATED_WARN)
+            outcome[f"{run}_release_copy_status"] = statuses.get(RELEASE_COPY_TEST)
             outcome["checks"][f"{run}_build_passes"] = pinned["build_passed"] = code == 0 and bool(statuses) and not failed
         outcome["checks"][f"{run}_pins_verified"] = pinned["pins_verified"]
         outcome[f"{run}_not_passing"] = failed

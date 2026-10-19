@@ -310,7 +310,7 @@ class Env:
             "case_host": str(case),
             "case_container": f"/workspace/out/{name}",
             "packages_host": str(packages),
-            "dbt_vars": {"check_release_copy_conflicts": False},
+            "dbt_vars": {},
         }
 
     def allocate(self, workers: int = 1) -> str:
@@ -2496,8 +2496,8 @@ def detached_python(env: Env, code: str, seconds: float = 30) -> dict[str, Any]:
             actions = [(os.POSIX_SPAWN_OPEN, 0, os.devnull, os.O_RDONLY, 0), (os.POSIX_SPAWN_OPEN, 1, os.devnull, os.O_WRONLY, 0), (os.POSIX_SPAWN_DUP2, 1, 2)]
             os.posix_spawn(
                 sys.executable,
-                [sys.executable, "-c", script, str(out)],
-                {"PATH": os.environ["PATH"], "HOME": str(launcher.account_home())},
+                [sys.executable, "-B", "-c", script, str(out)],
+                {"PATH": os.environ["PATH"], "HOME": str(launcher.account_home()), "PYTHONDONTWRITEBYTECODE": "1"},
                 file_actions=actions,
             )
         finally:
@@ -3285,12 +3285,17 @@ def deadline_acceptance(env: Env) -> dict[str, bool]:
     for pid in load:
         os.kill(pid, signal.SIGKILL)
         os.waitpid(pid, 0)
-    missing = run_command(sys.executable, [str(ROOT / "services/hai/deadline_run.py"), "true"], timeout=30, env={"PATH": os.environ["PATH"]})
+    missing = run_command(
+        sys.executable,
+        ["-B", str(ROOT / "services/hai/deadline_run.py"), "true"],
+        timeout=30,
+        env={"PATH": os.environ["PATH"], "PYTHONDONTWRITEBYTECODE": "1"},
+    )
     normal = run_command(
         sys.executable,
-        [str(ROOT / "services/hai/deadline_run.py"), "sh", "-c", "exit 7"],
+        ["-B", str(ROOT / "services/hai/deadline_run.py"), "sh", "-c", "exit 7"],
         timeout=30,
-        env={"PATH": os.environ["PATH"], "HAI_DEADLINE_UTC": str(time.time() + 30)},
+        env={"PATH": os.environ["PATH"], "HAI_DEADLINE_UTC": str(time.time() + 30), "PYTHONDONTWRITEBYTECODE": "1"},
     )
     (env.work / "deadline_stamps.json").write_text(json.dumps(stamps, indent=1))
     return {
@@ -4377,7 +4382,7 @@ def render_templates(env: Env) -> dict[str, bool]:
         and f["entrypoint"] == wrapped(["dbt"])
         and f["network"] == "none"
         and f["mounts"] == {(str(case_folder.resolve()), "/workspace/out/rc", False), (str(packages.resolve()), "/workspace/out/dbt_packages", True), resources}
-        and f["cmd"][-2:] == ["--vars", '{"check_release_copy_conflicts": false}']
+        and "--vars" not in f["cmd"]
         and "--target" in f["cmd"]
         and f["init"] is True
         and not any(name.startswith(("AWS", "POLARIS")) for name in f["env"])
@@ -5454,9 +5459,7 @@ def kit_launcher_client(env: Env) -> dict[str, bool]:
     mounts = bodies[0]["HostConfig"]["Mounts"] if bodies else []
     return {
         "dbt ran as a fixture_dbt attempt": code == 0 and bodies != [] and bodies[0]["Labels"]["hai.template"] == "fixture_dbt",
-        "every dbt call passes check_release_copy_conflicts false": all(
-            any(part == '{"check_release_copy_conflicts": false}' for part in b["Cmd"]) for b in bodies
-        ),
+        "every fixture uses the strict default invariant": bool(bodies) and all("--vars" not in b["Cmd"] for b in bodies),
         "the command carries the template's target and project, not the caller's": "--target" in command
         and "fixture" in command
         and "--project-dir" in command,
@@ -7738,8 +7741,84 @@ def release_phase_matrix(env: Env) -> dict[str, bool]:
     return checks
 
 
+@case("launcher_child_bytecode")
+def launcher_child_bytecode(env: Env) -> dict[str, bool]:
+    """Capture the detached command and environment without starting a launcher."""
+    results: dict[str, bool] = {}
+    allowed = {"PATH": "/synthetic/bin", "HOME": "/synthetic/home", "DOCKER_HOST": "synthetic-host", "TMPDIR": str(env.work)}
+    for setting in (None, "0"):
+        for kind in ("test", "real"):
+            for nonce in ("", "synthetic-client-nonce"):
+                label = f"{setting or 'absent'}/{kind}/{'nonce' if nonce else 'no_nonce'}"
+                registry = env.work / label
+                config = launcher.Config(run_lock.Registry(registry, kind), ROOT, "unused", registry / "tokens", registry / "runs")
+                client = launcher.LauncherClient(config)
+                client.launch_nonce = nonce
+                parent = {**allowed, "PYTHONPATH": "/synthetic/imports", "PYTHONPYCACHEPREFIX": "/synthetic/cache", "UNRELATED_CHILD_SETTING": "excluded"}
+                parent[launcher.LAUNCH_NONCE_VARIABLE] = "synthetic-inherited-nonce"
+                if setting is not None:
+                    parent["PYTHONDONTWRITEBYTECODE"] = setting
+                with (
+                    mock.patch.dict(os.environ, parent, clear=True),
+                    mock.patch.object(launcher.os, "fork", return_value=0),
+                    mock.patch.object(launcher.os, "setsid"),
+                    mock.patch.object(launcher.os, "chdir"),
+                    mock.patch.object(launcher.os, "posix_spawn") as spawn,
+                    mock.patch.object(launcher.os, "_exit"),
+                    mock.patch.object(launcher.os, "waitpid"),
+                ):
+                    client.start_launcher()
+                if spawn.call_count != 1 or spawn.call_args is None:
+                    raise CaseFailure("the detached command did not reach the intercepted spawn boundary")
+                program, arguments, environment = spawn.call_args.args
+                expected = [sys.executable, "-B", "-m", "orchestration.launcher"]
+                if kind == "test":
+                    expected += ["--test-registry", str(registry)]
+                expected.append("serve")
+                expected_keys = set(allowed) | {"PYTHONDONTWRITEBYTECODE"} | ({launcher.LAUNCH_NONCE_VARIABLE} if nonce else set())
+                results[f"{label}: the detached command has literal -B and the existing command tail"] = program == sys.executable and arguments == expected
+                results[f"{label}: the child bytecode policy is fixed to 1"] = environment.get("PYTHONDONTWRITEBYTECODE") == "1"
+                results[f"{label}: only the inherited allowlist and fixed fields reach the child"] = set(environment) == expected_keys
+                results[f"{label}: inherited allowlist values are preserved"] = all(environment.get(name) == value for name, value in allowed.items())
+                results[f"{label}: only the explicit client nonce reaches the child"] = environment.get(launcher.LAUNCH_NONCE_VARIABLE, "") == nonce
+                results[f"{label}: stdin and log redirection are preserved"] = spawn.call_args.kwargs == {
+                    "file_actions": [
+                        (os.POSIX_SPAWN_OPEN, 0, os.devnull, os.O_RDONLY, 0),
+                        (os.POSIX_SPAWN_OPEN, 1, str(registry / "launcher.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600),
+                        (os.POSIX_SPAWN_DUP2, 1, 2),
+                    ]
+                }
+    for setting in (None, "0"):
+        parent = {**allowed, "PYTHONPATH": "/synthetic/imports"}
+        if setting is not None:
+            parent["PYTHONDONTWRITEBYTECODE"] = setting
+        with (
+            mock.patch.dict(os.environ, parent, clear=True),
+            mock.patch.object(os, "fork", return_value=0),
+            mock.patch.object(os, "setsid"),
+            mock.patch.object(os, "chdir"),
+            mock.patch.object(os, "posix_spawn") as spawn,
+            mock.patch.object(os, "_exit", side_effect=SystemExit(0)),
+            contextlib.suppress(SystemExit),
+        ):
+            detached_python(env, "result = {}")
+        if spawn.call_count != 1 or spawn.call_args is None:
+            raise CaseFailure("the detached helper did not reach the intercepted spawn boundary")
+        program, arguments, environment = spawn.call_args.args
+        label = f"detached helper/{setting or 'absent'}"
+        results[f"{label}: the interpreter receives literal -B"] = program == sys.executable and arguments[:3] == [sys.executable, "-B", "-c"]
+        results[f"{label}: the child bytecode policy is fixed to 1"] = environment.get("PYTHONDONTWRITEBYTECODE") == "1"
+        results[f"{label}: the explicit environment retains only PATH, account HOME and fixed policy"] = environment == {
+            "PATH": allowed["PATH"],
+            "HOME": str(launcher.account_home()),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+    return results
+
+
 # Every case, listed so a case that loses its decorator cannot go unnoticed: the runner checks the list against the registry.
 ALL_CASES = (
+    launcher_child_bytecode,
     image_python_entrypoint_refused,
     deadline_relay_refused,
     dbt_archive_boundary,

@@ -23,6 +23,8 @@
     ],
     "lakehouse_checks": [
       "^scripts/(lakehouse|orchestration)/",
+      "^scripts/(acquisition|infrastructure)/",
+      "^tests/",
       "^orchestration/",
       "^dbt/",
       "^data_contracts/",

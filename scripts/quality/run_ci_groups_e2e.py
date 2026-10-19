@@ -601,6 +601,22 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         selection_case(work, f"orchestration_shared_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "core"], groups)
         for path, groups in ORCHESTRATION_SHARED.items()
     ]
+    cases += [
+        selection_case(
+            work,
+            "storage_harness_dependency_" + Path(path).stem,
+            ["--scope", "paths", "--path", path, "--part", "core"],
+            ["python_lint", "lakehouse_checks", "repository_code_checks", "configuration_checks"]
+            if not path.startswith("scripts/acquisition/")
+            else ["python_lint", "lakehouse_checks", "repository_code_checks"],
+        )
+        for path in (
+            "scripts/acquisition/s3_store.py",
+            "scripts/acquisition/tests/test_capture.py",
+            "scripts/infrastructure/render_project_config.py",
+            "tests/support.py",
+        )
+    ]
     code, _, _ = select(work, "--scope", "bogus")
     cases.append({"case": "invalid_scope_refused", "passed": code == 2, "exit": code})
     code, _, _ = select(work, "--scope", "full", "--part", "bogus")

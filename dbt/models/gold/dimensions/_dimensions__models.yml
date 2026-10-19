@@ -1058,11 +1058,15 @@ models:
                     column: member_sha256
                 space: 'true'
       - name: object_key
-        description: The smallest object key among the file's stored copies.
+        description: The immutable canonical object key selected during bootstrap.
       - name: copy_count
-        description: How many stored copies the file has.
+        description: Distinct live physical copies of the file.
       - name: release_date
-        description: The publication release read as a date; null when the release text is not a date.
+        description: The unchanged canonical observation date, null when its release text is not a date.
+      - name: publication_dates
+        description: Successful publication dates, sorted, including retired observations and excluding failed attempts.
+      - name: download_run_ids
+        description: All observed download-run identifiers, sorted.
       - name: period_start
         description: First day of the period the file covers, from the file-period seeds; null when none covers it.
       - name: period_end
@@ -1070,8 +1074,8 @@ models:
     data_tests:
       - release_copy_consistency:
           config:
-            severity: warn
-            enabled: '{{ var(''check_release_copy_conflicts'', false) }}'
+            severity: error
+            enabled: true
   - name: dim_rurality_code
     description: One row per (rurality code code system, code) as published, plus the unknown member. A RUCC code whose published meaning changed
       between the 2013 and 2023 editions (identity_rule split) has one row per edition.
@@ -1164,7 +1168,7 @@ models:
               arguments:
                 sk_column: source_sk
                 sources:
-                  - model: stg_bronze__file_copies
+                  - model: stg_bronze__release_observations
                     column: dataset_id
                 space: 'true'
       - name: publisher

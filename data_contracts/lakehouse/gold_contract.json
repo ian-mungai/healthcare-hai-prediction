@@ -512,12 +512,15 @@
         "copy_count",
         "release_date",
         "period_start",
-        "period_end"
+        "period_end",
+        "publication_dates",
+        "download_run_ids"
       ],
       "grain": "member_sha256 (stored file)",
       "inputs": [
         "stg_bronze__file_copies",
-        "the file-period seeds"
+        "the file-period seeds",
+        "stg_bronze__files"
       ],
       "package": "G2"
     },
@@ -545,7 +548,7 @@
       ],
       "grain": "dataset",
       "inputs": [
-        "stg_bronze__file_copies",
+        "stg_bronze__release_observations",
         "dbt/seeds/gold/source_labels.csv (generated from config/acquisition/registry_additions.json and config/acquisition/source_registry.json)"
       ],
       "package": "G2"
@@ -1102,7 +1105,7 @@
       "dim_source": {
         "dataset_id": [
           [
-            "stg_bronze__file_copies",
+            "stg_bronze__release_observations",
             "dataset_id"
           ]
         ]

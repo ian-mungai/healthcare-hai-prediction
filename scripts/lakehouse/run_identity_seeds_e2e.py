@@ -324,7 +324,12 @@ def run_completeness() -> list[dict[str, Any]]:
     refused = exemption_of("lakehouse", {"synthetic_dataset_ids": [SYNTHETIC_ID]})
     fixture = exemption_of("fixture", {})
     cleared = exemption_of("fixture", {"synthetic_dataset_ids": []})
+    source = render_completeness_test("lakehouse", {})
     return [
+        {
+            "case": "completeness_reads_the_set_dim_source_reads",
+            "ok": '"stg_bronze__release_observations"' in source and '"stg_bronze__file_copies"' not in source,
+        },
         {"case": "completeness_real_target_rejects_unlisted_id", "exemption": real, "ok": real == ""},
         {"case": "completeness_lint_target_exempts_nothing", "exemption": exemption_of("lint", {}), "ok": exemption_of("lint", {}) == ""},
         {

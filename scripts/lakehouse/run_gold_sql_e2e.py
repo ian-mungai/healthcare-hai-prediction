@@ -1452,8 +1452,8 @@ def runner_helpers(source: str, mutation: str = "") -> dict[str, Any]:
     names = {
         "BUILD_OK",
         "GOLD_MODELS",
-        "WARN_TOLERATED",
-        "WARN_NAMES",
+        "RELEASE_COPY_TEST",
+        "RELEASE_COPY_NAMES",
         "RELEASE_MODEL",
         "EXPRESSION_CHECKS",
         "LEAF_EXPRESSION_CLASSES",
@@ -1522,23 +1522,24 @@ def helper_cases(contract: Any, runner_source: str, checker_source: str) -> list
     helpers = runner_helpers(runner_source)
     model_id = "model.synthetic.dim_release"
     model = {"resource_type": "model", "name": "dim_release", "fqn": ["synthetic", "gold", "dim_release"]}
-    test_name = helpers["WARN_TOLERATED"]
+    test_name = helpers["RELEASE_COPY_TEST"]
     test_id = "test.synthetic." + test_name
-    test = {"resource_type": "test", "name": test_name, "attached_node": model_id, "config": {"severity": "warn"}}
+    test = {"resource_type": "test", "name": test_name, "attached_node": model_id, "config": {"severity": "error"}}
     manifest = {"nodes": {model_id: model, test_id: test}}
-    statuses = {"dim_release": "success", test_name: "warn"}
+    statuses = {"dim_release": "success", test_name: "pass"}
     for suffix in ("", "_"):
         active = copy.deepcopy(manifest)
         active["nodes"].pop(test_id)
         active["nodes"][test_id + suffix] = {**test, "name": test_name + suffix}
-        found = helpers["gold_node_problems"](active, {"dim_release": "success", test_name + suffix: "warn"}, True)
-        records.append({"name": "positive_A42_warn" + ("_trailing" if suffix else "_named"), "passed": not found, "problems": found})
+        found = helpers["gold_node_problems"](active, {"dim_release": "success", test_name + suffix: "pass"}, True)
+        records.append({"name": "positive_release_copy_pass" + ("_trailing" if suffix else "_named"), "passed": not found, "problems": found})
     required_mutant = runner_helpers(runner_source, "required_test")
     for label, changed in (
         ("deleted", {"nodes": {model_id: model}}),
         ("disabled", {"nodes": {model_id: model}, "disabled": {test_id: [test]}}),
-        ("severity_error", {"nodes": {model_id: model, test_id: {**test, "config": {"severity": "error"}}}}),
+        ("severity_warn", {"nodes": {model_id: model, test_id: {**test, "config": {"severity": "warn"}}}}),
         ("wrong_attachment", {"nodes": {model_id: model, test_id: {**test, "attached_node": "model.synthetic.dim_hospital"}}}),
+        ("disabled_config", {"nodes": {model_id: model, test_id: {**test, "config": {"severity": "error", "enabled": False}}}}),
     ):
         local_mutant = dict(required_mutant)
         if label == "disabled":
@@ -1547,7 +1548,7 @@ def helper_cases(contract: Any, runner_source: str, checker_source: str) -> list
         found = helpers["gold_node_problems"](changed, statuses, True)
         escaped = local_mutant["gold_node_problems"](changed, statuses, True)
         record("F17_required_test_" + label, bool(found), bool(escaped), {"problems": found, "mutant_problems": escaped})
-    for status in ("not run", "fail", "error", "skipped"):
+    for status in ("not run", "fail", "error", "skipped", "warn"):
         found = helpers["gold_node_problems"](manifest, {"dim_release": "success", test_name: status}, True)
         # Simulate the old missing-status guard accepting this required node.
         weak = dict(helpers)

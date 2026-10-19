@@ -10,8 +10,7 @@ Run from a checkout or a package worktree:
 Every container is an attempt of a launcher template (``fixture_dbt``, ``fixture_init`` or ``duckdb_helper``) on the pinned analytics image with
 no network: no AWS profile, catalog or secret is used, so a fresh worktree needs only the image and the dbt packages already installed in
 the main checkout. The kit is a launcher client and makes no Docker call; its launches run under one allocation, which admits one heavy job
-at a time across worktrees (a caller's ``HAI_ALLOCATION`` is reused). Every dbt call of a package check passes ``check_release_copy_conflicts:
-false``, so the kit counts no ``warn`` of the release copy-consistency test; a gate case (the silver and gold E2E fixture stages) passes true. A
+at a time across worktrees (a caller's ``HAI_ALLOCATION`` is reused). Every fixture enforces the physical release-copy invariant. A
 baseline fingerprints every relation of a build file opened read-only: row count, ordered columns with types and an
 order-independent content hash (the sum of each row's lower 64 MD5 bits and the XOR of each row's full MD5, as text in
 the pinned DuckDB). ``check`` builds a package's patched project, selects its frozen required tests with their ancestors
@@ -48,10 +47,6 @@ IMAGE = "hai-analytics:duckdb1.5.6-dbt1.11.15"
 OUT = ROOT / "data" / "package_fixture"
 CONTAINER_OUT = "/workspace/out"
 TIMEOUT = 3600
-# The dbt variable the kit sets for every call (amendment A42: the gate runs the release copy-consistency test, package checks do not).
-DBT_VARS = {"check_release_copy_conflicts": False}
-# The same variable for a gate case: the silver and gold E2E fixture stages are gate evidence and run the test as warn (A42, A77).
-GATE_DBT_VARS = {"check_release_copy_conflicts": True}
 # The test registry a test of the kit passes; the real run never sets it.
 TEST_REGISTRY: str | None = None
 # One query per relation; the attach is added for views that read the fixture bronze database.
@@ -221,22 +216,20 @@ class Case:
 
     name: str
     folder: Path
-    gate: bool = False
 
     @property
     def params(self) -> dict[str, Any]:
-        """The ``fixture_dbt`` parameters: the case folder, its container path, the package folder and the kit's dbt variable (the gate's for a gate case)."""
+        """Return fixture paths and an empty variable map for the launcher template."""
         return {
             "case_host": str(self.folder.resolve()),
             "case_container": f"{CONTAINER_OUT}/{self.name}",
             "packages_host": str((OUT / "dbt_packages").resolve()),
-            "dbt_vars": GATE_DBT_VARS if self.gate else DBT_VARS,
+            "dbt_vars": {},
         }
 
 
-def make_case(name: str, session: Session, patches: list[Path], gate: bool = False) -> Case:
-    """Write a case: this checkout's dbt/ with the given patches applied, its seeds and the synthetic bronze database [888]. A gate case
-    (the silver and gold E2E fixture stages) runs the release copy-consistency test; a package check does not (A42)."""
+def make_case(name: str, session: Session, patches: list[Path]) -> Case:
+    """Write a fixture case with the given patches, generated seeds and synthetic bronze database."""
     from scripts.lakehouse import run_staging_e2e as staging
 
     # A new folder per run: Docker Desktop's file sharing can show a folder deleted and recreated at the same path as
@@ -262,7 +255,9 @@ def make_case(name: str, session: Session, patches: list[Path], gate: bool = Fal
     objects = staging.BASE
     (folder / "bronze.csv").write_text(staging.fixture_csv(objects))
     (folder / "copies.csv").write_text(staging.copies_csv(objects))
+    (folder / "metadata.json").write_text(json.dumps(staging.fixture_metadata(objects)))
     variables = f"SET VARIABLE fixture_csv = '{CONTAINER_OUT}/{name}/bronze.csv';\nSET VARIABLE copies_csv = '{CONTAINER_OUT}/{name}/copies.csv';\n"
+    variables += f"SET VARIABLE metadata_json = '{CONTAINER_OUT}/{name}/metadata.json';\n"
     for table in staging.WIDE_COLUMNS:
         (folder / f"{table}.csv").write_text(staging.wide_csv(objects, table))
         variables += f"SET VARIABLE {table}_csv = '{CONTAINER_OUT}/{name}/{table}.csv';\n"
@@ -280,7 +275,7 @@ def make_case(name: str, session: Session, patches: list[Path], gate: bool = Fal
     result = session.run("fixture_init", f"init-{name}", [], params)
     if not result.ok:
         raise FixtureError(f"fixture bronze database failed: {result.stderr.strip()[-500:]}")
-    return Case(name, folder, gate)
+    return Case(name, folder)
 
 
 def dbt(case: Case, args: list[str], session: Session | None = None) -> tuple[int, str, dict[str, str]]:

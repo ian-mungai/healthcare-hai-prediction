@@ -1,5 +1,3 @@
--- One row per stored copy in the tables whose copies staging resolves, loaded or not: each copy's file, capture and
--- publication release, and whether it is the copy bronze loads (failure modes 167 to 171, 204 to 209).
 {{ config(materialized='table') }}
 
 with
@@ -20,79 +18,55 @@ loaded as (
     {{ union_copy_tables('loaded_') }}
 ),
 
-families as (
-    {%- for table, family in var('copy_tables').items() %}
-    select
-        '{{ table }}' as bronze_table,
-        '{{ family }}' as source_family
-    {%- if not loop.last %}
-    union all
-    {%- endif %}
-    {%- endfor %}
-),
-
 copies as (
     select
-        stored_copies.table_name as bronze_table,
-        families.source_family,
-        stored_copies._object_key as object_key,
-        stored_copies.sha256 as member_sha256,
-        stored_copies.s3_key,
-        stored_copies.s3_version_id,
-        stored_copies.member_path,
-        stored_copies.file_name,
-        stored_copies.snapshot_id,
-        stored_copies.dataset_id,
-        stored_copies.release_id,
-        stored_copies.loaded as is_loaded,
-        stored_copies.retired as is_retired
-    from {{ source('bronze', 'stored_copies') }} as stored_copies
-    inner join families on stored_copies.table_name = families.bronze_table
-),
-
-releases as (
-    select
-        copies.*,
-        -- A nested archive member is dated by its nested archive's name; otherwise it keeps its container's release [170].
-        case
-            when not contains(copies.member_path, '!') then 'release_partition'
-            when regexp_matches(copies.member_path, '\d{4}-\d{2}-\d{2}\.zip!') then 'nested_archive'
-            else 'container'
-        end as release_source
-    from copies
+        observations.*,
+        physical_index.canonical_object_key as indexed_object_key,
+        physical_index.canonical_observation_id,
+        physical_index.bucket as indexed_bucket,
+        physical_index.s3_key as indexed_s3_key,
+        physical_index.s3_version_id as indexed_s3_version_id,
+        row_number() over (
+            partition by observations.bronze_table, observations.bucket, observations.s3_key, observations.s3_version_id
+            order by observations.is_canonical desc, observations.object_key asc, observations.observation_id asc
+        ) as physical_rank
+    from {{ ref('stg_bronze__release_observations') }} as observations
+    inner join {{ ref('stg_bronze__physical_object_index') }} as physical_index
+        on observations.member_sha256 = physical_index.member_sha256
+    where not observations.is_retired and not observations.is_failed_attempt
 ),
 
 final as (
     select
-        releases.bronze_table,
-        releases.source_family,
-        releases.object_key,
-        releases.member_sha256,
+        copies.bronze_table,
+        copies.source_family,
+        copies.member_sha256,
         loaded.checksum_count,
-        releases.s3_key,
-        releases.s3_version_id,
-        releases.member_path,
-        releases.file_name,
-        releases.snapshot_id,
-        releases.dataset_id,
-        releases.release_id,
-        releases.release_source,
-        -- Only the loaded copy has rows in bronze; its copies hold the same bytes [209].
+        copies.bucket,
+        copies.s3_key,
+        copies.s3_version_id,
+        copies.byte_count,
+        copies.member_path,
+        copies.file_name,
+        copies.snapshot_id,
+        copies.dataset_id,
+        copies.release_id,
+        copies.release_source,
         loaded.row_count,
-        releases.is_retired,
-        -- The canonical copy is the one bronze loads: the smallest object key, never tied to capture time [167] [205].
-        releases.is_loaded as is_canonical,
-        releases.bronze_table || ':' || releases.object_key as copy_key,
-        case
-            when releases.release_source = 'nested_archive' then regexp_extract(releases.member_path, '.*(\d{4}-\d{2}-\d{2})\.zip!', 1)
-            else releases.release_id
-        end as publication_release,
-        releases.release_source = 'container' as is_release_from_container
-    from releases
+        copies.is_retired,
+        copies.publication_release,
+        copies.publication_date,
+        copies.is_release_from_container,
+        copies.indexed_object_key as object_key,
+        copies.observation_id = copies.canonical_observation_id
+        and copies.bucket = copies.indexed_bucket
+        and copies.s3_key = copies.indexed_s3_key
+        and copies.s3_version_id = copies.indexed_s3_version_id as is_canonical,
+        copies.bronze_table || ':' || md5(to_json([copies.bucket, copies.s3_key, copies.s3_version_id])) as copy_key
+    from copies
     left join loaded
-        on
-            releases.bronze_table = loaded.bronze_table
-            and releases.object_key = loaded.object_key
+        on copies.bronze_table = loaded.bronze_table and copies.indexed_object_key = loaded.object_key
+    where copies.physical_rank = 1
 )
 
 select * from final

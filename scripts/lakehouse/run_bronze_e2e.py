@@ -23,14 +23,16 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import zipfile
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
-from scripts.lakehouse import bronze, care_compare_tables, dictionary, file_readers
+from scripts.lakehouse import bronze, bronze_metadata, care_compare_tables, dictionary, file_readers
 from scripts.lakehouse.session import spark_session
 
 REPORT_ROOT = Path("data/e2e/bronze")
@@ -1048,6 +1050,7 @@ def remaining_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: P
     results.update(copies_scenarios(spark, root, storage, scratch))
     results.update(supersession_scenarios(spark, root, storage, scratch))
     results.update(removed_table_scenarios(spark, root, storage, scratch))
+    results.update(atomic_metadata_scenarios(spark, root, storage))
     return results
 
 
@@ -1696,6 +1699,235 @@ def removed_table_scenarios(spark: Any, root: Path, storage: FakeStorage, scratc
     )
     # [259] A rerun reports the table as absent and changes nothing.
     results["removed_table_rerun_absent"] = bronze.drop_removed(spark, bronze.load_removed(listed, kept_only), "bronze") == {"removal_drop": "absent"}
+    return results
+
+
+def atomic_metadata_scenarios(spark: Any, root: Path, storage: FakeStorage) -> dict[str, bool]:
+    """Publish complete metadata, reject partial generations and preserve a pinned historical reader."""
+    collection = "cms/atomic_metadata"
+    payload = b"synthetic\nvalue\n"
+    table = {"table": "atomic_files", "collection": collection, "member_pattern": r"\.csv$", "format": "csv"}
+    config = bronze.load_table_map(table_map(root / "atomic_metadata.json", [table]))
+    first = store(storage, collection, "first", "first_capture", [(["first.csv"], "first.csv", payload)])
+    first_key = first + "/manifest.json"
+    first_version = next(version for key, version in storage.objects if key == first_key)
+    physical = json.loads(storage.get(BUCKET, first_key, first_version))["objects"][0]["object"]
+    names = ["atomic_files"]
+    inputs, excluded = bronze.discover(storage, BUCKET, config, names)
+    original = bronze_metadata.build(names, inputs, excluded, [], names)
+    namespace = "metadata_atomic"
+    bronze_metadata.publish(spark, namespace, original)
+    table_name = namespace + ".file_metadata"
+    refs_sql = "SELECT snapshot_id FROM metadata_atomic.file_metadata.refs WHERE name = 'main'"
+    snapshot = spark.sql(refs_sql).collect()[0]["snapshot_id"]
+    bronze_metadata.publish(spark, namespace, original)
+    same_snapshot = spark.sql(refs_sql).collect()[0]["snapshot_id"]
+    results = {"metadata_republish_is_idempotent": snapshot == same_snapshot}
+    second = store(storage, collection, "second", "later_capture_2", [(["second.csv"], "second.csv", payload)], release="2026-04-01")
+    key = second + "/manifest.json"
+    version = next(version for found, version in storage.objects if found == key)
+    manifest = json.loads(storage.get(BUCKET, key, version))
+    manifest["objects"][0]["object"] = physical
+    del storage.objects[(key, version)]
+    storage.put(key, json.dumps(manifest).encode())
+    canonical_keys = {(row["table_name"], row["sha256"]): row["_object_key"] for row in original if row["kind"] == "object"}
+    canonical_observations = {(row["table_name"], row["sha256"]): row["observation_id"] for row in original if row["kind"] == "object"}
+    unfrozen, _ = bronze.discover(storage, BUCKET, config, names)
+    results["failing_first_unfrozen_discovery_changes_canonical_key"] = unfrozen[0]["object_key"] < original[0]["canonical_object_key"]
+    inputs, excluded = bronze.discover(storage, BUCKET, config, names, canonical_keys=canonical_keys, canonical_observations=canonical_observations)
+    updated = bronze_metadata.build(names, inputs, excluded, original, names)
+    bronze_metadata.publish(spark, namespace, updated)
+    pinned = {row["generation"] for row in bronze_metadata.read(spark, namespace, int(snapshot))}
+    current = bronze_metadata.read(spark, namespace)
+    published_snapshot = spark.sql(refs_sql).collect()[0]["snapshot_id"]
+    missing_kind = [dict(row) for row in updated if row["kind"] == "observation"]
+    for row in missing_kind:
+        row["generation_row_count"] = len(missing_kind)
+        row["generation_object_count"] = 0
+    missing_kind_digest = bronze_metadata.generation_digest(missing_kind)
+    for row in missing_kind:
+        row["generation"] = missing_kind_digest
+    for name, invalid, reason in (
+        ("partial_generation_is_never_published", updated[:-1], "partial"),
+        ("generation_missing_kind_fails_closed", missing_kind, "both object and observation"),
+    ):
+        try:
+            bronze_metadata.publish(spark, namespace, invalid)
+        except bronze_metadata.MetadataError as error:
+            results[name] = reason in str(error) and spark.sql(refs_sql).collect()[0]["snapshot_id"] == published_snapshot
+        else:
+            results[name] = False
+    results["pinned_metadata_reader_excludes_later_generation"] = (
+        pinned == {original[0]["generation"]} and {row["generation"] for row in current} == {updated[0]["generation"]} and len(current) == 3
+    )
+    results["metadata_preserves_bootstrap_canonical_key"] = results["failing_first_unfrozen_discovery_changes_canonical_key"] and all(
+        row["canonical_object_key"] == original[0]["canonical_object_key"] for row in current
+    )
+    results["metadata_preserves_observation_dates_and_names"] = {row["publication_date"] for row in current if row["kind"] == "observation"} == {
+        "2026-01-01",
+        "2026-04-01",
+    }
+    index = root / "bootstrap.json"
+    digest = bronze_metadata.write_bootstrap(current, index)
+    results["bootstrap_export_is_write_once_and_repeatable"] = (
+        digest == bronze_metadata.write_bootstrap(current, index) and hashlib.sha256(index.read_bytes()).hexdigest() == digest
+    )
+    from pyspark.sql.functions import lit
+
+    for name, bad_rows in (
+        ("partial_generation", updated[:-1]),
+        ("missing_kind", [row for row in updated if row["kind"] == "observation"]),
+        ("idempotent_republish", updated),
+    ):
+        bad_namespace = "metadata_mutant_" + name
+        bronze_metadata.publish(spark, bad_namespace, updated)
+        before_snapshot = bronze_metadata.snapshot(spark, bad_namespace)
+        spark.createDataFrame([tuple(row[field] for field in bronze_metadata.FIELDS) for row in bad_rows], bronze_metadata.SCHEMA).writeTo(
+            bad_namespace + ".file_metadata"
+        ).overwrite(lit(True))
+        after_snapshot = bronze_metadata.snapshot(spark, bad_namespace)
+        results["failing_first_" + name + "_unsafe_writer_changes_snapshot"] = before_snapshot != after_snapshot
+        visible = [row.asDict() for row in spark.table(bad_namespace + ".file_metadata").collect()]
+        results["failing_first_" + name + "_unguarded_reader_sees_rows"] = sorted(json.dumps(row, sort_keys=True) for row in visible) == sorted(
+            json.dumps(row, sort_keys=True) for row in bad_rows
+        )
+    weak_reader = {row["generation"] for row in spark.table(table_name).collect()}
+    results["failing_first_unpinned_reader_sees_later_generation"] = weak_reader != {original[0]["generation"]}
+    results.update(metadata_commit_scenarios(spark, original, updated))
+    return results
+
+
+def metadata_commit_scenarios(spark: Any, original: list[dict], updated: list[dict]) -> dict[str, bool]:
+    """Exercise two real Iceberg writers, stale publication and a native commit rejection; no S3 is involved.
+
+    Failure modes: lost concurrent generation, stale resurrection, indefinite rendezvous, wrong rejection cause and
+    a failed Iceberg commit changing the published head. Unsafe native overwrites supply the failing-first controls.
+    """
+    from pyspark.sql.functions import lit
+
+    def branch(base: list[dict], suffix: str) -> list[dict]:
+        rows = [dict(row) for row in base]
+        seed = next(row for row in rows if row["kind"] == "observation")
+        rows.append({**seed, "observation_id": suffix, "manifest_key": suffix + "/manifest.json", "loaded": False})
+        for row in rows:
+            row["generation_row_count"] = len(rows)
+        digest = bronze_metadata.generation_digest(rows)
+        for row in rows:
+            row["generation"] = digest
+        bronze_metadata.validate(rows)
+        return rows
+
+    def content(rows: list[dict]) -> list[str]:
+        return sorted(json.dumps(row, sort_keys=True) for row in rows)
+
+    left, right = branch(original, "publisher_left"), branch(original, "publisher_right")
+    namespace = "metadata_two_publishers"
+    bronze_metadata.publish(spark, namespace, original)
+    barrier = threading.Barrier(2, timeout=30)
+    reader = bronze_metadata.read
+    outcomes: dict[str, str] = {}
+
+    def rendezvous(session: Any, selected: str, snapshot_id: int | None = None) -> list[dict]:
+        rows = reader(session, selected, snapshot_id)
+        if selected == namespace:
+            barrier.wait()
+        return rows
+
+    def writer(name: str, rows: list[dict]) -> None:
+        session = spark.newSession()
+        session.sparkContext.setJobGroup(name, "synthetic metadata publisher", interruptOnCancel=True)
+        try:
+            bronze_metadata.publish(session, namespace, rows)
+            outcomes[name] = "committed"
+        except Exception as error:
+            outcomes[name] = (
+                "conflict" if any(word in str(error).lower() for word in ("conflict", "validationexception", "commitfailed")) else type(error).__name__
+            )
+        finally:
+            session.sparkContext.setLocalProperty("spark.jobGroup.id", None)
+
+    workers = [threading.Thread(target=writer, args=(name, rows), daemon=True) for name, rows in (("left", left), ("right", right))]
+    try:
+        with patch.object(bronze_metadata, "read", rendezvous):
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=120)
+            if any(worker.is_alive() for worker in workers):
+                raise TimeoutError("metadata publishers exceeded the 240-second join deadline")
+    finally:
+        barrier.abort()
+        for name in ("left", "right"):
+            spark.sparkContext.cancelJobGroup(name)
+        for worker in workers:
+            worker.join(timeout=10)
+        if any(worker.is_alive() for worker in workers):
+            raise TimeoutError("metadata publisher did not stop after cancellation")
+    visible = reader(spark, namespace)
+    results = {
+        "two_publishers_have_one_commit_and_one_native_conflict": sorted(outcomes.values()) == ["committed", "conflict"],
+        "concurrent_reader_sees_one_whole_generation": content(visible) in (content(left), content(right)),
+    }
+    unsafe_namespace = "metadata_two_unsafe_publishers"
+    bronze_metadata.publish(spark, unsafe_namespace, original)
+    for rows in (left, right):
+        spark.createDataFrame([tuple(row[field] for field in bronze_metadata.FIELDS) for row in rows], bronze_metadata.SCHEMA).writeTo(
+            unsafe_namespace + ".file_metadata"
+        ).overwrite(lit(True))
+    results["failing_first_unconditional_publishers_lose_left_observation"] = content(reader(spark, unsafe_namespace)) == content(right)
+    stale_namespace = "metadata_stale_writer"
+    bronze_metadata.publish(spark, stale_namespace, original)
+    bronze_metadata.publish(spark, stale_namespace, updated)
+    before = bronze_metadata.snapshot(spark, stale_namespace)
+    try:
+        bronze_metadata.publish(spark, stale_namespace, left)
+    except bronze_metadata.MetadataError as error:
+        results["stale_writer_refused_before_commit"] = "loses or changes" in str(error) and bronze_metadata.snapshot(spark, stale_namespace) == before
+    else:
+        results["stale_writer_refused_before_commit"] = False
+    results["stale_writer_preserves_newer_observations"] = content(reader(spark, stale_namespace)) == content(updated)
+    with patch.object(bronze_metadata, "validate_successor", lambda _old, _new: None):
+        bronze_metadata.publish(spark, stale_namespace, left)
+    results["failing_first_unguarded_stale_writer_loses_newer_generation"] = content(reader(spark, stale_namespace)) == content(left)
+
+    failure_namespace = "metadata_failed_commit"
+    bronze_metadata.publish(spark, failure_namespace, original)
+    before = bronze_metadata.snapshot(spark, failure_namespace)
+    frame_factory = spark.createDataFrame
+
+    class FailedBaseFrame:
+        """Delegate to the real writer, changing only its validation base to an absent snapshot."""
+
+        def __init__(self, frame: Any) -> None:
+            self.frame = frame
+
+        def writeTo(self, table: str) -> Any:
+            writer = self.frame.writeTo(table)
+
+            class Commit:
+                def option(self, name: str, value: Any) -> Any:
+                    writer.option(name, "-1" if name == "validate-from-snapshot-id" else value)
+                    return self
+
+                def overwrite(self, condition: Any) -> None:
+                    writer.overwrite(condition)
+
+            return Commit()
+
+    try:
+        with patch.object(spark, "createDataFrame", lambda *args: FailedBaseFrame(frame_factory(*args))):
+            bronze_metadata.publish(spark, failure_namespace, left)
+    except Exception as error:
+        results["native_failed_commit_keeps_previous_snapshot"] = (
+            "snapshot" in str(error).lower() and "-1" in str(error) and bronze_metadata.snapshot(spark, failure_namespace) == before
+        )
+    else:
+        results["native_failed_commit_keeps_previous_snapshot"] = False
+    results["native_failed_commit_keeps_previous_generation_bytes"] = content(reader(spark, failure_namespace)) == content(original)
+    spark.createDataFrame([tuple(row[field] for field in bronze_metadata.FIELDS) for row in left], bronze_metadata.SCHEMA).writeTo(
+        failure_namespace + ".file_metadata"
+    ).overwrite(lit(True))
+    results["failing_first_unconditional_writer_changes_failed_commit_snapshot"] = bronze_metadata.snapshot(spark, failure_namespace) != before
     return results
 
 

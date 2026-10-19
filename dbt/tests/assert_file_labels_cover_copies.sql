@@ -15,7 +15,7 @@ copies as (
     select
         bronze_table,
         object_key
-    from {{ ref('stg_bronze__file_copies') }}
+    from {{ ref('stg_bronze__release_observations') }}
 ),
 
 orphans as (

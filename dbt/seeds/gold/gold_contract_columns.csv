@@ -1283,6 +1283,8 @@ dim_release,copy_count,,false
 dim_release,release_date,,false
 dim_release,period_start,,false
 dim_release,period_end,,false
+dim_release,publication_dates,,false
+dim_release,download_run_ids,,false
 dim_rurality_code,code_system,,false
 dim_rurality_code,code,,false
 dim_rurality_code,code_label,,false

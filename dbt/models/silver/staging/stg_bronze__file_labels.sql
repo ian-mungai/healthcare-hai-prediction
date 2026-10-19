@@ -1,22 +1,23 @@
--- One row per loaded IPPS and occupational-mix object with its labels from the generated map: role, rule and data
+-- One row per IPPS and occupational-mix observation with its labels from the generated map: role, rule and data
 -- fiscal years, identity year and rule stage, read from its names and stored container (failure modes 178 to 182).
-{{ config(materialized='table') }}
+{{ config(materialized='table', pre_hook='{{ assert_original_label_keys() }}') }}
 
 with
 
 copies as (
     select
+        observation_id,
         copy_key,
         bronze_table,
         object_key,
         member_sha256,
         file_name
-    from {{ ref('stg_bronze__file_copies') }}
+    from {{ ref('stg_bronze__release_observations') }}
     where source_family in ('ipps', 'occupational_mix')
 ),
 
 labels as (
-    select
+    select distinct
         bronze_table,
         object_key,
         member_sha256,
@@ -32,7 +33,8 @@ labels as (
 
 final as (
     select
-        copies.copy_key,
+        copies.observation_id,
+        copies.observation_id as copy_key,
         copies.bronze_table,
         copies.object_key,
         copies.member_sha256,

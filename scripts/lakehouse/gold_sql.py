@@ -228,7 +228,7 @@ A36_A39_A43_A48: Json = {
             "code": [["int_rucc_county_codes", "rucc_code"], ["int_ruca_codes", "primary_ruca"], ["int_pos_hospital_snapshots", "cbsa_urban_rural_code"]],
             "code_label": [["int_rucc_county_codes", "description"]],
         },
-        "dim_source": {"dataset_id": [["stg_bronze__file_copies", "dataset_id"]]},
+        "dim_source": {"dataset_id": [["stg_bronze__release_observations", "dataset_id"]]},
         "dim_state": {
             "state_code": [
                 ["int_cost_reports", "state_code"],

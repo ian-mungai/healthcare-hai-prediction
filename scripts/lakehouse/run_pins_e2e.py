@@ -53,16 +53,17 @@ def rival_keeps_its_pin(path: Path) -> bool:
 
 
 def scenarios(spark: Any, root: Path) -> dict[str, bool]:
-    """Pin, verify, refusals and a moved table, on two synthetic tables and one empty table."""
+    """Pin synthetic data and metadata tables and reject moved or absent snapshots."""
     from scripts.lakehouse.session import CATALOG
 
     sql = spark.sql
     sql(f"CREATE NAMESPACE IF NOT EXISTS {CATALOG}.{NAMESPACE}")
-    for table in ("first", "second", "empty"):
+    for table in ("first", "second", "file_metadata", "empty"):
         sql(CREATE_SQL.format(catalog=CATALOG, namespace=NAMESPACE, table=table))
     sql(INSERT_SQL.format(catalog=CATALOG, namespace=NAMESPACE, table="first", value=1))
     sql(INSERT_SQL.format(catalog=CATALOG, namespace=NAMESPACE, table="second", value=2))
-    tables = ["first", "second"]
+    sql(INSERT_SQL.format(catalog=CATALOG, namespace=NAMESPACE, table="file_metadata", value=1))
+    tables = ["file_metadata", "first", "second"]
     path = root / "runs" / "20261011T090000Z-0a1b2c3d" / "pins.json"
     pinned = pins.current_snapshots(spark, CATALOG, NAMESPACE, tables)
     pins.write_once(path, pinned)
@@ -76,6 +77,9 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
     sql(INSERT_SQL.format(catalog=CATALOG, namespace=NAMESPACE, table="first", value=3))
     moved = pins.differences(written, pins.current_snapshots(spark, CATALOG, NAMESPACE, tables))
     results["verify names the table that moved"] = len(moved) == 1 and moved[0].startswith("first: ")
+    sql(INSERT_SQL.format(catalog=CATALOG, namespace=NAMESPACE, table="file_metadata", value=2))
+    moved_metadata = pins.differences(written, pins.current_snapshots(spark, CATALOG, NAMESPACE, tables))
+    results["verify refuses moved backing metadata"] = any(change.startswith("file_metadata: ") for change in moved_metadata)
     results["a missing table stops the pin"] = refused(lambda: pins.current_snapshots(spark, CATALOG, NAMESPACE, ["first", "absent"]), "absent cannot be read")
     results["a table with no snapshot stops the pin"] = refused(
         lambda: pins.current_snapshots(spark, CATALOG, NAMESPACE, ["empty"]), "empty has no current snapshot"

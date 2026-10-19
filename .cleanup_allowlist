@@ -1,4 +1,5 @@
 # Exceptions to the cleanup checks: <kind> <path glob> -- <reason> (README, Quality Checks).
+config scripts/lakehouse/run_provenance_e2e.py -- negative assertion rejects the removed release-copy switch in every launched command
 orphan dbt/models/* -- dbt loads every model and properties file under model-paths; a final model has no ref() to it
 orphan dbt/macros/* -- dbt loads every macro under macro-paths; models call macros by name, not by file
 config data_contracts/lakehouse/gold_contract.json -- geography_level is a live column of the MMD fact the contract declares
