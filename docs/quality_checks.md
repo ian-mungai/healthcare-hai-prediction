@@ -1,7 +1,7 @@
 ---
 title: Quality checks
 description: Every repository check the pre-commit hooks and CI run, what each blocks and how to run it on its own.
-last_updated: 2026-10-16
+last_updated: 2026-10-19
 ---
 
 # Quality checks
@@ -11,12 +11,16 @@ last_updated: 2026-10-16
   settings. The `ruff` hook and the CI source gate use `.venv/bin/python -m scripts.quality.lint_sources ruff`.
   Paths remain separate arguments, including hidden files and names with spaces. Source symlinks are rejected.
 - **Shell syntax:** the `shell-syntax` hook checks every nonignored shell source with its declared interpreter's
-  syntax-only mode. Shell suffixes and declared shell scripts without a suffix are inventoried. Script bodies never run.
+  syntax-only mode. Shell suffixes and declared shell scripts without a suffix are inventoried. Files without a shell suffix
+  are skipped when their raw bytes do not start with `#!`, including binary files and UTF-8 split at the read boundary.
+  Only the shebang line is decoded, replacing invalid UTF-8. A malformed shebang diagnostic names the path. Script bodies never run.
 - **Language linters:** ShellCheck 0.11.0 checks tracked shell sources. actionlint 1.7.12 checks Actions workflows.
   It validates local `action.yml` metadata only through the workflow's `uses:` reference. Shell scripts and expressions
   inside composite steps are not linted. yamllint 1.38.0 checks tracked YAML, including `action.yml` and `.yamllint` itself and treats duplicate keys
   as errors. Hadolint 2.15.1 checks every tracked Dockerfile. gofmt and go vet use installed Go 1.27.1, with vet targeting
-  Linux amd64 and arm64 for the Linux-only programs. No Go toolchain or module is downloaded. The native tool archives
+  Linux amd64 and arm64 for the Linux-only programs. Each tracked Go file is vetted separately, so standalone programs
+  can share a folder. Files that form one multi-file package are not supported. A vet error in any file fails the gate.
+  No Go toolchain or module is downloaded. The native tool archives
   and raw binaries are checksum-pinned in `config/quality_tools.json`. `scripts/quality/install_tools.py --tool <NAME>`
   selects one native tool without reinstalling the others. yamllint is pinned in `requirements.txt`.
   `.venv/bin/python -m scripts.quality.lint_sources <CHECK>` runs each tool through the same entry point as its hook.
@@ -33,8 +37,9 @@ last_updated: 2026-10-16
   image build. Spark's final stage uses Bash with pipefail, keeping all three checksum pipelines. Its changed runtime
   behavior remains unverified until that image build. No Hadolint rule is ignored globally.
 - **SQL style:** SQLFluff uses the pinned environment under `.tools/sqlfluff`. Active `dbt/models/`, `dbt/tests/`
-  and `dbt/macros/` use DuckDB with the dbt templater. `services/analytics/resources.sql` uses raw DuckDB and the Polaris
-  schema SQL uses raw PostgreSQL. `services/analytics/bronze.sql` is listed as excluded from SQLFluff: it is a DuckDB CLI
+  and `dbt/macros/` use DuckDB with the dbt templater. `services/analytics/resources.sql` uses raw DuckDB.
+  `services/lakehouse/polaris/create-polaris-schema.sql` uses raw PostgreSQL. All profiles use `.sqlfluff`.
+  `services/analytics/bronze.sql` is listed as excluded from SQLFluff: it is a DuckDB CLI
   init script whose LOAD, CREATE SECRET and ATTACH statements are outside the pinned grammar. Its source stays unchanged.
   The 6 SQL files of `tests/orchestration/fixtures/tiny` are listed as excluded too: they form the synthetic dbt project of
   the transform scheduler E2E, which builds and checks them.
