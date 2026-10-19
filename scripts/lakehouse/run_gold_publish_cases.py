@@ -67,6 +67,7 @@ COUNT_AT_Q = "SELECT count(*) FROM {table} VERSION AS OF {snapshot}"
 UPDATE_AMOUNT_Q = "UPDATE {table}.branch_{branch} SET amount = amount + 1 WHERE visit_key = 'v1'"
 UPDATE_SITE_Q = "UPDATE {table}.branch_{branch} SET site_name = 'x' WHERE site_sk = 's1'"
 INSERT_SITE_Q = "INSERT INTO {table} VALUES ('s9', 'other writer')"
+RELEASE_LISTS_Q = "SELECT release_sk, publication_dates, download_run_ids FROM {table} VERSION AS OF {snapshot}"
 
 
 def q(spark: Any, template: str, **parts: Any) -> Any:
@@ -1068,6 +1069,43 @@ def contract_plan(h: Harness) -> Check:
     }
 
 
+RELEASE_LIST_TYPES = {"publication_dates": "array<date>", "download_run_ids": "array<string>"}
+
+
+def release_lists(index: int) -> tuple[list[date] | None, list[str] | None]:
+    """The lists the publish fixture plants in row ``k<index>`` of ``dim_release``: a null list, an empty list, one element and two elements in turn."""
+    if index % 4 == 0:
+        return None, None
+    if index % 4 == 1:
+        return [], []
+    dates = [date(2026, 1, 1) + timedelta(days=index), date(2026, 2, 1)]
+    runs = [f"run-{index}", "run-x"]
+    return dates[: index % 4 - 1], runs[: index % 4 - 1]
+
+
+def release_list_checks(ctx: Context, manifest: dict[str, Any], export_dir: Path, snapshot: int) -> Check:
+    """The ``dim_release`` list columns after the whole path: the Spark types of the Parquet file and of the Iceberg table and, per key, the exact list."""
+    item = manifest["tables"]["dim_release"]
+    exported = {
+        field.name: field.dataType.simpleString() for field in ctx.spark.table(publish.parquet_view(ctx, export_dir, "dim_release", item)).schema.fields
+    }
+    table = {field.name: field.dataType.simpleString() for field in ctx.spark.table(ctx.fq("dim_release")).schema.fields}
+    rows = q(ctx.spark, RELEASE_LISTS_Q, table=ctx.fq("dim_release"), snapshot=snapshot).collect()
+    found = {str(row[0]): (row[1], row[2]) for row in rows}
+    dates = [pair[0] for pair in found.values()]
+    return {
+        "dim_release list columns read as array<date> and array<string> from the exported Parquet file": all(
+            exported.get(name) == kind for name, kind in RELEASE_LIST_TYPES.items()
+        ),
+        "dim_release list columns are array<date> and array<string> in the Iceberg table": all(
+            table.get(name) == kind for name, kind in RELEASE_LIST_TYPES.items()
+        ),
+        "dim_release holds every planted list exactly": len(found) == len(rows) == int(item["rows"]) > 0
+        and all(pair == release_lists(int(key[1:])) for key, pair in found.items()),
+        "dim_release holds a null, an empty and a populated list": any(d is None for d in dates) and any(d == [] for d in dates) and any(d for d in dates),
+    }
+
+
 def readback(h: Harness) -> Check:
     """The multi-process publish (one container per step) left a catalog that reads back as the export says. Needs ``inputs.json``."""
     inputs = json.loads((REPORT_ROOT / STAMP / "inputs.json").read_text())["multi"]
@@ -1091,6 +1129,7 @@ def readback(h: Harness) -> Check:
         found = content_at(ctx, name, int(head["snapshot_set"][name]), item["columns"])
         equal += found == wanted and found[0] == int(item["rows"])
     checks["every table at the named snapshot equals the export (rows and fingerprint)"] = equal == len(manifest["tables"]) == 70
+    checks.update(release_list_checks(ctx, manifest, export_dir, int(head["snapshot_set"]["dim_release"])))
     checks["main of every table is at the named snapshot"] = {n: m for n, m in mains(ctx).items()} == head["snapshot_set"]
     checks["no run branch is left"] = all(ctx.branch not in publish.table_refs(ctx, n) for n in plan.tables)
     checks["the record chain is complete"] = all(
