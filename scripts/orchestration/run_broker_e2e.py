@@ -232,6 +232,16 @@ def events(env: BrokerEnv, submission_id: str, run_id: str = RUN) -> list[str]:
     return [line["event"] for line in ledger_lines(env, run_id) if line["submission_id"] == submission_id]
 
 
+def not_ended(found: list[str]) -> bool:
+    return "finished" not in found and "failed_closed" not in found
+
+
+def ended_only_by_cancel(env: BrokerEnv, submission_id: str) -> bool:
+    """True when the submission has no end or a cancelled finished line with exit code 143."""
+    ends = [line for line in ledger_lines(env, RUN) if line["submission_id"] == submission_id and line["event"] in ("finished", "failed_closed")]
+    return all(line["event"] == "finished" and line.get("cancelled") is True and line["exit_code"] == 143 for line in ends)
+
+
 def run_record_file(env: BrokerEnv, run_id: str) -> str:
     """A durable run record, as a finalizing run's release needs it."""
     path = env.work / f"{run_id}_run.json"
@@ -993,9 +1003,11 @@ def cancel_after_token_store_loss(env: BrokerEnv) -> dict[str, bool]:
                 except Exception as error:
                     summary = {"error": f"{type(error).__name__}: {error}"}
                 port = env.listener_for(fresh, session).port
+                after_restart = events(env, request.submission_id)
                 status_code, _ = try_post(port, session, "/v1/status", payload)
+                after_status = events(env, request.submission_id)
                 first_cancel, _ = try_post(port, session, "/v1/cancel", payload)
-                while_hidden = events(env, request.submission_id)
+                cancel_only = ended_only_by_cancel(env, request.submission_id)
                 held = env.attempt(accepted["id"])
                 container = env.daemon.containers.get(held.get("container_id") or "")
                 running = bool(container and container["State"]["Running"])
@@ -1009,7 +1021,9 @@ def cancel_after_token_store_loss(env: BrokerEnv) -> dict[str, bool]:
             stop_attempt(env, accepted["id"])
             checks |= {
                 f"{label}: the submit reply was lost and the broker has no forward cache": submit_code == 503 and cache_missing,
-                f"{label}: the ledger is not ended by the restart": "finished" not in while_hidden and "failed_closed" not in while_hidden,
+                f"{label}: the ledger is not ended by the restart": not_ended(after_restart),
+                f"{label}: the status does not end the ledger": not_ended(after_status),
+                f"{label}: only the cancel can end the ledger": cancel_only,
                 f"{label}: the restart reports the submission {'pending' if hidden else 'updated'}": request.submission_id
                 in summary.get("pending" if hidden else "updated", []),
                 f"{label}: {'a status and a cancel are answered 503' if hidden else 'a status and a cancel are answered 200'}": (
@@ -1138,9 +1152,11 @@ def cancel_after_marker_ancestor_loss(env: BrokerEnv) -> dict[str, bool]:
                 except Exception as error:
                     summary = {"error": f"{type(error).__name__}: {error}"}
                 port = env.listener_for(fresh, session).port
+                after_restart = events(env, request.submission_id)
                 status_code, _ = try_post(port, session, "/v1/status", payload)
+                after_status = events(env, request.submission_id)
                 first_cancel, _ = try_post(port, session, "/v1/cancel", payload)
-                while_lost = events(env, request.submission_id)
+                cancel_only = ended_only_by_cancel(env, request.submission_id)
                 held = env.attempt(accepted["id"])
             finally:
                 restore()
@@ -1153,7 +1169,9 @@ def cancel_after_marker_ancestor_loss(env: BrokerEnv) -> dict[str, bool]:
             checks |= {
                 f"{label}: the submit reply was lost and the broker has no forward cache": submit_code == 503 and cache_missing,
                 f"{label}: the dispatch marker is written beside the ledger": marker_written and marker.parent == env.paths.ledger,
-                f"{label}: the ledger is not ended by the restart": "finished" not in while_lost and "failed_closed" not in while_lost,
+                f"{label}: the ledger is not ended by the restart": not_ended(after_restart),
+                f"{label}: the status does not end the ledger": not_ended(after_status),
+                f"{label}: only the cancel can end the ledger": cancel_only,
                 f"{label}: the restart reports the submission updated": request.submission_id in summary.get("updated", []),
                 f"{label}: a status and a cancel are answered 200": (status_code, first_cancel) == (200, 200),
                 f"{label}: the attempt received the cancel while the folders were lost": held.get("cancel_intent") is not None,
@@ -1193,9 +1211,12 @@ def cancel_after_marker_ancestor_loss(env: BrokerEnv) -> dict[str, bool]:
                     summary = {"error": f"{type(error).__name__}: {error}"}
             restored = ledger_file.is_file() and marker.is_file()
             port = env.listener_for(fresh, session).port
+            after_restart = events(env, request.submission_id)
             status_code, _ = try_post(port, session, "/v1/status", payload)
+            after_status = events(env, request.submission_id)
             first_cancel, _ = try_post(port, session, "/v1/cancel", payload)
-            after = events(env, request.submission_id)
+            after_cancel = events(env, request.submission_id)
+            cancel_only = ended_only_by_cancel(env, request.submission_id)
             held = env.attempt(accepted["id"])
             final = cancelled_status(fresh, handle)
             ended = env.attempt(accepted["id"])
@@ -1208,7 +1229,9 @@ def cancel_after_marker_ancestor_loss(env: BrokerEnv) -> dict[str, bool]:
                     bool(seen.get("loss_injected")) is bool(loss_kind) and restored
                 ),
                 f"{label}: the launcher is asked once, by the original request ID": len(lookups) == 1,
-                f"{label}: the ledger is not ended by the restart": "finished" not in after and "failed_closed" not in after,
+                f"{label}: the ledger is not ended by the restart": not_ended(after_restart),
+                f"{label}: the status does not end the ledger": not_ended(after_status),
+                f"{label}: only the cancel can end the ledger": cancel_only,
                 f"{label}: the restart reports the submission updated": request.submission_id in summary.get("updated", []),
                 f"{label}: a status and a cancel are answered 200": (status_code, first_cancel) == (200, 200),
                 f"{label}: the attempt received the cancel": held.get("cancel_intent") is not None,
@@ -1219,7 +1242,9 @@ def cancel_after_marker_ancestor_loss(env: BrokerEnv) -> dict[str, bool]:
             if loss_kind == "replace":
                 checks[f"{label}: the replacement folder held the ledger and no marker"] = seen.get("replacement_has_no_marker") is True
             env.evidence[label] = {
-                "events": after,
+                "events_after_restart": after_restart,
+                "events_after_status": after_status,
+                "events_after_cancel": after_cancel,
                 "updated": summary.get("updated"),
                 "start_error": summary.get("error"),
                 "submission_replies": wire(fresh).submission_replies,
@@ -1399,9 +1424,11 @@ def cancel_after_marker_write_replacement(env: BrokerEnv) -> dict[str, bool]:
         except Exception as error:
             summary = {"error": f"{type(error).__name__}: {error}"}
         port = env.listener_for(fresh, session).port
+        after_restart = events(env, request.submission_id)
         status_code, _ = try_post(port, session, "/v1/status", payload)
+        after_status = events(env, request.submission_id)
         first_cancel, _ = try_post(port, session, "/v1/cancel", payload)
-        after = events(env, request.submission_id)
+        cancel_only = ended_only_by_cancel(env, request.submission_id)
         held = env.attempt(accepted["id"])
         kept = env.temp / "intact_marker_folder" / marker.name
         if kept.is_file():
@@ -1419,7 +1446,9 @@ def cancel_after_marker_write_replacement(env: BrokerEnv) -> dict[str, bool]:
             and seen.get("ledger_unchanged") is True
             and seen.get("marker_in_ledger_folder") is False,
             f"{label}: the launcher is asked once, by the original request ID": len(lookups) == 1,
-            f"{label}: the ledger is not ended by the restart": "finished" not in after and "failed_closed" not in after,
+            f"{label}: the ledger is not ended by the restart": not_ended(after_restart),
+            f"{label}: the status does not end the ledger": not_ended(after_status),
+            f"{label}: only the cancel can end the ledger": cancel_only,
             f"{label}: the restart reports the submission updated": request.submission_id in summary.get("updated", []),
             f"{label}: a status and a cancel are answered 200": (status_code, first_cancel) == (200, 200),
             f"{label}: the attempt received the cancel while the marker was lost": held.get("cancel_intent") is not None,
