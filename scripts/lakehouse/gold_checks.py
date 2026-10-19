@@ -88,11 +88,14 @@ class Table:
     inputs: tuple[str, ...] = ()
     grain_columns: tuple[str, ...] = ()
     references: tuple[tuple[str, str], ...] = ()
+    nullable_columns: tuple[str, ...] = ()
 
     @property
     def required_columns(self) -> tuple[str, ...]:
-        """Columns that must never be null: a bridge's references where it has them (its vintage columns may be empty), else its grain."""
-        return tuple(column for column, _dimension in self.references) or self.grain_columns
+        """Columns that must never be null: a bridge's references where it has them (its vintage columns may be empty), else its grain; a column the
+        contract lists as nullable is left out."""
+        required = tuple(column for column, _dimension in self.references) or self.grain_columns
+        return tuple(column for column in required if column not in self.nullable_columns)
 
     @property
     def key(self) -> str:
@@ -186,9 +189,15 @@ def bridge_table(name: str, entry: dict[str, Any]) -> Table:
         return Table(name, "bridge", str(entry["grain"]), columns, inputs, grain, references)
     if not columns:
         raise ContractError(f"{name}: the contract lists no columns for this bridge")
-    if entry["grain"] not in {column.name for column in columns}:
-        raise ContractError(f"{name}: grain {entry['grain']!r} is not one of its columns")
-    return Table(name, "bridge", str(entry["grain"]), columns, inputs, (str(entry["grain"]),))
+    listed = {column.name for column in columns}
+    grain = tuple(entry["grain_columns"]) if "grain_columns" in entry else (str(entry["grain"]),)
+    if not set(grain) <= listed:
+        raise ContractError(f"{name}: grain columns {sorted(set(grain) - listed)} are not among its columns")
+    nullable = tuple(entry.get("nullable_columns", ()))
+    if not set(nullable) <= listed:
+        raise ContractError(f"{name}: nullable columns {sorted(set(nullable) - listed)} are not among its columns")
+    references = tuple((item["column"], item["dimension"]) for item in entry.get("references", []))
+    return Table(name, "bridge", str(entry["grain"]), columns, inputs, grain, references, nullable)
 
 
 def dimension_key(dimension: str) -> str:

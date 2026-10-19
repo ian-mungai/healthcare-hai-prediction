@@ -56,7 +56,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, NoReturn
 
-from scripts.lakehouse import dbt_package_archive, memory_budget, pins, run_lock
+from scripts.lakehouse import dbt_package_archive, gold_publish_record, memory_budget, pins, run_lock
 from scripts.lakehouse import provenance as build_provenance
 from scripts.process import run_command
 
@@ -653,6 +653,8 @@ COMPOSE_ENV_NAMES = (
     "POLARIS_CLIENT_SECRET",
     "POLARIS_READER_CLIENT_ID",
     "POLARIS_READER_CLIENT_SECRET",
+    "POLARIS_GOLD_WRITER_CLIENT_ID",
+    "POLARIS_GOLD_WRITER_CLIENT_SECRET",
     "AWS_PROFILE",
     "AWS_REGION",
     "POLARIS_MEMORY_LIMIT",
@@ -986,6 +988,17 @@ TEMPLATES: dict[str, Template] = {
         Template("spark_read", "spark", True, ("run",), needs_catalog=True, default_seconds=7200, run_domains=("transform",)),
         Template("spark_write", "spark", True, ("run",), needs_catalog=True, default_seconds=43200, run_modes=("real",)),
         Template("spark_e2e", "spark", True, ("alloc",), default_seconds=7200),
+        Template("gold_export", "quality", True, ("alloc", "run"), default_seconds=3600, run_domains=("transform",), run_modes=("publish_fixture", "real")),
+        Template(
+            "gold_publish",
+            "spark",
+            True,
+            ("run",),
+            needs_catalog=True,
+            default_seconds=10800,
+            run_domains=("transform",),
+            run_modes=("publish_fixture", "real"),
+        ),
         Template("catalog_service", None, False, ("service",)),
         Template("orchestration_service", None, False, ("stack",)),
         Template("orchestration_check", None, True, ("alloc",), default_seconds=900, max_seconds=3600),
@@ -1034,8 +1047,52 @@ SPARK_JOBS: dict[str, dict[str, Any]] = {
     "smoke": {"template": "spark_write", "domains": ("acquisition",), "module": "scripts.lakehouse.smoke", "writes": (), "aws": True, "grammar": {}},
     "bronze_e2e": {"template": "spark_e2e", "module": "scripts.lakehouse.run_bronze_e2e", "writes": ("data/e2e/bronze",), "aws": False, "grammar": {}},
     "pins_e2e": {"template": "spark_e2e", "module": "scripts.lakehouse.run_pins_e2e", "writes": ("data/e2e/pins",), "aws": False, "grammar": {}},
+    # The offline gold publish: the cases and the single steps run on a local file-based Iceberg catalog (no Polaris, no S3, network none).
+    "gold_publish_e2e": {
+        "template": "spark_e2e",
+        "module": "scripts.lakehouse.run_gold_publish_cases",
+        "writes": ("data/e2e/gold_publish",),
+        "aws": False,
+        "contract": True,
+        "grammar": {"--case": "values", "--stamp": "value"},
+    },
+    "gold_publish_local": {
+        "template": "spark_e2e",
+        "module": "scripts.lakehouse.gold_publish",
+        "writes": ("data/e2e/gold_publish",),
+        "aws": False,
+        "contract": True,
+        "grammar": {
+            "candidates": None,
+            "reconcile": None,
+            "backup": None,
+            "commit": None,
+            "--run": "value",
+            "--mode": "value",
+            "--sealed-sha256": "value",
+            "--accepted-result-sha256": "value",
+            "--publish-dir": "value",
+            "--local-warehouse": "value",
+        },
+    },
+}
+# The gold publish steps (gold plan F5; failure modes 858 to 867): the module's step, the catalog principal, the files the step needs and whether the run's
+# sealed-build record (``completion``) is an input. The launcher builds every argument itself from the run; a client passes none.
+GOLD_JOBS: dict[str, dict[str, Any]] = {
+    "publish_candidates": {"module": "scripts.lakehouse.gold_publish", "step": "candidates", "principal": "writer", "sealed": True},
+    "reconcile_candidates": {"module": "scripts.lakehouse.gold_publish", "step": "reconcile", "principal": "reader", "sealed": True},
+    "catalog_backup": {"module": "scripts.lakehouse.gold_publish", "step": "backup", "principal": "writer", "sealed": True, "deployment": True},
+    "commit_publish": {"module": "scripts.lakehouse.gold_publish", "step": "commit", "principal": "writer", "sealed": True},
+    "gold_maintenance": {"module": "scripts.lakehouse.gold_maintenance", "step": None, "principal": "writer", "sealed": False},
 }
 SEALED_READERS = ("duckdb_helper", "quality_validate")
+MAINTENANCE_FENCE = "gold-maintenance-fence"
+GOLD_WRITE_PREFIX = {"publish_fixture": "lakehouse/gold_e2e/", "real": "lakehouse/gold/"}
+GOLD_CONTRACT = "data_contracts/lakehouse/gold_contract.json"
+SEALED_FOLDER = "sealed"
+GOLD_WRITER_ENV = ("POLARIS_GOLD_WRITER_CLIENT_ID", "POLARIS_GOLD_WRITER_CLIENT_SECRET")
+READER_ENV = ("POLARIS_READER_CLIENT_ID", "POLARIS_READER_CLIENT_SECRET")
+SHA256_HEX = re.compile(r"[a-f0-9]{64}")
 DBT_COMMANDS = ("build", "run", "seed", "snapshot", "test", "run-operation", "ls", "parse", "compile", "debug")
 DBT_OPTIONS_VALUES = {"--select": "many", "-s": "many", "--exclude": "many", "--selector": "one", "--indirect-selection": "choice"}
 DBT_OPTIONS_FLAGS = ("--full-refresh", "--fail-fast", "-x")
@@ -1269,6 +1326,9 @@ class RenderInput:
     run_folder: Path | None = None
     provenance: Mapping[str, str] = field(default_factory=dict)
     image_entrypoint: Sequence[str] = ()
+    completion: Mapping[str, Any] | None = None
+    run_mode: str = ""
+    accepted_result: str = ""
 
 
 class Renderer:
@@ -1296,6 +1356,8 @@ class Renderer:
             "spark_read": self.render_spark_read,
             "spark_write": self.render_spark_write,
             "spark_e2e": self.render_spark_e2e,
+            "gold_export": self.render_gold_export,
+            "gold_publish": self.render_gold_publish,
             "probe": self.render_probe,
             "orchestration_check": self.render_orchestration_check,
             "orchestration_dump": self.render_orchestration_dump,
@@ -1861,6 +1923,8 @@ class Renderer:
             mounts.append(Mount(str(account_home() / ".aws"), "/aws", True))
         if spec.get("deployment"):
             mounts.append(Mount(str(self.checkout / "infra/deployment.auto.tfvars.json"), "/workspace/infra/deployment.auto.tfvars.json", True))
+        if spec.get("contract"):
+            mounts.append(Mount(str(self.checkout / GOLD_CONTRACT), f"/workspace/{GOLD_CONTRACT}", True))
         for relative in spec["writes"]:
             folder = self.checkout / relative
             folder.mkdir(parents=True, exist_ok=True)
@@ -1930,6 +1994,114 @@ class Renderer:
     def render_spark_e2e(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
         """Throwaway-catalog jobs on a private network."""
         return self.render_spark(inp, name, registry_id, False)
+
+    def render_gold_export(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """The consumer of the sealed copy (D1 section 10 item 6): it hashes the mounted file in the container and exports only on the expected digest.
+
+        A run owner's inputs come from the run's ``completion`` record. An allocation (the offline checks) names the file, folder, run and digest.
+        """
+        self.only_params(inp, ("sealed_host", "publish_host", "run", "sealed_sha256") if inp.run_folder is None else ())
+        if inp.run_folder is not None:
+            record = inp.completion
+            if record is None:
+                raise LauncherError("gold_export needs the run's sealed-build record", "spec")
+            run_id, sha = inp.run_folder.name, str(record["sha256"])
+            sealed_dir = inp.run_folder / "sealed"
+            sealed = inp.run_folder / str(record["file"])
+            if sealed.is_symlink() or not sealed.is_file() or not inside(sealed, [sealed_dir]):
+                raise LauncherError("the run's sealed copy is missing or is not a plain file inside its sealed folder", "spec")
+            publish = inp.run_folder / "publish"
+            publish.mkdir(parents=True, exist_ok=True)
+        else:
+            run_id, sha = str(inp.params["run"]), str(inp.params["sealed_sha256"])
+            if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}", run_id) or not SHA256_HEX.fullmatch(sha):
+                raise LauncherError("gold_export needs a run ID and a lower-case hexadecimal SHA-256", "args")
+            sealed = self.allowed(str(inp.params["sealed_host"]), "sealed_host")
+            publish = self.allowed(str(inp.params["publish_host"]), "publish_host")
+            if not sealed.is_file() or not publish.is_dir():
+                raise LauncherError("sealed_host must be a file and publish_host a folder", "args")
+        mounts = [
+            Mount(str(self.checkout / "scripts"), "/workspace/scripts", True),
+            Mount(str(self.checkout / GOLD_CONTRACT), f"/workspace/{GOLD_CONTRACT}", True),
+            Mount(str(sealed.resolve()), "/workspace/sealed/sealed.duckdb", True),
+            Mount(str(publish.resolve()), "/workspace/out/publish", False),
+        ]
+        env = self.allocation_env(inp, ("DUCKDB_MEMORY_LIMIT", "JOB_THREADS"))
+        command = ["--run", run_id, "--sealed-sha256", sha]
+        return self.assemble(
+            inp,
+            name,
+            self.image("quality"),
+            ["python", "-m", "scripts.lakehouse.gold_export"],
+            command,
+            env,
+            mounts,
+            int(inp.values["JOB_MEMORY_LIMIT"]),
+            "none",
+            workdir="/workspace",
+        )
+
+    @staticmethod
+    def accepted_result_current(inp: RenderInput) -> None:
+        """A step runs only against the consumer result the launcher accepted: the run's result file must still hold exactly the accepted bytes."""
+        if inp.run_folder is None or not gold_publish_record.SHA256.fullmatch(inp.accepted_result):
+            raise LauncherError("the run has no accepted consumer result; call accept_consumer on the finished export first", "spec")
+        current = run_file_sha256(inp.run_folder / "publish", gold_publish_record.RESULT_NAME)
+        if current != inp.accepted_result:
+            raise LauncherError("the consumer result changed since the launcher accepted it", "spec")
+
+    def render_gold_publish(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """A gold publish step as ``gold_writer`` (the reconcile step as the reader): the writer's credential never goes to any other template."""
+        job = str(inp.params.get("job", ""))
+        spec = GOLD_JOBS.get(job)
+        if spec is None:
+            raise LauncherError(f"gold_publish has no job {job!r}", "args")
+        self.only_params(inp, ("job",))
+        if inp.args:
+            raise LauncherError(f"gold_publish job {job} takes no arguments: the launcher builds them from the run", "args")
+        if inp.run_folder is None or inp.run_mode not in GOLD_WRITE_PREFIX:
+            raise LauncherError("gold_publish needs a run in a publish mode", "spec")
+        if spec["sealed"] and inp.completion is None:
+            raise LauncherError(f"gold_publish job {job} needs the run's sealed-build record", "spec")
+        if spec["sealed"]:
+            self.accepted_result_current(inp)
+        credentials = READER_ENV if spec["principal"] == "reader" else GOLD_WRITER_ENV
+        values = self.compose_values(["AWS_PROFILE", "AWS_REGION", *credentials], inp.values)
+        if any(name not in values for name in credentials):
+            raise LauncherError("the catalog principal credentials are missing; set up the principal first", "spec")
+        publish = inp.run_folder / "publish"
+        publish.mkdir(parents=True, exist_ok=True)
+        mounts = [
+            Mount(str(self.checkout / "scripts"), "/workspace/scripts", True),
+            Mount(str(self.checkout / "config"), "/workspace/config", True),
+            Mount(str(account_home() / ".aws"), "/aws", True),
+            Mount(str(self.checkout / GOLD_CONTRACT), f"/workspace/{GOLD_CONTRACT}", True),
+            Mount(str(publish.resolve()), "/workspace/out/publish", False),
+        ]
+        if spec.get("deployment"):
+            mounts.append(Mount(str(self.checkout / "infra/deployment.auto.tfvars.json"), "/workspace/infra/deployment.auto.tfvars.json", True))
+        env: dict[str, str] = {"SPARK_JOB_MEMORY": inp.values["SPARK_JOB_MEMORY"], "JOB_THREADS": inp.values["JOB_THREADS"]}
+        env.update(self.aws_environment(values))
+        env["POLARIS_URI"] = "http://polaris:8181/api/catalog"
+        env["POLARIS_CLIENT_ID"], env["POLARIS_CLIENT_SECRET"] = values[credentials[0]], values[credentials[1]]
+        run_id = inp.run_folder.name
+        if spec["step"] is None:
+            command = ["--run", run_id, "--mode", inp.run_mode, "--protected", "/workspace/out/publish/protected.json"]
+        else:
+            command = [spec["step"], "--run", run_id, "--mode", inp.run_mode, "--sealed-sha256", str((inp.completion or {}).get("sha256", ""))]
+            command += ["--accepted-result-sha256", inp.accepted_result]
+        return self.assemble(
+            inp,
+            name,
+            self.image("spark"),
+            ["python", "-m", spec["module"]],
+            command,
+            env,
+            mounts,
+            int(inp.values["JOB_MEMORY_LIMIT"]),
+            self.network_name(registry_id),
+            workdir="/workspace",
+        )
 
     def render_probe(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
         """The fixed probe container: analytics image, entrypoint ``true``, no mounts, no network (D1 section 2 item 6)."""
@@ -2082,6 +2254,37 @@ class Renderer:
             self.orchestration_network_name(registry_id),
             **self.orchestration_hardening(raw, values),
         )
+
+
+def completion_of(run: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a live build's sealed digest and path, refusing invalid provenance or a malformed record."""
+    try:
+        record = build_provenance.check_completion(run)
+    except build_provenance.ProvenanceError as error:
+        raise LauncherError(str(error), "refused") from error
+    sha, file = str(record.get("sha256", "")), str(record.get("file", ""))
+    if not SHA256_HEX.fullmatch(sha) or file != f"{SEALED_FOLDER}/{sha}.duckdb":
+        raise LauncherError(f"run {run.get('run_id')} has a malformed sealed-build record", "refused")
+    return {"sha256": sha, "file": file, "inode": record.get("inode"), "device": record.get("device")}
+
+
+def run_file_sha256(folder: Path, name: str, limit: int = 1 << 20) -> str:
+    """The SHA-256 of a plain file in a run's folder, opened without following a link; a link, a missing file or a large file is a refusal."""
+    try:
+        if folder.is_symlink() or not folder.is_dir():
+            raise LauncherError(f"{folder.name} of the run is not a plain folder", "spec")
+        descriptor = os.open(folder / name, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise LauncherError(f"{name} of the run cannot be opened without following links: {error.strerror or type(error).__name__}", "spec") from error
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise LauncherError(f"{name} of the run is not a regular file", "spec")
+        data = os.read(descriptor, limit + 1)
+    finally:
+        os.close(descriptor)
+    if len(data) > limit:
+        raise LauncherError(f"{name} of the run is larger than {limit} bytes", "spec")
+    return hashlib.sha256(data).hexdigest()
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -2286,6 +2489,7 @@ METHODS: dict[str, MethodSpec] = {
     "release": MethodSpec(("run",)),
     "recover": MethodSpec(("run",), owner_flag=True),
     "snapshot": MethodSpec(("run",)),
+    "accept_consumer": MethodSpec(("run",)),
     "register_reader": MethodSpec(("alloc",)),
     "deregister_reader": MethodSpec(("alloc",)),
     "reserve": MethodSpec(("any",)),
@@ -2496,6 +2700,7 @@ class Launcher:
             "release": self.m_release,
             "recover": self.m_recover,
             "snapshot": self.m_snapshot,
+            "accept_consumer": self.m_accept_consumer,
             "register_reader": self.m_register_reader,
             "deregister_reader": self.m_deregister_reader,
             "reserve": self.m_reserve,
@@ -3297,6 +3502,8 @@ class Launcher:
                 return f"template {template_name} needs a run of domain {' or '.join(domains)}; run {ident} is a {run['domain']} run"
             if template.run_modes is not None and run["mode"] not in template.run_modes:
                 return f"template {template_name} needs a run of mode {' or '.join(template.run_modes)}; run {ident} is a {run['mode']} run"
+            if template_name in ("gold_export", "gold_publish"):
+                return Launcher.gold_problem(state, ident, run, template_name, params)
             if template_name == "spark_write":
                 prefixes = list(run.get("write_prefixes") or [])
                 if not prefixes:
@@ -3312,6 +3519,27 @@ class Launcher:
         elif kind == "alloc" and template.reader:
             if not any(r["kind"] == "reader" and r["allocation"] == ident for r in state["registrations"].values()):
                 return f"template {template_name} needs a reader registration of allocation {ident}"
+        return None
+
+    @staticmethod
+    def gold_problem(state: Mapping[str, Any], ident: str, run: Mapping[str, Any], template_name: str, params: Mapping[str, Any]) -> str | None:
+        """What refuses a gold template for this run, or None: a sealed build (except for maintenance) and the gold prefix of its mode declared."""
+        try:
+            Launcher.gold_inputs(state, f"run:{ident}", template_name, params)
+        except LauncherError as error:
+            return str(error)
+        wanted = GOLD_WRITE_PREFIX[run["mode"]]
+        prefixes = list(run.get("write_prefixes") or [])
+        if not any(wanted.startswith(p) for p in prefixes):
+            return f"template {template_name} writes under {wanted}; run {ident} declares {', '.join(prefixes) or 'no write prefix'}"
+        if template_name == "gold_publish" and GOLD_JOBS[str(params["job"])]["sealed"]:
+            acceptance = run.get("consumer_acceptance")
+            if not isinstance(acceptance, dict) or acceptance.get("sealed_sha256") != completion_of(run)["sha256"]:
+                return f"run {ident} has no accepted consumer result for its sealed copy; call accept_consumer on the finished export first"
+        try:
+            run_lock.check_cross_domain(dict(state), run["domain"], [wanted])
+        except run_lock.Refused as error:
+            return str(error)
         return None
 
     def admissible(self, state: Mapping[str, Any], attempt: Mapping[str, Any]) -> bool:
@@ -3420,6 +3648,26 @@ class Launcher:
         labels.update(extra or {})
         return labels
 
+    @staticmethod
+    def gold_inputs(state: Mapping[str, Any], owner: str, template_name: str, params: Mapping[str, Any]) -> tuple[Mapping[str, Any] | None, str]:
+        """The sealed-build record and the mode of a run that a gold template renders for; (None, "") for any other template or owner."""
+        kind, _, ident = owner.partition(":")
+        if kind != "run" or template_name not in ("gold_export", "gold_publish"):
+            return None, ""
+        run = state["runs"][ident]
+        spec = GOLD_JOBS.get(str(params.get("job")), {})
+        needs = template_name == "gold_export" or bool(spec.get("sealed"))
+        return (completion_of(run) if needs else None), str(run["mode"])
+
+    @staticmethod
+    def gold_accepted(state: Mapping[str, Any], owner: str, template_name: str, params: Mapping[str, Any]) -> str:
+        """The SHA-256 of the consumer result the launcher accepted for the run, for a gold step that runs against it; an empty string for any other launch."""
+        kind, _, ident = owner.partition(":")
+        if kind != "run" or template_name != "gold_publish" or not GOLD_JOBS.get(str(params.get("job")), {}).get("sealed"):
+            return ""
+        acceptance = state["runs"][ident].get("consumer_acceptance")
+        return str(acceptance.get("result_sha256", "")) if isinstance(acceptance, dict) else ""
+
     def owner_name(self, attempt: Mapping[str, Any]) -> str:
         """The owner part of a container name."""
         kind, _, ident = str(attempt["owner"]).partition(":")
@@ -3450,6 +3698,7 @@ class Launcher:
             sealed_id = str(attempt["params"][build_provenance.SEALED_RUN_PARAM])
             provenance = self.sealed_reader_vars(state, sealed_id)
             run_folder = self.cfg.runs_root / sealed_id
+        completion, run_mode = self.gold_inputs(state, str(attempt["owner"]), str(attempt["template"]), attempt["params"])
         inp = RenderInput(
             attempt["template"],
             self.owner_name(attempt),
@@ -3466,6 +3715,9 @@ class Launcher:
             run_folder,
             provenance,
             tuple(self.image_cache.get(self.image_reference(attempt), (0.0, {}))[1].get("entrypoint", ())),
+            completion,
+            run_mode,
+            self.gold_accepted(state, str(attempt["owner"]), str(attempt["template"]), attempt["params"]),
         )
         if template.name == "catalog_service":
             return renderer.render_service(inp, str(attempt["params"]["service"]), self.registry_id)
@@ -5201,8 +5453,12 @@ class Launcher:
         attempt_params = dict(params.get("params") or {})
         self.dry_render(ctx.state, owner, template_name, args, attempt_params, checkout)
         self.take_guard(ctx.state, template, attempt_params)
+        fenced = template_name == "gold_publish" and attempt_params.get("job") == "gold_maintenance"
+        protection = self.maintenance_protection(ctx.state) if fenced else []
         attempt = self.new_attempt(ctx.state, owner, template_name, launch_id, args, attempt_params, request=ctx.key, checkout=str(checkout), seconds=seconds)
         self.register_guard(ctx.state, template, attempt)
+        if fenced:
+            self.take_maintenance_fence(ctx.state, ident, attempt, protection)
         return {"attempt_id": attempt["id"], "n": attempt["n"], "deadline_utc": attempt["deadline_utc"]}
 
     PLACEHOLDER_ENV = {"JOB_MEMORY_LIMIT": str(4 * 1024**3), "DUCKDB_MEMORY_LIMIT": "3GB", "SPARK_JOB_MEMORY": "3g", "JOB_THREADS": "1"}
@@ -5220,8 +5476,26 @@ class Launcher:
         if build_provenance.SEALED_RUN_PARAM in params:
             run_folder = self.cfg.runs_root / "dry"
             provenance = {build_provenance.VARIABLE_SEALED_SHA: "0" * 64, build_provenance.VARIABLE_SEALED_EXPECTED: "{}"}
+        completion, run_mode = self.gold_inputs(state, owner, template_name, params)
         inp = RenderInput(
-            template_name, ident, "dry", 1, 1, "op-dry", self.PLACEHOLDER_ENV, int(time.time()) + 60, args, params, {}, None, run_folder, provenance
+            template_name,
+            ident,
+            "dry",
+            1,
+            1,
+            "op-dry",
+            self.PLACEHOLDER_ENV,
+            int(time.time()) + 60,
+            args,
+            params,
+            {},
+            None,
+            run_folder,
+            provenance,
+            (),
+            completion,
+            run_mode,
+            self.gold_accepted(state, owner, template_name, params),
         )
         renderer.render(inp, self.registry_id)
 
@@ -5242,6 +5516,47 @@ class Launcher:
             raise LauncherError(f"the package folder is in use ({'a writer' if guard['writer'] else 'readers'}); dbt_deps is refused", "refused")
         if template.guard == "reader" and guard["writer"]:
             raise LauncherError("dbt_deps holds the package folder; fixture_dbt is refused", "refused")
+
+    @staticmethod
+    def maintenance_protection(state: Mapping[str, Any]) -> list[dict[str, str]]:
+        """The items the maintenance job must protect, from the readers of the registry; refuses when the fence is held or a reader cannot be named.
+
+        A reservation is a pending item from the time it was taken. A registration names a snapshot set; the set must be a gold run ID, because the job
+        keeps sets by committed run and cannot keep a set it cannot name.
+        """
+        Launcher.require_no_maintenance_fence(state)
+        items = []
+        for name, reader in sorted(state["readers"].items()):
+            if not gold_publish_record.READER_NAME.fullmatch(name):
+                raise LauncherError(f"reader {name} has a name the maintenance job cannot list; maintenance is refused", "refused")
+            if reader["state"] == "registered":
+                if not gold_publish_record.RUN_ID.fullmatch(str(reader["snapshot_set"])):
+                    raise LauncherError(
+                        f"reader {name} is registered on {reader['snapshot_set']!r}, which is not a gold run ID; maintenance is refused", "refused"
+                    )
+                items.append({"kind": "registration", "id": name, "run_id": str(reader["snapshot_set"])})
+            else:
+                items.append({"kind": "pending", "id": name, "since": str(reader["at"])})
+        return items
+
+    def take_maintenance_fence(self, state: dict[str, Any], run_id: str, attempt: Mapping[str, Any], items: list[dict[str, str]]) -> None:
+        """Take the maintenance fence for the attempt and write the protected file it fixes, in the registry transaction that admits the job.
+
+        The fence is a registry guard held by the attempt; ``finish_attempt`` frees it at the attempt's end whatever the reason. While it is held, no
+        reservation or registration changes, so the file stays true up to the job's expiry call.
+        """
+        state["guards"][MAINTENANCE_FENCE] = {"writer": attempt["id"], "readers": {}}
+        document = {
+            "schema": 1,
+            "fence": {"run_id": run_id, "attempt_id": attempt["id"], "taken_at": utc_now()},
+            "items": items,
+        }
+        folder = self.cfg.runs_root / run_id / "publish"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            run_lock.write_atomic(folder / "protected.json", json.dumps(document, indent=2, sort_keys=True) + "\n")
+        except OSError as error:
+            raise LauncherError(f"the protected file of the maintenance job cannot be written: {error.strerror or type(error).__name__}", "refused") from error
 
     def register_guard(self, state: dict[str, Any], template: Template, attempt: Mapping[str, Any]) -> None:
         """Record the guard owner at admission."""
@@ -5318,6 +5633,7 @@ class Launcher:
 
     def m_reserve(self, ctx: Ctx) -> dict[str, Any]:
         """A snapshot-set reader announces the publish run it is about to read [777]."""
+        self.require_no_maintenance_fence(ctx.state)
         params = ctx.params
         reader, publish_run = str(params["reader"]), str(params["publish_run"])
         pid = int(params.get("pid") or ctx.conn.peer.pid)
@@ -5337,8 +5653,16 @@ class Launcher:
         }
         return {"ok": True}
 
+    @staticmethod
+    def require_no_maintenance_fence(state: Mapping[str, Any]) -> None:
+        """Refuse a change of the readers while a gold maintenance job holds the fence: the job's protected file is final until its attempt ends."""
+        holder = (state["guards"].get(MAINTENANCE_FENCE) or {}).get("writer")
+        if holder:
+            raise LauncherError(f"a gold maintenance job (attempt {holder}) holds the maintenance fence; retry when it has ended", "refused")
+
     def m_register_set(self, ctx: Ctx) -> dict[str, Any]:
         """Turn a reservation into a registration of the pinned snapshot set [777]."""
+        self.require_no_maintenance_fence(ctx.state)
         reader = str(ctx.params["reader"])
         if reader not in ctx.state["readers"]:
             raise LauncherError(f"reader {reader} has no reservation", "refused")
@@ -5355,6 +5679,43 @@ class Launcher:
             raise LauncherError(f"reader {reader} is stale; needs --owner-confirmed", "refused")
         ctx.state["readers"].pop(reader)
         return {"ok": True}
+
+    def m_accept_consumer(self, ctx: Ctx) -> dict[str, Any]:
+        """Accept the consumer result of the run's finished export by the one rule of the publish steps and record the exact result (D1 section 10 item 6).
+
+        The launcher reads the result file itself; the client names only the attempt. The record holds the digest of the bytes it read, and every publish
+        step is admitted and rendered against that digest only. A result that the rule rejects records nothing, and a result file that changes later no
+        longer equals the record, so no step runs on it.
+        """
+        owner = self.owner_of(ctx)
+        _, _, run_id = owner.partition(":")
+        run = ctx.state["runs"][run_id]
+        if run["state"] != "held":
+            raise LauncherError(f"run {run_id} is {run['state']}; only a held run accepts a consumer result", "refused")
+        attempt_id = str(ctx.params.get("attempt_id", ""))
+        attempt = ctx.state["attempts"].get(attempt_id)
+        if attempt is None or attempt["owner"] != owner or attempt["template"] != "gold_export":
+            raise LauncherError("the attempt is not a gold_export attempt of this run", "refused")
+        if attempt["phase"] != "ended" or attempt.get("reason") != "exited" or attempt.get("exit_code") != 0:
+            raise LauncherError("the export attempt has not ended with exit code 0; its result is not accepted", "refused")
+        completion = completion_of(run)
+        folder = self.cfg.runs_root / run_id / "publish"
+        digest = run_file_sha256(folder, gold_publish_record.RESULT_NAME)
+        result, read_digest = gold_publish_record.read_record(folder / gold_publish_record.RESULT_NAME)
+        if read_digest != digest:
+            raise LauncherError("the consumer result changed while the launcher read it", "refused")
+        try:
+            gold_publish_record.accept_consumer(result, completion, run_id)
+        except gold_publish_record.PublishError as error:
+            raise LauncherError(str(error), "refused") from error
+        run["consumer_acceptance"] = {
+            "attempt_id": attempt_id,
+            "result_sha256": digest,
+            "manifest_sha256": str(result["manifest_sha256"]),
+            "sealed_sha256": completion["sha256"],
+            "accepted_at": utc_now(),
+        }
+        return {"accepted": True, "result_sha256": digest}
 
     def m_shutdown(self, ctx: Ctx) -> dict[str, Any]:
         """Stop the launcher (owner only). A request that names a launch nonce stops only the instance started with it, so a client that

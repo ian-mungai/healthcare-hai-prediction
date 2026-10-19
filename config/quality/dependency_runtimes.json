@@ -13,14 +13,17 @@
       "code": ["scripts/review/*.py"]
     },
     "spark": {
-      "reason": "The lakehouse jobs that scripts/lakehouse/catalog.py runs in the Spark image, and the modules only they use.",
+      "reason": "The lakehouse jobs that scripts/lakehouse/catalog.py runs in the Spark image, the gold publish steps and their case suite, and the modules only they use.",
       "requirements": ["services/lakehouse/spark/requirements.txt"],
       "code": [
         "scripts/lakehouse/bronze.py",
         "scripts/lakehouse/checksums.py",
         "scripts/lakehouse/dictionary.py",
         "scripts/lakehouse/file_readers.py",
+        "scripts/lakehouse/gold_maintenance.py",
+        "scripts/lakehouse/gold_publish.py",
         "scripts/lakehouse/pins.py",
+        "scripts/lakehouse/run_gold_publish_cases.py",
         "scripts/lakehouse/run_pins_e2e.py",
         "scripts/lakehouse/run_bronze_e2e.py",
         "scripts/lakehouse/session.py",
@@ -36,9 +39,9 @@
       "code": ["services/analytics/*.py"]
     },
     "quality": {
-      "reason": "Great Expectations validation of the silver build file runs in the quality image (scripts/lakehouse/silver.py validate starts it).",
+      "reason": "Great Expectations validation of the silver build file (scripts/lakehouse/silver.py validate starts it) and the gold publish export of the sealed copy run in the quality image.",
       "requirements": ["services/quality/requirements.txt"],
-      "code": ["scripts/lakehouse/silver_quality.py", "scripts/lakehouse/gold_reconcile.py"]
+      "code": ["scripts/lakehouse/gold_export.py", "scripts/lakehouse/gold_reconcile.py", "scripts/lakehouse/silver_quality.py"]
     },
     "orchestration": {
       "reason": "The DAG files, the in-image checks and the metadata dump run inside the Airflow image that services/orchestration/Dockerfile builds from the official image (Airflow plan section 11.1).",

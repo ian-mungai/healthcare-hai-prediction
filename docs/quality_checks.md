@@ -58,8 +58,11 @@ last_updated: 2026-10-16
   credential files are blocked.
 - **Data files:** `.csv`, `.tsv`, `.parquet`, `.xlsx`, `.xls`, `.jsonl`,
   `.ndjson`, `.avro`, `.db` and `.sqlite` files are allowed only in
-  `tests/fixtures/` for synthetic samples and in `dbt/seeds/` for the reviewed
-  dbt seeds (file labels and checksums from the S3 manifests, no source values). Any file over 5 MB is blocked
+  `tests/fixtures/` for synthetic samples, in `dbt/seeds/` for the reviewed
+  dbt seeds (file labels and checksums from the S3 manifests, no source values),
+  in `features/recipes/` for the formula recipes and as the one named file
+  `config/lakehouse/identity_classification.csv` (codes, classes and public
+  source citations; a path that only starts with that name is blocked). Any file over 5 MB is blocked
   unless Git LFS stores it. Acquired data stays in S3 and ignored local folders.
   Git LFS stores two acquisition config files over the limit,
   `config/acquisition/source_registry.json` and
@@ -355,7 +358,7 @@ run in their own CI job and through their hook only when acquisition files
 change. The full local CI also runs them. Run them directly before a release
 with `bash scripts/acquisition/run_checks.sh`.
 
-The checks cover secrets and credential files, data files (allowed only in `tests/fixtures/` and `dbt/seeds/`), a
+The checks cover secrets and credential files, data files (allowed only in `tests/fixtures/`, `dbt/seeds/`, `features/recipes/` and the one file `config/lakehouse/identity_classification.csv`), a
 privacy scan of every non-ignored file, prose style, Markdown syntax, front matter, commit messages, documentation that
 matches the code, removed names, unused code, dependencies and files, lint settings and Docker calls outside the
 launcher. Each has a failing and a passing sample run in local CI. Local commits need an ignored

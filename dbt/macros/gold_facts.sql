@@ -591,15 +591,16 @@ where measures.fact is not null and measures.unit is distinct from silver_units.
 {% test bridge_matches_seeds(model, seeds) %}
 {#-
     Rebuilds the expected bridge rows from the control bridge seeds (a row with a non-empty measure_key; the measure key hash of the fact,
-    key and value column, the control key hash, the control, the vintage bounds and the seed provenance) and compares them with the bridge
+    key and value column, and, for a split measure, the edition start, the control key hash, the control, the vintage bounds and the seed provenance) and compares them with the bridge
     in both directions with multiplicity, so a dropped, doubled or substituted mapping fails [827] [744].
 -#}
 with
 
-expected as (
+seed_rows as (
     select
-        md5(fact || '|' || measure_key || '|' || value_column) as measure_sk,
-        md5(measure_control) as registry_control_sk,
+        fact,
+        measure_key,
+        value_column,
         measure_control,
         vintage_start,
         vintage_end,
@@ -621,8 +622,39 @@ expected as (
         union all
         {%- endif %}
         {%- endfor %}
-    ) as seed_rows
+    ) as all_seed_rows
     where measure_key is not null and measure_key <> ''
+),
+
+editions as (
+    select
+        fact,
+        measure_key,
+        value_column,
+        edition_start,
+        edition_end
+    from {{ ref('dim_measure') }}
+    where edition_start is not null
+),
+
+-- A seed row of a split measure expects one bridge row per edition whose years overlap its vintage range (every edition when the range is empty).
+expected as (
+    select
+        md5(seed_rows.fact || '|' || seed_rows.measure_key || '|' || seed_rows.value_column || coalesce('|' || editions.edition_start, '')) as measure_sk,
+        md5(seed_rows.measure_control) as registry_control_sk,
+        seed_rows.measure_control,
+        seed_rows.vintage_start,
+        seed_rows.vintage_end,
+        seed_rows.source_seed,
+        seed_rows.source_row
+    from seed_rows
+    left join editions
+        on
+            seed_rows.fact = editions.fact
+            and seed_rows.measure_key = editions.measure_key
+            and seed_rows.value_column = editions.value_column
+            and coalesce(nullif(seed_rows.vintage_start, ''), '0000') <= left(editions.edition_end, 4)
+            and coalesce(nullif(seed_rows.vintage_end, ''), '9999') >= left(editions.edition_start, 4)
 ),
 
 actual as (
