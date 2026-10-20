@@ -14,5 +14,6 @@ The acquisition stage's source code and dependencies are tracked in the reposito
 | `closeout` | Clean-checkout gate and replay checks | `data/acquisition_planning/closeout_*/` |
 | `successor` | Builds the current-state locked plans and records and their legacy catalog from the private archive (`build_successor.py`; a rerun changes nothing) | `data/acquisition_planning/acquisition_legacy_20261009/` |
 | `registry_rev3` | Builds source registry revision 3 (the six owner decisions of Oct 8 2026) from the archived revision 2 and catalogs revision 2 (`build_rev3.py`; a rerun changes nothing) | `data/acquisition_planning/acquisition_legacy_20261009/registry_rev2/` |
+| `reference_documents` | Strict fetch of reference PDFs (`fetch_reference_pdfs.py`) and the offline Alaska county-code check (`check_alaska_county_codes.py`), with their shared receipt code and the download process they start for each file (`fetch_child.py`). `run_reference_documents_e2e` checks them offline in the acquisition gate | `data/reference_checks/` |
 
 The acquisition gate lints and type-checks these tools but leaves them out of its coverage target (`config/acquisition/coverage.ini`). Their run records show what they did.

@@ -392,7 +392,7 @@
         "code_label",
         "identity_rule"
       ],
-      "grain": "published code; one identity per code with the label of the latest release (held as unresolved, policy D1). A Medicare Inpatient data year is a calendar year that can combine two fiscal-year MS-DRG grouper versions, and each release chooses its own title version, so one code and one label can cover different definitions across data years",
+      "grain": "published code; one identity per code with the label of the latest release (held as unresolved, policy D1). A Medicare Inpatient data year is a calendar year that can combine two fiscal-year MS-DRG grouper versions, and each release chooses its own title version, so one code and one label can cover different definitions across data years. CMS assigns each discharge to the grouper version in effect on its discharge date (Medicare Claims Processing Manual, Pub 100-04, chapter 3 section 20.2.3.1, subsection B of transmittals 4144, Oct 4 2018, and 13969, Sep 29 2026), but the 2024 release methodology (May 2024) names no grouper version and no public document found ties a release to one, so the version of a stay in a release is not stated and the one-identity rule stands. The restricted MedPAR file carries the version as DRG_GRPR_VRSN_CD (ResDAC, new in 2021)",
       "inputs": [
         "published code lists in the facts",
         "dbt/seeds/gold/identity_splits.csv (generated from the approved classification list)"
@@ -462,7 +462,7 @@
         "edition_end",
         "identity_rule"
       ],
-      "grain": "measure identity (gold plan 2.2); one identity per label edition for a measure the identity-splits seed lists as redefined; a renamed or held measure keeps one identity with the label of its latest release. A renamed measure records a label change, not a change of its exclusion logic: OP_18b keeps one identity, which does not certify an unchanged psychiatric diagnosis code list and is not a claim of full numerical comparability across years",
+      "grain": "measure identity (gold plan 2.2); one identity per label edition for a measure the identity-splits seed lists as redefined; a renamed or held measure keeps one identity with the label of its latest release. A renamed measure records a label change, not a change of its exclusion logic: OP_18b keeps one identity, which does not certify an unchanged psychiatric diagnosis code list and is not a claim of full numerical comparability across years. OP_18b: the Hospital OQR specifications manual v20.0 release notes (completed Jun 10 2026, encounters 2027) change only its title, and the algorithm steps for the psychiatric and transfer strata read the same in v19.0a and v20.0. PSI_09 is held at one identity across a definition change: AHRQ v2021 (Jul 2021) renamed it Postoperative and CMS PSI software v12.0 (QualityNet, January 2023 Care Compare release) also modified its denominator exclusions (CMS PSI FAQ v12.0, question 4), so its meaning changed at that step; a Jul or Oct 2022 release is not listed on QualityNet and the CMS adoption date of AHRQ v2022 is not documented",
       "inputs": [
         "every long fact's published measure ID or field",
         "every wide fact's columns",
