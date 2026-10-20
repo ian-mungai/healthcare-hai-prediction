@@ -128,6 +128,50 @@ def mutants() -> dict[str, Mutant]:
         BROKER, "request_id_of", 'def request_id_of(submission_id: str, operation: str = "submit") -> str:\n    return f"brk-{operation}-{os.urandom(8).hex()}"'
     )
     stub = "def {name}({arguments}) -> {result}:\n    return {value}"
+    lookup = 'stack["services"].get(service)'
+    in_memory = 'self.__dict__.setdefault("seen_attempts", {}).get(service)'
+    done = block('        stack["services"][service] = attempt["id"]', "        return attempt")
+    done_in_memory = block(
+        '        stack["services"][service] = attempt["id"]', '        self.seen_attempts[service] = attempt["id"]', "        return attempt"
+    )
+    orchestration_attempt = block(
+        '        attempt_id = stack["services"].get(service)',
+        "        if attempt_id is not None:",
+        '            return state["attempts"][attempt_id]',
+        "        seconds = 900 if service in ORCHESTRATION_FINITE else 10**7",
+        "        attempt = self.new_attempt(",
+        "            state,",
+        "            ORCHESTRATION_OWNER,",
+        '            "orchestration_service",',
+        '            f"orch-{service}",',
+        "            [],",
+        '            {"service": service},',
+        '            request="launcher",',
+        '            checkout=stack["checkout"],',
+        "            seconds=seconds,",
+        "        )",
+        '        stack["services"][service] = attempt["id"]',
+        "        return attempt",
+    )
+    lineage_attempt = block(
+        '        attempt_id = stack["services"].get(service)',
+        "        if attempt_id is not None:",
+        '            return state["attempts"][attempt_id]',
+        "        seconds = 10**7",
+        "        attempt = self.new_attempt(",
+        "            state,",
+        "            LINEAGE_OWNER,",
+        '            "lineage_service",',
+        '            f"lineage-{service}",',
+        "            [],",
+        '            {"service": service},',
+        '            request="launcher",',
+        '            checkout=stack["checkout"],',
+        "            seconds=seconds,",
+        "        )",
+        '        stack["services"][service] = attempt["id"]',
+        "        return attempt",
+    )
     found = [
         Mutant(
             "docker_call_in_broker",
@@ -717,7 +761,28 @@ def mutants() -> dict[str, Mutant]:
         Mutant(
             "health_not_awaited",
             "the stack goes on without waiting for a service to be healthy",
-            (Edit(LAUNCHER, 'if stack["health"].get(service) == "healthy":', "if True:"),),
+            (
+                Edit(
+                    LAUNCHER,
+                    block(
+                        '        if service in ORCHESTRATION_FINITE or attempt["phase"] != "started":',
+                        "            return",
+                        '        if stack["health"].get(service) == "healthy":',
+                    ),
+                    block('        if service in ORCHESTRATION_FINITE or attempt["phase"] != "started":', "            return", "        if True:"),
+                ),
+            ),
+        ),
+        Mutant(
+            "lineage_health_not_awaited",
+            "the lineage stack goes on without waiting for a service to be healthy",
+            (
+                Edit(
+                    LAUNCHER,
+                    block('        if attempt["phase"] != "started":', "            return", '        if stack["health"].get(service) == "healthy":'),
+                    block('        if attempt["phase"] != "started":', "            return", "        if True:"),
+                ),
+            ),
         ),
         Mutant(
             "up_during_teardown_allowed",
@@ -735,8 +800,13 @@ def mutants() -> dict[str, Mutant]:
         ),
         Mutant(
             "service_attempt_not_reused",
-            "a service's attempt is created again at every step instead of being found",
-            (Edit(LAUNCHER, block('        attempt_id = stack["services"].get(service)'), block("        attempt_id = None")),),
+            "a service's attempt is found only in the launcher's memory, so a restarted launcher creates it again",
+            (Edit(LAUNCHER, orchestration_attempt, orchestration_attempt.replace(lookup, in_memory).replace(done, done_in_memory)),),
+        ),
+        Mutant(
+            "lineage_attempt_not_reused",
+            "a lineage service's attempt is found only in the launcher's memory, so a restarted launcher creates it again",
+            (Edit(LAUNCHER, lineage_attempt, lineage_attempt.replace(lookup, in_memory).replace(done, done_in_memory)),),
         ),
         Mutant(
             "catalog_sees_stack_network",
@@ -750,9 +820,29 @@ def mutants() -> dict[str, Mutant]:
                 Edit(
                     LAUNCHER,
                     block(
-                        "        if not inside(candidate, roots):", '            raise LauncherError(f"state {text!r} is outside the allowed folders", "args")'
+                        '        roots = [checkout / "data" / "orchestration", self.main_checkout / "data" / "orchestration", *self.cfg.allowed_roots]',
+                        "        if not inside(candidate, roots):",
+                        '            raise LauncherError(f"state {text!r} is outside the allowed folders", "args")',
                     ),
-                    block("        pass"),
+                    block(
+                        '        roots = [checkout / "data" / "orchestration", self.main_checkout / "data" / "orchestration", *self.cfg.allowed_roots]',
+                        "        pass",
+                    ),
+                ),
+            ),
+        ),
+        Mutant(
+            "lineage_state_folder_unchecked",
+            "the lineage state folder is not held to the allowed folders",
+            (
+                Edit(
+                    LAUNCHER,
+                    block(
+                        '        roots = [checkout / "data" / "lineage", self.main_checkout / "data" / "lineage", *self.cfg.allowed_roots]',
+                        "        if not inside(candidate, roots):",
+                        '            raise LauncherError(f"state {text!r} is outside the allowed folders", "args")',
+                    ),
+                    block('        roots = [checkout / "data" / "lineage", self.main_checkout / "data" / "lineage", *self.cfg.allowed_roots]', "        pass"),
                 ),
             ),
         ),
@@ -763,9 +853,16 @@ def mutants() -> dict[str, Mutant]:
                 Edit(
                     LAUNCHER,
                     block(
-                        '        stack.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})', '        return {"phase": "tearing_down"}'
+                        "        stack = self.orchestration_record(ctx.state)",
+                        '        if stack["phase"] in ("down", "tearing_down"):',
+                        '            return {"phase": stack["phase"]}',
+                        '        stack.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})',
+                        '        return {"phase": "tearing_down"}',
                     ),
                     block(
+                        "        stack = self.orchestration_record(ctx.state)",
+                        '        if stack["phase"] in ("down", "tearing_down"):',
+                        '            return {"phase": stack["phase"]}',
                         '        stack.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})',
                         '        for other in self.docker.containers(label="com.docker.compose.project"):',
                         '            self.docker.remove(str(other["Id"]))',
@@ -773,6 +870,62 @@ def mutants() -> dict[str, Mutant]:
                     ),
                 ),
             ),
+        ),
+        Mutant(
+            "lineage_teardown_removes_other_projects",
+            "the lineage stack's teardown also removes the containers of every Compose project",
+            (
+                Edit(
+                    LAUNCHER,
+                    block(
+                        "        stack = self.lineage_record(ctx.state)",
+                        '        if stack["phase"] in ("down", "tearing_down"):',
+                        '            return {"phase": stack["phase"]}',
+                        '        stack.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})',
+                        '        return {"phase": "tearing_down"}',
+                    ),
+                    block(
+                        "        stack = self.lineage_record(ctx.state)",
+                        '        if stack["phase"] in ("down", "tearing_down"):',
+                        '            return {"phase": stack["phase"]}',
+                        '        stack.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})',
+                        '        for other in self.docker.containers(label="com.docker.compose.project"):',
+                        '            self.docker.remove(str(other["Id"]))',
+                        '        return {"phase": "tearing_down"}',
+                    ),
+                ),
+            ),
+        ),
+        Mutant(
+            "lineage_api_not_joined",
+            "the lineage API is created on the frontend network and never joined to the backend network",
+            (
+                Edit(
+                    LAUNCHER,
+                    block('        if service == "api":', '            rendered.joins[f"hai-{registry_id[:8]}-lineage-backend"] = ["lineage-api"]'),
+                    block('        if service == "api":', "            pass"),
+                ),
+                Edit(LAUNCHER, 'or created_on | set(rendered.joins) != {f"hai-{registry_id[:8]}-lineage-{role}" for role in expected}', "or False"),
+            ),
+        ),
+        Mutant(
+            "lineage_join_refusal_ignored",
+            "a join the daemon refuses is ignored and the container is started",
+            (
+                Edit(
+                    LAUNCHER,
+                    block("                    self.docker.connect_network(network, container_id, aliases)"),
+                    block(
+                        "                    with contextlib.suppress(Exception):",
+                        "                        self.docker.connect_network(network, container_id, aliases)",
+                    ),
+                ),
+            ),
+        ),
+        Mutant(
+            "lineage_join_repeated_on_retry",
+            "a retried start joins the networks again although the container shows them",
+            (Edit(LAUNCHER, "                if network not in present:", "                if True:"),),
         ),
         Mutant(
             "pull_without_digest_rule",
@@ -904,6 +1057,17 @@ GUARDS: dict[str, dict[str, tuple[Guard, ...]]] = {
         "stack_request_validation": (Guard("state_folder_unchecked", "a state folder outside the allowed folders is refused"),),
         "pull_rules": (Guard("pull_without_digest_rule", "a tag-only reference is refused"),),
         "orchestration_check_template": (Guard("check_job_on_a_network", "it runs on no network"),),
+        "lineage_two_networks": (
+            Guard("lineage_api_not_joined", "exactly one join is sent, for the API and the backend network, with the lineage-api alias"),
+            Guard("lineage_teardown_removes_other_projects", "a container of another project still runs after the lineage teardown"),
+        ),
+        "lineage_join_refused": (Guard("lineage_join_refusal_ignored", "one join was tried and the API was never started"),),
+        "lineage_join_resumed_after_launcher_kill": (
+            Guard("lineage_join_repeated_on_retry", "exactly one join was sent in all"),
+            Guard("lineage_attempt_not_reused", "the API was created once"),
+        ),
+        "lineage_unhealthy_service": (Guard("lineage_health_not_awaited", "the lineage stack is down"),),
+        "lineage_request_validation": (Guard("lineage_state_folder_unchecked", "a state folder outside the allowed folders is refused"),),
     },
     "offline": {
         "compose": (Guard("compose_check_off", "mutation: compose with another PostgreSQL digest refused"),),

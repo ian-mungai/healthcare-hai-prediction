@@ -1,8 +1,9 @@
 """A fake Docker Engine on a Unix socket, for the launcher's end-to-end runs (scripts/lakehouse/run_launcher_e2e.py).
 
 It speaks the part of the Engine API the launcher uses: containers (create, start, stop, kill, remove, inspect, list, logs, stats, attach),
-networks, volumes, images, ``info``, ``_ping`` and the events stream. Its state lives in the test process, so a launcher that is killed
-leaves the fake daemon as it was, and a request that was accepted completes whether or not its caller is still there.
+networks (create, connect, list, remove), volumes, images, ``info``, ``_ping`` and the events stream. A create request that names more than one
+network endpoint is refused as the Engine does under API v1.43, the version the launcher speaks. Its state lives in the test process, so a
+launcher that is killed leaves the fake daemon as it was, and a request that was accepted completes whether or not its caller is still there.
 
 The test controls the daemon's timing: a *gate* pauses a request before or after the daemon applies its side effect, an event can be
 published before or after the reply, the event connections can be dropped, the subscription can be registered late (the response
@@ -148,6 +149,7 @@ class FakeDocker:
         self.health_status = "healthy"
         self.fail_remove = 0
         self.fail_list = False
+        self.connect_refusals: list[tuple[int, str]] = []
         self.stdout: dict[str, str] = {}
         self.create_bodies: dict[str, dict[str, Any]] = {}
         self.stopping = False
@@ -163,6 +165,10 @@ class FakeDocker:
         entry = {"t": time.time(), "method": method, "path": path, "query": dict(query)}
         if body and path == "/containers/create":
             entry["name"] = query.get("name")
+        if body and path.startswith("/networks/") and path.endswith("/connect"):
+            joined = self.find(str(body.get("Container", "")))
+            entry["target"] = joined["Name"].lstrip("/") if joined else None
+            entry["aliases"] = list((body.get("EndpointConfig") or {}).get("Aliases") or [])
         parts = path.split("/")
         if len(parts) >= 3 and parts[1] == "containers" and parts[2] not in ("create", "json"):
             found = self.find(parts[2])
@@ -433,7 +439,11 @@ class FakeDocker:
         name = query.get("name", "")
         context = {"name": name, "labels": body.get("Labels", {}), "body": body}
         self.checkpoint("create", "before", context)
+        endpoints = (body.get("NetworkingConfig") or {}).get("EndpointsConfig") or {}
         with self.lock:
+            if len(endpoints) > 1:
+                handler.reply(400, {"message": f"Container cannot be created with multiple network endpoints: {', '.join(endpoints)}"})
+                return
             if any(c["Name"].lstrip("/") == name for c in self.containers.values()):
                 handler.reply(409, {"message": f"Conflict. The container name /{name} is already in use"})
                 return
@@ -490,6 +500,7 @@ class FakeDocker:
                 },
                 "Mounts": [{"Type": m["Type"], "Source": m["Source"], "Destination": m["Target"], "RW": not m.get("ReadOnly")} for m in host.get("Mounts", [])],
                 "State": {"Status": "created", "Running": False, "ExitCode": 0, "Health": {"Status": "starting"} if body.get("Healthcheck") else None},
+                "NetworkSettings": {"Networks": {network: {"Aliases": entry.get("Aliases")} for network, entry in endpoints.items()}},
                 "_body": body,
                 "_stdin": b"",
             }
@@ -656,9 +667,11 @@ class FakeDocker:
                     handler.reply(409, {"message": "network with this name already exists"})
                     return
                 network_id = uuid.uuid4().hex
-                self.networks[network_id] = {"Id": network_id, "Name": body["Name"], "Labels": body.get("Labels", {})}
+                self.networks[network_id] = {"Id": network_id, "Name": body["Name"], "Labels": body.get("Labels", {}), "Internal": bool(body.get("Internal"))}
             self.checkpoint("net_create", "after", context)
             handler.reply(201, {"Id": network_id})
+        elif len(parts) == 2 and parts[1] == "connect" and method == "POST":
+            self.connect(handler, parts[0], body)
         elif len(parts) == 1 and method == "DELETE":
             self.checkpoint("net_remove", "before", {"id": parts[0]})
             with self.lock:
@@ -666,3 +679,25 @@ class FakeDocker:
             handler.reply(204 if existed else 404, None)
         else:
             handler.reply(404, {"message": "fake daemon: no such network route"})
+
+    def connect(self, handler: Handler, ref: str, body: dict[str, Any]) -> None:
+        """Join a container to a network with the aliases of the request; an unknown network or container, or a network already joined, is refused."""
+        with self.lock:
+            network = self.networks.get(ref) or next((n for n in self.networks.values() if n["Name"] == ref), None)
+            container = self.find(str(body.get("Container", "")))
+            if self.connect_refusals:
+                status, message = self.connect_refusals.pop(0)
+                handler.reply(status, {"message": message})
+                return
+            if network is None:
+                handler.reply(404, {"message": f"network {ref} not found"})
+                return
+            if container is None:
+                handler.reply(404, {"message": f"No such container: {body.get('Container')}"})
+                return
+            joined = container["NetworkSettings"]["Networks"]
+            if network["Name"] in joined:
+                handler.reply(403, {"message": f"endpoint with name {container['Name'].lstrip('/')} already exists in network {network['Name']}"})
+                return
+            joined[network["Name"]] = {"Aliases": list((body.get("EndpointConfig") or {}).get("Aliases") or []) or None}
+        handler.reply(200, None)

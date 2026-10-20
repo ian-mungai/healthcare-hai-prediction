@@ -844,7 +844,7 @@ def gate_evidence_matches(record: dict[str, Any], run_id: str) -> bool:
         states.get("status") == "read"
         and states.get("dag_run_id") == run_id
         and states.get("failed_tasks") == []
-        and [item["task"] for item in predecessors] == [name for name in STEPS if name not in ("final_gate", "release_run")]
+        and sorted(item["task"] for item in predecessors) == sorted(name for name in STEPS if name not in ("final_gate", "release_run"))
         and all(item["observed"] == item["expected"] == SUCCESS_TASKS[item["task"]] for item in predecessors)
     )
 

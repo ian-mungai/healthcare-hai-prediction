@@ -47,7 +47,15 @@ class FakeSubmissions:
 
     def _write(self, request: SubmissionRequest, event: str, **fields: Any) -> None:
         """Append one ledger line after checking it against the ledger schema."""
-        line = {"schema_version": 1, "event": event, "at": datetime.now(UTC).isoformat(), "submission_id": request.submission_id, **request.as_dict(), **fields}
+        line = {
+            "schema_version": 1,
+            "event": event,
+            "at": datetime.now(UTC).isoformat(),
+            "submission_id": request.submission_id,
+            **request.as_dict(),
+            "lineage": {"version": 1, "inputs": [], "outputs": []},
+            **fields,
+        }
         self._lines.validate(line)
         self.ledger.append(line)
 
@@ -62,7 +70,10 @@ class FakeSubmissions:
         if request.mode not in spec["modes"]:
             raise SubmissionRefused(f"template {request.template} does not support mode {request.mode}")
         if request.submission_id in self._handles:
-            return self._handles[request.submission_id]
+            handle = self._handles[request.submission_id]
+            if SubmissionRequest.from_record(self._lines_of(handle)[0]).identity() != request.identity():
+                raise SubmissionRefused("caller identity differs from the persisted submission identity")
+            return handle
         handle = Handle(request.submission_id, request.container_name)
         self._handles[request.submission_id] = handle
         spec_sha256 = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
@@ -110,7 +121,7 @@ class FakeSubmissions:
         """Stop a running submission (exit code 143, as after SIGTERM); a finished one is unchanged."""
         last = self._lines_of(handle)[-1]
         if last["event"] in ("started", "adopted"):
-            request = SubmissionRequest(last["template"], last["run_id"], last["mode"], last["attempt"])
+            request = SubmissionRequest.from_record(last)
             self._cancelled.add(handle.submission_id)
             self._write(request, "finished", exit_code=143, record_path=None, observed_peak_memory_bytes=None, no_op=False)
         return self.status(handle)

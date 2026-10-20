@@ -67,6 +67,44 @@ class StackEnv(Env):
             },
         }
 
+    def prepare_lineage(self) -> Path:
+        """The lineage state folder, allowed to the launcher, and the pinned images of the three lineage services; call before the launcher starts."""
+        folder = self.temp / "lineage"
+        for name in ("postgres", "private", "config"):
+            (folder / name).mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.settings["allowed_roots"] = [str(self.orch), str(folder)]
+        self.write_settings()
+        self.daemon.script = lambda container: None
+        for row in launcher.ComposeModel(ROOT / launcher.LINEAGE_COMPOSE).services.values():
+            self.daemon.images[str(row["image"])] = {
+                "Id": "sha256:" + os.urandom(8).hex(),
+                "Config": {"Labels": {}, "Env": ["PATH=/usr/local/bin:/usr/bin"], "User": "", "WorkingDir": "", "Entrypoint": None, "Cmd": []},
+            }
+        return folder
+
+    def lineage(self) -> dict[str, Any]:
+        """The recorded lineage stack."""
+        return dict(self.state()["launcher"].get("lineage") or {"phase": "down"})
+
+    def lineage_up(self, folder: Path, seconds: float = 60) -> str:
+        """Request the lineage stack and wait for ``up`` or a failed start (``down`` with the cause recorded); returns the phase."""
+        params = {"state": str(folder), "api_port": 18701, "web_port": 18702, "checkout": str(ROOT)}
+        self.client().call("lineage_up", params)
+        time.sleep(0.2)
+        return str(self.wait(lambda: self.lineage().get("phase") in ("up", "down") and self.lineage()["phase"], seconds, "the lineage stack is up or failed"))
+
+    def lineage_down(self, seconds: float = 40) -> None:
+        """Request teardown and wait until the stack is down and nothing of it is left."""
+        self.client().call("lineage_down")
+        self.wait(lambda: self.lineage().get("phase") == "down" and not self.lineage_objects(), seconds, "the lineage stack is down")
+
+    def lineage_objects(self) -> list[str]:
+        """Containers and networks of the lineage stack."""
+        with self.daemon.lock:
+            found = [c["Name"] for c in self.daemon.containers.values() if c["Config"]["Labels"].get(launcher.LABEL_STACK) == "lineage"]
+            found += [n["Name"] for n in self.daemon.networks.values() if n["Labels"].get(launcher.LABEL_STACK) == "lineage"]
+        return found
+
     def up_params(self, **extra: Any) -> dict[str, Any]:
         """The parameters of an ``orchestration_up`` request."""
         return {"state": str(self.orch), "api_port": API_PORT, "checkout": str(ROOT), **extra}
@@ -100,6 +138,10 @@ class StackEnv(Env):
     def created_names(self) -> list[str]:
         """Container names in the order the daemon received their creates."""
         return [str(c["name"]) for c in self.daemon.calls_matching("POST", "/containers/create") if "-svc-orch-" in str(c["name"])]
+
+    def created_lineage_names(self) -> list[str]:
+        """Lineage container names in the order the daemon received their creates."""
+        return [str(c["name"]) for c in self.daemon.calls_matching("POST", "/containers/create") if "-svc-lineage-" in str(c["name"])]
 
     def body_of(self, service: str) -> dict[str, Any]:
         """The create body of one stack service."""
@@ -216,8 +258,12 @@ def stack_up_down(env: StackEnv) -> dict[str, bool]:
         "no mount is the Docker socket, an AWS folder or a lakehouse secret": not any(
             source.endswith(".sock") or ".aws" in source or "lakehouse/secrets" in source for source, _, _ in all_mounts
         ),
-        "only the logs and the database folder are writable": sorted({target for _, target, ro in all_mounts if not ro})
-        == ["/opt/airflow/logs", "/var/lib/postgresql/data"],
+        "only the logs, the lineage provider spool and the database folder are writable": sorted({target for _, target, ro in all_mounts if not ro})
+        == ["/opt/airflow/logs", "/opt/hai/lineage_provider", "/var/lib/postgresql/data"],
+        "only the scheduler and the API server mount the lineage provider spool writable": sorted(
+            s for s, b in bodies.items() if any(t == "/opt/hai/lineage_provider" and not ro for _, t, ro in mount_pairs(b))
+        )
+        == ["airflow-apiserver", "airflow-scheduler"],
         "only the scheduler receives the broker session folder": [s for s, b in bodies.items() if any(t == "/opt/hai/broker" for _, t, _ in mount_pairs(b))]
         == ["airflow-scheduler"],
         "the launcher mounts only the three DAG-side modules, never launcher.py": sorted(
@@ -321,9 +367,15 @@ def stack_resume_after_launcher_kill(env: StackEnv) -> dict[str, bool]:
     env.kill_launcher()
     env.start()
     gate.release()
-    settles(env, lambda: env.stack_phase() == "up", 60)
+
+    def api_creates() -> list[str]:
+        return [n for n in env.created_names() if n.endswith("orch-airflow-apiserver")]
+
+    settles(env, lambda: env.stack_phase() == "up" or len(api_creates()) > 1, 60)
     started_ok = env.stack_phase() == "up"
-    unique = len({n for n in env.created_names() if n.endswith("orch-airflow-apiserver")}) == 1
+    unique = len(api_creates()) == 1
+    if not (started_ok and unique):
+        return {"a start interrupted by a launcher kill resumes and comes up": started_ok, "the API server was created once": unique}
     gate2 = env.daemon.add_gate("remove", "before", match=lambda c: str(c["name"]).endswith("orch-airflow-scheduler"))
     env.client().call("orchestration_down")
     gate2.wait_reached()
@@ -645,6 +697,181 @@ def orchestration_check_template(env: StackEnv) -> dict[str, bool]:
     }
 
 
+def lineage_network_facts(env: StackEnv) -> dict[str, Any]:
+    """What the fake daemon saw of the lineage stack: the create bodies, the joins and the order of the joins and starts."""
+    rid = env.registry_id()[:8]
+    names = {service: f"hai-{rid}-svc-lineage-{service}" for service in ("postgres", "api", "web")}
+    networks = {"backend": f"hai-{rid}-lineage-backend", "frontend": f"hai-{rid}-lineage-frontend"}
+    calls = env.daemon.calls
+    starts = {s: [i for i, c in enumerate(calls) if c["path"].endswith("/start") and c.get("target") == name] for s, name in names.items()}
+    joins = [(i, c) for i, c in enumerate(calls) if c["path"].startswith("/networks/") and c["path"].endswith("/connect")]
+    return {
+        "rid": rid,
+        "names": names,
+        "networks": networks,
+        "starts": starts,
+        "joins": joins,
+        "bodies": {s: env.daemon.create_bodies.get(n) for s, n in names.items()},
+    }
+
+
+@case("lineage_two_networks")
+def lineage_two_networks(env: StackEnv) -> dict[str, bool]:
+    """The lineage API is on the frontend and the backend network although the daemon (API 1.43) takes one endpoint at create: the create body names
+    the frontend only, the launcher joins the backend before the start and the stack comes up; teardown leaves nothing."""
+    folder = env.prepare_lineage()
+    env.start()
+    phase = env.lineage_up(folder)
+    if phase != "up" or env.lineage().get("error"):
+        settles(env, lambda: not env.lineage_objects() and not env.daemon.networks, 40)
+        return {"the lineage stack is up": False}
+    facts = lineage_network_facts(env)
+    names, networks, bodies = facts["names"], facts["networks"], facts["bodies"]
+    api = next((c for c in env.daemon.containers.values() if c["Name"].lstrip("/") == names["api"]), None)
+    joined = (api or {"NetworkSettings": {"Networks": {}}})["NetworkSettings"]["Networks"]
+    by_name = {n["Name"]: n for n in env.daemon.networks.values()}
+    endpoints = {s: sorted(((b or {}).get("NetworkingConfig") or {}).get("EndpointsConfig", {})) for s, b in bodies.items()}
+    join_targets = [(c["target"], c["aliases"], c["path"].split("/")[2]) for _, c in facts["joins"]]
+    checks = {
+        "the lineage stack is up": phase == "up" and env.lineage().get("error", "") == "",
+        "no create names more than one endpoint": all(len(found) == 1 for found in endpoints.values()),
+        "the API is created on the frontend network, which carries its published port": endpoints["api"] == [networks["frontend"]]
+        and bodies["api"]["HostConfig"]["NetworkMode"] == networks["frontend"],
+        "PostgreSQL is on the backend network only and the web service on the frontend only": endpoints["postgres"] == [networks["backend"]]
+        and endpoints["web"] == [networks["frontend"]],
+        "exactly one join is sent, for the API and the backend network, with the lineage-api alias": len(join_targets) == 1
+        and join_targets[0][:2] == (names["api"], ["lineage-api"])
+        and join_targets[0][2] in (by_name.get(networks["backend"], {}).get("Id"), networks["backend"]),
+        "the join precedes the start of the API": len(facts["joins"]) == 1
+        and len(facts["starts"]["api"]) >= 1
+        and facts["joins"][0][0] < facts["starts"]["api"][0],
+        "the API container is on both networks": sorted(joined) == sorted(networks.values()),
+        "the API keeps its alias on the backend network": (joined.get(networks["backend"]) or {}).get("Aliases") == ["lineage-api"],
+        "the backend network is internal and the frontend network is not": by_name.get(networks["backend"], {}).get("Internal") is True
+        and by_name.get(networks["frontend"], {}).get("Internal") is False,
+        "the API port binds the loopback only and the database publishes nothing": bodies["api"]["HostConfig"]["PortBindings"]
+        == {"5000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18701"}]}
+        and not bodies["postgres"]["HostConfig"].get("PortBindings"),
+        "every service has a memory limit": all(b["HostConfig"]["Memory"] > 0 for b in bodies.values()),
+        "no create is refused as a configuration mismatch": not any(
+            op["result"] in ("digest_mismatch",) for op in env.state()["operations"].values() if op["kind"] == "create"
+        ),
+    }
+    rogue = env.daemon.create_rogue("rogue-other-project", {"com.docker.compose.project": "elsewhere"}, running=True)
+    env.lineage_down()
+    rogue_container = env.daemon.find(rogue)
+    survived = rogue_container is not None and rogue_container["State"]["Running"]
+    with env.daemon.lock:
+        env.daemon.containers.pop(rogue, None)
+    checks["lineage_down leaves no container and no network"] = not env.lineage_objects() and not env.daemon.networks
+    checks["the stack record is down with no error"] = env.lineage().get("phase") == "down" and env.lineage().get("error", "") == ""
+    checks["a container of another project still runs after the lineage teardown"] = survived
+    return checks
+
+
+@case("lineage_join_refused")
+def lineage_join_refused(env: StackEnv) -> dict[str, bool]:
+    """A join the daemon refuses ends the API attempt before any start: the container is removed, the stack fails with the daemon's text and
+    tears down PostgreSQL and both networks."""
+    folder = env.prepare_lineage()
+    env.engine.connect_refusals.append((404, "network lineage-backend not found"))
+    env.start()
+    phase = env.lineage_up(folder)
+    settles(env, lambda: not env.lineage_objects() and not env.daemon.networks, 40)
+    facts = lineage_network_facts(env)
+    error = env.lineage().get("error", "")
+    return {
+        "the stack is down": phase == "down" and env.lineage().get("phase") == "down",
+        "the error names the API and the daemon's refusal": "api ended" in error and "network lineage-backend not found" in error,
+        "one join was tried and the API was never started": len(facts["joins"]) == 1 and not facts["starts"]["api"],
+        "the web service was never created": facts["bodies"]["web"] is None,
+        "PostgreSQL was started and then removed": len(facts["starts"]["postgres"]) >= 1 and not env.lineage_objects(),
+        "no container and no network are left": not env.lineage_objects() and not env.daemon.networks and not env.labelled(),
+    }
+
+
+@case("lineage_join_resumed_after_launcher_kill")
+def lineage_join_resumed_after_launcher_kill(env: StackEnv) -> dict[str, bool]:
+    """A launcher killed after the join and before the start reaches the daemon starts the container again without a second join (the container
+    already shows the network) and the stack comes up."""
+    folder = env.prepare_lineage()
+    env.start()
+    gate = env.daemon.add_gate("start", "before", match=lambda c: str(c["name"]).endswith("svc-lineage-api"))
+    env.client().call("lineage_up", {"state": str(folder), "api_port": 18701, "web_port": 18702, "checkout": str(ROOT)})
+    if not gate.wait_reached():
+        raise CaseFailure("no start of the lineage API reached the daemon, so the launcher was not killed between the join and the start")
+    env.kill_launcher()
+    env.start()
+    gate.release()
+    settles(env, lambda: env.lineage().get("phase") == "up", 60)
+    facts = lineage_network_facts(env)
+    checks = {
+        "the stack comes up after the restart": env.lineage().get("phase") == "up" and env.lineage().get("error", "") == "",
+        "the API was created once": len([n for n in env.created_lineage_names() if n.endswith("svc-lineage-api")]) == 1,
+        "exactly one join was sent in all": len(facts["joins"]) == 1,
+    }
+    asked(env, "lineage_down")
+    settles(env, lambda: env.lineage().get("phase") == "down" and not env.lineage_objects(), 40)
+    checks["nothing of the stack is left"] = not env.lineage_objects() and not env.daemon.networks
+    return checks
+
+
+@case("lineage_unhealthy_service")
+def lineage_unhealthy_service(env: StackEnv) -> dict[str, bool]:
+    """A lineage service that never turns healthy tears the stack down after the health wait, so the services after it are never created. Failure
+    modes: the wait is skipped and the stack reports up; the wait ends but the started services stay; the error names no service."""
+    folder = env.prepare_lineage()
+    env.engine.unhealthy_service = "lineage-api"
+    env.start()
+    phase = env.lineage_up(folder, 60)
+    settles(env, lambda: not env.lineage_objects() and not env.daemon.networks, 30)
+    created = env.created_lineage_names()
+    return {
+        "the lineage stack is down": phase == "down" and env.lineage().get("phase") == "down",
+        "the error names the API and the health wait": "api was not healthy" in env.lineage().get("error", ""),
+        "the web service was never created": not any(name.endswith("svc-lineage-web") for name in created),
+        "PostgreSQL, started before the API, was stopped and removed": any(name.endswith("svc-lineage-postgres") for name in created)
+        and not env.lineage_objects(),
+        "no network is left": not env.daemon.networks,
+    }
+
+
+@case("lineage_request_validation")
+def lineage_request_validation(env: StackEnv) -> dict[str, bool]:
+    """The lineage request names a state folder, two ports and a checkout, and the launcher validates each. Failure modes: a folder outside the
+    allowed folders, inside a secrets folder, relative, missing or without the private folders is accepted; a port is not an unprivileged integer;
+    something starts before the request is refused."""
+    folder = env.prepare_lineage()
+    env.start()
+    client = env.client()
+    params = {"state": str(folder), "api_port": 18701, "web_port": 18702, "checkout": str(ROOT)}
+
+    def error_of(**override: Any) -> launcher.ClientError | None:
+        try:
+            client.call("lineage_up", {**params, **override})
+        except launcher.ClientError as error:
+            return error
+        return None
+
+    outside = env.temp / "elsewhere"
+    outside.mkdir()
+    secrets_folder = env.orch / "lakehouse" / "secrets"
+    secrets_folder.mkdir(parents=True)
+    bare = env.orch / "bare"
+    bare.mkdir()
+    return {
+        "a state folder outside the allowed folders is refused": refused(error_of(state=str(outside)), "args", "outside the allowed folders"),
+        "a state folder inside a secrets folder is refused": refused(error_of(state=str(secrets_folder)), "mount"),
+        "a relative state folder is refused": refused(error_of(state="lineage"), "args"),
+        "a missing state folder is refused": refused(error_of(state=str(env.orch / "missing")), "args", "does not exist"),
+        "a state folder without the private folders is refused": refused(error_of(state=str(bare)), "args", "lacks"),
+        "a port below 1024 is refused": refused(error_of(api_port=80), "args", "api_port"),
+        "a web port equal to the API port is refused": refused(error_of(web_port=18701), "args", "web_port"),
+        "an unknown parameter is refused": refused(error_of(image="evil"), "args", "image"),
+        "nothing started": not env.created_lineage_names() and env.lineage().get("phase") == "down" and not env.daemon.networks,
+    }
+
+
 # Every case, listed so that a case that loses its decorator cannot go unnoticed: the runner checks the list against the registry.
 ALL_CASES = (
     stack_up_down,
@@ -659,6 +886,11 @@ ALL_CASES = (
     orchestration_dump_template,
     pull_rules,
     orchestration_check_template,
+    lineage_two_networks,
+    lineage_join_refused,
+    lineage_join_resumed_after_launcher_kill,
+    lineage_unhealthy_service,
+    lineage_request_validation,
 )
 
 

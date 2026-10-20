@@ -102,11 +102,13 @@ COPIED_ALLOWED = (
     "unused-code scripts/* -- check scripts copied into the scratch repository\n"
     "unused-dependencies scripts/* -- check scripts copied into the scratch repository\n"
 )
-# A runtime map with an image whose lock file pins a package and a transitive pin, and a package the image provides.
+# A runtime map with an image whose lock file pins a package and a transitive pin, and a package the image provides. The host provides
+# jsonschema as the real map does, because the scratch repository holds the launcher, which imports it.
 RUNTIME_MAP = "config/quality/dependency_runtimes.json"
 PROVIDED_MODULE = "spark" + "lib"
 RUNTIME_MAP_SOURCE = (
-    '{"host": {"requirements": ["requirements.txt"]}, "runtimes": {"image": {"requirements": ["image/requirements.txt"], '
+    '{"host": {"requirements": ["requirements.txt"], "provided": {"jsonschema": "pinned for the acquisition collectors"}}, '
+    '"runtimes": {"image": {"requirements": ["image/requirements.txt"], '
     f'"code": ["image/*.py"], "provided": {{"{PROVIDED_MODULE}": "the image\'s own distribution"}}}}}}}}\n'
 )
 RUNTIME_SAMPLE = {

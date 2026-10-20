@@ -38,19 +38,21 @@ import json
 import os
 import re
 import secrets
+import stat
 import sys
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from orchestration import launcher
+from orchestration import dbt_lineage, launcher
 from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
+from orchestration.snapshots import SnapshotError, validate_input_record, validate_snapshot_record
 from scripts.lakehouse import run_lock
 from scripts.orchestration.ledger import Ledger, LedgerError, LedgerUnavailable, now, publish_folder, schema_validator
 
@@ -78,6 +80,8 @@ VALIDATED_BY_INPUT = "validated_by"
 RESULT_INPUT = "build_file_result"
 VALIDATED_SHA_INPUT = "validated_sha256"
 CHECKPOINT_HASHES = (VALIDATED_SHA_INPUT,)
+FIXTURE_PIN_BYTES = 512 * 1024**2
+RUN_FOLDER = ("data", "analytics", "dbt", "runs")
 
 
 class BrokerError(Exception):
@@ -169,15 +173,33 @@ def launch_id_of(submission_id: str) -> str:
     return f"sub-{sha256_text(submission_id)[:24]}"
 
 
-def submission_request(submission_id: str) -> SubmissionRequest:
-    """The request a submission ID stands for, refused when malformed."""
+def submission_parts(submission_id: str) -> tuple[str, str, str, int]:
+    """Validate a handle's legacy-shaped key without inventing caller identity."""
     parts = submission_id.split(":")
     if len(parts) != 4 or not parts[3].isdecimal():
-        raise SubmissionRefused(f"malformed submission ID {submission_id!r}")
-    request = SubmissionRequest(parts[1], parts[0], parts[2], int(parts[3]))
-    errors = sorted(schema_validator("submission_request.schema.json").iter_errors(request.as_dict()), key=str)
+        raise SubmissionRefused("malformed submission ID")
+    request_schema = json.loads((ROOT / "data_contracts/orchestration/submission_request.schema.json").read_text())
+    key_fields = ("template", "run_id", "mode", "attempt")
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(key_fields),
+        "properties": {key: request_schema["properties"][key] for key in key_fields},
+    }
+    values = {"template": parts[1], "run_id": parts[0], "mode": parts[2], "attempt": int(parts[3])}
+    errors = sorted(Draft202012Validator(schema).iter_errors(values), key=str)
     if errors:
-        raise SubmissionRefused(f"malformed submission ID: {errors[0].message}")
+        raise SubmissionRefused("malformed submission ID")
+    return parts[0], parts[1], parts[2], int(parts[3])
+
+
+def submission_request(submission_id: str, record: dict[str, Any]) -> SubmissionRequest:
+    """Recover caller identity from an intent and require agreement with its key."""
+    submission_parts(submission_id)
+    request = SubmissionRequest.from_record(record)
+    errors = list(schema_validator("submission_request.schema.json").iter_errors(request.as_dict()))
+    if errors or request.submission_id != submission_id:
+        raise SubmissionRefused("persisted request identity does not match its submission ID")
     return request
 
 
@@ -251,8 +273,11 @@ class Broker:
         for a run ID and mode; the gate control actions record what it returns."""
         if paths.registry.kind != "test" and crash_at is not None:
             raise BrokerError("crash points are test-only")
+        validator = Draft202012Validator(json.loads(TEMPLATES_SCHEMA.read_text()))
+        if list(validator.iter_errors(templates)):
+            raise BrokerError("broker templates violate the declared lineage schema")
         self.paths = paths
-        self.templates: dict[str, Any] = templates["templates"]
+        self.templates: dict[str, Any] = json.loads(canonical(templates["templates"]))
         self.templates_sha256 = sha256_text(canonical(templates))
         self.client = client
         self.repo_root = repo_root
@@ -266,7 +291,8 @@ class Broker:
         self._lock_file: Any = None
 
     def start(self) -> dict[str, Any]:
-        """Hold the one-broker lock, then bring every unfinished submission up to date with the launcher."""
+        """Hold the one-broker lock, create the records folder (empty until the first submission finishes, so a lineage collector sees no records
+        instead of a missing folder), then bring every unfinished submission up to date with the launcher."""
         self.paths.private.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.paths.private, 0o700)
         handle = (self.paths.private / "broker.lock").open("a")
@@ -277,6 +303,7 @@ class Broker:
             raise BrokerError(f"another broker holds {self.paths.private / 'broker.lock'}") from None
         self._lock_file = handle
         try:
+            self.paths.records.mkdir(parents=True, exist_ok=True, mode=0o700)
             return self.reconcile()
         except BaseException:
             self.close()
@@ -296,6 +323,16 @@ class Broker:
         for value in known:
             text = text.replace(value, REDACTED)
         return text
+
+    def capture_failure(self, attempt: dict[str, Any]) -> str | None:
+        """The failure the launcher recorded for the attempt's dbt artifact capture: the launcher's known message as written, any other text as a
+        fixed message, so no recorded text reaches the ledger.
+
+        None when the launcher recorded a capture record, or no text: the record is then judged by its contract."""
+        recorded = attempt.get("dbt_artifact_error")
+        if "dbt_artifacts" in attempt or not isinstance(recorded, str):
+            return None
+        return dbt_lineage.CAPTURE_FAILED if recorded == dbt_lineage.CAPTURE_FAILED else dbt_lineage.CAPTURE_WITHHELD
 
     def remember_secret(self, value: str) -> None:
         """Add a value to the redaction set."""
@@ -328,12 +365,12 @@ class Broker:
             raise SubmissionRefused(f"no launcher template runs {request.template} in mode {request.mode}: {row['reason']}")
         return dict(row)
 
-    def placeholder_values(self, request: SubmissionRequest) -> dict[str, str]:
+    def placeholder_values(self, run_id: str, mode: str) -> dict[str, str]:
         """The five values a row's text may name: the run, the mode, the run folder, the build file and the checkout; nothing from the caller."""
-        run_dir = self.runs_root / request.run_id
+        run_dir = self.runs_root / run_id
         return {
-            "run_id": request.run_id,
-            "mode": request.mode,
+            "run_id": run_id,
+            "mode": mode,
             "run_dir": str(run_dir),
             "build_file": str(run_dir / "build.duckdb"),
             "checkout": str(self.repo_root),
@@ -343,7 +380,7 @@ class Broker:
         """The launcher ``submit`` parameters of a submission: the row's fixed values with the placeholders filled, nothing from the caller."""
         if row.get("control") is not None:
             return {"control": row["control"], "template": request.template}
-        values = self.placeholder_values(request)
+        values = self.placeholder_values(request.run_id, request.mode)
         target = row["launcher"]
         payload: dict[str, Any] = {
             "template": target["template"],
@@ -351,7 +388,10 @@ class Broker:
             "args": substitute(target["args"], values),
             "params": substitute(target["params"], values),
             "checkout": str(self.repo_root),
+            "caller_identity": request.identity(),
         }
+        if "dbt_nodes" in target:
+            payload["capture_dbt_artifacts"] = True
         if "timeout_seconds" in target:
             payload["timeout_seconds"] = target["timeout_seconds"]
         return payload
@@ -449,6 +489,12 @@ class Broker:
 
     def write_intent(self, request: SubmissionRequest, row: dict[str, Any], payload: dict[str, Any] | None) -> None:
         """The intent line: written and fsynced before anything is sent to the launcher."""
+        lineage = substitute(
+            (row.get("launcher") or {}).get("lineage", {"version": 1, "inputs": [], "outputs": []}), self.placeholder_values(request.run_id, request.mode)
+        )
+        if self.redact(canonical(lineage)) != canonical(lineage):
+            raise SubmissionRefused("declared lineage contains a known secret")
+        pins = self.pin_inputs(request, lineage)
         self.append(
             {
                 "event": "intent",
@@ -460,12 +506,78 @@ class Broker:
                 "reservation_id": None,
                 "reserved_memory_bytes": None,
                 "container_name": request.container_name,
+                "lineage": lineage,
+                **({"input_pins": pins} if pins else {}),
+                **(
+                    {"dbt_nodes": substitute(row["launcher"]["dbt_nodes"], self.placeholder_values(request.run_id, request.mode))}
+                    if "dbt_nodes" in (row.get("launcher") or {})
+                    else {}
+                ),
             }
         )
 
+    def pin_inputs(self, request: SubmissionRequest, lineage: dict[str, Any]) -> list[dict[str, Any]]:
+        """Freeze the SHA-256 of every declared fixture input as it is in the run folder, before anything is sent to the launcher.
+
+        A fixture row with declared inputs that cannot all be pinned is refused. Other modes and rows without inputs have no pins.
+        """
+        if request.mode != "fixture" or not lineage["inputs"]:
+            return []
+        pins = []
+        for dataset in lineage["inputs"]:
+            if dataset["namespace"] != "file":
+                raise SubmissionRefused("a declared fixture input is not a local file")
+            if self.run_relative(request.run_id, dataset["name"]) is None:
+                raise SubmissionRefused("a declared fixture input is not under the run folder")
+            digest = self.fixture_digest(request.run_id, dataset["name"])
+            if digest is None:
+                raise SubmissionRefused("a declared fixture input cannot be read from the run folder")
+            pins.append({"namespace": dataset["namespace"], "name": dataset["name"], "snapshot": {"kind": "file_sha256", "id": digest}})
+        return pins
+
+    @staticmethod
+    def run_relative(run_id: str, name: str) -> tuple[str, ...] | None:
+        """The path below ``runs_root`` that a logical name ``data/analytics/dbt/runs/<run_id>/<path>`` stands for, or None when it does not map."""
+        parts = PurePosixPath(name).parts
+        if parts[: len(RUN_FOLDER)] != RUN_FOLDER or len(parts) <= len(RUN_FOLDER) + 1 or parts[len(RUN_FOLDER)] != run_id:
+            return None
+        relative = (run_id, *parts[len(RUN_FOLDER) + 1 :])
+        return None if any(part in ("", ".", "..") for part in relative) else relative
+
+    def fixture_digest(self, run_id: str, name: str) -> str | None:
+        """The SHA-256 of the file a logical name stands for in this broker's run folder.
+
+        Only the mapping of ``run_relative`` applies, wherever the checkout is. Every directory below the run root is opened through its parent descriptor
+        without following a link, then the regular file the same way. None when the name does not map, a link is met, the file is absent or it is over the
+        bound.
+        """
+        relative = self.run_relative(run_id, name)
+        if relative is None:
+            return None
+        descriptors: list[int] = []
+        try:
+            descriptors.append(os.open(self.runs_root, os.O_RDONLY | os.O_DIRECTORY))
+            for part in relative[:-1]:
+                descriptors.append(os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptors[-1]))
+            descriptors.append(os.open(relative[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptors[-1]))
+            if not stat.S_ISREG(os.fstat(descriptors[-1]).st_mode):
+                return None
+            digest, size = hashlib.sha256(), 0
+            while chunk := os.read(descriptors[-1], 1024**2):
+                size += len(chunk)
+                if size > FIXTURE_PIN_BYTES:
+                    return None
+                digest.update(chunk)
+            return digest.hexdigest()
+        except OSError:
+            return None
+        finally:
+            for descriptor in descriptors:
+                os.close(descriptor)
+
     def checkpoint_markers(self, request: SubmissionRequest, row: dict[str, Any]) -> dict[str, str]:
         launcher_row = row.get("launcher") or {}
-        values = self.placeholder_values(request)
+        values = self.placeholder_values(request.run_id, request.mode)
         markers: dict[str, str] = {}
         if launcher_row.get("records_build_file") is not None:
             markers[RECORDS_INPUT] = str(substitute(launcher_row["records_build_file"], values))
@@ -487,20 +599,59 @@ class Broker:
     def finish(self, request: SubmissionRequest, exit_code: int, *, no_op: bool = False, record: dict[str, Any] | None = None, **extra: Any) -> None:
         """Write the submission's record file, then its ``finished`` line."""
         lines = self.lines_of(request)
+        if lines and lines[-1]["event"] in ("finished", "failed_closed"):
+            raise SubmissionRefused("submission already has a terminal record")
+        metadata = {**(record or {}), **extra}
+        snapshots: dict[str, Any] = {}
+        if "dbt_lineage" in metadata:
+            try:
+                completed = metadata.get("launcher") or {}
+                attempt_id = completed.get("id")
+                if not isinstance(attempt_id, str):
+                    raise dbt_lineage.DbtLineageError("dbt lineage requires a completed launcher attempt")
+                metadata["dbt_lineage"] = dbt_lineage.validate_record(
+                    metadata["dbt_lineage"], request.as_dict(), attempt_id, lines[0]["lineage"], lines[0].get("dbt_nodes", {}), completed.get("dbt_artifacts")
+                )
+            except dbt_lineage.DbtLineageError as error:
+                self.append(
+                    {"event": "failed_closed", "submission_id": request.submission_id, **request.as_dict(), "reason": self.redact(str(error)), "containers": []}
+                )
+                return
+        succeeded = exit_code == 0 and metadata.get("cancelled") is not True
+        validators: dict[str, Callable[[Any], dict[str, Any]]] = {
+            "snapshot_record": lambda value: validate_snapshot_record(value, request.as_dict(), lines[0]["lineage"]["outputs"], succeeded=succeeded),
+            "input_snapshot_record": lambda value: validate_input_record(
+                value, request.as_dict(), lines[0]["lineage"]["inputs"], succeeded=succeeded, pinned=lines[0].get("input_pins", [])
+            ),
+        }
+        for key, validate in validators.items():
+            if key not in metadata:
+                continue
+            try:
+                validated = validate(metadata[key])
+                if self.redact(canonical(validated)) != canonical(validated):
+                    raise SnapshotError(f"{key.replace('_', ' ')} contains a known secret")
+            except SnapshotError as error:
+                self.append({"event": "failed_closed", "submission_id": request.submission_id, **request.as_dict(), "reason": str(error), "containers": []})
+                return
+            snapshots[key] = validated
         record_path = self.paths.records / request.run_id / f"{request.container_name}.json"
         body = {
+            **metadata,
+            **snapshots,
             "submission_id": request.submission_id,
             **request.as_dict(),
             "exit_code": exit_code,
             "no_op": no_op,
             "ledger": lines,
             "written_at": now(),
-            **(record or {}),
-            **extra,
+            "lineage": lines[0]["lineage"],
         }
         write_private(record_path, self.redact(json.dumps(body, indent=2, sort_keys=True, default=str)) + "\n")
         self.append(
             {
+                **extra,
+                **snapshots,
                 "event": "finished",
                 "submission_id": request.submission_id,
                 **request.as_dict(),
@@ -508,7 +659,7 @@ class Broker:
                 "record_path": str(record_path),
                 "observed_peak_memory_bytes": None,
                 "no_op": no_op,
-                **extra,
+                "lineage": lines[0]["lineage"],
             }
         )
         self.log("finished", f"{request.submission_id} exit {exit_code}")
@@ -517,12 +668,17 @@ class Broker:
         """Refuse, return the existing handle or forward once."""
         errors = sorted(self.requests_schema.iter_errors(request.as_dict()), key=str)
         if errors:
-            raise SubmissionRefused(f"request refused: {errors[0].message}")
+            field = ".".join(str(part) for part in errors[0].absolute_path) or "request"
+            raise SubmissionRefused(f"request refused: {field} does not match its {errors[0].validator} constraint")
+        if self.redact(canonical(request.as_dict())) != canonical(request.as_dict()):
+            raise SubmissionRefused("request identity contains a known secret")
         handle = Handle(request.submission_id, request.container_name)
         try:
             with self.ledger.locked(request.run_id):
                 lines = self.lines_of(request)
                 if lines:
+                    if submission_request(request.submission_id, lines[0]).identity() != request.identity():
+                        raise SubmissionRefused("caller identity differs from the persisted submission identity")
                     if lines[-1]["event"] not in ("finished", "failed_closed"):
                         self.advance_locked(request)
                     return handle
@@ -626,7 +782,7 @@ class Broker:
         from scripts.orchestration import run_control
 
         control = row["control"]
-        params = substitute(control.get("params", {}), self.placeholder_values(request))
+        params = substitute(control.get("params", {}), self.placeholder_values(request.run_id, request.mode))
         try:
             result = run_control.perform(self, request, control["action"], params)
         except run_control.ControlRefused as error:
@@ -675,6 +831,11 @@ class Broker:
             self.fail_changed_row(request)
             return None
         payload = self.payload_of(request, row)
+        lineage = substitute(row["launcher"]["lineage"], self.placeholder_values(request.run_id, request.mode))
+        bindings = substitute(row["launcher"].get("dbt_nodes"), self.placeholder_values(request.run_id, request.mode))
+        if lineage != intent["lineage"] or bindings != intent.get("dbt_nodes"):
+            self.fail_changed_row(request)
+            return None
         if sha256_text(canonical(payload)) != intent["spec_sha256"]:
             self.fail_changed_row(request)
             return None
@@ -721,6 +882,17 @@ class Broker:
         lines = self.lines_of(request)
         events = [line["event"] for line in lines]
         container_id = attempt.get("container_id")
+        if attempt.get("caller_identity") != request.identity():
+            self.append(
+                {
+                    "event": "failed_closed",
+                    "submission_id": request.submission_id,
+                    **request.as_dict(),
+                    "reason": "the launcher attempt caller identity differs from its persisted intent",
+                    "containers": [str(container_id)] if container_id else [],
+                }
+            )
+            return
         if container_id and not {"started", "adopted"} & set(events):
             state = "created" if attempt["phase"] in ("creating", "created") else "exited" if attempt["phase"] in ("exiting", "ended") else "running"
             self.append(
@@ -750,10 +922,29 @@ class Broker:
         exit_code = attempt.get("exit_code") if reason == "exited" else END_CODES.get(reason, attempt.get("exit_code"))
         if exit_code is None:
             exit_code = END_CODES.get(reason, UNKNOWN_END)
+        models: dict[str, Any] = {}
+        if "dbt_nodes" in lines[0] and (int(exit_code) == 0 or "dbt_artifacts" in attempt):
+            try:
+                failure = self.capture_failure(attempt)
+                if failure is not None:
+                    raise dbt_lineage.DbtLineageError(failure)
+                artifact_folder = self.runs_root.resolve() / request.run_id / "attempts" / str(attempt["id"]) / "dbt_artifacts"
+                models["dbt_lineage"] = dbt_lineage.from_attempt(artifact_folder, attempt, request.as_dict(), lines[0])
+                if self.redact(canonical(models)) != canonical(models):
+                    raise dbt_lineage.DbtLineageError("dbt model lineage contains a known secret")
+            except dbt_lineage.DbtLineageError as error:
+                self.append(
+                    {"event": "failed_closed", "submission_id": request.submission_id, **request.as_dict(), "reason": self.redact(str(error)), "containers": []}
+                )
+                return
         logs = self.saved_logs(request, attempt)
         cancelled = reason in ("cancelled", "fenced") or bool(attempt.get("cancel_intent"))
         summary = {
-            "launcher": {key: attempt.get(key) for key in ("id", "template", "n", "phase", "reason", "exit_code", "container_name", "detail", "ended_at")},
+            **models,
+            "launcher": {
+                key: attempt.get(key)
+                for key in ("id", "template", "n", "phase", "reason", "exit_code", "container_name", "detail", "ended_at", "dbt_artifacts")
+            },
             "log_path": str(logs) if logs else None,
         }
         from scripts.orchestration import run_control
@@ -764,6 +955,8 @@ class Broker:
                 extra = self.validated_build(request, attempt)
             except run_control.ControlFailed as error:
                 exit_code, extra = 1, {"failed": True, "reason": self.redact(str(error))}
+        if int(exit_code) == 0 and not cancelled and "input_pins" in lines[0]:
+            extra = {**extra, "input_snapshot_record": {"version": 1, "invocation": request.as_dict(), "inputs": lines[0]["input_pins"]}}
         self.finish(request, int(exit_code), record=summary, cancelled=cancelled, end_reason=reason, **extra)
 
     def validated_build(self, request: SubmissionRequest, attempt: dict[str, Any]) -> dict[str, Any]:
@@ -797,7 +990,7 @@ class Broker:
                     for submission_id, lines in self.ledger.submissions(run_id).items():
                         if lines[-1]["event"] in ("finished", "failed_closed"):
                             continue
-                        request = submission_request(submission_id)
+                        request = submission_request(submission_id, lines[0])
                         try:
                             self.advance_locked(request)
                             summary["updated"].append(submission_id)
@@ -810,16 +1003,17 @@ class Broker:
 
     def _lines(self, handle: Handle) -> tuple[SubmissionRequest, list[dict[str, Any]]]:
         """The ledger lines of one handle, or a refusal."""
-        request = submission_request(handle.submission_id)
-        if handle.container_name != request.container_name:
+        run_id, template, _, attempt = submission_parts(handle.submission_id)
+        if handle.container_name != f"hai-{run_id}-{template}-{attempt}":
             raise SubmissionRefused("the handle's container name does not match its submission ID")
         try:
-            with self.ledger.locked(request.run_id):
-                lines = self.lines_of(request)
+            with self.ledger.locked(run_id):
+                lines = self.ledger.submissions(run_id).get(handle.submission_id, [])
         except LedgerError as error:
             raise SubmissionRefused(f"ledger: {error}") from None
         if not lines:
             raise SubmissionRefused(f"unknown submission {handle.submission_id}")
+        request = submission_request(handle.submission_id, lines[0])
         return request, lines
 
     def refresh(self, handle: Handle) -> list[dict[str, Any]]:
@@ -905,8 +1099,8 @@ def handle_for(payload: dict[str, Any]) -> Handle:
     """A handle from a request body that names only a submission ID (and a tail for logs)."""
     if set(payload) - {"submission_id", "tail"} or not isinstance(payload.get("submission_id"), str):
         raise SubmissionRefused("the body must name only submission_id (and tail for logs)")
-    request = submission_request(payload["submission_id"])
-    return Handle(request.submission_id, request.container_name)
+    run_id, template, _, attempt = submission_parts(payload["submission_id"])
+    return Handle(payload["submission_id"], f"hai-{run_id}-{template}-{attempt}")
 
 
 def status_body(status: Status) -> dict[str, Any]:
@@ -1048,7 +1242,7 @@ def dispatch(broker: Broker, operation: str, payload: dict[str, Any]) -> dict[st
         errors = sorted(broker.requests_schema.iter_errors(payload), key=str)
         if errors:
             raise SubmissionRefused(f"request refused: {errors[0].message}")
-        handle = broker.submit(SubmissionRequest(payload["template"], payload["run_id"], payload["mode"], payload["attempt"]))
+        handle = broker.submit(SubmissionRequest.from_record(payload))
         return {"submission_id": handle.submission_id, "container_name": handle.container_name}
     handle = handle_for(payload)
     if operation == "status":
@@ -1089,6 +1283,9 @@ def main() -> int:
     command.add_argument("--run", required=True)
     command.add_argument("--mode", required=True)
     command.add_argument("--attempt", type=int, required=True)
+    command.add_argument("--dag-id", required=True)
+    command.add_argument("--task-id", required=True)
+    command.add_argument("--dag-run-id", required=True)
     command.add_argument("--crash-at", choices=CRASH_POINTS)
     args = cli.parse_args()
     try:
@@ -1101,7 +1298,7 @@ def main() -> int:
             try:
                 result = broker.start()
                 if args.command == "submit-once":
-                    handle = broker.submit(SubmissionRequest(args.template, args.run, args.mode, args.attempt))
+                    handle = broker.submit(SubmissionRequest(args.template, args.run, args.mode, args.attempt, args.dag_id, args.task_id, args.dag_run_id))
                     result = status_body(broker.status(handle))
                 elif args.command == "release":
                     result = broker.release_run(args.run, args.record)

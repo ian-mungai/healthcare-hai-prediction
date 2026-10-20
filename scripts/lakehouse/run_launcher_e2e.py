@@ -4342,6 +4342,7 @@ def facts(rendered: launcher.Rendered) -> dict[str, Any]:
         "memory": host["Memory"],
         "ports": {c: [(b["HostIp"], b["HostPort"]) for b in bs] for c, bs in (host.get("PortBindings") or {}).items()},
         "init": host.get("Init"),
+        "joins": rendered.joins,
         "body": body,
     }
 
@@ -4629,7 +4630,112 @@ def render_templates(env: Env) -> dict[str, bool]:
         and f["cmd"] == ["commit", "--run", PINS_RUN, "--mode", "publish_fixture", "--sealed-sha256", sealed_sha, "--accepted-result-sha256", accepted]
         and f["entrypoint"] == wrapped(["python", "-m", "scripts.lakehouse.gold_publish"])
     )
+    lineage_state = (env.work / "lineage").resolve()
+    for part in ("postgres", "private", "config"):
+        (lineage_state / part).mkdir(parents=True, exist_ok=True)
+    lineage_limits = {"postgres": 512 * 1024**2, "api": 768 * 1024**2, "web": 256 * 1024**2}
+    lineage_values = {
+        **values,
+        "HAI_LINEAGE_STATE": str(lineage_state),
+        "HAI_LINEAGE_API_PORT": "15000",
+        "HAI_LINEAGE_WEB_PORT": "13000",
+        **{f"HAI_LINEAGE_MEM_{service.upper()}": str(limit) for service, limit in lineage_limits.items()},
+    }
+    lineage_model = launcher.ComposeModel(ROOT / launcher.LINEAGE_COMPOSE)
+    checks_model = launcher.ComposeModel(ROOT / launcher.LINEAGE_CHECKS_COMPOSE)
+    lineage_renderer = launcher.Renderer(config, lineage_model, ROOT, ROOT, b"k" * 32)
+    dump_renderer = launcher.Renderer(config, checks_model, ROOT, ROOT, b"k" * 32)
+    lineage_document = importlib.import_module("yaml").safe_load((ROOT / launcher.LINEAGE_COMPOSE).read_text())["services"]
+    backend, frontend = f"hai-{registry_id[:8]}-lineage-backend", f"hai-{registry_id[:8]}-lineage-frontend"
+
+    def lineage_input(template: str, params: dict[str, Any]) -> launcher.RenderInput:
+        return launcher.RenderInput(
+            template, "lineage", "l1", 1, 1, "op-1", lineage_values, int(time.time()) + 600, [], params, {"hai.registry_id": registry_id}
+        )
+
+    def lineage_service(service: str) -> dict[str, Any]:
+        return facts(lineage_renderer.render_lineage_service(lineage_input("lineage_service", {"service": service}), service, registry_id))
+
+    def endpoints(f: dict[str, Any]) -> dict[str, list[str]]:
+        return {name: entry["Aliases"] for name, entry in f["body"]["NetworkingConfig"]["EndpointsConfig"].items()}
+
+    stacks = {service: lineage_service(service) for service in ("postgres", "api", "web")}
+    for service, f in stacks.items():
+        out[f"lineage_service {service}: pinned image, own limit, no deadline wrapper, no privilege gain"] = (
+            f["image"] == lineage_model.image(service)
+            and "@sha256:" in f["image"]
+            and f["memory"] == lineage_limits[service]
+            and f["env"] == {key: str(value) for key, value in lineage_document[service]["environment"].items()}
+            and "Entrypoint" not in f["body"]
+            and "HAI_DEADLINE_UTC" not in f["env"]
+            and "User" not in f["body"]
+            and f["body"]["HostConfig"]["SecurityOpt"] == ["no-new-privileges:true"]
+            and f["body"]["Labels"][launcher.LABEL_STACK] == "lineage"
+            and f["body"]["Labels"][launcher.LABEL_SERVICE] == f"lineage-{service}"
+            and f["body"]["Healthcheck"]["Test"][0] == "CMD"
+            and f["init"] is True
+        )
+    out["lineage_service postgres: backend network only, no published port, private folder read-only"] = (
+        stacks["postgres"]["network"] == backend
+        and endpoints(stacks["postgres"]) == {backend: ["lineage-postgres"]}
+        and stacks["postgres"]["joins"] == {}
+        and stacks["postgres"]["ports"] == {}
+        and stacks["postgres"]["mounts"]
+        == {(str(lineage_state / "postgres"), "/var/lib/postgresql/data", False), (str(lineage_state / "private"), "/run/hai/private", True)}
+    )
+    out["lineage_service api: created on the frontend network and joined to the backend before it starts, loopback port, config read-only"] = (
+        stacks["api"]["network"] == frontend
+        and endpoints(stacks["api"]) == {frontend: ["lineage-api"]}
+        and stacks["api"]["joins"] == {backend: ["lineage-api"]}
+        and stacks["api"]["ports"] == {"5000/tcp": [("127.0.0.1", "15000")]}
+        and stacks["api"]["mounts"] == {(str(lineage_state / "config"), "/run/hai/config", True)}
+    )
+    out["lineage_service web: frontend network only, loopback port, no mount"] = (
+        stacks["web"]["network"] == frontend
+        and endpoints(stacks["web"]) == {frontend: ["lineage-web"]}
+        and stacks["web"]["joins"] == {}
+        and stacks["web"]["ports"] == {"3000/tcp": [("127.0.0.1", "13000")]}
+        and stacks["web"]["mounts"] == set()
+    )
+    unknown = expect_error_of(lambda: lineage_service("bogus"))
+    out["lineage_service: an unknown service is refused"] = (
+        isinstance(unknown, launcher.LauncherError) and unknown.code == "args" and "unknown lineage service" in str(unknown)
+    )
+    f = facts(dump_renderer.render(lineage_input("lineage_dump", {"state": str(lineage_state)}), registry_id))
+    out["lineage_dump"] = (
+        f["image"] == checks_model.image("dump")
+        and f["network"] == backend
+        and f["ports"] == {}
+        and f["entrypoint"] == wrapped(["python"])
+        and f["cmd"] == ["/opt/hai/lineage_dump.py"]
+        and f["body"]["User"] == f"{os.getuid()}:0"
+        and f["body"]["HostConfig"]["CapDrop"] == ["ALL"]
+        and f["body"]["HostConfig"]["SecurityOpt"] == ["no-new-privileges:true"]
+        and f["memory"] == int(values["JOB_MEMORY_LIMIT"])
+        and f["mounts"]
+        == {
+            (str(ROOT / "services/lineage/db_dump.py"), "/opt/hai/lineage_dump.py", True),
+            (str(lineage_state / "private"), "/run/hai/private", True),
+            (str(lineage_state / "dumps"), "/out", False),
+        }
+        and set(f["env"]) == {"HAI_DEADLINE_UTC"}
+        and f["init"] is True
+        and (lineage_state / "dumps").stat().st_mode & 0o777 == 0o700
+    )
+    incomplete = env.work / "lineage_incomplete"
+    for part in ("postgres", "config"):
+        (incomplete / part).mkdir(parents=True, exist_ok=True)
+    refusal = expect_error_of(lambda: dump_renderer.render(lineage_input("lineage_dump", {"state": str(incomplete)}), registry_id))
+    out["lineage_dump: a state folder without the private folder is refused and nothing is created in it"] = (
+        isinstance(refusal, launcher.LauncherError)
+        and refusal.code == "args"
+        and "incomplete" in str(refusal)
+        and not (incomplete / "dumps").exists()
+        and not (incomplete / "private").exists()
+    )
     out["every template of the table was rendered"] = set(launcher.TEMPLATES) - {"orchestration_service", "orchestration_check", "orchestration_dump"} <= {
+        "lineage_service",
+        "lineage_dump",
         "fixture_dbt",
         "fixture_init",
         "duckdb_helper",

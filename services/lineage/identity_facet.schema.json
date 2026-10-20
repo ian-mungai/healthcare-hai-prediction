@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Declared caller identity run facet",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "_producer",
+    "_schemaURL",
+    "eventId",
+    "runId",
+    "attempt"
+  ],
+  "properties": {
+    "_producer": {
+      "const": "https://github.com/ian-mungai/healthcare-hai-prediction"
+    },
+    "_schemaURL": {
+      "type": "string",
+      "format": "uri"
+    },
+    "eventId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 99
+    },
+    "launcherAttemptId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    }
+  }
+}

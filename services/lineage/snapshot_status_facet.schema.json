@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Output snapshot availability run facet",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "_producer",
+    "_schemaURL",
+    "state",
+    "missingOutputs"
+  ],
+  "properties": {
+    "_producer": {
+      "const": "https://github.com/ian-mungai/healthcare-hai-prediction"
+    },
+    "_schemaURL": {
+      "type": "string",
+      "format": "uri"
+    },
+    "state": {
+      "enum": [
+        "not_applicable",
+        "missing",
+        "partial",
+        "complete"
+      ]
+    },
+    "missingOutputs": {
+      "type": "array",
+      "maxItems": 1000,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "namespace",
+          "name"
+        ],
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "maxLength": 250,
+            "pattern": "^(file|s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]|iceberg://[A-Za-z0-9_.:-]+(/[A-Za-z0-9_.-]+)*)$(?![\\s\\S])"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^(?:[A-Za-z0-9_./:-]|\\{(?:run_id|mode|run_dir|build_file|checkout)\\})+$(?![\\s\\S])",
+            "not": {
+              "pattern": "(^|/)(\\.\\.|secrets?|\\.env|[^/]*\\.(key|pem))(/|$)"
+            }
+          }
+        }
+      }
+    }
+  }
+}

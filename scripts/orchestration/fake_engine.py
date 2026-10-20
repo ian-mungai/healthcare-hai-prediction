@@ -48,6 +48,7 @@ class StackDocker(FakeDocker):
 
     def set_health(self, container: dict[str, Any]) -> None:
         """Mark a running container healthy, except the service the test chose."""
-        if self.unhealthy_service and container["Config"]["Labels"].get("hai.orch_service") == self.unhealthy_service:
+        labels = container["Config"]["Labels"]
+        if self.unhealthy_service and self.unhealthy_service in (labels.get("hai.orch_service"), labels.get("hai.service")):
             return
         super().set_health(container)

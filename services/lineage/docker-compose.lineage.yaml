@@ -1,0 +1,70 @@
+# Proposal consumed only by the launcher after its lineage service patch is accepted.
+# The launcher generates private config, computes limits, creates the backend and frontend networks,
+# waits for health in postgres/api/web order and tears down only this registry's services.
+name: hai-lineage
+
+services:
+  postgres:
+    image: postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+    environment:
+      POSTGRES_USER: marquez
+      POSTGRES_DB: marquez
+      POSTGRES_PASSWORD_FILE: /run/hai/private/db_password
+      POSTGRES_INITDB_ARGS: --encoding UTF8 --data-checksums
+    mem_limit: ${HAI_LINEAGE_MEM_POSTGRES}
+    volumes:
+      - ${HAI_LINEAGE_STATE}/postgres:/var/lib/postgresql/data
+      - ${HAI_LINEAGE_STATE}/private:/run/hai/private:ro
+    networks: [backend]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, pg_isready, -U, marquez, -d, marquez]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+
+  api:
+    image: marquezproject/marquez@sha256:6d8a2c2cdb28a4f6d13f9ca6f8cc055d8312c4dee204ebeb848efdd76e6ab30e
+    environment:
+      MARQUEZ_CONFIG: /run/hai/config/marquez.yaml
+    mem_limit: ${HAI_LINEAGE_MEM_API}
+    volumes:
+      - ${HAI_LINEAGE_STATE}/config:/run/hai/config:ro
+    networks: [frontend, backend]
+    ports:
+      - "127.0.0.1:${HAI_LINEAGE_API_PORT}:5000"
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -ec
+        - "exec 3<>/dev/tcp/127.0.0.1/5001; printf 'GET /healthcheck HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3; read -r status <&3; [[ $status == *' 200 '* ]]"
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+
+  web:
+    image: marquezproject/marquez-web@sha256:e8d53e10ab141cde1b121b01ff47776a58b407813fb6e10f490842d20c184346
+    environment:
+      MARQUEZ_HOST: lineage-api
+      MARQUEZ_PORT: "5000"
+      WEB_PORT: "3000"
+      REACT_APP_ADVANCED_SEARCH: "false"
+    mem_limit: ${HAI_LINEAGE_MEM_WEB}
+    networks: [frontend]
+    ports:
+      - "127.0.0.1:${HAI_LINEAGE_WEB_PORT}:3000"
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, node, -e, "const r=require('http').get('http://127.0.0.1:3000/healthcheck',s=>process.exit(s.statusCode===200?0:1));r.setTimeout(2000,()=>{r.destroy();process.exit(1)});r.on('error',()=>process.exit(1));"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+networks:
+  backend:
+    internal: true
+  frontend:
+    internal: false

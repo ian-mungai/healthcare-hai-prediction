@@ -118,7 +118,11 @@ class BrokerEnv(Env):
             "packages_host": str(self.packages_dir),
             "dbt_vars": {},
         }
-        return {"class": "offline", "no_op": False, "launcher": {"template": "fixture_dbt", "args": args, "params": params, **extra}}
+        return {
+            "class": "offline",
+            "no_op": False,
+            "launcher": {"template": "fixture_dbt", "args": args, "params": params, "lineage": {"version": 1, "inputs": [], "outputs": []}, **extra},
+        }
 
     def inventory(self) -> dict[str, Any]:
         """The real broker template file with a few rows that the launcher can run in a test registry."""
@@ -130,7 +134,7 @@ class BrokerEnv(Env):
         modes["gold_validate"]["modes"]["fixture"] = {
             "class": "offline",
             "no_op": False,
-            "launcher": {"template": "real_dbt", "args": ["build"], "params": {}},
+            "launcher": {"template": "real_dbt", "args": ["build"], "params": {}, "lineage": {"version": 1, "inputs": [], "outputs": []}},
         }
         return document
 
@@ -159,7 +163,7 @@ class BrokerEnv(Env):
         self.daemon.script = lambda container: (0.2, 0) if "hai.probe" in container["Config"]["Labels"] else None
 
     def request(self, template: str = "silver_build", run_id: str = RUN, mode: str = "fixture", attempt: int = 1) -> SubmissionRequest:
-        return SubmissionRequest(template, run_id, mode, attempt)
+        return SubmissionRequest(template, run_id, mode, attempt, "lineage_fixture", str(template), "manual__" + str(run_id))
 
     def wait_state(self, broker: Broker, handle: Handle, wanted: tuple[State, ...], seconds: float = 30) -> Any:
         """Poll the broker's status until it reaches one of the states."""
@@ -172,6 +176,10 @@ class BrokerEnv(Env):
 
     def child(self, *arguments: str, shim: Path | None = None) -> Any:
         """Run the broker as a child process on this case's registry with the test inventory."""
+        if arguments[0] == "submit-once" and "--dag-id" not in arguments:
+            template = arguments[arguments.index("--template") + 1]
+            run_id = arguments[arguments.index("--run") + 1]
+            arguments = (*arguments, "--dag-id", "lineage_fixture", "--task-id", template, "--dag-run-id", f"manual__{run_id}")
         environment = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR") if name in os.environ}
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         if shim is not None:
@@ -1883,7 +1891,7 @@ def broker_templates_schema(env: BrokerEnv) -> dict[str, bool]:
     def with_row(document: dict[str, Any], row: dict[str, Any]) -> None:
         document["templates"]["silver_build"]["modes"]["fixture"] = row
 
-    launcher_row = {"template": "fixture_dbt", "args": ["build"], "params": {}}
+    launcher_row = {"template": "fixture_dbt", "args": ["build"], "params": {}, "lineage": {"version": 1, "inputs": [], "outputs": []}}
     results = {
         "the real file loads": bool(load_templates()["templates"]),
         "a launcher row with an image key is refused": refused_load(
@@ -2250,6 +2258,7 @@ def ledger_has_no_container_state(env: BrokerEnv) -> dict[str, bool]:
     env.wait_state(broker, running, (State.RUNNING,))
     keys = {key for line in ledger_lines(env) for key in line}
     allowed = {
+        "request_version", "dag_id", "task_id", "dag_run_id", "lineage",
         "schema_version", "event", "at", "submission_id", "run_id", "template", "mode", "attempt", "spec_sha256", "code_sha256", "inputs", "reservation_id",
         "reserved_memory_bytes", "container_name", "container_id", "container_state", "launcher_attempt", "exit_code", "record_path",
         "observed_peak_memory_bytes", "no_op", "cancelled", "end_reason", "reason", "refused", "containers",

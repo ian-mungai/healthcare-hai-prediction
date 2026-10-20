@@ -115,6 +115,9 @@ lakehouse_checks() {
 }
 
 orchestration_checks() {
+  "$python_bin" -m scripts.orchestration.run_lineage_e2e
+  "$python_bin" -m scripts.orchestration.run_lineage_completion_e2e
+  "$python_bin" -m scripts.orchestration.run_lineage_amendment_e2e
   "$python_bin" -m scripts.orchestration.run_stack_e2e
   "$python_bin" -m scripts.orchestration.run_broker_e2e
   "$python_bin" -m scripts.orchestration.run_supervisor_e2e

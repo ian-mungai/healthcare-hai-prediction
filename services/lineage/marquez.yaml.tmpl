@@ -1,0 +1,23 @@
+# Render into ignored owner-only runtime state; never send this configuration to lineage.
+server:
+  applicationConnectors:
+    - type: http
+      port: 5000
+      httpCompliance: RFC7230_LEGACY
+  adminConnectors:
+    - type: http
+      port: 5001
+db:
+  driverClass: org.postgresql.Driver
+  url: jdbc:postgresql://lineage-postgres:5432/marquez
+  user: marquez
+  password: ${HAI_LINEAGE_DB_PASSWORD}
+migrateOnStartup: true
+graphql:
+  enabled: true
+search:
+  enabled: false
+logging:
+  level: INFO
+  appenders:
+    - type: console

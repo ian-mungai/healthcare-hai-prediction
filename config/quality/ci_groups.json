@@ -43,6 +43,7 @@
       "^config/orchestration/",
       "^data_contracts/orchestration/",
       "^services/orchestration/",
+      "^services/lineage/",
       "^scripts/lakehouse/(__init__|dbt_package_archive|fake_docker|memory_budget|pins|provenance|run_launcher_e2e|run_lock)\\.py$",
       "^scripts/quality/(docker_calls|repo_checks|typecheck)\\.py$",
       "^config/quality/(docker_calls_reviewed|mypy_runtimes)\\.json$",

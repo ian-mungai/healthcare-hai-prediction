@@ -1,0 +1,5 @@
+transport:
+  type: hai_lineage.provider_transport.SafeTransport
+  path: /opt/hai/lineage_provider
+facets:
+  environment_variables: []

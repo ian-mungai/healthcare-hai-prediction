@@ -86,7 +86,1252 @@
               "case_container": "/workspace/out/case",
               "packages_host": "{checkout}/data/analytics/dbt/dbt_packages"
             },
-            "timeout_seconds": 3600
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [
+                {
+                  "namespace": "file",
+                  "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+                }
+              ],
+              "outputs": [
+                {
+                  "namespace": "file",
+                  "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+                }
+              ]
+            },
+            "dbt_nodes": {
+              "model.hai.bridge_county_neighbor": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.bridge_measure_control": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.bridge_zip_county": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_census_tract": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_change_type": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_condition": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_county": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_date": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_demographic_group": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_drg": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_ehr_product": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_enrollment": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_footnote": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_measure": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_owner_organization": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_owner_role": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_registry_control": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_release": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_rurality_code": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_source": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_state": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_zip": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_acs_county_value": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_bls_county_series": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_cc_window_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_cmi_observation": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_complications_deaths_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_cost_report": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_enrollment_release": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_gv_county_value": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hac_program_year": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hai_hospital_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hai_national_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hai_state_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hai_window_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hcahps_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hgi_release": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hhs_capacity_week": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hospital_owner_release": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hpsa_component": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hrrp_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hsa_zip_cases": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hud_zip_county_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_impact_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_ipps_impact_value": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_maternal_health_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_medicare_inpatient_drg": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_medicare_inpatient_provider": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_mmd_prevalence": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_mua_component": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_occupational_mix_survey": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_onc_attestation": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_onc_ehr_product": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_ownership_change": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_ownership_change_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_places_county_value": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_pos_snapshot": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_ruca_code": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_rucc_county": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_sahie_county_value": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_saipe_county_estimate": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_svi_county_value": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_timely_effective_care_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_unplanned_visits_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_validation_program_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_validation_window_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_vbp_program_year": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_wonder_county_deaths": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_acs_county_values": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_bls_county_series": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_complications_deaths_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_hcahps_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_hrrp_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_maternal_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_timely_effective_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_unplanned_visits_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_window_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_change_of_ownership_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_change_of_ownership_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cmi_file_layouts": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cmi_file_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cmi_hospital_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cost_reports": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_county_adjacency_edges": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_gv_county_values": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hac_program_years": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hai_hospital_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hai_national_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hai_state_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hai_window_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hgi_hospital_releases": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hhs_capacity_weeks": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hospital_enrollment_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hospital_owner_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hpsa_components": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hsa_zip_cases": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hud_zip_county_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hud_zip_county_quarters": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_impact_file_layouts": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_impact_file_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_impact_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_impact_hospital_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_impact_hospital_values": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_mmd_prevalence": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_mua_components": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_mup_drg_discharges": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_mup_providers": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_occmix_file_layouts": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_occmix_file_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_occmix_survey_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_onc_attestation_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_onc_chpl_linkage_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_places_county_values": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_pos_hospital_snapshots": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_ruca_codes": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_rucc_county_codes": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_sahie_county_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_saipe_county_estimates": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_silver_build_marker": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_svi_county_values": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_validation_program_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_validation_window_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_vbp_program_years": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_wonder_county_deaths": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_b16005": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_b19013": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_b25070": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_b25091": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_b26001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_c16001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_dp02": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_dp03": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_dp04": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_dp05": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_s0101": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_s0601": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_s1701": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_s2503": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_s2701": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_summary_b16005": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_summary_b19013": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_summary_b25070": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_summary_b25091": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_summary_b26001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_summary_c16001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bls_laus": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bronze__file_copies": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bronze__file_labels": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bronze__file_selection": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bronze__files": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bronze__sheet_selection": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bronze__twin_comparison": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_complications_and_deaths_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_hac_reduction_program_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_hcahps_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_hospital_general_information": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_hospital_readmissions_reduction_program_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_hvbp_tps": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_maternal_health_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_timely_and_effective_care_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_unplanned_hospital_visits_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_change_of_ownership": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_geographic_variation_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hai_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hai_national": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hai_state": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hospital_cost_reports": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hospital_enrollments": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hospital_owners": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hsa_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_ipps_sas": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_ipps_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_ipps_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_medicare_inpatient_by_drg": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_medicare_inpatient_by_provider": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_mmd_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_occupational_mix_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_occupational_mix_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_occupational_mix_text_lines_utf16": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_provider_of_services": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_county_adjacency": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_county_adjacency_2010_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_hhs_capacity_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_hrsa_hpsa_detail": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_hrsa_mua_detail": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_hud_zip_county": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_hud_zip_county_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_onc_pi_attestations_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_onc_pi_chpl_linkage_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_places": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_ruca_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_ruca_tracts_2020": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_ruca_zip_2010": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_ruca_zip_2020": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_rucc": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_rucc_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_sahie": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_saipe_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_svi": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_wonder_county_mortality": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.acs_svi_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.acs_variable_map": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.cmi_layout_columns": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.cost_report_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.county_health_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.geography_file_periods": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.geography_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.gold_contract_columns": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.gold_measure_id_domains": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.gold_measure_key_evidence": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.gold_measure_key_rules": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.hai_outcome_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.hhs_onc_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.hhs_reviewed_ccn_matches": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.impact_layout_columns": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.impact_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.income_labor_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.ipps_occmix_copy_labels": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.ipps_occmix_twins": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.measure_id_aliases": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.mmd_condition_units": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.mmd_conditions_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.mup_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.occmix_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.ownership_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.ownership_release_periods": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.pos_file_periods": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.registry_controls": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.registry_measure_sources_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.shortage_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.staging_label_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.validation_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.vbp_file_fiscal_years": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_b16005": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_b19013": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_b25070": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_b25091": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_b26001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_c16001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_dp02": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_dp03": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_dp04": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_dp05": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_s0101": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_s0601": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_s1701": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_s2503": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_s2701": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_summary_b16005": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_summary_b19013": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_summary_b25070": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_summary_b25091": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_summary_b26001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.acs_summary_c16001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.bls_laus": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_cc_complications_and_deaths_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_cc_hac_reduction_program_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_cc_hcahps_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_cc_hospital_general_information": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_cc_hospital_readmissions_reduction_program_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_cc_hvbp_tps": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_cc_maternal_health_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_cc_timely_and_effective_care_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_cc_unplanned_hospital_visits_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_change_of_ownership": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_geographic_variation_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_hai_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_hai_national": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_hai_state": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_hospital_cost_reports": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_hospital_enrollments": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_hospital_owners": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_hsa_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_ipps_sas": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_ipps_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_ipps_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_medicare_inpatient_by_drg": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_medicare_inpatient_by_provider": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_mmd_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_occupational_mix_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_occupational_mix_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_occupational_mix_text_lines_utf16": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.cms_provider_of_services": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.column_map": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.county_adjacency": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.county_adjacency_2010_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.file_preambles": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.hhs_capacity_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.hrsa_hpsa_detail": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.hrsa_mua_detail": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.hud_zip_county": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.hud_zip_county_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.onc_pi_attestations_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.onc_pi_chpl_linkage_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.places": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.ruca_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.ruca_tracts_2020": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.ruca_zip_2010": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.ruca_zip_2020": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.rucc": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.rucc_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.sahie": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.saipe_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.stored_copies": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.svi": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              },
+              "source.hai.bronze.wonder_county_mortality": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/fixture_lakehouse.duckdb"
+              }
+            }
           }
         },
         "publish_fixture": {
@@ -121,7 +1366,17 @@
             },
             "timeout_seconds": 3600,
             "records_build_file": "{run_dir}/staging.duckdb",
-            "build_file_result": "{run_dir}/quality_silver/result.json"
+            "build_file_result": "{run_dir}/quality_silver/result.json",
+            "lineage": {
+              "version": 1,
+              "inputs": [
+                {
+                  "namespace": "file",
+                  "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+                }
+              ],
+              "outputs": []
+            }
           }
         },
         "publish_fixture": {
@@ -162,6 +1417,1251 @@
             "requires_build_file": {
               "validated_by": "silver_validate",
               "file": "{run_dir}/staging.duckdb"
+            },
+            "lineage": {
+              "version": 1,
+              "inputs": [
+                {
+                  "namespace": "file",
+                  "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+                }
+              ],
+              "outputs": [
+                {
+                  "namespace": "file",
+                  "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+                }
+              ]
+            },
+            "dbt_nodes": {
+              "model.hai.bridge_county_neighbor": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.bridge_measure_control": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.bridge_zip_county": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_census_tract": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_change_type": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_condition": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_county": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_date": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_demographic_group": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_drg": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_ehr_product": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_enrollment": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_footnote": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_measure": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_owner_organization": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_owner_role": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_registry_control": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_release": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_rurality_code": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_source": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_state": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.dim_zip": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_acs_county_value": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_bls_county_series": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_cc_window_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_cmi_observation": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_complications_deaths_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_cost_report": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_enrollment_release": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_gv_county_value": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hac_program_year": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hai_hospital_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hai_national_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hai_state_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hai_window_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hcahps_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hgi_release": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hhs_capacity_week": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hospital_owner_release": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hpsa_component": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hrrp_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hsa_zip_cases": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_hud_zip_county_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_impact_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_ipps_impact_value": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_maternal_health_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_medicare_inpatient_drg": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_medicare_inpatient_provider": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_mmd_prevalence": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_mua_component": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_occupational_mix_survey": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_onc_attestation": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_onc_ehr_product": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_ownership_change": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_ownership_change_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_places_county_value": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_pos_snapshot": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_ruca_code": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_rucc_county": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_sahie_county_value": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_saipe_county_estimate": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_svi_county_value": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_timely_effective_care_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_unplanned_visits_window": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_validation_program_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_validation_window_hold": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_vbp_program_year": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.fct_wonder_county_deaths": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_acs_county_values": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_bls_county_series": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_complications_deaths_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_hcahps_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_hrrp_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_maternal_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_timely_effective_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_unplanned_visits_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cc_window_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_change_of_ownership_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_change_of_ownership_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cmi_file_layouts": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cmi_file_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cmi_hospital_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_cost_reports": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_county_adjacency_edges": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_gv_county_values": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hac_program_years": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hai_hospital_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hai_national_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hai_state_windows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hai_window_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hgi_hospital_releases": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hhs_capacity_weeks": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hospital_enrollment_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hospital_owner_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hpsa_components": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hsa_zip_cases": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hud_zip_county_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_hud_zip_county_quarters": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_impact_file_layouts": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_impact_file_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_impact_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_impact_hospital_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_impact_hospital_values": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_mmd_prevalence": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_mua_components": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_mup_drg_discharges": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_mup_providers": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_occmix_file_layouts": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_occmix_file_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_occmix_survey_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_onc_attestation_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_onc_chpl_linkage_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_places_county_values": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_pos_hospital_snapshots": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_ruca_codes": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_rucc_county_codes": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_sahie_county_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_saipe_county_estimates": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_silver_build_marker": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_svi_county_values": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_validation_program_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_validation_window_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_vbp_program_years": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_wonder_county_deaths": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_b16005": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_b19013": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_b25070": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_b25091": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_b26001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_c16001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_dp02": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_dp03": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_dp04": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_dp05": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_s0101": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_s0601": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_s1701": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_s2503": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_s2701": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_summary_b16005": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_summary_b19013": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_summary_b25070": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_summary_b25091": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_summary_b26001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_acs_summary_c16001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bls_laus": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bronze__file_copies": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bronze__file_labels": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bronze__file_selection": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bronze__files": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bronze__sheet_selection": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_bronze__twin_comparison": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_complications_and_deaths_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_hac_reduction_program_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_hcahps_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_hospital_general_information": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_hospital_readmissions_reduction_program_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_hvbp_tps": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_maternal_health_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_timely_and_effective_care_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_cc_unplanned_hospital_visits_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_change_of_ownership": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_geographic_variation_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hai_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hai_national": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hai_state": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hospital_cost_reports": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hospital_enrollments": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hospital_owners": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_hsa_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_ipps_sas": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_ipps_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_ipps_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_medicare_inpatient_by_drg": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_medicare_inpatient_by_provider": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_mmd_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_occupational_mix_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_occupational_mix_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_occupational_mix_text_lines_utf16": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_cms_provider_of_services": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_county_adjacency": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_county_adjacency_2010_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_hhs_capacity_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_hrsa_hpsa_detail": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_hrsa_mua_detail": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_hud_zip_county": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_hud_zip_county_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_onc_pi_attestations_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_onc_pi_chpl_linkage_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_places": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_ruca_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_ruca_tracts_2020": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_ruca_zip_2010": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_ruca_zip_2020": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_rucc": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_rucc_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_sahie": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_saipe_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_svi": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.stg_wonder_county_mortality": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.acs_svi_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.acs_variable_map": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.cmi_layout_columns": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.cost_report_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.county_health_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.geography_file_periods": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.geography_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.gold_contract_columns": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.gold_measure_id_domains": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.gold_measure_key_evidence": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.gold_measure_key_rules": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.hai_outcome_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.hhs_onc_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.hhs_reviewed_ccn_matches": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.impact_layout_columns": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.impact_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.income_labor_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.ipps_occmix_copy_labels": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.ipps_occmix_twins": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.measure_id_aliases": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.mmd_condition_units": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.mmd_conditions_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.mup_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.occmix_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.ownership_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.ownership_release_periods": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.pos_file_periods": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.registry_controls": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.registry_measure_sources_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.shortage_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.staging_label_holds": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.validation_measures_bridge": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.vbp_file_fiscal_years": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_b16005": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_b19013": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_b25070": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_b25091": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_b26001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_c16001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_dp02": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_dp03": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_dp04": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_dp05": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_s0101": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_s0601": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_s1701": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_s2503": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_s2701": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_summary_b16005": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_summary_b19013": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_summary_b25070": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_summary_b25091": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_summary_b26001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.acs_summary_c16001": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.bls_laus": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_cc_complications_and_deaths_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_cc_hac_reduction_program_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_cc_hcahps_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_cc_hospital_general_information": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_cc_hospital_readmissions_reduction_program_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_cc_hvbp_tps": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_cc_maternal_health_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_cc_timely_and_effective_care_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_cc_unplanned_hospital_visits_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_change_of_ownership": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_geographic_variation_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_hai_hospital": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_hai_national": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_hai_state": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_hospital_cost_reports": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_hospital_enrollments": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_hospital_owners": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_hsa_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_ipps_sas": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_ipps_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_ipps_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_medicare_inpatient_by_drg": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_medicare_inpatient_by_provider": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_mmd_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_occupational_mix_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_occupational_mix_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_occupational_mix_text_lines_utf16": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.cms_provider_of_services": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.column_map": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.county_adjacency": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.county_adjacency_2010_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.file_preambles": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.hhs_capacity_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.hrsa_hpsa_detail": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.hrsa_mua_detail": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.hud_zip_county": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.hud_zip_county_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.onc_pi_attestations_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.onc_pi_chpl_linkage_csv": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.places": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.ruca_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.ruca_tracts_2020": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.ruca_zip_2010": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.ruca_zip_2020": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.rucc": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.rucc_sheet_rows": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.sahie": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.saipe_text_lines": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.stored_copies": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.svi": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "source.hai.bronze.wonder_county_mortality": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              }
             }
           }
         },
@@ -195,7 +2695,17 @@
               "baselines_host": "{checkout}/data_contracts/great_expectations/fixture_baselines.json",
               "out_host": "{run_dir}/quality_gold"
             },
-            "timeout_seconds": 3600
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [
+                {
+                  "namespace": "file",
+                  "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+                }
+              ],
+              "outputs": []
+            }
           }
         },
         "publish_fixture": {
@@ -231,7 +2741,17 @@
               "baselines_host": "{checkout}/data_contracts/great_expectations/fixture_baselines.json",
               "out_host": "{run_dir}/quality_cross"
             },
-            "timeout_seconds": 3600
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [
+                {
+                  "namespace": "file",
+                  "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+                }
+              ],
+              "outputs": []
+            }
           }
         },
         "publish_fixture": {
