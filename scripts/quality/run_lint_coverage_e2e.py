@@ -45,7 +45,7 @@ class Sample:
     hook: str
     path: str
     bad: str
-    good: str
+    good: str | bytes
     diagnostic: str
     executable: bool = False
     support: tuple[tuple[str, str], ...] = ()
@@ -70,6 +70,29 @@ SAMPLES = (
         "#!/usr/bin/env bash\ntouch body_executed\n",
         "syntax error",
         True,
+    ),
+    *(
+        Sample(
+            name,
+            "shell-syntax",
+            "new_folder/non_shell",
+            "#!/usr/bin/env bash\nif then\n",
+            content,
+            "syntax error",
+            good_diagnostic="Shell syntax: 0 nonignored shell sources",
+        )
+        for name, content in (
+            ("shell_non_shell_split_utf8", b"a" * 511 + "é".encode()),
+            ("shell_non_shell_binary", b"\xff\xfe"),
+        )
+    ),
+    Sample(
+        "shell_malformed_shebang_path",
+        "shell-syntax",
+        "new_folder/malformed",
+        '#!/usr/bin/env "bash\n',
+        "#!/usr/bin/env bash\ntouch body_executed\n",
+        "new_folder/malformed:1: invalid shell shebang",
     ),
     Sample(
         "shellcheck",
@@ -167,6 +190,15 @@ SAMPLES = (
         'package main\n\nimport "fmt"\n\nfunc main() { fmt.Printf("%d", "text") }\n',
         'package main\n\nimport "fmt"\n\nfunc main() { fmt.Printf("%s", "text") }\n',
         "format %d has arg",
+    ),
+    Sample(
+        "go_vet_standalone_programs",
+        "go-vet",
+        "services/probe/first.go",
+        'package main\n\nimport "fmt"\n\nfunc main() { fmt.Printf("%d", "text") }\n',
+        'package main\n\nimport "fmt"\n\nfunc main() { fmt.Printf("%s", "text") }\n',
+        "format %d has arg",
+        support=(("services/probe/second.go", "package main\n\nfunc main() {}\n"),),
     ),
     Sample(
         "sql_postgres",
@@ -305,10 +337,10 @@ def sample_case(sample: Sample, out: Path, mutant: bool) -> dict[str, object]:
     with tempfile.TemporaryDirectory(prefix="hai_lint_case_") as temporary:
         repo = Path(temporary) / "repo"
         fixture(repo, mutant)
-        for name, content in sample.support:
+        for name, support_content in sample.support:
             path = repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content)
+            path.write_text(support_content)
             git(repo, "add", "--", name)
         for variant, content in (("bad", sample.bad), ("good", sample.good)):
             name = sample.good_path if variant == "good" and sample.good_path else sample.path
@@ -316,7 +348,8 @@ def sample_case(sample: Sample, out: Path, mutant: bool) -> dict[str, object]:
             path.parent.mkdir(parents=True, exist_ok=True)
             if name != sample.path:
                 git(repo, "mv", "--", sample.path, name)
-            path.write_text(content)
+            payload = content.encode() if isinstance(content, str) else content
+            path.write_bytes(payload)
             if sample.executable:
                 path.chmod(0o700)
             git(repo, "add", "--", name)
@@ -335,7 +368,7 @@ def sample_case(sample: Sample, out: Path, mutant: bool) -> dict[str, object]:
                 passed &= sample.good_diagnostic in output
             if variant == "bad" and sample.expected_line is not None:
                 passed &= re.search(rf"L:\s*{sample.expected_line}\b", output) is not None
-            unchanged = path.read_text() == content
+            unchanged = path.read_bytes() == payload
             observations.append(
                 {
                     "variant": variant,

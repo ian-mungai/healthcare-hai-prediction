@@ -1,6 +1,8 @@
-# SQLFluff for the dbt models and tests, run by the sqlfluff pre-commit hook and scripts/run_ci.sh from the pinned
-# environment in .tools/sqlfluff (scripts/quality/install_sqlfluff.py). The style follows the SQL standard: lowercase
-# keywords and functions, four-space indentation, trailing commas and a 160-character line length.
+# SQLFluff profiles run by scripts/quality/lint_sources.py sql through pre-commit and scripts/run_ci.sh.
+# Covers dbt/models/, dbt/tests/, dbt/macros/, services/analytics/resources.sql and
+# services/lakehouse/polaris/create-polaris-schema.sql using the pinned .tools/sqlfluff environment
+# (scripts/quality/install_sqlfluff.py). Style: lowercase keywords and functions, four-space indentation,
+# trailing commas and a 160-character line length.
 [sqlfluff]
 dialect = duckdb
 templater = dbt

@@ -445,11 +445,11 @@
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 155,
+      "line": 158,
       "code_sha256": "f358f8cea2df557bf32cdaf6b4dc0246232da9aa20916194c11c4bbbbe384b12",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
@@ -458,11 +458,11 @@
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 184,
+      "line": 187,
       "code_sha256": "965b2fb24fba80e1b4dc15abfb79a40639337d8a6bd307be3a3d50b9a3338de1",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
@@ -471,11 +471,11 @@
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 240,
+      "line": 243,
       "code_sha256": "fd40c94d9e9392559ff22762cc4cb941caae9d997df0daaab37ed1fdc83855f3",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
@@ -484,24 +484,24 @@
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 255,
+      "line": 258,
       "code_sha256": "f8c56d974f57abe387f78f0bef9bbf3b8eef1ad258f002599ef6a36441d701a7",
       "problem": "whose program the check cannot prove",
       "occurrences": 2,
-      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
       },
-      "reason": "two calls whose first line is the same code: line 255 runs the pinned dbt from .tools/sqlfluff/bin with parse to read the macro call graph; line 324 runs the pinned SQLFluff from .tools/sqlfluff/bin on temporary masked copies of DuckDB CLI scripts"
+      "reason": "two calls whose first line is the same code: line 258 runs pinned dbt from .tools/sqlfluff/bin with parse to read the macro call graph; line 327 runs pinned SQLFluff from .tools/sqlfluff/bin on temporary masked copies of DuckDB CLI scripts"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 351,
+      "line": 354,
       "code_sha256": "d75274826882b437b689d5b81193a2f97388dbc7fe9fa2dfe757f94933685050",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
@@ -510,11 +510,11 @@
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 526,
+      "line": 528,
       "code_sha256": "cff80cdc4d10023eadcab151ee1587c2fa228a6a33f7ddf690876b575403b4b5",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
@@ -523,11 +523,11 @@
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 530,
+      "line": 532,
       "code_sha256": "1893430c33b623d1bbcc9424e6727d2ca17af3dc51718382c93583a4e8bbdef9",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
@@ -536,11 +536,11 @@
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 534,
+      "line": 536,
       "code_sha256": "5a40e40360800053230faed6c6757add11e7596eff8d6184c10034c5b8532ec0",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "cc34bd6e1479e79cf843e2f752558093877155ed4125a2d2cdb95eac404a7432",
+      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
