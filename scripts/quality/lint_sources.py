@@ -114,12 +114,15 @@ def shell_sources(tracked: bool = False) -> dict[str, str]:
             continue
         path = safe_source(name)
         with path.open("rb") as stream:
-            first = stream.readline(512).decode("utf-8")
-        if not first.startswith("#!"):
+            first = stream.readline(512)
+        if not first.startswith(b"#!"):
             if extension:
                 raise ValueError(f"{name}:1: shell source needs a declared interpreter")
             continue
-        words = shlex.split(first[2:].strip())
+        try:
+            words = shlex.split(first[2:].decode("utf-8", errors="replace").strip())
+        except ValueError as error:
+            raise ValueError(f"{name}:1: invalid shell shebang: {error}. Fix the declared interpreter or ask the owner.") from error
         if words and Path(words[0]).name == "env":
             words = words[1:]
             if words and words[0] == "-S":
@@ -357,9 +360,8 @@ def go(check: str) -> int:
     for architecture in ("amd64", "arm64"):
         sys.stdout.write(f"go vet target: linux/{architecture}\n")
         target = {**environment, "GOOS": "linux", "GOARCH": architecture, "CGO_ENABLED": "0"}
-        for folder in sorted({str(Path(name).parent) for name in selected}):
-            files = ["./" + name for name in selected if str(Path(name).parent) == folder]
-            failed |= bool(call(program, ["vet", *files], environment=target, timeout=180))
+        for name in selected:
+            failed |= bool(call(program, ["vet", "./" + name], environment=target, timeout=180))
     return int(failed)
 
 
