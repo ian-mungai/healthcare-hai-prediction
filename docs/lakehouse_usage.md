@@ -230,8 +230,18 @@ fingerprints. Every fact needs rows in the fixture stage; in the real stage ever
 A hold fact may be empty when nothing is held; at least one non-empty hold fact must keep its rows. Every expression
 finding on the compiled gold SQL (`scripts/lakehouse/gold_sql.py`) counts toward the verdict. An analysis that could not
 visit every relation a model reads fails the run. The check's own corpus E2E is
-`.venv/bin/python -m scripts.lakehouse.run_gold_sql_e2e --out <report.json>`. The gold Great Expectations suites in
-`data_contracts/great_expectations/gold/` are generated from the contract (`gold_checks write-suites`) and
+`.venv/bin/python -m scripts.lakehouse.run_gold_sql_e2e --out <report.json>` (`--g4` runs only the six allowlist entries that
+name a model and the models that use them). The keys and the identity text of the split dimensions end with the edition
+part (`edition_start`). The check accepts it in `dim_rurality_code`, `dim_measure` and `bridge_measure_control` only. Each
+allowlist entry that names a model admits one plain expression over the relation and column that model reads, in the clause and
+output column the entry names. The entries that rest on a model's whole query (the label bounds of `dim_rurality_code` and
+`dim_measure`, the county-list bounds and the membership test of `dim_county`, the edition years of `bridge_measure_control`,
+the state prefix of `dim_state`, the tract count and the county prefix of `bridge_county_planning_region`)
+are granted only to the delivered query: its normalized parse must equal the fingerprint pinned in `PINS` in
+`scripts/lakehouse/gold_sql.py`. A change to one of these six models changes its pin and its probes in the same commit.
+A function or window call written with a schema or catalog (`main.left(...)`, `system.main.count_star()`) is a finding in every model.
+The permissions are for the unqualified built-in names.
+The gold Great Expectations suites in `data_contracts/great_expectations/gold/` are generated from the contract (`gold_checks write-suites`) and
 `gold_checks check-suites` in local CI fails when they drift. The test `release_copy_consistency` fails a build unless
 each selected file has exactly one live physical copy and one valid canonical copy. Release-label aliases remain in
 the observation history and do not increase the physical-copy count.

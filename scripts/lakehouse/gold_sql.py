@@ -12,11 +12,30 @@ applies the expression policy:
   nothing, and a role matches by shape and by the names of the columns it reads.
 * Amendment A36 rule 8, A37, A40 and A43 add scoped permissions for named models and output roles; ``DATE_ROLES`` and the other constants
   below name each one. Everything else that computes a value fails: arithmetic, ``case``, aggregates, window expressions, casts and any function.
+* The allowlist entries that name a model (``STATE_PREFIX``, ``RANGE_BOUNDS``, ``COUNTY_MEMBERSHIP``, ``TRACT_COUNT``, ``EDITION_YEAR`` and
+  ``COUNTY_FILTER``) each admit one expression: a plain aggregate (no filter, distinct or order by) or the exact function, comparison or test, in
+  the named model, over the named relation and column by resolved lineage, in the named clause or select item and into the named output column only.
+  Each change from that form is refused, and so is the expression with its entry missing.
+* Six of those capabilities rest on the whole query of their model, and a property of the query cannot be proved in general (a later filter, a
+  restricted row set, a borrowed row, a swapped list name each keep the evidence while changing the meaning). ``PINS`` therefore grants
+  ``label_bounds`` (``dim_rurality_code``, ``dim_measure``), ``county_list_bounds`` (``dim_county``), ``edition_year`` (``bridge_measure_control``),
+  ``state_prefix`` (``dim_state``) and ``tract_count`` and ``county_prefix`` (``bridge_county_planning_region``) only when the model's statement
+  equals the delivered one: ``query_fingerprint`` is the hash of its parse without source positions and without the catalog and schema of a table
+  reference. Any other structure gets no grant and the finding names both fingerprints. The structural rules above stay as a second condition. A
+  change to a pinned model changes its pin and its probes deliberately.
+* A key or an identity text may add the edition part (``KeySpec.edition``): the first release date or vintage that carries a published label. A row with
+  no edition has a null one, which ``concat_ws`` drops, so the part may be left out only where the same select outputs a typed null edition. The
+  bound label (``min``) reaches a key only as that part. The published-label selection accepts one more complete form: one row per published label of a
+  code, grouped by the keys and the label, bounded by ``min`` and ``max`` of one date that is filtered as not null.
 * Every expression node in the parse is visited or recognized by a role; a node nothing visited is reported, so an unsupported shape cannot hide.
+* A function or window call written with a schema or catalog (``spoof."left"(...)``, ``system.main.count_star()``) is a finding wherever it stands: every
+  permission above is for the unqualified built-in name, and a function in another namespace never receives it.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -43,16 +62,31 @@ CAPABILITIES = {
     "coalesce(<dimension>.<dimension>_sk, md5('<unknown>')) for the unknown member": "unknown_coalesce",
     "cast(<natural key> as varchar) inside a surrogate key": "varchar_cast",
     "case only inside surrogate-key or unknown-member handling": "key_case",
+    "min and max over a label group's release date, data year or vintage, inside dim_rurality_code and dim_measure only": "label_bounds",
+    "left(county_fips, 2) for the state FIPS prefix, inside dim_state only": "state_prefix",
+    "min and max over county-list vintages and a membership test against the latest vintage's county list, inside dim_county only": "county_list_bounds",
+    "count(*) of tract rows per old county and planning region, inside bridge_county_planning_region only": "tract_count",
+    "left(edition_start, 4) and left(edition_end, 4) compared with the seed vintage range, inside bridge_measure_control only": "edition_year",
+    "county_fips like '09%' for the old Connecticut counties, inside bridge_county_planning_region only": "county_prefix",
 }
 
 
 class KeySpec(NamedTuple):
-    """The columns whose text a key hashes, in order; several columns are joined with ``separator`` by ``concat_ws``."""
+    """The columns whose text a key hashes, in order; several columns are joined with ``separator`` by ``concat_ws``.
+
+    ``edition`` names a trailing part a key may add: the edition of a row whose published label changed. A row with no edition has a null one, and
+    ``concat_ws`` drops a null, so a key without the part is the key the row had before editions existed. ``edition_from`` is the one stored column a
+    key may hash as that part without computing it.
+    """
 
     columns: tuple[str, ...]
     separator: str = "|"
+    edition: str = ""
+    edition_from: Base | None = None
 
 
+EDITION_COLUMN = "edition_start"
+EDITION_SOURCE = ("dim_measure", EDITION_COLUMN)
 # The natural key of each dimension. Sources: the dimension grains of gold_contract.json, amendments A36 rules 1, 3 to 7 and A40 item 1, and
 # the unknown_member_natural_key tests of G2's checkpoint revision 3. A code list keys on its code system and code (A36 rule 4).
 CODE_LIST = KeySpec(("code_system", "code"))
@@ -68,12 +102,12 @@ DIMENSION_KEYS = {
     "dim_enrollment": KeySpec(("enrollment_id",)),
     "dim_footnote": CODE_LIST,
     "dim_hospital": KeySpec(("ccn",)),
-    "dim_measure": KeySpec(("fact", "measure_key", "value_column")),
+    "dim_measure": KeySpec(("fact", "measure_key", "value_column"), edition=EDITION_COLUMN),
     "dim_owner_organization": KeySpec(("associate_id",)),
     "dim_owner_role": CODE_LIST,
     "dim_registry_control": KeySpec(("measure_control",)),
     "dim_release": KeySpec(("member_sha256",)),
-    "dim_rurality_code": CODE_LIST,
+    "dim_rurality_code": KeySpec(CODE_LIST.columns, edition=EDITION_COLUMN),
     "dim_source": KeySpec(("dataset_id",)),
     "dim_state": KeySpec(("state_code",)),
     "dim_zip": KeySpec(("zip_code",)),
@@ -81,12 +115,171 @@ DIMENSION_KEYS = {
 # Amendments A39 and A36 rule 3: the control bridge keys its measure on the measure identity and its control on the control ID.
 BRIDGE_KEYS = {
     "bridge_measure_control": {
-        "measure_sk": KeySpec(("fact", "measure_key", "value_column")),
+        "measure_sk": KeySpec(("fact", "measure_key", "value_column"), edition=EDITION_COLUMN, edition_from=EDITION_SOURCE),
         "registry_control_sk": KeySpec(("measure_control",)),
     }
 }
 # Amendment A36 rule 3: dim_measure also carries its identity text, the natural key its key hashes.
-IDENTITY_OUTPUTS = {"dim_measure": ("measure_identity", KeySpec(("fact", "measure_key", "value_column")))}
+IDENTITY_OUTPUTS = {"dim_measure": ("measure_identity", KeySpec(("fact", "measure_key", "value_column"), edition=EDITION_COLUMN))}
+
+
+class RangeBound(NamedTuple):
+    """An allowlist entry for ``min`` and ``max``: the capability, the one column of each relation it reads, the output column each result may reach and
+    the aggregates that read the rows of the grouped columns themselves."""
+
+    capability: str
+    column: str
+    relations: frozenset[str]
+    minimum: str
+    maximum: str
+    grouped_rows: frozenset[str]
+
+    @property
+    def inputs(self) -> frozenset[Base]:
+        return frozenset((relation, self.column) for relation in self.relations)
+
+
+NAMED_MEASURE_MODELS = frozenset(
+    {
+        "int_cc_complications_deaths_windows",
+        "int_cc_hcahps_windows",
+        "int_cc_maternal_windows",
+        "int_cc_timely_effective_windows",
+        "int_cc_unplanned_visits_windows",
+        "int_hai_hospital_windows",
+        "int_hai_national_windows",
+        "int_hai_state_windows",
+    }
+)
+COUNTY_LIST_MODELS = frozenset({"int_acs_county_values", "int_county_adjacency_edges", "int_rucc_county_codes"})
+RANGE_BOUNDS = {
+    "dim_county": RangeBound("county_list_bounds", "vintage", COUNTY_LIST_MODELS, "first_unlisted_vintage", "last_listed_vintage", frozenset({"max"})),
+    "dim_measure": RangeBound("label_bounds", "release_date", NAMED_MEASURE_MODELS, "edition_start", "edition_end", frozenset({"min", "max"})),
+    "dim_rurality_code": RangeBound("label_bounds", "vintage", frozenset({"int_rucc_county_codes"}), "edition_start", "edition_end", frozenset({"min", "max"})),
+}
+
+
+class StatePrefix(NamedTuple):
+    """The state FIPS prefix: its model, the relation and column it reads, the prefix width and the one output column."""
+
+    model: str
+    relation: str
+    column: str
+    width: int
+    output: str
+
+
+class CountyMembership(NamedTuple):
+    """The membership test of dim_county: its model, the county code column, the output column and the list that names the latest members."""
+
+    model: str
+    column: str
+    output: str
+    list_name: str
+
+
+class TractCount(NamedTuple):
+    """The tract count: its model, the relation of the tract rows, the grouping (old county, planning region, file) and the output column."""
+
+    model: str
+    relation: str
+    grouping: frozenset[str]
+    output: str
+
+
+class EditionYear(NamedTuple):
+    """The edition join of the control bridge: its model, the edition relation, the year width, each bound's comparison and seed column, the seeds."""
+
+    model: str
+    relation: str
+    width: int
+    pairs: dict[str, tuple[str, str]]
+    seeds: frozenset[str]
+
+
+class CountyFilter(NamedTuple):
+    """The filter of the old Connecticut counties: its model, the relation and column it reads and the one pattern."""
+
+    model: str
+    relation: str
+    column: str
+    pattern: str
+
+
+STATE_PREFIX = StatePrefix("dim_state", "int_rucc_county_codes", "county_fips", 2, "state_fips")
+COUNTY_MEMBERSHIP = CountyMembership("dim_county", "county_fips", "in_latest_county_list", "int_county_adjacency_edges")
+TRACT_COUNT = TractCount("bridge_county_planning_region", "int_ruca_codes", frozenset({"county_fips", "county_fips_2023", "member_sha256"}), "tract_count")
+EDITION_YEAR = EditionYear(
+    "bridge_measure_control",
+    "dim_measure",
+    4,
+    {"edition_end": ("COMPARE_GREATERTHANOREQUALTO", "vintage_start"), "edition_start": ("COMPARE_LESSTHANOREQUALTO", "vintage_end")},
+    frozenset(
+        {
+            "acs_svi_measures_bridge",
+            "cost_report_measures_bridge",
+            "county_health_measures_bridge",
+            "geography_measures_bridge",
+            "hai_outcome_measures_bridge",
+            "hhs_onc_measures_bridge",
+            "impact_measures_bridge",
+            "income_labor_measures_bridge",
+            "mmd_conditions_bridge",
+            "mup_measures_bridge",
+            "occmix_measures_bridge",
+            "ownership_measures_bridge",
+            "registry_measure_sources_bridge",
+            "shortage_measures_bridge",
+            "validation_measures_bridge",
+        }
+    ),
+)
+COUNTY_FILTER = CountyFilter("bridge_county_planning_region", "int_ruca_codes", "county_fips", "09%")
+
+
+class Pin(NamedTuple):
+    """The delivered query one pinned capability is granted to: the fingerprint of its normalized parse (``query_fingerprint``) and why it is pinned."""
+
+    fingerprint: str
+    reason: str
+
+
+PINNED_CAPABILITIES = frozenset({"label_bounds", "county_list_bounds", "edition_year", "state_prefix", "tract_count", "county_prefix"})
+PINS: dict[tuple[str, str], Pin] = {
+    ("dim_rurality_code", "label_bounds"): Pin(
+        "54899dd39ef73441ccf035e8429a37647b7515629aa4df5e62cb0141e5ae50f7",
+        "dim_rurality_code: the first and last vintage of each published label of a split RUCC code bound its edition and reach its key",
+    ),
+    ("dim_measure", "label_bounds"): Pin(
+        "28bb15707754e643fed47961239a0aebc90204fc7ef44be45a3aae94a45813d5",
+        "dim_measure: the first and last release date of each published name of a split measure bound its edition and reach its key and identity text",
+    ),
+    ("dim_county", "county_list_bounds"): Pin(
+        "2dcc6d63338bd5e97295904fcfe4cedb7b2e726c2775df20c1f7a1a02ad5aa6d",
+        "dim_county: the county-list vintage bounds and the membership in the latest adjacency list rest on its chain of lists, latest vintage and latest list",
+    ),
+    ("bridge_measure_control", "edition_year"): Pin(
+        "abc23441460b6840d1289fc2146800d4a1974f3a30d399ee978c548b4f6c6ce6",
+        "bridge_measure_control: the edition years are compared with the seed range of the same seed row and the key hashes the stored edition start",
+    ),
+    ("dim_state", "state_prefix"): Pin(
+        "6e7030a92311d15545dd24f39dc5375431d3117ac3ab5d3998ed50f87eb6bc81",
+        "dim_state: the first two characters of the RUCC county code give the state code its FIPS prefix",
+    ),
+    ("bridge_county_planning_region", "tract_count"): Pin(
+        "f5184ab1d2281da8581bf1d1cfaeb62270efbc7bb4861c52b4c38e9c3f92c496",
+        "bridge_county_planning_region: the tract count is the number of RUCA tract rows of each old county, planning region and file",
+    ),
+    ("bridge_county_planning_region", "county_prefix"): Pin(
+        "f5184ab1d2281da8581bf1d1cfaeb62270efbc7bb4861c52b4c38e9c3f92c496",
+        "bridge_county_planning_region: the county prefix filter keeps the 2020 tract rows of the old Connecticut counties",
+    ),
+}
+EDITION_BOUND = frozenset({"range_bound:min"})
+LATEST_VINTAGE = "latest_vintage"
+LATEST_LIST = "latest_list"
+PROOF_LABELS = frozenset({LATEST_VINTAGE, LATEST_LIST})
+LIST_NAME_COLUMN = "list_name"
 CALENDAR_COLUMN = "calendar_date"
 FISCAL_COLUMN = "federal_fiscal_year"
 # Approved source and role bindings; the contract replaces this amendment fallback at integration.
@@ -109,6 +302,8 @@ A36_A39_A43_A48: Json = {
             "county_fips": [
                 ["int_acs_county_values", "county_fips"],
                 ["int_bls_county_series", "county_fips"],
+                ["int_county_adjacency_edges", "county_fips"],
+                ["int_county_adjacency_edges", "neighbor_fips"],
                 ["int_gv_county_values", "county_fips"],
                 ["int_hpsa_components", "county_fips"],
                 ["int_mmd_prevalence", "county_fips"],
@@ -290,6 +485,7 @@ class Policy:
     date_pairs: frozenset[Base]
     aggregates: frozenset[str]
     scopes: Json = field(default_factory=lambda: A36_A39_A43_A48)
+    pins: dict[tuple[str, str], Pin] = field(default_factory=lambda: PINS)
 
 
 @dataclass(frozen=True)
@@ -386,6 +582,8 @@ class Scope:
     value_equalities: list[tuple[Value, Value]] = field(default_factory=list)
     # A FROM reference with TABLESAMPLE restricts the rows it reads, like a WHERE clause (issue WV3-007, amendment A90).
     sampled: bool = False
+    groups: tuple[Json, ...] = ()
+    left_joins: list[tuple[Flow, Flow]] = field(default_factory=list)
 
 
 @dataclass
@@ -401,6 +599,11 @@ OTHER = frozenset({"other"})
 EMPTY: frozenset[Base] = frozenset()
 
 
+def key_columns(spec: KeySpec, count: int) -> tuple[str, ...]:
+    """The columns a key of ``count`` parts hashes: the natural key, and the edition when the key has one part more."""
+    return (*spec.columns, spec.edition) if spec.edition and count == len(spec.columns) + 1 else spec.columns
+
+
 def dimension_key(dimension: str) -> str:
     """A dimension's surrogate-key column: its name without ``dim_`` plus ``_sk``."""
     return dimension.removeprefix("dim_") + "_sk"
@@ -408,6 +611,59 @@ def dimension_key(dimension: str) -> str:
 
 def column_names(bases: frozenset[Base]) -> set[str]:
     return {column for _relation, column in bases}
+
+
+def no_edition(column: Col | Value) -> bool:
+    """A typed null edition: the row has none."""
+    return column.flow.null and not column.bases
+
+
+def bounded_edition(column: Col | Value) -> bool:
+    """An edition that is the ``min`` of a date and is never null."""
+    return bool(column.labels & EDITION_BOUND) and not column.flow.null
+
+
+def merged_labels(left: Col, right: Col) -> frozenset[str]:
+    """The labels of a union column; a proof label (the newest vintage, the latest list) survives only when both arms hold it."""
+    return (left.labels | right.labels) - PROOF_LABELS | (PROOF_LABELS & left.labels & right.labels)
+
+
+def plain_call(node: Json) -> bool:
+    """An aggregate call with no filter, distinct or order by: only its arguments decide its value."""
+    return node.get("filter") is None and not node.get("distinct") and not node["order_bys"]["orders"] and not node.get("export_state")
+
+
+def plain_grouping(node: Json) -> tuple[Json, ...]:
+    """The columns of a GROUP BY of plain columns in one grouping set; empty when there is none or it is anything else."""
+    groups = node.get("group_expressions", [])
+    if not groups or not all(is_column(group) for group in groups) or node.get("group_sets") != [list(range(len(groups)))]:
+        return ()
+    return tuple(groups)
+
+
+def simple_select(node: Json) -> bool:
+    """A select with no GROUP BY, HAVING, QUALIFY, modifier or sample: its WHERE clause alone narrows its rows."""
+    return not any(node.get(key) for key in ("group_expressions", "having", "qualify", "modifiers", "sample"))
+
+
+def disjuncts(node: Json) -> list[Json]:
+    """The operands of an OR, through nested ORs."""
+    if node["class"] == "CONJUNCTION" and node["type"] == "CONJUNCTION_OR":
+        return [part for child in node["children"] for part in disjuncts(child)]
+    return [node]
+
+
+def item_calls(node: Json) -> set[int]:
+    """A select item that is a call, or a plain cast of a call: the calls whose result becomes the output column."""
+    calls = {id(node)}
+    if node["class"] == "CAST" and not node["try_cast"] and node["child"]["class"] == "FUNCTION":
+        calls.add(id(node["child"]))
+    return calls
+
+
+def from_source(value: Value | Col, source: Source) -> bool:
+    """Every occurrence of the value is a column of that FROM source."""
+    return bool(value.flow.occurrences) and all(origin.path[0] == source.occurrence for origin in value.flow.occurrences)
 
 
 def is_column(node: Json | None) -> bool:
@@ -539,11 +795,12 @@ def child_nodes(node: Any) -> list[Json]:
 class Walker:
     """One pass over a model's parse: collects findings and physical reads, and resolves lineage."""
 
-    def __init__(self, model: str, kind: str, policy: Policy, fact_map: dict[str, tuple[str, str]]) -> None:
+    def __init__(self, model: str, kind: str, policy: Policy, fact_map: dict[str, tuple[str, str]], fingerprint: str) -> None:
         self.model = model
         self.kind = kind
         self.policy = policy
         self.fact_map = fact_map
+        self.fingerprint = fingerprint
         self.joined: dict[str, tuple[str, str]] = {}
         self.findings: list[Finding] = []
         self.reads: set[str] = set()
@@ -552,6 +809,32 @@ class Walker:
         self.used_normalizations: set[str] = set()
         self.value_filters: list[tuple[str, Value]] = []
         self.serial = 0
+        self.edition_parts: set[int] = set()
+        self.year_calls: set[int] = set()
+        self.year_slots: set[int] = set()
+        self.projected_calls: set[int] = set()
+        self.where_conjuncts: set[int] = set()
+        self.membership_selects: set[int] = set()
+        self.clause = ""
+
+    def granted(self, capability: str) -> bool:
+        """The contract allowlist switches the capability on and, for a pinned capability, this model's whole query is the pinned query."""
+        if capability not in self.policy.capabilities:
+            return False
+        if capability not in PINNED_CAPABILITIES:
+            return True
+        pin = self.policy.pins.get((self.model, capability))
+        return pin is not None and pin.fingerprint == self.fingerprint
+
+    def pin_findings(self) -> None:
+        """A model with pinned capabilities that is not its pinned query: the finding names both fingerprints and the reason."""
+        for (model, capability), pin in sorted(self.policy.pins.items()):
+            if model == self.model and capability in self.policy.capabilities and pin.fingerprint != self.fingerprint:
+                self.flag(
+                    "functions",
+                    f"{capability} is pinned to the delivered {model} query ({pin.fingerprint}); this query is {self.fingerprint}: {pin.reason}; "
+                    "change the pin and its probes deliberately",
+                )
 
     def identity_number(self) -> int:
         self.serial += 1
@@ -591,6 +874,8 @@ class Walker:
         keys = self.policy.scopes["label_choice"].get(self.model, [])
         if not keys:
             return False
+        if self.edition_disjoint(left, right):
+            return True
         if any(
             (x := left.get(key)) is not None
             and (y := right.get(key)) is not None
@@ -618,6 +903,16 @@ class Walker:
                 return True
         return False
 
+    def edition_disjoint(self, left: Out, right: Out) -> bool:
+        """Rows with a null edition and rows with a bounded edition never share a key, because the edition is the last part of the key."""
+        bound = RANGE_BOUNDS.get(self.model)
+        if bound is None or bound.capability != "label_bounds" or not self.granted(bound.capability):
+            return False
+        a, b = left.get(bound.minimum), right.get(bound.minimum)
+        if a is None or b is None:
+            return False
+        return (no_edition(a) and bounded_edition(b)) or (bounded_edition(a) and no_edition(b))
+
     def set_output(self, node: Json, left: Out, right: Out) -> Out:
         """UNION invalidates overlapping selections; subtracting or intersecting rows keeps only left-side evidence."""
         # The reserved unknown hash has no source operand. Use that arm's natural values when merging its explicit sentinel row.
@@ -625,11 +920,15 @@ class Walker:
             for index, column in enumerate(arm.columns):
                 spec = DIMENSION_KEYS.get(self.model) if column.name == dimension_key(self.model) else BRIDGE_KEYS.get(self.model, {}).get(column.name)
                 if spec is not None and not column.inputs and column.flow.literals == {UNKNOWN} and "md5_key" in column.labels:
-                    natural = [arm.get(name) for name in spec.columns]
-                    # A null natural key is the contract's sentinel only for dim_measure's key parts and dim_date; elsewhere it is '<unknown>'.
+                    carried = arm.get(spec.edition) if spec.edition else None
+                    names = (*spec.columns, spec.edition) if carried is not None and no_edition(carried) else spec.columns
+                    natural = [arm.get(name) for name in names]
                     null_allowed = self.model in NULL_SENTINEL_MODELS
                     if all(
-                        value is not None and not value.bases and ((null_allowed and value.flow.null) or value.flow.literals == {UNKNOWN}) for value in natural
+                        value is not None
+                        and not value.bases
+                        and ((null_allowed or name == spec.edition) and value.flow.null or value.flow.literals == {UNKNOWN})
+                        for name, value in zip(names, natural, strict=True)
                     ):
                         arm.columns[index] = replace(column, inputs=tuple(Value(value.bases, value.labels, flow=value.flow) for value in natural if value))
         if node["setop_type"] in {"EXCEPT", "INTERSECT"}:
@@ -653,7 +952,7 @@ class Walker:
             Col(
                 a.name,
                 a.bases | b.bases,
-                a.labels | b.labels,
+                merged_labels(a, b),
                 merge_inputs(a.inputs, b.inputs),
                 Flow(
                     a.flow.occurrences | b.flow.occurrences,
@@ -688,8 +987,11 @@ class Walker:
                 self.mark(value)
 
     def sweep(self, node: Any) -> None:
-        """Report any expression node that no handler visited and no role recognized."""
+        """Report any expression node that no handler visited and no role recognized, and any call outside the unqualified built-in names."""
         if isinstance(node, dict):
+            if node.get("class") in ("FUNCTION", "WINDOW") and (node.get("schema") or node.get("catalog")):
+                qualified = ".".join(part for part in (node["catalog"], node["schema"], node["function_name"]) if part)
+                self.flag("functions", f"function {qualified} is qualified; only the unqualified built-in name is approved")
             if "class" in node and id(node) not in self.seen:
                 self.flag("functions", f"expression {node['class']} was not analyzed (unsupported shape)")
                 return
@@ -803,7 +1105,8 @@ class Walker:
         ]
 
     def select(self, node: Json, ctes: dict[str, Out], outer: Scope | None = None) -> Out:
-        scope = Scope([], ctes, outer, identity=self.identity_number())
+        enclosing, self.clause = self.clause, ""
+        scope = Scope([], ctes, outer, identity=self.identity_number(), groups=plain_grouping(node))
         self.relations(node["from_table"], scope)
         columns: list[Col] = []
         stars: list[StarSource] = []
@@ -824,18 +1127,69 @@ class Walker:
         self.project_proofs(out, scope, node)
         modifier_scope = Scope([Source("", out), *scope.sources], ctes, outer, identity=scope.identity, using=scope.using)
         self.label_selection(node, modifier_scope, out)
+        self.edition_selection(node, scope, out)
+        self.county_list_proofs(node, scope, out)
         for modifier in node.get("modifiers", []):
             self.modifier(modifier, modifier_scope)
+        self.clause = enclosing
         return out
+
+    def edition_selection(self, node: Json, scope: Scope, out: Out) -> None:
+        """The label selection with editions: one row per published label of a code, grouped by the keys and the label, bounded by ``min`` and ``max``.
+
+        The label is selected when the select groups by exactly the label keys and the label, outputs the edition bounds of the model's allowlist entry
+        over one date that the select filters as not null (so no edition takes the null edition of the single-label rows), and so the label travels
+        with an edition in the key. Anything else leaves the label unselected.
+        """
+        bound = RANGE_BOUNDS.get(self.model)
+        keys = self.policy.scopes["label_choice"].get(self.model, [])
+        if bound is None or bound.capability != "label_bounds" or not self.granted(bound.capability) or not keys:
+            return
+        labels = [column for column in out.columns if "label_pending" in column.labels]
+        first, last = out.get(bound.minimum), out.get(bound.maximum)
+        if len(labels) != 1 or first is None or last is None or "range_bound:min" not in first.labels or "range_bound:max" not in last.labels:
+            return
+        if not same_value(first, last) or not self.not_null_filter(node, scope, first):
+            return
+        grouped = [self.column(group, scope) if is_column(group) else None for group in node.get("group_expressions", [])]
+        wanted = [out.get(key) for key in keys] + labels
+        if len(grouped) != len(wanted) or any(value is None for value in grouped) or any(column is None for column in wanted):
+            return
+        if not all(any(column is not None and same_value(column, value) for value in grouped if value is not None) for column in wanted):
+            return
+        certificate = self.certificate(scope.identity, out, labels[0])
+        out.columns = [
+            replace(column, flow=replace(column.flow, selections=frozenset({certificate}))) if column is labels[0] else column for column in out.columns
+        ]
+
+    def not_null_filter(self, node: Json, scope: Scope, bounded: Col) -> bool:
+        """The WHERE clause holds ``<the bounded date> is not null`` as one of its conjunctions."""
+        return bool(node.get("where_clause")) and any(
+            part["class"] == "OPERATOR"
+            and part["type"] == "OPERATOR_IS_NOT_NULL"
+            and len(part["children"]) == 1
+            and is_column(part["children"][0])
+            and (value := self.column(part["children"][0], scope)).bases == bounded.bases
+            and value.flow.occurrences == bounded.flow.occurrences
+            for part in conjunctions(node["where_clause"])
+        )
 
     def project_hash_inputs(self, out: Out, scope: Scope) -> None:
         """Rebind hash operands only through proved inner-join value equalities to the corresponding natural output."""
         for index, column in enumerate(out.columns):
             spec = DIMENSION_KEYS.get(self.model) if column.name == dimension_key(self.model) else BRIDGE_KEYS.get(self.model, {}).get(column.name)
-            if spec is None or len(column.inputs) != len(spec.columns):
+            identity = IDENTITY_OUTPUTS.get(self.model)
+            if spec is None and identity and column.name == identity[0]:
+                self.padded_edition(column, identity[1], out)
+            if spec is None:
+                continue
+            padding = self.padded_edition(column, spec, out)
+            inputs = (*column.inputs, padding) if padding is not None else column.inputs
+            names = key_columns(spec, len(inputs))
+            if len(inputs) != len(names):
                 continue
             parts: list[Value] = []
-            for name, hashed in zip(spec.columns, column.inputs, strict=True):
+            for name, hashed in zip(names, inputs, strict=True):
                 natural = out.get(name)
                 reachable = {hashed}
                 while True:
@@ -847,6 +1201,18 @@ class Walker:
                     hashed = Value(natural.bases, natural.labels, flow=natural.flow)
                 parts.append(hashed)
             out.columns[index] = replace(column, inputs=tuple(parts))
+
+    def padded_edition(self, column: Col, spec: KeySpec, out: Out) -> Value | None:
+        """The typed null edition that completes a key leaving out its edition part; a key that omits an edition its row carries is a finding."""
+        if not spec.edition or len(column.inputs) != len(spec.columns):
+            return None
+        carried = out.get(spec.edition)
+        if carried is None:
+            return None
+        if not no_edition(carried):
+            self.flag("functions", f"output column {column.name} omits the edition part its row carries ({spec.edition})")
+            return None
+        return Value(carried.bases, carried.labels, flow=carried.flow)
 
     def project_proofs(self, out: Out, scope: Scope, node: Json) -> None:
         """Rebind a certificate only through exact join equalities in the direction that preserves its selected label."""
@@ -908,22 +1274,7 @@ class Walker:
                 if side:
                     scope.using[name] = side[0].alias
             if ref.get("condition") and not self.key_join(ref["condition"], scope):
-                self.expr(ref["condition"], scope, "predicate")
-                for part in conjunctions(ref["condition"]):
-                    if part.get("type") != "COMPARE_EQUAL" or not is_column(part.get("left")) or not is_column(part.get("right")):
-                        continue
-                    a_value, b_value = self.column(part["left"], scope), self.column(part["right"], scope)
-                    if ref["join_type"] == "INNER":
-                        scope.value_equalities.extend(((a_value, b_value), (b_value, a_value)))
-                    a, b = a_value.flow, b_value.flow
-                    left_ids = {source.occurrence for source in left}
-                    right_ids = {source.occurrence for source in scope.sources[len(left) :]}
-                    if all(origin.path[0] in right_ids for origin in a.occurrences) and all(origin.path[0] in left_ids for origin in b.occurrences):
-                        a, b = b, a
-                    if ref["join_type"] in {"INNER", "LEFT"}:
-                        scope.equalities.append((b, a))
-                    if ref["join_type"] in {"INNER", "RIGHT"}:
-                        scope.equalities.append((a, b))
+                self.join_condition(ref, left, scope)
         elif kind == "SUBQUERY":
             out = self.query(ref["subquery"]["node"], scope.ctes, Scope(list(scope.sources), scope.ctes, scope.outer))
             names = ref.get("column_name_alias") or []
@@ -936,9 +1287,40 @@ class Walker:
         elif kind != "EMPTY":
             self.flag("lineage", f"relation kind {kind} is not supported")
 
+    def join_condition(self, ref: Json, left: list[Source], scope: Scope) -> None:
+        """A join's ON condition in the ``join`` clause, and the column equalities it adds in the direction its join type preserves."""
+        outer_clause, self.clause = self.clause, "join"
+        self.year_slots |= {id(operand) for part in conjunctions(ref["condition"]) for operand in disjuncts(part) if part is not operand}
+        self.expr(ref["condition"], scope, "predicate")
+        self.clause = outer_clause
+        join_type = ref["join_type"]
+        for part in conjunctions(ref["condition"]):
+            if part.get("type") != "COMPARE_EQUAL" or not is_column(part.get("left")) or not is_column(part.get("right")):
+                continue
+            a_value, b_value = self.column(part["left"], scope), self.column(part["right"], scope)
+            if join_type == "INNER":
+                scope.value_equalities.extend(((a_value, b_value), (b_value, a_value)))
+            a, b = a_value.flow, b_value.flow
+            left_ids = {source.occurrence for source in left}
+            right_ids = {source.occurrence for source in scope.sources[len(left) :]}
+            if all(origin.path[0] in right_ids for origin in a.occurrences) and all(origin.path[0] in left_ids for origin in b.occurrences):
+                a, b = b, a
+            if join_type in {"INNER", "LEFT"}:
+                scope.equalities.append((b, a))
+            if join_type in {"INNER", "RIGHT"}:
+                scope.equalities.append((a, b))
+            if join_type in {"LEFT", "RIGHT"}:
+                scope.left_joins.append((b, a) if join_type == "LEFT" else (a, b))
+
     # WHERE clause: amendment A43 value-space filters, then the ordinary predicate rules.
     def where(self, node: Json, scope: Scope) -> None:
+        outer_clause, self.clause = self.clause, "where"
+        self.where_parts(node, scope)
+        self.clause = outer_clause
+
+    def where_parts(self, node: Json, scope: Scope) -> None:
         parts = conjunctions(node)
+        self.where_conjuncts |= {id(part) for part in parts}
         self.mark_conjunctions(node)
         for part in parts:
             if part["class"] == "OPERATOR" and part["type"] == "OPERATOR_IS_NULL" and is_column(part["children"][0]) and scope.projected:
@@ -1068,6 +1450,7 @@ class Walker:
         if node["class"] == "STAR":
             return self.star(node, scope)
         alias = node.get("alias") or column_name(node) or "expression"
+        self.projected_calls |= item_calls(node)
         value = self.output(node, alias, scope)
         return [Col(alias, value.bases, value.labels, value.inputs, value.flow)], []
 
@@ -1124,7 +1507,7 @@ class Walker:
             occurrences = self.operand_occurrences(node, scope)
             if "calendar_date" in value.labels:
                 inherited -= {"date_bound:min", "date_bound:max"}
-            if value.labels & {"md5_key", "identity"}:
+            if value.labels & {"md5_key", "identity", "county_membership"}:
                 inherited = frozenset(label for label in inherited if not label.startswith(("normalization:", "normalize:")))
             self.mark(node)
             return replace(value, labels=value.labels | inherited, flow=replace(value.flow, occurrences=occurrences))
@@ -1136,7 +1519,8 @@ class Walker:
         if node["class"] == "CONSTANT":
             return frozenset()
         if is_column(node):
-            return self.column(node, scope).labels - COLUMN - CONSTANT - OTHER - {"calendar_date", "date_part"}
+            labels = self.column(node, scope).labels - COLUMN - CONSTANT - OTHER - {"calendar_date", "date_part"}
+            return labels - EDITION_BOUND if id(node) in self.edition_parts else labels
         return frozenset(label for child in child_nodes(node) for label in self.operand_labels(child, scope))
 
     def operand_occurrences(self, node: Json, scope: Scope) -> frozenset[Occurrence]:
@@ -1160,6 +1544,10 @@ class Walker:
         identity = IDENTITY_OUTPUTS.get(self.model)
         if identity and alias == identity[0]:
             return lambda node, scope: self.identity(node, scope, identity[1])
+        if (self.model, alias) == (STATE_PREFIX.model, STATE_PREFIX.output):
+            return self.state_prefix
+        if (self.model, alias) == (COUNTY_MEMBERSHIP.model, COUNTY_MEMBERSHIP.output):
+            return self.county_membership
         if self.model == "dim_date":
             if alias == CALENDAR_COLUMN:
                 return self.calendar_date
@@ -1203,14 +1591,18 @@ class Walker:
     def concat(self, node: Json, scope: Scope, spec: KeySpec) -> tuple[Value, ...] | None:
         """``concat_ws(separator, c1, c2, ...)`` over the spec's columns, each plain or cast to varchar."""
         parts = node["children"] if node["class"] == "FUNCTION" and node["function_name"] == "concat_ws" else []
-        if len(parts) != len(spec.columns) + 1 or not is_text(parts[0], spec.separator):
+        names = key_columns(spec, len(parts) - 1)
+        if len(parts) != len(names) + 1 or not is_text(parts[0], spec.separator):
             return None
         values: list[Value] = []
-        for part, name in zip(parts[1:], spec.columns, strict=True):
+        for part, name in zip(parts[1:], names, strict=True):
             if is_column(part) and column_name(part) == name:
                 value = self.column(part, scope)
+                if name == spec.edition and not self.edition_part(value, spec):
+                    return None
                 self.use_normalizations(value, name)
                 values.append(value)
+                self.take_edition(part, name, spec)
             elif (
                 part["class"] == "CAST"
                 and not part["try_cast"]
@@ -1218,10 +1610,24 @@ class Walker:
                 and column_name(part["child"]) == name
                 and "varchar_cast" in self.policy.capabilities
             ):
-                values.append(self.column(part["child"], scope))
+                value = self.column(part["child"], scope)
+                if name == spec.edition and not self.edition_part(value, spec):
+                    return None
+                values.append(value)
+                self.take_edition(part["child"], name, spec)
             else:
                 return None
         return tuple(values)
+
+    def edition_part(self, value: Value, spec: KeySpec) -> bool:
+        """What a key may hash as its edition: a bounded ``min`` of a date, a typed null or the stored column the key's spec names (in its pinned model)."""
+        stored = spec.edition_from is not None and value.bases == {spec.edition_from} and self.granted("edition_year")
+        return bounded_edition(value) or no_edition(value) or stored
+
+    def take_edition(self, column: Json, name: str, spec: KeySpec) -> None:
+        """The edition part of a key consumes the bound label (``min``); no other part of a key may carry it."""
+        if spec.edition and name == spec.edition:
+            self.edition_parts.add(id(column))
 
     def guard(self, node: Json, scope: Scope, name: str) -> tuple[Value, ...] | None:
         """``case when c is null then '<unknown>' else cast(c as varchar) end`` on the key column; the cast needs its own allowlist entry."""
@@ -1306,6 +1712,92 @@ class Walker:
         """dim_measure's identity text: ``concat_ws('|', fact, measure_key, value_column)`` (amendment A36 rule 3)."""
         parts = self.concat(node, scope, spec)
         return None if parts is None else Value(frozenset(base for part in parts for base in part.bases), frozenset({"identity"}), parts)
+
+    def state_prefix(self, node: Json, scope: Scope) -> Value | None:
+        """``left(county_fips, 2)`` over the RUCC county code (allowlist entry, dim_state's ``state_fips`` only)."""
+        if not self.granted("state_prefix") or node["class"] != "FUNCTION" or node["function_name"] != "left" or len(node["children"]) != 2:
+            return None
+        code, width = node["children"]
+        if (
+            column_name(code) != STATE_PREFIX.column
+            or width["class"] != "CONSTANT"
+            or width["value"]["is_null"]
+            or width["value"]["value"] != STATE_PREFIX.width
+        ):
+            return None
+        value = self.column(code, scope)
+        return Value(value.bases, frozenset({"state_prefix"})) if value.bases == {(STATE_PREFIX.relation, STATE_PREFIX.column)} else None
+
+    def county_membership(self, node: Json, scope: Scope) -> Value | None:
+        """``<county_fips> is not null`` over the county code of the latest list (allowlist entry, ``in_latest_county_list`` only)."""
+        if not self.granted("county_list_bounds") or node["class"] != "OPERATOR" or node["type"] != "OPERATOR_IS_NOT_NULL":
+            return None
+        if len(node["children"]) != 1 or column_name(node["children"][0]) != COUNTY_MEMBERSHIP.column:
+            return None
+        code = self.column(node["children"][0], scope)
+        if LATEST_LIST not in code.labels:
+            return None
+        self.use_normalizations(code, COUNTY_MEMBERSHIP.column)
+        self.membership_selects.add(scope.identity)
+        return Value(code.bases, frozenset({"county_membership"}))
+
+    def county_list_proofs(self, node: Json, scope: Scope, out: Out) -> None:
+        """The three parts of the membership test in dim_county: the newest vintage of the list, the list's rows of that vintage and the left join."""
+        if self.model != COUNTY_MEMBERSHIP.model or not self.granted("county_list_bounds"):
+            return
+        self.latest_vintage(node, scope, out)
+        self.latest_members(node, scope, out)
+        self.membership_join(scope, out)
+
+    def list_filter(self, node: Json, scope: Scope) -> bool:
+        """The WHERE clause is ``list_name = '<the latest list>'``, over the literal column that names each list, and nothing else."""
+        parts = conjunctions(node["where_clause"]) if node.get("where_clause") else []
+        if len(parts) != 1 or parts[0]["class"] != "COMPARISON" or parts[0]["type"] != "COMPARE_EQUAL":
+            return False
+        column, literal = parts[0]["left"], parts[0]["right"]
+        if not is_column(column) or column_name(column) != LIST_NAME_COLUMN or not is_text(literal, COUNTY_MEMBERSHIP.list_name):
+            return False
+        value = self.column(column, scope)
+        return not value.bases and COUNTY_MEMBERSHIP.list_name in value.flow.literals
+
+    def latest_vintage(self, node: Json, scope: Scope, out: Out) -> None:
+        """``select max(vintage) as vintage from <lists> where list_name = '<the latest list>'``: the newest vintage of that list."""
+        column = out.get("vintage")
+        if len(out.columns) != 1 or column is None or "range_bound:max" not in column.labels or len(scope.sources) != 1:
+            return
+        if not simple_select(node) or not self.list_filter(node, scope):
+            return
+        out.columns = [replace(column, labels=column.labels | {LATEST_VINTAGE})]
+
+    def latest_members(self, node: Json, scope: Scope, out: Out) -> None:
+        """``select <lists>.county_fips from <lists> inner join <latest vintage> on <lists>.vintage = <latest vintage>.vintage where list_name = '<list>'``."""
+        column, ref = out.get(COUNTY_MEMBERSHIP.column), node["from_table"]
+        if len(out.columns) != 1 or column is None or ref["type"] != "JOIN" or ref["join_type"] != "INNER" or len(scope.sources) != 2:
+            return
+        if not simple_select(node) or not self.list_filter(node, scope):
+            return
+        condition = ref.get("condition")
+        if condition is None or condition["class"] != "COMPARISON" or condition["type"] != "COMPARE_EQUAL":
+            return
+        if not is_column(condition["left"]) or not is_column(condition["right"]):
+            return
+        rows, newest = scope.sources
+        sides = [self.column(condition["left"], scope), self.column(condition["right"], scope)]
+        listed = [value for value in sides if from_source(value, rows) and LATEST_VINTAGE not in value.labels]
+        latest = [value for value in sides if from_source(value, newest) and LATEST_VINTAGE in value.labels]
+        if len(listed) != 1 or len(latest) != 1 or not listed[0].bases <= RANGE_BOUNDS[self.model].inputs or not from_source(column, rows):
+            return
+        out.columns = [replace(column, labels=column.labels | {LATEST_LIST})]
+
+    def membership_join(self, scope: Scope, out: Out) -> None:
+        """The membership test is the optional side of a left join whose condition equates it with the model's county code."""
+        column, key = out.get(COUNTY_MEMBERSHIP.output), out.get(COUNTY_MEMBERSHIP.column)
+        if column is None or scope.identity not in self.membership_selects:
+            return
+        if key is None or not any(
+            optional.occurrences == column.flow.occurrences and preserved.occurrences == key.flow.occurrences for optional, preserved in scope.left_joins
+        ):
+            self.flag("functions", f"output column {column.name} is not a left join of the latest list on {COUNTY_MEMBERSHIP.column}")
 
     def calendar_date(self, node: Json, scope: Scope) -> Value | None:
         """``cast(unnest(generate_series(<first day>, <last day>, interval 1 day)) as date)`` between source dates (amendment A36 rule 1)."""
@@ -1414,6 +1906,8 @@ class Walker:
         if kind == "OPERATOR" and node["type"] == "OPERATOR_COALESCE":
             self.flag("functions", "coalesce is allowed only as a fact key: coalesce(<dimension>.<dimension>_sk, md5('<unknown>'))")
             return self.children(node, scope)
+        if kind == "COMPARISON":
+            self.edition_year(node, scope)
         if kind in ("OPERATOR", "COMPARISON", "CONJUNCTION", "BETWEEN") and (
             node["type"] in BOOLEAN_TYPES or str(node["type"]).startswith(("COMPARE_", "CONJUNCTION_"))
         ):
@@ -1493,6 +1987,18 @@ class Walker:
             value = replace(value, labels=value.labels | {"label_pending"})
         return value
 
+    def text_of_bound(self, child: Json, value: Value) -> bool:
+        """The text form of a label group's ``min`` or ``max``, as dim_measure writes its edition bounds."""
+        bound = RANGE_BOUNDS.get(self.model)
+        return (
+            bound is not None
+            and bound.capability == "label_bounds"
+            and self.granted(bound.capability)
+            and child["class"] == "FUNCTION"
+            and str(child["function_name"]).lower() in {"min", "max"}
+            and bool(value.labels & {"range_bound:min", "range_bound:max"})
+        )
+
     def cast(self, node: Json, scope: Scope, position: str) -> Value:
         target, child = node["cast_type"]["id"], node["child"]
         value = self.expr(child, scope, position)
@@ -1507,11 +2013,47 @@ class Walker:
             return replace(value, labels=value.labels - COLUMN - CONSTANT | {"release_date"})
         if constant_cast(child):
             return value
+        if target == "VARCHAR" and self.text_of_bound(child, value):
+            return value
         self.flag("functions", f"cast to {target} of a column is allowed only as the varchar normalization of a dimension's natural-key or code column")
         return replace(value, labels=value.labels | OTHER)
 
+    def edition_year(self, node: Json, scope: Scope) -> None:
+        """Approve ``left(<edition bound>, 4)`` in the comparison of the control bridge's edition join with the seed vintage range of its seed row."""
+        model, relation, width, pairs, seeds = EDITION_YEAR
+        call, seed = node["left"], node["right"]
+        if self.model != model or not self.granted("edition_year") or self.clause != "join" or not is_column(seed):
+            return
+        if id(node) not in self.year_slots or call["class"] != "FUNCTION" or call["function_name"] != "left" or len(call["children"]) != 2:
+            return
+        bound, size = call["children"]
+        pair = pairs.get(column_name(bound) or "")
+        if pair is None or node["type"] != pair[0] or column_name(seed) != pair[1] or size["class"] != "CONSTANT" or size["value"]["is_null"]:
+            return
+        if size["value"]["value"] != width or len(scope.sources) != 2:
+            return
+        rows, editions = scope.sources
+        edition, vintage = self.column(bound, scope), self.column(seed, scope)
+        from_editions = edition.bases == {(relation, column_name(bound) or "")} and from_source(edition, editions)
+        from_seed = from_source(vintage, rows) and bool(vintage.bases) and vintage.bases <= {(name, pair[1]) for name in seeds}
+        if from_editions and from_seed:
+            self.year_calls.add(id(call))
+
+    def county_filter(self, node: Json, scope: Scope, position: str) -> bool:
+        """``county_fips like '09%'`` over the RUCA rows, a positive conjunct of the WHERE clause of the planning-region bridge's own select."""
+        model, relation, column, pattern = COUNTY_FILTER
+        if self.model != model or not self.granted("county_prefix") or position != "predicate" or self.clause != "where":
+            return False
+        if scope.outer is not None or id(node) not in self.where_conjuncts:
+            return False
+        if len(node["children"]) != 2 or column_name(node["children"][0]) != column or not is_text(node["children"][1], pattern):
+            return False
+        return self.column(node["children"][0], scope).bases == {(relation, column)}
+
     def function(self, node: Json, scope: Scope, position: str) -> Value:
         name = str(node["function_name"]).lower()
+        if (name == "left" and id(node) in self.year_calls) or (name == "~~" and self.county_filter(node, scope, position)):
+            return self.children(node, scope)
         if name in ARITHMETIC:
             self.flag("arithmetic", f"arithmetic {name!r}")
             return self.children(node, scope)
@@ -1523,14 +2065,49 @@ class Walker:
         self.flag("functions", f"function {name} is not approved here")
         return self.children(node, scope)
 
+    def tract_rows(self, node: Json, scope: Scope) -> bool:
+        """A plain ``count(*)`` select item over the RUCA tract rows of one physical relation, grouped by exactly the old county, planning region and file."""
+        return (
+            self.model == TRACT_COUNT.model
+            and self.granted("tract_count")
+            and plain_call(node)
+            and id(node) in self.projected_calls
+            and len(scope.sources) == 1
+            and scope.sources[0].out is None
+            and scope.sources[0].relation == TRACT_COUNT.relation
+            and len(scope.groups) == len(TRACT_COUNT.grouping)
+            and {column_name(group) for group in scope.groups} == TRACT_COUNT.grouping
+        )
+
+    def range_bound(self, name: str, node: Json, value: Value, scope: Scope) -> Value | None:
+        """A plain ``min`` or ``max`` select item over one column of the relations a model's allowlist entry names; the result may reach only its output column.
+
+        A label group's bound (``label_bounds``) needs a GROUP BY. The column may carry the text cast of its ordering role, which the bound consumes.
+        """
+        bound = RANGE_BOUNDS.get(self.model)
+        if bound is None or not self.granted(bound.capability) or not plain_call(node) or id(node) not in self.projected_calls:
+            return None
+        if not is_column(node["children"][0]) or not value.bases or not value.bases <= bound.inputs:
+            return None
+        if bound.capability == "label_bounds" and not scope.groups:
+            return None
+        rows = {origin.path for origin in value.flow.occurrences}
+        if name in bound.grouped_rows and any(not {origin.path for origin in self.column(group, scope).flow.occurrences} <= rows for group in scope.groups):
+            return None
+        self.use_normalizations(value, "@order")
+        labels = frozenset(label for label in value.labels if not label.startswith(("normalization:", "normalize:")))
+        return replace(value, labels=labels - OTHER | {"range_bound:" + name})
+
     def aggregate(self, name: str, node: Json, scope: Scope) -> Value:
         kids = node["children"]
         value = self.children(node, scope)
-        if name == "any_value" and len(kids) == 1 and is_column(kids[0]):
+        if name == "any_value" and len(kids) == 1 and is_column(kids[0]) and plain_call(node):
             return value
         policy = self.policy
         if name == "count_star" and self.model == self.policy.scopes["release"]["model"]:
             return Value(EMPTY, frozenset({"copy_count"}))
+        if name == "count_star" and self.tract_rows(node, scope):
+            return Value(EMPTY, frozenset({"tract_count"}))
         if name in ("min", "max") and len(kids) == 1 and value.bases:
             if (
                 self.model in policy.scopes["source_date_models"]
@@ -1544,9 +2121,29 @@ class Walker:
                 and value.bases == {(self.policy.scopes["release"]["relation"], self.policy.scopes["release"]["object_column"])}
             ):
                 return replace(value, labels=value.labels - OTHER | {"object_key"})
+            bound = self.range_bound(name, node, value, scope)
+            if bound is not None:
+                return bound
         shown = ", ".join(f"{relation}.{column}" for relation, column in sorted(value.bases))
         self.flag("functions", f"aggregate {name}({shown}) is outside the A36 scopes (de-duplicate with distinct, group by or any_value)")
         return replace(value, labels=value.labels | OTHER)
+
+
+def final_roles(model: str) -> dict[str, set[str]]:
+    """The output columns each operation label may reach in a model; a label in any other output column is a finding."""
+    range_bound = RANGE_BOUNDS.get(model)
+    return {
+        "release_date": {"release_date"},
+        "copy_count": {"copy_count"},
+        "object_key": {"object_key"},
+        "date_bound:min": {"first_seen"} if model == "dim_hospital" else set(),
+        "date_bound:max": {"last_seen"} if model == "dim_hospital" else set(),
+        "state_prefix": {STATE_PREFIX.output} if model == STATE_PREFIX.model else set(),
+        "county_membership": {COUNTY_MEMBERSHIP.output} if model == COUNTY_MEMBERSHIP.model else set(),
+        "tract_count": {TRACT_COUNT.output} if model == TRACT_COUNT.model else set(),
+        "range_bound:min": {range_bound.minimum} if range_bound else set(),
+        "range_bound:max": {range_bound.maximum} if range_bound else set(),
+    }
 
 
 def _analyze_model(model: str, kind: str, document: Json, policy: Policy, fact_map: dict[str, tuple[str, str]]) -> Analysis:
@@ -1554,15 +2151,16 @@ def _analyze_model(model: str, kind: str, document: Json, policy: Policy, fact_m
 
     ``fact_map`` maps each of a fact's key columns to the (dimension model, natural-key column) the contract gives it.
     """
-    walker = Walker(model, kind, policy, fact_map)
+    statements = document.get("statements", [])
+    walker = Walker(model, kind, policy, fact_map, query_fingerprint(statements[0]) if len(statements) == 1 else "")
     if kind == "dimension" and model not in DIMENSION_KEYS:
         walker.flag("functions", "no natural-key specification for this dimension (add it to DIMENSION_KEYS with its contract amendment)")
-    statements = document.get("statements", [])
     if len(statements) != 1:
         walker.flag("functions", "compiled SQL must contain exactly one statement")
         return Analysis(walker.findings, set(), Out([]))
     top = walker.query(statements[0]["node"], {})
     walker.sweep(document["statements"][0]["node"])
+    walker.pin_findings()
     wanted: dict[str, str] = {}
     if kind == "dimension":
         wanted[dimension_key(model)] = "md5_key"
@@ -1587,6 +2185,7 @@ def _analyze_model(model: str, kind: str, document: Json, policy: Policy, fact_m
             )
         ):
             walker.flag("functions", f"A43 predicate input does not reach natural-key output {name}")
+    roles = final_roles(model)
     for column in top.columns:
         if "label_pending" in column.labels and not any(proof_matches(proof, top, column) for proof in column.flow.selections):
             walker.flag("functions", f"A48 published label reaches {column.name} without the complete label selection")
@@ -1596,13 +2195,6 @@ def _analyze_model(model: str, kind: str, document: Json, policy: Policy, fact_m
         normalization = {label.removeprefix("normalize:") for label in column.labels if label.startswith("normalize:")}
         if normalization and column.name not in normalization:
             walker.flag("functions", f"normalized source reaches forbidden final role {column.name}; allowed roles {sorted(normalization)}")
-        roles = {
-            "release_date": {"release_date"},
-            "copy_count": {"copy_count"},
-            "object_key": {"object_key"},
-            "date_bound:min": {"first_seen"} if model == "dim_hospital" else set(),
-            "date_bound:max": {"last_seen"} if model == "dim_hospital" else set(),
-        }
         for label, permitted in roles.items():
             if label in column.labels and column.name not in permitted:
                 walker.flag("functions", f"operation {label} reaches forbidden final role {column.name}")
@@ -1620,16 +2212,36 @@ def bind_key(walker: Walker, model: str, key: str, column: Col, top: Out) -> Non
     spec = DIMENSION_KEYS.get(model) if model.startswith("dim_") else BRIDGE_KEYS.get(model, {}).get(key)
     if spec is None:
         return
-    if len(column.inputs) != len(spec.columns):
+    names = key_columns(spec, len(column.inputs))
+    if len(column.inputs) != len(names):
         walker.flag("functions", f"output column {key} hashes no natural key (found {len(column.inputs)} inputs, wanted {len(spec.columns)})")
         return
-    for name, hashed in zip(spec.columns, column.inputs, strict=True):
+    for name, hashed in zip(names, column.inputs, strict=True):
         natural = top.get(name)
         if natural is None:
             if model.startswith("dim_"):
                 walker.flag("functions", f"no natural-key output column {name}")
         elif not same_value(natural, hashed):
             walker.flag("functions", f"{key} hashes a column whose lineage or occurrence/value identity differs from the natural-key output {name}")
+
+
+def canonical_query(node: Any) -> Any:
+    """The parse of a query without source positions and without the catalog and schema of a table reference, which keeps one bit: bare (a CTE) or qualified."""
+    if isinstance(node, list):
+        return [canonical_query(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    table = node.get("type") == "BASE_TABLE" and "table_name" in node
+    dropped = {"query_location", "schema_name", "catalog_name"} if table else {"query_location"}
+    result = {key: canonical_query(value) for key, value in node.items() if key not in dropped}
+    if table:
+        result["qualified"] = bool(node["schema_name"] or node["catalog_name"])
+    return result
+
+
+def query_fingerprint(statement: Json) -> str:
+    """The SHA-256 of a statement's canonical parse: equal for the same query whatever its layout, comments, quoting or keyword case."""
+    return hashlib.sha256(json.dumps(canonical_query(statement), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def normalized_sql(sql: str) -> tuple[str, ...]:
