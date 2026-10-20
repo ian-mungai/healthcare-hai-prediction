@@ -1,7 +1,7 @@
 ---
 title: Acquisition Design
 description: What each collector and shared acquisition mechanism checks and which failure each check prevents.
-last_updated: 2026-10-14
+last_updated: 2026-10-20
 ---
 
 # Acquisition Design
@@ -35,6 +35,7 @@ Collection checks prove integrity and provenance only. A successful capture stay
 - [Scripted File Downloads](#scripted-file-downloads)
   - [Download Batches](#download-batches)
   - [History Routes](#history-routes)
+  - [Reference Document Fetch](#reference-document-fetch)
   - [ZIP Archives](#zip-archives)
 - [Browser Downloads](#browser-downloads)
   - [Census Table Exports](#census-table-exports)
@@ -295,6 +296,19 @@ Discovery scripts (`discover_history.py`, `discover_publisher_history.py`, `disc
 | Repeated URLs are planned once. Each job reserves twice its size limit against a run budget, with 512 MiB per file. | Duplicate downloads or an unbounded run. |
 | A redirect is followed only after `history_redirects.py` confirms it lands on the same resource and file name in the reviewed publisher bucket. | An unreviewed redirect is followed. |
 | Without `--execute` every job is validated offline. Each job has a write-once record and a `completed.json` once stored. | Dry runs have side effects. Work is repeated. |
+
+### Reference Document Fetch
+
+`one_off/reference_documents/fetch_support.py` downloads the files for `fetch_reference_pdfs.py` (reference PDFs named in a history-route candidates file) and `check_alaska_county_codes.py` (four county crosswalk files). Both reuse the [download transport](#download-transport) checks and add the ones below. Neither writes to S3 or bronze.
+
+| Check | Failure it prevents |
+| --- | --- |
+| A file is accepted only when its media type is one the script names for it (`application/pdf` for a PDF) and, for a PDF, its first bytes are `%PDF-`. The transport check alone tolerates leading whitespace and does not compare the media type of an unsigned response. | A publisher's HTML page served with HTTP 200 is stored as a PDF. |
+| A candidate that pins `expected_sha256` is rejected when the bytes differ. | Storage later stores other bytes than the ones that were reviewed. |
+| Every file gets an entry in one write-once `receipt.json` with status, reason, media type, size and SHA-256, rejected files included (a file stopped at the deadline has no size or SHA-256). A failed run leaves its evidence and a new run uses a new folder. | A failure leaves no record or a retry overwrites it. |
+| A folder that holds a receipt is only rechecked: the URL and file name list must match, each accepted file must keep its hash and must still meet the current rules (media type, header, payload structure and any candidate pin). A changed pin that a saved file violates fails the rerun. A folder with files and no receipt is refused. | A rerun repeats requests, mixes two runs or reuses bytes that break the pin now requested. |
+| Each file downloads in its own process. The project's process launcher starts it and ends it 180 seconds after it started. The limit covers name lookup, connect, headers, body and retry pauses. The command installs no signal handler or timer. A file stopped by it is rejected as `capture_deadline_exceeded`: its receipt entry has no size or SHA-256, its folder keeps the attempts that finished (the running attempt keeps its partial file and has no `transport.json`) and gets `deadline.json` naming the URL and the seconds. Nothing partial is accepted. A download process that fails another way, for example on a refused URL, stops the command with exit 2. | A response that sends a few bytes at a time or a name lookup that never returns keeps a command running as long as the publisher or resolver keeps it waiting. |
+| The county-code check reads the named columns of each file and fails when a column or archive member is missing. It writes its report once and a rerun must reproduce it byte for byte. | A changed layout is read as a different column. |
 
 ### ZIP Archives
 
