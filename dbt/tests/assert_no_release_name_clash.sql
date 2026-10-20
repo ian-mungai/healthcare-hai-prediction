@@ -4,7 +4,7 @@ select
     publication_release,
     file_name,
     count(distinct member_sha256) as file_versions
-from {{ ref('stg_bronze__file_copies') }}
+from {{ ref('stg_bronze__release_observations') }}
 group by
     bronze_table,
     publication_release,

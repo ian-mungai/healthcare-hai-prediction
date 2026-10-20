@@ -37,7 +37,6 @@ import csv
 import hashlib
 import io
 import json
-import re
 import secrets
 import shutil
 import sys
@@ -51,7 +50,16 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
-from scripts.lakehouse import catalog, geography_file_periods, ipps_file_labels, mmd_conditions, ownership_release_periods, pos_file_periods, provenance
+from scripts.lakehouse import (
+    bronze_metadata,
+    catalog,
+    geography_file_periods,
+    ipps_file_labels,
+    mmd_conditions,
+    ownership_release_periods,
+    pos_file_periods,
+    provenance,
+)
 
 REPO_ROOT = catalog.REPO_ROOT
 OUT = REPO_ROOT / "data/analytics/dbt"
@@ -139,7 +147,7 @@ HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
     "83b9668d22a23b40def50b64725f9674dcaa821d0b2db5e43215e672cad69a71": "BRZ-016",
 }
-NESTED_DATE = re.compile(r".*(\d{4}-\d{2}-\d{2})\.zip!")
+HELD_FIRST, HELD_SECOND = HELD
 HAI_FILE = "Healthcare_Associated_Infections-Hospital.csv"
 
 
@@ -168,8 +176,9 @@ class Stored:
 
 
 def sha(label: str) -> str:
-    """Return a readable 64-character fake checksum."""
-    return (label * 64)[:64]
+    """Hash a synthetic payload label into a valid SHA-256 for the production metadata builder."""
+    candidate = (label * 64)[:64]
+    return candidate if len(candidate) == 64 and all(char in "0123456789abcdef" for char in candidate) else hashlib.sha256(label.encode()).hexdigest()
 
 
 # Displayed values in the text file (4 decimals, "$1,234.50") against full precision in the workbook [189]; data rows align
@@ -2716,7 +2725,7 @@ GROUP_C4 = (
         "gv_al4",
         "CMS_GV__al4",
         "2014-2024_Original_Medicare_Geographic_Variation_Public_Use_File.csv",
-        sha("q8"),
+        sha("gv_al4"),
         1,
         records=(gv_row("2020", "County", "01073", ma_prtcptn_rate="0.3"),),
     ),
@@ -2955,7 +2964,7 @@ GROUP_AL5 = (
         "ha_al5",
         "2022-12-01",
         "FY_2023_HAC_Reduction_Program_Hospital.csv",
-        sha("q6"),
+        sha("ha_al5"),
         1,
         records=(hac_row("010001", "2023", "4.0", "No", hai_measures_start_date="01/01/2021", hai_measures_end_date="12/31/2021"),),
     ),
@@ -3043,7 +3052,7 @@ GROUP_C5 = (
         "mm02_al4",
         "MMD_API_C258_02_2020__x",
         "mmd_ffs_county_c258_02_prevalence_2020.csv",
-        sha("q7"),
+        sha("mm02_al4"),
         1,
         records=(mmd_row("2020", ALZHEIMERS, "1073", "Jefferson County", "ALABAMA", "Urban", "10,000+", "11.0"),),
     ),
@@ -4158,7 +4167,16 @@ CREATE TABLE bronze.column_map AS SELECT * REPLACE (position::INTEGER AS positio
 CREATE TABLE bronze.stored_copies AS
     SELECT * REPLACE (byte_count::BIGINT AS byte_count, loaded::BOOLEAN AS loaded, retired::BOOLEAN AS retired)
     FROM read_csv(getvariable('copies_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.file_metadata AS
+    SELECT * FROM read_json(getvariable('metadata_json'), columns = {METADATA_COLUMNS});
+
+
 """
+METADATA_COLUMNS = ", ".join(
+    f"'{field}': '{'BIGINT' if field in bronze_metadata.BIGINT_FIELDS else 'BOOLEAN' if field in {'loaded', 'retired', 'failed_attempt'} else 'VARCHAR'}'"
+    for field in bronze_metadata.FIELDS
+)
+FIXTURE_SQL = FIXTURE_SQL.replace("{METADATA_COLUMNS}", "{" + METADATA_COLUMNS + "}")
 COPY_COLUMNS = (
     "table_name",
     "_object_key",
@@ -4193,16 +4211,77 @@ def copies_csv(objects: Iterable[Stored]) -> str:
     """Return the copies table as CSV: every stored copy with its lineage and whether bronze loads it [206]."""
     items = list(objects)
     loaded = loaded_keys(items)
+    keepers = {(item.table, item.sha): item.key for item in items if item.key in loaded}
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow(COPY_COLUMNS)
     for item in items:
         file_name = item.member.rsplit("!", 1)[-1].rsplit("/", 1)[-1]
         writer.writerow(
-            (item.table, item.key, item.sha, f"fixture/{item.key}.zip", f"v-{item.key}", "fixture", item.snapshot, "fixture_dataset", item.release)
+            (
+                item.table,
+                item.key,
+                item.sha,
+                f"fixture/{keepers[(item.table, item.sha)]}.zip",
+                f"v-{keepers[(item.table, item.sha)]}",
+                "fixture",
+                item.snapshot,
+                "fixture_dataset",
+                item.release,
+            )
             + ("", "fixture/manifest.json", "v-manifest", item.member, file_name, item.rows * 10, str(item.key in loaded).lower(), "false")
         )
     return buffer.getvalue()
+
+
+def fixture_metadata(objects: Iterable[Stored]) -> list[dict[str, Any]]:
+    """Use the real builder, including an exact alias and a retired observation with retained history."""
+    copies = list(csv.DictReader(io.StringIO(copies_csv(objects))))
+    items: list[dict[str, Any]] = []
+    for row in copies:
+        items.append(
+            {
+                "table": row["table_name"],
+                "observation_id": hashlib.sha256(json.dumps([row["table_name"], row["_object_key"]]).encode()).hexdigest(),
+                "object_key": row["_object_key"],
+                "sha256": row["sha256"],
+                "bucket": "synthetic-bucket",
+                "key": row["s3_key"],
+                "version_id": row["s3_version_id"],
+                "source_id": row["source_id"],
+                "snapshot_id": row["snapshot_id"],
+                "dataset_id": row["dataset_id"],
+                "release_id": row["release_id"],
+                "release_partition": row["release_partition"],
+                "manifest_key": row["manifest_key"],
+                "manifest_version_id": row["manifest_version_id"],
+                "manifest_sha256": "0" * 64,
+                "member_chain": row["member_path"].split("!"),
+                "file_name": row["file_name"],
+                "byte_count": int(row["byte_count"]),
+                "loaded": row["loaded"] == "true",
+                "retired": False,
+            }
+        )
+    physical_sizes = {row["sha256"]: row["byte_count"] for row in items if row["loaded"]}
+    for row in items:
+        row["byte_count"] = physical_sizes[row["sha256"]]
+    seed = next(row for row in items if row["table"] == "cms_hai_hospital" and row["loaded"])
+    items += [
+        {**seed, "observation_id": "synthetic-alias", "manifest_key": "fixture/alias/manifest.json", "loaded": False},
+        {
+            **seed,
+            "observation_id": "synthetic-retired",
+            "manifest_key": "fixture/retired/manifest.json",
+            "key": "fixture/retired.csv",
+            "version_id": "v-retired",
+            "loaded": False,
+            "retired": True,
+            "retirement_record_json": '{"redaction_reference":"synthetic"}',
+        },
+    ]
+    names = {row["table"] for row in items}
+    return bronze_metadata.build(names, [row for row in items if row["loaded"]], [{"copy": row} for row in items if not row["loaded"]], [], names)
 
 
 def fixture_csv(objects: Iterable[Stored]) -> str:
@@ -4346,11 +4425,9 @@ def geography_periods_csv(objects: Iterable[Stored], unlabelled: frozenset[str])
 
 
 def publication(item: Stored) -> tuple[str, str]:
-    """Return the expected publication release and its source [170]."""
-    if "!" not in item.member:
-        return item.release, "release_partition"
-    nested = NESTED_DATE.match(item.member)
-    return (nested.group(1), "nested_archive") if nested else (item.release, "container")
+    """Return publication labels through the same parser that records metadata."""
+    parsed = bronze_metadata.release_label(item.member, item.release)
+    return str(parsed["publication_release"]), str(parsed["release_source"])
 
 
 def expected(objects: Iterable[Stored]) -> dict[str, Any]:
@@ -4365,11 +4442,12 @@ def expected(objects: Iterable[Stored]) -> dict[str, Any]:
         (item.table, item.key, item.sha, *publication(item), str(canonical[(item.table, item.sha)] == item.key).lower())
         + (str(item.rows) if canonical[(item.table, item.sha)] == item.key else "",)
         for item in items
+        if canonical[(item.table, item.sha)] == item.key
     )
     files: dict[tuple[str, str], dict[str, Any]] = {}
     for item in items:
         entry = files.setdefault((item.table, item.sha), {"copies": 0, "rows": item.rows, "releases": set()})
-        entry["copies"] += 1
+        entry["copies"] = 1
         entry["releases"].add(publication(item)[0])
     file_rows = sorted(
         (table, digest, canonical[(table, digest)], str(entry["copies"]), str(entry["rows"]), "|".join(sorted(entry["releases"])), HELD.get(digest, ""))
@@ -4390,23 +4468,20 @@ FILES_SQL = (
 
 
 WINDOWS_SQL = (
-    "SELECT level, entity_id, measure_id, window_start::VARCHAR, window_end::VARCHAR, score, left(member_sha256, 2) FROM ("
+    "SELECT level, entity_id, measure_id, window_start::VARCHAR, window_end::VARCHAR, score, member_sha256 FROM ("
     "SELECT 'hospital' AS level, * FROM int_hai_hospital_windows UNION ALL BY NAME "
     "SELECT 'state' AS level, * FROM int_hai_state_windows UNION ALL BY NAME "
     "SELECT 'national' AS level, * FROM int_hai_national_windows) ORDER BY ALL;"
 )
 HOLDS_SQL = "SELECT bronze_table, coalesce(entity_id, ''), coalesce(measure_id, ''), hold_reason, row_count::VARCHAR FROM int_hai_window_holds ORDER BY ALL;"
-TWINS_SQL = (
-    "SELECT left(text_sha256, 2), left(workbook_sha256, 2), text_layout, twin_status, coalesce(left(preferred_sha256, 2), '') "
-    "FROM stg_bronze__twin_comparison ORDER BY ALL;"
-)
+TWINS_SQL = "SELECT text_sha256, workbook_sha256, text_layout, twin_status, coalesce(preferred_sha256, '') FROM stg_bronze__twin_comparison ORDER BY ALL;"
 SELECTION_SQL = (
-    "SELECT left(member_sha256, 2), has_label_conflict::VARCHAR, is_label_held::VARCHAR, is_twin_excluded::VARCHAR, is_selected::VARCHAR "
+    "SELECT member_sha256, has_label_conflict::VARCHAR, is_label_held::VARCHAR, is_twin_excluded::VARCHAR, is_selected::VARCHAR "
     "FROM stg_bronze__file_selection WHERE NOT is_selected ORDER BY ALL;"
 )
 # Sheets of twin-excluded workbooks; every sheet of a selected workbook is file_selected [273].
 SHEETS_SQL = (
-    "SELECT left(member_sha256, 2), sheet_name, sheet_status, coalesce(left(covering_sha256, 2), ''), is_selected::VARCHAR "
+    "SELECT member_sha256, sheet_name, sheet_status, coalesce(covering_sha256, ''), is_selected::VARCHAR "
     "FROM stg_bronze__sheet_selection WHERE sheet_status <> 'file_selected' ORDER BY ALL;"
 )
 POS_SQL = (
@@ -4419,28 +4494,28 @@ POS_SQL = (
     "FROM int_pos_hospital_snapshots ORDER BY ALL;"
 )
 CMI_ROWS_SQL = (
-    "SELECT left(member_sha256, 2), rule_fiscal_year::VARCHAR, coalesce(data_fiscal_year::VARCHAR, ''), rule_stage, ccn, cmi::VARCHAR, "
+    "SELECT member_sha256, rule_fiscal_year::VARCHAR, coalesce(data_fiscal_year::VARCHAR, ''), rule_stage, ccn, cmi::VARCHAR, "
     "coalesce(cases::VARCHAR, ''), coalesce(relative_weights::VARCHAR, ''), coalesce(transfer_adjusted_cmi::VARCHAR, ''), has_header::VARCHAR "
     "FROM int_cmi_hospital_rows ORDER BY ALL;"
 )
 OWNER_PADDED_SQL = "SELECT associate_id_owner, period_end::VARCHAR FROM int_hospital_owner_rows WHERE associate_ids_padded ORDER BY ALL;"
 TE_SQL = (
-    "SELECT entity_id, measure_id, window_start::VARCHAR, window_end::VARCHAR, coalesce(score, ''), coalesce(sample, ''), left(member_sha256, 2) "
+    "SELECT entity_id, measure_id, window_start::VARCHAR, window_end::VARCHAR, coalesce(score, ''), coalesce(sample, ''), member_sha256 "
     "FROM int_cc_timely_effective_windows ORDER BY ALL;"
 )
 MATERNAL_SQL = (
-    "SELECT entity_id, measure_id, window_start::VARCHAR, window_end::VARCHAR, coalesce(score, ''), coalesce(sample, ''), left(member_sha256, 2) "
+    "SELECT entity_id, measure_id, window_start::VARCHAR, window_end::VARCHAR, coalesce(score, ''), coalesce(sample, ''), member_sha256 "
     "FROM int_cc_maternal_windows ORDER BY ALL;"
 )
 HCAHPS_SQL = (
     "SELECT entity_id, measure_id, window_start::VARCHAR, window_end::VARCHAR, coalesce(hcahps_answer_percent, ''), "
     "coalesce(number_of_completed_surveys, ''), coalesce(survey_response_rate_percent, ''), coalesce(patient_survey_star_rating, ''), "
-    "left(member_sha256, 2) FROM int_cc_hcahps_windows ORDER BY ALL;"
+    "member_sha256 FROM int_cc_hcahps_windows ORDER BY ALL;"
 )
 CC_HOLDS_SQL = "SELECT bronze_table, coalesce(entity_id, ''), coalesce(measure_id, ''), hold_reason, row_count::VARCHAR FROM int_cc_window_holds ORDER BY ALL;"
 HGI_SQL = (
     "SELECT ccn, release_date::VARCHAR, release_file_count::VARCHAR, coalesce(hospital_type, ''), coalesce(has_emergency_services::VARCHAR, ''), "
-    "coalesce(overall_rating::VARCHAR, ''), coalesce(overall_rating_text, ''), coalesce(overall_rating_footnote, ''), left(member_sha256, 2) "
+    "coalesce(overall_rating::VARCHAR, ''), coalesce(overall_rating_text, ''), coalesce(overall_rating_footnote, ''), member_sha256 "
     "FROM int_hgi_hospital_releases ORDER BY ALL;"
 )
 COST_REPORTS_SQL = (
@@ -4482,7 +4557,7 @@ PHONE_COLUMNS_SQL = (
     "SELECT count(*)::VARCHAR FROM information_schema.columns WHERE table_name = 'int_onc_chpl_linkage_rows' AND column_name LIKE '%telephone%';"
 )
 OWNERS_SQL = (
-    "SELECT left(member_sha256, 2), period_end::VARCHAR, enrollment_id, coalesce(associate_id_owner, ''), coalesce(role_code, ''), "
+    "SELECT member_sha256, period_end::VARCHAR, enrollment_id, coalesce(associate_id_owner, ''), coalesce(role_code, ''), "
     "coalesce(association_date::VARCHAR, ''), coalesce(percentage_ownership::VARCHAR, ''), flags_published::VARCHAR, "
     "coalesce(private_equity_company_owner::VARCHAR, ''), coalesce(reit_owner::VARCHAR, ''), coalesce(owned_by_another_org_or_ind_owner::VARCHAR, ''), "
     "coalesce(for_profit_owner::VARCHAR, '') FROM int_hospital_owner_rows ORDER BY ALL;"
@@ -4492,12 +4567,12 @@ ENROLLMENT_SOURCES_SQL = (
     "WHERE coalesce(ccn_source, '') <> 'published' ORDER BY ALL;"
 )
 ENROLLMENTS_SQL = (
-    "SELECT left(member_sha256, 2), period_end::VARCHAR, enrollment_id, coalesce(ccn, ''), coalesce(ccn_published, ''), "
+    "SELECT member_sha256, period_end::VARCHAR, enrollment_id, coalesce(ccn, ''), coalesce(ccn_published, ''), "
     "coalesce(proprietary_nonprofit, ''), coalesce(incorporation_date::VARCHAR, ''), coalesce(subgroup_acute_care::VARCHAR, ''), "
     "coalesce(reh_conversion_flag::VARCHAR, '') FROM int_hospital_enrollment_rows ORDER BY ALL;"
 )
 CHOW_SQL = (
-    "SELECT left(member_sha256, 2), period_end::VARCHAR, coalesce(ccn_buyer, ''), coalesce(ccn_buyer_published, ''), coalesce(ccn_seller, ''), "
+    "SELECT member_sha256, period_end::VARCHAR, coalesce(ccn_buyer, ''), coalesce(ccn_buyer_published, ''), coalesce(ccn_seller, ''), "
     "coalesce(chow_type_code, ''), coalesce(effective_date::VARCHAR, ''), event_key FROM int_change_of_ownership_rows ORDER BY ALL;"
 )
 VIEW_ROWS_SQL = "SELECT getvariable('checked_table'), count(*)::VARCHAR FROM query_table(getvariable('checked_table'));\n"
@@ -4576,10 +4651,10 @@ WONDER_SQL = (
     "coalesce(hold_reason, '') FROM int_wonder_county_deaths ORDER BY ALL;"
 )
 D1_WINDOWS_SQL = (
-    "SELECT 'visits', entity_id, measure_id, window_start::VARCHAR, coalesce(score, ''), left(member_sha256, 3) FROM int_cc_unplanned_visits_windows "
-    "UNION ALL SELECT 'deaths', entity_id, measure_id, window_start::VARCHAR, coalesce(score, ''), left(member_sha256, 3) "
+    "SELECT 'visits', entity_id, measure_id, window_start::VARCHAR, coalesce(score, ''), member_sha256 FROM int_cc_unplanned_visits_windows "
+    "UNION ALL SELECT 'deaths', entity_id, measure_id, window_start::VARCHAR, coalesce(score, ''), member_sha256 "
     "FROM int_cc_complications_deaths_windows "
-    "UNION ALL SELECT 'hrrp', entity_id, measure_id, window_start::VARCHAR, coalesce(excess_readmission_ratio, ''), left(member_sha256, 3) "
+    "UNION ALL SELECT 'hrrp', entity_id, measure_id, window_start::VARCHAR, coalesce(excess_readmission_ratio, ''), member_sha256 "
     "FROM int_cc_hrrp_windows ORDER BY ALL;"
 )
 # The validation window models carry the reviewed ID, the published ID and the number (moved from the archived control map).
@@ -4599,8 +4674,8 @@ VALIDATION_HOLDS_SQL = (
 )
 PROGRAM_YEARS_SQL = (
     "SELECT 'hac', ccn, fiscal_year::VARCHAR, coalesce(total_hac_score, ''), coalesce(is_payment_reduced::VARCHAR, ''), "
-    "coalesce(psi_90_value, ''), left(member_sha256, 3) FROM int_hac_program_years "
-    "UNION ALL SELECT 'vbp', ccn, fiscal_year::VARCHAR, coalesce(total_performance_score, ''), '', '', left(member_sha256, 3) "
+    "coalesce(psi_90_value, ''), member_sha256 FROM int_hac_program_years "
+    "UNION ALL SELECT 'vbp', ccn, fiscal_year::VARCHAR, coalesce(total_performance_score, ''), '', '', member_sha256 "
     "FROM int_vbp_program_years ORDER BY ALL;"
 )
 VBP_DOMAINS_SQL = (
@@ -4870,14 +4945,12 @@ def install_packages() -> None:
         raise SystemExit(f"dbt deps failed ({result.exit_code}): {(result.stdout + result.stderr)[-2000:]}")
 
 
-# Amendment A42: the gold release copy-consistency test warns by design (stored copies of one file can carry different release labels). Only
-# that test may warn; every other status except pass and success is a failure, and the runner records whether it warned.
-TOLERATED_WARN = "release_copy_consistency_dim_release_"
+RELEASE_COPY_TEST = "release_copy_consistency_dim_release_"
 
 
 def node_passes(name: str, status: str) -> bool:
-    """A node passed, or it is the one tolerated warn test and warned (amendment A42)."""
-    return status in ("pass", "success") or (status == "warn" and name == TOLERATED_WARN)
+    """Return whether a node completed successfully."""
+    return status in ("pass", "success")
 
 
 def dbt_build(case: str, target: str, project: bool = False) -> tuple[int, dict[str, str]]:
@@ -4944,7 +5017,9 @@ def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[st
     fixture_project(case_dir, objects, unlabelled)
     (case_dir / "bronze.csv").write_text(fixture_csv(objects))
     (case_dir / "copies.csv").write_text(copies_csv(objects))
+    (case_dir / "metadata.json").write_text(json.dumps(fixture_metadata(objects)))
     variables = f"SET VARIABLE fixture_csv = '{CONTAINER_OUT}/e2e/{case}/bronze.csv';\nSET VARIABLE copies_csv = '{CONTAINER_OUT}/e2e/{case}/copies.csv';\n"
+    variables += f"SET VARIABLE metadata_json = '{CONTAINER_OUT}/e2e/{case}/metadata.json';\n"
     for table in WIDE_COLUMNS:
         (case_dir / f"{table}.csv").write_text(wide_csv(objects, table))
         variables += f"SET VARIABLE {table}_csv = '{CONTAINER_OUT}/e2e/{case}/{table}.csv';\n"
@@ -5467,25 +5542,25 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
     # measure_name; the repeated MORT_30_HF window is held, not kept; the 5-digit ID is padded and the malformed one held.
     checks["d1_windows_match_expected"] = base.get("d1_windows") == sorted(
         [
-            ("visits", "010001", "OP_32", "2020-07-01", "11.5", "r9r"),
-            ("visits", "010001", "OP_32", "2021-01-01", "11.0", "r9r"),
-            ("visits", "010001", "OP_32", "2022-01-01", "12.5", "vi1"),
+            ("visits", "010001", "OP_32", "2020-07-01", "11.5", sha("r9")),
+            ("visits", "010001", "OP_32", "2021-01-01", "11.0", sha("r9")),
+            ("visits", "010001", "OP_32", "2022-01-01", "12.5", sha("vi1")),
             # [A12] The OP-32 row beside the exact OP_32 for 010001 is dropped; 010003's alias-only row takes OP_32.
-            ("visits", "010003", "OP_32", "2022-01-01", "4.0", "vi1"),
-            ("visits", "010001", "READM_30_HF", "2022-01-01", "20.1", "vi1"),
-            ("visits", "010003", "OP_35_ED", "2022-01-01", "Not Available", "vi1"),
-            ("visits", "010003", "OP_36", "2022-01-01", "7.0", "vi1"),
-            ("visits", "010001", "OP_36", "2020-01-01", "9.9", "vi0"),
-            ("deaths", "010001", "MORT_30_AMI", "2022-01-01", "12.3", "de1"),
-            ("deaths", "010001", "PSI_90", "2022-01-01", "1.01", "de1"),
-            ("deaths", "010001", "PSI_90_SAFETY", "2022-01-01", "0.99", "de1"),
-            ("deaths", "010001", "PSI_13", "2022-01-01", "4.52", "de1"),
-            ("deaths", "010001", "PSI_08", "2021-01-01", "0.12", "g4a"),
-            ("deaths", "010001", "PSI_08", "2024-01-01", "0.15", "g4b"),
-            ("deaths", "010001", "PSI_09", "2021-01-01", "3.10", "g4a"),
-            ("deaths", "010001", "PSI_09", "2024-01-01", "2.90", "g4b"),
-            ("hrrp", "010001", "READM-30-HF-HRRP", "2020-07-01", "1.0123", "hr1"),
-            ("hrrp", "010003", "READM-30-AMI-HRRP", "2020-07-01", "N/A", "hr1"),
+            ("visits", "010003", "OP_32", "2022-01-01", "4.0", sha("vi1")),
+            ("visits", "010001", "READM_30_HF", "2022-01-01", "20.1", sha("vi1")),
+            ("visits", "010003", "OP_35_ED", "2022-01-01", "Not Available", sha("vi1")),
+            ("visits", "010003", "OP_36", "2022-01-01", "7.0", sha("vi1")),
+            ("visits", "010001", "OP_36", "2020-01-01", "9.9", sha("vi0")),
+            ("deaths", "010001", "MORT_30_AMI", "2022-01-01", "12.3", sha("de1")),
+            ("deaths", "010001", "PSI_90", "2022-01-01", "1.01", sha("de1")),
+            ("deaths", "010001", "PSI_90_SAFETY", "2022-01-01", "0.99", sha("de1")),
+            ("deaths", "010001", "PSI_13", "2022-01-01", "4.52", sha("de1")),
+            ("deaths", "010001", "PSI_08", "2021-01-01", "0.12", sha("g4a")),
+            ("deaths", "010001", "PSI_08", "2024-01-01", "0.15", sha("g4b")),
+            ("deaths", "010001", "PSI_09", "2021-01-01", "3.10", sha("g4a")),
+            ("deaths", "010001", "PSI_09", "2024-01-01", "2.90", sha("g4b")),
+            ("hrrp", "010001", "READM-30-HF-HRRP", "2020-07-01", "1.0123", sha("hr1")),
+            ("hrrp", "010003", "READM-30-AMI-HRRP", "2020-07-01", "N/A", sha("hr1")),
         ]
     )
     # [508] [509] [510] [629] [A12] Each window keeps its published ID beside the reviewed one; numbers only for plain numbers.
@@ -5528,17 +5603,17 @@ def program_checks(base: dict[str, Any]) -> dict[str, bool]:
     # held; the 5-digit TPS ID is padded.
     checks["program_years_match_expected"] = base.get("program_years") == sorted(
         [
-            ("hac", "010001", "2023", "4.0", "false", "", "q6q"),
-            ("hac", "010001", "2021", "5.7", "false", "", "ha2"),
-            ("hac", "010003", "2021", "N/A", "", "", "ha1"),
-            ("hac", "010001", "2024", "6.1", "true", "1.02", "ha3"),
-            ("vbp", "010001", "2019", "38.0", "", "", "tp0"),
-            ("vbp", "010001", "2020", "24.083333333333(23)", "", "", "tp9"),
-            ("vbp", "010001", "2025", "23.5", "", "", "tp1"),
-            ("vbp", "010003", "2025", "Not Available", "", "", "tp1"),
-            ("vbp", "010005", "2019", "30.0", "", "", "tp0"),
-            ("vbp", "010005", "2025", "41.25", "", "", "tp1"),
-            ("vbp", "010007", "2025", "Too Few to Report", "", "", "tp1"),
+            ("hac", "010001", "2023", "4.0", "false", "", sha("ha_al5")),
+            ("hac", "010001", "2021", "5.7", "false", "", sha("ha2")),
+            ("hac", "010003", "2021", "N/A", "", "", sha("ha1")),
+            ("hac", "010001", "2024", "6.1", "true", "1.02", sha("ha3")),
+            ("vbp", "010001", "2019", "38.0", "", "", sha("tp0")),
+            ("vbp", "010001", "2020", "24.083333333333(23)", "", "", sha("tp9")),
+            ("vbp", "010001", "2025", "23.5", "", "", sha("tp1")),
+            ("vbp", "010003", "2025", "Not Available", "", "", sha("tp1")),
+            ("vbp", "010005", "2019", "30.0", "", "", sha("tp0")),
+            ("vbp", "010005", "2025", "41.25", "", "", sha("tp1")),
+            ("vbp", "010007", "2025", "Too Few to Report", "", "", sha("tp1")),
         ]
     )
     # [525] Every domain score is kept as published; clinical care and clinical outcomes stay apart.
@@ -5634,58 +5709,64 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     results = build_cases(jobs, workers)
     code, statuses = built(results, "base")
     checks["base_build_passes"] = code == 0 and bool(statuses) and all(node_passes(name, status) for name, status in statuses.items())
-    FIXTURE_EVIDENCE["base_tolerated_warn"] = statuses.get(TOLERATED_WARN)
+    FIXTURE_EVIDENCE["base_release_copy_status"] = statuses.get(RELEASE_COPY_TEST)
     base = model_outputs("base")
     checks["copies_match_expected"] = [tuple(row) for row in want["copies"]] == base.get("copies")
     checks["files_match_expected"] = [tuple(row) for row in want["files"]] == base.get("files")
     checks["view_rows_match_distinct_files"] = want["rows"] == base.get("rows")
     # Twins: the quoted, zero-padded, rounded pair agrees and prefers its text file; the fixed-width pair prefers its
     # workbook; the comma pair with a changed value differs and keeps neither [184] to [187].
-    checks["twins_match_expected"] = base.get("twins") == [
-        ("61", "n2", "tab", "agree", "61"),
-        ("d1", "d2", "tab", "agree", "d1"),
-        ("d4", "d5", "fixed_width", "not_compared", "d5"),
-        ("e1", "e2", "comma", "differ", ""),
-        ("g1", "g2", "tab", "agree", "g1"),
-        ("h1", "h2", "tab", "agree", "h1"),
-        ("j1", "j2", "fixed_width", "not_compared", "j2"),
-        ("k1", "k2", "tab", "agree", "k1"),
-        ("l1", "l2", "tab", "agree", "l1"),
-        ("p1", "p2", "tab", "agree", "p1"),
-    ]
+    checks["twins_match_expected"] = base.get("twins") == sorted(
+        [
+            (HELD_FIRST, sha("n2"), "tab", "agree", HELD_FIRST),
+            (sha("d1"), sha("d2"), "tab", "agree", sha("d1")),
+            (sha("d4"), sha("d5"), "fixed_width", "not_compared", sha("d5")),
+            (sha("e1"), sha("e2"), "comma", "differ", ""),
+            (sha("g1"), sha("g2"), "tab", "agree", sha("g1")),
+            (sha("h1"), sha("h2"), "tab", "agree", sha("h1")),
+            (sha("j1"), sha("j2"), "fixed_width", "not_compared", sha("j2")),
+            (sha("k1"), sha("k2"), "tab", "agree", sha("k1")),
+            (sha("l1"), sha("l2"), "tab", "agree", sha("l1")),
+            (sha("p1"), sha("p2"), "tab", "agree", sha("p1")),
+        ]
+    )
     # Not selected: the two held BRZ-016 files (their copies conflict) and the excluded twins [172] [181] [187].
-    checks["selection_matches_expected"] = base.get("selection") == [
-        ("61", "true", "true", "false", "false"),
-        ("83", "true", "true", "false", "false"),
-        ("d2", "false", "false", "true", "false"),
-        ("d4", "false", "false", "true", "false"),
-        ("e1", "false", "false", "true", "false"),
-        ("e2", "false", "false", "true", "false"),
-        ("g2", "false", "false", "true", "false"),
-        ("h2", "false", "false", "true", "false"),
-        ("j1", "false", "false", "true", "false"),
-        ("k2", "false", "false", "true", "false"),
-        ("l2", "false", "false", "true", "false"),
-        ("n2", "false", "false", "true", "false"),
-        ("p2", "false", "false", "true", "false"),
-    ]
+    checks["selection_matches_expected"] = base.get("selection") == sorted(
+        [
+            (HELD_FIRST, "true", "true", "false", "false"),
+            (HELD_SECOND, "true", "true", "false", "false"),
+            (sha("d2"), "false", "false", "true", "false"),
+            (sha("d4"), "false", "false", "true", "false"),
+            (sha("e1"), "false", "false", "true", "false"),
+            (sha("e2"), "false", "false", "true", "false"),
+            (sha("g2"), "false", "false", "true", "false"),
+            (sha("h2"), "false", "false", "true", "false"),
+            (sha("j1"), "false", "false", "true", "false"),
+            (sha("k2"), "false", "false", "true", "false"),
+            (sha("l2"), "false", "false", "true", "false"),
+            (sha("n2"), "false", "false", "true", "false"),
+            (sha("p2"), "false", "false", "true", "false"),
+        ]
+    )
     # Sheets of twin-excluded workbooks: covered only by a selected text of the same release whose data rows all match;
     # otherwise kept, except the compared sheet of a pair that differs [267] to [274].
-    checks["sheets_match_expected"] = base.get("sheets") == [
-        ("d2", "Data", "covered", "d1", "false"),
-        ("d2", "Variable Descriptions", "kept", "", "true"),
-        ("e2", "Sheet1", "twin_differs", "", "false"),
-        ("g2", "Data", "covered", "g1", "false"),
-        ("h2", "Sheet1", "covered", "h1", "false"),
-        ("k2", "Data", "covered", "k1", "false"),
-        ("k2", "Variable Descriptions", "kept", "", "true"),
-        ("l2", "CN 2024", "kept", "", "true"),
-        ("l2", "FR 2024", "covered", "l1", "false"),
-        ("n2", "FY19 NPRM", "kept", "", "true"),
-        ("n2", "Variable Descriptions", "kept", "", "true"),
-        ("p2", "AHW Data", "covered", "p3", "false"),
-        ("p2", "S-3 Data", "covered", "p1", "false"),
-    ]
+    checks["sheets_match_expected"] = base.get("sheets") == sorted(
+        [
+            (sha("d2"), "Data", "covered", sha("d1"), "false"),
+            (sha("d2"), "Variable Descriptions", "kept", "", "true"),
+            (sha("e2"), "Sheet1", "twin_differs", "", "false"),
+            (sha("g2"), "Data", "covered", sha("g1"), "false"),
+            (sha("h2"), "Sheet1", "covered", sha("h1"), "false"),
+            (sha("k2"), "Data", "covered", sha("k1"), "false"),
+            (sha("k2"), "Variable Descriptions", "kept", "", "true"),
+            (sha("l2"), "CN 2024", "kept", "", "true"),
+            (sha("l2"), "FR 2024", "covered", sha("l1"), "false"),
+            (sha("n2"), "FY19 NPRM", "kept", "", "true"),
+            (sha("n2"), "Variable Descriptions", "kept", "", "true"),
+            (sha("p2"), "AHW Data", "covered", sha("p3"), "false"),
+            (sha("p2"), "S-3 Data", "covered", sha("p1"), "false"),
+        ]
+    )
     # [219] [218] A file in two pairs, or a renamed pair from two captures, is refused by the generator.
     stored = generator_objects(BASE)
     checks["generator_refuses_file_in_two_pairs"] = refuses(
@@ -5695,28 +5776,28 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     # [230] to [235] One row per HAI measurement window, from the latest dated file; conflicts and unreadable rows held.
     checks["hai_windows_match_expected"] = base.get("windows") == sorted(
         [
-            ("hospital", "010001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.4", "a6"),
-            ("hospital", "010005", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.6", "a6"),
-            ("hospital", "010006", "HAI_1_SIR", "2018-01-01", "2018-12-31", "0.6", "a6"),
-            ("hospital", "010005", "HAI_1_SIR", "2020-04-01", "2021-03-31", "0.7", "a6"),
-            ("hospital", "010005", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.6", "a6"),
-            ("hospital", "010009", "HAI_1_SIR", "2021-01-01", "2021-12-31", "1.1", "a6"),
-            ("hospital", "011301", "HAI_1_SIR", "2020-01-01", "2020-12-31", "0.5", "a6"),
-            ("hospital", "011301", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.5", "a6"),
-            ("hospital", "01001F", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.3", "a6"),
-            ("hospital", "070001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.9", "a6"),
-            ("hospital", "990001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "1.0", "a6"),
-            *(("hospital", line.split("|")[0], line.split("|")[1], "2021-01-01", "2021-12-31", line.split("|")[4], "a7") for line in HAI_OUTCOME),
-            ("hospital", "210001", "HAI_5_SIR", "2021-01-01", "2021-12-31", "0.7", "a8"),
-            ("hospital", "210001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.8", "a6"),
-            ("hospital", "010001", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.6", "a2"),
-            ("hospital", "010001", "HAI_1_SIR", "2025-01-01", "2025-12-31", "1.2", "a3"),
-            ("hospital", "010001", "HAI_2_SIR", "2019-01-01", "2019-12-31", "0.7", "a1"),
-            ("hospital", "010002", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.9", "a1"),
-            ("hospital", "01000F", "HAI_1_SIR", "2025-01-01", "2025-12-31", "0.3", "a3"),
-            ("national", "US", "HAI_1_SIR", "2019-01-01", "2019-12-31", "1.0", "b2"),
-            ("state", "AL", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.8", "b1"),
-            ("state", "AL", "HAI_2_SIR", "2019-01-01", "2019-12-31", "0.9", "b1"),
+            ("hospital", "010001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.4", sha("a6")),
+            ("hospital", "010005", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.6", sha("a6")),
+            ("hospital", "010006", "HAI_1_SIR", "2018-01-01", "2018-12-31", "0.6", sha("a6")),
+            ("hospital", "010005", "HAI_1_SIR", "2020-04-01", "2021-03-31", "0.7", sha("a6")),
+            ("hospital", "010005", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.6", sha("a6")),
+            ("hospital", "010009", "HAI_1_SIR", "2021-01-01", "2021-12-31", "1.1", sha("a6")),
+            ("hospital", "011301", "HAI_1_SIR", "2020-01-01", "2020-12-31", "0.5", sha("a6")),
+            ("hospital", "011301", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.5", sha("a6")),
+            ("hospital", "01001F", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.3", sha("a6")),
+            ("hospital", "070001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.9", sha("a6")),
+            ("hospital", "990001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "1.0", sha("a6")),
+            *(("hospital", line.split("|")[0], line.split("|")[1], "2021-01-01", "2021-12-31", line.split("|")[4], sha("a7")) for line in HAI_OUTCOME),
+            ("hospital", "210001", "HAI_5_SIR", "2021-01-01", "2021-12-31", "0.7", sha("a8")),
+            ("hospital", "210001", "HAI_1_SIR", "2021-01-01", "2021-12-31", "0.8", sha("a6")),
+            ("hospital", "010001", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.6", sha("a2")),
+            ("hospital", "010001", "HAI_1_SIR", "2025-01-01", "2025-12-31", "1.2", sha("a3")),
+            ("hospital", "010001", "HAI_2_SIR", "2019-01-01", "2019-12-31", "0.7", sha("a1")),
+            ("hospital", "010002", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.9", sha("a1")),
+            ("hospital", "01000F", "HAI_1_SIR", "2025-01-01", "2025-12-31", "0.3", sha("a3")),
+            ("national", "US", "HAI_1_SIR", "2019-01-01", "2019-12-31", "1.0", sha("b2")),
+            ("state", "AL", "HAI_1_SIR", "2019-01-01", "2019-12-31", "0.8", sha("b1")),
+            ("state", "AL", "HAI_2_SIR", "2019-01-01", "2019-12-31", "0.9", sha("b1")),
         ]
     )
     checks["hai_holds_match_expected"] = base.get("holds") == [
@@ -5801,30 +5882,30 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     # file in a CMI snapshot is not read.
     checks["cmi_rows_match_expected"] = base.get("cmi_rows") == sorted(
         [
-            ("q1", "2020", "2018", "final", "010001", "1.9186", "7072.0", "13568.39", "", "true"),
-            ("q1", "2020", "2018", "final", "010005", "1.381", "3140.0", "4336.49", "", "true"),
-            ("q2", "2020", "2018", "proposed", "010001", "1.9188", "7042.0", "13511.8844", "", "false"),
-            ("q2", "2020", "2018", "proposed", "010007", "1.2", "1000.0", "1200.0", "", "false"),
-            ("q3", "2025", "2023", "correction", "010001", "2.0542", "4209.0", "8646.1878", "", "true"),
-            ("q4", "2025", "2023", "final", "010001", "2.054", "4209.0", "8645.29", "", "true"),
-            ("q4", "2025", "2023", "final", "010005", "1.5456", "1479.0", "2285.89", "", "true"),
-            ("q5", "2007", "", "final", "010001", "1.4972", "10147.0", "15192.4568", "1.4815", "true"),
-            ("q6", "2021", "", "final", "010001", "1.690319553", "8178.0", "13823.4333", "1.673542371", "true"),
-            ("q6", "2021", "", "final", "010005", "1.267981138", "2232.0", "2830.1339", "1.260570928", "true"),
-            ("q6", "2021", "", "final", "010006", "1.6", "5000.0", "8000.0", "1.59596", "true"),
-            ("q7", "2021", "2019", "final", "010001", "1.9837", "6752.0", "13394.11", "", "true"),
-            ("q7", "2021", "2019", "final", "010006", "1.6", "5000.0", "8000.0", "", "true"),
-            ("q8", "2027", "2025", "final", "010001", "1.8688", "4524.0", "8454.4376", "", "true"),
-            ("r1", "2011", "", "unspecified", "010001", "1.751124", "7913.0", "13856.646", "", "false"),
-            ("s1", "2023", "2020", "proposed", "010001", "2.0352", "4818.0", "9805.71", "", "true"),
-            ("s1", "2023", "2020", "proposed", "010005", "1.6864", "1950.0", "3288.4", "", "true"),
-            ("s1", "2023", "2020", "proposed", "010005", "1.7", "2000.0", "3400.0", "", "true"),
-            ("s1", "2023", "2020", "proposed", "010009", "1.2", "500.0", "600.0", "", "true"),
-            ("s1", "2023", "2020", "proposed", "070001", "1.5", "1000.0", "1500.0", "", "true"),
-            ("s1", "2023", "2020", "proposed", "210001", "1.8", "1000.0", "1800.0", "", "true"),
-            ("s2", "2023", "2021", "final", "010001", "2.0375", "4837.0", "9855.42", "", "true"),
-            ("s3", "2022", "2019", "final", "010001", "1.9837", "6752.0", "13394.11", "", "true"),
-            ("s3", "2022", "2019", "final", "010006", "1.7", "5000.0", "8500.0", "", "true"),
+            (sha("q1"), "2020", "2018", "final", "010001", "1.9186", "7072.0", "13568.39", "", "true"),
+            (sha("q1"), "2020", "2018", "final", "010005", "1.381", "3140.0", "4336.49", "", "true"),
+            (sha("q2"), "2020", "2018", "proposed", "010001", "1.9188", "7042.0", "13511.8844", "", "false"),
+            (sha("q2"), "2020", "2018", "proposed", "010007", "1.2", "1000.0", "1200.0", "", "false"),
+            (sha("q3"), "2025", "2023", "correction", "010001", "2.0542", "4209.0", "8646.1878", "", "true"),
+            (sha("q4"), "2025", "2023", "final", "010001", "2.054", "4209.0", "8645.29", "", "true"),
+            (sha("q4"), "2025", "2023", "final", "010005", "1.5456", "1479.0", "2285.89", "", "true"),
+            (sha("q5"), "2007", "", "final", "010001", "1.4972", "10147.0", "15192.4568", "1.4815", "true"),
+            (sha("q6"), "2021", "", "final", "010001", "1.690319553", "8178.0", "13823.4333", "1.673542371", "true"),
+            (sha("q6"), "2021", "", "final", "010005", "1.267981138", "2232.0", "2830.1339", "1.260570928", "true"),
+            (sha("q6"), "2021", "", "final", "010006", "1.6", "5000.0", "8000.0", "1.59596", "true"),
+            (sha("q7"), "2021", "2019", "final", "010001", "1.9837", "6752.0", "13394.11", "", "true"),
+            (sha("q7"), "2021", "2019", "final", "010006", "1.6", "5000.0", "8000.0", "", "true"),
+            (sha("q8"), "2027", "2025", "final", "010001", "1.8688", "4524.0", "8454.4376", "", "true"),
+            (sha("r1"), "2011", "", "unspecified", "010001", "1.751124", "7913.0", "13856.646", "", "false"),
+            (sha("s1"), "2023", "2020", "proposed", "010001", "2.0352", "4818.0", "9805.71", "", "true"),
+            (sha("s1"), "2023", "2020", "proposed", "010005", "1.6864", "1950.0", "3288.4", "", "true"),
+            (sha("s1"), "2023", "2020", "proposed", "010005", "1.7", "2000.0", "3400.0", "", "true"),
+            (sha("s1"), "2023", "2020", "proposed", "010009", "1.2", "500.0", "600.0", "", "true"),
+            (sha("s1"), "2023", "2020", "proposed", "070001", "1.5", "1000.0", "1500.0", "", "true"),
+            (sha("s1"), "2023", "2020", "proposed", "210001", "1.8", "1000.0", "1800.0", "", "true"),
+            (sha("s2"), "2023", "2021", "final", "010001", "2.0375", "4837.0", "9855.42", "", "true"),
+            (sha("s3"), "2022", "2019", "final", "010001", "1.9837", "6752.0", "13394.11", "", "true"),
+            (sha("s3"), "2022", "2019", "final", "010006", "1.7", "5000.0", "8500.0", "", "true"),
         ]
     )
     # [301] One CMI per CCN and rule year from the best stage's files: a correction over the final file, a final file over
@@ -5841,25 +5922,31 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     checks["owner_ids_padded"] = code == 0 and bridged.get("owner_padded") == [("0042633786", "2022-11-30")]
     checks["base_owner_ids_not_padded"] = base.get("owner_padded") == []
     # [318] to [322] Care Compare windows as for HAI: the latest release wins, conflicts and unparsed dates are held.
-    checks["timely_windows_match_expected"] = base.get("timely") == [
-        ("010001", "EDV", "2020-01-01", "2020-12-31", "Low", "", "z6"),
-        ("010001", "ED_1b", "2018-01-01", "2018-12-31", "270", "", "g4"),
-        ("010001", "ED_1b", "2020-01-01", "2020-12-31", "265", "", "g4"),
-        ("010001", "HCP_COVID_19", "2021-01-01", "2021-12-31", "81", "", "g4"),
-        ("010001", "HCP_COVID_19", "2024-01-01", "2024-12-31", "76", "", "g4"),
-        ("010001", "OP_18b", "2018-01-01", "2018-12-31", "130", "", "z6"),
-        ("010001", "OP_18b", "2020-01-01", "2020-12-31", "145", "", "z6"),
-        ("010001", "OP_18b", "2022-01-01", "2022-12-31", "152", "310", "w2"),
-        ("010002", "EDV", "2022-01-01", "2022-12-31", "high", "", "w1"),
-    ]
-    checks["maternal_windows_match_expected"] = base.get("maternal") == [
-        ("010001", "PC_02", "2023-01-01", "2023-12-31", "30", "100", "w4"),
-        ("010001", "SM_7", "2023-01-01", "2023-12-31", "Yes", "", "w4"),
-    ]
-    checks["hcahps_windows_match_expected"] = base.get("hcahps") == [
-        ("010001", "H_COMP_1_A_P", "2022-01-01", "2022-12-31", "80", "507", "21", "", "w5"),
-        ("010001", "H_STAR_RATING", "2022-01-01", "2022-12-31", "Not Applicable", "507", "21", "4", "w5"),
-    ]
+    checks["timely_windows_match_expected"] = base.get("timely") == sorted(
+        [
+            ("010001", "EDV", "2020-01-01", "2020-12-31", "Low", "", sha("z6")),
+            ("010001", "ED_1b", "2018-01-01", "2018-12-31", "270", "", sha("g4c")),
+            ("010001", "ED_1b", "2020-01-01", "2020-12-31", "265", "", sha("g4d")),
+            ("010001", "HCP_COVID_19", "2021-01-01", "2021-12-31", "81", "", sha("g4c")),
+            ("010001", "HCP_COVID_19", "2024-01-01", "2024-12-31", "76", "", sha("g4d")),
+            ("010001", "OP_18b", "2018-01-01", "2018-12-31", "130", "", sha("z6")),
+            ("010001", "OP_18b", "2020-01-01", "2020-12-31", "145", "", sha("z6")),
+            ("010001", "OP_18b", "2022-01-01", "2022-12-31", "152", "310", sha("w2")),
+            ("010002", "EDV", "2022-01-01", "2022-12-31", "high", "", sha("w1")),
+        ]
+    )
+    checks["maternal_windows_match_expected"] = base.get("maternal") == sorted(
+        [
+            ("010001", "PC_02", "2023-01-01", "2023-12-31", "30", "100", sha("w4")),
+            ("010001", "SM_7", "2023-01-01", "2023-12-31", "Yes", "", sha("w4")),
+        ]
+    )
+    checks["hcahps_windows_match_expected"] = base.get("hcahps") == sorted(
+        [
+            ("010001", "H_COMP_1_A_P", "2022-01-01", "2022-12-31", "80", "507", "21", "", sha("w5")),
+            ("010001", "H_STAR_RATING", "2022-01-01", "2022-12-31", "Not Applicable", "507", "21", "4", sha("w5")),
+        ]
+    )
     checks["cc_holds_match_expected"] = base.get("cc_holds") == [
         ("cms_cc_timely_and_effective_care_hospital", "010001", "SEP_1", "same_date_conflict", "2"),
         ("cms_cc_timely_and_effective_care_hospital", "010003", "SEP_1", "unparsed_date", "1"),
@@ -5867,14 +5954,16 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     ]
     # [323] [325] [326] [327] Registry controls get exactly their named measure; numbers only for plain numbers.
     # [328] [329] One Hospital General Information row per CCN and file; two files on one release date are both kept.
-    checks["hgi_releases_match_expected"] = base.get("hgi") == [
-        ("010001", "2020-07-01", "1", "Acute Care Hospitals", "", "2", "2", "", "z8"),
-        ("010001", "2024-01-31", "2", "Acute Care Hospitals", "true", "3", "3", "", "u5"),
-        ("010001", "2024-01-31", "2", "Acute Care Hospitals", "true", "4", "4", "", "u1"),
-        ("010005", "2020-10-01", "2", "Acute Care Hospitals", "", "3", "3", "", "z9"),
-        ("010005", "2020-10-01", "2", "Acute Care Hospitals", "", "5", "5", "", "r6"),
-        ("010005", "2024-01-31", "2", "Critical Access Hospitals", "false", "", "Not Available", "16", "u1"),
-    ]
+    checks["hgi_releases_match_expected"] = base.get("hgi") == sorted(
+        [
+            ("010001", "2020-07-01", "1", "Acute Care Hospitals", "", "2", "2", "", sha("z8")),
+            ("010001", "2024-01-31", "2", "Acute Care Hospitals", "true", "3", "3", "", sha("u5")),
+            ("010001", "2024-01-31", "2", "Acute Care Hospitals", "true", "4", "4", "", sha("u1")),
+            ("010005", "2020-10-01", "2", "Acute Care Hospitals", "", "3", "3", "", sha("z9")),
+            ("010005", "2020-10-01", "2", "Acute Care Hospitals", "", "5", "5", "", sha("r6")),
+            ("010005", "2024-01-31", "2", "Critical Access Hospitals", "false", "", "Not Available", "16", sha("u1")),
+        ]
+    )
     # [331] to [338] One row per cost report: fiscal year by the period start, inclusive days, full years by the anniversary,
     # reports per CCN and fiscal year, ZIP and urban/rural as approved, amounts typed.
     checks["cost_reports_match_expected"] = base.get("cost_reports") == [
@@ -5952,26 +6041,30 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     # [365] to [372] Ownership: each file dated by its recorded period; owner flags null before the April 2025 layout and for
     # a blank; one-digit dates; a lost leading zero padded, a unit CCN kept and a value that is not a CCN nulled; a
     # change of ownership kept once per release under one event key.
-    checks["owners_match_expected"] = base.get("owners") == [
-        ("o2", "2022-11-30", "O20000000002", "5555555555", "43", "2019-11-30", "", "false", "", "", "", "true"),
-        ("o2", "2022-11-30", "O20000000002", "9876543210", "34", "2020-03-07", "100.0", "false", "", "", "", "true"),
-        ("o3", "2025-04-30", "O20000000002", "1111111111", "35", "2025-04-15", "37.5", "true", "false", "false", "", ""),
-        ("o3", "2025-04-30", "O20000000002", "5555555555", "43", "", "", "true", "", "", "", ""),
-        ("o3", "2025-04-30", "O20000000002", "9876543210", "34", "2020-03-07", "62.5", "true", "true", "false", "true", "true"),
-        ("r8", "2020-07-31", "O20000000001", "1111111111", "34", "", "60.0", "true", "true", "false", "", ""),
-        ("r8", "2020-07-31", "O20000000001", "2222222222", "43", "", "", "true", "false", "true", "", ""),
-        ("u3", "2025-05-31", "O20000000001", "", "", "", "", "true", "false", "", "", ""),
-    ]
-    checks["enrollments_match_expected"] = base.get("enrollments") == [
-        ("u2", "2024-01-31", "O20000000001", "010001", "010001", "", "", "", ""),
-        ("v1", "2022-11-30", "O20000000002", "013025", "13025", "P", "1990-01-05", "true", "false"),
-        ("v1", "2022-11-30", "O20000000003", "01T001", "01T001", "", "", "false", ""),
-        ("v1", "2022-11-30", "O20000000010", "010001", "01000101", "", "", "", ""),
-        ("v1", "2022-11-30", "O20000000011", "010001", "1000101", "", "", "", ""),
-        ("v1", "2022-11-30", "O20000000012", "010001", "01S001A", "", "", "", ""),
-        ("v1", "2022-11-30", "O20000000013", "", "01000101", "", "", "", ""),
-        ("v1", "2022-11-30", "O20000000014", "", "78A005BP", "", "", "", ""),
-    ]
+    checks["owners_match_expected"] = base.get("owners") == sorted(
+        [
+            (sha("o2"), "2022-11-30", "O20000000002", "5555555555", "43", "2019-11-30", "", "false", "", "", "", "true"),
+            (sha("o2"), "2022-11-30", "O20000000002", "9876543210", "34", "2020-03-07", "100.0", "false", "", "", "", "true"),
+            (sha("o3"), "2025-04-30", "O20000000002", "1111111111", "35", "2025-04-15", "37.5", "true", "false", "false", "", ""),
+            (sha("o3"), "2025-04-30", "O20000000002", "5555555555", "43", "", "", "true", "", "", "", ""),
+            (sha("o3"), "2025-04-30", "O20000000002", "9876543210", "34", "2020-03-07", "62.5", "true", "true", "false", "true", "true"),
+            (sha("r8"), "2020-07-31", "O20000000001", "1111111111", "34", "", "60.0", "true", "true", "false", "", ""),
+            (sha("r8"), "2020-07-31", "O20000000001", "2222222222", "43", "", "", "true", "false", "true", "", ""),
+            (sha("u3"), "2025-05-31", "O20000000001", "", "", "", "", "true", "false", "", "", ""),
+        ]
+    )
+    checks["enrollments_match_expected"] = base.get("enrollments") == sorted(
+        [
+            (sha("u2"), "2024-01-31", "O20000000001", "010001", "010001", "", "", "", ""),
+            (sha("v1"), "2022-11-30", "O20000000002", "013025", "13025", "P", "1990-01-05", "true", "false"),
+            (sha("v1"), "2022-11-30", "O20000000003", "01T001", "01T001", "", "", "false", ""),
+            (sha("v1"), "2022-11-30", "O20000000010", "010001", "01000101", "", "", "", ""),
+            (sha("v1"), "2022-11-30", "O20000000011", "010001", "1000101", "", "", "", ""),
+            (sha("v1"), "2022-11-30", "O20000000012", "010001", "01S001A", "", "", "", ""),
+            (sha("v1"), "2022-11-30", "O20000000013", "", "01000101", "", "", "", ""),
+            (sha("v1"), "2022-11-30", "O20000000014", "", "78A005BP", "", "", "", ""),
+        ]
+    )
     # [619] [620] The route of each mapped CCN.
     checks["enrollment_ccn_sources_match_expected"] = base.get("enrollment_ccn_sources") == [
         ("O20000000010", "010001", "location_suffix"),
@@ -5980,13 +6073,15 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("O20000000013", "", ""),
         ("O20000000014", "", ""),
     ]
-    checks["chow_match_expected"] = base.get("chow") == [
-        ("u4", "2023-12-31", "010001", "010001", "010001", "", "2023-01-01", "||2023-01-01|"),
-        ("y2", "2022-09-30", "", "10002900", "100029", "CH", "2021-03-01", "O20000000004|O20000000005|2021-03-01|CH"),
-        ("y2", "2022-09-30", "013025", "13025", "01T001", "AM", "2022-07-01", "O20000000006|O20000000007|2022-07-01|AM"),
-        ("y3", "2022-12-31", "", "", "", "CH", "2022-08-01", "O20000000021|O20000000022|2022-08-01|CH"),
-        ("y3", "2022-12-31", "", "", "", "CH", "2022-09-01", "O20000000023|O20000000024|2022-09-01|CH"),
-    ]
+    checks["chow_match_expected"] = base.get("chow") == sorted(
+        [
+            (sha("u4"), "2023-12-31", "010001", "010001", "010001", "", "2023-01-01", "||2023-01-01|"),
+            (sha("y2"), "2022-09-30", "", "10002900", "100029", "CH", "2021-03-01", "O20000000004|O20000000005|2021-03-01|CH"),
+            (sha("y2"), "2022-09-30", "013025", "13025", "01T001", "AM", "2022-07-01", "O20000000006|O20000000007|2022-07-01|AM"),
+            (sha("y3"), "2022-12-31", "", "", "", "CH", "2022-08-01", "O20000000021|O20000000022|2022-08-01|CH"),
+            (sha("y3"), "2022-12-31", "", "", "", "CH", "2022-09-01", "O20000000023|O20000000024|2022-09-01|CH"),
+        ]
+    )
     checks["ownership_generator_refuses_file_without_period"] = refuses_period(
         lambda: ownership_release_periods.rows_for(
             [{"table": "cms_hospital_owners", "sha256": sha("o9"), "release_id": "missing", "file_name": "organisation_owners.csv"}], {}
@@ -6515,7 +6610,7 @@ def real_stage(once: bool = False) -> dict[str, Any]:
         with pinned_run(run, outcome) as pinned:
             code, statuses = dbt_build(run, "lakehouse")
             failed = sorted(name for name, status in statuses.items() if not node_passes(name, status))
-            outcome[f"{run}_tolerated_warn"] = statuses.get(TOLERATED_WARN)
+            outcome[f"{run}_release_copy_status"] = statuses.get(RELEASE_COPY_TEST)
             outcome["checks"][f"{run}_build_passes"] = pinned["build_passed"] = code == 0 and bool(statuses) and not failed
         outcome["checks"][f"{run}_pins_verified"] = pinned["pins_verified"]
         outcome[f"{run}_not_passing"] = failed

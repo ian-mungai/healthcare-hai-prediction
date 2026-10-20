@@ -16,6 +16,8 @@ import importlib.machinery
 import json
 import re
 import sys
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,6 +50,7 @@ class Probe:
     failures: tuple[str, ...]
     cause: str = ""
     remove: str = ""
+    real_pins: bool = False
 
 
 def parse(sql: str) -> str:
@@ -61,7 +64,7 @@ def parse(sql: str) -> str:
 def render_models() -> dict[str, str]:
     """Render delivered SQL with stand-in main-schema refs; this is a static acceptance check, not dbt compilation."""
     env = Environment(undefined=StrictUndefined, autoescape=select_autoescape(default_for_string=False))
-    macro = (ROOT / "dbt/macros/gold_facts.sql").read_text().split("{% test ", 1)[0]
+    macro = "".join((ROOT / f"dbt/macros/{name}.sql").read_text().split("{% test ", 1)[0] for name in ("gold_facts", "gold_identity"))
     output: dict[str, str] = {}
     for path in sorted((ROOT / "dbt/models/gold").rglob("*.sql")):
         template = env.from_string(macro + path.read_text())
@@ -869,10 +872,11 @@ def round3_siblings(rendered: dict[str, str]) -> list[Probe]:
     for model in ("dim_drg", "dim_rurality_code"):
         sql = rendered[model]
         cases.append(Probe("R3_A48_labeled_unlabeled_unknown_" + model, model, sql, ()))
+        source = "single" if model == "dim_rurality_code" else "observed"
         for name, before, after in [
-            ("missing_anti_key", "labeled.code = observed.code", "true"),
-            ("wrong_anti_alias", "labeled.code = observed.code", "labeled.code = labeled.code"),
-            ("partial_anti_rows", "labeled.code = observed.code", "labeled.code = observed.code and labeled.code = '068'"),
+            ("missing_anti_key", f"labeled.code = {source}.code", "true"),
+            ("wrong_anti_alias", f"labeled.code = {source}.code", "labeled.code = labeled.code"),
+            ("partial_anti_rows", f"labeled.code = {source}.code", f"labeled.code = {source}.code and labeled.code = '068'"),
             ("anti_limit", "select 1\n            from labeled", "select 1\n            from (select * from labeled limit 1) labeled"),
         ]:
             changed = sql.replace(before, after)
@@ -1396,6 +1400,1241 @@ def round4_siblings() -> list[Probe]:
     return result
 
 
+G4_MODELS = ("bridge_county_planning_region", "bridge_measure_control", "dim_county", "dim_measure", "dim_rurality_code", "dim_state")
+
+
+EXPR = ("expression_functions",)
+CONTROL_SEED = "main.registry_measure_sources_bridge"
+STATE_SQL = Template(
+    "with fips as (select distinct state as state_code, $expression as $alias from $source "
+    "where state is not null and county_fips is not null) select md5(state_code) as state_sk, state_code, $out from fips"
+)
+TRACT_SQL = Template(
+    "with counted as (select county_fips, county_fips_2023, member_sha256, $count as tract_count from $source$group) "
+    "select county_fips as old_county_fips, county_fips_2023 as planning_region_fips, $out, member_sha256 from counted"
+)
+TRACT_GROUP = " group by county_fips, county_fips_2023, member_sha256"
+RURALITY_BOUNDS_SQL = Template(
+    "with observed as (select 'int_rucc_county_codes.rucc_code' as code_system, cast(rucc_code as varchar) as code, "
+    "cast(vintage as varchar) as label_order from main.int_rucc_county_codes), "
+    "editions as (select code_system, code, $start as edition_start, $end as edition_end from observed$group) "
+    "select md5(concat_ws('|', code_system, code, edition_start)) as rurality_code_sk, code_system, code, edition_start, edition_end$extra from editions"
+)
+MEASURE_BOUNDS_SQL = Template(
+    "with names_published as (select 'fct_hai_hospital_window' as fact, cast(measure_id as varchar) as measure_key, "
+    "'score' as value_column, release_date, window_end from main.int_hai_hospital_windows), "
+    "editions as (select fact, measure_key, value_column, $start as edition_start, $end as edition_end from names_published$group) "
+    "select md5(concat_ws('|', fact, measure_key, value_column, edition_start)) as measure_sk, "
+    "concat_ws('|', fact, measure_key, value_column, edition_start) as measure_identity, "
+    "fact, measure_key, value_column, edition_start, edition_end from editions"
+)
+COUNTY_LISTS_SQL = Template(
+    "with lists as (select 'int_county_adjacency_edges' as list_name, vintage, cast(county_fips as varchar) as county_fips "
+    "from main.int_county_adjacency_edges where vintage is not null union "
+    "select 'int_rucc_county_codes' as list_name, vintage, cast(county_fips as varchar) as county_fips from main.int_rucc_county_codes "
+    "where vintage is not null), "
+    "vintages as (select distinct vintage from lists), "
+    "latest_vintage as (select max(vintage) as vintage from lists where list_name = 'int_county_adjacency_edges'), "
+    "latest as (select lists.county_fips from lists inner join latest_vintage on lists.vintage = latest_vintage.vintage "
+    "where lists.list_name = 'int_county_adjacency_edges'), "
+    "last_listed as (select county_fips, max(vintage) as last_listed_vintage from lists group by county_fips), "
+    "first_unlisted as (select last_listed.county_fips, min(vintages.vintage) as first_unlisted_vintage from last_listed "
+    "inner join vintages on last_listed.last_listed_vintage < vintages.vintage "
+    "where last_listed.county_fips not in (select latest.county_fips from latest) group by last_listed.county_fips) "
+    "select md5(last_listed.county_fips) as county_sk, last_listed.county_fips, $membership as $alias, "
+    "last_listed.last_listed_vintage, first_unlisted.first_unlisted_vintage from last_listed "
+    "$join latest on $condition "
+    "left join first_unlisted on last_listed.county_fips = first_unlisted.county_fips"
+)
+COUNTY_BOUNDS_SQL = Template(
+    "select md5(county_fips) as county_sk, county_fips, $first as first_unlisted_vintage, $last as $last_alias from $source group by county_fips"
+)
+RURALITY_KEY_SQL = Template(
+    "with observed as (select 'int_rucc_county_codes.rucc_code' as code_system, cast(rucc_code as varchar) as code, "
+    "cast(vintage as varchar) as label_order from main.int_rucc_county_codes), "
+    "editions as (select code_system, code, min(label_order) as edition_start, max(label_order) as edition_end from observed group by code_system, code) "
+    "select md5(concat_ws('|', $parts)) as rurality_code_sk, code_system, code, edition_start, edition_end from editions"
+)
+MEASURE_UNION_SQL = Template(
+    "with names_published as (select 'fct_hai_hospital_window' as fact, cast(measure_id as varchar) as measure_key, 'score' as value_column, release_date "
+    "from main.int_hai_hospital_windows), "
+    "base as (select md5(concat_ws('|', fact, measure_key, value_column)) as measure_sk, "
+    "concat_ws('|', fact, measure_key, value_column) as measure_identity, fact, measure_key, value_column from names_published), "
+    "editions as (select fact, measure_key, value_column, cast(min(release_date) as varchar) as edition_start, "
+    "cast(max(release_date) as varchar) as edition_end from names_published group by fact, measure_key, value_column), "
+    "ordinary as (select measure_sk, measure_identity, fact, measure_key, value_column, $ordinary_start as edition_start, "
+    "cast(null as varchar) as edition_end from base), "
+    "split_rows as (select md5(concat_ws('|', base.fact, base.measure_key, base.value_column$split_part)) as measure_sk, "
+    "concat_ws('|', base.fact, base.measure_key, base.value_column$identity_part) as measure_identity, "
+    "base.fact, base.measure_key, base.value_column, editions.edition_start, editions.edition_end from base "
+    "inner join editions on base.fact = editions.fact and base.measure_key = editions.measure_key and base.value_column = editions.value_column) "
+    "select * from ordinary union all select * from split_rows union all "
+    "select md5('<unknown>') as measure_sk, '<unknown>' as measure_identity, cast(null as varchar) as fact, cast(null as varchar) as measure_key, "
+    "cast(null as varchar) as value_column, cast(null as varchar) as edition_start, cast(null as varchar) as edition_end"
+)
+BRIDGE_KEYS_SQL = Template(
+    "with seed_rows as (select fact, measure_key, value_column, vintage_start, vintage_end, measure_control from $seed), "
+    "editions as (select fact, measure_key, value_column, edition_start, edition_end from main.dim_measure where edition_start is not null) "
+    "select md5(concat_ws('|', seed_rows.fact, seed_rows.measure_key, seed_rows.value_column$fourth)) as $key, "
+    "md5(seed_rows.measure_control) as registry_control_sk, seed_rows.measure_control, seed_rows.vintage_start$extra "
+    "from seed_rows left join editions on seed_rows.fact = editions.fact and seed_rows.measure_key = editions.measure_key "
+    "and seed_rows.value_column = editions.value_column "
+    "and (seed_rows.vintage_start is null or seed_rows.vintage_start = '' or $first) "
+    "and (seed_rows.vintage_end is null or seed_rows.vintage_end = '' or $second)$tail"
+)
+EDITION_START_CMP = "left(editions.edition_end, 4) >= seed_rows.vintage_start"
+EDITION_END_CMP = "left(editions.edition_start, 4) <= seed_rows.vintage_end"
+LABEL_EDITION_SQL = Template(
+    "with observed as (select '$system' as code_system, cast($code_column as varchar) as code, cast($label_column as varchar) as code_label, "
+    "cast($order_column as varchar) as label_order from main.$source), "
+    "editions as (select code_system, code, code_label, $start as edition_start, $end as edition_end from observed$where$group) "
+    "select md5(concat_ws('|', code_system, code$edition)) as $key, code_system, code, code_label, edition_start, edition_end from editions"
+)
+NAMED_EDITION_SQL = Template(
+    "with names_published as (select 'fct_hai_hospital_window' as fact, cast(measure_id as varchar) as measure_key, measure_name, release_date "
+    "from main.int_hai_hospital_windows), "
+    "editions as (select fact, measure_key, measure_name as edition_label, $start as edition_start, $end as edition_end "
+    "from names_published$where$group), "
+    "keyed as (select fact, measure_key, edition_label as measure_label, 'score' as value_column, edition_start, edition_end from editions) "
+    "select md5(concat_ws('|', fact, measure_key, value_column, edition_start)) as measure_sk, "
+    "concat_ws('|', fact, measure_key, value_column, edition_start) as measure_identity, fact, measure_key, value_column, measure_label, "
+    "edition_start, edition_end from keyed"
+)
+COUNTY_CASTS_SQL = Template(
+    "with lists as (select 'int_county_adjacency_edges' as list_name, vintage, cast($column as varchar) as county_fips from main.$source "
+    "where vintage is not null), "
+    "latest_vintage as (select max(vintage) as vintage from lists where list_name = 'int_county_adjacency_edges'), "
+    "latest as (select lists.county_fips from lists inner join latest_vintage on lists.vintage = latest_vintage.vintage "
+    "where lists.list_name = 'int_county_adjacency_edges'), "
+    "valid as (select cast(county_fips as varchar) as county_fips from main.int_rucc_county_codes) "
+    "select md5(valid.county_fips) as county_sk, valid.county_fips, $membership as $alias$extra "
+    "from valid left join latest on valid.county_fips = latest.county_fips"
+)
+COUNTY_ROWS_SQL = Template(
+    "with lists as (select a.county_fips, $vintage as vintage from $source) "
+    "select md5(county_fips) as county_sk, county_fips, max(vintage) as last_listed_vintage from lists group by county_fips"
+)
+RURALITY_ROWS_SQL = Template(
+    "with observed as (select 'int_rucc_county_codes.rucc_code' as code_system, cast(r.rucc_code as varchar) as code, "
+    "cast(r.description as varchar) as code_label, $date as label_order from $source), "
+    "editions as (select code_system, code, code_label, min(label_order) as edition_start, max(label_order) as edition_end "
+    "from observed where code_label is not null and label_order is not null group by code_system, code, code_label) "
+    "select md5(concat_ws('|', code_system, code, edition_start)) as rurality_code_sk, code_system, code, code_label, edition_start, edition_end from editions"
+)
+KEY_ROWS_SQL = Template("with q as (select $columns from $source) select md5(concat_ws('|', $parts)) as $key, $parts from q")
+COUNTY_FILTER_SQL = Template(
+    "with counted as (select county_fips, county_fips_2023, member_sha256, count(*) as tract_count from $source where vintage = '2020' and $filter "
+    "group by county_fips, county_fips_2023, member_sha256) "
+    "select county_fips as old_county_fips, county_fips_2023 as planning_region_fips, tract_count, member_sha256$extra from counted"
+)
+
+
+def changed(sql: str, before: str, after: str) -> str:
+    """The text with ``before`` replaced; a replacement that changes nothing raises, so a changed template cannot silently void a probe."""
+    result = sql.replace(before, after)
+    if result == sql:
+        raise ValueError("Probe mutation did not change the text: " + before)
+    return result
+
+
+def state_sql(expression: str = "left(county_fips, 2)", alias: str = "state_fips", out: str = "state_fips", source: str = "main.int_rucc_county_codes") -> str:
+    return STATE_SQL.substitute(expression=expression, alias=alias, out=out, source=source)
+
+
+def tract_sql(count: str = "count(*)", source: str = "main.int_ruca_codes", group: str = TRACT_GROUP, out: str = "tract_count") -> str:
+    return TRACT_SQL.substitute(count=count, source=source, group=group, out=out)
+
+
+def rurality_bounds_sql(start: str = "min(label_order)", end: str = "max(label_order)", group: str = " group by code_system, code", extra: str = "") -> str:
+    return RURALITY_BOUNDS_SQL.substitute(start=start, end=end, group=group, extra=extra)
+
+
+def measure_bounds_sql(
+    start: str = "cast(min(release_date) as varchar)", end: str = "cast(max(release_date) as varchar)", group: str = " group by fact, measure_key, value_column"
+) -> str:
+    return MEASURE_BOUNDS_SQL.substitute(start=start, end=end, group=group)
+
+
+def county_lists_sql(
+    membership: str = "latest.county_fips is not null",
+    alias: str = "in_latest_county_list",
+    join: str = "left join",
+    condition: str = "last_listed.county_fips = latest.county_fips",
+) -> str:
+    return COUNTY_LISTS_SQL.substitute(membership=membership, alias=alias, join=join, condition=condition)
+
+
+def county_bounds_sql(
+    first: str = "min(vintage)", last: str = "max(vintage)", last_alias: str = "last_listed_vintage", source: str = "main.int_rucc_county_codes"
+) -> str:
+    return COUNTY_BOUNDS_SQL.substitute(first=first, last=last, last_alias=last_alias, source=source)
+
+
+def bridge_keys_sql(
+    fourth: str = ", editions.edition_start",
+    key: str = "measure_sk",
+    extra: str = "",
+    first: str = EDITION_START_CMP,
+    second: str = EDITION_END_CMP,
+    seed: str = CONTROL_SEED,
+    tail: str = "",
+) -> str:
+    return BRIDGE_KEYS_SQL.substitute(seed=seed, fourth=fourth, key=key, extra=extra, first=first, second=second, tail=tail)
+
+
+def label_edition_sql(
+    model: str = "dim_rurality_code",
+    start: str = "min(label_order)",
+    end: str = "max(label_order)",
+    where: str = " where code_label is not null and label_order is not null",
+    group: str = " group by code_system, code, code_label",
+) -> str:
+    drg = model == "dim_drg"
+    return LABEL_EDITION_SQL.substitute(
+        system="int_mup_drg_discharges.drg_cd" if drg else "int_rucc_county_codes.rucc_code",
+        code_column="drg_cd" if drg else "rucc_code",
+        label_column="drg_desc" if drg else "description",
+        order_column="data_year" if drg else "vintage",
+        source="int_mup_drg_discharges" if drg else "int_rucc_county_codes",
+        start=start,
+        end=end,
+        where=where,
+        group=group,
+        edition="" if drg else ", edition_start",
+        key="drg_sk" if drg else "rurality_code_sk",
+    )
+
+
+def named_edition_sql(
+    start: str = "cast(min(release_date) as varchar)",
+    end: str = "cast(max(release_date) as varchar)",
+    where: str = " where release_date is not null",
+    group: str = " group by fact, measure_key, measure_name",
+) -> str:
+    return NAMED_EDITION_SQL.substitute(start=start, end=end, where=where, group=group)
+
+
+def county_filter_sql(condition: str = "county_fips like '09%'", source: str = "main.int_ruca_codes", extra: str = "") -> str:
+    return COUNTY_FILTER_SQL.substitute(source=source, filter=condition, extra=extra)
+
+
+def state_prefix_probes() -> list[Probe]:
+    """``left(county_fips, 2)``: admitted in dim_state over the RUCC county code, into ``state_fips`` only."""
+    cases: list[Probe] = []
+
+    def state(name: str, expression: str = "left(county_fips, 2)", alias: str = "state_fips", out: str = "state_fips", **kwargs: Any) -> None:
+        sql = state_sql(expression, alias, out)
+        cases.append(Probe("G4_state_prefix_" + name, kwargs.pop("model", "dim_state"), kwargs.pop("sql", sql), **kwargs))
+
+    state("admitted", failures=())
+    state("entry_removed", failures=EXPR, cause="left", remove="state_prefix")
+    state("wrong_column", "left(state, 2)", failures=EXPR, cause="contracted expression")
+    state("wrong_width", "left(county_fips, 3)", failures=EXPR, cause="contracted expression")
+    state("wrong_function", "right(county_fips, 2)", failures=EXPR, cause="right")
+    state("wrong_substring", "substr(county_fips, 1, 2)", failures=EXPR, cause="substr")
+    state("other_alias", alias="state_prefix", out="state_prefix", failures=EXPR, cause="left")
+    state("reaches_other_output", out="state_fips, state_fips as state_name", failures=EXPR, cause="forbidden final role")
+    state(
+        "in_dim_county",
+        model="dim_county",
+        sql="with fips as (select distinct county_fips, left(county_fips, 2) as state_fips from main.int_rucc_county_codes) "
+        "select md5(county_fips) as county_sk, county_fips, state_fips from fips",
+        failures=EXPR,
+        cause="left",
+    )
+    return cases
+
+
+def tract_count_probes() -> list[Probe]:
+    """``count(*)`` of the RUCA tract rows: admitted in bridge_county_planning_region per old county, planning region and file."""
+    cases: list[Probe] = []
+
+    def tract(name: str, **kwargs: Any) -> None:
+        sql = tract_sql(
+            kwargs.pop("count", "count(*)"), kwargs.pop("source", "main.int_ruca_codes"), kwargs.pop("group", TRACT_GROUP), kwargs.pop("out", "tract_count")
+        )
+        cases.append(Probe("G4_tract_count_" + name, kwargs.pop("model", "bridge_county_planning_region"), sql, **kwargs))
+
+    tract("admitted", failures=())
+    tract("entry_removed", failures=EXPR, cause="aggregate count_star", remove="tract_count")
+    tract("in_bridge_zip_county", model="bridge_zip_county", failures=EXPR, cause="aggregate count_star")
+    tract("in_dim_hospital", model="dim_hospital", failures=EXPR, cause="aggregate count_star")
+    tract("other_relation", source="main.int_hospital_enrollment_rows", failures=EXPR, cause="aggregate count_star")
+    tract("ungrouped", group="", failures=EXPR, cause="aggregate count_star")
+    tract("without_planning_region", group=" group by county_fips, member_sha256", failures=EXPR, cause="aggregate count_star")
+    tract("without_old_county", group=" group by county_fips_2023, member_sha256", failures=EXPR, cause="aggregate count_star")
+    tract("column_count", count="count(county_fips)", failures=EXPR, cause="aggregate count")
+    tract("sum", count="sum(county_fips)", failures=EXPR, cause="aggregate sum")
+    tract("other_output", out="tract_count as weight", failures=EXPR, cause="forbidden final role")
+    tract("arithmetic", count="count(*) + 1", failures=("expression_arithmetic",), cause="arithmetic")
+    return cases
+
+
+def rurality_bound_probes() -> list[Probe]:
+    """``min`` and ``max`` of a label group's vintage in dim_rurality_code, and the same bounds in dim_drg, which has no edition."""
+    cases: list[Probe] = []
+
+    def rurality(name: str, **kwargs: Any) -> None:
+        sql = rurality_bounds_sql(
+            kwargs.pop("start", "min(label_order)"),
+            kwargs.pop("end", "max(label_order)"),
+            kwargs.pop("group", " group by code_system, code"),
+            kwargs.pop("extra", ""),
+        )
+        cases.append(Probe("G4_label_bounds_rurality_" + name, "dim_rurality_code", sql, **kwargs))
+
+    rurality("admitted", failures=())
+    rurality("entry_removed", failures=EXPR, cause="aggregate min", remove="label_bounds")
+    rurality("wrong_column", start="min(code)", failures=EXPR, cause="aggregate min")
+    rurality("ungrouped", group="", failures=EXPR, cause="aggregate min")
+    rurality("swapped", start="max(label_order)", end="min(label_order)", failures=EXPR, cause="forbidden final role")
+    rurality("other_output", extra=", edition_start as unit", failures=EXPR, cause="forbidden final role")
+    rurality("expression_operand", start="min(label_order || 'x')", failures=EXPR, cause="function ||")
+    cases.append(
+        Probe(
+            "G4_label_bounds_in_dim_drg",
+            "dim_drg",
+            "with observed as (select 'int_mup_drg_discharges.drg_cd' as code_system, cast(drg_cd as varchar) as code, data_year "
+            "from main.int_mup_drg_discharges) select md5(concat_ws('|', code_system, code)) as drg_sk, code_system, code, "
+            "min(data_year) as edition_start from observed group by code_system, code",
+            EXPR,
+            "aggregate min",
+        )
+    )
+    return cases
+
+
+def measure_bound_probes() -> list[Probe]:
+    """``min`` and ``max`` of the release dates of one measure identity in dim_measure."""
+    cases: list[Probe] = []
+
+    def measure(name: str, **kwargs: Any) -> None:
+        sql = measure_bounds_sql(
+            kwargs.pop("start", "cast(min(release_date) as varchar)"),
+            kwargs.pop("end", "cast(max(release_date) as varchar)"),
+            kwargs.pop("group", " group by fact, measure_key, value_column"),
+        )
+        cases.append(Probe("G4_label_bounds_measure_" + name, "dim_measure", sql, **kwargs))
+
+    measure("admitted", failures=())
+    measure("entry_removed", failures=EXPR, cause="aggregate min", remove="label_bounds")
+    measure("wrong_column", start="cast(min(window_end) as varchar)", end="cast(max(window_end) as varchar)", failures=EXPR, cause="aggregate min")
+    measure("ungrouped", group="", failures=EXPR, cause="aggregate min")
+    measure("swapped", start="cast(max(release_date) as varchar)", end="cast(min(release_date) as varchar)", failures=EXPR, cause="forbidden final role")
+    measure("two_operands", start="cast(min(release_date, window_end) as varchar)", failures=EXPR, cause="aggregate min")
+    measure("column_cast", start="cast(release_date as varchar)", end="cast(release_date as varchar)", group="", failures=EXPR, cause="cast to VARCHAR")
+    return cases
+
+
+def county_list_probes() -> list[Probe]:
+    """The county-list bounds and the membership test of dim_county, over the delivered chain of list, latest vintage and latest list."""
+    cases: list[Probe] = []
+
+    def county(name: str, **kwargs: Any) -> None:
+        sql = county_lists_sql(kwargs.pop("membership", "latest.county_fips is not null"), kwargs.pop("alias", "in_latest_county_list"))
+        cases.append(Probe("G4_county_" + name, kwargs.pop("model", "dim_county"), kwargs.pop("sql", sql), **kwargs))
+
+    def bounds(name: str, **kwargs: Any) -> None:
+        sql = county_bounds_sql(kwargs.pop("first", "min(vintage)"), kwargs.pop("last", "max(vintage)"), kwargs.pop("last_alias", "last_listed_vintage"))
+        county(name, sql=sql, **kwargs)
+
+    county("lists_admitted", failures=())
+    county("lists_entry_removed", failures=EXPR, cause="aggregate max", remove="county_list_bounds")
+    county("membership_other_alias", alias="is_listed", failures=EXPR, cause="boolean expression")
+    county("membership_wrong_column", membership="latest.neighbor_fips is not null", failures=EXPR, cause="boolean expression")
+    county("membership_is_null", membership="latest.county_fips is null", failures=EXPR, cause="boolean expression")
+    county("membership_comparison", membership="latest.county_fips = '09001'", failures=EXPR, cause="boolean expression")
+    bounds("bounds_minimal_admitted", failures=())
+    bounds("bounds_swapped", first="max(vintage)", last="min(vintage)", failures=EXPR, cause="forbidden final role")
+    bounds("bounds_wrong_column", first="min(county_fips)", failures=EXPR, cause="aggregate min")
+    bounds("bounds_other_output", last_alias="county_name", failures=EXPR, cause="forbidden final role")
+    bounds("bounds_cast", first="cast(min(vintage) as varchar)", failures=EXPR, cause="cast to VARCHAR")
+    county(
+        "bounds_in_dim_zip",
+        sql="select md5(zip_code) as zip_sk, zip_code, max(vintage) as last_listed_vintage from main.int_hsa_zip_cases group by zip_code",
+        model="dim_zip",
+        failures=EXPR,
+        cause="aggregate max",
+    )
+    county(
+        "membership_in_dim_zip",
+        sql="select md5(zip_code) as zip_sk, zip_code, zip_code is not null as in_latest_county_list from main.int_hsa_zip_cases",
+        model="dim_zip",
+        failures=EXPR,
+        cause="boolean expression",
+    )
+    return cases
+
+
+def g4_entry_probes() -> list[Probe]:
+    """The four gold contract allowlist entries that name a model (G4): each capability admits its one expression in its model and columns.
+
+    A control carries the delivered shape of the expression. A refusal changes exactly one thing: the entry, the model, the source column, the
+    width, the output column, the grouping or the operator around the result. The synthetic SQL is only parsed; no relation is bound.
+    """
+    return state_prefix_probes() + tract_count_probes() + rurality_bound_probes() + measure_bound_probes() + county_list_probes()
+
+
+def rurality_key_probes() -> list[Probe]:
+    """The edition part of dim_rurality_code's key: the last component, a bounded ``min`` of the vintage or a typed null."""
+    cases: list[Probe] = []
+
+    def rurality(name: str, parts: str = "code_system, code, edition_start", **kwargs: Any) -> None:
+        cases.append(Probe("P2_key_" + name, kwargs.pop("model", "dim_rurality_code"), kwargs.pop("sql", RURALITY_KEY_SQL.substitute(parts=parts)), **kwargs))
+
+    rurality("rurality_edition", failures=())
+    rurality("edition_end", "code_system, code, edition_end", failures=EXPR, cause="contracted expression")
+    rurality("edition_not_last", "code_system, edition_start, code", failures=EXPR, cause="contracted expression")
+    rurality("extra_part", "code_system, code, edition_start, edition_end", failures=EXPR, cause="contracted expression")
+    rurality("coalesced_edition", "code_system, code, coalesce(edition_start, '')", failures=EXPR, cause="contracted expression")
+    rurality("edition_plain_column", sql=rurality_bounds_sql("label_order", "label_order", ""), failures=EXPR, cause="contracted expression")
+    rurality("edition_start_is_max", sql=rurality_bounds_sql("max(label_order)", "max(label_order)"), failures=EXPR, cause="forbidden final role")
+    rurality(
+        "bound_as_code",
+        sql="with observed as (select 'int_rucc_county_codes.rucc_code' as code_system, cast(vintage as varchar) as label_order "
+        "from main.int_rucc_county_codes), "
+        "editions as (select code_system, min(label_order) as code from observed group by code_system) "
+        "select md5(concat_ws('|', code_system, code)) as rurality_code_sk, code_system, code from editions",
+        failures=EXPR,
+        cause="forbidden final role",
+    )
+    rurality(
+        "edition_in_dim_drg",
+        model="dim_drg",
+        sql="with observed as (select 'int_mup_drg_discharges.drg_cd' as code_system, cast(drg_cd as varchar) as code, "
+        "cast(data_year as varchar) as label_order from main.int_mup_drg_discharges) "
+        "select md5(concat_ws('|', code_system, code, label_order)) as drg_sk, code_system, code, label_order as edition_start from observed",
+        failures=EXPR,
+        cause="contracted expression",
+    )
+    return cases
+
+
+def measure_union_probes() -> list[Probe]:
+    """The ordinary and split rows of dim_measure merged in one union: a key and an identity text pad or carry the edition."""
+    cases: list[Probe] = []
+
+    def union(
+        name: str, ordinary_start: str = "cast(null as varchar)", split_part: str = ", editions.edition_start", identity_part: str | None = None, **kwargs: Any
+    ) -> None:
+        sql = MEASURE_UNION_SQL.substitute(
+            ordinary_start=ordinary_start, split_part=split_part, identity_part=split_part if identity_part is None else identity_part
+        )
+        cases.append(Probe("P2_key_measure_" + name, "dim_measure", sql, **kwargs))
+
+    union("union_edition", failures=())
+    union("split_rows_omit_edition", split_part="", failures=EXPR, cause="omits the edition")
+    union("split_rows_identity_omits_edition", identity_part="", failures=EXPR, cause="omits the edition")
+    union("split_rows_edition_end", split_part=", editions.edition_end", failures=EXPR, cause="contracted expression")
+    union("ordinary_arm_has_edition", ordinary_start="cast('2020' as varchar)", failures=EXPR, cause="omits the edition")
+    return cases
+
+
+def bridge_edition_probes() -> list[Probe]:
+    """The control bridge: its measure key adds the edition start and its join compares the edition years with the seed range."""
+    cases: list[Probe] = []
+    open_join = {"first": "seed_rows.vintage_start is not null", "second": "seed_rows.vintage_end is not null"}
+
+    def bridge(name: str, **kwargs: Any) -> None:
+        sql = bridge_keys_sql(
+            kwargs.pop("fourth", ", editions.edition_start"),
+            kwargs.pop("key", "measure_sk"),
+            kwargs.pop("extra", ""),
+            kwargs.pop("first", EDITION_START_CMP),
+            kwargs.pop("second", EDITION_END_CMP),
+        )
+        cases.append(Probe(name, kwargs.pop("model", "bridge_measure_control"), sql, **kwargs))
+
+    bridge("P2_key_bridge_edition", failures=(), **open_join)
+    bridge("P2_key_bridge_other_column", fourth=", editions.edition_end", failures=EXPR, cause="contracted expression", **open_join)
+    bridge("P2_key_bridge_other_model", model="bridge_zip_county", failures=EXPR, cause="md5 is allowed only", **open_join)
+    bridge("P2_left_edition_join", failures=())
+    bridge("P2_left_entry_removed", failures=EXPR, cause="function left is not approved", remove="edition_year")
+    bridge("P2_left_other_column", first="left(editions.measure_key, 4) >= seed_rows.vintage_start", failures=EXPR, cause="function left is not approved")
+    bridge("P2_left_wrong_width", first="left(editions.edition_end, 5) >= seed_rows.vintage_start", failures=EXPR, cause="function left is not approved")
+    bridge("P2_left_reversed", first="left(editions.edition_end, 4) <= seed_rows.vintage_start", failures=EXPR, cause="function left is not approved")
+    bridge("P2_left_swapped_bounds", second="left(editions.edition_end, 4) <= seed_rows.vintage_end", failures=EXPR, cause="function left is not approved")
+    bridge(
+        "P2_left_other_seed_column", first="left(editions.edition_end, 4) >= seed_rows.measure_control", failures=EXPR, cause="function left is not approved"
+    )
+    bridge("P2_left_other_function", first="right(editions.edition_end, 4) >= seed_rows.vintage_start", failures=EXPR, cause="function right is not approved")
+    bridge("P2_left_in_output", extra=", left(editions.edition_end, 4) as edition_year", failures=EXPR, cause="function left is not approved")
+    cases.append(
+        Probe(
+            "P2_left_in_where",
+            "bridge_measure_control",
+            "select md5(concat_ws('|', fact, measure_key, value_column)) as measure_sk, md5(measure_control) as registry_control_sk, measure_control "
+            "from main.dim_measure where left(edition_end, 4) >= vintage_start",
+            EXPR,
+            "function left is not approved",
+        )
+    )
+    cases.append(
+        Probe(
+            "P2_left_in_dim_hospital",
+            "dim_hospital",
+            "select md5(a.ccn) as hospital_sk, a.ccn from main.int_cost_reports a "
+            "inner join main.dim_measure editions on left(editions.edition_end, 4) >= a.ccn",
+            EXPR,
+            "function left is not approved",
+        )
+    )
+    return cases
+
+
+def rurality_selection_probes() -> list[Probe]:
+    """The label selection with editions in dim_rurality_code and dim_drg: one row per published label, grouped by the keys and the label."""
+    cases: list[Probe] = []
+
+    def edition(name: str, **kwargs: Any) -> None:
+        model = kwargs.pop("model", "dim_rurality_code")
+        sql = label_edition_sql(
+            model,
+            kwargs.pop("start", "min(label_order)"),
+            "max(label_order)",
+            kwargs.pop("where", " where code_label is not null and label_order is not null"),
+            kwargs.pop("group", " group by code_system, code, code_label"),
+        )
+        cases.append(Probe("P2_a48_edition_" + name, model, sql, **kwargs))
+
+    edition("rurality", failures=())
+    edition("in_dim_drg", model="dim_drg", failures=EXPR, cause="A48")
+    edition("null_constant", start="cast(null as varchar)", failures=EXPR, cause="A48")
+    edition("wrong_aggregate", start="max(label_order)", failures=EXPR, cause="A48")
+    edition("unguarded", where=" where code_label is not null", failures=EXPR, cause="A48")
+    edition("order_guard_only", where=" where label_order is not null", failures=())
+    edition("group_without_label", group=" group by code_system, code", failures=EXPR, cause="A48")
+    edition("group_without_key", group=" group by code_system, code_label", failures=EXPR, cause="A48")
+    edition("group_with_extra", group=" group by code_system, code, code_label, label_order", failures=EXPR, cause="A48")
+    return cases
+
+
+def measure_selection_probes() -> list[Probe]:
+    """The label selection with editions in dim_measure: one row per published name of a measure, bounded by the first and last release date."""
+    cases: list[Probe] = []
+
+    def measure_edition(name: str, **kwargs: Any) -> None:
+        sql = named_edition_sql(
+            kwargs.pop("start", "cast(min(release_date) as varchar)"),
+            where=kwargs.pop("where", " where release_date is not null"),
+            group=kwargs.pop("group", " group by fact, measure_key, measure_name"),
+        )
+        cases.append(Probe("P2_a48_edition_measure_" + name, "dim_measure", sql, **kwargs))
+
+    measure_edition("admitted", failures=())
+    measure_edition("null_constant", start="cast(null as varchar)", failures=EXPR, cause="A48")
+    measure_edition("unguarded", where="", failures=EXPR, cause="A48")
+    measure_edition("group_without_label", group=" group by fact, measure_key", failures=EXPR, cause="A48")
+    measure_edition("group_without_key", group=" group by fact, measure_name", failures=EXPR, cause="A48")
+    return cases
+
+
+def delivered_edition_probes(rendered: dict[str, str]) -> list[Probe]:
+    """The delivered edition models with one part of their selection or key taken out: each must reach the label-selection or the key refusal."""
+    cases: list[Probe] = []
+    for name, model, before, after in (
+        ("rurality_null_constant", "dim_rurality_code", "min(observed.label_order) as edition_start", "cast(null as varchar) as edition_start"),
+        ("rurality_unguarded", "dim_rurality_code", " and observed.label_order is not null", ""),
+        (
+            "measure_null_constant",
+            "dim_measure",
+            "cast(min(names_published.release_date) as varchar) as edition_start",
+            "cast(null as varchar) as edition_start",
+        ),
+        ("measure_unguarded", "dim_measure", " and names_published.release_date is not null", ""),
+    ):
+        cases.append(Probe("P2_a48_delivered_" + name, model, changed(rendered[model], before, after), EXPR, "A48"))
+    cases.append(
+        Probe(
+            "P2_key_delivered_rurality_omits_edition",
+            "dim_rurality_code",
+            changed(rendered["dim_rurality_code"], "combined.code, combined.edition_start)) as rurality_code_sk", "combined.code)) as rurality_code_sk"),
+            EXPR,
+            "omits the edition",
+        )
+    )
+    return cases
+
+
+def county_cast_probes() -> list[Probe]:
+    """Casts of the county lists in dim_county: the adjacency counties and neighbors are county code inputs; no other column or relation is."""
+    cases: list[Probe] = []
+    adjacency = "int_county_adjacency_edges"
+
+    def county(name: str, column: str = "county_fips", source: str = adjacency, **kwargs: Any) -> None:
+        sql = COUNTY_CASTS_SQL.substitute(
+            column=column,
+            source=source,
+            membership=kwargs.pop("membership", "latest.county_fips is not null"),
+            alias=kwargs.pop("alias", "in_latest_county_list"),
+            extra=kwargs.pop("extra", ""),
+        )
+        cases.append(Probe("P2_county_" + name, kwargs.pop("model", "dim_county"), kwargs.pop("sql", sql), **kwargs))
+
+    county("membership_of_normalized_code", failures=())
+    county("normalized_to_other_output", membership="latest.county_fips", alias="county_name", failures=EXPR, cause="normalized source reaches forbidden")
+    county("normalized_code_also_to_other_output", extra=", latest.county_fips as county_name", failures=EXPR, cause="normalized source reaches forbidden")
+    county("adjacency_cast", failures=())
+    county("adjacency_neighbor_cast", column="neighbor_fips", failures=())
+    county("adjacency_cast_vintage", column="vintage", failures=EXPR, cause="cast to VARCHAR")
+    county("adjacency_cast_other_column", column="shared_border_length_m", failures=EXPR, cause="cast to VARCHAR")
+    county("adjacency_cast_other_relation", column="neighbor_fips", source="int_hsa_zip_cases", failures=EXPR, cause="cast to VARCHAR")
+    county(
+        "adjacency_cast_in_dim_zip",
+        model="dim_zip",
+        sql="with lists as (select cast(county_fips as varchar) as zip_code from main.int_county_adjacency_edges) "
+        "select md5(zip_code) as zip_sk, zip_code from lists",
+        failures=EXPR,
+        cause="cast to VARCHAR",
+    )
+    return cases
+
+
+def county_filter_probes() -> list[Probe]:
+    """``county_fips like '09%'`` over the RUCA rows: a positive conjunct of the WHERE clause of bridge_county_planning_region."""
+    cases: list[Probe] = []
+
+    def like(name: str, condition: str = "county_fips like '09%'", source: str = "main.int_ruca_codes", **kwargs: Any) -> None:
+        sql = kwargs.pop("sql", county_filter_sql(condition, source, kwargs.pop("extra", "")))
+        cases.append(Probe("P2_like_" + name, kwargs.pop("model", "bridge_county_planning_region"), sql, **kwargs))
+
+    like("admitted", failures=())
+    like("entry_removed", failures=EXPR, cause="function ~~ is not approved", remove="county_prefix")
+    like("other_model", model="bridge_zip_county", failures=EXPR, cause="function ~~ is not approved")
+    like("other_column", condition="county_fips_2023 like '09%'", failures=EXPR, cause="function ~~ is not approved")
+    like("other_pattern", condition="county_fips like '0%'", failures=EXPR, cause="function ~~ is not approved")
+    like("wildcard_inside", condition="county_fips like '0_%'", failures=EXPR, cause="function ~~ is not approved")
+    like("other_relation", source="main.int_pos_hospital_snapshots", failures=EXPR, cause="function ~~ is not approved")
+    like("not_like", condition="county_fips not like '09%'", failures=EXPR, cause="function !~~ is not approved")
+    like("ilike", condition="county_fips ilike '09%'", failures=EXPR, cause="function ~~* is not approved")
+    like("escape", condition="county_fips like '09%' escape '!'", failures=EXPR, cause="function like_escape is not approved")
+    like("in_output", extra=", county_fips like '09%' as in_connecticut", failures=EXPR, cause="function ~~ is not approved")
+    like(
+        "in_having",
+        sql="select county_fips as old_county_fips, county_fips_2023 as planning_region_fips, count(*) as tract_count, member_sha256 from main.int_ruca_codes "
+        "where vintage = '2020' group by county_fips, county_fips_2023, member_sha256 having county_fips like '09%'",
+        failures=EXPR,
+        cause="function ~~ is not approved",
+    )
+    like(
+        "in_dim_hospital",
+        model="dim_hospital",
+        sql="select md5(ccn) as hospital_sk, ccn from main.int_cost_reports where ccn like '09%'",
+        failures=EXPR,
+        cause="function ~~ is not approved",
+    )
+    return cases
+
+
+def edition_probes(rendered: dict[str, str]) -> list[Probe]:
+    """The edition-split gold models: the edition part of a key, the label selection with editions and three narrow forms.
+
+    Each control carries the delivered shape; a refusal changes one thing (the model, the column, the width, the pairing, the aggregate, a filter or the
+    grouping). The mutations of delivered text raise when they no longer change it, so a model change cannot silently void a probe.
+    """
+    return (
+        rurality_key_probes()
+        + measure_union_probes()
+        + bridge_edition_probes()
+        + rurality_selection_probes()
+        + measure_selection_probes()
+        + delivered_edition_probes(rendered)
+        + county_cast_probes()
+        + county_filter_probes()
+    )
+
+
+def filtered_bound_probes(rendered: dict[str, str]) -> list[Probe]:
+    """A bound is granted only to a plain aggregate; a filter, ``distinct`` or ``order by`` leaves it a refused aggregate."""
+    cases: list[Probe] = []
+    null_rurality, null_measure = "filter (where label_order is null)", "filter (where release_date is null)"
+    for name, start, end in (
+        ("filter_false", "min(label_order) filter (where false)", "max(label_order) filter (where false)"),
+        ("filter_null_column", f"min(label_order) {null_rurality}", f"max(label_order) {null_rurality}"),
+        ("distinct", "min(distinct label_order)", "max(distinct label_order)"),
+        ("order_by", "min(label_order order by label_order)", "max(label_order)"),
+    ):
+        sql = label_edition_sql(start=start, end=end)
+        cases.append(Probe("P3_h1_rurality_" + name, "dim_rurality_code", sql, EXPR, "" if name == "filter_false" else "aggregate m"))
+    for name, start, end in (
+        ("filter_false", "cast(min(release_date) filter (where false) as varchar)", "cast(max(release_date) filter (where false) as varchar)"),
+        ("filter_null_column", f"cast(min(release_date) {null_measure} as varchar)", f"cast(max(release_date) {null_measure} as varchar)"),
+    ):
+        cases.append(
+            Probe("P3_h1_measure_" + name, "dim_measure", named_edition_sql(start=start, end=end), EXPR, "" if name == "filter_false" else "aggregate m")
+        )
+    for model, operand in (("dim_rurality_code", "observed.label_order"), ("dim_measure", "names_published.release_date")):
+        for name, modifier in (("filter_false", "filter (where false)"), ("filter_null_column", f"filter (where {operand} is null)")):
+            text = changed(changed(rendered[model], f"min({operand})", f"min({operand}) {modifier}"), f"max({operand})", f"max({operand}) {modifier}")
+            cases.append(Probe(f"P3_h1_delivered_{model.removeprefix('dim_')}_{name}", model, text, EXPR, "" if name == "filter_false" else "aggregate m"))
+    bounds = county_bounds_sql(first="min(vintage) filter (where vintage is null)")
+    cases.append(Probe("P3_h1_county_bounds_filter", "dim_county", bounds, EXPR, "aggregate min"))
+    return cases
+
+
+def bound_input_probes() -> list[Probe]:
+    """The label bounds read the date of the relation that carries the label, from the occurrence that carries it."""
+    published = (
+        "names_published as (select 'fct_hai_hospital_window' as fact, cast(measure_id as varchar) as measure_key, measure_name, release_date "
+        "from main.int_hai_hospital_windows), "
+    )
+    other_date = (
+        "names_published as (select 'fct_hai_hospital_window' as fact, cast(w.measure_id as varchar) as measure_key, w.measure_name, c.release_date "
+        "from main.int_hai_hospital_windows w cross join main.int_cost_reports c), "
+    )
+    rucc = "main.int_rucc_county_codes r"
+    sources = (
+        (
+            "rurality_bound_unrelated_date",
+            "dim_rurality_code",
+            RURALITY_ROWS_SQL.substitute(date="h.release_date", source=rucc + " cross join main.int_hai_hospital_windows h"),
+        ),
+        (
+            "rurality_bound_other_relation",
+            "dim_rurality_code",
+            RURALITY_ROWS_SQL.substitute(date="b.vintage", source=rucc + " cross join main.int_ruca_codes b"),
+        ),
+        (
+            "rurality_bound_label_from_other_row",
+            "dim_rurality_code",
+            RURALITY_ROWS_SQL.substitute(date="cast(o.vintage as varchar)", source=rucc + " cross join main.int_rucc_county_codes o"),
+        ),
+        ("measure_bound_other_relation", "dim_measure", changed(named_edition_sql(), published, other_date)),
+        ("county_bounds_other_relation", "dim_county", county_bounds_sql(source="main.int_ruca_codes")),
+        (
+            "county_bounds_other_row",
+            "dim_county",
+            COUNTY_ROWS_SQL.substitute(source="main.int_county_adjacency_edges a cross join main.int_rucc_county_codes b", vintage="b.vintage"),
+        ),
+    )
+    causes = {"rurality_bound_label_from_other_row": "A48", "county_bounds_other_relation": "aggregate max", "county_bounds_other_row": "aggregate max"}
+    cases = [Probe("P3_m1_" + name, model, sql, EXPR, causes.get(name, "aggregate min")) for name, model, sql in sources]
+    return [
+        Probe("P3_m1_county_bounds_same_row", "dim_county", COUNTY_ROWS_SQL.substitute(source="main.int_county_adjacency_edges a", vintage="a.vintage"), ())
+    ] + cases
+
+
+def key_input_probes() -> list[Probe]:
+    """The state prefix reads the RUCC county code, and only the control bridge hashes the edition start of dim_measure."""
+    rurality_key = KEY_ROWS_SQL.substitute(
+        columns="'int_rucc_county_codes.rucc_code' as code_system, cast(r.rucc_code as varchar) as code, m.edition_start",
+        source="main.int_rucc_county_codes r cross join main.dim_measure m",
+        parts="code_system, code, edition_start",
+        key="rurality_code_sk",
+    )
+    measure_key = (
+        "with q as (select fact, measure_key, value_column, edition_start from main.dim_measure) "
+        "select md5(concat_ws('|', fact, measure_key, value_column, edition_start)) as measure_sk, "
+        "concat_ws('|', fact, measure_key, value_column, edition_start) as measure_identity, fact, measure_key, value_column, edition_start from q"
+    )
+    renamed = (
+        "with q as (select state_code, ccn as county_fips from main.int_cost_reports) "
+        "select md5(state_code) as state_sk, state_code, left(county_fips, 2) as state_fips from q"
+    )
+    return [
+        Probe("P3_m1_state_prefix_renamed_ccn", "dim_state", renamed, EXPR, "contracted expression"),
+        Probe("P3_m1_state_prefix_other_relation", "dim_state", state_sql(source="main.int_pos_hospital_snapshots"), EXPR, "contracted expression"),
+        Probe("P3_m1_rurality_key_measure_edition", "dim_rurality_code", rurality_key, EXPR, "contracted expression"),
+        Probe("P3_m1_measure_key_passthrough", "dim_measure", measure_key, EXPR, "contracted expression"),
+    ]
+
+
+def latest_list_probes() -> list[Probe]:
+    """The membership test reads the county code of the latest adjacency-list selection and is left joined on the county code."""
+    base = county_lists_sql()
+    latest = (
+        "latest as (select lists.county_fips from lists inner join latest_vintage on lists.vintage = latest_vintage.vintage "
+        "where lists.list_name = 'int_county_adjacency_edges'), "
+    )
+    latest_vintage = "latest_vintage as (select max(vintage) as vintage from lists where list_name = 'int_county_adjacency_edges'), "
+    sources = (
+        ("membership_last_listed", changed(base, "latest.county_fips is not null", "last_listed.county_fips is not null"), "contracted expression"),
+        (
+            "membership_unrelated_relation",
+            "select md5(county_fips) as county_sk, county_fips, county_fips is not null as in_latest_county_list from main.int_ruca_codes",
+            "contracted expression",
+        ),
+        (
+            "latest_without_vintage_join",
+            changed(base, latest, "latest as (select lists.county_fips from lists where lists.list_name = 'int_county_adjacency_edges'), "),
+            "contracted expression",
+        ),
+        (
+            "latest_other_list",
+            changed(base, "where lists.list_name = 'int_county_adjacency_edges'), ", "where lists.list_name = 'int_rucc_county_codes'), "),
+            "contracted expression",
+        ),
+        (
+            "latest_vintage_unfiltered",
+            changed(base, latest_vintage, "latest_vintage as (select max(vintage) as vintage from lists), "),
+            "contracted expression",
+        ),
+        (
+            "latest_vintage_other_list",
+            changed(base, latest_vintage, latest_vintage.replace("'int_county_adjacency_edges'", "'int_rucc_county_codes'")),
+            "contracted expression",
+        ),
+        (
+            "latest_union_extra_rows",
+            changed(base, latest, latest.replace("), ", " union select county_fips from lists), ")),
+            "contracted expression",
+        ),
+        ("membership_inner_join", county_lists_sql(join="inner join"), "left join"),
+        ("membership_not_joined_on_county", county_lists_sql(condition="latest.county_fips = '09001'"), "left join"),
+    )
+    return [Probe("P3_m2_" + name, "dim_county", sql, EXPR, cause) for name, sql, cause in sources]
+
+
+def tract_grain_probes() -> list[Probe]:
+    """The tract count is a plain ``count(*)``, grouped by exactly the old county, planning region and file, and only a select item."""
+    having = changed(
+        tract_sql(), "group by county_fips, county_fips_2023, member_sha256", "group by county_fips, county_fips_2023, member_sha256 having count(*) > 1"
+    )
+    sources = (
+        ("filter_false", tract_sql(count="count(*) filter (where false)")),
+        ("extra_group", tract_sql(group=TRACT_GROUP + ", geography_id")),
+        ("rollup", tract_sql(group=" group by rollup (county_fips, county_fips_2023, member_sha256)")),
+        ("having", having),
+    )
+    return [Probe("P3_m3_tract_count_" + name, "bridge_county_planning_region", sql, EXPR, "aggregate count_star") for name, sql in sources]
+
+
+def seed_side_probes() -> list[Probe]:
+    """The seed side of the edition-year comparison is the physical seed range of the left source, nothing renamed or borrowed."""
+    projected = "value_column, vintage_start, vintage_end, measure_control from"
+    other_row = bridge_keys_sql(
+        first="seed_rows.vintage_start is not null",
+        second="seed_rows.vintage_end is not null",
+        tail=" inner join main.impact_measures_bridge other_seed on other_seed.fact = seed_rows.fact "
+        "and (other_seed.vintage_start is null or left(editions.edition_end, 4) >= other_seed.vintage_start)",
+    )
+    sources = (
+        ("seed_renamed_control", changed(bridge_keys_sql(), projected, "value_column, measure_control as vintage_start, vintage_end, measure_control from")),
+        ("seed_renamed_source", changed(bridge_keys_sql(), projected, "value_column, source_seed as vintage_start, vintage_end, measure_control from")),
+        ("seed_other_relation", bridge_keys_sql(seed="main.int_cost_reports")),
+        ("seed_other_row", other_row),
+    )
+    return [Probe("P3_m4_" + name, "bridge_measure_control", sql, EXPR, "function left is not approved") for name, sql in sources]
+
+
+def predicate_context_probes() -> list[Probe]:
+    """The county like and the year comparison keep their clause and their enclosing operators."""
+    sources = (
+        ("like_nested_having", county_filter_sql("exists (select 1 from main.int_ruca_codes r group by r.county_fips having r.county_fips like '09%')")),
+        ("like_nested_where", county_filter_sql("exists (select 1 from main.int_ruca_codes r where r.county_fips like '09%')")),
+        ("like_negated", county_filter_sql("not (county_fips like '09%')")),
+        ("like_is_false", county_filter_sql("(county_fips like '09%') is false")),
+        ("like_in_or", county_filter_sql("(county_fips like '09%' or geography_type = 'tract')")),
+    )
+    cases = [
+        Probe("P3_m5_" + name, "bridge_county_planning_region", sql, EXPR, "" if name == "like_is_false" else "function ~~ is not approved")
+        for name, sql in sources
+    ]
+    base = bridge_keys_sql()
+    guarded = "and (seed_rows.vintage_start is null or seed_rows.vintage_start = '' or " + EDITION_START_CMP + ")"
+    years = (
+        ("year_nested_having", bridge_keys_sql(first=f"exists (select 1 having {EDITION_START_CMP})")),
+        ("year_negated", bridge_keys_sql(first=f"not ({EDITION_START_CMP})")),
+        ("year_outside_or", changed(base, guarded, "and " + EDITION_START_CMP)),
+    )
+    return cases + [Probe("P3_m5_" + name, "bridge_measure_control", sql, EXPR, "function left is not approved") for name, sql in years]
+
+
+def near_delivered_probes(rendered: dict[str, str]) -> list[Probe]:
+    """Near-delivered expressions that leave the approved bound: a filtered aggregate, a borrowed column, row or relation, a negated or nested predicate."""
+    return (
+        filtered_bound_probes(rendered)
+        + key_input_probes()
+        + bound_input_probes()
+        + latest_list_probes()
+        + tract_grain_probes()
+        + seed_side_probes()
+        + predicate_context_probes()
+    )
+
+
+PIN_CAUSE = "pinned to the delivered"
+STAND_IN_LATEST = (
+    "latest as (select lists.county_fips from lists inner join latest_vintage on lists.vintage = latest_vintage.vintage "
+    "where lists.list_name = 'int_county_adjacency_edges'), "
+)
+STAND_IN_LATEST_VINTAGE = "latest_vintage as (select max(vintage) as vintage from lists where list_name = 'int_county_adjacency_edges'), "
+ADJACENCY_LITERAL, RUCC_LITERAL = "'int_county_adjacency_edges' as list_name", "'int_rucc_county_codes' as list_name"
+NULL_BOUNDS = ("filter (where edition_start is null)", "filter (where edition_end is null)")
+FALSE_BOUNDS = ("filter (where false)", "filter (where false)")
+PLAIN_BOUNDS = ("", "")
+RESTRICTED_LATEST = Template("latest as (select county_fips from actual_latest$tail), ")
+RESTRICTED_DELIVERED_LATEST = Template("latest as (select county_fips from actual_latest$tail),\nlast_listed as (")
+STAND_IN_RURALITY_ANY_VALUE = Template(
+    "), filtered_editions as (select code_system, code, code_label, any_value(edition_start) $start as edition_start, "
+    "any_value(edition_end) $end as edition_end from editions group by code_system, code, code_label) select md5("
+)
+STAND_IN_MEASURE_ANY_VALUE = Template(
+    "filtered_editions as (select fact, measure_key, edition_label, any_value(edition_start) $start as edition_start, "
+    "any_value(edition_end) $end as edition_end from editions group by fact, measure_key, edition_label), "
+    "keyed as (select fact, measure_key, edition_label as measure_label, 'score' as value_column, edition_start, edition_end from filtered_editions) "
+)
+DELIVERED_RURALITY_ANY_VALUE = Template(
+    "editions as (select code_system, code, code_label, any_value(edition_start) $start as edition_start, "
+    "any_value(edition_end) $end as edition_end from raw_editions group by code_system, code, code_label),\ncombined as ("
+)
+DELIVERED_MEASURE_ANY_VALUE = Template(
+    "editions as (select fact, measure_key, edition_label, any_value(edition_start) $start as edition_start, "
+    "any_value(edition_end) $end as edition_end from raw_editions group by fact, measure_key, edition_label),\nbase as ("
+)
+
+
+def changed_once(sql: str, before: str, after: str) -> str:
+    """The text with its one occurrence of ``before`` replaced; a missing or repeated match raises, so a probe changes exactly the element it names."""
+    if sql.count(before) != 1:
+        raise ValueError(f"Probe mutation must match exactly once ({sql.count(before)} found): {before}")
+    return sql.replace(before, after)
+
+
+def swapped(sql: str, first: str, second: str) -> str:
+    """The text with every ``first`` and every ``second`` exchanged."""
+    return changed(changed(changed(sql, first, "\0"), second, first), "\0", second)
+
+
+def stand_in_county(name: str) -> str:
+    """The delivered chain of dim_county's list, latest vintage and latest list as a small query, with one change that alters its meaning."""
+    base = county_lists_sql()
+    narrowed = "from (select * from lists where $rows) narrowed where"
+
+    def restricted(tail: str) -> str:
+        return changed_once(base, STAND_IN_LATEST, STAND_IN_LATEST.replace("latest as", "actual_latest as") + RESTRICTED_LATEST.substitute(tail=tail))
+
+    def vintage_over(rows: str) -> str:
+        return changed_once(base, STAND_IN_LATEST_VINTAGE, STAND_IN_LATEST_VINTAGE.replace("from lists where", Template(narrowed).substitute(rows=rows)))
+
+    return {
+        "after_filter_false": lambda: restricted(" where false"),
+        "after_filter_county": lambda: restricted(" where county_fips <> '09110'"),
+        "after_limit_zero": lambda: restricted(" limit 0"),
+        "after_except_self": lambda: restricted(" except select county_fips from actual_latest"),
+        "after_intersect_empty": lambda: restricted(" intersect select county_fips from actual_latest where false"),
+        "max_over_old_vintage": lambda: vintage_over("vintage = '2013'"),
+        "max_over_empty": lambda: vintage_over("false"),
+        "extra_join_false": lambda: county_lists_sql(condition="last_listed.county_fips = latest.county_fips and false"),
+        "projects_vintage": lambda: changed_once(
+            base, STAND_IN_LATEST, STAND_IN_LATEST.replace("select lists.county_fips", "select lists.vintage as county_fips")
+        ),
+        "swapped_list_literals": lambda: swapped(base, "select " + ADJACENCY_LITERAL, "select " + RUCC_LITERAL),
+        "positive": lambda: base,
+    }[name]()
+
+
+def delivered_county(text: str, name: str) -> str:
+    """The delivered dim_county with the same change made to its own latest-list chain."""
+    latest = "latest as (\n    select lists.county_fips\n    from lists\n    inner join latest_vintage"
+    vintage = "select max(vintage) as vintage\n    from lists\n    where list_name = 'int_county_adjacency_edges'"
+    renamed = changed_once(text, latest, latest.replace("latest as", "actual_latest as"))
+
+    def restricted(tail: str) -> str:
+        return changed_once(renamed, "last_listed as (", RESTRICTED_DELIVERED_LATEST.substitute(tail=tail))
+
+    return {
+        "after_filter_false": lambda: restricted(" where false"),
+        "after_filter_county": lambda: restricted(" where county_fips <> '09110'"),
+        "after_limit_zero": lambda: restricted(" limit 0"),
+        "after_except_self": lambda: restricted(" except select county_fips from actual_latest"),
+        "after_intersect_empty": lambda: restricted(" intersect select county_fips from actual_latest where false"),
+        "max_over_old_vintage": lambda: changed_once(
+            text, vintage, vintage.replace("from lists", "from (select * from lists where vintage = '2013') as narrowed")
+        ),
+        "max_over_empty": lambda: changed_once(text, vintage, vintage.replace("from lists", "from (select * from lists where false) as narrowed")),
+        "extra_join_false": lambda: changed_once(text, "on valid.county_fips = latest.county_fips", "on valid.county_fips = latest.county_fips and false"),
+        "projects_vintage": lambda: changed_once(text, latest, latest.replace("select lists.county_fips", "select lists.vintage as county_fips")),
+        "swapped_list_literals": lambda: swapped(text, ADJACENCY_LITERAL, RUCC_LITERAL),
+    }[name]()
+
+
+def stand_in_any_value(model: str, bounds: tuple[str, str]) -> str:
+    """The positive edition selection with a later grouped CTE that re-reads each bound through ``any_value``."""
+    start, end = bounds
+    if model == "dim_rurality_code":
+        text = changed_once(label_edition_sql(), "edition_start, edition_end from editions", "edition_start, edition_end from filtered_editions")
+        return changed_once(text, ") select md5(", STAND_IN_RURALITY_ANY_VALUE.substitute(start=start, end=end))
+    keyed = "keyed as (select fact, measure_key, edition_label as measure_label, 'score' as value_column, edition_start, edition_end from editions) "
+    return changed_once(named_edition_sql(), keyed, STAND_IN_MEASURE_ANY_VALUE.substitute(start=start, end=end))
+
+
+def delivered_any_value(text: str, model: str, bounds: tuple[str, str]) -> str:
+    """The delivered model whose edition CTE is re-read by a later grouped CTE through ``any_value``."""
+    start, end = bounds
+    if model == "dim_rurality_code":
+        opened, closing, later = "editions as (\n    select\n        observed.code_system,", "combined as (", DELIVERED_RURALITY_ANY_VALUE
+    else:
+        opened, closing, later = "editions as (\n    select\n        names_published.fact,", "base as (", DELIVERED_MEASURE_ANY_VALUE
+    return changed_once(changed_once(text, opened, "raw_" + opened), closing, later.substitute(start=start, end=end))
+
+
+def borrowed_row_probes(rendered: dict[str, str]) -> list[Probe]:
+    """The seed range or the edition bounds of the control bridge come from another row of their own table."""
+    seed_rows = "seed_rows as (select fact, measure_key, value_column, vintage_start, vintage_end, measure_control from main.registry_measure_sources_bridge)"
+    borrowed_seed = (
+        "seed_rows as (select a.fact, a.measure_key, a.value_column, b.vintage_start, a.vintage_end, a.measure_control "
+        "from main.registry_measure_sources_bridge a cross join main.registry_measure_sources_bridge b)"
+    )
+    editions = "editions as (select fact, measure_key, value_column, edition_start, edition_end from main.dim_measure where edition_start is not null)"
+    borrowed_edition = (
+        "editions as (select a.fact, a.measure_key, a.value_column, b.edition_start, b.edition_end "
+        "from main.dim_measure a cross join main.dim_measure b where b.edition_start is not null)"
+    )
+    text = rendered["bridge_measure_control"]
+    seed_pairs = "from seed_rows as seed_rows"
+    editions_opened = (
+        "    select\n        fact,\n        measure_key,\n        value_column,\n        edition_start,\n        edition_end\n"
+        '    from main."dim_measure"\n    where edition_start is not null'
+    )
+    borrowed_rows = (
+        "borrowed as (select a.fact, a.measure_key, a.value_column, b.vintage_start, a.vintage_end, a.measure_control, a.source_seed, a.source_row "
+        "from seed_rows a cross join seed_rows b),\n"
+    )
+    other_edition = (
+        "    select a.fact, a.measure_key, a.value_column, b.edition_start, b.edition_end\n"
+        '    from main."dim_measure" a cross join main."dim_measure" b\n    where b.edition_start is not null'
+    )
+    delivered_seed = changed_once(changed_once(text, "keyed as (", borrowed_rows + "keyed as ("), seed_pairs, "from borrowed as seed_rows")
+    cases = (
+        ("P4_m4_seed_bounds_other_row", changed_once(bridge_keys_sql(), seed_rows, borrowed_seed)),
+        ("P4_m4_edition_bounds_other_row", changed_once(bridge_keys_sql(), editions, borrowed_edition)),
+        ("P4_d_bridge_seed_bounds_other_row", delivered_seed),
+        ("P4_d_bridge_edition_bounds_other_row", changed_once(text, editions_opened, other_edition)),
+    )
+    return [Probe(name, "bridge_measure_control", sql, EXPR, PIN_CAUSE, real_pins=True) for name, sql in cases]
+
+
+def pinned_query_reproducers(rendered: dict[str, str]) -> list[Probe]:
+    """Changes that keep the evidence of a pinned capability and alter its meaning, each as a small query and as a change of the delivered text."""
+    cases: list[Probe] = []
+    for label, bounds in (("null", NULL_BOUNDS), ("false", FALSE_BOUNDS), ("plain", PLAIN_BOUNDS)):
+        for model, short in (("dim_rurality_code", "rurality"), ("dim_measure", "measure")):
+            cases.append(Probe(f"P4_h1r2_{short}_any_value_{label}", model, stand_in_any_value(model, bounds), EXPR, PIN_CAUSE, real_pins=True))
+            if label != "plain":
+                cases.append(
+                    Probe(f"P4_d_{short}_any_value_{label}", model, delivered_any_value(rendered[model], model, bounds), EXPR, PIN_CAUSE, real_pins=True)
+                )
+    names = ("after_filter_false", "after_filter_county", "after_limit_zero", "after_except_self", "after_intersect_empty", "max_over_old_vintage")
+    for name in (*names, "max_over_empty", "extra_join_false", "projects_vintage", "swapped_list_literals"):
+        group = "m2b" if name in {"projects_vintage", "swapped_list_literals"} else "m2a"
+        cases.append(Probe(f"P4_{group}_{name}", "dim_county", stand_in_county(name), EXPR, PIN_CAUSE, real_pins=True))
+        cases.append(Probe(f"P4_d_county_{name}", "dim_county", delivered_county(rendered["dim_county"], name), EXPR, PIN_CAUSE, real_pins=True))
+    cases.append(Probe("P4_m2a_latest_positive", "dim_county", stand_in_county("positive"), EXPR, PIN_CAUSE, real_pins=True))
+    return cases + borrowed_row_probes(rendered)
+
+
+MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "dim_rurality_code": (
+        ("modifier", "min(observed.label_order) as edition_start", "min(distinct observed.label_order) as edition_start"),
+        ("filter", " and observed.label_order is not null", ""),
+        ("join_type", "inner join split_keys", "left join split_keys"),
+        ("grouping", "group by observed.code_system, observed.code, observed.code_label", "group by observed.code_system, observed.code"),
+        ("source_table", 'from main."int_rucc_county_codes"', 'from main."int_ruca_codes"'),
+        ("literal", "where identity_rule = 'split'", "where identity_rule = 'merged'"),
+    ),
+    "dim_measure": (
+        ("modifier", "cast(min(names_published.release_date) as varchar)", "cast(min(distinct names_published.release_date) as varchar)"),
+        ("filter", " and names_published.release_date is not null", ""),
+        ("join_type", "inner join editions", "left join editions"),
+        (
+            "grouping",
+            "group by names_published.fact, names_published.measure_key, names_published.measure_name",
+            "group by names_published.fact, names_published.measure_key",
+        ),
+        (
+            "source_table",
+            'from main."int_hai_state_windows"\n    where measure_id is not null and measure_name is not null',
+            'from main."int_hai_national_windows"\n    where measure_id is not null and measure_name is not null',
+        ),
+        ("literal", "identity_rules.identity_rule = 'split' and", "identity_rules.identity_rule = 'merged' and"),
+    ),
+    "dim_county": (
+        ("modifier", "select max(vintage) as vintage", "select max(distinct vintage) as vintage"),
+        ("filter", "where vintage is not null and neighbor_fips is not null", "where neighbor_fips is not null"),
+        ("join_type", "inner join latest_vintage", "left join latest_vintage"),
+        ("grouping", "group by county_fips\n)", "group by county_fips, vintage\n)"),
+        ("source_table", 'from main."int_acs_county_values"\n    where vintage is not null', 'from main."int_ruca_codes"\n    where vintage is not null'),
+        ("literal", "'int_acs_county_values' as list_name", "'int_acs_county_vals' as list_name"),
+    ),
+    "bridge_measure_control": (
+        ("select_modifier", "select\n    measure_sk,", "select distinct\n    measure_sk,"),
+        ("filter", "    where edition_start is not null", ""),
+        ("join_type", "left join editions as editions", "inner join editions as editions"),
+        ("source_table", 'from main."registry_measure_sources_bridge"', 'from main."impact_measures_bridge"'),
+        ("literal", "left(editions.edition_end, 4) >= seed_rows.vintage_start", "left(editions.edition_end, 5) >= seed_rows.vintage_start"),
+        ("operator", "left(editions.edition_end, 4) >= seed_rows.vintage_start", "left(editions.edition_end, 4) > seed_rows.vintage_start"),
+    ),
+}
+UNRELATED_EDITS = {
+    "dim_rurality_code": ("select * from final", "select final.*, 'x' as note from final"),
+    "dim_measure": ("select * from final", "select final.*, 'x' as note from final"),
+    "dim_county": ("select * from final", "select final.*, 'x' as note from final"),
+    "bridge_measure_control": ("    source_row\nfrom keyed", "    source_row,\n    source_seed as seed_copy\nfrom keyed"),
+}
+
+
+def mutation_probes(
+    rendered: dict[str, str],
+    mutations: dict[str, tuple[tuple[str, str, str], ...]] = MUTATIONS,
+    unrelated: dict[str, tuple[str, str]] = UNRELATED_EDITS,
+    prefix: str = "P4",
+) -> list[Probe]:
+    """One element of each pinned model changed at a time (modifier, filter, join type, grouping, source table, literal, operator) and an unrelated edit."""
+    cases = [
+        Probe(f"{prefix}_mut_{model.removeprefix('dim_')}_{element}", model, changed_once(rendered[model], before, after), EXPR, PIN_CAUSE, real_pins=True)
+        for model, edits in mutations.items()
+        for element, before, after in edits
+    ]
+    for model, (before, after) in unrelated.items():
+        cases.append(Probe(f"{prefix}_pin_unrelated_edit_{model}", model, changed_once(rendered[model], before, after), EXPR, PIN_CAUSE, real_pins=True))
+    return cases
+
+
+def layout_only(text: str) -> str:
+    """The same query with other indentation, keyword case, a comment and unquoted relation names: its parse does not change."""
+    return "/* layout only */\n" + re.sub(r'main\."(\w+)"', r"main.\1", re.sub(r"\bselect\b", "SELECT", text.replace("\n    ", "\n      ")))
+
+
+def layout_pin_probes(rendered: dict[str, str], models: Iterable[str], prefix: str) -> list[Probe]:
+    """What a pin accepts: the delivered query with other layout, and with the build catalog written on its relations (the parse alone counts)."""
+    cases: list[Probe] = []
+    for model in models:
+        cases.append(Probe(f"{prefix}_pin_text_only_{model}", model, layout_only(rendered[model]), (), real_pins=True))
+        cases.append(Probe(f"{prefix}_pin_catalog_{model}", model, rendered[model].replace('main."', '"staging".main."'), (), real_pins=True))
+    return cases
+
+
+def missing_pin_probes(rendered: dict[str, str], causes: dict[str, str], prefix: str) -> list[Probe]:
+    """A pinned capability whose pin entry is missing is not granted: the delivered query is refused for the cause its model's capability would have lifted."""
+    return [
+        Probe(f"{prefix}_pin_missing_{model}", model, rendered[model], EXPR, cause, remove="pin:" + model, real_pins=True) for model, cause in causes.items()
+    ]
+
+
+def pin_application_probes(rendered: dict[str, str]) -> list[Probe]:
+    """What the pin accepts (the parse alone counts) and what it does not carry over (another model, a CTE read as a build relation, a missing pin)."""
+    cases = layout_pin_probes(rendered, MUTATIONS, "P4")
+    cases.append(
+        Probe(
+            "P4_pin_cte_made_physical",
+            "dim_county",
+            changed_once(rendered["dim_county"], "select max(vintage) as vintage\n    from lists", 'select max(vintage) as vintage\n    from main."lists"'),
+            EXPR,
+            PIN_CAUSE,
+            real_pins=True,
+        )
+    )
+    cases.append(Probe("P4_pin_other_model_county_as_measure", "dim_measure", rendered["dim_county"], EXPR, PIN_CAUSE, real_pins=True))
+    cases.append(Probe("P4_pin_other_model_rurality_as_drg", "dim_drg", rendered["dim_rurality_code"], EXPR, "aggregate min", real_pins=True))
+    causes = {
+        "dim_rurality_code": "aggregate min",
+        "dim_measure": "aggregate min",
+        "dim_county": "aggregate max",
+        "bridge_measure_control": "function left is not approved",
+    }
+    return cases + missing_pin_probes(rendered, causes, "P4")
+
+
+def own_pin_any_value_probes() -> list[Probe]:
+    """Without the pin, ``any_value`` keeps a certified bound only as a plain call (each probe runs with the fingerprint of its own query as the pin)."""
+    cases = []
+    for label, bounds, failures, cause in (
+        ("filter_null", NULL_BOUNDS, EXPR, "aggregate any_value"),
+        ("filter_false", FALSE_BOUNDS, EXPR, "aggregate any_value"),
+        ("plain", PLAIN_BOUNDS, (), ""),
+    ):
+        for model, short in (("dim_rurality_code", "rurality"), ("dim_measure", "measure")):
+            cases.append(Probe(f"P4_any_value_{label}_own_pin_{short}", model, stand_in_any_value(model, bounds), failures, cause))
+    return cases
+
+
+def pinned_model_probes(rendered: dict[str, str]) -> list[Probe]:
+    """The reproducers, the one-element mutations of the pinned models and the pin's own rules."""
+    return pinned_query_reproducers(rendered) + mutation_probes(rendered) + pin_application_probes(rendered) + own_pin_any_value_probes()
+
+
+MUTATIONS_STATE_PLANNING: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "dim_state": (
+        ("modifier", "select distinct\n        state as state_code,", "select\n        state as state_code,"),
+        ("filter", "where state is not null and county_fips is not null", "where state is not null"),
+        ("join_type", "left join fips", "inner join fips"),
+        (
+            "source_table",
+            'from main."int_rucc_county_codes"\n    where state is not null and county_fips',
+            'from main."int_ruca_codes"\n    where state is not null and county_fips',
+        ),
+        ("literal", "left(county_fips, 2)", "left(county_fips, 3)"),
+        ("operator", "'^[A-Z]{2}$'", "'^[A-Z]{3}$'"),
+    ),
+    "bridge_county_planning_region": (
+        ("modifier", "count(*) as tract_count", "count(distinct county_fips) as tract_count"),
+        ("filter", " and geography_type = 'tract'", ""),
+        ("grouping", "group by county_fips, county_fips_2023, member_sha256", "group by county_fips, county_fips_2023"),
+        ("source_table", 'from main."int_ruca_codes"', 'from main."int_rucc_county_codes"'),
+        ("literal", "county_fips like '09%'", "county_fips like '36%'"),
+        ("operator", "vintage = '2020'", "vintage <> '2020'"),
+    ),
+}
+UNRELATED_EDITS_STATE_PLANNING = {
+    "dim_state": ("select * from final", "select final.*, 'x' as note from final"),
+    "bridge_county_planning_region": ("    member_sha256\nfrom counted", "    member_sha256,\n    'x' as note\nfrom counted"),
+}
+
+
+def second_pin_probes(rendered: dict[str, str]) -> list[Probe]:
+    """The pins of dim_state and bridge_county_planning_region: one element changed at a time, an unrelated edit, layout-only text and a missing pin."""
+    causes = {"dim_state": "function left is not approved", "bridge_county_planning_region": "aggregate count_star"}
+    return (
+        mutation_probes(rendered, MUTATIONS_STATE_PLANNING, UNRELATED_EDITS_STATE_PLANNING, "P5")
+        + layout_pin_probes(rendered, MUTATIONS_STATE_PLANNING, "P5")
+        + missing_pin_probes(rendered, causes, "P5")
+    )
+
+
+QUALIFIED_CAUSE = "is qualified"
+
+
+def spoofed_calls(rendered: dict[str, str]) -> list[tuple[str, str, str]]:
+    """Qualified spellings of the approved calls, each as a small query and as a change of the delivered text: the model's name, the model and the SQL."""
+    state, planning, dim_county = rendered["dim_state"], rendered["bridge_county_planning_region"], rendered["dim_county"]
+    left = ('spoof."left"(county_fips, 2)', "main.left(county_fips, 2)", 'spoof_db.spoof."left"(county_fips, 2)', 'system.main."left"(county_fips, 2)')
+    counts = ("spoof.count_star()", "system.main.count_star()", "main.count_star()")
+    likes = ("spoof.\"~~\"(county_fips, '09%')", "spoof_db.spoof.\"~~\"(county_fips, '09%')", "main.\"~~\"(county_fips, '09%')")
+    cases: list[tuple[str, str, str]] = []
+    for index, call in enumerate(left):
+        cases.append((f"state_left_{index}", "dim_state", state_sql(call)))
+        cases.append((f"d_state_left_{index}", "dim_state", changed_once(state, "left(county_fips, 2)", call)))
+    for index, call in enumerate(counts):
+        cases.append((f"tract_count_{index}", "bridge_county_planning_region", tract_sql(call)))
+        cases.append((f"d_tract_count_{index}", "bridge_county_planning_region", changed_once(planning, "count(*)", call)))
+    for index, call in enumerate(likes):
+        cases.append((f"county_like_{index}", "bridge_county_planning_region", county_filter_sql(call)))
+        cases.append((f"d_county_like_{index}", "bridge_county_planning_region", changed_once(planning, "county_fips like '09%'", call)))
+    cases.append(("aggregate_max", "dim_county", changed_once(dim_county, "select max(vintage) as vintage", "select main.max(vintage) as vintage")))
+    bound = ("min(vintages.vintage) as first_unlisted_vintage", "main.min(vintages.vintage) as first_unlisted_vintage")
+    cases.append(("aggregate_min", "dim_county", changed_once(dim_county, *bound)))
+    return cases
+
+
+def qualified_function_probes(rendered: dict[str, str]) -> list[Probe]:
+    """A function written with a schema or catalog never receives the permission of the built-in it is named after, with or without a pin."""
+    cases = spoofed_calls(rendered)
+    cases.append(("md5_key", "dim_state", changed_once(state_sql(), "md5(state_code)", "spoof.md5(state_code)")))
+    cases.append(("other_function", "dim_state", state_sql("main.upper(county_fips)")))
+    cases.append(("window", "dim_state", state_sql("main.row_number() over ()")))
+    refused = [Probe(f"P5_q_{name}", model, sql, EXPR, QUALIFIED_CAUSE) for name, model, sql in cases]
+    refused += [Probe(f"P5_q_{name}_real_pins", model, sql, EXPR, QUALIFIED_CAUSE, real_pins=True) for name, model, sql in cases]
+    controls = (
+        ("control_state", "dim_state", state_sql()),
+        ("control_tract_count", "bridge_county_planning_region", tract_sql()),
+        ("control_county_like", "bridge_county_planning_region", county_filter_sql()),
+        ("control_d_state", "dim_state", rendered["dim_state"]),
+        ("control_d_planning", "bridge_county_planning_region", rendered["bridge_county_planning_region"]),
+    )
+    return refused + [Probe(f"P5_q_{name}", model, sql, ()) for name, model, sql in controls]
+
+
 class SelectedSourceLoader(importlib.abc.InspectLoader):
     """Import selected local definitions in memory without creating or executing a runner file."""
 
@@ -1452,8 +2691,8 @@ def runner_helpers(source: str, mutation: str = "") -> dict[str, Any]:
     names = {
         "BUILD_OK",
         "GOLD_MODELS",
-        "WARN_TOLERATED",
-        "WARN_NAMES",
+        "RELEASE_COPY_TEST",
+        "RELEASE_COPY_NAMES",
         "RELEASE_MODEL",
         "EXPRESSION_CHECKS",
         "LEAF_EXPRESSION_CLASSES",
@@ -1522,23 +2761,24 @@ def helper_cases(contract: Any, runner_source: str, checker_source: str) -> list
     helpers = runner_helpers(runner_source)
     model_id = "model.synthetic.dim_release"
     model = {"resource_type": "model", "name": "dim_release", "fqn": ["synthetic", "gold", "dim_release"]}
-    test_name = helpers["WARN_TOLERATED"]
+    test_name = helpers["RELEASE_COPY_TEST"]
     test_id = "test.synthetic." + test_name
-    test = {"resource_type": "test", "name": test_name, "attached_node": model_id, "config": {"severity": "warn"}}
+    test = {"resource_type": "test", "name": test_name, "attached_node": model_id, "config": {"severity": "error"}}
     manifest = {"nodes": {model_id: model, test_id: test}}
-    statuses = {"dim_release": "success", test_name: "warn"}
+    statuses = {"dim_release": "success", test_name: "pass"}
     for suffix in ("", "_"):
         active = copy.deepcopy(manifest)
         active["nodes"].pop(test_id)
         active["nodes"][test_id + suffix] = {**test, "name": test_name + suffix}
-        found = helpers["gold_node_problems"](active, {"dim_release": "success", test_name + suffix: "warn"}, True)
-        records.append({"name": "positive_A42_warn" + ("_trailing" if suffix else "_named"), "passed": not found, "problems": found})
+        found = helpers["gold_node_problems"](active, {"dim_release": "success", test_name + suffix: "pass"}, True)
+        records.append({"name": "positive_release_copy_pass" + ("_trailing" if suffix else "_named"), "passed": not found, "problems": found})
     required_mutant = runner_helpers(runner_source, "required_test")
     for label, changed in (
         ("deleted", {"nodes": {model_id: model}}),
         ("disabled", {"nodes": {model_id: model}, "disabled": {test_id: [test]}}),
-        ("severity_error", {"nodes": {model_id: model, test_id: {**test, "config": {"severity": "error"}}}}),
+        ("severity_warn", {"nodes": {model_id: model, test_id: {**test, "config": {"severity": "warn"}}}}),
         ("wrong_attachment", {"nodes": {model_id: model, test_id: {**test, "attached_node": "model.synthetic.dim_hospital"}}}),
+        ("disabled_config", {"nodes": {model_id: model, test_id: {**test, "config": {"severity": "error", "enabled": False}}}}),
     ):
         local_mutant = dict(required_mutant)
         if label == "disabled":
@@ -1547,7 +2787,7 @@ def helper_cases(contract: Any, runner_source: str, checker_source: str) -> list
         found = helpers["gold_node_problems"](changed, statuses, True)
         escaped = local_mutant["gold_node_problems"](changed, statuses, True)
         record("F17_required_test_" + label, bool(found), bool(escaped), {"problems": found, "mutant_problems": escaped})
-    for status in ("not run", "fail", "error", "skipped"):
+    for status in ("not run", "fail", "error", "skipped", "warn"):
         found = helpers["gold_node_problems"](manifest, {"dim_release": "success", test_name: status}, True)
         # Simulate the old missing-status guard accepting this required node.
         weak = dict(helpers)
@@ -1763,7 +3003,140 @@ def range_cases(contract: Any, aggregates: frozenset[str]) -> tuple[list[dict[st
     }
 
 
-def run(out: Path, proposals: Path | None = None) -> bool:
+def g4_policy_record(contract: Any, aggregates: frozenset[str]) -> dict[str, Any]:
+    """The real contract's allowlist is readable, every entry switches on its own capability and an altered entry text is refused."""
+    sql = gold_checks.gold_sql
+    allowlist = contract.allowlist
+    error = ""
+    try:
+        gold_checks.policy_for(contract, aggregates)
+    except sql.PolicyError as raised:
+        error = str(raised)
+    capabilities = [sql.CAPABILITIES.get(entry) for entry in allowlist]
+    altered_refused = False
+    try:
+        sql.capabilities((allowlist[-1] + " ",))
+    except sql.PolicyError:
+        altered_refused = True
+    return {
+        "name": "G4_real_contract_policy_reads",
+        "entries": list(allowlist),
+        "capabilities": capabilities,
+        "error": error,
+        "altered_entry_refused": altered_refused,
+        "passed": not error and None not in capabilities and len(set(capabilities)) == len(allowlist) and altered_refused,
+    }
+
+
+def policy_mirror_record(contract: Any) -> dict[str, Any]:
+    """The contract's expression policy and the checker's built-in fallback policy (``A36_A39_A43_A48``) say the same."""
+    mirror = json.loads(json.dumps(gold_checks.gold_sql.A36_A39_A43_A48))
+    differing = sorted(key for key in mirror.keys() | contract.expression_policy.keys() if mirror.get(key) != contract.expression_policy.get(key))
+    return {"name": "P2_policy_mirror_equal", "differs": differing, "passed": not differing}
+
+
+def tested_contract(contract: Any, probe: Probe) -> Any:
+    """The contract a probe runs against: the allowlist entry or scope entry it names is removed."""
+    if probe.remove.startswith("scope:"):
+        scopes = copy.deepcopy(contract.expression_policy)
+        name = probe.remove.removeprefix("scope:")
+        if name == "source_date_models":
+            scopes[name] = []
+        else:
+            scopes[name].pop(probe.model)
+        return replace(contract, expression_policy=scopes)
+    if probe.remove and not probe.remove.startswith("pin:"):
+        allowlist = () if probe.remove == "all" else tuple(entry for entry in contract.allowlist if gold_checks.gold_sql.CAPABILITIES[entry] != probe.remove)
+        return replace(contract, allowlist=allowlist)
+    return contract
+
+
+def probe_pins(probe: Probe, document: str) -> dict[tuple[str, str], Any] | None:
+    """The pin table a probe runs with: the real one for a probe that tests a pin, the probe's own query fingerprint as its model's pin otherwise."""
+    sql = gold_checks.gold_sql
+    pins = getattr(sql, "PINS", None)
+    if pins is None:
+        return None
+    if probe.remove.startswith("pin:"):
+        return {key: pin for key, pin in pins.items() if key[0] != probe.remove.removeprefix("pin:")}
+    statements = json.loads(document).get("statements", [])
+    if probe.real_pins or len(statements) != 1:
+        return dict(pins)
+    own = sql.query_fingerprint(statements[0])
+    return {key: pin._replace(fingerprint=own) if key[0] == probe.model else pin for key, pin in pins.items()}
+
+
+@contextmanager
+def patched_pins(pins: dict[tuple[str, str], Any] | None) -> Iterator[None]:
+    """Run with another pin table in the checker; the original is back after the block, also after an exception."""
+    sql = gold_checks.gold_sql
+    if pins is None:
+        yield
+        return
+    original = sql.PINS
+    sql.PINS = pins
+    try:
+        yield
+    finally:
+        sql.PINS = original
+
+
+def evaluate_probe(probe: Probe, contract: Any, aggregates: frozenset[str], expected: dict[str, str]) -> dict[str, Any]:
+    """Check one probe through the production entry point and return its record."""
+    document = parse(probe.sql)
+    declared = set(re.findall(r"main\.\"?(\w+)", probe.sql)) - ({"stg_bronze__file_copies"} if not probe.name.startswith(("R2_", "R3_", "R4_")) else set())
+    kwargs: dict[str, Any] = {}
+    if "compiled" in gold_checks.expression_problems.__annotations__:
+        kwargs = {"compiled": {probe.model: probe.sql}, "expected_fact_sql": expected}
+    with patched_pins(probe_pins(probe, document)):
+        problems, _reads = gold_checks.expression_problems(
+            tested_contract(contract, probe), {probe.model: document}, [probe.model], aggregates, {probe.model: declared}, **kwargs
+        )
+    found = {name for name, items in problems.items() if items}
+    intended = set(probe.failures) <= found if probe.failures else not found
+    parsed = not json.loads(document).get("error", False)
+    if probe.name.startswith(("R2_", "R3_", "R4_")):
+        intended &= parsed
+    cause = not probe.cause or any(probe.cause in message for name in probe.failures for message in problems[name])
+    return {
+        "name": probe.name,
+        "expected_failures": probe.failures,
+        "sql": probe.sql,
+        "expected_cause": probe.cause,
+        "parsed": parsed,
+        "problems": problems,
+        "passed": intended and cause,
+    }
+
+
+def pin_records(contract: Any, rendered: dict[str, str], aggregates: frozenset[str], expected: dict[str, str]) -> list[dict[str, Any]]:
+    """The pins equal the delivered queries; the refusal names both fingerprints; a removed allowlist entry leaves no pin message."""
+    sql = gold_checks.gold_sql
+
+    def fingerprint(text: str) -> str:
+        return str(sql.query_fingerprint(json.loads(parse(text))["statements"][0]))
+
+    delivered = {key: fingerprint(rendered[key[0]]) for key in sql.PINS}
+    mutated = changed_once(rendered["dim_county"], "select max(vintage) as vintage", "select max(distinct vintage) as vintage")
+    named = evaluate_probe(Probe("P4_pin_message_names_both", "dim_county", mutated, EXPR, PIN_CAUSE, real_pins=True), contract, aggregates, expected)
+    pin = sql.PINS[("dim_county", "county_list_bounds")]
+    shown = " ".join(message for items in named["problems"].values() for message in items)
+    named["passed"] = named["passed"] and all(part in shown for part in (pin.fingerprint, fingerprint(mutated), pin.reason))
+    removed_probe = Probe(
+        "P4_pin_entry_removed_county", "dim_county", rendered["dim_county"], EXPR, "aggregate max", remove="county_list_bounds", real_pins=True
+    )
+    removed = evaluate_probe(removed_probe, contract, aggregates, expected)
+    removed["passed"] = removed["passed"] and PIN_CAUSE not in " ".join(message for items in removed["problems"].values() for message in items)
+    equal = {
+        "name": "P4_pins_equal_delivered",
+        "pins": {f"{model}:{capability}": value for (model, capability), value in delivered.items()},
+        "passed": all(delivered[key] == value.fingerprint for key, value in sql.PINS.items())
+        and {capability for _model, capability in sql.PINS} == sql.PINNED_CAPABILITIES,
+    }
+    return [equal, named, removed]
+
+
+def run(out: Path, proposals: Path | None = None, only_g4: bool = False) -> bool:
     global gold_checks
     if proposals is not None:
         proposals = proposals.resolve()
@@ -1787,6 +3160,7 @@ def run(out: Path, proposals: Path | None = None) -> bool:
             "data_contracts/lakehouse/gold_contract.json",
             "data_contracts/lakehouse/silver_columns.json",
             "dbt/macros/gold_facts.sql",
+            "dbt/macros/gold_identity.sql",
         )
     ]
     inputs += [checker_path, runner_path, contract_path]
@@ -1813,9 +3187,11 @@ def run(out: Path, proposals: Path | None = None) -> bool:
         check=True,
     )
     aggregates = frozenset(row["function_name"] for row in json.loads(result.stdout))
-    records: list[dict[str, Any]] = []
-    for probe in (
-        probes(rendered)
+    records: list[dict[str, Any]] = [g4_policy_record(contract, aggregates), policy_mirror_record(contract)]
+    corpus = (
+        []
+        if only_g4
+        else probes(rendered)
         + round2_probes(rendered)
         + round2_siblings(rendered)
         + round3_review_probes()
@@ -1823,61 +3199,35 @@ def run(out: Path, proposals: Path | None = None) -> bool:
         + round4_review_probes()
         + round4_siblings()
         + round5_probes()
-    ):
-        tested = contract
-        if probe.remove.startswith("scope:"):
-            scopes = copy.deepcopy(contract.expression_policy)
-            name = probe.remove.removeprefix("scope:")
-            if name == "source_date_models":
-                scopes[name] = []
-            else:
-                scopes[name].pop(probe.model)
-            tested = replace(contract, expression_policy=scopes)
-        elif probe.remove:
-            allowlist = (
-                () if probe.remove == "all" else tuple(entry for entry in contract.allowlist if gold_checks.gold_sql.CAPABILITIES[entry] != probe.remove)
-            )
-            tested = replace(contract, allowlist=allowlist)
-        document = parse(probe.sql)
-        declared = set(re.findall(r"main\.\"?(\w+)", probe.sql)) - ({"stg_bronze__file_copies"} if not probe.name.startswith(("R2_", "R3_", "R4_")) else set())
-        kwargs: dict[str, Any] = {}
-        if "compiled" in gold_checks.expression_problems.__annotations__:
-            kwargs = {"compiled": {probe.model: probe.sql}, "expected_fact_sql": expected}
-        problems, _reads = gold_checks.expression_problems(tested, {probe.model: document}, [probe.model], aggregates, {probe.model: declared}, **kwargs)
-        found = {name for name, items in problems.items() if items}
-        intended = set(probe.failures) <= found if probe.failures else not found
-        parsed = not json.loads(document).get("error", False)
-        if probe.name.startswith(("R2_", "R3_", "R4_")):
-            intended &= parsed
-        cause = not probe.cause or any(probe.cause in message for name in probe.failures for message in problems[name])
-        records.append(
-            {
-                "name": probe.name,
-                "expected_failures": probe.failures,
-                "sql": probe.sql,
-                "expected_cause": probe.cause,
-                "parsed": parsed,
-                "problems": problems,
-                "passed": intended and cause,
-            }
-        )
+    )
+    original_pins = dict(getattr(gold_checks.gold_sql, "PINS", {}))
+    fixes = near_delivered_probes(rendered) + pinned_model_probes(rendered) + second_pin_probes(rendered) + qualified_function_probes(rendered)
+    for probe in corpus + g4_entry_probes() + edition_probes(rendered) + fixes:
+        records.append(evaluate_probe(probe, contract, aggregates, expected))
     for model, sql in rendered.items():
+        if only_g4 and model not in G4_MODELS:
+            continue
         kwargs = {"compiled": {model: sql}, "expected_fact_sql": expected} if "compiled" in gold_checks.expression_problems.__annotations__ else {}
         problems, _reads = gold_checks.expression_problems(
             contract, {model: parse(sql)}, [model], aggregates, {model: set(re.findall(r"main\.\"?(\w+)", sql))}, **kwargs
         )
         records.append({"name": "accept_" + model, "problems": problems, "passed": not any(problems.values())})
-    records += helper_cases(contract, runner_path.read_text(), checker_path.read_text())
-    records.append(label_choice_mutation(contract, rendered, aggregates))
-    ranged, range_artifact = range_cases(contract, aggregates)
-    records += ranged
-    records += boundary_cases(contract, rendered, expected, aggregates, runner_path.read_text())
+    if hasattr(gold_checks.gold_sql, "PINS"):
+        records += pin_records(contract, rendered, aggregates, expected)
+        records.append({"name": "P4_pins_restored", "passed": original_pins == gold_checks.gold_sql.PINS})
+    range_artifact: dict[str, Any] = {}
+    if not only_g4:
+        records += helper_cases(contract, runner_path.read_text(), checker_path.read_text())
+        records.append(label_choice_mutation(contract, rendered, aggregates))
+        ranged, range_artifact = range_cases(contract, aggregates)
+        records += ranged
+        records += boundary_cases(contract, rendered, expected, aggregates, runner_path.read_text())
     unchanged = hashes == {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}
     records.append({"name": "source_unchanged_during_corpus", "passed": unchanged})
     report = {
         "started_at_utc": started,
         "finished_at_utc": datetime.now(UTC).isoformat(),
-        "mode": "full static corpus, serial",
+        "mode": "G4 allowlist entries and their delivered models, serial" if only_g4 else "full static corpus, serial",
         "boundary": "static synthetic parser and Jinja rendering; no dbt build",
         "inputs_sha256": hashes,
         "range_macro": range_artifact,
@@ -1901,9 +3251,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--proposals", type=Path, help="Read preserved local checker, contract and runner proposals without applying them")
+    parser.add_argument("--g4", action="store_true", help="Run only the six model-bound allowlist entries (G4) and the models that use them")
     args = parser.parse_args()
     try:
-        return 0 if run(args.out, args.proposals) else 1
+        return 0 if run(args.out, args.proposals, args.g4) else 1
     finally:
         sys.modules.pop("_gx_static_checker", None)
         sys.modules.pop("_gx_static_helpers", None)

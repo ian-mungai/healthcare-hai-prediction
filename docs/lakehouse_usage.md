@@ -123,7 +123,8 @@ project and package snapshot and the pinned bronze snapshot set. The launch is r
 Launches that may write the build file run one at a time in submit order. A hook drops the build marker before each
 mutating launch. After a complete build whose results are all `success` or `pass`, the end hook writes the marker and
 the launcher seals the build: a read-only copy `sealed/<sha256>.duckdb` in the run folder, recorded with its digest in the
-run's completion. A build with any warning, including the release-copy conflict check, is not sealed. After sealing, the
+run's completion. A build with any warning is not sealed. The release-copy check fails the build unless each selected
+file has exactly one live physical copy and one valid canonical copy. After sealing, the
 run refuses every further mutating launch. Each reader (gold, quality, query) attaches the sealed copy and checks its
 digest inside its container before reading. A graceful launcher stop waits for a running seal to finish. The sealed copy
 is a full byte copy, so it needs free disk equal to the build file. `scripts.lakehouse.run_provenance_e2e` covers these
@@ -139,14 +140,18 @@ rules with a fake Docker and a test registry.
 ## Bronze
 
 The lakehouse jobs run in the Spark container. The bronze E2E uses a throwaway local catalog and synthetic files, never
-S3. Each load reads only the S3 manifests and the committed table map (`config/lakehouse/bronze_tables.json`), loads one
-copy of each stored file (the smallest object key), lists every copy in `bronze.stored_copies`, replaces each object in
-its own commit, prunes objects a table no longer selects, rebuilds the table's data dictionary and writes a counts-only
-report. A corrected manifest replaces the manifest it names as superseded; tables taken out of the map are listed in
+S3. Discovery reads the S3 manifests, the committed table map (`config/lakehouse/bronze_tables.json`) and the previous
+complete metadata snapshot. The first bootstrap selects the smallest logical key for each file. Later loads retain
+that canonical lineage, list every observation in `bronze.stored_copies`, replace each loaded object in its own commit,
+prune objects a table no longer selects, rebuild the table's data dictionary and write a counts-only report.
+The initial `--bootstrap-all` path requires coverage of the full map and publishes the copies ledger and one complete
+metadata generation. It verifies the existing data without loading, pruning or rebuilding dictionaries.
+A corrected manifest replaces the manifest it names as superseded. Tables taken out of the map are listed in
 `config/lakehouse/removed_tables.json` and dropped with `--drop-removed`:
 
 ```sh
 .venv/bin/python -m scripts.lakehouse.catalog job bronze_e2e        # report: data/e2e/bronze/
+.venv/bin/python -m scripts.lakehouse.catalog job bronze -- --bootstrap-all    # full-map metadata bootstrap, no data reload
 .venv/bin/python -m scripts.lakehouse.catalog job bronze -- --group hai           # or --tables a,b; report: data/e2e/bronze_load/
 .venv/bin/python -m scripts.lakehouse.catalog job bronze -- --tables a,b --copies-only   # list copies, prune, verify
 .venv/bin/python -m scripts.lakehouse.catalog job bronze -- --drop-removed       # drop tables in removed_tables.json
@@ -225,10 +230,21 @@ fingerprints. Every fact needs rows in the fixture stage; in the real stage ever
 A hold fact may be empty when nothing is held; at least one non-empty hold fact must keep its rows. Every expression
 finding on the compiled gold SQL (`scripts/lakehouse/gold_sql.py`) counts toward the verdict. An analysis that could not
 visit every relation a model reads fails the run. The check's own corpus E2E is
-`.venv/bin/python -m scripts.lakehouse.run_gold_sql_e2e --out <report.json>`. The gold Great Expectations suites in
-`data_contracts/great_expectations/gold/` are generated from the contract (`gold_checks write-suites`) and
-`gold_checks check-suites` in local CI fails when they drift. The test `release_copy_consistency` warns, without
-failing a build, when stored copies of one file carry different release labels.
+`.venv/bin/python -m scripts.lakehouse.run_gold_sql_e2e --out <report.json>` (`--g4` runs only the six allowlist entries that
+name a model and the models that use them). The keys and the identity text of the split dimensions end with the edition
+part (`edition_start`). The check accepts it in `dim_rurality_code`, `dim_measure` and `bridge_measure_control` only. Each
+allowlist entry that names a model admits one plain expression over the relation and column that model reads, in the clause and
+output column the entry names. The entries that rest on a model's whole query (the label bounds of `dim_rurality_code` and
+`dim_measure`, the county-list bounds and the membership test of `dim_county`, the edition years of `bridge_measure_control`,
+the state prefix of `dim_state`, the tract count and the county prefix of `bridge_county_planning_region`)
+are granted only to the delivered query: its normalized parse must equal the fingerprint pinned in `PINS` in
+`scripts/lakehouse/gold_sql.py`. A change to one of these six models changes its pin and its probes in the same commit.
+A function or window call written with a schema or catalog (`main.left(...)`, `system.main.count_star()`) is a finding in every model.
+The permissions are for the unqualified built-in names.
+The gold Great Expectations suites in `data_contracts/great_expectations/gold/` are generated from the contract (`gold_checks write-suites`) and
+`gold_checks check-suites` in local CI fails when they drift. The test `release_copy_consistency` fails a build unless
+each selected file has exactly one live physical copy and one valid canonical copy. Release-label aliases remain in
+the observation history and do not increase the physical-copy count.
 
 **Silver validation (Great Expectations).** After a build, Great Expectations 1.23.2 checks the kept silver models and the
 gold tables as a second gate independent of the dbt tests. `scripts/lakehouse/silver.py validate` runs
@@ -281,8 +297,31 @@ service's unused limit is held back as a growth reserve.
 image and no network, AWS profile or secret (`prepare`), fingerprints a build file read-only (`baseline`) and checks a
 work package's patched project against its frozen selector: required tests with their ancestors, a recorded and
 approved effective selection, the `beab859` baseline and expected-failure mutations (`check`). Its launches are launcher
-attempts under one allocation. A package check runs dbt with `check_release_copy_conflicts: false`; the silver and gold
-E2E fixture builds are gate cases and run that test (amendment A42).
+attempts under one allocation. Package checks and silver and gold E2E fixture builds enforce the same unconditional
+physical release-copy invariant. Every selected file must have exactly one live physical copy and one valid canonical copy.
+
+The backing `bronze.file_metadata` table covers all 330 committed bronze tables. Its physical index covers every live
+checksum across that map. A checksum with only retired versions or failed attempts has observation rows and no physical
+index row. Observations retain manifest entries, receipt and transport references and retirement evidence.
+Failed attempts remain in this audit ledger but do not contribute publication labels, publication-date lists or the
+latest publication date in `stg_bronze__files` and `dim_release`. Successful retired observations still contribute them.
+Published observations from superseded manifests retain their labels and the replacing manifest's exact key and version.
+They cannot become canonical. A canonical transfer changes only the observation identity, to a validated replacement with
+the same table, logical key, checksum and exact physical version. The physical index records both observation identities
+and the superseding manifest for pinned readers. A missing eligible replacement fails closed with the table and key.
+
+Single-copy acquisition is off by default. When enabled, publisher payloads in the `datasets` and `references`
+categories use `bronze_objects/sha256/<sha256>`. Audit payloads and evidence-only captures use
+`bronze_evidence/sha256/<sha256>`. Each prefix has its own conditional create and checksum index, so identical publisher
+and audit bytes remain one physical object in each namespace. The immutable bootstrap format has separate `objects`
+and `evidence_objects` maps; a reference cannot cross between them. Category determines routing. An unknown category
+fails closed. Manifests retain their collection paths, including evidence-only manifests under `audit`.
+Both content prefixes remain inactive until the owner's IAM and storage review permits activation.
+
+`stg_bronze__release_observations` covers the 70 analytical tables in the `copy_tables` family map, including aliases
+and retired observations. Adding a table to that map includes its observations. Readers needing the full set use
+the source-layer `bronze.file_metadata` relation with `kind = 'observation'` through the pinned metadata source,
+or filter the unfiltered `stg_bronze__metadata` model by that kind.
 
 ```sh
 .venv/bin/python -m scripts.lakehouse.run_lock status       # holders, runs and readers; never a token

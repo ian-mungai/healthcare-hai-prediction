@@ -727,7 +727,7 @@ def fixture_cases(run: Run, args: argparse.Namespace, session: package_fixture.S
         base = Path(args.build_file).resolve()
         run.checks["fixture_build_passes"] = base.is_file()
     else:
-        case = package_fixture.make_case(kit_stem(run.run_id), session, [], gate=True)
+        case = package_fixture.make_case(kit_stem(run.run_id), session, [])
         code, tail, by_id = package_fixture.dbt(case, ["build"], session)
         statuses = run_gold_e2e.statuses_by_name(by_id)
         manifest = json.loads((case.folder / "target/manifest.json").read_text()) if (case.folder / "target/manifest.json").is_file() else {}
@@ -736,7 +736,6 @@ def fixture_cases(run: Run, args: argparse.Namespace, session: package_fixture.S
         stage["build"] = {
             "nodes": len(statuses),
             "not_passing": problems[:30],
-            "warnings": run_gold_e2e.warning_counts(case.folder / "target/run_results.json"),
             "evidence": evidence_of(case.folder),
         }
         if not statuses:

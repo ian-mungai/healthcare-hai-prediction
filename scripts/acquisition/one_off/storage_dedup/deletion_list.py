@@ -33,7 +33,7 @@ for line in (HERE / "manifest_entries.jsonl").open():
     current = objects.setdefault(identity, {**entry, "object_key": object_key, "roles": set()})
     current["object_key"] = min(current["object_key"], object_key)
     current["roles"].add(entry["role"])
-live = {identity: entry for identity, entry in objects.items() if identity not in retired}
+live = {identity: entry for identity, entry in objects.items() if identity not in retired.checksums}
 by_sha = collections.defaultdict(list)
 for identity, entry in live.items():
     by_sha[entry["sha256"]].append(identity)

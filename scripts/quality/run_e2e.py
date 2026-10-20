@@ -76,7 +76,7 @@ def installation_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
     archives.mkdir()
     selected_platform = f"{platform.system().lower()}_{'amd64' if platform.machine() in {'x86_64', 'AMD64'} else platform.machine()}"
     tools: dict[str, Any] = {}
-    for name, kind in [("gitleaks", "tar.gz"), ("tflint", "zip"), ("trivy", "tar.gz")]:
+    for name, kind in [("duckdb", "zip"), ("gitleaks", "tar.gz"), ("tflint", "zip"), ("trivy", "tar.gz")]:
         path = archives / f"{name}.{kind}"
         content = b"synthetic executable fixture; never executed\n"
         if kind == "zip":
@@ -94,6 +94,8 @@ def installation_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
                     "url": f"https://github.com/example_org/example_tool/releases/download/v1.2.3/{path.name}",
                     "sha256": digest(path),
                     "format": kind,
+                    "member": name,
+                    "max_archive_bytes": path.stat().st_size,
                 }
             },
         }
@@ -115,6 +117,10 @@ def installation_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
     cases.append({"name": "replay_install", **run(command, ROOT)})
     after = {str(p.relative_to(destination)): (digest(p), p.stat().st_mtime_ns) for p in destination.rglob("*") if p.is_file()}
     check(before == after, "Repeated install changed files")
+    bounded = copy.deepcopy(tools)
+    bounded["duckdb"]["releases"][selected_platform]["max_archive_bytes"] -= 1
+    manifest.write_text(json.dumps({"schema_version": 1, "tools": bounded}), encoding="utf-8")
+    cases.append({"name": "reject_duckdb_archive_over_limit", **run(command, ROOT, expected=1)})
     corrupted = copy.deepcopy(tools)
     corrupted["gitleaks"]["releases"][selected_platform]["sha256"] = "0" * 64
     manifest.write_text(json.dumps({"schema_version": 1, "tools": corrupted}), encoding="utf-8")
@@ -155,7 +161,10 @@ def installation_cases(workspace: Path, cases: list[dict[str, Any]]) -> None:
             archive.addfile(member, io.BytesIO(content))
     nested_tools = copy.deepcopy(tools)
     nested_tools["gitleaks"]["releases"][selected_platform].update(
-        url=f"https://github.com/example_org/example_tool/releases/download/v1.2.3/{nested.name}", sha256=digest(nested), member="release/bin/gitleaks"
+        url=f"https://github.com/example_org/example_tool/releases/download/v1.2.3/{nested.name}",
+        sha256=digest(nested),
+        member="release/bin/gitleaks",
+        max_archive_bytes=nested.stat().st_size,
     )
     nested_manifest = workspace / "nested_manifest.json"
     nested_manifest.write_text(json.dumps({"schema_version": 1, "tools": nested_tools}), encoding="utf-8")
@@ -331,7 +340,7 @@ def main() -> None:
         report["requirements_sha256"] = digest(ROOT / "requirements.txt")
         report["configuration_sha256"] = {name: digest(ROOT / name) for name in ("config/quality_tools.json", ".pre-commit-config.yaml")}
         report["native_tool_sha256"] = {
-            name: digest(ROOT / ".tools/bin" / name) for name in ("gitleaks", "tflint", "trivy") if (ROOT / ".tools/bin" / name).is_file()
+            name: digest(ROOT / ".tools/bin" / name) for name in ("duckdb", "gitleaks", "tflint", "trivy") if (ROOT / ".tools/bin" / name).is_file()
         }
         (output / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         (output / "evidence_manifest.json").write_text(json.dumps({"report.json": digest(output / "report.json")}) + "\n", encoding="utf-8")

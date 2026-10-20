@@ -169,6 +169,10 @@
       }
     },
     "loader_tables": {
+      "file_metadata": {
+        "class": "Public",
+        "reason": "Bronze lineage metadata: manifest entries, checksums, versioned capture locations, release labels and receipt or retirement references. No publisher data rows."
+      },
       "stored_copies": {
         "class": "Public",
         "reason": "Bronze lineage table: file names, checksums, capture locations and release labels. No publisher data rows."

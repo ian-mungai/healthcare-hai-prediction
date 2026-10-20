@@ -1,13 +1,10 @@
--- One row per stored file (member_sha256), plus the unknown member. object_key is the smallest object key among the file's stored copies and
--- copy_count counts them. release_date is the publication release read as a date and is null when the text is not a date. The period comes from
--- the file-period seeds where one covers the file, else it is null [824] [750].
 with
 
 copies as (
     select
         member_sha256,
         object_key,
-        publication_release
+        publication_date
     from {{ ref('stg_bronze__file_copies') }}
     where member_sha256 is not null
 ),
@@ -26,12 +23,20 @@ releases as (
         files.member_sha256,
         files.object_key,
         files.copy_count,
-        copies.publication_release
+        copies.publication_date
     from files
     inner join copies
         on
             files.member_sha256 = copies.member_sha256
             and files.object_key = copies.object_key
+),
+
+release_lists as (
+    select
+        member_sha256,
+        publication_dates,
+        download_run_ids
+    from {{ ref('stg_bronze__files') }}
 ),
 
 periods as (
@@ -60,10 +65,13 @@ final as (
         releases.member_sha256,
         releases.object_key,
         releases.copy_count,
-        try_cast(releases.publication_release as date) as release_date,
+        releases.publication_date as release_date,
         periods.period_start,
-        periods.period_end
+        periods.period_end,
+        release_lists.publication_dates,
+        release_lists.download_run_ids
     from releases
+    inner join release_lists on releases.member_sha256 = release_lists.member_sha256
     left join periods
         on releases.member_sha256 = periods.member_sha256
     union all
@@ -74,7 +82,9 @@ final as (
         cast(null as bigint) as copy_count,
         cast(null as date) as release_date,
         cast(null as date) as period_start,
-        cast(null as date) as period_end
+        cast(null as date) as period_end,
+        cast(null as date[]) as publication_dates,
+        cast(null as varchar[]) as download_run_ids
 )
 
 select * from final

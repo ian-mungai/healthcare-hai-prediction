@@ -38,7 +38,7 @@ class PinError(RuntimeError):
 def mapped_tables(table_map: Path = TABLE_MAP) -> list[str]:
     """The bronze tables of the committed table map [891]."""
     document = json.loads(table_map.read_text())
-    tables = sorted({entry["table"] for entry in document["tables"]})
+    tables = sorted({entry["table"] for entry in document["tables"]} | {"file_metadata"})
     bad = [table for table in tables if not IDENTIFIER.fullmatch(table)]
     if bad:
         raise PinError(f"table map names tables that are not plain identifiers: {bad}")

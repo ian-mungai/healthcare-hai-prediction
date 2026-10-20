@@ -6,6 +6,19 @@ sources:
     database: lakehouse
     schema: bronze
     tables:
+      - name: file_metadata
+        description: Complete atomic generations of release observations and immutable physical object references.
+        meta:
+          classification: Public
+        columns:
+          - name: generation
+            data_tests: [not_null]
+          - name: kind
+            data_tests:
+              - not_null
+              - accepted_values:
+                  arguments:
+                    values: [object, observation]
       - name: stored_copies
         description: Every stored copy of each bronze table's files, loaded or not, with its lineage (failure mode 206).
         meta:

@@ -1,5 +1,3 @@
--- One row per distinct stored file (bronze table and member SHA-256): its canonical copy, every release that published
--- it, its row count, whether its copies' labels conflict and any owner label hold (failure modes 166 to 172, 180, 181).
 {{ config(materialized='table') }}
 
 with
@@ -10,8 +8,6 @@ copies as (
         source_family,
         object_key,
         member_sha256,
-        file_name,
-        publication_release,
         row_count,
         is_canonical
     from {{ ref('stg_bronze__file_copies') }}
@@ -38,6 +34,19 @@ holds as (
     from {{ ref('staging_label_holds') }}
 ),
 
+releases as (
+    select
+        bronze_table,
+        member_sha256,
+        list_sort(list_distinct(list(publication_release) filter (where not is_failed_attempt))) as publication_releases,
+        list_sort(list_distinct(list(publication_date) filter (where not is_failed_attempt))) as publication_dates,
+        list_sort(list_distinct(list(download_run_id))) as download_run_ids,
+        max(publication_date) filter (where not is_failed_attempt) as latest_publication_date,
+        list_sort(list_distinct(list(file_name))) as file_names
+    from {{ ref('stg_bronze__release_observations') }}
+    group by bronze_table, member_sha256
+),
+
 files as (
     select
         copies.bronze_table,
@@ -46,10 +55,7 @@ files as (
         max(case when copies.is_canonical then copies.object_key end) as canonical_object_key,
         count(*) as copy_count,
         count(*) filter (where copies.is_canonical) as canonical_count,
-        max(copies.row_count) as row_count,
-        list_sort(list_distinct(list(copies.publication_release))) as publication_releases,
-        max(try_cast(copies.publication_release as date)) as latest_publication_date,
-        list_sort(list_distinct(list(copies.file_name))) as file_names
+        max(copies.row_count) as row_count
     from copies
     group by
         copies.bronze_table,
@@ -66,15 +72,18 @@ final as (
         files.copy_count,
         files.canonical_count,
         files.row_count,
-        files.publication_releases,
-        files.latest_publication_date,
-        files.file_names,
+        releases.publication_releases,
+        releases.publication_dates,
+        releases.download_run_ids,
+        releases.latest_publication_date,
+        releases.file_names,
         holds.issue as label_hold_issue,
         holds.reason as label_hold_reason,
         files.bronze_table || ':' || files.member_sha256 as file_key,
         coalesce(conflicts.has_label_conflict, false) as has_label_conflict,
         holds.issue is not null as is_label_held
     from files
+    inner join releases on files.bronze_table = releases.bronze_table and files.member_sha256 = releases.member_sha256
     left join conflicts
         on
             files.bronze_table = conflicts.bronze_table

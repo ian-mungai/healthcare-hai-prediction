@@ -26,9 +26,6 @@ on-run-end:
   - "{{ hai_finalize_build_marker(results) }}"
 
 vars:
-  # The gold release copy-consistency test (warn severity) runs in every gate and real build; package kit checks keep it off
-  # because the kit counts a warning as a failure.
-  check_release_copy_conflicts: true
   # Bronze tables whose stored copies staging resolves (failure modes 166 to 177), with each table's source family.
   copy_tables:
     cms_hai_hospital: hai

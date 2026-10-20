@@ -50,7 +50,10 @@ def archive_bytes(release: dict[str, Any], directory: Path | None) -> bytes:
         raise ValueError("Expected a GitHub release asset")
     if not re.fullmatch(r"[a-f0-9]{64}", release["sha256"]):
         raise ValueError("Invalid archive hash")
-    limit = MAX_BINARY if release["format"] == "binary" else MAX_ARCHIVE
+    ceiling = MAX_BINARY if release["format"] == "binary" else MAX_ARCHIVE
+    limit = release.get("max_archive_bytes", ceiling)
+    if type(limit) is not int or not 0 < limit <= ceiling:
+        raise ValueError("Invalid archive size limit")
     if directory is not None:
         with (directory / Path(url.path).name).open("rb") as source:
             content = source.read(limit + 1)
@@ -117,7 +120,7 @@ def publish(path: Path, content: bytes, mode: int) -> None:
 def install(manifest: Path, destination: Path, archives: Path | None, tools: list[str] | None = None) -> None:
     """Validate every asset before publishing binaries and deterministic receipts."""
     config = json.loads(manifest.read_text(encoding="utf-8"))
-    native = {"gitleaks", "tflint", "trivy", "shellcheck", "actionlint", "hadolint"}
+    native = {"gitleaks", "tflint", "trivy", "shellcheck", "actionlint", "hadolint", "duckdb"}
     names = set(config["tools"])
     if config["schema_version"] != 1 or not {"gitleaks", "tflint", "trivy"} <= names or names - native - {"yamllint"}:
         raise ValueError("Unsupported tool manifest")

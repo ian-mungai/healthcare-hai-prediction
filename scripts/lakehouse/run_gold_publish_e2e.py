@@ -11,10 +11,10 @@ Modes:
 - ``local_iceberg``: the project's Spark image on a local file-based Iceberg catalog proves a branch per table, ``MERGE INTO`` on a branch,
   candidates invisible on ``main``, the fast-forward and a read-back.
 - ``suite``: only the case suite of ``publish_offline`` (the Spark image, a local catalog).
-- ``publish_offline``: the whole sequence on a local catalog. A fixture sealed copy of every contract table is made by the pinned DuckDB image,
-  exported by the consumer in the quality image (a replaced copy is refused), published step by step with one container per step, read
-  back, and then the case suite runs in the Spark image (interruptions, retries, tampering, a moved main, maintenance). A sentinel scan
-  closes the run.
+- ``publish_offline``: the whole sequence on a local catalog. A fixture sealed copy of every contract table is made by the pinned DuckDB image
+  (``dim_release`` with null, empty and populated ``DATE[]`` and ``VARCHAR[]`` lists), exported by the consumer in the quality image (a replaced copy
+  is refused), published step by step with one container per step, read back (rows, fingerprints and the exact lists), and then the case suite runs
+  in the Spark image (interruptions, retries, tampering, a moved main, maintenance). A sentinel scan closes the run.
 
 The launcher is a throwaway one on a test registry under the system temporary folder. It talks to the real Docker daemon and starts one container
 at a time, each with network none. No Polaris, no S3, no AWS profile and no secret exist in these modes: the sentinel values the scan looks for are
@@ -58,6 +58,12 @@ REDACTED = "[redacted]"
 LAUNCHER_MODULE = "orchestration.launcher"
 OPTIONS_WITH_VALUE = ("-W", "-X", "-Q")
 CREATE_FIXTURE = "CREATE TABLE main.{table} AS SELECT {columns} FROM range(12) AS t(i);"
+RELEASE_LISTS_SQL = (
+    "CASE i % 4 WHEN 0 THEN NULL WHEN 1 THEN []::DATE[] WHEN 2 THEN [DATE '2026-01-01' + CAST(i AS INTEGER)] "
+    "ELSE [DATE '2026-01-01' + CAST(i AS INTEGER), DATE '2026-02-01'] END AS \"publication_dates\"",
+    "CASE i % 4 WHEN 0 THEN NULL WHEN 1 THEN []::VARCHAR[] WHEN 2 THEN ['run-' || i] ELSE ['run-' || i, 'run-x'] END AS \"download_run_ids\"",
+)
+RELEASE_LIST_TYPES = {"publication_dates": "DATE[]", "download_run_ids": "VARCHAR[]"}
 
 
 @dataclass(frozen=True)
@@ -475,7 +481,10 @@ def suite(session: Session, report: Path, selected: list[str] | None = None) -> 
 
 
 def fixture_sql(plan: gold_publish.Plan) -> str:
-    """SQL that makes a DuckDB file holding every contract table with a few rows; keys unique, values of several types with nulls."""
+    """SQL that makes a DuckDB file holding every contract table with a few rows; keys unique, values of several types with nulls.
+
+    ``dim_release`` also carries its two list columns with null, empty and populated lists.
+    """
     statements = []
     for name, key in plan.tables.items():
         columns = [f"'k' || i AS {gold_export.duck_ident(key[0])}"]
@@ -486,6 +495,8 @@ def fixture_sql(plan: gold_publish.Plan) -> str:
             'i % 2 = 0 AS "flag_c"',
             "DATE '2026-01-01' + CAST(i AS INTEGER) AS \"date_d\"",
         ]
+        if name == "dim_release":
+            columns += RELEASE_LISTS_SQL
         statements.append(CREATE_FIXTURE.format(table=gold_export.duck_ident(name), columns=", ".join(columns)))
     return "\n".join(statements) + "\n"
 
@@ -589,6 +600,14 @@ def publish_offline(session: Session, report: Path) -> list[dict[str, Any]]:
             "gold_export: the consumer exports the 70 tables on the expected digest",
             exported.ok and accept_ok and len(manifest["tables"]) == 70,
             exit=exported.exit_code,
+        )
+    )
+    release_types = dict(manifest["tables"].get("dim_release", {}).get("columns", []))
+    steps.append(
+        step(
+            "gold_export: dim_release keeps publication_dates as DATE[] and download_run_ids as VARCHAR[]",
+            all(release_types.get(name) == kind for name, kind in RELEASE_LIST_TYPES.items()),
+            types={name: release_types.get(name) for name in RELEASE_LIST_TYPES},
         )
     )
     if not (exported.ok and accept_ok):

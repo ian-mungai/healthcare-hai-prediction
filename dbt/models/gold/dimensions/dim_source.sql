@@ -7,7 +7,7 @@ with
 
 observed as (
     select distinct cast(dataset_id as varchar) as dataset_id
-    from {{ ref('stg_bronze__file_copies') }}
+    from {{ ref('stg_bronze__release_observations') }}
     where dataset_id is not null
 ),
 

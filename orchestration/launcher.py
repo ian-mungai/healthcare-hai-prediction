@@ -1101,7 +1101,7 @@ INDIRECT_CHOICES = ("eager", "cautious", "buildable", "empty")
 ARG_VALUE = re.compile(r"[A-Za-z0-9_.,:=/+@*\[\]-]{1,300}")
 # Macros a ``run-operation`` may call; initially none (D1 section 7 item 1).
 RUN_OPERATION_ALLOWLIST: dict[str, dict[str, type]] = {}
-DBT_VARS_ALLOWED = {"check_release_copy_conflicts": bool}
+DBT_VARS_ALLOWED: dict[str, type] = {}
 DUCKDB_QUERY_FLAGS = ("-csv", "-json", "-markdown", "-noheader", "-header", "-readonly")
 
 
@@ -7088,11 +7088,12 @@ class LauncherClient:
         self.config.registry.path.mkdir(parents=True, exist_ok=True)
         self.config.registry.path.chmod(0o700)
         log = str(self.config.registry.path / "launcher.log")
-        arguments = [sys.executable, "-m", "orchestration.launcher"]
+        arguments = [sys.executable, "-B", "-m", "orchestration.launcher"]
         if self.config.registry.kind == "test":
             arguments += ["--test-registry", str(self.config.registry.path)]
         arguments.append("serve")
         environment = {name: os.environ[name] for name in ("PATH", "HOME", "DOCKER_HOST", "TMPDIR") if name in os.environ}
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
         if self.launch_nonce:
             environment[LAUNCH_NONCE_VARIABLE] = self.launch_nonce
         middle = os.fork()

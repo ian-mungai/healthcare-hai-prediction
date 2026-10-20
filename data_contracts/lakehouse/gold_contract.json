@@ -512,12 +512,15 @@
         "copy_count",
         "release_date",
         "period_start",
-        "period_end"
+        "period_end",
+        "publication_dates",
+        "download_run_ids"
       ],
       "grain": "member_sha256 (stored file)",
       "inputs": [
         "stg_bronze__file_copies",
-        "the file-period seeds"
+        "the file-period seeds",
+        "stg_bronze__files"
       ],
       "package": "G2"
     },
@@ -545,7 +548,7 @@
       ],
       "grain": "dataset",
       "inputs": [
-        "stg_bronze__file_copies",
+        "stg_bronze__release_observations",
         "dbt/seeds/gold/source_labels.csv (generated from config/acquisition/registry_additions.json and config/acquisition/source_registry.json)"
       ],
       "package": "G2"
@@ -581,7 +584,9 @@
     "min and max over a label group's release date, data year or vintage, inside dim_rurality_code and dim_measure only",
     "left(county_fips, 2) for the state FIPS prefix, inside dim_state only",
     "min and max over county-list vintages and a membership test against the latest vintage's county list, inside dim_county only",
-    "count(*) of tract rows per old county and planning region, inside bridge_county_planning_region only"
+    "count(*) of tract rows per old county and planning region, inside bridge_county_planning_region only",
+    "left(edition_start, 4) and left(edition_end, 4) compared with the seed vintage range, inside bridge_measure_control only",
+    "county_fips like '09%' for the old Connecticut counties, inside bridge_county_planning_region only"
   ],
   "expression_policy": {
     "date_roles": {
@@ -672,6 +677,14 @@
           [
             "int_bls_county_series",
             "county_fips"
+          ],
+          [
+            "int_county_adjacency_edges",
+            "county_fips"
+          ],
+          [
+            "int_county_adjacency_edges",
+            "neighbor_fips"
           ],
           [
             "int_gv_county_values",
@@ -1102,7 +1115,7 @@
       "dim_source": {
         "dataset_id": [
           [
-            "stg_bronze__file_copies",
+            "stg_bronze__release_observations",
             "dataset_id"
           ]
         ]

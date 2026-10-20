@@ -5,11 +5,11 @@
 {%- set synthetic = var('synthetic_dataset_ids', ['fixture_dataset'] if target.name == 'fixture' else []) %}
 {%- set refusal = 'synthetic_dataset_ids may exempt datasets only on the fixture target, not on ' ~ target.name %}
 {%- if synthetic and target.name != 'fixture' %}{{ exceptions.raise_compiler_error(refusal) }}{% endif %}
-select distinct file_copies.dataset_id
-from {{ ref('stg_bronze__file_copies') }} as file_copies
+select distinct observations.dataset_id
+from {{ ref('stg_bronze__release_observations') }} as observations
 left join {{ ref('source_labels') }} as source_labels
-    on file_copies.dataset_id = source_labels.dataset_id
+    on observations.dataset_id = source_labels.dataset_id
 where
-    file_copies.dataset_id is not null
+    observations.dataset_id is not null
     and source_labels.dataset_id is null {%- if synthetic %}
-    and file_copies.dataset_id not in ({% for item in synthetic %}'{{ item }}'{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}
+    and observations.dataset_id not in ({% for item in synthetic %}'{{ item }}'{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}

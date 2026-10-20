@@ -3,16 +3,13 @@ version: 2
 models:
   - name: stg_bronze__file_copies
     description: >
-      One row per stored copy in the tables whose copies staging resolves, from bronze.stored_copies, loaded or not:
-      the file it holds, where and when it was captured, its publication release and whether it is the copy bronze
-      loads. Every capture location stays listed (failure modes 167 to 171,
-      plans/staging_dedup_20261003/failure_modes.md; 204 to 209,
-      data/lakehouse_planning/dedup_20261003/failure_modes.md).
+      One row per table and distinct live physical file, deduplicated by exact bucket, key and version.
+      Retired versions remain in the release-observation relation and never count as live copies.
     meta:
       classification: Public
     columns:
       - name: copy_key
-        description: Bronze table and object key, the model's key.
+        description: Bronze table and exact physical object identity, the model's key.
         data_tests: [unique, not_null]
       - name: bronze_table
         description: The bronze table the copy belongs to.
@@ -57,12 +54,12 @@ models:
       - name: is_release_from_container
         description: True when a nested archive member had no dated archive name and kept its container's release.
       - name: row_count
-        description: Rows the loaded copy holds in bronze; null for a copy that is not loaded.
+        description: Rows counted in bronze for the indexed canonical object key.
       - name: is_retired
-        description: True for a copy on the retired list, deleted from S3 and never loaded.
+        description: False for every live physical copy. Retirement history stays in release observations.
         data_tests: [not_null]
       - name: is_canonical
-        description: True for the copy bronze loads, the file's copy with the smallest object key; staging reads it.
+        description: True for the live physical copy whose loaded canonical lineage matches the immutable object index.
         data_tests: [not_null]
 
   - name: stg_bronze__files
@@ -87,15 +84,19 @@ models:
         description: Object key of the copy staging reads.
         data_tests: [not_null]
       - name: copy_count
-        description: Stored copies of the file, loaded or not.
+        description: Distinct live physical files for this checksum.
       - name: canonical_count
         description: Canonical copies among them; always 1.
       - name: row_count
         description: Rows in the file.
       - name: publication_releases
-        description: Every release that published the file, sorted.
+        description: Successful publication labels, sorted, including retired observations and excluding failed attempts.
+      - name: publication_dates
+        description: Successful publication dates, sorted, including retired observations and excluding failed attempts.
+      - name: download_run_ids
+        description: All observed capture-run identifiers, sorted.
       - name: latest_publication_date
-        description: The latest publication release that is a date; null when every release is a capture snapshot.
+        description: The latest successful publication date, including retired observations; null when none is a date.
       - name: file_names
         description: Every name the file was stored under, sorted.
       - name: label_hold_issue
@@ -323,14 +324,16 @@ models:
 
   - name: stg_bronze__file_labels
     description: >
-      One row per loaded IPPS and occupational-mix object with its labels from the generated map
-      (scripts/lakehouse/ipps_file_labels.py, seed ipps_occmix_copy_labels), read from its names and stored container,
-      never from capture time (failure modes 178 to 182).
+      One IPPS or occupational-mix manifest observation with its labels, including retired versions and aliases.
+      The original object key maps each observation to the label seed and the checksum associates its canonical file.
     meta:
       classification: Public
     columns:
+      - name: observation_id
+        description: Immutable manifest observation identity, the model's primary key.
+        data_tests: [unique, not_null]
       - name: copy_key
-        description: Bronze table and object key, the model's key.
+        description: Compatibility alias for the manifest observation identity.
         data_tests: [unique, not_null]
       - name: bronze_table
         description: The bronze table the copy belongs to.

@@ -33,7 +33,7 @@ copies as (
         bronze_table,
         member_sha256,
         release_id
-    from {{ ref('stg_bronze__file_copies') }}
+    from {{ ref('stg_bronze__release_observations') }}
 ),
 
 -- Only a selected text file that shares a release with a twin-excluded, unheld workbook can cover its sheets [268] [270].

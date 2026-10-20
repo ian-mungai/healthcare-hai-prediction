@@ -732,7 +732,7 @@ def seal_not_written(env: Env) -> dict[str, bool]:
         ("selected build", ["build", "--select", "x"], {"mode": "success"}, None),
         ("failed build", ["build"], {"mode": "failed"}, None),
         ("warning", ["build"], {"mode": "warn"}, "not success or pass"),
-        ("release copy-consistency warning", ["build"], {"mode": "release_copy_warning"}, "not success or pass"),
+        ("a warning test", ["build"], {"mode": "release_copy_warning"}, "not success or pass"),
         ("manifest of another invocation", ["build"], {"mode": "manifest"}, "different invocations"),
         ("write-ahead log", ["build"], {"mode": "wal"}, "write-ahead log"),
         ("missing build file", ["build"], {"mode": "nodb"}, "the build file of run"),
@@ -805,11 +805,11 @@ def results_invocation(env: Env) -> str:
 
 @case("warning_not_tolerated", "unpatched")
 def warning_not_tolerated(env: Env) -> dict[str, bool]:
-    """923 (D1 section 10 item 5, review round 1 finding 6): every result must be success or pass; a warning, also the one that warns by design, refuses."""
+    """Require every build result to be success or pass and refuse a seal when any test warns."""
     run, fakes = prepare(env, builds=[{"mode": "release_copy_warning", "seconds": 0.3}, {"mode": "warn", "seconds": 0.3}, {"mode": "success", "seconds": 0.3}])
     checks: dict[str, bool] = {}
     sealed_folder = run_folder(env) / "sealed"
-    for index, label in enumerate(("the release copy-consistency warning", "another warning")):
+    for index, label in enumerate(("a warning test", "another warning")):
         reply = dbt_submit(env, run, f"w{index}", ["build"])
         env.wait_ended(reply["attempt_id"], 30)
         error = expect_error_of(partial(lambda attempt: launcher.seal(bound(env, run_record(env), attempt)), reply["attempt_id"]))
@@ -1331,8 +1331,10 @@ def completion_of_live_build(env: Env) -> dict[str, bool]:
 
 @case("release_copy_warning_refused", "patched")
 def release_copy_warning_refused(env: Env) -> dict[str, bool]:
-    """923 (D1 section 10 item 5, A42 and A46, lead decision on marked point 1): the release copy-consistency test stays enabled and warns by design; a build
-    with that warning is refused a seal and a build without it is sealed. No launch turns the test off."""
+    """Refuse a seal for a warning test in the stub and seal a build without that warning.
+
+    No launch disables the production physical-copy invariant.
+    """
     run, fakes = prepare(env, builds=[{"mode": "release_copy_warning", "seconds": 0.3}, {"mode": "success", "seconds": 0.3}])
     warned = dbt_submit(env, run, "warned", ["build"])
     env.wait_ended(warned["attempt_id"], 30)
@@ -1346,7 +1348,7 @@ def release_copy_warning_refused(env: Env) -> dict[str, bool]:
     last = poll_run(env, lambda r: r.get("build_state") == "sealed" and (r.get("completion") or {}).get("build_attempt") == reply.get("attempt_id"), 20)
     texts = [json.dumps(body) for body in env.daemon.create_bodies.values()]
     return {
-        "a build with the release copy-consistency warning is refused a seal": first.get("build_state") == "open"
+        "a build with a warning test is refused a seal": first.get("build_state") == "open"
         and "not success or pass" in str(first.get("seal_error"))
         and "completion" not in first,
         "the refused build leaves no sealed copy": no_copy,
@@ -1950,7 +1952,7 @@ con.close()
 
 def duckdb_file(path: Path, rows: list[tuple[str, ...]] | None) -> None:
     """A real DuckDB file with the marker table and the rows (or, for ``None``, only another table), made with the DuckDB of the tools environment."""
-    result = run_command(str(TOOLS_PYTHON), ["-I", "-c", DUCKDB_SCRIPT, str(path), json.dumps(rows)], cwd=ROOT)
+    result = run_command(str(TOOLS_PYTHON), ["-B", "-I", "-c", DUCKDB_SCRIPT, str(path), json.dumps(rows)], cwd=ROOT)
     if result.returncode != 0:
         raise CaseFailure(f"the DuckDB fixture could not be written: {result.stderr[-300:]}")
 
@@ -2103,7 +2105,7 @@ class Dbt:
         "HAI_BUILD_RUN_ID": PINS_RUN,
         "HAI_BUILD_DBT_TREE_SHA256": "a" * 64,
         "HAI_BUILD_PINS_SHA256": "b" * 64,
-        "HAI_BUILD_PINS_JSON": '{\n  "cms_hai_hospital": "1"\n}\n',
+        "HAI_BUILD_PINS_JSON": '{\n  "cms_hai_hospital": "1",\n  "file_metadata": "2"\n}\n',
         "HAI_BUILD_GIT_REVISION": "c" * 40,
         "HAI_PROVENANCE_REQUIRED": "1",
     }
@@ -2244,7 +2246,7 @@ def marker_macros(env: Env) -> dict[str, bool]:
         "a skip is not eligible": ([*ok, {"status": "skipped"}], "build", [], False),
         "a failed test is not eligible": ([*ok, {"status": "fail"}], "build", [], False),
         "another warning is not eligible": ([*ok, {"status": "warn", "node": {"name": "some_test"}}], "build", [], False),
-        "the release copy-consistency warning is not eligible": ([*ok, {"status": "warn", "node": {"name": RELEASE_COPY_TEST}}], "build", [], False),
+        "a warning test is not eligible": ([*ok, {"status": "warn", "node": {"name": RELEASE_COPY_TEST}}], "build", [], False),
         "no results are not eligible": ([], "build", [], False),
     }
     for label, (results, which, selection, expected) in cases.items():
@@ -2349,8 +2351,8 @@ def hook_command_coverage(env: Env) -> dict[str, bool]:
     warning.write_text("{{ config(severity='warn') }}\nselect 1 as x\n")
     warned, warned_output = hook_only.run(["build"], valid, "scratch")
     warned_state = hook_only.operation("marker_state", None, valid, "scratch")[1]
-    checks["control: dbt ran the build and the release copy-consistency test warned"] = warned == 0 and "WARN" in warned_output
-    checks["a build with the release copy-consistency test warning leaves no marker"] = "MARKER_TABLES=0" in warned_state
+    checks["control: dbt ran the build with a warning test"] = warned == 0 and "WARN" in warned_output
+    checks["a build with a warning test leaves no marker"] = "MARKER_TABLES=0" in warned_state
     warning.unlink()
     clean, _ = hook_only.run(["build"], valid, "scratch")
     checks["a build without the warning writes the marker"] = clean == 0 and "MARKER_ROWS=1" in hook_only.operation("marker_state", None, valid, "scratch")[1]

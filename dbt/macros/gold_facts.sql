@@ -690,15 +690,27 @@ from (
 
 
 {% test release_copy_consistency(model) %}
-{#-
-    Reports every checksum whose stored copies carry different publication_release texts. dim_release keeps the smallest object key copy
-    (amendment A40 item 2); this test is severity warn in the YAML and reports the conflict without failing the build [824].
--#}
+with physical as (
+    select
+        member_sha256,
+        count(*) as physical_count,
+        count(*) filter (where is_canonical and s3_version_id is not null and s3_version_id not in ('', 'null')
+            and checksum_count = 1 and row_count > 0 and not is_retired) as canonical_count
+    from {{ ref('stg_bronze__file_copies') }}
+    group by member_sha256
+),
+
+selected as (
+    select member_sha256
+    from {{ model }}
+    where member_sha256 != '<unknown>'
+)
+
 select
-    member_sha256,
-    count(distinct publication_release) as release_texts
-from {{ ref('stg_bronze__file_copies') }}
-where member_sha256 is not null
-group by member_sha256
-having count(distinct publication_release) > 1
+    coalesce(selected.member_sha256, physical.member_sha256) as member_sha256,
+    coalesce(physical.physical_count, 0) as physical_count,
+    coalesce(physical.canonical_count, 0) as canonical_count
+from selected
+full outer join physical on selected.member_sha256 = physical.member_sha256
+where selected.member_sha256 is null or physical.physical_count != 1 or physical.canonical_count != 1 or physical.member_sha256 is null
 {% endtest %}

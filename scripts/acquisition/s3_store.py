@@ -21,6 +21,7 @@ from scripts.acquisition.cli_tools import executable, run_argv
 from scripts.acquisition.collection_layout import load_routes, object_prefix
 from scripts.acquisition.dataset_layout import CATEGORIES, dataset_id, group_entries
 from scripts.acquisition.legacy_versions import bound_record
+from scripts.acquisition.single_copy import load_policy, reference_scope
 from scripts.acquisition.source_registry import RegistryError, canonical_hash, load_registry, read_json, require_collection_scope
 from scripts.acquisition.storage_controls import reuse_identity, verify_route
 from scripts.acquisition.transport import CaptureError, inspect_payload, validate_request
@@ -83,6 +84,7 @@ class AwsCli:
 
     def __init__(self, configuration: dict[str, str], runner: Any = None) -> None:
         self.configuration = configuration
+        self.storage_policy = load_policy()
         self.runner = runner or run_argv
 
     def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict:
@@ -172,7 +174,7 @@ def verify_version(client: AwsCli, key: str, version: Any, digest: str, size: in
             raise CaptureError("S3 checksum or encryption differs from the approved stored object.")
 
 
-def store_file(client: AwsCli, path: Path, key: str) -> tuple[dict, bool]:
+def store_file(client: AwsCli, path: Path, key: str, *, manifest: bool = False) -> tuple[dict, bool]:
     """Create or verify one content-addressed object and return its version record and creation flag."""
     parts = PurePosixPath(key).parts
     if len(parts) < 6 or parts[2] not in CATEGORIES or any(part in {"", ".", ".."} for part in key.split("/")):
@@ -186,6 +188,25 @@ def store_file(client: AwsCli, path: Path, key: str) -> tuple[dict, bool]:
     digest, size = fingerprint(path)
     if digest not in parts or size > 512 * 1024**2:
         raise CaptureError("Object keys must contain the actual SHA-256; single-file storage is bounded to 512 MiB.")
+    policy = client.storage_policy
+    if manifest and parts[2] not in {"manifests", "audit"}:
+        raise CaptureError("A manifest must retain its approved manifest or evidence-only audit category.")
+    if policy["enabled"] and parts[2] == "manifests" and parts[-1] not in {"manifest.json", "retired_versions.json", "redaction_manifest.json"}:
+        raise CaptureError("Single-copy manifests require the exact filename manifest.json, retired_versions.json or redaction_manifest.json.")
+    if policy["enabled"] and parts[2] == "audit" and manifest and parts[-1] != "manifest.json":
+        raise CaptureError("Single-copy manifest exemptions require the exact filename manifest.json.")
+    if policy["enabled"] and parts[2] != "manifests" and not manifest:
+        scope = "evidence_objects" if parts[2] == "audit" else "objects"
+        candidate = policy[scope].get(digest)
+        if candidate is not None:
+            if reference_scope(candidate["key"], digest) != scope:
+                raise CaptureError("Single-copy bootstrap reference crosses its data or evidence scope.")
+            if candidate["bucket"] != client.configuration["data_bucket_name"] or candidate["sha256"] != digest or candidate["byte_count"] != size:
+                raise CaptureError("Immutable bootstrap reference differs from the requested bytes or bucket.")
+            verify_version(client, candidate["key"], candidate["version_id"], digest, size)
+            return {**candidate, "verification": "version_get_sha256_and_length_match"}, False
+        prefix = "bronze_evidence" if scope == "evidence_objects" else "bronze_objects"
+        key = f"{prefix}/sha256/{digest}"
     created = False
     try:
         head = client.call("s3api", "head-object", ["--key", key, "--checksum-mode", "ENABLED"])
@@ -422,7 +443,6 @@ def upload_snapshot(
     entries.extend(expanded)
     entries.extend(item for item in extracted if item["parent_sha256"] not in containers)
     entries.append({"storage_path": receipt_path.name, "role": "capture_receipt"})
-    # Audit bytes equal to a selected payload reuse its S3 object through an explicit manifest alias.
     for path in sorted((root / "audit").rglob("*")):
         if path.is_file():
             relative = path.relative_to(root).as_posix()
@@ -446,6 +466,7 @@ def upload_snapshot(
     created_count = 0
     shared = shared if shared is not None else {}
     reuse_group = reuse_identity(receipt)
+    policy = client.storage_policy
     collection_objects: dict[str, dict] = {}
     for folder, dataset_entries in sorted(groups.items()):
         dataset_objects: list[dict] = []
@@ -454,13 +475,14 @@ def upload_snapshot(
             path = root / entry["storage_path"]
             digest, _ = fingerprint(path)
             role = entry["role"]
-            if role == "transport_audit" and digest in by_digest:
+            if role == "transport_audit" and digest in by_digest and not policy["enabled"]:
                 item = {**entry, "object": by_digest[digest], "reuses_identical_payload": True}
             else:
-                prefix = object_prefix(route, folder, role, release_id, run_id, evidence_only)
+                routing_role = "transport_audit" if policy["enabled"] and role == "capture_receipt" else role
+                prefix = object_prefix(route, folder, routing_role, release_id, run_id, evidence_only)
                 key = f"{prefix}/{digest}/{component(entry.get('stored_file_name', path.name))}"
                 reuse_key = canonical_hash({"scope": reuse_group, "sha256": digest, "role": role, "key": key})
-                candidate = shared.get(reuse_key) if role in {"data", "api_page"} and not evidence_only else None
+                candidate = shared.get(reuse_key) if role in {"data", "api_page"} and not evidence_only and not policy["enabled"] else None
                 if key in collection_objects:
                     record, created = collection_objects[key], False
                 elif candidate:
@@ -476,6 +498,8 @@ def upload_snapshot(
                 created_count += created
                 item = {**entry, "object": record}
                 by_digest[digest] = record
+            if policy["enabled"]:
+                item.setdefault("member_chain", [entry.get("stored_file_name", path.name)])
             dataset_objects.append(item)
         manifest = {
             "storage_contract_version": "4.0.0",
@@ -497,6 +521,8 @@ def upload_snapshot(
                 {"archive_member": item["archive_member"], "reason": item["hold_reason"]} for item in dataset_objects if item.get("hold_reason")
             ],
         }
+        if policy["enabled"]:
+            manifest["single_copy_bootstrap_sha256"] = policy["bootstrap_sha256"]
         if containers:
             manifest.update(
                 archive_storage_policy="extracted_members_only_zip_retained_locally",
@@ -509,7 +535,7 @@ def upload_snapshot(
         write_once(manifest_path, encoded_json(manifest))
         digest, _ = fingerprint(manifest_path)
         prefix = object_prefix(route, folder, "capture_receipt", release_id, run_id, evidence_only)
-        manifest_object, created = store_file(client, manifest_path, f"{prefix}/{digest}/manifest.json")
+        manifest_object, created = store_file(client, manifest_path, f"{prefix}/{digest}/manifest.json", manifest=True)
         created_count += created
         manifests.append({"dataset_id": folder, "object": manifest_object})
         stored.extend(dataset_objects)

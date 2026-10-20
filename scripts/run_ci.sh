@@ -110,6 +110,7 @@ lakehouse_checks() {
   "$python_bin" -m scripts.quality.run_model_metadata_e2e
   "$python_bin" -m scripts.lakehouse.run_lock_e2e
   "$python_bin" -m scripts.lakehouse.run_provenance_e2e
+  "$python_bin" -m scripts.lakehouse.run_storage_single_copy_e2e --report "$quality_output/storage_single_copy.json"
   "$python_bin" -m scripts.orchestration.run_contracts_e2e
 }
 
