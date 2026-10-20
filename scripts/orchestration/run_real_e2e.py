@@ -61,13 +61,19 @@ import json
 import time
 from datetime import UTC, datetime
 
-from airflow.sdk import DAG, task
+from airflow.sdk import DAG, get_current_context, task
 
 from orchestration.client import SESSION_FOLDER, BrokerClient, BrokerUnavailable
 from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
 
 RUN = "__RUN__"
 TERMINAL = (State.SUCCEEDED, State.FAILED, State.FAILED_CLOSED, State.CANCELLED, State.NO_OP)
+
+
+def submission(template: str, mode: str) -> SubmissionRequest:
+    """Use the scheduler task's actual caller identity in every broker request."""
+    instance = get_current_context()["ti"]
+    return SubmissionRequest(template, RUN, mode, 1, instance.dag_id, instance.task_id, instance.run_id)
 
 
 def wait_terminal(client: BrokerClient, handle: Handle, seconds: float = 420.0) -> Status:
@@ -102,7 +108,7 @@ def with_wrong_token() -> str:
 def unmapped_submission() -> str:
     """A template with no launcher row is refused by the broker with its reason."""
     try:
-        BrokerClient.from_session().submit(SubmissionRequest("gold_build", RUN, "real", 1))
+        BrokerClient.from_session().submit(submission("gold_build", "real"))
     except SubmissionRefused as error:
         return f"REFUSED {error}"
     return "REFUSED not refused"
@@ -112,7 +118,7 @@ def unmapped_submission() -> str:
 def fixture_success() -> str:
     """A fixture job that succeeds, submitted through the broker."""
     client = BrokerClient.from_session()
-    status = wait_terminal(client, client.submit(SubmissionRequest("silver_build", RUN, "fixture", 1)))
+    status = wait_terminal(client, client.submit(submission("silver_build", "fixture")))
     if status.state != State.SUCCEEDED:
         raise RuntimeError(f"FIXTURE_UNEXPECTED state={status.state.value} exit={status.exit_code}")
     return f"FIXTURE_OK state={status.state.value} exit={status.exit_code}"
@@ -122,7 +128,7 @@ def fixture_success() -> str:
 def fixture_failure() -> str:
     """A fixture job that is forced to fail; the task fails with the job's end state."""
     client = BrokerClient.from_session()
-    status = wait_terminal(client, client.submit(SubmissionRequest("gold_build", RUN, "fixture", 1)))
+    status = wait_terminal(client, client.submit(submission("gold_build", "fixture")))
     raise RuntimeError(f"FIXTURE_FAILED state={status.state.value} exit={status.exit_code}")
 
 

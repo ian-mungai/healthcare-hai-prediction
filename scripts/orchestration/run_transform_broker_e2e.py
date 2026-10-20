@@ -23,11 +23,13 @@ import sys
 import tempfile
 import time
 import traceback
+import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from orchestration import dbt_lineage
 from orchestration.interface import Handle, State, Status, SubmissionRequest
 from scripts.orchestration.broker import Broker, BrokerError, load_templates
 from scripts.orchestration.run_broker_e2e import (
@@ -44,6 +46,7 @@ from scripts.orchestration.run_broker_e2e import (
     stop_attempt,
     wire,
 )
+from scripts.orchestration.transform_fixtures import CASE_CONTAINER, FIXTURE_BRONZE_BYTES, FIXTURE_BRONZE_NAME
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -92,6 +95,35 @@ class Env(BrokerEnv):
 
         self.daemon.script = script
 
+    def plays_dbt(self, resources: list[str]) -> None:
+        """Make the fake daemon's dbt jobs leave the native artifacts a real dbt run leaves in the run folder's ``target`` folder: a manifest and run results
+        that name the job's attempt and one new invocation. Each resource ID (``model.``, ``seed.`` or ``source.`` and a name) is in the manifest as its
+        kind; a model or a seed also has one successful result, a source has none. Only a container that carries the attempt variable plays dbt; every
+        other container keeps the script it had."""
+        other = self.daemon.script
+
+        def script(container: dict[str, Any]) -> tuple[float, int] | None:
+            entries = dict(item.partition("=")[::2] for item in container["Config"].get("Env") or [])
+            attempt = entries.get(dbt_lineage.ATTEMPT_ENV)
+            if attempt is None:
+                return other(container)
+            case = next(Path(mount["Source"]) for mount in container["Mounts"] if mount["Destination"] == CASE_CONTAINER)
+            target = case / "target"
+            target.mkdir(exist_ok=True)
+            metadata = {"invocation_id": str(uuid.uuid4()), "env": {"HAI_ATTEMPT_ID": attempt}}
+            described = {
+                name: {"resource_type": name.partition(".")[0], "config": {"materialized": "table"}, "depends_on": {"nodes": []}} for name in resources
+            }
+            sources = {name: node for name, node in described.items() if node["resource_type"] == "source"}
+            nodes = {name: node for name, node in described.items() if name not in sources}
+            (target / "manifest.json").write_text(json.dumps({"metadata": metadata, "nodes": nodes, "sources": sources}))
+            (target / "run_results.json").write_text(
+                json.dumps({"metadata": metadata, "results": [{"unique_id": name, "status": "success"} for name in nodes]})
+            )
+            return 0.2, 0
+
+        self.daemon.script = script
+
     def records(self, run_id: str) -> Path:
         return self.temp / "records" / run_id / "run.json"
 
@@ -121,6 +153,7 @@ class Env(BrokerEnv):
         (checkout / "data" / "analytics" / "dbt" / "dbt_packages").mkdir(parents=True)
         (checkout / "data" / "orchestration" / "fixture_seed" / "project").mkdir(parents=True)
         (checkout / "data" / "orchestration" / "fixture_seed" / "project" / "dbt_project.yml").write_text("name: seed\n")
+        (checkout / "data" / "orchestration" / "fixture_seed" / FIXTURE_BRONZE_NAME).write_bytes(FIXTURE_BRONZE_BYTES)
         return checkout
 
 
@@ -137,7 +170,7 @@ def case(name: str, **settings: Any) -> Callable[[Callable[[Env], dict[str, bool
 
 
 def step(broker: Broker, template: str, attempt: int = 1, run_id: str = RUN) -> Status:
-    return broker.status(broker.submit(SubmissionRequest(template, run_id, "fixture", attempt)))
+    return broker.status(broker.submit(SubmissionRequest(template, run_id, "fixture", attempt, "lineage_fixture", str(template), "manual__" + str(run_id))))
 
 
 def lock_of(env: Env, run_id: str = RUN) -> str | None:
@@ -211,7 +244,7 @@ def control_rows_schema(env: Env) -> dict[str, bool]:
 def control_acquire(env: Env) -> dict[str, bool]:
     broker = env.new_broker()
     broker.start()
-    request = SubmissionRequest("acquire_run", RUN, "fixture", 1)
+    request = SubmissionRequest("acquire_run", RUN, "fixture", 1, "lineage_fixture", "acquire_run", "manual__" + str(RUN))
     first, again = broker.submit(request), broker.submit(request)
     status = broker.status(first)
     second = step(broker, "acquire_run", 1, OTHER)
@@ -311,7 +344,7 @@ def control_gate(env: Env) -> dict[str, bool]:
     broker.start()
     step(broker, "acquire_run", 1)
     early = step(broker, "final_gate_accepted", 1)
-    work = broker.submit(SubmissionRequest("gold_build", RUN, "fixture", 1))
+    work = broker.submit(SubmissionRequest("gold_build", RUN, "fixture", 1, "lineage_fixture", "gold_build", "manual__" + str(RUN)))
     env.wait_state(broker, work, (State.FAILED, State.SUCCEEDED))
     rejected = step(broker, "final_gate_rejected", 1)
     after_rejected = record_of(env)
@@ -384,7 +417,7 @@ def control_gate_task_states(env: Env) -> dict[str, bool]:
         and accepted["task_states"]["status"] == "read"
         and accepted["task_states"].get("dag_run_id") == "manual__run"
         and accepted["task_states"].get("failed_tasks") == []
-        and [item["task"] for item in accepted["task_states"].get("predecessors", [])] == list(expected)
+        and sorted(item["task"] for item in accepted["task_states"].get("predecessors", [])) == sorted(expected)
         and all(item["observed"] == item["expected"] for item in accepted["task_states"].get("predecessors", [])),
         "a task that failed before any submission is named with its expected and observed state": rejected_step.state == State.SUCCEEDED
         and rejected["gate"]["result"] == "rejected"
@@ -488,7 +521,7 @@ def control_release_stops_open(env: Env) -> dict[str, bool]:
     broker = env.new_broker()
     broker.start()
     step(broker, "acquire_run", 1)
-    job = broker.submit(SubmissionRequest("silver_build", RUN, "fixture", 1))
+    job = broker.submit(SubmissionRequest("silver_build", RUN, "fixture", 1, "lineage_fixture", "silver_build", "manual__" + str(RUN)))
     env.wait_state(broker, job, (State.RUNNING,))
     stopped = step(broker, "release_rejected", 1)
     ended = soft_wait(lambda: state_of(broker, job) in (State.CANCELLED, State.FAILED), 10)
@@ -502,7 +535,7 @@ def control_release_stops_open(env: Env) -> dict[str, bool]:
 @case("control_release_stops_forwarded_after_row_drift")
 def control_release_stops_forwarded_after_row_drift(env: Env) -> dict[str, bool]:
     env.hold_jobs()
-    request = SubmissionRequest("silver_build", RUN, "fixture", 1)
+    request = SubmissionRequest("silver_build", RUN, "fixture", 1, "lineage_fixture", "silver_build", "manual__" + str(RUN))
     accepted, cache_missing, submit_code = lose_submit_reply(env, request, "f" * 64)
     drift_inventory(env, map_to_control)
     broker = env.new_broker()
@@ -520,8 +553,8 @@ def control_release_stops_forwarded_after_row_drift(env: Env) -> dict[str, bool]
 
 
 def run_job(env: Env, broker: Broker, template: str, attempt: int) -> Status:
-    handle = broker.submit(SubmissionRequest(template, RUN, "fixture", attempt))
-    return env.wait_state(broker, handle, (State.SUCCEEDED, State.FAILED, State.CANCELLED))
+    handle = broker.submit(SubmissionRequest(template, RUN, "fixture", attempt, "lineage_fixture", str(template), "manual__" + str(RUN)))
+    return env.wait_state(broker, handle, (State.SUCCEEDED, State.FAILED, State.CANCELLED, State.FAILED_CLOSED))
 
 
 @case("build_file_checkpoint")
@@ -559,7 +592,7 @@ def build_file_checkpoint(env: Env) -> dict[str, bool]:
 
 
 def validate_until_exit(env: Env, broker: Broker, attempt: int) -> tuple[Handle, SubmissionRequest]:
-    request = SubmissionRequest("silver_validate", RUN, "fixture", attempt)
+    request = SubmissionRequest("silver_validate", RUN, "fixture", attempt, "lineage_fixture", "silver_validate", "manual__" + str(RUN))
     handle = broker.submit(request)
     env.wait_ended(str((broker.read_forward(request) or {})["attempt_id"]))
     return handle, request
@@ -706,7 +739,7 @@ def build_file_checkpoint_from_intent(env: Env) -> dict[str, bool]:
     drift_inventory(env, stop_requiring)
     again = env.new_broker()
     resumed = again.start()
-    gold = SubmissionRequest("gold_build", RUN, "fixture", 1)
+    gold = SubmissionRequest("gold_build", RUN, "fixture", 1, "lineage_fixture", "gold_build", "manual__" + str(RUN))
     env.wait_state(again, Handle(gold.submission_id, gold.container_name), (State.SUCCEEDED, State.FAILED, State.CANCELLED))
     ended = finished(env, "gold_build", 1)
     return {
@@ -822,7 +855,7 @@ def control_crash_after_finalize(env: Env) -> dict[str, bool]:
 def control_idempotent_retry(env: Env) -> dict[str, bool]:
     broker = env.new_broker()
     broker.start()
-    request = SubmissionRequest("acquire_run", RUN, "fixture", 1)
+    request = SubmissionRequest("acquire_run", RUN, "fixture", 1, "lineage_fixture", "acquire_run", "manual__" + str(RUN))
     handles: list[Handle] = [broker.submit(request) for _ in range(3)]
     step(broker, "run_record", 1)
     step(broker, "run_record", 2)
@@ -839,7 +872,10 @@ def control_idempotent_retry(env: Env) -> dict[str, bool]:
 @case("shipped_rows_render")
 def shipped_rows_render(env: Env) -> dict[str, bool]:
     checkout = env.checkout_copy()
-    env.write_inventory(load_templates(SHIPPED))
+    shipped = load_templates(SHIPPED)
+    bound = {name: sorted(shipped["templates"][name]["modes"]["fixture"]["launcher"]["dbt_nodes"]) for name in ("silver_build", "gold_build")}
+    env.plays_dbt(bound["silver_build"])
+    env.write_inventory(shipped)
     broker = Broker(env.paths, load_templates(env.inventory_path), env.client_for_broker(), repo_root=checkout)
     env.brokers.append(broker)
     broker.start()
@@ -851,11 +887,27 @@ def shipped_rows_render(env: Env) -> dict[str, bool]:
     creates = [op["projection"] for op in env.state()["operations"].values() if op["kind"] == "create" and RUN in op["name"]]
     commands = [" ".join(spec["cmd"]) for spec in creates]
     mounts = {mount[1]: mount[2] for spec in creates for mount in spec["mounts"]}
+    build_dataset = {"namespace": "file", "name": f"data/analytics/dbt/runs/{RUN}/staging.duckdb"}
+    edges = {
+        name: json.loads(Path(finished(env, name)["record_path"]).read_text()).get("dbt_lineage", {}).get("models", [])
+        if states[name] == State.SUCCEEDED
+        else []
+        for name in bound
+    }
+    bronze_intent = next(line for line in ledger_lines(env) if line["submission_id"] == f"{RUN}:silver_build:fixture:1" and line["event"] == "intent")
     results = {
         "acquire_run copied the seed into the run folder and made the quality folders": acquired.state == State.SUCCEEDED
         and (folder / "project" / "dbt_project.yml").is_file()
+        and (folder / FIXTURE_BRONZE_NAME).is_file()
         and all((folder / name).is_dir() for name in ("quality_silver", "quality_gold", "quality_cross")),
+        "silver_build pinned the seed's bronze file by the hash of its bytes": [pin["snapshot"] for pin in bronze_intent.get("input_pins", [])]
+        == [{"kind": "file_sha256", "id": hashlib.sha256(FIXTURE_BRONZE_BYTES).hexdigest()}],
         "every shipped fixture step succeeded on the fake daemon": all(state == State.SUCCEEDED for state in states.values()),
+        "each dbt step recorded one edge for every model and seed its row binds (no source), on the build file": all(
+            [edge["model"] for edge in edges[name]] == [resource for resource in bound[name] if not resource.startswith("source.")]
+            and all(edge["status"] == "success" and edge["outputs"] == [build_dataset] for edge in edges[name])
+            for name in bound
+        ),
         "five containers were created, each on no network": len(creates) == 5 and all(spec["network"] == "none" for spec in creates),
         "silver_build builds every seed and the silver models with cautious indirect selection": any(
             "build --select resource_type:seed +path:models/silver --indirect-selection cautious" in text for text in commands

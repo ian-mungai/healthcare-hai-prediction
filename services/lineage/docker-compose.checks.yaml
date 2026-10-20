@@ -1,0 +1,14 @@
+name: hai-lineage-checks
+services:
+  dump:
+    image: hai-airflow:3.3.2-python3.12
+    user: "${HAI_ORCH_UID}:0"
+    entrypoint: [python]
+    command: [/opt/hai/lineage_dump.py]
+    mem_limit: ${JOB_MEMORY_LIMIT}
+    volumes:
+      - ${HAI_LINEAGE_REPO}/services/lineage/db_dump.py:/opt/hai/lineage_dump.py:ro
+      - ${HAI_LINEAGE_STATE}/private:/run/hai/private:ro
+      - ${HAI_LINEAGE_STATE}/dumps:/out
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]

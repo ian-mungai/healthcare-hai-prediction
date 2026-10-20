@@ -1,0 +1,6 @@
+{
+  "api_port": 5000,
+  "interval_seconds": 5,
+  "pass_seconds": 10,
+  "batch_limit": 1000
+}

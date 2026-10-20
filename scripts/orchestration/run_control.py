@@ -289,8 +289,7 @@ def recorded_result(broker: Broker, run_id: str, mode: str) -> str | None:
     control = (broker.templates.get("run_record", {}).get("modes", {}).get(mode) or {}).get("control")
     if control is None:
         return None
-    request = SubmissionRequest("run_record", run_id, mode, 1)
-    path = Path(str(substitute(control["params"]["record_file"], broker.placeholder_values(request))))
+    path = Path(str(substitute(control["params"]["record_file"], broker.placeholder_values(run_id, mode))))
     result = ((read_record(path, run_id) or {}).get("gate") or {}).get("result")
     return str(result) if result in GATE_RESULTS.values() else None
 
@@ -390,7 +389,7 @@ def stop_open(broker: Broker, request: SubmissionRequest) -> list[str]:
     for submission_id, lines in sorted(broker.ledger.submissions(request.run_id).items()):
         if lines[-1]["event"] in FINAL_STATES or submission_id == request.submission_id or broker.recorded_as_control(lines[0]):
             continue
-        asked = submission_request(submission_id)
+        asked = submission_request(submission_id, lines[0])
         forward = broker.read_forward(asked) or broker.accepted_forward(asked, principal)
         if forward is None:
             continue

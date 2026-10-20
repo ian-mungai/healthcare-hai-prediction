@@ -34,6 +34,7 @@ from typing import Any
 
 from orchestration import launcher
 from orchestration.interface import SubmissionRefused, SubmissionRequest
+from orchestration.lineage import CompletionWorker
 from scripts.lakehouse import run_lock
 from scripts.orchestration import run_control
 from scripts.orchestration.airflow_api import AirflowApi, AirflowApiError
@@ -83,6 +84,7 @@ class Supervisor:
         fail_at: str | None = None,
         templates_file: Path = TEMPLATES_FILE,
         repo_root: Path = ROOT,
+        lineage_api_port: int | None = None,
     ) -> None:
         """Other ports or a failure point only with a test registry."""
         if paths.registry.kind != "test" and any(value is not None for value in (api_port, broker_port, fail_at)):
@@ -97,14 +99,14 @@ class Supervisor:
         self.fail_at = fail_at
         self.templates_file = templates_file
         self.repo_root = repo_root
+        self.lineage_api_port = lineage_api_port
         self.transform_dag = TRANSFORM_DAG
         self.state = paths.state / "airflow"
         self.broker: Broker | None = None
         self.listener: Listener | None = None
         self.token = ""
         self.evidence: dict[str, Any] = {}
-
-    # Launcher calls
+        self.emitter: CompletionWorker | None = None
 
     def call(self, method: str, params: dict[str, Any] | None = None, timeout: float = 120.0) -> Any:
         """One launcher request; a refusal or an outage is a ``SupervisorError`` naming the request."""
@@ -129,8 +131,6 @@ class Supervisor:
         except (OSError, TimeoutError) as error:
             raise SupervisorError(f"the launcher did not answer the wait for the stack: {type(error).__name__}") from None
 
-    # Preparation
-
     def check_images(self) -> dict[str, Any]:
         """PostgreSQL by digest (pulled through the launcher when absent) and the locally built Airflow image."""
         pulled = self.call("pull", {"reference": self.platform["metadata_database"]["image"]}, timeout=PULL_SECONDS)
@@ -148,7 +148,7 @@ class Supervisor:
 
     def prepare_state(self, token: str, broker_port: int) -> None:
         """Folders, metadata secrets (owner-only files read through Airflow's ``_CMD`` options) and this session's token and broker URL."""
-        for folder in ("postgres", "logs", "metadata", "session"):
+        for folder in ("postgres", "logs", "metadata", "session", "lineage_provider"):
             (self.state / folder).mkdir(parents=True, exist_ok=True, mode=0o700)
         metadata = self.state / "metadata"
         password_file = metadata / "db_password"
@@ -161,8 +161,6 @@ class Supervisor:
             write_private(metadata / name, secrets.token_urlsafe(48))
         write_private(self.state / "session" / "broker_token", token + "\n")
         write_private(self.state / "session" / "client.json", json.dumps({"url": f"http://host.docker.internal:{broker_port}"}) + "\n")
-
-    # Session
 
     def start(self) -> dict[str, Any]:
         """Start the whole session or leave nothing of it running."""
@@ -189,12 +187,38 @@ class Supervisor:
             if self.fail_at == "after_airflow_start":
                 raise SupervisorError("test failure point after_airflow_start")
             self.evidence["health"] = self.ready()
+            self.start_lineage()
         except BaseException:
             outcome = self.teardown()
             if outcome.get("errors"):
                 sys.stderr.write("supervisor: the cleanup after the failed start did not finish:\n" + "".join(f"  {item}\n" for item in outcome["errors"]))
             raise
         return self.evidence
+
+    def start_lineage(self) -> None:
+        """Schedule independent durable collection; lineage failures leave the orchestration session available."""
+        try:
+            settings = json.loads((self.repo_root / "services/lineage/delivery.json").read_text())
+            if set(settings) != {"api_port", "interval_seconds", "pass_seconds", "batch_limit"}:
+                raise ValueError("lineage delivery settings contain unknown or missing fields")
+            port = self.lineage_api_port
+            if port is None and self.paths.registry.kind != "test":
+                port = settings["api_port"]
+            worker = CompletionWorker(
+                self.paths.records,
+                self.state / "lineage_provider",
+                self.paths.state / "lineage" / "outbox.sqlite",
+                port=port,
+                interval_seconds=settings["interval_seconds"],
+                pass_seconds=settings["pass_seconds"],
+                limit=settings["batch_limit"],
+            )
+            worker.start()
+            self.emitter = worker
+            self.evidence["lineage"] = {"scheduled": True, "delivery": port is not None}
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
+            self.evidence["lineage"] = {"scheduled": False, "error": type(error).__name__}
+            sys.stderr.write(f"supervisor: lineage collection was not scheduled ({type(error).__name__})\n")
 
     def ready(self) -> dict[str, Any]:
         """Poll the API's health endpoint until every component reports healthy."""
@@ -267,7 +291,9 @@ class Supervisor:
         elif held["state"] == "finalizing" and self.release_pending(run_id, mode, snapshot["tasks"], outcome):
             pass
         else:
-            handle = self.broker.submit(SubmissionRequest("release_rejected", run_id, mode, RECONCILE_ATTEMPT))
+            handle = self.broker.submit(
+                SubmissionRequest("release_rejected", run_id, mode, RECONCILE_ATTEMPT, self.transform_dag, "supervisor_reconcile", snapshot["dag_run_id"])
+            )
             outcome["reconciled"].append({"run_id": run_id, "submission_id": handle.submission_id, "dag_run_states": [snapshot["dag_run_state"]]})
         return outcome
 
@@ -305,6 +331,13 @@ class Supervisor:
         wait that fails and any phase other than ``down`` are errors too, so the result is clean only when the launcher confirms the stack is down."""
         result: dict[str, Any] = {}
         errors: list[str] = []
+        if self.emitter is not None:
+            try:
+                self.emitter.stop()
+                result["lineage"] = {"cleanup": "done", "last_pass": self.emitter.outcome, "failures": self.emitter.failures}
+                self.emitter = None
+            except TimeoutError as error:
+                errors.append(self.failure("lineage", error))
         if self.listener is not None:
             try:
                 self.listener.stop()
@@ -337,11 +370,11 @@ class Supervisor:
         return result
 
 
-def build(test_registry: str | None) -> Supervisor:
+def build(test_registry: str | None, lineage_api_port: int | None = None) -> Supervisor:
     """A supervisor for the real registry or a test one."""
     paths = resolve_paths(test_registry)
     platform: dict[str, Any] = json.loads(PLATFORM_FILE.read_text())
-    return Supervisor(paths, platform, launcher.load_client(test_registry))
+    return Supervisor(paths, platform, launcher.load_client(test_registry), lineage_api_port=lineage_api_port)
 
 
 def reconcile(supervisor: Supervisor) -> None:
@@ -359,13 +392,14 @@ def main() -> int:
     """Run one command; ``up`` holds the session in the foreground until SIGINT or SIGTERM."""
     cli = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     cli.add_argument("--test-registry", help="a test registry folder named registry; its parent holds the test state")
+    cli.add_argument("--lineage-api-port", type=int, help="the existing loopback Marquez API port; test sessions otherwise collect without HTTP")
     commands = cli.add_subparsers(dest="command", required=True)
     commands.add_parser("up", help="start the session and hold it until Ctrl-C")
     commands.add_parser("down", help="tear down the stack and delete the session token")
     commands.add_parser("status", help="print the launcher's record of the stack")
     args = cli.parse_args()
     try:
-        supervisor = build(args.test_registry)
+        supervisor = build(args.test_registry, args.lineage_api_port)
         if args.command == "status":
             result: Any = supervisor.stack()
         elif args.command == "down":

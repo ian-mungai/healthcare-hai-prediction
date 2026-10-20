@@ -40,23 +40,37 @@ STEP_ARGUMENTS = {
     "cross_layer_checks": ["test", "--select", "tag:cross_checks"],
 }
 CATALOG_ARGUMENTS = ["parse"]
-CHECKPOINT_KEYS = ("requires_build_file",)
+CHECKPOINT_KEYS = ("requires_build_file", "lineage")
+FIXTURE_BRONZE_NAME = "fixture_lakehouse.duckdb"
+FIXTURE_BRONZE_BYTES = b"synthetic fixture bronze bytes, not a database\n"
 
 
 def seed_run(seeds: Path, run_id: str, overlay: str) -> Path:
-    """The seed folder of one run: the tiny project under ``project/`` with the overlay's files replacing its own."""
+    """The seed folder of one run: the tiny project under ``project/`` with the overlay's files replacing its own, and the synthetic bronze file the shipped
+    rows declare as the silver build input."""
     folder = seeds / run_id
     shutil.rmtree(folder, ignore_errors=True)
     shutil.copytree(TINY, folder / "project")
     for name, text in OVERLAYS[overlay].items():
         (folder / "project" / name).write_text(text)
+    (folder / FIXTURE_BRONZE_NAME).write_bytes(FIXTURE_BRONZE_BYTES)
     return folder
 
 
 def dbt_row(arguments: list[str], packages: Path, seconds: int = 300) -> dict[str, Any]:
     """A broker row that runs ``fixture_dbt`` on the run folder."""
     params = {"case_host": "{run_dir}", "case_container": CASE_CONTAINER, "packages_host": str(packages)}
-    return {"class": "offline", "no_op": False, "launcher": {"template": "fixture_dbt", "args": arguments, "params": params, "timeout_seconds": seconds}}
+    return {
+        "class": "offline",
+        "no_op": False,
+        "launcher": {
+            "template": "fixture_dbt",
+            "args": arguments,
+            "params": params,
+            "timeout_seconds": seconds,
+            "lineage": {"version": 1, "inputs": [], "outputs": []},
+        },
+    }
 
 
 def test_inventory(seeds: Path, packages: Path, catalog_job: bool = False, extra: dict[str, list[str]] | None = None) -> dict[str, Any]:
@@ -70,6 +84,10 @@ def test_inventory(seeds: Path, packages: Path, catalog_job: bool = False, extra
         shipped = templates[name]["modes"]["fixture"].get("launcher") or {}
         row = dbt_row(arguments, packages)
         row["launcher"].update({key: shipped[key] for key in CHECKPOINT_KEYS if key in shipped})
+        if arguments[0] in ("run", "build", "seed"):
+            outputs = row["launcher"]["lineage"]["outputs"]
+            if outputs:
+                row["launcher"]["dbt_nodes"] = {f"model.tiny.{path.stem}": copy.deepcopy(outputs[0]) for path in (TINY / "models").glob("*.sql")}
         templates[name]["modes"]["fixture"] = row
     validate = templates["silver_validate"]["modes"]["fixture"]["launcher"]["params"]
     validate["suites_host"] = "{checkout}/data_contracts/great_expectations/tiny_suites"
@@ -87,6 +105,7 @@ def prepare_checkout(folder: Path, extra_dags: dict[str, str] | None = None) -> 
     ``extra_dags`` adds DAG files to the copy's DAG folder by file name (a variant of the transform DAG that fails inside one task, or a probe DAG)."""
     (folder / "services" / "orchestration").mkdir(parents=True)
     (folder / "services" / "analytics").mkdir(parents=True)
+    shutil.copytree(ROOT / "services" / "lineage", folder / "services" / "lineage", ignore=shutil.ignore_patterns("__pycache__"))
     (folder / "scripts" / "orchestration").mkdir(parents=True)
     (folder / "orchestration").mkdir()
     (folder / "dags").mkdir()

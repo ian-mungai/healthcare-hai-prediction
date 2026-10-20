@@ -11,17 +11,20 @@ read-only and runs ``python in_image_checks.py``. It prints one JSON object:
   tools at the version the image records, or in the exact release set of ``config/orchestration/platform.json`` at its own pinned version. Nothing is
   exempt by name prefix: any other distribution, an extra provider or the task SDK included, is reported as unpinned.
 
-It imports only the standard library, Airflow and ``orchestration.graph``.
+The lineage probe checks the provider and client already installed in the pinned image. It starts no service or network delivery.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
 import sys
+import tempfile
 from collections.abc import Callable
+from datetime import UTC, datetime
 from importlib import metadata
 from pathlib import Path
 from typing import Any
@@ -159,7 +162,70 @@ def constraints(tools: dict[str, str]) -> dict[str, Any]:
         "build_tools": build_tools,
         "release": {name: installed.get(name) for name in sorted(release)},
         "release_problems": release_problems,
+        "lineage_packages": {
+            name: installed.get(name) for name in ("apache-airflow-providers-openlineage", "openlineage-python", "openlineage-integration-common")
+        },
     }
+
+
+def lineage_transport() -> dict[str, Any]:
+    """Check native pinned event classes, transport factory and sanitized local persistence without network delivery."""
+    from airflow.providers.openlineage.plugins.facets import AirflowRunFacet
+    from openlineage.client.event_v2 import Job, Run, RunEvent, RunState
+    from openlineage.client.facet_v2 import parent_run
+    from openlineage.client.transport.factory import DefaultTransportFactory
+
+    provider = importlib.import_module("hai_lineage.provider_events")
+    transport_module = importlib.import_module("hai_lineage.provider_transport")
+    sentinel = "synthetic-provider-metadata-must-not-leave-memory"
+    run_id, parent_id = "13d9e9ef-93b2-4efc-90d5-066b1becf67d", "3589fe84-f7d0-49fe-b456-5fa256a72938"
+    facet = AirflowRunFacet(
+        dag={"dag_id": "transform_dag", "owner": sentinel},
+        dagRun={"run_id": "manual__provider_probe", "conf": {"secret": sentinel}},
+        task={"task_id": "silver_build", "source_code": sentinel},
+        taskInstance={"try_number": 1, "map_index": None},
+        taskUuid=run_id,
+    )
+    event = RunEvent(
+        eventType=RunState.START,
+        eventTime=datetime.now(UTC).isoformat(),
+        run=Run(
+            runId=run_id,
+            facets={
+                "airflow": facet,
+                "parent": parent_run.ParentRunFacet(
+                    run=parent_run.Run(runId=parent_id), job=parent_run.Job(namespace=provider.NAMESPACE, name="transform_dag")
+                ),
+            },
+        ),
+        job=Job(namespace=provider.NAMESPACE, name="transform_dag.silver_build"),
+        producer=provider.PRODUCER,
+    )
+    transport = DefaultTransportFactory().create({"type": "hai_lineage.provider_transport.SafeTransport", "path": "/opt/hai/lineage_provider"})
+    try:
+        transport_module.SpoolConfig.from_dict({"type": "hai_lineage.provider_transport.SafeTransport", "path": "/opt/hai/unapproved"})
+    except ValueError:
+        pass
+    else:
+        raise ValueError("native transport accepted an unapproved spool path")
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        if not provider.emit(root, event):
+            raise ValueError("native provider event did not reach the sanitized spool")
+        files = list(root.glob("*.json"))
+        if len(files) != 1:
+            raise ValueError("native provider event did not persist once")
+        envelope = provider.validate(json.loads(files[0].read_text()))
+        if envelope["event"]["run"]["runId"] != run_id or sentinel in files[0].read_text():
+            raise ValueError("native provider projection lost correlation or retained metadata")
+    if (
+        not isinstance(transport, transport_module.SafeTransport)
+        or transport.config_class is not transport_module.SpoolConfig
+        or transport.kind != "hai-lineage-spool"
+        or not transport.close(timeout=0)
+    ):
+        raise ValueError("native provider factory did not create the local transport")
+    return {"ok": True, "factory": transport.kind, "native_run_uuid_preserved": True, "sentinel_absent": True, "network": "none"}
 
 
 def main() -> int:
@@ -167,6 +233,10 @@ def main() -> int:
     argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args()
     tools = {name: os.environ.get(variable, "") for name, variable in (("pip", "AIRFLOW_PIP_VERSION"), ("uv", "AIRFLOW_UV_VERSION"))}
     report = {"dags": dags(), "graph_cases": graph_cases(), "transform_graph": transform_graph(), "constraints": constraints(tools)}
+    try:
+        report["lineage_transport"] = lineage_transport()
+    except (OSError, ValueError, TypeError, AttributeError, ImportError) as error:
+        report["lineage_transport"] = {"ok": False, "error": type(error).__name__}
     sys.stdout.write("IN_IMAGE " + json.dumps(report) + "\n")
     return 0
 

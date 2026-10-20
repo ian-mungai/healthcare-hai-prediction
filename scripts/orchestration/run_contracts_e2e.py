@@ -132,16 +132,25 @@ def fake() -> dict[str, bool]:
     """The fake keeps the interface's promises: one launch per request, refusals, no-ops and failures."""
     fake_subs = FakeSubmissions(load("job_templates.json"), {"gold_validate": 1}, running={"silver_validate"})
     subs: Submissions = fake_subs  # tasks see only the interface; the ledger is the fake's own
-    request = SubmissionRequest("silver_build", RUN, "fixture", 1)
+    request = SubmissionRequest("silver_build", RUN, "fixture", 1, "lineage_fixture", "silver_build", "manual__" + str(RUN))
     first, second = subs.submit(request), subs.submit(request)
     intents = [line for line in fake_subs.ledger if line["event"] == "intent"]
-    noop = subs.submit(SubmissionRequest("pin_bronze", RUN, "fixture", 1))
-    failed = subs.submit(SubmissionRequest("gold_validate", RUN, "fixture", 1))
+    noop = subs.submit(SubmissionRequest("pin_bronze", RUN, "fixture", 1, "lineage_fixture", "pin_bronze", "manual__" + str(RUN)))
+    failed = subs.submit(SubmissionRequest("gold_validate", RUN, "fixture", 1, "lineage_fixture", "gold_validate", "manual__" + str(RUN)))
     refusals = {}
     for name, (bad, reason) in {
-        "unsupported mode": (SubmissionRequest("publish_candidates", RUN, "fixture", 1), "does not support mode fixture"),
-        "unknown template": (SubmissionRequest("drop_tables", RUN, "fixture", 1), "unknown template drop_tables"),
-        "malformed run ID": (SubmissionRequest("silver_build", "run_a", "fixture", 1), "does not match"),
+        "unsupported mode": (
+            SubmissionRequest("publish_candidates", RUN, "fixture", 1, "lineage_fixture", "publish_candidates", "manual__" + str(RUN)),
+            "does not support mode fixture",
+        ),
+        "unknown template": (
+            SubmissionRequest("drop_tables", RUN, "fixture", 1, "lineage_fixture", "drop_tables", "manual__" + str(RUN)),
+            "unknown template drop_tables",
+        ),
+        "malformed run ID": (
+            SubmissionRequest("silver_build", "run_a", "fixture", 1, "lineage_fixture", "silver_build", "manual__" + "run_a"),
+            "does not match",
+        ),
     }.items():
         try:
             subs.submit(bad)
@@ -159,7 +168,7 @@ def fake() -> dict[str, bool]:
         "cancel of a finished submission changes nothing": subs.cancel(first) == subs.status(first),
         "logs name the submission": request.submission_id in subs.logs(first),
     }
-    long_job = subs.submit(SubmissionRequest("silver_validate", RUN, "fixture", 1))
+    long_job = subs.submit(SubmissionRequest("silver_validate", RUN, "fixture", 1, "lineage_fixture", "silver_validate", "manual__" + str(RUN)))
     before = subs.status(long_job)
     try:
         subs.record(long_job)

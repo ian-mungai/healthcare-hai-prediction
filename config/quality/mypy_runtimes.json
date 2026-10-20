@@ -95,6 +95,14 @@
     "scripts/review/run_member_review_e2e.py": {
       "runtime": "review",
       "reason": "Library stubs not installed for \"openpyxl\""
+    },
+    "services/lineage/provider_transport.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"openlineage.client.transport.transport\""
+    },
+    "services/lineage/db_dump.py": {
+      "runtime": "orchestration_image",
+      "reason": "Library stubs not installed for \"psycopg2\""
     }
   }
 }

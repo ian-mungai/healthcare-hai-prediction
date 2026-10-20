@@ -89,7 +89,9 @@ def submit_and_wait(client: BrokerClient, request: SubmissionRequest) -> tuple[H
 
 def run_step(template: str) -> str:
     run_id, mode, attempt = transform_run()
-    _, status = submit_and_wait(BrokerClient.from_session(), SubmissionRequest(template, run_id, mode, attempt))
+    task_instance = get_current_context()["ti"]
+    request = SubmissionRequest(template, run_id, mode, attempt, task_instance.dag_id, task_instance.task_id, task_instance.run_id)
+    _, status = submit_and_wait(BrokerClient.from_session(), request)
     if status.state not in PASSING:
         raise RuntimeError(f"{template} ended {status.state.value} with exit code {status.exit_code}")
     return status.state.value

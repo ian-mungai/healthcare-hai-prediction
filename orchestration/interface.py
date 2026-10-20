@@ -1,10 +1,7 @@
-"""The submission interface between Airflow tasks and the host job broker.
+"""Version 2 caller identity and fixed launch selection for the host broker.
 
-DAG code imports only this module (failure mode 771): it names what a task may ask for and what it gets back, never how
-the broker launches a container. The broker (scripts/orchestration/broker.py) and the fake in orchestration/fake.py
-implement it. A request carries only the template, run ID, mode and attempt (data_contracts/orchestration/
-submission_request.schema.json); everything else comes from the template's launch specification. Repeating a request
-returns the same handle instead of a second launch (Airflow plan section 7).
+Requests identify their DAG run and task without supplying datasets or overriding a launch specification.
+Repeating a request returns the same handle. Reusing its key with different caller identity is refused.
 """
 
 from __future__ import annotations
@@ -23,13 +20,13 @@ class SubmissionRefused(Exception):
 class State(StrEnum):
     """A submission's state, read from its ledger lines."""
 
-    PENDING = "pending"  # intent written; no container yet
-    RUNNING = "running"  # started or adopted
-    SUCCEEDED = "succeeded"  # finished with exit code 0
-    FAILED = "failed"  # finished with a non-zero exit code
-    CANCELLED = "cancelled"  # stopped on request; finished with the signal's exit code
-    NO_OP = "no_op"  # the mode makes the template an intentional no-op; finished without a container
-    FAILED_CLOSED = "failed_closed"  # reconciliation found an ambiguous container state; stops for the owner
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    NO_OP = "no_op"
+    FAILED_CLOSED = "failed_closed"
 
 
 @dataclass(frozen=True)
@@ -40,6 +37,23 @@ class SubmissionRequest:
     run_id: str
     mode: str
     attempt: int
+    dag_id: str
+    task_id: str
+    dag_run_id: str
+
+    @classmethod
+    def from_record(cls, record: dict[str, Any]) -> SubmissionRequest:
+        """Recover a v2 caller request from its validated persisted fields."""
+        if record.get("request_version") != 2:
+            raise SubmissionRefused("request version 2 with caller identity is required")
+        try:
+            return cls(*(record[key] for key in ("template", "run_id", "mode", "attempt", "dag_id", "task_id", "dag_run_id")))
+        except KeyError:
+            raise SubmissionRefused("request version 2 is missing caller identity") from None
+
+    def identity(self) -> dict[str, str]:
+        """Return the three caller identifiers carried by this request."""
+        return {"dag_id": self.dag_id, "task_id": self.task_id, "dag_run_id": self.dag_run_id}
 
     @property
     def submission_id(self) -> str:
@@ -53,7 +67,7 @@ class SubmissionRequest:
 
     def as_dict(self) -> dict[str, Any]:
         """The request as the submission request schema reads it."""
-        return {"template": self.template, "run_id": self.run_id, "mode": self.mode, "attempt": self.attempt}
+        return {"request_version": 2, "template": self.template, "run_id": self.run_id, "mode": self.mode, "attempt": self.attempt, **self.identity()}
 
 
 @dataclass(frozen=True)

@@ -153,7 +153,7 @@ def port_open(port: int) -> bool:
 @case("supervisor_full_session")
 def supervisor_full_session(env: SessionEnv) -> dict[str, bool]:
     """933: a full session through the launcher: images checked, token and metadata files owner-only, the listener serving, the stack up and
-    healthy, then a teardown that leaves nothing."""
+    healthy, the lineage worker finishing a pass and failing none, then a teardown that leaves nothing."""
     services_script(env)
     env.start()
     supervisor = env.supervisor()
@@ -175,8 +175,13 @@ def supervisor_full_session(env: SessionEnv) -> dict[str, bool]:
         "the evidence names the sizing the launcher computed": any(key.startswith("HAI_ORCH_MEM") for key in evidence["settings"]),
         "the catalog was not touched": catalog_phase(env) == "down",
     }
+    worker = supervisor.emitter
+    worker_passed = worker is not None and settles(env, lambda: bool(worker.outcome), 30)
     result = supervisor.teardown()
+    last_pass = result.get("lineage", {}).get("last_pass", {})
     after = {
+        "the lineage worker finished a pass that reached its end": worker_passed and "record_cycle" in last_pass,
+        "the lineage worker recorded no failed pass over the session": result.get("lineage", {}).get("failures") == 0 and "error" not in last_pass,
         "teardown ends in phase down": result["stack"]["phase"] == "down" and env.stack_phase() == "down",
         "nothing of the stack is left": not env.stack_objects() and not env.daemon.networks,
         "the session token and client file are deleted": env.session_files() == [],
