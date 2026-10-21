@@ -17,7 +17,7 @@ last_updated: 2026-10-19
 - **Language linters:** ShellCheck 0.11.0 checks tracked shell sources. actionlint 1.7.12 checks Actions workflows.
   It validates local `action.yml` metadata only through the workflow's `uses:` reference. Shell scripts and expressions
   inside composite steps are not linted. yamllint 1.38.0 checks tracked YAML, including `action.yml` and `.yamllint` itself and treats duplicate keys
-  as errors. Hadolint 2.15.1 checks every tracked Dockerfile. gofmt and go vet use installed Go 1.27.1, with vet targeting
+  as errors. Hadolint 2.15.1 checks every tracked Dockerfile. gofmt and go vet use installed Go 1.27.3, with vet targeting
   Linux amd64 and arm64 for the Linux-only programs. Each tracked Go file is vetted separately, so standalone programs
   can share a folder. Files that form one multi-file package are not supported. A vet error in any file fails the gate.
   No Go toolchain or module is downloaded. The native tool archives

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -227,13 +228,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--mode", required=True, choices=MODES)
     parser.add_argument("--protected", required=True)
     parser.add_argument("--publish-dir", default="/workspace/out/publish")
+    parser.add_argument("--local-warehouse", type=Path)
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     plan = load_plan()
     protected_path = Path(args.protected)
     try:
         from scripts.lakehouse.session import spark_session
 
-        spark = spark_session("gold_maintenance")
+        if args.local_warehouse is not None and (args.mode != "publish_fixture" or os.environ.get("POLARIS_URI")):
+            raise PublishError("a local catalog requires an isolated publish_fixture run")
+        spark = spark_session("gold_maintenance", warehouse=args.local_warehouse)
         try:
             ctx = Context(spark, plan, args.run, args.mode, Path(args.publish_dir), "", needs_sealed=False)
             result = maintain(ctx, lambda: load_protected(protected_path))

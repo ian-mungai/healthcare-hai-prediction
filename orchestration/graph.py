@@ -13,7 +13,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-# Section 5, steps 1 to 13 with 9a, in order; skip_publish is the fixture branch's no-op beside steps 10 to 13.
 WORK_CHAIN = (
     "acquire_run",
     "catalog_up",
@@ -32,7 +31,6 @@ WORK_CHAIN = (
 )
 WORK_TASKS = (*WORK_CHAIN, "skip_publish", "run_record")
 ALL_SUCCESS = "all_success"
-# The upstream set of every task in the section 5 graph.
 EXPECTED_UPSTREAM: dict[str, frozenset[str]] = {
     WORK_CHAIN[0]: frozenset(),
     **{task: frozenset({WORK_CHAIN[index - 1]}) for index, task in enumerate(WORK_CHAIN) if index},
@@ -43,6 +41,54 @@ EXPECTED_UPSTREAM: dict[str, frozenset[str]] = {
     "release_run": frozenset({"final_gate"}),
 }
 EXPECTED_RULES = {"run_record": "none_failed_min_one_success", "catalog_release": "all_done", "final_gate": "all_done", "release_run": "all_done"}
+PIPELINE_CHAINS = {
+    "silver_transform_dag": (
+        "acquire_run",
+        "catalog_up",
+        "snapshot_project",
+        "pin_bronze",
+        "silver_build",
+        "silver_validate",
+        "verify_bronze",
+        "seal_silver",
+        "silver_export",
+        "silver_candidates",
+        "silver_reconcile",
+        "silver_backup",
+        "silver_commit",
+        "record_silver_snapshot",
+        "run_record",
+    ),
+    "gold_transform_dag": (
+        "acquire_run",
+        "catalog_up",
+        "snapshot_project",
+        "reserve_silver",
+        "pin_silver",
+        "read_silver",
+        "gold_build",
+        "gold_validate",
+        "cross_layer_checks",
+        "seal_gold",
+        "gold_export",
+        "publish_candidates",
+        "reconcile_candidates",
+        "catalog_backup",
+        "commit_publish",
+        "run_record",
+    ),
+    "gold_maintenance_dag": ("acquire_run", "catalog_up", "gold_maintenance", "run_record"),
+}
+
+
+def requirements(dag_id: str) -> tuple[dict[str, frozenset[str]], dict[str, str]]:
+    """Return the fixed task dependencies and trigger rules for a supported pipeline."""
+    if dag_id == "transform_dag":
+        return EXPECTED_UPSTREAM, EXPECTED_RULES
+    chain = PIPELINE_CHAINS[dag_id]
+    upstream = {chain[0]: frozenset(), **{name: frozenset({chain[index - 1]}) for index, name in enumerate(chain) if index}}
+    upstream.update({"catalog_release": frozenset(chain), "final_gate": frozenset((*chain, "catalog_release")), "release_run": frozenset({"final_gate"})})
+    return upstream, {name: "all_done" for name in ("catalog_release", "final_gate", "release_run")}
 
 
 @dataclass(frozen=True)
@@ -64,9 +110,10 @@ class Violation:
     detail: str
 
 
-def reference_graph() -> dict[str, TaskNode]:
+def reference_graph(dag_id: str = "transform_dag") -> dict[str, TaskNode]:
     """The section 5 graph itself; every rule accepts it."""
-    return {task: TaskNode(upstream, EXPECTED_RULES.get(task, ALL_SUCCESS)) for task, upstream in EXPECTED_UPSTREAM.items()}
+    expected, rules = requirements(dag_id)
+    return {task: TaskNode(upstream, rules.get(task, ALL_SUCCESS)) for task, upstream in expected.items()}
 
 
 def graph_from_dag(dag: Any) -> dict[str, TaskNode]:
@@ -96,8 +143,9 @@ def cycle_members(graph: dict[str, TaskNode]) -> list[str]:
             upstream.difference_update(ready)
 
 
-def validate_transform_graph(graph: dict[str, TaskNode]) -> list[Violation]:
+def validate_transform_graph(graph: dict[str, TaskNode], dag_id: str = "transform_dag") -> list[Violation]:
     """Every section 5 rule ``graph`` breaks; an empty list means the graph is accepted."""
+    expected_upstream, expected_rules = requirements(dag_id)
     violations = [
         Violation("setup_or_teardown", task, "setup task" if node.is_setup else "teardown task")
         for task, node in sorted(graph.items())
@@ -115,16 +163,16 @@ def validate_transform_graph(graph: dict[str, TaskNode]) -> list[Violation]:
     leaves = sorted(set(graph) - downstream)
     if leaves != ["release_run"]:
         violations.append(Violation("leaf", ",".join(leaves) or "-", "release_run must be the only leaf"))
-    violations += [Violation("missing_task", task, "section 5 task absent") for task in EXPECTED_UPSTREAM if task not in graph]
-    violations += [Violation("unexpected_task", task, "not a section 5 task") for task in sorted(set(graph) - set(EXPECTED_UPSTREAM))]
-    for task, expected in EXPECTED_UPSTREAM.items():
+    violations += [Violation("missing_task", task, "required pipeline task absent") for task in expected_upstream if task not in graph]
+    violations += [Violation("unexpected_task", task, "not a pipeline task") for task in sorted(set(graph) - set(expected_upstream))]
+    for task, expected in expected_upstream.items():
         node = graph.get(task)
         if node is None:
             continue
         if node.upstream != expected:
             missing, extra = sorted(expected - node.upstream), sorted(node.upstream - expected)
             violations.append(Violation("upstream", task, f"missing {missing}, unexpected {extra}"))
-        rule = EXPECTED_RULES.get(task, ALL_SUCCESS)
+        rule = expected_rules.get(task, ALL_SUCCESS)
         if node.trigger_rule != rule:
             violations.append(Violation("trigger_rule", task, f"{node.trigger_rule}, expected {rule}"))
     return violations

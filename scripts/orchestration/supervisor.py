@@ -56,6 +56,7 @@ COMPONENTS = ("metadatabase", "scheduler", "triggerer", "dag_processor")
 ROTATED_SECRETS = ("jwt_secret", "api_secret_key")
 PULL_SECONDS = 3600.0
 TRANSFORM_DAG = "transform_dag"
+PIPELINE_DAGS = ("silver_transform_dag", "gold_transform_dag", "gold_maintenance_dag")
 RECONCILE_SECONDS = 60.0
 RECONCILE_ATTEMPT = 99
 LIVE_RUN_STATES = ("queued", "running")
@@ -247,20 +248,25 @@ class Supervisor:
         try:
             secret = (self.state / "metadata" / "jwt_secret").read_text().strip()
             api = AirflowApi(self.api_port, secret, timeout=SNAPSHOT_SECONDS, deadline=deadline)
+            names = (
+                PIPELINE_DAGS if self.transform_dag == TRANSFORM_DAG and (self.repo_root / "dags/silver_transform_dag.py").is_file() else (self.transform_dag,)
+            )
             runs = [
-                item
-                for item in api.runs(self.transform_dag)
+                (name, item)
+                for name in names
+                for item in api.runs(name)
                 if (item.get("conf") or {}).get("run_id") == run_id and (item.get("conf") or {}).get("mode") == mode
             ]
             if len(runs) != 1:
-                return {"unavailable": f"{len(runs)} DAG runs of {self.transform_dag} name run {run_id} in mode {mode}, not one"}
-            dag_run_id = str(runs[0]["dag_run_id"])
-            tasks = api.task_states(self.transform_dag, dag_run_id)
+                return {"unavailable": f"{len(runs)} pipeline DAG runs name run {run_id} in mode {mode}, not one"}
+            dag_id, selected = runs[0]
+            dag_run_id = str(selected["dag_run_id"])
+            tasks = api.task_states(dag_id, dag_run_id)
             if time.monotonic() >= deadline:
                 raise AirflowApiError("the deadline of the read passed")
         except (AirflowApiError, OSError, KeyError, ValueError) as error:
             return {"unavailable": f"the DAG run cannot be read: {type(error).__name__}: {str(error)[:200]}"}
-        return {"dag_run_id": dag_run_id, "dag_run_state": str(runs[0]["state"]), "tasks": tasks}
+        return {"dag_id": dag_id, "dag_run_id": dag_run_id, "dag_run_state": str(selected["state"]), "tasks": tasks}
 
     def reconcile_runs(self) -> dict[str, Any]:
         """Move the transform run to ``failed_retained``, through the broker's ``release_rejected`` control row, when its DAG run has ended without the gate

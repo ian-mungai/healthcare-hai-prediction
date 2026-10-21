@@ -298,7 +298,9 @@ def run_checks(
     covered["bridges"] = (len(bridges), len(contract.bridges))
 
     manifest = json.loads((target / "manifest.json").read_text())
-    results.add("lineage", gold_checks.lineage_problems(contract, manifest))
+    lineage = gold_checks.lineage_problems(contract, manifest, gold_checks.published_silver())
+    results.add("lineage", lineage)
+    results.details["lineage_problems"] = lineage
     results.add("gold_models_match_contract", gold_checks.contract_models_problems(contract, manifest))
     models = sorted(set(contract.model_names) | set(gold_checks.gold_nodes(manifest)))
     parsed, aggregates = parse_compiled(target, manifest, models, backend.plan)

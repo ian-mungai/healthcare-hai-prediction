@@ -4,7 +4,19 @@
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
     },
-    "dags/transform_dag.py": {
+    "dags/gold_maintenance_dag.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
+    },
+    "dags/gold_transform_dag.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
+    },
+    "dags/silver_transform_dag.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
+    },
+    "orchestration/dag_runtime.py": {
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
     },
@@ -28,6 +40,14 @@
       "runtime": "quality",
       "reason": "Cannot find implementation or library stub for module named \"duckdb\""
     },
+    "scripts/lakehouse/gold_reconcile.py": {
+      "runtime": "quality",
+      "reason": "Cannot find implementation or library stub for module named \"duckdb\""
+    },
+    "scripts/lakehouse/pipeline_build.py": {
+      "runtime": "analytics",
+      "reason": "Skipping analyzing \"dbt.cli.main\": module is installed, but missing library stubs or py.typed marker; Cannot find implementation or library stub for module named \"duckdb\""
+    },
     "scripts/lakehouse/run_bronze_e2e.py": {
       "runtime": "spark",
       "reason": "Library stubs not installed for \"openpyxl\""
@@ -35,10 +55,6 @@
     "scripts/lakehouse/session.py": {
       "runtime": "spark",
       "reason": "Cannot find implementation or library stub for module named \"pyspark.sql\""
-    },
-    "scripts/lakehouse/gold_reconcile.py": {
-      "runtime": "quality",
-      "reason": "Cannot find implementation or library stub for module named \"duckdb\""
     },
     "scripts/lakehouse/silver_quality.py": {
       "runtime": "quality",
@@ -103,6 +119,10 @@
     "services/lineage/db_dump.py": {
       "runtime": "orchestration_image",
       "reason": "Library stubs not installed for \"psycopg2\""
+    },
+    "tests/orchestration/fixtures/combined_dag.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
     }
   }
 }

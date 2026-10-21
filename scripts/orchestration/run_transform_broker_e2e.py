@@ -54,6 +54,28 @@ OUT = ROOT / "data" / "e2e" / "orchestration_transform_broker"
 OTHER = "20261013T090100Z-0b1b2b3b"
 SHIPPED = ROOT / "config" / "orchestration" / "broker_templates.json"
 CHECKPOINT_KEYS = ("records_build_file", "build_file_result", "requires_build_file")
+CONTROL_TEMPLATES = (
+    "acquire_run",
+    "catalog_release",
+    "catalog_up",
+    "final_gate_accepted",
+    "final_gate_rejected",
+    "gold_final_gate_accepted",
+    "gold_final_gate_rejected",
+    "maintenance_final_gate_accepted",
+    "maintenance_final_gate_rejected",
+    "pin_bronze",
+    "release_accepted",
+    "release_rejected",
+    "reserve_silver",
+    "run_record",
+    "seal_gold",
+    "seal_silver",
+    "silver_final_gate_accepted",
+    "silver_final_gate_rejected",
+    "snapshot_project",
+    "verify_bronze",
+)
 
 
 def reported(data: bytes) -> dict[str, Any] | None:
@@ -201,12 +223,8 @@ def prepare_finalizing(env: Env, broker: Broker, run_id: str = RUN) -> Path:
 @case("control_rows_schema")
 def control_rows_schema(env: Env) -> dict[str, bool]:
     shipped = load_templates(SHIPPED)
-    results = {
-        "the shipped inventory loads and holds six control templates": sum(
-            1 for t in shipped["templates"].values() if any("control" in m for m in t["modes"].values())
-        )
-        == 6
-    }
+    control_templates = sorted(name for name, t in shipped["templates"].items() if any("control" in m for m in t["modes"].values()))
+    results = {"the shipped inventory loads and holds exactly the twenty control templates": control_templates == sorted(CONTROL_TEMPLATES)}
 
     def mutated(change: Callable[[dict[str, Any]], None], fragment: str) -> bool:
         document = copy.deepcopy(shipped)

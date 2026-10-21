@@ -262,7 +262,11 @@ def mutants() -> dict[str, Mutant]:
                 ),
             ),
         ),
-        Mutant("class_unchecked", "the network class is not checked", (Edit(BROKER, 'if row["class"] != OFFLINE:', "if False:", count=2),)),
+        Mutant(
+            "class_unchecked",
+            "the network class is not checked",
+            (Edit(BROKER, 'if row["class"] not in (OFFLINE, *getattr(launcher, "NETWORK_CLASSES_ENFORCED", ())):', "if False:", count=2),),
+        ),
         Mutant(
             "templates_schema_off",
             "the broker template file is not validated against its schema",

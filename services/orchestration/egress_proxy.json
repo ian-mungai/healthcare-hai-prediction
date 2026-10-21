@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "image": "ubuntu/squid@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c",
+  "classes": ["lakehouse_read", "lakehouse_write"],
+  "memory_share": 0.03,
+  "memory_floor_bytes": 67108864,
+  "port": 3128,
+  "source": "https://hub.docker.com/r/ubuntu/squid"
+}

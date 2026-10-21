@@ -1,6 +1,7 @@
 """Version 2 caller identity and fixed launch selection for the host broker.
 
 Requests identify their DAG run and task without supplying datasets or overriding a launch specification.
+A silver pin request may also name the committed producer run whose silver it pins.
 Repeating a request returns the same handle. Reusing its key with different caller identity is refused.
 """
 
@@ -40,6 +41,7 @@ class SubmissionRequest:
     dag_id: str
     task_id: str
     dag_run_id: str
+    input_run_id: str | None = None
 
     @classmethod
     def from_record(cls, record: dict[str, Any]) -> SubmissionRequest:
@@ -47,7 +49,16 @@ class SubmissionRequest:
         if record.get("request_version") != 2:
             raise SubmissionRefused("request version 2 with caller identity is required")
         try:
-            return cls(*(record[key] for key in ("template", "run_id", "mode", "attempt", "dag_id", "task_id", "dag_run_id")))
+            return cls(
+                record["template"],
+                record["run_id"],
+                record["mode"],
+                record["attempt"],
+                record["dag_id"],
+                record["task_id"],
+                record["dag_run_id"],
+                record.get("input_run_id"),
+            )
         except KeyError:
             raise SubmissionRefused("request version 2 is missing caller identity") from None
 
@@ -58,7 +69,8 @@ class SubmissionRequest:
     @property
     def submission_id(self) -> str:
         """The idempotency key: one launch per template, run, mode and attempt."""
-        return f"{self.run_id}:{self.template}:{self.mode}:{self.attempt}"
+        key = f"{self.run_id}:{self.template}:{self.mode}:{self.attempt}"
+        return f"{key}:{self.input_run_id}" if self.input_run_id is not None else key
 
     @property
     def container_name(self) -> str:
@@ -67,7 +79,17 @@ class SubmissionRequest:
 
     def as_dict(self) -> dict[str, Any]:
         """The request as the submission request schema reads it."""
-        return {"request_version": 2, "template": self.template, "run_id": self.run_id, "mode": self.mode, "attempt": self.attempt, **self.identity()}
+        body: dict[str, Any] = {
+            "request_version": 2,
+            "template": self.template,
+            "run_id": self.run_id,
+            "mode": self.mode,
+            "attempt": self.attempt,
+            **self.identity(),
+        }
+        if self.input_run_id is not None:
+            body["input_run_id"] = self.input_run_id
+        return body
 
 
 @dataclass(frozen=True)

@@ -38,6 +38,7 @@ EVENT_SCHEMA = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEve
 MAX_RECORD_BYTES = 2 * 1024**2
 MAX_RECORDS = 10000
 REQUEST_KEYS = ("request_version", "template", "run_id", "mode", "attempt", "dag_id", "task_id", "dag_run_id")
+SELECTOR_KEY = "input_run_id"
 LOG = logging.getLogger(__name__)
 
 
@@ -180,7 +181,7 @@ def model_events(frame: Frame, models: list[dict[str, Any]]) -> list[dict[str, A
 def build_events(record: dict[str, Any], provider_run: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Return stable START and terminal events from validated, declared record fields only."""
     request_check, lineage_check = record_validators()
-    request = {key: record[key] for key in REQUEST_KEYS if key in record}
+    request = {key: record[key] for key in (*REQUEST_KEYS, SELECTOR_KEY) if key in record}
     if list(request_check.iter_errors(request)) or list(lineage_check.iter_errors(record.get("lineage"))):
         raise LineageError("record has invalid caller identity or declared lineage")
     code = record.get("exit_code")
@@ -200,7 +201,7 @@ def build_events(record: dict[str, Any], provider_run: dict[str, Any] | None = N
     if not isinstance(lines, list) or not lines or not isinstance(lines[0], dict) or lines[0].get("event") != "intent":
         raise LineageError("record needs its persisted intent")
     intent = lines[0]
-    if any(intent.get(key) != value for key, value in request.items()):
+    if any(intent.get(key) != value for key, value in request.items()) or intent.get(SELECTOR_KEY) != request.get(SELECTOR_KEY):
         raise LineageError("record identity conflicts with its intent")
     if intent.get("lineage") != record["lineage"]:
         raise LineageError("record lineage conflicts with its intent")

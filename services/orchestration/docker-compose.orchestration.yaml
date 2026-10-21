@@ -39,11 +39,11 @@ x-airflow: &airflow
     PYTHONPATH: /opt/hai
   volumes:
     - ${HAI_ORCH_REPO}/dags:/opt/airflow/dags:ro
-    # DAG code imports these three modules only (the interface-only import check, failure mode 771); the launcher is not mounted.
     - ${HAI_ORCH_REPO}/orchestration/__init__.py:/opt/hai/orchestration/__init__.py:ro
     - ${HAI_ORCH_REPO}/orchestration/interface.py:/opt/hai/orchestration/interface.py:ro
     - ${HAI_ORCH_REPO}/orchestration/client.py:/opt/hai/orchestration/client.py:ro
     - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
+    - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
     - ${HAI_ORCH_STATE}/logs:/opt/airflow/logs
     - ${HAI_ORCH_STATE}/metadata:/run/hai/metadata:ro
   security_opt:
@@ -90,6 +90,7 @@ services:
       - ${HAI_ORCH_REPO}/orchestration/interface.py:/opt/hai/orchestration/interface.py:ro
       - ${HAI_ORCH_REPO}/orchestration/client.py:/opt/hai/orchestration/client.py:ro
       - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
+      - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
       - ${HAI_ORCH_STATE}/lineage_provider:/opt/hai/lineage_provider
       - ${HAI_ORCH_STATE}/logs:/opt/airflow/logs
       - ${HAI_ORCH_STATE}/metadata:/run/hai/metadata:ro
@@ -114,6 +115,7 @@ services:
       - ${HAI_ORCH_REPO}/orchestration/client.py:/opt/hai/orchestration/client.py:ro
       - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
       - ${HAI_ORCH_STATE}/lineage_provider:/opt/hai/lineage_provider
+      - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
       - ${HAI_ORCH_STATE}/logs:/opt/airflow/logs
       - ${HAI_ORCH_STATE}/metadata:/run/hai/metadata:ro
       # The broker URL and this session's token; only the scheduler runs tasks, so only it receives them.
@@ -162,6 +164,7 @@ services:
       - ${HAI_ORCH_REPO}/orchestration/client.py:/opt/hai/orchestration/client.py:ro
       - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
       - ${HAI_ORCH_REPO}/orchestration/graph.py:/opt/hai/orchestration/graph.py:ro
+      - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
       - ${HAI_ORCH_REPO}/scripts/orchestration/in_image_checks.py:/opt/hai/checks/in_image_checks.py:ro
       - ${HAI_ORCH_REPO}/services/orchestration/constraints-3.12.txt:/opt/hai/constraints.txt:ro
       - ${HAI_ORCH_REPO}/config/orchestration/platform.json:/opt/hai/platform.json:ro

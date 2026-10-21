@@ -36,7 +36,10 @@
     "analytics": {
       "reason": "The DuckDB UI relay runs in the analytics image.",
       "requirements": ["services/analytics/requirements.txt"],
-      "code": ["services/analytics/*.py"]
+      "code": ["scripts/lakehouse/pipeline_build.py", "services/analytics/*.py"],
+      "provided": {
+        "dbt": "the module of dbt-core, pinned in services/analytics/requirements.txt; the host environment does not install dbt-core, so deptry cannot map the module to its package"
+      }
     },
     "quality": {
       "reason": "Great Expectations validation of the silver build file (scripts/lakehouse/silver.py validate starts it) and the gold publish export of the sealed copy run in the quality image.",
@@ -46,7 +49,7 @@
     "orchestration": {
       "reason": "The DAG files, the in-image checks and the metadata dump run inside the Airflow image that services/orchestration/Dockerfile builds from the official image (Airflow plan section 11.1).",
       "requirements": ["services/orchestration/requirements.txt"],
-      "code": ["dags/*.py", "scripts/orchestration/in_image_checks.py", "scripts/orchestration/db_dump.py", "services/lineage/provider_transport.py", "services/lineage/db_dump.py"],
+      "code": ["dags/*.py", "orchestration/dag_runtime.py", "scripts/orchestration/in_image_checks.py", "scripts/orchestration/db_dump.py", "services/lineage/provider_transport.py", "services/lineage/db_dump.py", "tests/orchestration/fixtures/combined_dag.py"],
       "provided": {
         "airflow": "the official Airflow image pinned by digest in services/orchestration/Dockerfile",
         "psycopg2": "the PostgreSQL driver of the official Airflow image (psycopg2-binary in its constraints file)",

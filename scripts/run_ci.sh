@@ -105,6 +105,7 @@ lakehouse_checks() {
   "$python_bin" -m scripts.lakehouse.gold_checks check-suites
   # The silver suites must match the kept-model contract, the moved checks and the baselines they are generated from.
   "$python_bin" -m scripts.lakehouse.run_silver_e2e --check-suites
+  "$python_bin" -m scripts.lakehouse.run_gold_publish_e2e --mode contract
   "$python_bin" -m scripts.lakehouse.run_resource_checks
   "$python_bin" -m scripts.quality.model_metadata
   "$python_bin" -m scripts.quality.run_model_metadata_e2e
@@ -118,6 +119,8 @@ orchestration_checks() {
   "$python_bin" -m scripts.orchestration.run_lineage_e2e
   "$python_bin" -m scripts.orchestration.run_lineage_completion_e2e
   "$python_bin" -m scripts.orchestration.run_lineage_amendment_e2e
+  "$python_bin" -m scripts.orchestration.run_publish_contracts
+  "$python_bin" -m scripts.orchestration.run_pipeline_light
   "$python_bin" -m scripts.orchestration.run_stack_e2e
   "$python_bin" -m scripts.orchestration.run_broker_e2e
   "$python_bin" -m scripts.orchestration.run_supervisor_e2e

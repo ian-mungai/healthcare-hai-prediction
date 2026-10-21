@@ -44,10 +44,13 @@
       "^data_contracts/orchestration/",
       "^services/orchestration/",
       "^services/lineage/",
-      "^scripts/lakehouse/(__init__|dbt_package_archive|fake_docker|memory_budget|pins|provenance|run_launcher_e2e|run_lock)\\.py$",
       "^scripts/quality/(docker_calls|repo_checks|typecheck)\\.py$",
       "^config/quality/(docker_calls_reviewed|mypy_runtimes)\\.json$",
-      "^docker-compose\\.yaml$"
+      "^docker-compose\\.yaml$",
+      "^scripts/lakehouse/",
+      "^dbt/",
+      "^data_contracts/lakehouse/",
+      "^data_contracts/great_expectations/"
     ],
     "repository_code_checks": [
       "\\.(py|sh)$",
@@ -91,7 +94,8 @@
       "^data_contracts/",
       "^dbt/packages\\.yml$",
       "^dbt/package-lock\\.yml$",
-      "^docker-compose\\.yaml$"
+      "^docker-compose\\.yaml$",
+      "^dbt/"
     ]
   },
   "full_only": [

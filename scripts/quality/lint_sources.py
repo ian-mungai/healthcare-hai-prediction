@@ -345,11 +345,11 @@ def go(check: str) -> int:
         return 0
     program = find_program("go")
     if program is None:
-        raise ValueError("Go:1: installed Go 1.27.1 is required. Ask the owner before installing a toolchain.")
+        raise ValueError("Go:1: installed Go 1.27.3 is required. Ask the owner before installing a toolchain.")
     environment = {**os.environ, "GOTOOLCHAIN": "local", "GOPROXY": "off", "GOSUMDB": "off"}
     version = run_command(program, ["version"], cwd=ROOT, env=environment, timeout=30)
-    if not re.search(r"\bgo1\.27\.1\b", version.stdout) or version.returncode:
-        raise ValueError("Go:1: the check requires installed Go 1.27.1. No toolchain is downloaded.")
+    if not re.search(r"\bgo1\.27\.3\b", version.stdout) or version.returncode:
+        raise ValueError("Go:1: the check requires installed Go 1.27.3. No toolchain is downloaded.")
     if check == "gofmt":
         result = run_command(str(Path(program).with_name("gofmt")), ["-l", *["./" + name for name in selected]], cwd=ROOT, env=environment, timeout=120)
         for name in result.stdout.splitlines():

@@ -34,7 +34,7 @@ from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.sdk import DAG
 from airflow.sdk.bases.operator import BaseOperator
 
-from orchestration.graph import EXPECTED_RULES, EXPECTED_UPSTREAM, graph_from_dag, validate_transform_graph
+from orchestration.graph import EXPECTED_RULES, EXPECTED_UPSTREAM, PIPELINE_CHAINS, graph_from_dag, validate_transform_graph
 
 DAG_FOLDER = Path("/opt/hai/dags")
 CONSTRAINTS = Path("/opt/hai/constraints.txt")
@@ -60,6 +60,17 @@ def transform_graph() -> dict[str, Any]:
         "tasks": sorted(dag.task_dict),
         "violations": [{"rule": item.rule, "task": item.task, "detail": item.detail} for item in violations],
     }
+
+
+def pipeline_graphs() -> dict[str, Any]:
+    """Validate each shipped split DAG's actual task objects, including failed-work cleanup edges."""
+    bag = DagBag(dag_folder=str(DAG_FOLDER))
+    results = {}
+    for name in PIPELINE_CHAINS:
+        dag = bag.dags.get(name)
+        violations = validate_transform_graph(graph_from_dag(dag), name) if dag is not None else []
+        results[name] = {"present": dag is not None, "violations": [{"rule": item.rule, "task": item.task, "detail": item.detail} for item in violations]}
+    return results
 
 
 def build(
@@ -232,7 +243,13 @@ def main() -> int:
     """Print every result as JSON."""
     argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args()
     tools = {name: os.environ.get(variable, "") for name, variable in (("pip", "AIRFLOW_PIP_VERSION"), ("uv", "AIRFLOW_UV_VERSION"))}
-    report = {"dags": dags(), "graph_cases": graph_cases(), "transform_graph": transform_graph(), "constraints": constraints(tools)}
+    report = {
+        "dags": dags(),
+        "graph_cases": graph_cases(),
+        "transform_graph": transform_graph(),
+        "pipeline_graphs": pipeline_graphs(),
+        "constraints": constraints(tools),
+    }
     try:
         report["lineage_transport"] = lineage_transport()
     except (OSError, ValueError, TypeError, AttributeError, ImportError) as error:

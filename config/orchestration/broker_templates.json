@@ -18,6 +18,37 @@
               ]
             }
           }
+        },
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "acquire",
+            "params": {
+              "folders": [
+                "quality_silver",
+                "quality_gold",
+                "quality_cross",
+                "publish"
+              ],
+              "seed": "{checkout}/data/orchestration/fixture_seed"
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "acquire",
+            "params": {
+              "folders": [
+                "quality_silver",
+                "quality_gold",
+                "quality_cross",
+                "publish"
+              ]
+            }
+          }
         }
       }
     },
@@ -30,16 +61,18 @@
           "reason": "the fixture mode reads a fixture bronze database, so no catalog starts and no catalog user is registered"
         },
         "publish_fixture": {
-          "class": "lakehouse_read",
+          "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "control": {
+            "action": "catalog_up"
+          }
         },
         "real": {
-          "class": "lakehouse_read",
+          "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "control": {
+            "action": "catalog_up"
+          }
         }
       }
     },
@@ -52,16 +85,28 @@
           "reason": "the fixture mode has no bronze to pin or verify, so the step records why it did nothing"
         },
         "publish_fixture": {
-          "class": "lakehouse_read",
+          "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "control": {
+            "action": "fixture_pin"
+          }
         },
         "real": {
           "class": "lakehouse_read",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "pin_bronze"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         }
       }
     },
@@ -1335,16 +1380,38 @@
           }
         },
         "publish_fixture": {
-          "class": "lakehouse_read",
+          "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_dbt",
+            "args": [],
+            "params": {
+              "layer": "silver"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         },
         "real": {
           "class": "lakehouse_read",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_dbt",
+            "args": [],
+            "params": {
+              "layer": "silver"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         }
       }
     },
@@ -1382,14 +1449,48 @@
         "publish_fixture": {
           "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_validate_silver",
+            "args": [],
+            "params": {
+              "database": "{run_dir}/staging.duckdb",
+              "build_root": "{run_dir}",
+              "suites_host": "{checkout}/data_contracts/great_expectations/suites",
+              "baselines_host": "{checkout}/data_contracts/great_expectations/fixture_baselines.json",
+              "out_host": "{run_dir}/quality_silver"
+            },
+            "timeout_seconds": 3600,
+            "records_build_file": "{run_dir}/staging.duckdb",
+            "build_file_result": "{run_dir}/quality_silver/result.json",
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         },
         "real": {
           "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_validate_silver",
+            "args": [],
+            "params": {
+              "database": "{run_dir}/staging.duckdb",
+              "build_root": "{run_dir}",
+              "suites_host": "{checkout}/data_contracts/great_expectations/suites",
+              "baselines_host": "{checkout}/data_contracts/great_expectations/baselines.json",
+              "out_host": "{run_dir}/quality_silver"
+            },
+            "timeout_seconds": 3600,
+            "records_build_file": "{run_dir}/staging.duckdb",
+            "build_file_result": "{run_dir}/quality_silver/result.json",
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         }
       }
     },
@@ -2668,14 +2769,36 @@
         "publish_fixture": {
           "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_dbt",
+            "args": [],
+            "params": {
+              "layer": "gold"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         },
         "real": {
           "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_dbt",
+            "args": [],
+            "params": {
+              "layer": "gold"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         }
       }
     },
@@ -2711,14 +2834,48 @@
         "publish_fixture": {
           "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_validate_gold",
+            "args": [],
+            "params": {
+              "database": "{run_dir}/staging.duckdb",
+              "build_root": "{run_dir}",
+              "suites_host": "{checkout}/data_contracts/great_expectations/gold",
+              "baselines_host": "{checkout}/data_contracts/great_expectations/fixture_baselines.json",
+              "out_host": "{run_dir}/quality_gold"
+            },
+            "timeout_seconds": 3600,
+            "records_build_file": "{run_dir}/staging.duckdb",
+            "build_file_result": "{run_dir}/quality_gold/result.json",
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         },
         "real": {
           "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_validate_gold",
+            "args": [],
+            "params": {
+              "database": "{run_dir}/staging.duckdb",
+              "build_root": "{run_dir}",
+              "suites_host": "{checkout}/data_contracts/great_expectations/gold",
+              "baselines_host": "{checkout}/data_contracts/great_expectations/baselines.json",
+              "out_host": "{run_dir}/quality_gold"
+            },
+            "timeout_seconds": 3600,
+            "records_build_file": "{run_dir}/staging.duckdb",
+            "build_file_result": "{run_dir}/quality_gold/result.json",
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         }
       }
     },
@@ -2757,14 +2914,62 @@
         "publish_fixture": {
           "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_validate_cross",
+            "args": [],
+            "params": {
+              "database": "{run_dir}/staging.duckdb",
+              "build_root": "{run_dir}",
+              "suites_hosts": [
+                "{checkout}/data_contracts/great_expectations/suites",
+                "{checkout}/data_contracts/great_expectations/gold"
+              ],
+              "baselines_host": "{checkout}/data_contracts/great_expectations/fixture_baselines.json",
+              "out_host": "{run_dir}/quality_cross"
+            },
+            "timeout_seconds": 3600,
+            "records_build_file": "{run_dir}/staging.duckdb",
+            "build_file_result": "{run_dir}/quality_cross/result.json",
+            "requires_build_file": {
+              "validated_by": "gold_validate",
+              "file": "{run_dir}/staging.duckdb"
+            },
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         },
         "real": {
           "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_validate_cross",
+            "args": [],
+            "params": {
+              "database": "{run_dir}/staging.duckdb",
+              "build_root": "{run_dir}",
+              "suites_hosts": [
+                "{checkout}/data_contracts/great_expectations/suites",
+                "{checkout}/data_contracts/great_expectations/gold"
+              ],
+              "baselines_host": "{checkout}/data_contracts/great_expectations/baselines.json",
+              "out_host": "{run_dir}/quality_cross"
+            },
+            "timeout_seconds": 3600,
+            "records_build_file": "{run_dir}/staging.duckdb",
+            "build_file_result": "{run_dir}/quality_cross/result.json",
+            "requires_build_file": {
+              "validated_by": "gold_validate",
+              "file": "{run_dir}/staging.duckdb"
+            },
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         }
       }
     },
@@ -2777,16 +2982,28 @@
           "reason": "the fixture mode has no bronze to pin or verify, so the step records why it did nothing"
         },
         "publish_fixture": {
-          "class": "lakehouse_read",
+          "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "control": {
+            "action": "fixture_verify"
+          }
         },
         "real": {
           "class": "lakehouse_read",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "verify_bronze"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         }
       }
     },
@@ -2814,16 +3031,40 @@
       "purpose": "Write each gold table with MERGE INTO and record the new snapshot IDs as candidates (step 10)",
       "modes": {
         "publish_fixture": {
-          "class": "lakehouse_write",
+          "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "gold",
+              "step": "candidates"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         },
         "real": {
           "class": "lakehouse_write",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "gold",
+              "step": "candidates"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         }
       }
     },
@@ -2831,16 +3072,40 @@
       "purpose": "Compare counts and fingerprints of exactly the candidate snapshots with the build (step 11)",
       "modes": {
         "publish_fixture": {
-          "class": "lakehouse_read",
+          "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "gold",
+              "step": "reconcile"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         },
         "real": {
           "class": "lakehouse_read",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "gold",
+              "step": "reconcile"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         }
       }
     },
@@ -2848,16 +3113,40 @@
       "purpose": "Write the catalog backup and read it back (step 12)",
       "modes": {
         "publish_fixture": {
-          "class": "lakehouse_write",
+          "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "gold",
+              "step": "backup"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         },
         "real": {
           "class": "lakehouse_write",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "gold",
+              "step": "backup"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         }
       }
     },
@@ -2865,16 +3154,40 @@
       "purpose": "Write the publish_runs row naming the candidate snapshot set, last (step 13)",
       "modes": {
         "publish_fixture": {
-          "class": "lakehouse_write",
+          "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "gold",
+              "step": "commit"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         },
         "real": {
           "class": "lakehouse_write",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "gold",
+              "step": "commit"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         }
       }
     },
@@ -2882,6 +3195,26 @@
       "purpose": "Write the durable run record and move the run to finalizing; the build file and the lock are kept (step 14)",
       "modes": {
         "fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "record",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json"
+            }
+          }
+        },
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "record",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json"
+            }
+          }
+        },
+        "real": {
           "class": "offline",
           "no_op": false,
           "control": {
@@ -2902,16 +3235,18 @@
           "reason": "the fixture mode registered no catalog user, so nothing is deregistered"
         },
         "publish_fixture": {
-          "class": "lakehouse_read",
+          "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "control": {
+            "action": "catalog_release"
+          }
         },
         "real": {
-          "class": "lakehouse_read",
+          "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "control": {
+            "action": "catalog_release"
+          }
         }
       }
     },
@@ -2999,6 +3334,34 @@
               ]
             }
           }
+        },
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "release_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "build_files": [
+                "{run_dir}/staging.duckdb",
+                "{run_dir}/staging.duckdb.wal"
+              ]
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "release_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "build_files": [
+                "{run_dir}/staging.duckdb",
+                "{run_dir}/staging.duckdb.wal"
+              ]
+            }
+          }
         }
       }
     },
@@ -3011,6 +3374,20 @@
           "control": {
             "action": "release_rejected"
           }
+        },
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "release_rejected"
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "release_rejected"
+          }
         }
       }
     },
@@ -3018,16 +3395,40 @@
       "purpose": "Expire gold snapshots and compact files, keeping every registered or reserved snapshot set (gold_maintenance_dag)",
       "modes": {
         "publish_fixture": {
-          "class": "lakehouse_write",
+          "class": "offline",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "gold",
+              "step": "maintenance"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         },
         "real": {
           "class": "lakehouse_write",
           "no_op": false,
-          "launcher": null,
-          "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "gold",
+              "step": "maintenance"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
         }
       }
     },
@@ -3039,6 +3440,769 @@
           "no_op": false,
           "launcher": null,
           "reason": "no launcher template runs this step yet; the launcher gains a row for it with the DAG package that needs it"
+        }
+      }
+    },
+    "snapshot_project": {
+      "purpose": "Perform the fixed snapshot_project lifecycle action",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "snapshot_project"
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "snapshot_project"
+          }
+        }
+      }
+    },
+    "reserve_silver": {
+      "purpose": "Perform the fixed reserve_silver lifecycle action",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "reserve_silver"
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "reserve_silver"
+          }
+        }
+      }
+    },
+    "seal_silver": {
+      "purpose": "Perform the fixed seal_silver lifecycle action",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "seal_silver"
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "seal_silver"
+          }
+        }
+      }
+    },
+    "seal_gold": {
+      "purpose": "Perform the fixed seal_gold lifecycle action",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "seal_gold"
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "seal_gold"
+          }
+        }
+      }
+    },
+    "silver_export": {
+      "purpose": "Export only the accepted sealed silver build",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_export",
+            "args": [],
+            "params": {
+              "layer": "silver"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_export",
+            "args": [],
+            "params": {
+              "layer": "silver"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "gold_export": {
+      "purpose": "Export only the accepted sealed gold build",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_export",
+            "args": [],
+            "params": {
+              "layer": "gold"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_export",
+            "args": [],
+            "params": {
+              "layer": "gold"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "pin_silver": {
+      "purpose": "Run the fixed pin_silver snapshot handler",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "pin_silver",
+              "source_run": "{input_run_id}"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "pin_silver",
+              "source_run": "{input_run_id}"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "read_silver": {
+      "purpose": "Run the fixed read_silver snapshot handler",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "read_silver"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "read_silver"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "record_silver_snapshot": {
+      "purpose": "Run the fixed record_silver_snapshot snapshot handler",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "record_silver_snapshot"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "record_silver_snapshot"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "silver_candidates": {
+      "purpose": "Run the silver candidates publication command",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "silver",
+              "step": "candidates"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "silver",
+              "step": "candidates"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "silver_reconcile": {
+      "purpose": "Run the silver reconcile publication command",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "silver",
+              "step": "reconcile"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "silver",
+              "step": "reconcile"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "silver_backup": {
+      "purpose": "Run the silver backup publication command",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "silver",
+              "step": "backup"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "silver",
+              "step": "backup"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "silver_commit": {
+      "purpose": "Run the silver commit publication command",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "silver",
+              "step": "commit"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "silver",
+              "step": "commit"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "silver_final_gate_accepted": {
+      "purpose": "Check every required silver task before the terminal release",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "snapshot_project": "success",
+                "pin_bronze": "success",
+                "silver_build": "success",
+                "silver_validate": "success",
+                "verify_bronze": "success",
+                "seal_silver": "success",
+                "silver_export": "success",
+                "silver_candidates": "success",
+                "silver_reconcile": "success",
+                "silver_backup": "success",
+                "silver_commit": "success",
+                "record_silver_snapshot": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "snapshot_project": "success",
+                "pin_bronze": "success",
+                "silver_build": "success",
+                "silver_validate": "success",
+                "verify_bronze": "success",
+                "seal_silver": "success",
+                "silver_export": "success",
+                "silver_candidates": "success",
+                "silver_reconcile": "success",
+                "silver_backup": "success",
+                "silver_commit": "success",
+                "record_silver_snapshot": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "silver_final_gate_rejected": {
+      "purpose": "Check every required silver task before the terminal release",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "snapshot_project": "success",
+                "pin_bronze": "success",
+                "silver_build": "success",
+                "silver_validate": "success",
+                "verify_bronze": "success",
+                "seal_silver": "success",
+                "silver_export": "success",
+                "silver_candidates": "success",
+                "silver_reconcile": "success",
+                "silver_backup": "success",
+                "silver_commit": "success",
+                "record_silver_snapshot": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "snapshot_project": "success",
+                "pin_bronze": "success",
+                "silver_build": "success",
+                "silver_validate": "success",
+                "verify_bronze": "success",
+                "seal_silver": "success",
+                "silver_export": "success",
+                "silver_candidates": "success",
+                "silver_reconcile": "success",
+                "silver_backup": "success",
+                "silver_commit": "success",
+                "record_silver_snapshot": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "gold_final_gate_accepted": {
+      "purpose": "Check every required gold task before the terminal release",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "snapshot_project": "success",
+                "reserve_silver": "success",
+                "pin_silver": "success",
+                "read_silver": "success",
+                "gold_build": "success",
+                "gold_validate": "success",
+                "cross_layer_checks": "success",
+                "seal_gold": "success",
+                "gold_export": "success",
+                "publish_candidates": "success",
+                "reconcile_candidates": "success",
+                "catalog_backup": "success",
+                "commit_publish": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "snapshot_project": "success",
+                "reserve_silver": "success",
+                "pin_silver": "success",
+                "read_silver": "success",
+                "gold_build": "success",
+                "gold_validate": "success",
+                "cross_layer_checks": "success",
+                "seal_gold": "success",
+                "gold_export": "success",
+                "publish_candidates": "success",
+                "reconcile_candidates": "success",
+                "catalog_backup": "success",
+                "commit_publish": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "gold_final_gate_rejected": {
+      "purpose": "Check every required gold task before the terminal release",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "snapshot_project": "success",
+                "reserve_silver": "success",
+                "pin_silver": "success",
+                "read_silver": "success",
+                "gold_build": "success",
+                "gold_validate": "success",
+                "cross_layer_checks": "success",
+                "seal_gold": "success",
+                "gold_export": "success",
+                "publish_candidates": "success",
+                "reconcile_candidates": "success",
+                "catalog_backup": "success",
+                "commit_publish": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "snapshot_project": "success",
+                "reserve_silver": "success",
+                "pin_silver": "success",
+                "read_silver": "success",
+                "gold_build": "success",
+                "gold_validate": "success",
+                "cross_layer_checks": "success",
+                "seal_gold": "success",
+                "gold_export": "success",
+                "publish_candidates": "success",
+                "reconcile_candidates": "success",
+                "catalog_backup": "success",
+                "commit_publish": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "maintenance_final_gate_accepted": {
+      "purpose": "Check every required maintenance task before the terminal release",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "gold_maintenance": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "gold_maintenance": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "maintenance_final_gate_rejected": {
+      "purpose": "Check every required maintenance task before the terminal release",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "gold_maintenance": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "gold_maintenance": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
         }
       }
     }

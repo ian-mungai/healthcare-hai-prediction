@@ -91,7 +91,7 @@
     },
     "placeholder_text": {
       "type": "string",
-      "pattern": "^([^{}]|\\{(run_id|mode|run_dir|build_file|checkout)\\})*$"
+      "pattern": "^([^{}]|\\{(run_id|mode|run_dir|build_file|checkout|input_run_id)\\})*$"
     },
     "value": {
       "oneOf": [
@@ -209,7 +209,15 @@
             "gate_accepted",
             "gate_rejected",
             "release_accepted",
-            "release_rejected"
+            "release_rejected",
+            "catalog_up",
+            "catalog_release",
+            "snapshot_project",
+            "reserve_silver",
+            "seal_silver",
+            "seal_gold",
+            "fixture_pin",
+            "fixture_verify"
           ]
         },
         "params": {

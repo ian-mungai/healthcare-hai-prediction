@@ -1,0 +1,328 @@
+{
+  "atomic_models_sha256": "93519b5503bc6005672a902ac96433cc11a1a74f10dbc7024f9597ce779d061e",
+  "classification": "Confidential",
+  "key_sources_sha256": {
+    "dbt/models/silver/intermediate/_intermediate__models.yml": "85fb0332dab3a2810affffdf7d685b603003ef2796e89739baffacab65a9fe2e",
+    "dbt/models/silver/staging/_staging__models.yml": "6ffe71cb489aed6b655a10551afc7fdb2f2ef69ba688cb2da10a8c4ce5f023a8"
+  },
+  "publish": {
+    "backup_prefix": "lakehouse/silver/catalog_backups/",
+    "branch_prefix": "silver_publish_",
+    "maintenance": {
+      "expire_after_days": 7,
+      "orphan_after_days": 7,
+      "retain_sets": 3
+    },
+    "namespaces": {
+      "publish_fixture": "silver_e2e",
+      "real": "silver"
+    },
+    "runs_table": "publish_runs",
+    "tables": {
+      "int_acs_county_values": {
+        "merge_key": [
+          "acs_value_key"
+        ]
+      },
+      "int_bls_county_series": {
+        "merge_key": [
+          "bls_row_key"
+        ]
+      },
+      "int_cc_complications_deaths_windows": {
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "int_cc_hcahps_windows": {
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "int_cc_hrrp_windows": {
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "int_cc_maternal_windows": {
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "int_cc_timely_effective_windows": {
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "int_cc_unplanned_visits_windows": {
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "int_cc_window_holds": {
+        "merge_key": [
+          "hold_key"
+        ]
+      },
+      "int_change_of_ownership_holds": {
+        "merge_key": [
+          "hold_key"
+        ]
+      },
+      "int_change_of_ownership_rows": {
+        "merge_key": [
+          "event_key"
+        ]
+      },
+      "int_cmi_file_layouts": {
+        "merge_key": [
+          "layout_key"
+        ]
+      },
+      "int_cmi_file_rows": {
+        "merge_key": [
+          "bronze_table",
+          "member_sha256",
+          "sheet_name",
+          "line_number"
+        ]
+      },
+      "int_cmi_hospital_rows": {
+        "merge_key": [
+          "cmi_row_key"
+        ]
+      },
+      "int_cost_reports": {
+        "merge_key": [
+          "rpt_rec_num"
+        ]
+      },
+      "int_county_adjacency_edges": {
+        "merge_key": [
+          "edge_key"
+        ]
+      },
+      "int_gv_county_values": {
+        "merge_key": [
+          "gv_value_key"
+        ]
+      },
+      "int_hac_program_years": {
+        "merge_key": [
+          "program_key"
+        ]
+      },
+      "int_hai_hospital_windows": {
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "int_hai_national_windows": {
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "int_hai_state_windows": {
+        "merge_key": [
+          "window_key"
+        ]
+      },
+      "int_hai_window_holds": {
+        "merge_key": [
+          "hold_key"
+        ]
+      },
+      "int_hgi_hospital_releases": {
+        "merge_key": [
+          "release_key"
+        ]
+      },
+      "int_hhs_capacity_weeks": {
+        "merge_key": [
+          "week_key"
+        ]
+      },
+      "int_hospital_enrollment_rows": {
+        "merge_key": [
+          "enrollment_key"
+        ]
+      },
+      "int_hospital_owner_rows": {
+        "merge_key": [
+          "owner_row_key"
+        ]
+      },
+      "int_hpsa_components": {
+        "merge_key": [
+          "hpsa_row_key"
+        ]
+      },
+      "int_hsa_zip_cases": {
+        "merge_key": [
+          "hsa_row_key"
+        ]
+      },
+      "int_hud_zip_county_holds": {
+        "merge_key": [
+          "hud_row_key"
+        ]
+      },
+      "int_hud_zip_county_quarters": {
+        "merge_key": [
+          "hud_row_key"
+        ]
+      },
+      "int_impact_file_layouts": {
+        "merge_key": [
+          "layout_key"
+        ]
+      },
+      "int_impact_file_rows": {
+        "merge_key": [
+          "bronze_table",
+          "member_sha256",
+          "sheet_name",
+          "line_number",
+          "family",
+          "rule_fiscal_year",
+          "rule_stage"
+        ]
+      },
+      "int_impact_holds": {
+        "merge_key": [
+          "hold_key"
+        ]
+      },
+      "int_impact_hospital_rows": {
+        "merge_key": [
+          "hospital_row_key"
+        ]
+      },
+      "int_impact_hospital_values": {
+        "merge_key": [
+          "value_key"
+        ]
+      },
+      "int_mmd_prevalence": {
+        "merge_key": [
+          "mmd_row_key"
+        ]
+      },
+      "int_mua_components": {
+        "merge_key": [
+          "mua_row_key"
+        ]
+      },
+      "int_mup_drg_discharges": {
+        "merge_key": [
+          "drg_key"
+        ]
+      },
+      "int_mup_providers": {
+        "merge_key": [
+          "provider_key"
+        ]
+      },
+      "int_occmix_file_layouts": {
+        "merge_key": [
+          "layout_key"
+        ]
+      },
+      "int_occmix_file_rows": {
+        "merge_key": [
+          "source_row_key"
+        ]
+      },
+      "int_occmix_survey_rows": {
+        "merge_key": [
+          "survey_row_key"
+        ]
+      },
+      "int_onc_attestation_rows": {
+        "merge_key": [
+          "attestation_key"
+        ]
+      },
+      "int_onc_chpl_linkage_rows": {
+        "merge_key": [
+          "linkage_key"
+        ]
+      },
+      "int_places_county_values": {
+        "merge_key": [
+          "places_row_key"
+        ]
+      },
+      "int_pos_hospital_snapshots": {
+        "merge_key": [
+          "snapshot_key"
+        ]
+      },
+      "int_ruca_codes": {
+        "merge_key": [
+          "ruca_row_key"
+        ]
+      },
+      "int_rucc_county_codes": {
+        "merge_key": [
+          "rucc_key"
+        ]
+      },
+      "int_sahie_county_rows": {
+        "merge_key": [
+          "sahie_row_key"
+        ]
+      },
+      "int_saipe_county_estimates": {
+        "merge_key": [
+          "saipe_row_key"
+        ]
+      },
+      "int_silver_build_marker": {
+        "merge_key": [
+          "dbt_invocation_id"
+        ]
+      },
+      "int_svi_county_values": {
+        "merge_key": [
+          "svi_value_key"
+        ]
+      },
+      "int_validation_program_holds": {
+        "merge_key": [
+          "hold_key"
+        ]
+      },
+      "int_validation_window_holds": {
+        "merge_key": [
+          "hold_key"
+        ]
+      },
+      "int_vbp_program_years": {
+        "merge_key": [
+          "program_key"
+        ]
+      },
+      "int_wonder_county_deaths": {
+        "merge_key": [
+          "wonder_row_key"
+        ]
+      },
+      "stg_bronze__file_copies": {
+        "merge_key": [
+          "copy_key"
+        ]
+      },
+      "stg_bronze__files": {
+        "merge_key": [
+          "file_key"
+        ]
+      },
+      "stg_bronze__release_observations": {
+        "merge_key": [
+          "observation_id"
+        ]
+      }
+    }
+  }
+}

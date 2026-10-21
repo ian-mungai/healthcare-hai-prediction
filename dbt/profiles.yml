@@ -3,6 +3,13 @@
 hai:
   target: lakehouse
   outputs:
+    pinned_silver:
+      type: duckdb
+      path: /workspace/out/staging.duckdb
+      threads: "{{ env_var('JOB_THREADS') | int }}"
+      settings:
+        memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT') }}"
+        threads: "{{ env_var('JOB_THREADS') | int }}"
     lakehouse:
       type: duckdb
       path: /workspace/out/staging.duckdb

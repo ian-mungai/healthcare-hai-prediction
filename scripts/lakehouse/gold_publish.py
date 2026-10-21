@@ -32,7 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from scripts.lakehouse.gold_publish_record import RESULT_NAME, RUN_ID, SHA256, PublishError, accept_consumer, read_record, sha256_bytes
+from scripts.lakehouse.gold_publish_record import IDENT_MAX, RESULT_NAME, RUN_ID, SHA256, PublishError, accept_consumer, read_record, sha256_bytes
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = REPO_ROOT / "data_contracts/lakehouse/gold_contract.json"
@@ -40,7 +40,7 @@ CONTRACT = REPO_ROOT / "data_contracts/lakehouse/gold_contract.json"
 CATALOG = "hai_lakehouse"
 MODES = ("publish_fixture", "real")
 STEPS = ("candidates", "reconcile", "backup", "commit")
-IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}")
+IDENT = re.compile(rf"[A-Za-z_][A-Za-z0-9_]{{0,{IDENT_MAX - 1}}}")
 BACKUP_NAME = re.compile(r"catalog_backup_[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}\.json")
 SCHEMA = 1
 
@@ -570,11 +570,30 @@ def ensure_runs_table(ctx: Context) -> None:
         ctx.sql(CREATE_TABLE, table=ctx.fq(ctx.plan.runs_table), columns=columns)
 
 
+def commit_receipt(ctx: Context, backup_sha: str, snapshot_set: Mapping[str, int]) -> dict[str, Any]:
+    """The ``commit.json`` record of a committed run: the one shape both the first commit and a retry write."""
+    return {"schema": SCHEMA, "run_id": ctx.run_id, "backup_sha256": backup_sha, "snapshot_set": dict(snapshot_set), "state": "committed"}
+
+
+def restore_receipt(path: Path, receipt: Mapping[str, Any]) -> str:
+    """Write the receipt of a run whose ``publish_runs`` row exists, or confirm that the receipt on disk is identical; returns its SHA-256.
+
+    An interruption after the row and before the receipt leaves no ``commit.json``. A receipt that records anything else is refused and kept.
+    """
+    if path.is_file():
+        on_disk, sha = read_record(path)
+        if on_disk != dict(receipt):
+            raise PublishError("commit.json records another commit of this run")
+        return sha
+    return write_record(path, receipt)
+
+
 def commit_publish(ctx: Context) -> dict[str, Any]:
     """Fast-forward every table to its reconciled candidate and write the ``publish_runs`` row last.
 
     A rerun after a success changes nothing. A rerun after an interruption fast-forwards the tables still behind. A table whose ``main`` is
-    neither the recorded base nor the candidate stops the commit before any table moves.
+    neither the recorded base nor the candidate stops the commit before any table moves. A rerun that finds the run's row checks the row's mode,
+    sealed digest, export manifest digest, backup name and digest and snapshot set against the run's records, then restores a missing ``commit.json``.
     """
     manifest, manifest_sha, _ = verified_export(ctx)
     candidates, candidates_sha = verified_candidates(ctx, manifest_sha)
@@ -587,9 +606,18 @@ def commit_publish(ctx: Context) -> dict[str, Any]:
     snapshot_set = {name: int(candidates["tables"][name]["candidate_snapshot_id"]) for name in sorted(ctx.plan.tables)}
     existing = committed_run(ctx)
     if existing is not None:
-        if existing["snapshot_set"] != {k: v for k, v in snapshot_set.items()} or existing["backup_sha256"] != backup["backup_sha256"]:
-            raise PublishError("this run is committed with a different snapshot set")
-        return {"step": "commit", "already_committed": True, "tables": len(snapshot_set)}
+        identity = {
+            "mode": ctx.mode,
+            "sealed_sha256": ctx.sealed_sha256,
+            "export_manifest_sha256": manifest_sha,
+            "backup_name": backup["name"],
+            "backup_sha256": backup["backup_sha256"],
+            "snapshot_set": snapshot_set,
+        }
+        if any(existing[key] != value for key, value in identity.items()):
+            raise PublishError("this run is committed with a different identity, predecessor hash or snapshot set")
+        sha = restore_receipt(ctx.path("commit.json"), commit_receipt(ctx, backup_sha, snapshot_set))
+        return {"step": "commit", "already_committed": True, "tables": len(snapshot_set), "record_sha256": sha}
     heads = {name: main_head(ctx, name) for name in snapshot_set}
     for name, candidate in snapshot_set.items():
         base = candidates["tables"][name]["base_snapshot_id"]
@@ -623,8 +651,7 @@ def commit_publish(ctx: Context) -> dict[str, Any]:
     }
     ctx.spark.sql(MERGE_RUN.format(table=ctx.fq(ctx.plan.runs_table), view=runs_view(ctx, row)))
     ctx.faults.hit("commit:after_publish_runs")
-    record = {"schema": SCHEMA, "run_id": ctx.run_id, "backup_sha256": backup_sha, "snapshot_set": snapshot_set, "state": "committed"}
-    sha = write_record(ctx.path("commit.json"), record)
+    sha = write_record(ctx.path("commit.json"), commit_receipt(ctx, backup_sha, snapshot_set))
     return {"step": "commit", "already_committed": False, "tables": len(snapshot_set), "record_sha256": sha}
 
 

@@ -54,12 +54,42 @@ COPIED = (
     "scripts/lakehouse/run_provenance_e2e.py",
     "scripts/orchestration/broker.py",
     "scripts/orchestration/offline_checks.py",
+    "scripts/orchestration/run_pipeline_light.py",
+    "scripts/orchestration/run_publish_contracts.py",
+    "orchestration/graph.py",
+    "orchestration/network_policy.py",
+    "services/orchestration/egress_proxy.json",
     "scripts/quality/ci_groups.py",
     "scripts/quality/lint_sources.py",
     "scripts/quality/documentation_review.py",
     "scripts/quality/repo_checks.py",
     "scripts/quality/run_checks_e2e.py",
     "scripts/quality/run_lint_coverage_e2e.py",
+    "dags/gold_maintenance_dag.py",
+    "dags/gold_transform_dag.py",
+    "dags/silver_transform_dag.py",
+    "orchestration/dag_runtime.py",
+    "orchestration/interface.py",
+    "orchestration/pipeline_protocol.py",
+    "orchestration/pipeline_render.py",
+    "scripts/lakehouse/gold_maintenance.py",
+    "scripts/lakehouse/pipeline_build.py",
+    "scripts/lakehouse/pipeline_quality.py",
+    "scripts/lakehouse/silver_export.py",
+    "scripts/lakehouse/silver_input.py",
+    "scripts/lakehouse/silver_publish.py",
+    "scripts/orchestration/in_image_checks.py",
+    "scripts/orchestration/pipeline_control.py",
+    "scripts/orchestration/publish_dag_fixtures.py",
+    "scripts/orchestration/run_control.py",
+    "scripts/orchestration/run_network_classes_e2e.py",
+    "scripts/orchestration/run_publish_dags_e2e.py",
+    "scripts/orchestration/run_transform_e2e.py",
+    "scripts/orchestration/supervisor.py",
+    "scripts/orchestration/traffic_probe.py",
+    "scripts/orchestration/transform_fixtures.py",
+    "scripts/quality/run_ci_groups_e2e.py",
+    "tests/orchestration/fixtures/combined_dag.py",
     RUNNER,
     "scripts/quality/run_documentation_review_e2e.py",
     "scripts/quality/typecheck.py",
@@ -80,6 +110,12 @@ LAKEHOUSE_SCRIPT = ["python_lint", "lakehouse_checks", "orchestration_checks", "
 QUALITY_SCRIPT = ["python_lint", "orchestration_checks", "repository_code_checks", "configuration_checks"]
 QUALITY_CONFIG = ["lakehouse_checks", "orchestration_checks", "repository_code_checks", "configuration_checks"]
 ORCHESTRATION_SHARED = {
+    "dbt/profiles.yml": ["lakehouse_checks", "orchestration_checks", "repository_code_checks", "sql_style"],
+    "data_contracts/lakehouse/silver_publish.json": ["lakehouse_checks", "orchestration_checks"],
+    "scripts/lakehouse/pipeline_build.py": LAKEHOUSE_SCRIPT,
+    "scripts/lakehouse/silver_input.py": LAKEHOUSE_SCRIPT,
+    "scripts/lakehouse/silver_publish.py": LAKEHOUSE_SCRIPT,
+    "scripts/lakehouse/gold_maintenance.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/run_lock.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/fake_docker.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/run_launcher_e2e.py": LAKEHOUSE_SCRIPT,
@@ -136,6 +172,8 @@ def install_copies(work: Path) -> None:
         if (ROOT / path).exists():
             (work / path).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / path, work / path)
+    if not (ROOT / "dags/transform_dag.py").exists():
+        (work / "dags/transform_dag.py").unlink(missing_ok=True)
 
 
 def restore(work: Path) -> None:
@@ -407,7 +445,12 @@ def code_identity(work: Path) -> dict[str, Any]:
         "pre-commit": run_command(str(ROOT / ".venv" / "bin" / "pre-commit"), ["--version"], timeout=60).stdout.strip(),
         "markdownlint-cli2": "installed" if MARKDOWNLINT.exists() else "missing",
     }
-    return {"revision": git(work, "rev-parse", "HEAD").strip(), "sha256": {path: sha256_of(ROOT / path) for path in files}, "tools": versions}
+    return {
+        "revision": git(work, "rev-parse", "HEAD").strip(),
+        "sha256": {path: sha256_of(ROOT / path) for path in files},
+        "tools": versions,
+        "deleted_sources": ["dags/transform_dag.py"] if not (ROOT / "dags/transform_dag.py").exists() else [],
+    }
 
 
 def acquisition_selection_case(work: Path, path: str, wanted: bool) -> dict[str, Any]:
@@ -448,7 +491,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             work,
             "dbt_and_script_range",
             ["--scope", "range", "--from", f"{DBT_AND_README}^", "--to", DBT_AND_README, "--part", "core"],
-            ["python_lint", "lakehouse_checks", "repository_code_checks", "sql_style"],
+            ["python_lint", "lakehouse_checks", "orchestration_checks", "repository_code_checks", "sql_style"],
         ),
         selection_case(
             work,
@@ -525,7 +568,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             work,
             "staged_dbt_change_selects_sql_style",
             [["update-index", "--add", "--cacheinfo", f"100644,{git(work, 'rev-parse', 'HEAD:dbt/dbt_project.yml').strip()},dbt/staged_copy.yml"]],
-            ["lakehouse_checks", "sql_style"],
+            ["lakehouse_checks", "orchestration_checks", "sql_style"],
         ),
         staged_case(work, "deleted_file_counts", [["rm", "--quiet", "--cached", "infra/iam/main.tf"]], ["configuration_checks", "terraform_checks"]),
         staged_case(work, "renamed_file_counts_old_name", [["mv", "infra/iam/main.tf", "docs/renamed_main.tf"]], ["configuration_checks", "terraform_checks"]),
@@ -535,10 +578,13 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             selection_case(work, f"copied_input_{path}", ["--scope", "paths", "--path", path, "--part", "core"], wanted)
             for path, wanted in (
                 (".env.example", ["repository_code_checks", "configuration_checks"]),
-                ("dbt/dbt_project.yml", ["lakehouse_checks", "repository_code_checks", "sql_style"]),
-                ("dbt/profiles.yml", ["lakehouse_checks", "repository_code_checks", "sql_style"]),
+                ("dbt/dbt_project.yml", ["lakehouse_checks", "orchestration_checks", "repository_code_checks", "sql_style"]),
+                ("dbt/profiles.yml", ["lakehouse_checks", "orchestration_checks", "repository_code_checks", "sql_style"]),
                 ("README.md", ["repository_code_checks"]),
-                ("dbt/models/silver/intermediate/_intermediate__models.yml", ["lakehouse_checks", "repository_code_checks", "sql_style"]),
+                (
+                    "dbt/models/silver/intermediate/_intermediate__models.yml",
+                    ["lakehouse_checks", "orchestration_checks", "repository_code_checks", "sql_style"],
+                ),
                 ("docs/quality_checks.md", ["repository_code_checks"]),
             )
         ),
@@ -680,12 +726,13 @@ def main() -> int:
         run_command("git", ["-C", str(ROOT), "worktree", "remove", "--force", str(work)], timeout=600)
         shutil.rmtree(scratch, ignore_errors=True)
     after = code_identity(ROOT) if identity else {}
-    if identity and identity["sha256"] != after["sha256"]:
+    if identity and (identity["sha256"] != after["sha256"] or identity["deleted_sources"] != after["deleted_sources"]):
         results.append(
             {
                 "case": "code_unchanged_during_run",
                 "passed": False,
-                "changed": sorted(k for k in identity["sha256"] if identity["sha256"][k] != after["sha256"][k]),
+                "changed": sorted(k for k in identity["sha256"] if identity["sha256"][k] != after["sha256"][k])
+                + (["dags/transform_dag.py"] if identity["deleted_sources"] != after["deleted_sources"] else []),
             }
         )
     failed = [result["case"] for result in results if not result["passed"]]

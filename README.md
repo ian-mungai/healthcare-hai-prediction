@@ -58,6 +58,17 @@ Then start the catalog from the main checkout (a launcher running in another che
 `data/lakehouse/secrets/` and never prints them. It creates the `hai_lakehouse` catalog, limited to `lakehouse/` in the
 project bucket. `down` stops the containers and keeps the catalog database.
 
+## Data layers
+
+| Layer | Stored form | Build and publication |
+| --- | --- | --- |
+| Bronze | Source tables in Iceberg | Acquisition jobs load the approved source files. |
+| Silver | Validated atomic tables in Iceberg namespace `silver`, under `lakehouse/silver/` | Manually trigger `silver_transform_dag` to pin bronze, build and validate silver, then publish a snapshot set. |
+| Gold | Atomic facts, dimensions and bridges in Iceberg | Manually trigger `gold_transform_dag` to select a committed silver snapshot set, build and validate gold, then publish it. |
+| Features | Definitions under `features/` | Generate research joins, alignments and derived ratios when the feature phase needs them. |
+
+Publication verification is pending. Fixture runs use a test registry and local Iceberg catalog. Real silver test writes are restricted to `lakehouse/silver_e2e/`. Local builds use DuckDB; Athena access through an AWS Glue catalog mirror belongs to the final AWS migration stage. Asset scheduling stays disabled. `gold_maintenance_dag` retains registered snapshot sets when maintaining gold.
+
 ## Usage
 
 Run the full local CI, which the pre-commit hooks and GitHub Actions also run, without AWS credentials. Run it before
