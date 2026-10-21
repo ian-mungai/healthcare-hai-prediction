@@ -49,7 +49,7 @@ PLATFORM_FILE = ROOT / "config" / "orchestration" / "platform.json"
 CODE = ("dags", "orchestration", "scripts/orchestration")
 IN_IMAGE = "scripts/orchestration/in_image_checks.py"
 FORBIDDEN_MOUNT_MARKERS = (".aws", "lakehouse/secrets", "${HOME}")
-DAG_MODULES = {"orchestration.interface", "orchestration.client"}
+DAG_MODULES = {"orchestration.interface", "orchestration.client", "orchestration.dag_runtime"}
 NEVER_IN_DAGS = {"subprocess", "docker", "scripts"}
 PACKAGE_MANAGERS = re.compile(r"\b(pip|pip3|uv|apt|apt-get|apk|npm|conda|poetry|curl|wget)\b")
 A1_FILES = (
@@ -174,6 +174,9 @@ def interface_problems() -> list[str]:
             root = module.split(".")[0]
             if module not in allowed and (root not in sys.stdlib_module_names or root == "subprocess") and root != "__future__":
                 problems.append(f"{path} imports {module}")
+    runtime = ROOT / "orchestration/dag_runtime.py"
+    if runtime.is_file():
+        problems.extend(dag_import_problems("orchestration/dag_runtime.py", runtime.read_text()))
     return problems
 
 
@@ -444,7 +447,11 @@ def collect(platform: dict[str, Any], sections: set[str], test_registry: str | N
             results["every DAG file imports in the image with no error or cycle"] = {"ok": not dags["import_errors"] and bool(dags["dag_ids"]), **dags}
             results.update({f"graph (Airflow objects): {name}": case for name, case in image["graph_cases"].items()})
             transform = image["transform_graph"]
-            results["transform_dag passes the graph validator (Airflow object)"] = {"ok": transform["present"] and not transform["violations"], **transform}
+            if transform["present"]:
+                results["transform_dag passes the graph validator (Airflow object)"] = {"ok": not transform["violations"], **transform}
+            else:
+                for name, graph in image["pipeline_graphs"].items():
+                    results[f"{name} passes the graph validator (Airflow object)"] = {"ok": graph["present"] and not graph["violations"], **graph}
             pins = image["constraints"]
             tools_ok = all(tool["ok"] for tool in pins["build_tools"].values())
             release_ok = not pins.get("release_problems") and set(pins.get("release", {})) == set(platform["airflow"]["release_packages"])

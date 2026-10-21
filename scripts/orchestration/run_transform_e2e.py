@@ -516,7 +516,7 @@ class Stack:
                 for name, mutant in DAG_MUTANTS.items()
             },
         }
-        transform_fixtures.prepare_checkout(self.checkout, extra)
+        self.prepare_checkout(extra)
         self.write_inventory(self.base_inventory())
         os.environ.update(SENTINELS)
         self.config = launcher.resolve_config(str(self.registry))
@@ -556,6 +556,10 @@ class Stack:
                 shutil.rmtree(self.state / "postgres", ignore_errors=True)
         secret = (self.state / "metadata" / "jwt_secret").read_text().strip()
         self.api = AirflowApi(self.supervisor.api_port, secret)
+
+    def prepare_checkout(self, extra: dict[str, str]) -> None:
+        """Prepare the isolated combined-DAG regression checkout."""
+        transform_fixtures.prepare_checkout(self.checkout, extra)
 
     def base_inventory(self) -> dict[str, Any]:
         if self.shipped:
@@ -1595,8 +1599,7 @@ BODIES = {
     "unknown template": {**BASE, "template": "not_a_template"},
     "template path escape": {**BASE, "template": "../silver_build"},
     "mode the template lacks": {**BASE, "template": "commit_publish"},
-    "class other than offline": {**BASE, "template": "publish_candidates", "mode": "publish_fixture"},
-    "mode without a launcher row": {**BASE, "mode": "real"},
+    "mode without a launcher row": {**BASE, "template": "sense_markers", "mode": "real"},
     "run ID path escape": {**BASE, "run_id": "../../etc"},
     "attempt out of range": {**BASE, "attempt": 0},
     "attempt not a number": {**BASE, "attempt": "1; id"},
@@ -1661,7 +1664,7 @@ def refused_specifications(stack: Stack) -> dict[str, bool]:
     }
 
 
-def dump_and_scan(stack: Stack) -> dict[str, bool]:
+def dump_and_scan(stack: Stack, *, expected_runs: set[str] | None = None) -> dict[str, bool]:
     allocation = stack.client.allocate()
     results: dict[str, Any] = {}
     try:
@@ -1699,7 +1702,9 @@ def dump_and_scan(stack: Stack) -> dict[str, bool]:
     return {
         "the dump and the XCom query ran as launcher jobs and wrote their files": all(item["ok"] for item in results.values())
         and (folder / "metadata.sql").is_file(),
-        "the dump holds the DAG runs of this session (the scan can see the data)": len(run_ids) >= 2,
+        "the dump holds the DAG runs of this session (the scan can see the data)": (
+            len(run_ids) >= 2 if expected_runs is None else bool(expected_runs) and expected_runs == stack.seen_runs == set(run_ids)
+        ),
         "the sentinel scan read every input and found no token or credential": scan.ok and not short,
     }
 

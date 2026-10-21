@@ -7,7 +7,7 @@ and do not change them; a needed change goes to the repository owner first. Chec
 
 | File | Contract |
 | --- | --- |
-| `submission_request.schema.json` | What a caller may send: template, run ID, mode and attempt, nothing else |
+| `submission_request.schema.json` | What a caller may send (version 2): template, run ID, mode, attempt and the caller identity (`dag_id`, `task_id`, `dag_run_id`), plus `input_run_id` for `pin_silver` only, nothing else |
 | `launch_spec.schema.json` | The launch specification of every container template (`config/orchestration/job_templates.json`) |
 | `ledger_line.schema.json` | One line of a run's ledger |
 | `examples/job_templates.json` | One complete specification per template (13 templates, placeholder image digests) |
@@ -21,8 +21,8 @@ package tests.
 
 - **Run ID:** `<UTC start as YYYYMMDDTHHMMSSZ>-<8 hex characters>`, for example `20261011T090000Z-0a1b2c3d`. A retry
   with different code, specification or inputs is a new run with a new run ID.
-- **Submission ID:** `<run_id>:<template>:<mode>:<attempt>`. A repeated request with the same ID returns the same
-  handle and starts nothing.
+- **Submission ID:** `<run_id>:<template>:<mode>:<attempt>`, with the suffix `:<input_run_id>` when the request names a
+  selected producer run. A repeated request with the same ID returns the same handle and starts nothing.
 - **Container name:** the launcher names every container `hai-<registry ID prefix>-<owner>-<launch ID>-a<attempt>`.
   For a broker submission the launch ID is `sub-` with 24 hexadecimal characters of the submission ID's SHA-256. The
   launcher request ID is `brk-submit-` with 40 of them, so a repeated submit returns the launcher's first answer
@@ -62,8 +62,11 @@ package tests.
 ## Run control rows
 
 A broker template row can name an action the broker performs on the launcher's run methods instead of forwarding a
-container. The request is the same four fields as for any other template. The actions are idempotent, so a repeated
-request or a task retry ends in the same state. The rows exist for mode `fixture` only.
+container. The request is the same version 2 request as for any other template: the four selection fields, the caller
+identity and `input_run_id` only for `pin_silver`. The actions are idempotent, so a repeated request or a task retry
+ends in the same state. The six rows below exist for mode `fixture`. `acquire_run`, `run_record`, `release_accepted` and
+`release_rejected` also exist for `publish_fixture` and `real`. The final gate rows of the split DAGs (below) exist for
+`publish_fixture` and `real`.
 
 | Template | Action | What it does |
 | --- | --- | --- |
@@ -76,8 +79,18 @@ request or a task retry ends in the same state. The rows exist for mode `fixture
 
 The owner's release remains the only way out of `failed_retained`.
 
+The split silver and gold workflows replace the retired transform workflow. Each DAG file in `dags/` has its own work
+steps and ends with its own gate rows: `silver_transform_dag` (`silver_final_gate_accepted`,
+`silver_final_gate_rejected`), `gold_transform_dag` (`gold_final_gate_accepted`, `gold_final_gate_rejected`) and
+`gold_maintenance_dag` (`maintenance_final_gate_accepted`, `maintenance_final_gate_rejected`). They use the same
+`gate_accepted` and `gate_rejected` actions and run in modes `publish_fixture` and `real`. The other control rows of
+these DAGs are `catalog_up`, `catalog_release`, `snapshot_project`, `reserve_silver`, `seal_silver` and `seal_gold`.
+The combined `transform_dag` and its `fixture` mode remain only as a test fixture under
+`tests/orchestration/fixtures/combined_dag.py`.
+
 The gate rows record the Airflow DAG run's task states in `gate.task_states`. The supervisor reads them once from the
-Airflow API in the one DAG run of `transform_dag` whose configuration names the run and mode. It reads every page of the
+Airflow API in the one DAG run, among `silver_transform_dag`, `gold_transform_dag` and `gold_maintenance_dag`, whose
+configuration names the run and mode (a checkout without those DAG files reads `transform_dag`). It reads every page of the
 DAG run listing and every task instance of the run. A listing that cannot be shown to be complete counts as a listing
 that cannot be read. So does a read that does not finish within 60 seconds in total. It hands them to the
 broker, which holds no Airflow credential. For each predecessor task the record has its name, its expected state (the
@@ -109,7 +122,8 @@ with its silver model, on the same private copy.
 
 ## Modes and Classes
 
-`fixture` runs offline on synthetic data; `pin_bronze` and `verify_bronze` are recorded no-ops in that mode.
-`publish_fixture` writes only the `gold_e2e` namespace; `real` writes `gold`. Each template names the network and
-secret class of each mode it supports (`offline`, `lakehouse_read`, `lakehouse_write`, `collector`, `training`,
-`serving`). Only the publish, backup, commit and maintenance templates write. None of them supports `fixture`.
+`fixture` runs offline on synthetic data; `pin_bronze` and `verify_bronze` are recorded no-ops in that mode. The split
+DAGs accept `publish_fixture` and `real` only. `publish_fixture` writes only the `silver_e2e` and `gold_e2e`
+namespaces. `real` writes `silver` and `gold`. Each template names the network and secret class of each mode it
+supports (`offline`, `lakehouse_read`, `lakehouse_write`, `collector`, `training`, `serving`). Only the silver and gold
+candidate, backup, commit and maintenance templates write. None of them supports `fixture`.

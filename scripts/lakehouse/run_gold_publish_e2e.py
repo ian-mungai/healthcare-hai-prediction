@@ -6,7 +6,7 @@ Modes:
 
 - ``launcher``: the gold publish templates against the fake Docker Engine (render, admission and the sentinel scan). No Docker.
 - ``contract``: the contract's merge keys against the gold contract checks' own reading of grains, dimension keys and bridge grains. No Docker.
-- ``writer_setup``: the ``gold_writer`` set-up requests against a recording stand-in for Polaris. No Docker, no catalog.
+- ``writer_setup``: the ``gold_writer`` and ``silver_writer`` set-up requests against a recording stand-in for Polaris. No Docker, no catalog.
 - ``runner``: the driver's own start-up, clean-up and final-report cases, against a stand-in for the launcher client. No launcher, no Docker.
 - ``local_iceberg``: the project's Spark image on a local file-based Iceberg catalog proves a branch per table, ``MERGE INTO`` on a branch,
   candidates invisible on ``main``, the fast-forward and a read-back.
@@ -24,7 +24,9 @@ planted in the test registry's own compose file, which no offline template reads
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -32,13 +34,15 @@ import sys
 import tempfile
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
-from scripts.lakehouse import gold_export, gold_publish, run_lock
+from orchestration.pipeline_protocol import PipelineError, safe_name
+from scripts.lakehouse import gold_export, gold_publish, gold_writer_setup, polaris_writer, run_lock, silver_writer_setup
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -389,22 +393,215 @@ def contract_check(report: Path) -> list[dict[str, Any]]:
         step("every key column of a fact or bridge is one of the table's contract columns", not missing, missing=missing),
         step("the namespaces are gold_e2e for publish_fixture and gold for real", dict(plan.namespaces) == {"publish_fixture": "gold_e2e", "real": "gold"}),
         step("the backup prefix is the owner's folder under lakehouse/", plan.backup_prefix == "lakehouse/catalog_backups/"),
+        *identifier_rule_steps(),
+        *plan_boundary_steps(),
+        *silver_read_steps(),
     ]
 
 
-def writer_setup(report: Path) -> list[dict[str, Any]]:
-    """The set-up requests against a recording stand-in: scope, idempotence and the credential's only destination."""
-    from scripts.lakehouse import gold_writer_setup as setup
+STRICTEST_NAME_LENGTH = 128
+UNSAFE_NAMES = ("a`b", 'a"b', "a'b", "a b", "a-b", "a.b", "a;b", "a\nb", "a\n", "1a", "", "caf\u00e9", "a`; DROP TABLE x; --")
 
+
+def synthetic_manifest(gold: dict[str, tuple[str, ...]], macros: tuple[str, ...] = ()) -> dict[str, Any]:
+    """A dbt manifest of two silver models, one seed, one source and the given gold models; each gold model maps to the unique IDs it depends on."""
+
+    def node(kind: str, name: str, layer: str, depends: tuple[str, ...] = ()) -> dict[str, Any]:
+        path = [name] if kind == "seed" else [layer, name]
+        return {
+            "resource_type": kind,
+            "name": name,
+            "fqn": ["hai", *path],
+            "raw_code": "select 'left_out' as left_out",
+            "depends_on": {"nodes": list(depends), "macros": list(macros)},
+        }
+
+    nodes = {
+        "model.hai.kept": node("model", "kept", "silver"),
+        "model.hai.left_out": node("model", "left_out", "silver"),
+        "seed.hai.lookup": node("seed", "lookup", "seeds"),
+        **{f"model.hai.{name}": node("model", name, "gold", depends) for name, depends in gold.items()},
+    }
+    return {"nodes": nodes, "sources": {"source.hai.external.left_out": {"resource_type": "source", "name": "left_out"}}}
+
+
+def silver_read_steps() -> list[dict[str, Any]]:
+    """Gold reads only published silver models; the rule reads the dependencies of each gold model in the dbt manifest."""
+    from scripts.lakehouse import gold_checks
+
+    published = frozenset({"kept"})
+
+    def problems(gold: dict[str, tuple[str, ...]], macros: tuple[str, ...] = (), names: frozenset[str] = published) -> list[str]:
+        return gold_checks.unpublished_silver_problems(synthetic_manifest(gold, macros), names)
+
+    refused = "g reads the silver model left_out, which the silver publish contract does not publish"
+    contract = gold_checks.load_contract()
+    dimension = contract.dimensions[0].name
+    wired = gold_checks.lineage_problems(contract, synthetic_manifest({dimension: ("model.hai.left_out",)}), published)
+    live = gold_checks.published_silver()
+    return [
+        step(
+            "a gold model that depends on a published silver model has no problem, whatever names its SQL text holds",
+            problems({"g": ("model.hai.kept",)}) == [],
+        ),
+        step("a gold model that depends on an unpublished silver model is named with that model", problems({"g": ("model.hai.left_out",)}) == [refused]),
+        step(
+            "a dependency that a macro resolves is named like a direct one",
+            problems({"g": ("model.hai.left_out",)}, macros=("macro.hai.hidden_relation",)) == [refused],
+        ),
+        step(
+            "a seed and a source() with the name of an unpublished model are not silver reads",
+            problems({"g": ("seed.hai.lookup", "source.hai.external.left_out")}) == [],
+        ),
+        step("a gold model that depends on another gold model is not a silver read", problems({"g": ("model.hai.kept",), "h": ("model.hai.g",)}) == []),
+        step(
+            "a published name that no silver model has is named",
+            problems({"g": ("model.hai.kept",)}, names=frozenset({"kept", "ghost"})) == ["ghost is published but no silver model has that name"],
+        ),
+        step(
+            "a manifest without silver models fails instead of passing an empty scan",
+            gold_checks.unpublished_silver_problems({"nodes": {}}, published) == ["the manifest holds no silver model, so no read was checked"],
+        ),
+        step(
+            "the lineage check applies the rule to a contract model",
+            any(item.startswith(f"{dimension} reads the silver model left_out") for item in wired),
+            problems=wired,
+        ),
+        step("the silver publish contract lists tables", len(live) > 50, published=len(live)),
+    ]
+
+
+def plan_boundary_steps() -> list[dict[str, Any]]:
+    """The publish plan loader accepts a table name and a merge-key column of the strictest length and refuses one character more."""
+    document = json.loads(gold_publish.CONTRACT.read_text())
+
+    def loads(table: str, column: str) -> bool:
+        changed = json.loads(json.dumps(document))
+        tables = changed["publish"]["tables"]
+        first = next(iter(tables))
+        tables[table] = {**tables.pop(first), "merge_key": [column]}
+        with tempfile.TemporaryDirectory(prefix="publish_plan_") as folder:
+            path = Path(folder) / "gold_contract.json"
+            path.write_text(json.dumps(changed))
+            try:
+                plan = gold_publish.load_plan(path)
+            except gold_publish.PublishError as error:
+                if "not a plain identifier" not in str(error):
+                    raise
+                return False
+            return plan.tables[table] == (column,)
+
+    ordinary = "a"
+    longest = "a" * STRICTEST_NAME_LENGTH
+    over = "a" * (STRICTEST_NAME_LENGTH + 1)
+    return [
+        step("the plan loads with ordinary names", loads(ordinary, ordinary)),
+        step(f"the plan loads a table name of {STRICTEST_NAME_LENGTH} characters", loads(longest, ordinary)),
+        step(f"the plan refuses a table name of {STRICTEST_NAME_LENGTH + 1} characters", not loads(over, ordinary)),
+        step(f"the plan loads a merge-key column of {STRICTEST_NAME_LENGTH} characters", loads(ordinary, longest)),
+        step(f"the plan refuses a merge-key column of {STRICTEST_NAME_LENGTH + 1} characters", not loads(ordinary, over)),
+    ]
+
+
+def identifier_rule_steps() -> list[dict[str, Any]]:
+    """The rule for a name in a statement accepts every contract name and refuses an unsafe name or one past the strictest limit."""
+    from scripts.lakehouse import gold_checks
+
+    def refused(name: str) -> bool:
+        try:
+            gold_publish.ident(name)
+        except gold_publish.PublishError as error:
+            return "not a plain identifier" in str(error)
+        return False
+
+    def import_refuses(name: str) -> bool:
+        try:
+            safe_name(name)
+        except PipelineError:
+            return True
+        return False
+
+    contract = gold_checks.load_contract()
+    names = {table.name for table in contract.tables} | {fact.name for fact in contract.facts} | {bridge.name for bridge in contract.bridges}
+    for fact in contract.facts:
+        names |= (
+            {name for name, _ in fact.expected_columns}
+            | {column.silver_column for column in fact.columns}
+            | {key.natural_key for key in fact.keys}
+            | {fact.grain}
+        )
+    for table in contract.tables:
+        names |= {column.name for column in table.columns} | {table.key, *table.grain_columns}
+    silver = json.loads(gold_checks.SILVER_COLUMNS.read_text())["models"]
+    for model, item in silver.items():
+        names |= {model, *(column[0] for column in item["columns"])}
+    over = sorted(name for name in names if refused(name))
+    published = (
+        set(json.loads((ROOT / "data_contracts/lakehouse/silver_publish.json").read_text())["publish"]["tables"])
+        | {table.name for table in contract.tables}
+        | {fact.name for fact in contract.facts}
+    )
+    return [
+        step(
+            "the contracts name more than 900 distinct tables and columns, and some are longer than 63 characters",
+            len(names) > 900 and any(len(n) > 63 for n in names),
+        ),
+        step("every table and column of the gold and silver contracts is accepted", not over, refused=over),
+        step(
+            f"a name of exactly {STRICTEST_NAME_LENGTH} characters is accepted", gold_publish.ident("a" * STRICTEST_NAME_LENGTH) == "a" * STRICTEST_NAME_LENGTH
+        ),
+        step(f"a name of {STRICTEST_NAME_LENGTH + 1} characters is refused as not a plain identifier", refused("a" * (STRICTEST_NAME_LENGTH + 1))),
+        step(
+            "a name that is unsafe in a statement is refused as not a plain identifier",
+            all(refused(name) for name in UNSAFE_NAMES),
+            accepted=[n for n in UNSAFE_NAMES if not refused(n)],
+        ),
+        step("every published silver and gold table name is accepted when the build imports it", not [n for n in published if import_refuses(n)]),
+        step(
+            f"the import accepts a table name of {STRICTEST_NAME_LENGTH} characters and refuses one of {STRICTEST_NAME_LENGTH + 1}",
+            not import_refuses("a" * STRICTEST_NAME_LENGTH) and import_refuses("a" * (STRICTEST_NAME_LENGTH + 1)),
+        ),
+        step(
+            "the import refuses a table name with an uppercase letter, a leading digit, a hyphen or no characters",
+            all(import_refuses(name) for name in ("Ab", "1a", "a-b", "")),
+        ),
+    ]
+
+
+EXPECTED_GOLD = polaris_writer.Writer("gold_writer", ("gold", "gold_e2e"), ("POLARIS_GOLD_WRITER_CLIENT_ID", "POLARIS_GOLD_WRITER_CLIENT_SECRET"))
+EXPECTED_SILVER = polaris_writer.Writer("silver_writer", ("silver", "silver_e2e"), ("POLARIS_SILVER_WRITER_CLIENT_ID", "POLARIS_SILVER_WRITER_CLIENT_SECRET"))
+EXPECTED_CATALOG_GRANTS = ("CATALOG_READ_PROPERTIES",)
+EXPECTED_NAMESPACE_GRANTS = (
+    "NAMESPACE_LIST",
+    "NAMESPACE_READ_PROPERTIES",
+    "TABLE_LIST",
+    "TABLE_CREATE",
+    "TABLE_READ_PROPERTIES",
+    "TABLE_WRITE_PROPERTIES",
+    "TABLE_READ_DATA",
+    "TABLE_WRITE_DATA",
+)
+
+
+def writer_steps(
+    expected: polaris_writer.Writer,
+    ensure: Callable[..., str],
+    planned: Callable[[str], list[tuple[str, str, dict[str, Any] | None]]],
+    main: Callable[[list[str]], int],
+    refused: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """One writer's set-up requests against a recording stand-in, judged against ``expected``: exact scope and privileges, idempotence, failures, secrets."""
     secret = "writer-secret-" + os.urandom(6).hex()
     token = "access-token-" + os.urandom(6).hex()
     stored: list[dict[str, str]] = []
     calls: list[tuple[str, str, Any, str | None]] = []
     state = {"principal": False}
+    own = list(expected.namespaces)
+    id_key, secret_key = expected.keys
 
     def request(method: str, path: str, access: str | None = None, body: Any = None, form: Any = None) -> tuple[int, Any]:
         calls.append((method, path, body, access))
-        if method == "GET" and path.endswith("/principals/gold_writer"):
+        if method == "GET" and "/principals/" in path:
             return (200, {}) if state["principal"] else (404, None)
         if method == "POST" and path.endswith("/principals"):
             state["principal"] = True
@@ -413,45 +610,123 @@ def writer_setup(report: Path) -> list[dict[str, Any]]:
             return (409, None) if any(c[0] == method and c[1] == path and c[2] == body for c in calls[:-1]) else (201, {})
         return 200, {}
 
-    first = setup.ensure_writer(token, "hai_lakehouse", {"POLARIS_CLIENT_ID": "root", "POLARIS_CLIENT_SECRET": "r"}, request, stored.append)
+    first = ensure(token, "hai_lakehouse", {"POLARIS_CLIENT_ID": "root", "POLARIS_CLIENT_SECRET": "r"}, request, stored.append)
     grants = [c[2]["grant"] for c in calls if c[0] == "PUT" and c[1].endswith("/grants")]
     namespace_grants = [g for g in grants if g["type"] == "namespace"]
+    created = [c[2]["namespace"] for c in calls if c[0] == "POST" and c[1].endswith("/namespaces")]
     count_first = len(calls)
-    second = setup.ensure_writer(token, "hai_lakehouse", stored[-1], request, stored.append)
+    second = ensure(token, "hai_lakehouse", stored[-1], request, stored.append)
     text = json.dumps([c[:3] for c in calls])
+
+    def denied(method: str, path: str, access: str | None = None, body: Any = None, form: Any = None) -> tuple[int, Any]:
+        return 403, {"detail": token}
+
+    try:
+        ensure(token, "hai_lakehouse", {}, denied, stored.append)
+        refusal = ""
+    except polaris_writer.SetupError as error:
+        refusal = str(error)
+    plan_lines = io.StringIO()
+    with contextlib.redirect_stdout(plan_lines):
+        dry_status = main(["--dry-run"])
+    label = f"{expected.name}: "
+    expected_grants = [{"type": "catalog", "privilege": p} for p in EXPECTED_CATALOG_GRANTS] + [
+        {"type": "namespace", "namespace": [n], "privilege": p} for n in own for p in EXPECTED_NAMESPACE_GRANTS
+    ]
+    owned = {(n,) for n in own}
+    per_namespace = {n: sorted(g["privilege"] for g in namespace_grants if g["namespace"] == [n]) for n in own}
+    named = [
+        c[2][kind]["name"]
+        for c in calls[:count_first]
+        if c[0] in ("POST", "PUT") and isinstance(c[2], dict)
+        for kind in ("principalRole", "catalogRole", "principal")
+        if kind in c[2]
+    ]
     return [
         step(
-            "first run creates the principal and stores its pair once",
-            first == "created" and len(stored) == 1 and stored[0]["POLARIS_GOLD_WRITER_CLIENT_ID"] == "writer-id",
+            label + "first run creates the principal and stores its pair once",
+            first == "created" and len(stored) == 1 and stored[0][id_key] == "writer-id" and stored[0][secret_key] == secret,
         ),
         step(
-            "every namespace grant is on gold or gold_e2e", bool(namespace_grants) and all(g["namespace"] in (["gold"], ["gold_e2e"]) for g in namespace_grants)
+            label + f"the namespaces granted are exactly {' and '.join(own)}",
+            bool(namespace_grants) and {tuple(g["namespace"]) for g in namespace_grants} == owned,
+            granted=sorted(".".join(g["namespace"]) for g in namespace_grants),
+        ),
+        step(label + "the writer creates exactly its own namespaces and no other", sorted(created) == sorted([n] for n in own)),
+        step(
+            label + f"no grant or namespace names a refused namespace ({', '.join(refused)})",
+            bool(namespace_grants)
+            and not {n for g in namespace_grants for n in g["namespace"]} & set(refused)
+            and not {n for ns in created for n in ns} & set(refused),
         ),
         step(
-            "both namespaces get the same privileges",
-            {g["privilege"] for g in namespace_grants if g["namespace"] == ["gold"]}
-            == {g["privilege"] for g in namespace_grants if g["namespace"] == ["gold_e2e"]},
+            label + "each namespace gets exactly the eight table privileges, none extra and none missing",
+            all(privileges == sorted(EXPECTED_NAMESPACE_GRANTS) for privileges in per_namespace.values()),
+            granted=per_namespace,
         ),
         step(
-            "no forbidden privilege is granted (no management, namespace create or drop, table drop)",
-            not {g["privilege"] for g in grants} & set(setup.FORBIDDEN_PRIVILEGES),
+            label + "no forbidden privilege is granted (no management, namespace create or drop, table drop)",
+            not {g["privilege"] for g in grants} & set(polaris_writer.FORBIDDEN_PRIVILEGES),
         ),
         step(
-            "the only catalog-wide grant is the read of catalog properties",
-            [g["privilege"] for g in grants if g["type"] == "catalog"] == ["CATALOG_READ_PROPERTIES"],
+            label + f"the complete set of grants sent is exactly the expected {len(expected_grants)}, with no other type and no duplicate",
+            sorted(json.dumps(g, sort_keys=True) for g in grants) == sorted(json.dumps(g, sort_keys=True) for g in expected_grants),
+            sent=len(grants),
         ),
         step(
-            "the root token is sent as the bearer only and never in a body",
+            label + "the catalog-wide grants are exactly the read of catalog properties",
+            [g["privilege"] for g in grants if g["type"] == "catalog"] == list(EXPECTED_CATALOG_GRANTS),
+        ),
+        step(
+            label + "the principal, principal role and catalog role carry the expected name",
+            bool(named) and set(named) == {expected.name} and all(f"/catalog-roles/{expected.name}/grants" in c[1] for c in calls if c[1].endswith("/grants")),
+            named=named,
+        ),
+        step(
+            label + "the root token is sent as the bearer only and never in a body",
             all(token not in json.dumps(c[2]) for c in calls) and all(c[3] == token for c in calls),
         ),
-        step("the writer's secret is never sent in a request body or path", secret not in text),
+        step(label + "the writer's secret is never sent in a request body or path", secret not in text),
         step(
-            "a second run stores nothing and resets nothing",
+            label + "a second run stores nothing and resets nothing",
             second == "already present" and len(stored) == 1 and not any(c[1].endswith("/reset") for c in calls[count_first:]),
         ),
         step(
-            "the planned requests match the sent requests of a first run",
-            {(m, p) for m, p, _ in setup.planned_requests("hai_lakehouse")} <= {(c[0], c[1]) for c in calls},
+            label + "the planned requests match the sent requests of a first run",
+            {(m, p) for m, p, _ in planned("hai_lakehouse")} <= {(c[0], c[1]) for c in calls[:count_first]},
+        ),
+        step(
+            label + "a refused request raises an error that names the action and status and holds no credential",
+            "failed (HTTP 403)" in refusal and token not in refusal,
+        ),
+        step(
+            label + "the dry run prints one line per planned request and sends nothing",
+            dry_status == 0 and len(plan_lines.getvalue().splitlines()) == len(planned("hai_lakehouse")) and token not in plan_lines.getvalue(),
+        ),
+    ]
+
+
+def writer_setup(report: Path) -> list[dict[str, Any]]:
+    """The gold and silver writer set-ups against the recording stand-in; the two principals hold disjoint namespaces and credential keys."""
+    gold = writer_steps(
+        EXPECTED_GOLD, gold_writer_setup.ensure_writer, gold_writer_setup.planned_requests, gold_writer_setup.main, ("silver", "silver_e2e", "bronze")
+    )
+    silver = writer_steps(
+        EXPECTED_SILVER,
+        lambda *args: polaris_writer.ensure_writer(silver_writer_setup.SILVER, *args),
+        lambda catalog: polaris_writer.planned_requests(silver_writer_setup.SILVER, catalog),
+        silver_writer_setup.main,
+        ("gold", "gold_e2e", "bronze"),
+    )
+    pairs = (set(gold_writer_setup.GOLD.keys), set(silver_writer_setup.SILVER.keys))
+    return [
+        *gold,
+        *silver,
+        step(
+            "the gold and silver writers share no principal name, namespace or credential key",
+            gold_writer_setup.GOLD.name != silver_writer_setup.SILVER.name
+            and not set(gold_writer_setup.GOLD.namespaces) & set(silver_writer_setup.SILVER.namespaces)
+            and not pairs[0] & pairs[1],
         ),
     ]
 

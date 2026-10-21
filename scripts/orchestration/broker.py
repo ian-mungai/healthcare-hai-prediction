@@ -15,8 +15,10 @@ request ID created (the launcher's ``status`` target ``submission``, answered to
 row says now; "not found" is the launcher's answer that it never accepted the submit, the valid retry path; an answer that cannot be had leaves the
 submission unresolved.
 
-Only the network class ``offline`` runs; a mode of another class, a mode with no launcher row and a name that is not in the file
-are refused with that reason. The launcher's closed template table refuses the rest (a changed command, an extra variable or mount, another image).
+A mode that forwards to the launcher runs in the network class ``offline`` or in a class the launcher enforces (``lakehouse_read`` and
+``lakehouse_write``); a mode of another class, a mode with no launcher row and a name that is not in the file are refused with that reason. A mode with
+a ``control`` object (a run-control action the broker performs itself) stays ``offline``. The launcher's closed template table refuses the rest (a
+changed command, an extra variable or mount, another image).
 
 The supervisor (``scripts/orchestration/supervisor.py``) runs it in-process with its loopback listener. For the owner:
 
@@ -72,7 +74,7 @@ TRANSIENT_CODES = ("degraded", "internal")
 END_CODES = {"timeout": 124, "cancelled": 143, "fenced": 143, "create_failed": 125}
 UNKNOWN_END = 125
 START_WAIT_SECONDS = 15.0
-PLACEHOLDER_NAMES = ("run_id", "mode", "run_dir", "build_file", "checkout")
+PLACEHOLDER_NAMES = ("run_id", "mode", "run_dir", "build_file", "checkout", "input_run_id")
 CONTROL_INPUT = "control"
 RECORDS_INPUT = "records_build_file"
 REQUIRES_INPUT = "requires_build_file"
@@ -176,17 +178,18 @@ def launch_id_of(submission_id: str) -> str:
 def submission_parts(submission_id: str) -> tuple[str, str, str, int]:
     """Validate a handle's legacy-shaped key without inventing caller identity."""
     parts = submission_id.split(":")
-    if len(parts) != 4 or not parts[3].isdecimal():
+    if len(parts) not in (4, 5) or not parts[3].isdecimal():
         raise SubmissionRefused("malformed submission ID")
     request_schema = json.loads((ROOT / "data_contracts/orchestration/submission_request.schema.json").read_text())
-    key_fields = ("template", "run_id", "mode", "attempt")
+    key_fields = ("template", "run_id", "mode", "attempt", *(("input_run_id",) if len(parts) == 5 else ()))
     schema = {
         "type": "object",
         "additionalProperties": False,
         "required": list(key_fields),
         "properties": {key: request_schema["properties"][key] for key in key_fields},
+        "allOf": request_schema.get("allOf", []),
     }
-    values = {"template": parts[1], "run_id": parts[0], "mode": parts[2], "attempt": int(parts[3])}
+    values = {"template": parts[1], "run_id": parts[0], "mode": parts[2], "attempt": int(parts[3]), **({"input_run_id": parts[4]} if len(parts) == 5 else {})}
     errors = sorted(Draft202012Validator(schema).iter_errors(values), key=str)
     if errors:
         raise SubmissionRefused("malformed submission ID")
@@ -206,8 +209,9 @@ def submission_request(submission_id: str, record: dict[str, Any]) -> Submission
 def load_templates(path: Path = TEMPLATES_FILE) -> dict[str, Any]:
     """The broker templates, checked against their schema and against the launcher's closed table.
 
-    A mode that forwards to the launcher must have the network class ``offline`` and name a launcher template that a run can submit. A mode
-    with a ``control`` object (a run-control action the broker performs itself) must have the class ``offline``, a known action and exactly its parameters.
+    A mode that forwards to the launcher must have the network class ``offline`` or a class the launcher enforces (``launcher.NETWORK_CLASSES_ENFORCED``)
+    and name a launcher template that a run can submit. A mode with a ``control`` object (a run-control action the broker performs itself) must have the
+    class ``offline``, a known action and exactly its parameters.
     """
     from scripts.orchestration import run_control
 
@@ -232,9 +236,9 @@ def load_templates(path: Path = TEMPLATES_FILE) -> dict[str, Any]:
             row_launcher = row.get("launcher")
             if row_launcher is None:
                 continue
-            if row["class"] != OFFLINE:
+            if row["class"] not in (OFFLINE, *getattr(launcher, "NETWORK_CLASSES_ENFORCED", ())):
                 raise BrokerError(
-                    f"{name}/{mode}: network class {row['class']} cannot launch; the broker runs only the offline class until network allow lists are enforced"
+                    f"{name}/{mode}: network class {row['class']} cannot launch; the broker runs only the offline class and the enforced network classes"
                 )
             known = launcher.TEMPLATES.get(row_launcher["template"])
             if known is None or "run" not in known.owners or row_launcher["template"] in ("probe", "catalog_service", "orchestration_service"):
@@ -347,17 +351,17 @@ class Broker:
             handle.write(self.redact(f"{now()} {event} {detail}".rstrip()) + "\n")
 
     def row_for(self, request: SubmissionRequest) -> dict[str, Any]:
-        """The mode's row, or the refusal with its reason: unknown name, unsupported mode, a class other than offline, no launcher row."""
+        """The mode's row, or the refusal with its reason: unknown name, unsupported mode, a class that is neither offline nor enforced, no launcher row."""
         template = self.templates.get(request.template)
         if template is None:
             raise SubmissionRefused(f"unknown template {request.template}")
         row = template["modes"].get(request.mode)
         if row is None:
             raise SubmissionRefused(f"template {request.template} does not support mode {request.mode}")
-        if row["class"] != OFFLINE:
+        if row["class"] not in (OFFLINE, *getattr(launcher, "NETWORK_CLASSES_ENFORCED", ())):
             raise SubmissionRefused(
                 f"template {request.template} in mode {request.mode} needs the network class {row['class']}; "
-                "the broker runs only the offline class until network allow lists are enforced"
+                "the broker runs only the offline class and the enforced network classes"
             )
         if row.get("control") is not None:
             return dict(row)
@@ -365,8 +369,9 @@ class Broker:
             raise SubmissionRefused(f"no launcher template runs {request.template} in mode {request.mode}: {row['reason']}")
         return dict(row)
 
-    def placeholder_values(self, run_id: str, mode: str) -> dict[str, str]:
-        """The five values a row's text may name: the run, the mode, the run folder, the build file and the checkout; nothing from the caller."""
+    def placeholder_values(self, run_id: str, mode: str, input_run_id: str | None = None) -> dict[str, str]:
+        """The six values a row's text may name: the run, the mode, the run folder, the build file, the checkout and the input run ("latest" when none is
+        named); nothing from the caller."""
         run_dir = self.runs_root / run_id
         return {
             "run_id": run_id,
@@ -374,13 +379,14 @@ class Broker:
             "run_dir": str(run_dir),
             "build_file": str(run_dir / "build.duckdb"),
             "checkout": str(self.repo_root),
+            "input_run_id": input_run_id or "latest",
         }
 
     def payload_of(self, request: SubmissionRequest, row: dict[str, Any]) -> dict[str, Any]:
         """The launcher ``submit`` parameters of a submission: the row's fixed values with the placeholders filled, nothing from the caller."""
         if row.get("control") is not None:
             return {"control": row["control"], "template": request.template}
-        values = self.placeholder_values(request.run_id, request.mode)
+        values = self.placeholder_values(request.run_id, request.mode, request.input_run_id)
         target = row["launcher"]
         payload: dict[str, Any] = {
             "template": target["template"],
@@ -389,6 +395,7 @@ class Broker:
             "params": substitute(target["params"], values),
             "checkout": str(self.repo_root),
             "caller_identity": request.identity(),
+            "input_run_id": request.input_run_id or "latest",
         }
         if "dbt_nodes" in target:
             payload["capture_dbt_artifacts"] = True
@@ -396,15 +403,24 @@ class Broker:
             payload["timeout_seconds"] = target["timeout_seconds"]
         return payload
 
-    def call(self, method: str, params: dict[str, Any], principal: dict[str, Any] | None = None, request_id: str | None = None) -> Any:
-        """One launcher request; a transport error (the launcher is gone or stopped answering, so the outcome is unknown) and a degraded launcher are
-        ``LauncherUnavailable``, a definite refusal stays ``ClientError``."""
+    def call(
+        self, method: str, params: dict[str, Any], principal: dict[str, Any] | None = None, request_id: str | None = None, timeout: float | None = None
+    ) -> Any:
+        """One launcher request. With ``timeout``, the whole request (connecting, starting the launcher, each exchange and every pause before a repeat)
+        ends within that many seconds, plus up to two 0.5 second waits to clean up an intermediate launcher process that outlived them; without it
+        the client's own limits apply. A transport error (the launcher is gone or stopped answering, so the outcome is unknown), a spent budget and a
+        degraded launcher are ``LauncherUnavailable``, a definite refusal stays ``ClientError``. A budget that ended while the launcher was being
+        started says what became of the intermediate process and that a launcher it had spawned may still be running."""
         try:
-            return self.client.call(method, params, principal, request_id)
+            if timeout is None:
+                return self.client.call(method, params, principal, request_id)
+            return self.client.call(method, params, principal, request_id, budget=timeout)
         except launcher.ClientError as error:
             if error.transport or error.code in TRANSIENT_CODES:
                 raise LauncherUnavailable(f"the launcher is not available ({error.code}): {error}") from None
             raise
+        except launcher.StartTimeout as error:
+            raise LauncherUnavailable(f"the launcher is not reachable: {error}") from None
         except (OSError, TimeoutError, ValueError) as error:
             raise LauncherUnavailable(f"the launcher is not reachable: {type(error).__name__}") from None
 
@@ -490,7 +506,8 @@ class Broker:
     def write_intent(self, request: SubmissionRequest, row: dict[str, Any], payload: dict[str, Any] | None) -> None:
         """The intent line: written and fsynced before anything is sent to the launcher."""
         lineage = substitute(
-            (row.get("launcher") or {}).get("lineage", {"version": 1, "inputs": [], "outputs": []}), self.placeholder_values(request.run_id, request.mode)
+            (row.get("launcher") or {}).get("lineage", {"version": 1, "inputs": [], "outputs": []}),
+            self.placeholder_values(request.run_id, request.mode, request.input_run_id),
         )
         if self.redact(canonical(lineage)) != canonical(lineage):
             raise SubmissionRefused("declared lineage contains a known secret")
@@ -509,7 +526,7 @@ class Broker:
                 "lineage": lineage,
                 **({"input_pins": pins} if pins else {}),
                 **(
-                    {"dbt_nodes": substitute(row["launcher"]["dbt_nodes"], self.placeholder_values(request.run_id, request.mode))}
+                    {"dbt_nodes": substitute(row["launcher"]["dbt_nodes"], self.placeholder_values(request.run_id, request.mode, request.input_run_id))}
                     if "dbt_nodes" in (row.get("launcher") or {})
                     else {}
                 ),
@@ -577,7 +594,7 @@ class Broker:
 
     def checkpoint_markers(self, request: SubmissionRequest, row: dict[str, Any]) -> dict[str, str]:
         launcher_row = row.get("launcher") or {}
-        values = self.placeholder_values(request.run_id, request.mode)
+        values = self.placeholder_values(request.run_id, request.mode, request.input_run_id)
         markers: dict[str, str] = {}
         if launcher_row.get("records_build_file") is not None:
             markers[RECORDS_INPUT] = str(substitute(launcher_row["records_build_file"], values))
@@ -782,7 +799,7 @@ class Broker:
         from scripts.orchestration import run_control
 
         control = row["control"]
-        params = substitute(control.get("params", {}), self.placeholder_values(request.run_id, request.mode))
+        params = substitute(control.get("params", {}), self.placeholder_values(request.run_id, request.mode, request.input_run_id))
         try:
             result = run_control.perform(self, request, control["action"], params)
         except run_control.ControlRefused as error:
@@ -831,8 +848,8 @@ class Broker:
             self.fail_changed_row(request)
             return None
         payload = self.payload_of(request, row)
-        lineage = substitute(row["launcher"]["lineage"], self.placeholder_values(request.run_id, request.mode))
-        bindings = substitute(row["launcher"].get("dbt_nodes"), self.placeholder_values(request.run_id, request.mode))
+        lineage = substitute(row["launcher"]["lineage"], self.placeholder_values(request.run_id, request.mode, request.input_run_id))
+        bindings = substitute(row["launcher"].get("dbt_nodes"), self.placeholder_values(request.run_id, request.mode, request.input_run_id))
         if lineage != intent["lineage"] or bindings != intent.get("dbt_nodes"):
             self.fail_changed_row(request)
             return None
@@ -953,6 +970,9 @@ class Broker:
         if int(exit_code) == 0:
             try:
                 extra = self.validated_build(request, attempt)
+                from scripts.orchestration import pipeline_control
+
+                extra.update(pipeline_control.completed(self, request, attempt))
             except run_control.ControlFailed as error:
                 exit_code, extra = 1, {"failed": True, "reason": self.redact(str(error))}
         if int(exit_code) == 0 and not cancelled and "input_pins" in lines[0]:

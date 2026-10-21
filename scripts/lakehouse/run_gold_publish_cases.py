@@ -424,7 +424,7 @@ INTERRUPTS = (
 
 
 def interruptions(h: Harness) -> Check:
-    """An interruption at each point leaves the reader's view unchanged; a rerun of all steps completes the publish exactly once."""
+    """An interruption at each point leaves the reader's view unchanged; a rerun of all steps completes the publish once and leaves its receipt."""
     checks = h.begin()
     want1 = committed_baseline(h)
     for point in INTERRUPTS:
@@ -466,6 +466,11 @@ def interruptions(h: Harness) -> Check:
         )
         checks[f"{label} publish_runs holds the second run once"] = runs == [run_id(1), run_id(2)]
         checks[f"{label} no table has the run's branch left"] = all(ctx.branch not in publish.table_refs(resume, n) for n in TEST_PLAN.tables)
+        receipt_path = resume.path("commit.json")
+        receipt = publish.read_record(receipt_path)[0] if receipt_path.is_file() else {}
+        checks[f"{label} the resume leaves a commit receipt that names the second set"] = (
+            receipt.get("state") == "committed" and receipt.get("run_id") == run_id(2) and receipt.get("snapshot_set") == (view or {}).get("set")
+        )
     checks["the first set is still readable after every resume"] = bool(want1)
     return checks
 

@@ -80,15 +80,21 @@ class InstrumentedClient(launcher.LauncherClient):
         self.submission_replies: list[dict[str, Any]] = []
 
     def call(
-        self, method: str, params: dict[str, Any] | None = None, principal: dict[str, Any] | None = None, request_id: str | None = None, timeout: float = 120.0
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        principal: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        timeout: float = 120.0,
+        budget: float | None = None,
     ) -> Any:
         self.methods.append(method)
         if self.before is not None:
             self.before(method, params or {})
         if method != "status" or (params or {}).get("what") != "submission":
-            return super().call(method, params, principal, request_id, timeout)
+            return super().call(method, params, principal, request_id, timeout, budget)
         try:
-            reply = super().call(method, params, principal, request_id, timeout)
+            reply = super().call(method, params, principal, request_id, timeout, budget)
         except launcher.ClientError as error:
             self.submission_replies.append({"error": error.code})
             raise
@@ -1797,8 +1803,8 @@ def override_fields_refused(env: BrokerEnv) -> dict[str, bool]:
 
 @case("unmapped_template_refused")
 def unmapped_template_refused(env: BrokerEnv) -> dict[str, bool]:
-    """930: every frozen template name without a launcher row is refused with its reason; a name that is not in the file and a class other than
-    offline are refused too, each with its own reason."""
+    """930: every frozen template name without a launcher row is refused with its reason; a name that is not in the file and a class that is neither
+    offline nor enforced by the launcher are refused too, each with its own reason."""
     env.write_inventory(json.loads((ROOT / "config/orchestration/broker_templates.json").read_text()))
     broker = env.new_broker()
     broker.start()
@@ -1811,7 +1817,7 @@ def unmapped_template_refused(env: BrokerEnv) -> dict[str, bool]:
             error = refusal_of(partial(broker.submit, env.request(name, mode=mode, attempt=1)))
             if row["no_op"]:
                 results[f"{name}/{mode}: a no-op is recorded without a launcher request"] = error is None
-            elif row["class"] != "offline":
+            elif row["class"] not in (broker_module.OFFLINE, *launcher.NETWORK_CLASSES_ENFORCED):
                 results[f"{name}/{mode}: class {row['class']} is refused for the class"] = isinstance(
                     error, SubmissionRefused
                 ) and "the broker runs only the offline class" in str(error)
@@ -1827,12 +1833,30 @@ def unmapped_template_refused(env: BrokerEnv) -> dict[str, bool]:
     return results
 
 
+def enforced_row_kept(inventory: dict[str, Any] | None, network_class: str, mapping: dict[str, Any] | None) -> bool:
+    """True when a loaded inventory still holds the ``silver_build`` fixture row with the network class and launcher mapping that went in."""
+    kept = ((inventory or {}).get("templates") or {}).get("silver_build", {}).get("modes", {}).get("fixture")
+    return bool(mapping) and isinstance(kept, dict) and kept.get("class") == network_class and kept.get("launcher") == mapping
+
+
 @case("non_offline_class_refused")
 def non_offline_class_refused(env: BrokerEnv) -> dict[str, bool]:
-    """930: a broker row that forwards to the launcher with a class other than offline is refused when the file loads, and a submission in such a
-    class is refused with the class named."""
+    """930: a broker row that forwards to the launcher with a class the launcher does not enforce is refused when the file loads, and a submission in such
+    a class is refused with the class named; a class the launcher enforces loads and keeps its row."""
+    unenforced = "collector"
     document = env.inventory()
-    document["templates"]["silver_build"]["modes"]["fixture"]["class"] = "lakehouse_read"
+    row = document["templates"]["silver_build"]["modes"]["fixture"]
+    row["class"] = "lakehouse_read"
+    enforced_mapping = row["launcher"]
+    enforced_path = env.work / "enforced_class.json"
+    enforced_path.write_text(json.dumps(document))
+    enforced_inventory: dict[str, Any] | None = None
+    enforced_error = None
+    try:
+        enforced_inventory = load_templates(enforced_path)
+    except BrokerError as caught:
+        enforced_error = caught
+    row["class"] = unenforced
     path = env.work / "bad_class.json"
     path.write_text(json.dumps(document))
     load_error = None
@@ -1840,15 +1864,19 @@ def non_offline_class_refused(env: BrokerEnv) -> dict[str, bool]:
         load_templates(path)
     except BrokerError as caught:
         load_error = caught
-    document["templates"]["silver_build"]["modes"]["fixture"]["launcher"] = None
-    document["templates"]["silver_build"]["modes"]["fixture"]["reason"] = "a future launcher row will run this step"
+    row["launcher"] = None
+    row["reason"] = "a future launcher row will run this step"
     env.write_inventory(document)
     broker = env.new_broker()
     broker.start()
     error = refusal_of(lambda: broker.submit(env.request("silver_build", attempt=1)))
     return {
-        "a forwarding row with another class does not load": load_error is not None and "runs only the offline class" in str(load_error),
-        "a submission in another class is refused with the class named": isinstance(error, SubmissionRefused) and "lakehouse_read" in str(error),
+        "the class used here is not enforced by the launcher": unenforced not in launcher.NETWORK_CLASSES_ENFORCED,
+        "a forwarding row with an enforced class loads": enforced_error is None,
+        "the loaded inventory keeps that row's class and launcher mapping": enforced_row_kept(enforced_inventory, "lakehouse_read", enforced_mapping),
+        "a forwarding row with another class does not load": load_error is not None
+        and "runs only the offline class and the enforced network classes" in str(load_error),
+        "a submission in another class is refused with the class named": isinstance(error, SubmissionRefused) and unenforced in str(error),
         "nothing was sent to the launcher": not env.creates() and "submit" not in wire(broker).methods,
     }
 

@@ -44,7 +44,22 @@ from scripts.orchestration.broker import (
 )
 from scripts.orchestration.ledger import now
 
-ACTIONS = ("acquire", "record", "gate_accepted", "gate_rejected", "release_accepted", "release_rejected")
+ACTIONS = (
+    "acquire",
+    "record",
+    "gate_accepted",
+    "gate_rejected",
+    "release_accepted",
+    "release_rejected",
+    "catalog_up",
+    "catalog_release",
+    "snapshot_project",
+    "reserve_silver",
+    "seal_silver",
+    "seal_gold",
+    "fixture_pin",
+    "fixture_verify",
+)
 REQUIRED_PARAMS = {
     "acquire": (),
     "record": ("record_file",),
@@ -52,6 +67,14 @@ REQUIRED_PARAMS = {
     "gate_rejected": ("record_file", "expected_states"),
     "release_accepted": ("record_file", "build_files"),
     "release_rejected": (),
+    "catalog_up": (),
+    "catalog_release": (),
+    "snapshot_project": (),
+    "reserve_silver": (),
+    "seal_silver": (),
+    "seal_gold": (),
+    "fixture_pin": (),
+    "fixture_verify": (),
 }
 OPTIONAL_PARAMS = {"acquire": ("seed", "folders")}
 SEEDED_MARKER = ".seeded"
@@ -94,6 +117,8 @@ def inside(path: Path, roots: list[Path]) -> bool:
 
 def perform(broker: Broker, request: SubmissionRequest, action: str, params: dict[str, Any]) -> dict[str, Any]:
     """Run one control action; the result is merged into the ``finished`` ledger line and the submission record."""
+    from scripts.orchestration import pipeline_control
+
     handler = {
         "acquire": acquire,
         "record": record,
@@ -101,7 +126,7 @@ def perform(broker: Broker, request: SubmissionRequest, action: str, params: dic
         "gate_rejected": gate,
         "release_accepted": release_accepted,
         "release_rejected": release_rejected,
-    }[action]
+    }.get(action, pipeline_control.perform)
     try:
         return handler(broker, request, action, params)
     except OSError as error:
@@ -417,6 +442,10 @@ def release_accepted(broker: Broker, request: SubmissionRequest, action: str, pa
     if state is None:
         raise ControlRefused("the lock is not held")
     stopped = stop_open(broker, request) if state != "released" else []
+    if state != "released" and request.mode in ("publish_fixture", "real"):
+        from scripts.orchestration import pipeline_control
+
+        pipeline_control.perform(broker, request, "catalog_release", {})
     folder = run_folder(broker, request)
     deleted = []
     for name in params["build_files"]:
@@ -440,6 +469,10 @@ def release_accepted(broker: Broker, request: SubmissionRequest, action: str, pa
 def release_rejected(broker: Broker, request: SubmissionRequest, action: str, params: dict[str, Any]) -> dict[str, Any]:
     stopped = stop_open(broker, request)
     state = run_state(broker, request)
+    if state in ("held", "finalizing") and request.mode in ("publish_fixture", "real"):
+        from scripts.orchestration import pipeline_control
+
+        pipeline_control.perform(broker, request, "catalog_release", {})
     if state in ("held", "finalizing"):
         try:
             broker.call("mark", {"state": "failed_retained"}, broker.principal(request.run_id))

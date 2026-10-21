@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Iterable, Iterator
+from collections.abc import Collection, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
@@ -29,6 +29,7 @@ from scripts.lakehouse import gold_sql
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = REPO_ROOT / "data_contracts/lakehouse/gold_contract.json"
 SILVER_COLUMNS = REPO_ROOT / "data_contracts/lakehouse/silver_columns.json"
+SILVER_PUBLISH = REPO_ROOT / "data_contracts/lakehouse/silver_publish.json"
 SUITES = REPO_ROOT / "data_contracts/great_expectations/gold"
 UNKNOWN = "<unknown>"
 NUMERIC_TYPES = frozenset({"DOUBLE", "FLOAT", "BIGINT", "INTEGER", "SMALLINT", "HUGEINT", "TINYINT"})
@@ -655,9 +656,30 @@ def gold_nodes(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {node["name"]: node for node in manifest["nodes"].values() if node["resource_type"] == "model" and len(node["fqn"]) > 2 and node["fqn"][1] == "gold"}
 
 
-def lineage_problems(contract: Contract, manifest: dict[str, Any]) -> list[str]:
+def published_silver(path: Path = SILVER_PUBLISH) -> frozenset[str]:
+    """The silver models the silver publish contract publishes."""
+    return frozenset(json.loads(path.read_text())["publish"]["tables"])
+
+
+def unpublished_silver_problems(manifest: dict[str, Any], published: Collection[str]) -> list[str]:
+    """Gold models whose dbt dependencies include a silver model that is not published, and published names that no silver model has."""
+    silver = {
+        key: node["name"] for key, node in manifest["nodes"].items() if node["resource_type"] == "model" and len(node["fqn"]) > 2 and node["fqn"][1] == "silver"
+    }
+    if not silver:
+        return ["the manifest holds no silver model, so no read was checked"]
+    problems = [
+        f"{name} reads the silver model {silver[key]}, which the silver publish contract does not publish"
+        for name, node in sorted(gold_nodes(manifest).items())
+        for key in node["depends_on"]["nodes"]
+        if key in silver and silver[key] not in published
+    ]
+    return problems + [f"{name} is published but no silver model has that name" for name in sorted(set(published) - set(silver.values()))]
+
+
+def lineage_problems(contract: Contract, manifest: dict[str, Any], published: Collection[str]) -> list[str]:
     nodes = gold_nodes(manifest)
-    problems = []
+    problems = unpublished_silver_problems(manifest, published)
     dimension_names = {table.name for table in contract.dimensions}
     for name, node in sorted(nodes.items()):
         fact = next((item for item in contract.facts if item.name == name), None)

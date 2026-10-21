@@ -1,7 +1,7 @@
 ---
 title: Lakehouse usage
 description: Commands and checks for the launcher, bronze, staging, gold, silver validation, the run lock and the fixture kit.
-last_updated: 2026-10-15
+last_updated: 2026-10-20
 ---
 
 # Lakehouse usage
@@ -21,6 +21,25 @@ scripts/lakehouse/query.sh                                         # DuckDB shel
 .venv/bin/python -m scripts.lakehouse.run_gold_e2e                 # gold on the fixture; report: data/e2e/gold/
 .venv/bin/python -m scripts.lakehouse.run_launcher_e2e             # launcher scenarios with a fake Docker; report: data/e2e/launcher/
 ```
+
+## Writer principals
+
+Each publish layer writes the catalog as its own principal. Run each set-up once with the catalog up, before that layer's first real
+publish. `--dry-run` prints the requests and sends none. A rerun changes nothing and keeps the stored credentials.
+
+```sh
+.venv/bin/python -m scripts.lakehouse.gold_writer_setup --dry-run     # plan of the gold_writer principal (gold and gold_e2e)
+.venv/bin/python -m scripts.lakehouse.gold_writer_setup               # create it; credentials go to data/lakehouse/secrets/
+.venv/bin/python -m scripts.lakehouse.silver_writer_setup --dry-run   # plan of the silver_writer principal (silver and silver_e2e)
+.venv/bin/python -m scripts.lakehouse.silver_writer_setup             # create it; credentials go to data/lakehouse/secrets/
+.venv/bin/python -m scripts.lakehouse.run_gold_publish_e2e --mode writer_setup   # both set-ups against a stand-in Polaris; no Docker
+```
+
+A writer may create, read and write the tables of its own two namespaces and read the catalog's properties. It cannot touch the other
+layer's namespaces or bronze, manage the catalog, create or drop a namespace or drop a table. The root credentials make the set-up
+requests only. The writer's client ID and secret are stored in the owner-only credentials file and never printed. A job receives them
+only from the launcher (`POLARIS_GOLD_WRITER_CLIENT_ID` and `_SECRET`, `POLARIS_SILVER_WRITER_CLIENT_ID` and `_SECRET`). The shared
+requests are in `scripts/lakehouse/polaris_writer.py`.
 
 ## Launcher
 

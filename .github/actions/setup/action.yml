@@ -27,11 +27,11 @@ runs:
         cache: npm
         cache-dependency-path: scripts/quality/markdownlint/package-lock.json
 
-    # gofmt and go vet (scripts/quality/lint_sources.py) require exactly Go 1.27.1. The project has no go.sum, so no cache.
+    # gofmt and go vet (scripts/quality/lint_sources.py) require exactly Go 1.27.3. The project has no go.sum, so no cache.
     - name: Setup Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
-        go-version: "1.27.1"
+        go-version: "1.27.3"
         cache: false
 
     - name: Restore the dbt package archive

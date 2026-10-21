@@ -72,3 +72,4 @@ orphan tests/orchestration/fixtures/tiny/* -- dbt loads every model, test and pr
 
 unused-code scripts/orchestration/run_lineage_e2e.py -- http.server calls the synthetic receiver do_POST and log_message callbacks
 unused-code scripts/orchestration/run_lineage_launcher_e2e.py -- http.server calls the synthetic receiver do_POST and log_message callbacks
+unused-code scripts/orchestration/traffic_probe.py -- http.server dispatches Catalog.do_GET and Catalog.log_message by method name

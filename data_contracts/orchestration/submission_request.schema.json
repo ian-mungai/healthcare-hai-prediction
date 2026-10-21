@@ -14,6 +14,8 @@
     "template": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$"},
     "run_id": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"},
     "mode": {"enum": ["fixture", "publish_fixture", "real"]},
-    "attempt": {"type": "integer", "minimum": 1, "maximum": 99}
-  }
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 99},
+    "input_run_id": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"}
+  },
+  "allOf": [{"if": {"required": ["input_run_id"]}, "then": {"properties": {"template": {"const": "pin_silver"}}}}]
 }

@@ -17,6 +17,8 @@ RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 SHA256 = re.compile(r"[a-f0-9]{64}")
 RESULT_NAME = "consumer_result.json"
 READER_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
+# The Athena API returns a column name of 1 to 128 characters (Glue stores 255); Iceberg keeps column names in metadata files, not in PostgreSQL (63).
+IDENT_MAX = 128
 
 
 class PublishError(RuntimeError):

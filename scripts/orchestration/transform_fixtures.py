@@ -120,17 +120,17 @@ def prepare_checkout(folder: Path, extra_dags: dict[str, str] | None = None) -> 
     platform = json.loads(PLATFORM_FILE.read_text())
     shutil.copy2(ROOT / platform["compose"]["file"], folder / platform["compose"]["file"])
     shutil.copy2(ROOT / "scripts" / "orchestration" / "db_dump.py", folder / "scripts" / "orchestration" / "db_dump.py")
-    for name in ("__init__.py", "interface.py", "client.py"):
+    for name in ("__init__.py", "interface.py", "client.py", "dag_runtime.py"):
         shutil.copy2(ROOT / "orchestration" / name, folder / "orchestration" / name)
     shutil.copy2(ROOT / "dags" / "broker_probe_dag.py", folder / "dags" / "broker_probe_dag.py")
-    shutil.copy2(ROOT / "dags" / "transform_dag.py", folder / "dags" / "transform_dag.py")
+    shutil.copy2(ROOT / "tests/orchestration/fixtures/combined_dag.py", folder / "dags" / "transform_dag.py")
     for name, text in (extra_dags or {}).items():
         (folder / "dags" / name).write_text(text)
 
 
 def dag_variant(dag_id: str, replacements: list[tuple[str, str]]) -> str:
     """The text of ``dags/transform_dag.py`` as the DAG ``dag_id`` with each named text replaced once; a replacement that does not match fails loudly."""
-    text = (ROOT / "dags" / "transform_dag.py").read_text().replace('dag_id="transform_dag"', f'dag_id="{dag_id}"')
+    text = (ROOT / "tests/orchestration/fixtures/combined_dag.py").read_text().replace('dag_id="transform_dag"', f'dag_id="{dag_id}"')
     for old, new in replacements:
         if text.count(old) != 1:
             raise ValueError(f"the DAG text {old!r} occurs {text.count(old)} times, not once")

@@ -472,6 +472,13 @@ def hold_forever(env: Env) -> None:
     env.daemon.script = lambda container: None
 
 
+def catch_interrupt() -> Any:
+    """Make SIGINT raise ``KeyboardInterrupt`` here, even when the invoker left it ignored (a background job does); return the earlier handler."""
+    saved = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    return saved
+
+
 def orphan_names(env: Env) -> list[str]:
     """The names of containers the launcher disposed of as orphans."""
     return [str(item["name"]) for item in env.state()["launcher"].get("orphans", [])]
@@ -4347,6 +4354,202 @@ def facts(rendered: launcher.Rendered) -> dict[str, Any]:
     }
 
 
+def pipeline_hostname_checks(
+    renderer: launcher.Renderer,
+    registry_id: str,
+    values: dict[str, str],
+    run_folder: Path,
+    snapshot: Path,
+    pipeline: dict[str, Any],
+) -> tuple[dict[str, bool], dict[str, Any]]:
+    """Return offline Spark hostname checks and real create bodies for the render_templates case."""
+    checks: dict[str, bool] = {}
+    bodies: dict[str, Any] = {}
+    common_mounts = {
+        (str(renderer.checkout / "scripts"), "/workspace/scripts", True),
+        (str(renderer.checkout / "orchestration"), "/workspace/orchestration", True),
+        (str(renderer.checkout / "data_contracts/lakehouse"), "/workspace/data_contracts/lakehouse", True),
+        (str(run_folder), "/workspace/out", False),
+    }
+    local_mount = (str(pipeline["local_catalog"]), "/workspace/local_catalog", False)
+    common_args = ["--run", run_folder.name, "--mode", "publish_fixture"]
+    local_args = ["--local-warehouse", "/workspace/local_catalog/warehouse"]
+
+    def input_for(template: str, params: dict[str, Any], mode: str = "publish_fixture") -> launcher.RenderInput:
+        return launcher.RenderInput(
+            template,
+            "owner",
+            "hostname",
+            1,
+            1,
+            "op-hostname",
+            values,
+            2_000_000_600,
+            [],
+            params,
+            {"hai.registry_id": registry_id},
+            run_folder=run_folder,
+            snapshot=snapshot,
+            run_mode=mode,
+            pipeline=pipeline,
+        )
+
+    def observe(name: str, inp: launcher.RenderInput, network: str, mounts: set[tuple[str, str, bool]], offline_spark: bool) -> dict[str, Any]:
+        first = renderer.render(inp, registry_id)
+        second = renderer.render(inp, registry_id)
+        f = facts(first)
+        body, host = first.body, first.body["HostConfig"]
+        bodies[name] = body
+        prefix = f"pipeline hostname/{name}"
+        checks[f"{prefix}/repeatable"] = body == second.body
+        checks[f"{prefix}/hostname"] = body.get("Hostname") == "spark-job" if offline_spark else "Hostname" not in body
+        checks[f"{prefix}/loopback"] = host.get("ExtraHosts") == ["spark-job:127.0.0.1"] if offline_spark else "ExtraHosts" not in host
+        checks[f"{prefix}/network"] = host["NetworkMode"] == network
+        checks[f"{prefix}/mounts"] = f["mounts"] == mounts
+        checks[f"{prefix}/credential absence"] = not any(key.startswith(("AWS", "POLARIS")) or "TOKEN" in key or "SECRET" in key for key in f["env"])
+        checks[f"{prefix}/security"] = (
+            host["CapDrop"] == ["ALL"]
+            and host["SecurityOpt"] == ["no-new-privileges:true"]
+            and host["Init"] is True
+            and host["RestartPolicy"] == {"Name": "no"}
+            and host["AutoRemove"] is False
+            and host["Memory"] == int(values["JOB_MEMORY_LIMIT"])
+            and body["WorkingDir"] == "/workspace"
+            and not any(key in host for key in ("Dns", "DnsSearch", "DnsOptions", "PortBindings"))
+        )
+        return f
+
+    for job, module, args in (
+        ("pin_silver", "silver_publish", ["pin", *common_args, "--record", "/workspace/out/silver_pins.json"]),
+        ("read_silver", "silver_input", [*common_args, "--expected-pin-sha256", pipeline["silver_pin"]["sha256"]]),
+        ("record_silver_snapshot", "silver_publish", ["record", *common_args, "--record", "/workspace/out/silver_snapshot.json"]),
+        ("pin_bronze", "pins", ["pin", "--run", run_folder.name]),
+        ("verify_bronze", "pins", ["verify", "--run", run_folder.name]),
+    ):
+        mounts = common_mounts | {local_mount}
+        if job in ("pin_bronze", "verify_bronze"):
+            mounts |= {
+                (str(renderer.checkout / "config/lakehouse"), "/workspace/config/lakehouse", True),
+                (str(run_folder), f"/workspace/data/analytics/dbt/runs/{run_folder.name}", False),
+            }
+        name = f"snapshot/{job}"
+        f = observe(name, input_for("pipeline_spark", {"job": job}), "none", mounts, True)
+        checks[f"pipeline hostname/{name}/command"] = f["entrypoint"] == [launcher.DEADLINE_ENTRYPOINT, "python", "-m", f"scripts.lakehouse.{module}"] and f[
+            "cmd"
+        ] == [*args, *local_args]
+    for layer in ("silver", "gold"):
+        for step in ("candidates", "reconcile", "backup", "commit"):
+            name = f"publish/{layer}/{step}"
+            f = observe(name, input_for("pipeline_publish", {"layer": layer, "step": step}), "none", common_mounts | {local_mount}, True)
+            checks[f"pipeline hostname/{name}/command"] = f["entrypoint"] == [
+                launcher.DEADLINE_ENTRYPOINT,
+                "python",
+                "-m",
+                f"scripts.lakehouse.{layer}_publish",
+            ] and f["cmd"] == [
+                step,
+                *common_args,
+                "--sealed-sha256",
+                pipeline["layer_completions"][layer]["sha256"],
+                "--accepted-result-sha256",
+                hashlib.sha256(b"{}\n").hexdigest(),
+                *local_args,
+            ]
+    maintenance = input_for("pipeline_publish", {"layer": "gold", "step": "maintenance"})
+    f = observe("maintenance/gold", maintenance, "none", common_mounts | {local_mount}, True)
+    checks["pipeline hostname/maintenance/gold/command"] = f["entrypoint"] == [
+        launcher.DEADLINE_ENTRYPOINT,
+        "python",
+        "-m",
+        "scripts.lakehouse.gold_maintenance",
+    ] and f["cmd"] == [*common_args, "--protected", "/workspace/out/publish/protected.json", *local_args]
+    for layer in ("silver", "gold"):
+        observe(
+            f"non-Spark/build/{layer}",
+            input_for("pipeline_dbt", {"layer": layer}),
+            "none",
+            common_mounts | {(str(snapshot / "project"), "/workspace/dbt", True), (str(snapshot / "packages"), "/workspace/packages", True)},
+            False,
+        )
+        completion = pipeline["layer_completions"][layer]
+        observe(
+            f"non-Spark/export/{layer}",
+            input_for("pipeline_export", {"layer": layer}),
+            "none",
+            (common_mounts - {(str(run_folder), "/workspace/out", False)})
+            | {
+                (str(run_folder / completion["file"]), "/workspace/sealed/sealed.duckdb", True),
+                (str(run_folder / "publish"), "/workspace/out/publish", False),
+            },
+            False,
+        )
+    for role in ("offline", "lakehouse_read", "lakehouse_write"):
+        mounts = common_mounts - {(str(run_folder), "/workspace/out", False)}
+        if role != "offline":
+            mounts.add((str(run_folder / "network_sentinels" / f"{role}.txt"), "/run/class_sentinel", True))
+        observe(
+            f"non-Spark/probe/{role}",
+            input_for("pipeline_probe", {"class": role, "case": "traffic"}),
+            "none" if role == "offline" else pipeline["network"]["names"][role],
+            mounts,
+            False,
+        )
+    networked = replace(
+        input_for("pipeline_spark", {"job": "pin_silver"}, "real"),
+        values={
+            **values,
+            "AWS_REGION": "synthetic-region",
+            "PIPELINE_READER_AWS_PROFILE": "synthetic-profile",
+            "POLARIS_READER_CLIENT_ID": "unused-synthetic-id",
+            "POLARIS_READER_CLIENT_SECRET": "unused-synthetic-placeholder",
+        },
+    )
+    with mock.patch.object(launcher.pipeline_render, "apply_credentials", return_value=None) as injector:
+        observe("networked Spark/pin_silver", networked, pipeline["network"]["names"]["lakehouse_read"], common_mounts, False)
+        checks["pipeline hostname/networked Spark/credential boundary reached"] = injector.call_count == 2
+
+    commit = input_for("pipeline_publish", {"layer": "gold", "step": "commit"})
+    bad_export = {**pipeline, "layer_exports": {**pipeline["layer_exports"], "gold": {**pipeline["layer_exports"]["gold"], "sha256": "f" * 64}}}
+    invalid = (
+        ("missing run", replace(maintenance, run_folder=None), "a pipeline job requires a publish-mode run and no caller command"),
+        (
+            "wrong mode",
+            replace(
+                maintenance,
+                run_mode="fixture",
+                values={
+                    **values,
+                    "AWS_REGION": "synthetic-region",
+                    "PIPELINE_WRITER_AWS_PROFILE": "synthetic-profile",
+                    "POLARIS_GOLD_WRITER_CLIENT_ID": "unused-synthetic-id",
+                    "POLARIS_GOLD_WRITER_CLIENT_SECRET": "unused-synthetic-placeholder",
+                },
+            ),
+            "a pipeline job requires a publish-mode run and no caller command",
+        ),
+        ("caller command", replace(maintenance, args=["--caller-command"]), "a pipeline job requires a publish-mode run and no caller command"),
+        ("wrong registry kind", replace(maintenance, pipeline={**pipeline, "registry_kind": "real"}), "publish_fixture requires a test registry"),
+        ("unknown publication step", replace(maintenance, params={"layer": "gold", "step": "unknown"}), "the publication step is unknown"),
+        ("unsupported silver maintenance", replace(maintenance, params={"layer": "silver", "step": "maintenance"}), "only gold maintenance is supported"),
+        ("unknown snapshot job", input_for("pipeline_spark", {"job": "unknown"}), "the snapshot job is unknown"),
+        ("missing completion", replace(commit, pipeline={**pipeline, "layer_completions": {}}), "the layer has no accepted completion in this run generation"),
+        ("stale generation", replace(commit, generation=2), "the layer has no accepted completion in this run generation"),
+        ("missing export", replace(commit, pipeline={**pipeline, "layer_exports": {}}), "the layer has no accepted export in this generation"),
+        ("changed export digest", replace(commit, pipeline=bad_export), "the accepted export result changed"),
+    )
+    bodies["refusals"] = {}
+    for name, inp, message in invalid:
+        try:
+            renderer.render(inp, registry_id)
+        except launcher.LauncherError as error:
+            bodies["refusals"][name] = {"code": error.code, "message": str(error)}
+            checks[f"pipeline hostname/refuses/{name}"] = error.code == "spec" and message in str(error)
+        else:
+            bodies["refusals"][name] = {"code": "not refused", "message": ""}
+            checks[f"pipeline hostname/refuses/{name}"] = False
+    return checks, bodies
+
+
 @case("render_templates")
 def render_templates(env: Env) -> dict[str, bool]:
     """916: each template's effective specification against docker-compose.yaml and the template table (fake Docker; nothing is started)."""
@@ -4733,27 +4936,131 @@ def render_templates(env: Env) -> dict[str, bool]:
         and not (incomplete / "dumps").exists()
         and not (incomplete / "private").exists()
     )
-    out["every template of the table was rendered"] = set(launcher.TEMPLATES) - {"orchestration_service", "orchestration_check", "orchestration_dump"} <= {
-        "lineage_service",
-        "lineage_dump",
-        "fixture_dbt",
-        "fixture_init",
-        "duckdb_helper",
-        "dbt_deps",
-        "quality_validate",
-        "quality_reconcile",
-        "query_reader",
-        "ui_reader",
-        "real_dbt",
-        "sealed_consumer",
-        "spark_read",
-        "spark_write",
-        "spark_e2e",
-        "gold_export",
-        "gold_publish",
-        "catalog_service",
-        "probe",
+    from orchestration import network_policy
+
+    pipeline_rendered: set[str] = set()
+    names = network_policy.names(registry_id, PINS_RUN)
+    layer_completion = {**completion, "run_id": PINS_RUN, "generation": 1}
+    pipeline = {
+        "registry_kind": "test",
+        "source_sha256": "b" * 64,
+        "bronze_sha256": "c" * 64,
+        "silver_pin": {"sha256": "c" * 64},
+        "silver_input": {"pins_sha256": "c" * 64, "sha256": "e" * 64},
+        "layer_completions": {layer: layer_completion for layer in ("silver", "gold")},
+        "layer_exports": {layer: {"sha256": accepted, "sealed_sha256": sealed_sha, "generation": 1} for layer in ("silver", "gold")},
+        "local_catalog": str(env.work / "pipeline_catalog"),
+        "network": {"phase": "ready", "names": names},
     }
+
+    def pipeline_facts(name: str, params: dict[str, Any]) -> dict[str, Any]:
+        found = render(name, [], params, run_folder=run_folder, snapshot=snapshot, run_mode="publish_fixture", pipeline=pipeline)
+        pipeline_rendered.add(name)
+        return found
+
+    def credential_free(found: dict[str, Any]) -> bool:
+        return not any(name.startswith(("AWS", "POLARIS")) for name in found["env"])
+
+    f = pipeline_facts("pipeline_dbt", {"layer": "silver"})
+    out["pipeline_dbt"] = (
+        f["entrypoint"] == wrapped(["python", "-m", "scripts.lakehouse.pipeline_build"])
+        and f["network"] == "none"
+        and (str(snapshot / "project"), "/workspace/dbt", True) in f["mounts"]
+        and (str(snapshot / "packages"), "/workspace/packages", True) in f["mounts"]
+        and f["cmd"][f["cmd"].index("--source-sha256") + 1] == pipeline["source_sha256"]
+        and credential_free(f)
+    )
+    f = pipeline_facts("pipeline_spark", {"job": "pin_silver"})
+    out["pipeline_spark"] = (
+        f["entrypoint"] == wrapped(["python", "-m", "scripts.lakehouse.silver_publish"])
+        and f["cmd"][:1] == ["pin"]
+        and f["network"] == "none"
+        and (pipeline["local_catalog"], "/workspace/local_catalog", False) in f["mounts"]
+        and credential_free(f)
+    )
+    f = pipeline_facts("pipeline_export", {"layer": "gold"})
+    out["pipeline_export"] = (
+        f["entrypoint"] == wrapped(["python", "-m", "scripts.lakehouse.gold_export"])
+        and f["network"] == "none"
+        and (str(run_folder / completion["file"]), "/workspace/sealed/sealed.duckdb", True) in f["mounts"]
+        and (str(run_folder), "/workspace/out", False) not in f["mounts"]
+        and credential_free(f)
+    )
+    f = pipeline_facts("pipeline_publish", {"layer": "gold", "step": "commit"})
+    out["pipeline_publish"] = (
+        f["entrypoint"] == wrapped(["python", "-m", "scripts.lakehouse.gold_publish"])
+        and f["cmd"][:1] == ["commit"]
+        and f["network"] == "none"
+        and f["cmd"][f["cmd"].index("--accepted-result-sha256") + 1] == accepted
+        and credential_free(f)
+    )
+    hostname_checks, _ = pipeline_hostname_checks(renderer, registry_id, values, run_folder, snapshot, pipeline)
+    out.update(hostname_checks)
+    for kind in ("silver", "gold", "cross"):
+        name = f"pipeline_validate_{kind}"
+        f = pipeline_facts(
+            name,
+            {
+                "database": str(run_folder / "staging.duckdb"),
+                "build_root": str(run_folder),
+                "suites_host": str(suites),
+                "baselines_host": str(baselines),
+                "out_host": str(case_folder),
+            },
+        )
+        out[name] = (
+            f["entrypoint"] == wrapped(["python", "-m", "scripts.lakehouse.pipeline_quality"])
+            and f["cmd"][:2] == ["--kind", kind]
+            and f["network"] == "none"
+            and (str(ROOT / "orchestration"), "/workspace/orchestration", True) in f["mounts"]
+            and credential_free(f)
+        )
+    for role in (*network_policy.CLASSES, "offline"):
+        f = pipeline_facts("pipeline_probe", {"class": role, "case": "traffic"})
+        out[f"pipeline_probe/{role}"] = (
+            f["entrypoint"] == wrapped(["python", "-m", "scripts.orchestration.traffic_probe"])
+            and f["network"] == ("none" if role == "offline" else names[role])
+            and (str(run_folder), "/workspace/out", False) not in f["mounts"]
+            and credential_free(f)
+            and (role == "offline" or (str(run_folder / "network_sentinels" / f"{role}.txt"), "/run/class_sentinel", True) in f["mounts"])
+        )
+    f = pipeline_facts("pipeline_proxy", {"run_id": PINS_RUN})
+    out["pipeline_proxy"] = (
+        f["image"] == network_policy.PROXY_IMAGE
+        and f["entrypoint"] == ["/usr/sbin/squid"]
+        and f["network"] == names["egress"]
+        and set(f["body"]["NetworkingConfig"]["EndpointsConfig"]) == {names["egress"]}
+        and f["joins"] == {names[role]: [network_policy.PROXY_ALIAS] for role in network_policy.CLASSES}
+        and f["body"]["User"] == "13:13"
+        and f["body"]["HostConfig"]["CapDrop"] == ["ALL"]
+        and f["body"]["HostConfig"]["SecurityOpt"] == ["no-new-privileges:true"]
+        and credential_free(f)
+    )
+    out["every template of the table was rendered"] = (
+        set(launcher.TEMPLATES) - {"orchestration_service", "orchestration_check", "orchestration_dump"}
+        <= {
+            "lineage_service",
+            "lineage_dump",
+            "fixture_dbt",
+            "fixture_init",
+            "duckdb_helper",
+            "dbt_deps",
+            "quality_validate",
+            "quality_reconcile",
+            "query_reader",
+            "ui_reader",
+            "real_dbt",
+            "sealed_consumer",
+            "spark_read",
+            "spark_write",
+            "spark_e2e",
+            "gold_export",
+            "gold_publish",
+            "catalog_service",
+            "probe",
+        }
+        | pipeline_rendered
+    )
     return out
 
 
@@ -5956,7 +6263,7 @@ def staging_pool_interrupt(env: Env) -> dict[str, bool]:
     staging.launcher_client = lambda: fault_client
     names = ["l1a_pool_a", "l1a_pool_b"]
     jobs = [(name, tuple(staging.BASE), frozenset[str]()) for name in names]
-    saved_sigint = signal.getsignal(signal.SIGINT)
+    saved_sigint = catch_interrupt()
     gate = env.daemon.add_gate("remove", "before")  # one removal stays unresolved while the pool is interrupted
     interrupted: list[BaseException] = []
     observed: dict[str, Any] = {}
@@ -6029,7 +6336,7 @@ def staging_pool_cancel_unresolved(env: Env) -> dict[str, bool]:
     fault_client = PoolFaultClient(env.config)
     fault_client.fault, fault_client.failed, fault_client.acknowledged = str(env.settings.get("pool_fault", "unavailable")), set(), []
     staging.launcher_client = lambda: fault_client
-    saved_sigint = signal.getsignal(signal.SIGINT)
+    saved_sigint = catch_interrupt()
     returned = threading.Event()
     observed: dict[str, Any] = {}
     names = ["l1a_unresolved_a", "l1a_unresolved_b"]
@@ -6099,7 +6406,7 @@ def staging_pool_launcher_gone(env: Env) -> dict[str, bool]:
     fault_client = PoolFaultClient(env.config)
     fault_client.fault, fault_client.failed, fault_client.acknowledged = "gone_after_cancel", set(), []
     staging.launcher_client = lambda: fault_client
-    saved_sigint = signal.getsignal(signal.SIGINT)
+    saved_sigint = catch_interrupt()
     returned = threading.Event()
     observed: dict[str, Any] = {}
     names = ["l1a_gone_a", "l1a_gone_b"]
@@ -6164,7 +6471,7 @@ def staging_pool_removal_held(env: Env) -> dict[str, bool]:
     pool_client = PoolFaultClient(env.config)
     pool_client.fault, pool_client.failed, pool_client.acknowledged = "", set(), []
     staging.launcher_client = lambda: pool_client
-    saved_sigint = signal.getsignal(signal.SIGINT)
+    saved_sigint = catch_interrupt()
     returned = threading.Event()
     observed: dict[str, Any] = {}
     names = ["l1a_removal_a", "l1a_removal_b"]

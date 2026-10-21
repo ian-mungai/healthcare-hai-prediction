@@ -296,7 +296,7 @@
       "occurrences": 1,
       "file_sha256": "8326208a4259e96c48245a2f16b838785141c2692345c5b09526bed9904fe465",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:e0d9e6e522e0764959139aefa307130354278320157257798ee82931776a0fe2",
+        "orchestration/launcher.py": "sha256:c269224418e296f7655851fcc97552927558544fd56f7affc4ff2e383efe8350",
         "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
         "scripts/lakehouse/catalog.py": "sha256:641e1e747a4760e17690f122209b138432d9a6fe44c5e5c71c2a5696df0d5771",
         "scripts/lakehouse/checksums.py": "sha256:33100f77c34e1196e98ffa8dbf464ddda1819314979ff9a0e9d0c6be618e6df4",
@@ -316,7 +316,7 @@
       "occurrences": 1,
       "file_sha256": "8326208a4259e96c48245a2f16b838785141c2692345c5b09526bed9904fe465",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:e0d9e6e522e0764959139aefa307130354278320157257798ee82931776a0fe2",
+        "orchestration/launcher.py": "sha256:c269224418e296f7655851fcc97552927558544fd56f7affc4ff2e383efe8350",
         "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
         "scripts/lakehouse/catalog.py": "sha256:641e1e747a4760e17690f122209b138432d9a6fe44c5e5c71c2a5696df0d5771",
         "scripts/lakehouse/checksums.py": "sha256:33100f77c34e1196e98ffa8dbf464ddda1819314979ff9a0e9d0c6be618e6df4",
@@ -336,7 +336,7 @@
       "occurrences": 1,
       "file_sha256": "8326208a4259e96c48245a2f16b838785141c2692345c5b09526bed9904fe465",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:e0d9e6e522e0764959139aefa307130354278320157257798ee82931776a0fe2",
+        "orchestration/launcher.py": "sha256:c269224418e296f7655851fcc97552927558544fd56f7affc4ff2e383efe8350",
         "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
         "scripts/lakehouse/catalog.py": "sha256:641e1e747a4760e17690f122209b138432d9a6fe44c5e5c71c2a5696df0d5771",
         "scripts/lakehouse/checksums.py": "sha256:33100f77c34e1196e98ffa8dbf464ddda1819314979ff9a0e9d0c6be618e6df4",
@@ -350,13 +350,14 @@
     },
     {
       "path": "scripts/lakehouse/run_launcher_e2e.py",
-      "line": 2497,
+      "line": 2504,
       "code_sha256": "31df13bbd38b806ec10b83328e469066a44abb27722e6e02f3effa919c07c797",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "258bd9c0bd2c55063d0e1ddfdfb8af379553914832ff91be41a45859d0278775",
+      "file_sha256": "2129da2f8b56e0060d11a08ab544b24bfbc88b626b469b536a1cae7cf3979f34",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:e0d9e6e522e0764959139aefa307130354278320157257798ee82931776a0fe2",
+        "orchestration/launcher.py": "sha256:c269224418e296f7655851fcc97552927558544fd56f7affc4ff2e383efe8350",
+        "orchestration/network_policy.py": "sha256:26862fe808c9758d93e0c592f4eda1113b3b6a3a2921d402f88f7bd45f328400",
         "scripts/lakehouse/catalog.py": "sha256:641e1e747a4760e17690f122209b138432d9a6fe44c5e5c71c2a5696df0d5771",
         "scripts/lakehouse/dbt_package_archive.py": "sha256:a508b5d491d2b50fe617c587650285bf697d66563cd898430f738820ba0fed71",
         "scripts/lakehouse/fake_docker.py": "sha256:5217689406670c20ff948516a40d7efd9c8aabc57f7fb42ffd848d7bc4d3281a",
@@ -384,8 +385,8 @@
       "occurrences": 1,
       "file_sha256": "dd8eabf98f0f808050b9ff4b8da792a27338d263c06cea50de329aa5a74c8ab3",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:e0d9e6e522e0764959139aefa307130354278320157257798ee82931776a0fe2",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:258bd9c0bd2c55063d0e1ddfdfb8af379553914832ff91be41a45859d0278775",
+        "orchestration/launcher.py": "sha256:c269224418e296f7655851fcc97552927558544fd56f7affc4ff2e383efe8350",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:2129da2f8b56e0060d11a08ab544b24bfbc88b626b469b536a1cae7cf3979f34",
         "scripts/lakehouse/run_lock.py": "sha256:db8f8a9ca0d9eae74da96979933cbdd002e671e933b6054372fba6e55e5e3225",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
@@ -450,7 +451,7 @@
       "code_sha256": "f358f8cea2df557bf32cdaf6b4dc0246232da9aa20916194c11c4bbbbe384b12",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
+      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
@@ -463,7 +464,7 @@
       "code_sha256": "965b2fb24fba80e1b4dc15abfb79a40639337d8a6bd307be3a3d50b9a3338de1",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
+      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
@@ -476,7 +477,7 @@
       "code_sha256": "fd40c94d9e9392559ff22762cc4cb941caae9d997df0daaab37ed1fdc83855f3",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
+      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
@@ -489,7 +490,7 @@
       "code_sha256": "f8c56d974f57abe387f78f0bef9bbf3b8eef1ad258f002599ef6a36441d701a7",
       "problem": "whose program the check cannot prove",
       "occurrences": 2,
-      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
+      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
@@ -502,12 +503,12 @@
       "code_sha256": "d75274826882b437b689d5b81193a2f97388dbc7fe9fa2dfe757f94933685050",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
+      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
       },
-      "reason": "runs gofmt from the folder of the verified Go 1.27.1 program with -l"
+      "reason": "runs gofmt from the folder of the verified Go 1.27.3 program with -l"
     },
     {
       "path": "scripts/quality/lint_sources.py",
@@ -515,7 +516,7 @@
       "code_sha256": "cff80cdc4d10023eadcab151ee1587c2fa228a6a33f7ddf690876b575403b4b5",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
+      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
@@ -528,7 +529,7 @@
       "code_sha256": "1893430c33b623d1bbcc9424e6727d2ca17af3dc51718382c93583a4e8bbdef9",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
+      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
@@ -541,7 +542,7 @@
       "code_sha256": "5a40e40360800053230faed6c6757add11e7596eff8d6184c10034c5b8532ec0",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "b5583ff495552741c4618cbd254c6f9c428e68fd0db85d9929eb226f5785148e",
+      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"

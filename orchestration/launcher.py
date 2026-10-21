@@ -40,6 +40,7 @@ import re
 import secrets
 import selectors
 import shutil
+import signal
 import socket
 import stat
 import struct
@@ -59,13 +60,14 @@ from typing import Any, NoReturn
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from orchestration import dbt_lineage, lineage_services
+from orchestration import dbt_lineage, lineage_services, network_policy, pipeline_protocol, pipeline_render
 from scripts.lakehouse import dbt_package_archive, gold_publish_record, memory_budget, pins, run_lock
 from scripts.lakehouse import provenance as build_provenance
 from scripts.process import run_command
 
 PROTOCOL = 1
 REFUSED_EXIT, ERROR_EXIT, DEGRADED_EXIT = 3, 4, 5
+NETWORK_CLASSES_ENFORCED = network_policy.CLASSES
 LABEL_REGISTRY = "hai.registry_id"
 LABEL_RUN = run_lock.CONTAINER_LABEL
 LABEL_ALLOCATION = "hai.allocation"
@@ -581,12 +583,20 @@ class DockerApi:
         return list(self.call("GET", "/networks?filters=" + _quote(self.filters(label=[label]))) or [])
 
     def create_network(self, name: str, labels: dict[str, str], *, internal: bool = False) -> str:
-        """Create a bridge network with labels and return its ID."""
+        """Create a bridge network with explicit isolation and ownership labels."""
         return str(
             self.call(
                 "POST",
                 "/networks/create",
-                {"Name": name, "Driver": "bridge", "Labels": labels, "CheckDuplicate": True, **({"Internal": True} if internal else {})},
+                {
+                    "Name": name,
+                    "Driver": "bridge",
+                    "Labels": labels,
+                    "Internal": internal,
+                    "EnableIPv6": False,
+                    "Options": {"com.docker.network.bridge.gateway_mode_ipv4": "isolated"} if internal else {},
+                    "CheckDuplicate": True,
+                },
                 ok=(201,),
             )["Id"]
         )
@@ -700,6 +710,10 @@ COMPOSE_ENV_NAMES = (
     "POLARIS_READER_CLIENT_SECRET",
     "POLARIS_GOLD_WRITER_CLIENT_ID",
     "POLARIS_GOLD_WRITER_CLIENT_SECRET",
+    "POLARIS_SILVER_WRITER_CLIENT_ID",
+    "POLARIS_SILVER_WRITER_CLIENT_SECRET",
+    "PIPELINE_READER_AWS_PROFILE",
+    "PIPELINE_WRITER_AWS_PROFILE",
     "AWS_PROFILE",
     "AWS_REGION",
     "POLARIS_MEMORY_LIMIT",
@@ -928,6 +942,11 @@ def projection(
         "memory": int(host.get("Memory") or 0),
         "mounts": mounts,
         "network": host.get("NetworkMode") or "default",
+        **(
+            {"attached_networks": sorted((body.get("NetworkingConfig") or {}).get("EndpointsConfig") or {host.get("NetworkMode"): {}})}
+            if (body.get("Labels") or {}).get(network_policy.LABEL_CLASS)
+            else {}
+        ),
         "init": bool(host.get("Init")),
         "restart": str((host.get("RestartPolicy") or {}).get("Name") or ""),
         "auto_remove": bool(host.get("AutoRemove")),
@@ -967,6 +986,7 @@ def inspected_projection(info: Mapping[str, Any], spec: Mapping[str, Any], key: 
         "memory": int(host.get("Memory") or 0),
         "mounts": mounts,
         "network": host.get("NetworkMode") or "default",
+        **({"attached_networks": sorted((info.get("NetworkSettings") or {}).get("Networks") or {})} if "attached_networks" in spec else {}),
         "init": bool(host.get("Init")),
         "restart": str((host.get("RestartPolicy") or {}).get("Name") or ""),
         "auto_remove": bool(host.get("AutoRemove")),
@@ -1034,6 +1054,16 @@ TEMPLATES: dict[str, Template] = {
         Template("spark_read", "spark", True, ("run",), needs_catalog=True, default_seconds=7200, run_domains=("transform",)),
         Template("spark_write", "spark", True, ("run",), needs_catalog=True, default_seconds=43200, run_modes=("real",)),
         Template("spark_e2e", "spark", True, ("alloc",), default_seconds=7200),
+        Template("pipeline_dbt", "analytics-dbt", True, ("run",), run_domains=("transform",), run_modes=("publish_fixture", "real")),
+        Template("pipeline_spark", "spark", True, ("run",), run_domains=("transform",), run_modes=("publish_fixture", "real")),
+        Template("pipeline_export", "quality", True, ("run",), run_domains=("transform",), run_modes=("publish_fixture", "real")),
+        Template("pipeline_publish", "spark", True, ("run",), run_domains=("transform",), run_modes=("publish_fixture", "real")),
+        Template("pipeline_probe", "analytics-dbt", True, ("run",), run_domains=("transform",), run_modes=("publish_fixture",)),
+        Template("pipeline_proxy", None, False, ("service",)),
+        *(
+            Template(f"pipeline_validate_{layer}", "quality", True, ("run",), run_domains=("transform",), run_modes=("publish_fixture", "real"))
+            for layer in ("silver", "gold", "cross")
+        ),
         Template("gold_export", "quality", True, ("alloc", "run"), default_seconds=3600, run_domains=("transform",), run_modes=("publish_fixture", "real")),
         Template(
             "gold_publish",
@@ -1377,6 +1407,7 @@ class RenderInput:
     completion: Mapping[str, Any] | None = None
     run_mode: str = ""
     accepted_result: str = ""
+    pipeline: Mapping[str, Any] = field(default_factory=dict)
 
 
 class Renderer:
@@ -1404,6 +1435,13 @@ class Renderer:
             "spark_read": self.render_spark_read,
             "spark_write": self.render_spark_write,
             "spark_e2e": self.render_spark_e2e,
+            "pipeline_dbt": self.render_pipeline,
+            **{f"pipeline_validate_{layer}": self.render_pipeline_validate for layer in ("silver", "gold", "cross")},
+            "pipeline_spark": self.render_pipeline,
+            "pipeline_export": self.render_pipeline,
+            "pipeline_publish": self.render_pipeline,
+            "pipeline_probe": self.render_pipeline,
+            "pipeline_proxy": self.render_pipeline_proxy,
             "gold_export": self.render_gold_export,
             "gold_publish": self.render_gold_publish,
             "probe": self.render_probe,
@@ -2044,6 +2082,106 @@ class Renderer:
         """Throwaway-catalog jobs on a private network."""
         return self.render_spark(inp, name, registry_id, False)
 
+    def render_pipeline_validate(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """Run the fixed layer gate with a digest receipt bound to its successful process."""
+        layer = inp.template.removeprefix("pipeline_validate_")
+        contracts = self.checkout / "data_contracts"
+        contract = Mount(str(contracts / "lakehouse"), "/workspace/data_contracts/lakehouse", True)
+        rendered = self.render_quality_validate(
+            inp,
+            template,
+            name,
+            registry_id,
+            "scripts.lakehouse.pipeline_quality",
+            (Mount(str(self.checkout / "orchestration"), "/workspace/orchestration", True), *((contract,) if layer == "cross" else ())),
+        )
+        rendered.body["Cmd"][:0] = ["--kind", layer]
+        return rendered
+
+    def render_pipeline(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """Render a fixed layer job from authoritative source, pin, seal and export metadata."""
+        try:
+            values = self.compose_values(pipeline_render.needed_values(inp.template, dict(inp.params), inp.run_mode), inp.values)
+            spec = pipeline_render.build(inp, self.checkout, self.config.lakehouse_state / "pipeline_auth", values)
+        except (pipeline_protocol.PipelineError, ValueError, KeyError, OSError) as error:
+            raise LauncherError(f"pipeline specification refused: {type(error).__name__}: {error}", "spec") from None
+        mounts = [Mount(*parts) for parts in spec.mounts]
+        if inp.template == "pipeline_probe":
+            if inp.pipeline.get("registry_kind") != "test":
+                raise LauncherError("traffic probes require a test registry", "spec")
+            if inp.run_folder is None:
+                raise LauncherError("the traffic probe has no run folder", "spec")
+            selected = str(inp.params["class"])
+            if selected != "offline":
+                marker = inp.run_folder / "network_sentinels" / f"{selected}.txt"
+                mounts.append(Mount(str(marker), "/run/class_sentinel", True))
+        labels = {network_policy.LABEL_CLASS: spec.network_class} if spec.network_class != "offline" else {}
+        rendered = self.assemble(
+            inp,
+            name,
+            self.image(spec.service),
+            ["python", "-m", spec.module],
+            spec.arguments,
+            spec.environment,
+            mounts,
+            int(inp.values["JOB_MEMORY_LIMIT"]),
+            spec.network,
+            workdir="/workspace",
+            extra_labels=labels,
+            hostname="spark-job" if spec.service == "spark" and spec.network == "none" else "",
+            cap_drop=("ALL",),
+            security_opt=("no-new-privileges:true",),
+        )
+        if inp.template == "pipeline_probe" and inp.params["case"] == "catalog":
+            if inp.params["class"] != "lakehouse_read":
+                raise LauncherError("the synthetic catalog uses the fixed read class", "spec")
+            networks = inp.pipeline["network"]["names"]
+            self.attach_networks(rendered, {networks[role]: ["polaris"] for role in network_policy.CLASSES})
+        return rendered
+
+    @staticmethod
+    def attach_networks(rendered: Rendered, memberships: Mapping[str, Sequence[str]]) -> None:
+        """Put a container on several networks under aliases: it is created on the first and joined to the others before it starts.
+
+        API v1.43 creates a container on one network only, so every multi-network container (the lineage API, the proxy and the synthetic catalog)
+        takes this one path. The first network must be the container's network mode.
+        """
+        first, *others = memberships
+        if rendered.body["HostConfig"]["NetworkMode"] != first:
+            raise LauncherError("the first network of a multi-network container must be its network mode", "spec")
+        rendered.body["NetworkingConfig"] = {"EndpointsConfig": {first: {"Aliases": list(memberships[first])}}}
+        rendered.joins.update({network: list(memberships[network]) for network in others})
+
+    def render_pipeline_proxy(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """Render the credential-free proxy on only this run's two internal networks and its egress network."""
+        if inp.run_folder is None or set(inp.params) != {"run_id"} or inp.params["run_id"] != inp.run_folder.name:
+            raise LauncherError("the proxy has no owned run", "spec")
+        network = inp.pipeline.get("network", {})
+        if network.get("phase") not in ("networks_ready", "ready"):
+            raise LauncherError("the proxy networks are not ready", "spec")
+        names = network["names"]
+        name = f"hai-{registry_id[:8]}-svc-egress-{inp.run_folder.name.lower()}"
+        mounts = [Mount(str(inp.run_folder / "egress/squid.conf"), "/etc/squid/squid.conf", True)]
+        rendered = self.assemble(
+            inp,
+            name,
+            network_policy.PROXY_IMAGE,
+            ["/usr/sbin/squid"],
+            ["-f", "/etc/squid/squid.conf", "-NYC"],
+            {},
+            mounts,
+            int(inp.values["JOB_MEMORY_LIMIT"]),
+            names["egress"],
+            finite=False,
+            user="13:13",
+            tmpfs=("/run/squid",),
+            cap_drop=("ALL",),
+            security_opt=("no-new-privileges:true",),
+            extra_labels={network_policy.LABEL_CLASS: "proxy"},
+        )
+        self.attach_networks(rendered, {names[role]: [network_policy.PROXY_ALIAS] for role in ("egress", *network_policy.CLASSES)})
+        return rendered
+
     def render_gold_export(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
         """The consumer of the sealed copy (D1 section 10 item 6): it hashes the mounted file in the container and exports only on the expected digest.
 
@@ -2619,6 +2757,18 @@ METHODS: dict[str, MethodSpec] = {
     "register_set": MethodSpec(("any",)),
     "deregister_set": MethodSpec(("any",), owner_flag=False),
     "catalog_up": MethodSpec(("any",)),
+    "pipeline_catalog_up": MethodSpec(("run",)),
+    "pipeline_catalog_release": MethodSpec(("run",)),
+    "pipeline_network_up": MethodSpec(("run",)),
+    "pipeline_network_down": MethodSpec(("run",)),
+    "pipeline_reserve_silver": MethodSpec(("run",)),
+    "pipeline_accept_seal": MethodSpec(("run",)),
+    "pipeline_accept_export": MethodSpec(("run",)),
+    "pipeline_accept_pin": MethodSpec(("run",)),
+    "pipeline_accept_input": MethodSpec(("run",)),
+    "pipeline_fixture_pin": MethodSpec(("run",)),
+    "pipeline_fixture_verify": MethodSpec(("run",)),
+    "pipeline_test_catalog": MethodSpec(("run",)),
     "catalog_down": MethodSpec(("any",)),
     "lineage_up": MethodSpec(("any",)),
     "lineage_down": MethodSpec(("any",)),
@@ -2787,6 +2937,7 @@ class Launcher:
             "alloclist": self.on_alloclist,
             "alloclist_dead": self.on_alloclist_dead,
             "cataloglimits": self.on_cataloglimits,
+            "pipeline_net": self.on_pipeline_net,
             "netcreate": self.on_netcreate,
             "health": self.on_health,
             "netremove": self.on_netremove,
@@ -2837,6 +2988,18 @@ class Launcher:
             "register_set": self.m_register_set,
             "deregister_set": self.m_deregister_set,
             "catalog_up": self.m_catalog_up,
+            "pipeline_catalog_up": self.m_pipeline_catalog_up,
+            "pipeline_catalog_release": self.m_pipeline_catalog_release,
+            "pipeline_network_up": self.m_pipeline_network_up,
+            "pipeline_network_down": self.m_pipeline_network_down,
+            "pipeline_reserve_silver": self.m_pipeline_reserve_silver,
+            "pipeline_accept_seal": self.m_pipeline_accept_seal,
+            "pipeline_accept_export": self.m_pipeline_accept_export,
+            "pipeline_accept_pin": self.m_pipeline_accept_pin,
+            "pipeline_accept_input": self.m_pipeline_accept_input,
+            "pipeline_fixture_pin": self.m_pipeline_fixture_pin,
+            "pipeline_fixture_verify": self.m_pipeline_fixture_verify,
+            "pipeline_test_catalog": self.m_pipeline_test_catalog,
             "catalog_down": self.m_catalog_down,
             "lineage_up": self.m_lineage_up,
             "lineage_down": self.m_lineage_down,
@@ -3635,6 +3798,8 @@ class Launcher:
                 return f"template {template_name} needs a run of domain {' or '.join(domains)}; run {ident} is a {run['domain']} run"
             if template.run_modes is not None and run["mode"] not in template.run_modes:
                 return f"template {template_name} needs a run of mode {' or '.join(template.run_modes)}; run {ident} is a {run['mode']} run"
+            if template_name == "pipeline_dbt" and params.get("layer") in run.get("layer_completions", {}):
+                return "an accepted layer seal refuses a further build in this generation"
             if template_name in ("gold_export", "gold_publish"):
                 return Launcher.gold_problem(state, ident, run, template_name, params)
             if template_name == "spark_write":
@@ -3684,6 +3849,14 @@ class Launcher:
         if kind == "stack":
             stack = state["launcher"].get(ident) or {} if ident in ("orchestration", "lineage") else {}
             return stack.get("phase") in ("starting", "up") and not state["launcher"].get("restart")
+        if kind == "service" and ident.startswith("pipeline:"):
+            run = state["runs"].get(ident.removeprefix("pipeline:"))
+            return (
+                run is not None
+                and run["state"] in ("held", "finalizing")
+                and run.get("generation", 1) == attempt.get("generation")
+                and run.get("pipeline_network", {}).get("phase") in ("networks_ready", "ready")
+            )
         if kind == "service":
             catalog = state["launcher"].get("catalog") or {}
             # A launcher outside the catalog's checkout sends no positive catalog-service operation; cleanup stays allowed (A86, review C3a-1).
@@ -3825,8 +3998,9 @@ class Launcher:
         if kind == "run":
             run_folder = self.cfg.runs_root / ident
             run_folder.mkdir(parents=True, exist_ok=True)
-            if attempt["template"] == "real_dbt":
-                provenance = provenance_vars(state["runs"][ident])
+            if attempt["template"] in ("real_dbt", "pipeline_dbt"):
+                if attempt["template"] == "real_dbt" or (attempt["params"].get("layer") == "silver" and state["runs"][ident]["mode"] == "real"):
+                    provenance = provenance_vars(state["runs"][ident])
                 pointer = state["runs"][ident].get("snapshot")
                 if pointer is None:
                     raise LauncherError("the run has no complete snapshot", "spec")
@@ -3839,7 +4013,16 @@ class Launcher:
             sealed_id = str(attempt["params"][build_provenance.SEALED_RUN_PARAM])
             provenance = self.sealed_reader_vars(state, sealed_id)
             run_folder = self.cfg.runs_root / sealed_id
+        pipeline_run = state["runs"].get(ident) if kind == "run" else None
+        if attempt["template"] == "pipeline_proxy":
+            pipeline_run = state["runs"].get(str(attempt["params"]["run_id"]))
+            run_folder = self.cfg.runs_root / str(attempt["params"]["run_id"])
+        if kind == "service" and ident.startswith("pipeline:"):
+            pipeline_run = state["runs"].get(ident.partition(":")[2])
+            run_folder = self.cfg.runs_root / ident.partition(":")[2]
         completion, run_mode = self.gold_inputs(state, str(attempt["owner"]), str(attempt["template"]), attempt["params"])
+        if pipeline_run is not None and attempt["template"].startswith("pipeline_"):
+            run_mode = str(pipeline_run["mode"])
         inp = RenderInput(
             attempt["template"],
             self.owner_name(attempt),
@@ -3859,6 +4042,7 @@ class Launcher:
             completion,
             run_mode,
             self.gold_accepted(state, str(attempt["owner"]), str(attempt["template"]), attempt["params"]),
+            self.pipeline_inputs(state, pipeline_run) if pipeline_run is not None else {},
         )
         if template.name == "catalog_service":
             return renderer.render_service(inp, str(attempt["params"]["service"]), self.registry_id)
@@ -3872,6 +4056,8 @@ class Launcher:
         """The image the attempt's template runs (as a test registry may rename it)."""
         template = TEMPLATES[attempt["template"]]
         renderer = self.renderer_of(attempt["template"], Path(attempt["checkout"]))
+        if template.name == "pipeline_proxy":
+            return network_policy.PROXY_IMAGE
         if template.name in ("catalog_service", "orchestration_service", "lineage_service"):
             return renderer.image(str(attempt["params"]["service"]))
         if template.name == "orchestration_check":
@@ -4572,7 +4758,14 @@ class Launcher:
                 return
             if value:
                 self.finish_attempt(state, a, self.intent_reason(a), str(a.get("start_error", "")))
-                if a["reason"] == "exited" and a.get("exit_code") == 0 and a["template"] == "spark_read" and a["args"][:1] == ["pin"]:
+                if (
+                    a["reason"] == "exited"
+                    and a.get("exit_code") == 0
+                    and (
+                        (a["template"] == "spark_read" and a["args"][:1] == ["pin"])
+                        or (a["template"] == "pipeline_spark" and a["params"].get("job") == "pin_bronze")
+                    )
+                ):
                     self.record_pins(state, a)
                 if a["reason"] == "exited" and a.get("exit_code") == 0 and a["template"] == "real_dbt" and build_provenance.is_full_build(a["args"]):
                     self.begin_seal(state, a)
@@ -5308,6 +5501,12 @@ class Launcher:
         """Add or remove the run's registration as a shared-service user."""
         entry = self.run_entry(ctx)
         kind = str(ctx.params.get("kind"))
+        if (
+            kind == "catalog_user"
+            and bool(ctx.params.get("add", True))
+            and (ctx.state["launcher"].get("barrier") or self.catalog_record(ctx.state)["phase"] == "tearing_down")
+        ):
+            raise LauncherError("catalog teardown has begun", "refused")
         if kind not in run_lock.REGISTRATION_KINDS:
             raise LauncherError(f"registration kind {kind!r} is unknown", "args")
         run_lock.register_in(ctx.state, entry["run_id"], entry, kind, bool(ctx.params.get("add", True)))
@@ -5650,7 +5849,9 @@ class Launcher:
         attempt_params = dict(params.get("params") or {})
         self.dry_render(ctx.state, owner, template_name, args, attempt_params, checkout)
         self.take_guard(ctx.state, template, attempt_params)
-        fenced = template_name == "gold_publish" and attempt_params.get("job") == "gold_maintenance"
+        fenced = (template_name == "gold_publish" and attempt_params.get("job") == "gold_maintenance") or (
+            template_name == "pipeline_publish" and attempt_params.get("step") == "maintenance"
+        )
         protection = self.maintenance_protection(ctx.state) if fenced else []
         attempt = self.new_attempt(ctx.state, owner, template_name, launch_id, args, attempt_params, request=ctx.key, checkout=str(checkout), seconds=seconds)
         if identity is not None:
@@ -5679,6 +5880,19 @@ class Launcher:
             run_folder = self.cfg.runs_root / "dry"
             provenance = {build_provenance.VARIABLE_SEALED_SHA: "0" * 64, build_provenance.VARIABLE_SEALED_EXPECTED: "{}"}
         completion, run_mode = self.gold_inputs(state, owner, template_name, params)
+        pipeline: Mapping[str, Any] = {}
+        snapshot = None
+        if kind == "run" and template_name.startswith("pipeline_"):
+            run = state["runs"][ident]
+            run_mode = str(run["mode"])
+            pipeline = self.pipeline_inputs(state, run)
+            if template_name == "pipeline_dbt":
+                pointer = run.get("snapshot")
+                if pointer is None or run_folder is None:
+                    raise LauncherError("the run has no complete snapshot", "spec")
+                snapshot = run_folder / "snapshots" / str(pointer)
+                if params.get("layer") == "silver" and run_mode == "real":
+                    provenance = provenance_vars(run)
         inp = RenderInput(
             template_name,
             ident,
@@ -5691,13 +5905,14 @@ class Launcher:
             args,
             params,
             {},
-            None,
+            snapshot,
             run_folder,
             provenance,
             (),
             completion,
             run_mode,
             self.gold_accepted(state, owner, template_name, params),
+            pipeline,
         )
         renderer.render(inp, self.registry_id)
 
@@ -5729,6 +5944,8 @@ class Launcher:
         Launcher.require_no_maintenance_fence(state)
         items = []
         for name, reader in sorted(state["readers"].items()):
+            if reader.get("namespace") in ("silver", "silver_e2e"):
+                continue
             if not gold_publish_record.READER_NAME.fullmatch(name):
                 raise LauncherError(f"reader {name} has a name the maintenance job cannot list; maintenance is refused", "refused")
             if reader["state"] == "registered":
@@ -5936,6 +6153,448 @@ class Launcher:
     def catalog_record(self, state: dict[str, Any]) -> dict[str, Any]:
         """The catalog's service state in the registry."""
         return state["launcher"].setdefault("catalog", {"phase": "down", "services": {}})
+
+    def pipeline_inputs(self, state: Mapping[str, Any], run: Mapping[str, Any]) -> dict[str, Any]:
+        """Expose only trusted pipeline metadata to a renderer, without run tokens or unrelated credentials."""
+        snapshot = state["copies"].get(run.get("snapshot"), {})
+        return {
+            "registry_kind": self.registry.kind,
+            "source_sha256": snapshot.get("dbt_tree_sha256", ""),
+            "bronze_sha256": run.get("pins_sha256", run.get("fixture_pins_sha256", "")),
+            "silver_pin": run.get("silver_pin", {}),
+            "silver_input": run.get("silver_input", {}),
+            "layer_completions": run.get("layer_completions", {}),
+            "layer_exports": run.get("layer_exports", {}),
+            "local_catalog": run.get("local_catalog", ""),
+            "network": run.get("pipeline_network", {}),
+        }
+
+    @staticmethod
+    def pipeline_params(ctx: Ctx, allowed: tuple[str, ...] = ()) -> None:
+        """Reject unsupported fields on a pipeline lifecycle method."""
+        if set(ctx.params) != set(allowed):
+            raise LauncherError("pipeline method parameters do not match its closed contract", "args")
+
+    def m_pipeline_network_up(self, ctx: Ctx) -> dict[str, Any]:
+        """Provision owned class networks and start their admitted credential-free proxy."""
+        self.pipeline_params(ctx)
+        run = self.run_entry(ctx)
+        if run["state"] != "held":
+            raise LauncherError("only a held run starts class networks", "refused")
+        current = ctx.state["runs"][run["run_id"]].get("pipeline_network")
+        if current and current.get("generation") != run.get("generation", 1):
+            raise LauncherError("class networks belong to another run generation", "refused")
+        if current and current["phase"] in ("networks_ready", "ready"):
+            proxy = ctx.state["attempts"].get(current.get("proxy"))
+            if proxy is None or proxy["phase"] == "ended":
+                current["phase"] = "failed"
+                return {
+                    "phase": "failed",
+                    "attempt_id": current.get("proxy"),
+                    "error": "the class proxy did not remain running",
+                    "proxy": {key: proxy.get(key) for key in ("reason", "exit_code", "detail")} if proxy else {},
+                }
+            if proxy["phase"] == "started":
+                current["phase"] = "ready"
+            return {"phase": current["phase"]}
+        if current and current["phase"] in ("failed", "releasing", "down"):
+            raise LauncherError("class networks require cleanup before a new run", "refused")
+        catalog_id = None
+        if run["mode"] == "real":
+            catalog = self.catalog_record(ctx.state)
+            polaris = ctx.state["attempts"].get(catalog.get("services", {}).get("polaris"))
+            if catalog["phase"] != "up" or polaris is None or not polaris.get("container_id"):
+                raise LauncherError("the catalog is not ready for class attachment", "refused")
+            catalog_id = str(polaris["container_id"])
+        key = f"pipeline-net-up:{run['run_id']}:{run.get('generation', 1)}"
+        if current is None:
+            current = {
+                "phase": "creating",
+                "generation": run.get("generation", 1),
+                "names": network_policy.names(self.registry_id, run["run_id"]),
+                "catalog_id": catalog_id,
+                "started_at": time.time(),
+            }
+            ctx.state["runs"][run["run_id"]]["pipeline_network"] = current
+        if time.time() - current["started_at"] > 600:
+            current["phase"] = "failed"
+            raise LauncherError("class network startup exceeded 600 seconds", "timeout")
+        if key not in self.inflight:
+            region = "us-west-2" if self.registry.kind == "test" else self.renderer_for(self.cfg.root).compose_values(("AWS_REGION",), {})["AWS_REGION"]
+            self.spawn(key, "pipeline_net", self.create_pipeline_networks, run["run_id"], dict(current), region)
+        return {"phase": "creating"}
+
+    def create_pipeline_networks(self, run_id: str, record: dict[str, Any], region: str) -> dict[str, Any]:
+        """Worker: adopt exact owned networks, attach the catalog and compute the proxy's memory share."""
+        budget = memory_budget.current(self.reader())
+        policy = network_policy.load(self.cfg.root / "services/orchestration/egress_proxy.json")
+        limit = memory_budget.service_limit(budget, float(policy["memory_share"]), int(policy["memory_floor_bytes"]))
+        labels = {LABEL_REGISTRY: self.registry_id, network_policy.LABEL_RUN: run_id}
+        deadline = time.monotonic() + 600
+        identities = {}
+        for role, name in record["names"].items():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("class network provisioning exceeded 600 seconds")
+            found = [item for item in self.docker.networks(self.network_label()) if item.get("Name") == name]
+            if len(found) > 1:
+                raise LauncherError("multiple owned networks have the class name", "refused")
+            identity = str(found[0]["Id"]) if found else self.docker.create_network(name, labels, internal=role != "egress")
+            inspected = self.docker.call("GET", f"/networks/{identity}")
+            network_policy.check_network(inspected, name, self.registry_id, run_id, role != "egress")
+            identities[role] = identity
+            catalog_id = record.get("catalog_id")
+            if catalog_id and role != "egress" and catalog_id not in (inspected.get("Containers") or {}):
+                self.docker.connect_network(identity, catalog_id, ["polaris"])
+        folder = self.cfg.runs_root / run_id / "egress"
+        folder.mkdir(parents=True, exist_ok=True)
+        config = folder / "squid.conf"
+        expected = network_policy.squid_config(region)
+        if config.exists() or config.is_symlink():
+            if config.is_symlink() or config.read_text() != expected:
+                raise LauncherError("the proxy allowlist changed during startup", "refused")
+        else:
+            with config.open("x") as writer:
+                writer.write(expected)
+                writer.flush()
+                os.fsync(writer.fileno())
+            config.chmod(0o444)
+        return {"ids": identities, "memory": limit}
+
+    def m_pipeline_network_down(self, ctx: Ctx) -> dict[str, Any]:
+        """Stop only this run's proxy before removing its owned network attachments."""
+        self.pipeline_params(ctx)
+        run = self.run_entry(ctx)
+        record = ctx.state["runs"][run["run_id"]].get("pipeline_network")
+        if record is None or record["phase"] == "down":
+            return {"phase": "down"}
+        up = f"pipeline-net-up:{run['run_id']}:{record['generation']}"
+        if up in self.inflight:
+            return {"phase": "draining"}
+        catalog_probe = ctx.state["attempts"].get(record.get("catalog_probe"))
+        if catalog_probe is not None and is_open(catalog_probe):
+            if not catalog_probe["cancel_intent"]:
+                catalog_probe["cancel_intent"] = {"reason": "pipeline_release", "at": utc_now()}
+                self.dirty.add(catalog_probe["id"])
+            return {"phase": "draining"}
+        proxy = ctx.state["attempts"].get(record.get("proxy"))
+        if proxy is not None and is_open(proxy):
+            if not proxy["cancel_intent"]:
+                proxy["cancel_intent"] = {"reason": "pipeline_release", "at": utc_now()}
+            return {"phase": "draining"}
+        record["phase"] = "releasing"
+        key = f"pipeline-net-down:{run['run_id']}:{record['generation']}"
+        if key not in self.inflight:
+            self.spawn(key, "pipeline_net", self.remove_pipeline_networks, run["run_id"], dict(record))
+        return {"phase": "releasing"}
+
+    def remove_pipeline_networks(self, run_id: str, record: dict[str, Any]) -> dict[str, Any]:
+        """Worker: detach the known catalog and refuse deletion of any foreign or still-used network."""
+        for role, name in record["names"].items():
+            found = [item for item in self.docker.networks(self.network_label()) if item.get("Name") == name]
+            if not found:
+                continue
+            if len(found) != 1:
+                raise LauncherError("class network cleanup found ambiguous ownership", "refused")
+            identity = str(found[0]["Id"])
+            inspected = self.docker.call("GET", f"/networks/{identity}")
+            network_policy.check_network(inspected, name, self.registry_id, run_id, role != "egress")
+            catalog_id = record.get("catalog_id")
+            if catalog_id and catalog_id in (inspected.get("Containers") or {}):
+                self.docker.call("POST", f"/networks/{identity}/disconnect", {"Container": catalog_id, "Force": False})
+            self.docker.remove_network(identity)
+        return {"removed": True}
+
+    def on_pipeline_net(self, key: str, outcome: str, value: Any) -> None:
+        """Publish a network result only to the run generation that requested it."""
+        operation, run_id, generation = key.split(":", 2)
+        with self.tx() as state:
+            run = state["runs"].get(run_id)
+            record = run.get("pipeline_network") if run else None
+            if run is None or not isinstance(record, dict) or str(record["generation"]) != generation:
+                return
+            if outcome != "ok":
+                record.update({"phase": "failed", "error": f"class network operation failed: {value}"})
+                return
+            service = f"egress-{run_id.lower()}"
+            if operation == "pipeline-net-down":
+                record["phase"] = "down"
+                state["services"].pop(service, None)
+                state["services"].pop(f"catalog-probe-{run_id.lower()}", None)
+                return
+            if run["state"] != "held" or run.get("generation", 1) != record["generation"]:
+                record.update({"phase": "failed", "error": "the network owner changed while provisioning"})
+                return
+            record.update({"phase": "networks_ready", "ids": value["ids"]})
+            state["services"][service] = value["memory"]
+            proxy = self.new_attempt(
+                state,
+                f"service:pipeline:{run_id}",
+                "pipeline_proxy",
+                "egress",
+                [],
+                {"run_id": run_id},
+                request="pipeline",
+                checkout=str(self.cfg.root),
+                seconds=86400,
+            )
+            proxy.update({"generation": record["generation"], "plan_env": {"JOB_MEMORY_LIMIT": str(value["memory"])}, "prepared": True})
+            record["proxy"] = proxy["id"]
+
+    def m_pipeline_test_catalog(self, ctx: Ctx) -> dict[str, Any]:
+        """Start a credential-free positive-control server on both class networks of a test run."""
+        self.pipeline_params(ctx)
+        run = self.run_entry(ctx)
+        record = ctx.state["runs"][run["run_id"]].get("pipeline_network", {})
+        if self.registry.kind != "test" or run["mode"] != "publish_fixture" or record.get("phase") != "ready":
+            raise LauncherError("the synthetic catalog requires ready networks on a publication test run", "refused")
+        previous = ctx.state["attempts"].get(record.get("catalog_probe"))
+        if previous is not None:
+            return {"attempt_id": previous["id"], "phase": previous["phase"]}
+        proxy = ctx.state["attempts"][record["proxy"]]
+        memory = proxy["plan_env"]["JOB_MEMORY_LIMIT"]
+        ctx.state["services"][f"catalog-probe-{run['run_id'].lower()}"] = int(memory)
+        attempt = self.new_attempt(
+            ctx.state,
+            f"service:pipeline:{run['run_id']}",
+            "pipeline_probe",
+            "catalog-probe",
+            [],
+            {"class": "lakehouse_read", "case": "catalog"},
+            request="pipeline",
+            checkout=str(self.cfg.root),
+            seconds=600,
+        )
+        attempt.update({"generation": record["generation"], "prepared": True, "plan_env": {"JOB_MEMORY_LIMIT": memory}})
+        record["catalog_probe"] = attempt["id"]
+        return {"attempt_id": attempt["id"], "phase": attempt["phase"]}
+
+    def m_pipeline_catalog_up(self, ctx: Ctx) -> dict[str, Any]:
+        """Register this run before starting a shared catalog, or prepare its isolated file catalog."""
+        self.pipeline_params(ctx)
+        run = self.run_entry(ctx)
+        if run["state"] != "held" or ctx.state["launcher"].get("barrier"):
+            raise LauncherError("catalog registration is refused during finalization or teardown", "refused")
+        run_lock.register_in(ctx.state, run["run_id"], run, "catalog_user", True)
+        if run["mode"] == "publish_fixture":
+            if self.registry.kind != "test":
+                raise LauncherError("publish_fixture requires an isolated test registry", "refused")
+            folder = self.registry.path.parent / "pipeline_catalog"
+            folder.mkdir(parents=True, exist_ok=True)
+            if folder.is_symlink():
+                raise LauncherError("the local catalog is a symlink", "refused")
+            ctx.state["runs"][run["run_id"]]["local_catalog"] = str(folder)
+            return {"phase": "up", "local": True}
+        return self.m_catalog_up(ctx)
+
+    def m_pipeline_catalog_release(self, ctx: Ctx) -> dict[str, Any]:
+        """Deregister only this run and tear down only when no registered or active user remains."""
+        self.pipeline_params(ctx)
+        run = self.run_entry(ctx)
+        reader = ctx.state["readers"].get(f"silver:{run['run_id']}")
+        if reader is not None:
+            if reader.get("owner_run") != run["run_id"]:
+                raise LauncherError("the reader belongs to another run", "principal")
+            self.require_no_maintenance_fence(ctx.state)
+            ctx.state["readers"].pop(f"silver:{run['run_id']}")
+        run_lock.register_in(ctx.state, run["run_id"], run, "catalog_user", False)
+        if run["mode"] == "publish_fixture":
+            return {"phase": "down", "local": True}
+        if any("catalog_user" in entry.get("registrations", []) for entry in ctx.state["runs"].values()) or ctx.state["registrations"]:
+            return {"phase": "up", "shared": True}
+        if any(is_open(a) and TEMPLATES[a["template"]].needs_catalog for a in ctx.state["attempts"].values()):
+            return {"phase": "up", "shared": True}
+        return self.m_catalog_down(ctx)
+
+    def m_pipeline_reserve_silver(self, ctx: Ctx) -> dict[str, Any]:
+        """Reserve silver discovery before its producer is selected, bound to the consuming run."""
+        self.pipeline_params(ctx)
+        self.require_no_maintenance_fence(ctx.state)
+        run = self.run_entry(ctx)
+        name = f"silver:{run['run_id']}"
+        previous = ctx.state["readers"].get(name)
+        if previous is not None:
+            if previous.get("owner_run") != run["run_id"]:
+                raise LauncherError("the reservation belongs to another run", "principal")
+            return {"reader": name, "state": previous["state"]}
+        ctx.state["readers"][name] = {
+            "owner_run": run["run_id"],
+            "namespace": "silver_e2e" if run["mode"] == "publish_fixture" else "silver",
+            "domain": run["domain"],
+            "publish_run": "latest",
+            "snapshot_set": None,
+            "state": "reserved",
+            "pid": run["pid"],
+            "pid_start": run["pid_start"],
+            "at": utc_now(),
+        }
+        return {"reader": name, "state": "reserved"}
+
+    def pipeline_attempt(self, ctx: Ctx, template: str, job: str | None = None) -> dict[str, Any]:
+        """Require an uncancelled successful producer owned by this run and generation."""
+        run = self.run_entry(ctx)
+        attempt = ctx.state["attempts"].get(str(ctx.params["attempt_id"]))
+        if (
+            attempt is None
+            or attempt["owner"] != f"run:{run['run_id']}"
+            or attempt["template"] != template
+            or attempt["generation"] != run.get("generation", 1)
+        ):
+            raise LauncherError("the producer attempt does not belong to this run generation", "refused")
+        if attempt["phase"] != "ended" or attempt["reason"] != "exited" or attempt["exit_code"] != 0 or attempt["cancel_intent"]:
+            raise LauncherError("the producer attempt did not finish successfully", "refused")
+        if job is not None and attempt["params"].get("job") != job:
+            raise LauncherError("the producer attempt ran another job", "refused")
+        return attempt
+
+    def m_pipeline_accept_seal(self, ctx: Ctx) -> dict[str, Any]:
+        """Accept validated layer bytes and their successful frozen-source build receipt."""
+        layer = str(ctx.params.get("layer", ""))
+        self.pipeline_params(ctx, ("layer", "attempt_id", "cross_attempt_id") if layer == "gold" else ("layer", "attempt_id"))
+        run = self.run_entry(ctx)
+        folder = self.cfg.runs_root / run["run_id"]
+        try:
+            completion = pipeline_protocol.accept_validation(ctx.state, run["run_id"], layer, str(ctx.params["attempt_id"]), folder)
+            receipt, receipt_sha = pipeline_protocol.read_record(folder, "build_receipt.json")
+            metadata = self.pipeline_inputs(ctx.state, run)
+            expected_input = metadata["silver_pin"].get("sha256") if layer == "gold" else metadata["bronze_sha256"]
+            if (
+                receipt.get("run_id") != run["run_id"]
+                or receipt.get("layer") != layer
+                or receipt.get("mode") != run["mode"]
+                or receipt.get("source_sha256") != metadata["source_sha256"]
+                or receipt.get("input_sha256") != expected_input
+            ):
+                raise pipeline_protocol.PipelineError("the build receipt differs from the frozen source or accepted inputs")
+            builds = [
+                a
+                for a in ctx.state["attempts"].values()
+                if a["owner"] == f"run:{run['run_id']}"
+                and a["template"] == "pipeline_dbt"
+                and a["params"] == {"layer": layer}
+                and a["generation"] == run.get("generation", 1)
+            ]
+            latest = max(builds, key=lambda a: a["created_at"]) if builds else None
+            if latest is None or latest["phase"] != "ended" or latest["reason"] != "exited" or latest["exit_code"] != 0 or latest["cancel_intent"]:
+                raise pipeline_protocol.PipelineError("the latest frozen-source build did not succeed")
+            output = pipeline_protocol.output_record(latest)
+            if output.get("receipt_sha256") != receipt_sha:
+                raise pipeline_protocol.PipelineError("the build receipt differs from the successful builder output")
+            if layer == "gold":
+                cross = ctx.state["attempts"].get(str(ctx.params["cross_attempt_id"]))
+                if (
+                    cross is None
+                    or cross["owner"] != latest["owner"]
+                    or cross["template"] != "pipeline_validate_cross"
+                    or cross["phase"] != "ended"
+                    or cross["exit_code"] != 0
+                    or cross["reason"] != "exited"
+                    or cross["cancel_intent"]
+                    or cross["generation"] != latest["generation"]
+                    or cross["params"].get("database") != str(folder / "staging.duckdb")
+                    or cross["params"].get("out_host") != str(folder / "quality_cross")
+                ):
+                    raise pipeline_protocol.PipelineError("the cross-layer attempt did not succeed for this run")
+                record, cross_sha = pipeline_protocol.read_record(folder, "quality_cross/result.json")
+                if pipeline_protocol.output_record(cross).get("result_sha256") != cross_sha:
+                    raise pipeline_protocol.PipelineError("the cross-layer result differs from its successful producer receipt")
+                reconciliation = record.get("reconciliation", {})
+                if (
+                    record.get("build_file_sha256") != completion["sha256"]
+                    or record.get("counts", {}).get("fail") != 0
+                    or record.get("counts", {}).get("warn") != 0
+                    or not reconciliation.get("facts")
+                    or reconciliation.get("facts") != reconciliation.get("facts_in_contract")
+                    or any(reconciliation.get("problems", {}).values())
+                ):
+                    raise pipeline_protocol.PipelineError("cross-layer checks did not accept exactly these build bytes")
+            completion.update({"build_attempt": latest["id"], "receipt_sha256": receipt_sha})
+        except (pipeline_protocol.PipelineError, OSError, ValueError, KeyError, IndexError) as error:
+            raise LauncherError(f"layer seal refused: {error}", "refused") from None
+        ctx.state["runs"][run["run_id"]].setdefault("layer_completions", {})[layer] = completion
+        return {"layer": layer, "sha256": completion["sha256"]}
+
+    def m_pipeline_accept_export(self, ctx: Ctx) -> dict[str, Any]:
+        """Record the exact consumer-result bytes for a completed layer export."""
+        self.pipeline_params(ctx, ("layer", "attempt_id"))
+        run = self.run_entry(ctx)
+        layer = str(ctx.params["layer"])
+        try:
+            accepted = pipeline_protocol.accept_export(ctx.state, run["run_id"], layer, str(ctx.params["attempt_id"]), self.cfg.runs_root / run["run_id"])
+        except (pipeline_protocol.PipelineError, OSError, ValueError, KeyError, IndexError) as error:
+            raise LauncherError(f"layer export refused: {error}", "refused") from None
+        ctx.state["runs"][run["run_id"]].setdefault("layer_exports", {})[layer] = accepted
+        return {"layer": layer, "sha256": accepted["sha256"]}
+
+    def m_pipeline_accept_pin(self, ctx: Ctx) -> dict[str, Any]:
+        """Register only the accepted committed silver set of this run's successful pin producer."""
+        self.pipeline_params(ctx, ("attempt_id",))
+        self.require_no_maintenance_fence(ctx.state)
+        attempt = self.pipeline_attempt(ctx, "pipeline_spark", "pin_silver")
+        run = self.run_entry(ctx)
+        reader = ctx.state["readers"].get(f"silver:{run['run_id']}")
+        if reader is None or reader.get("owner_run") != run["run_id"]:
+            raise LauncherError("silver discovery has no owned reservation", "refused")
+        try:
+            record, digest = pipeline_protocol.read_record(self.cfg.runs_root / run["run_id"], "silver_pins.json")
+            if pipeline_protocol.output_record(attempt).get("sha256") != digest:
+                raise pipeline_protocol.PipelineError("the silver pin differs from its successful producer output")
+            contract = json.loads((Path(attempt["checkout"]) / "data_contracts/lakehouse/silver_publish.json").read_text())
+            pipeline_protocol.check_pin(record, run["run_id"], run["mode"], set(contract["publish"]["tables"]))
+            selected = attempt["params"].get("source_run")
+            if selected not in (None, "latest", record["source_run_id"]):
+                raise pipeline_protocol.PipelineError("the pin producer selected another source run")
+        except (pipeline_protocol.PipelineError, OSError, ValueError, KeyError, IndexError) as error:
+            raise LauncherError(f"silver pin refused: {error}", "refused") from None
+        previous = run.get("silver_pin")
+        if previous and previous.get("sha256") != digest:
+            raise LauncherError("this run already accepted another silver input", "refused")
+        accepted = {"sha256": digest, "source_run_id": record["source_run_id"], "attempt_id": attempt["id"]}
+        ctx.state["runs"][run["run_id"]]["silver_pin"] = accepted
+        reader.update({"state": "registered", "snapshot_set": record["source_run_id"]})
+        return accepted
+
+    def m_pipeline_accept_input(self, ctx: Ctx) -> dict[str, Any]:
+        """Bind the successful Iceberg extraction manifest to the accepted silver pin."""
+        self.pipeline_params(ctx, ("attempt_id",))
+        attempt = self.pipeline_attempt(ctx, "pipeline_spark", "read_silver")
+        run = self.run_entry(ctx)
+        try:
+            record, digest = pipeline_protocol.read_record(self.cfg.runs_root / run["run_id"], "silver_input/manifest.json")
+            if pipeline_protocol.output_record(attempt).get("sha256") != digest:
+                raise pipeline_protocol.PipelineError("the silver extract differs from its successful producer output")
+            if (
+                record.get("run_id") != run["run_id"]
+                or record.get("mode") != run["mode"]
+                or record.get("pins_sha256") != run.get("silver_pin", {}).get("sha256")
+            ):
+                raise pipeline_protocol.PipelineError("the extract is not this run's accepted silver pin")
+        except (pipeline_protocol.PipelineError, OSError, ValueError) as error:
+            raise LauncherError(f"silver extraction refused: {error}", "refused") from None
+        accepted = {"sha256": digest, "pins_sha256": record["pins_sha256"], "attempt_id": attempt["id"]}
+        ctx.state["runs"][run["run_id"]]["silver_input"] = accepted
+        return accepted
+
+    def m_pipeline_fixture_pin(self, ctx: Ctx) -> dict[str, Any]:
+        """Pin synthetic bronze file bytes in an isolated publication fixture."""
+        self.pipeline_params(ctx)
+        run = self.run_entry(ctx)
+        if self.registry.kind != "test" or run["mode"] != "publish_fixture":
+            raise LauncherError("a fixture bronze pin requires an isolated publication fixture", "refused")
+        digest = pipeline_protocol.digest_file(self.cfg.runs_root / run["run_id"] / "fixture_lakehouse.duckdb")
+        previous = run.get("fixture_pins_sha256")
+        if previous and previous != digest:
+            raise LauncherError("fixture bronze bytes changed after pinning", "refused")
+        ctx.state["runs"][run["run_id"]]["fixture_pins_sha256"] = digest
+        return {"sha256": digest}
+
+    def m_pipeline_fixture_verify(self, ctx: Ctx) -> dict[str, Any]:
+        """Refuse fixture publication after its pinned synthetic bronze bytes change."""
+        self.pipeline_params(ctx)
+        run = self.run_entry(ctx)
+        digest = pipeline_protocol.digest_file(self.cfg.runs_root / run["run_id"] / "fixture_lakehouse.duckdb")
+        if run["mode"] != "publish_fixture" or self.registry.kind != "test" or digest != run.get("fixture_pins_sha256"):
+            raise LauncherError("fixture bronze bytes differ from the pin", "refused")
+        return {"unchanged": True}
 
     def m_catalog_up(self, ctx: Ctx) -> dict[str, Any]:
         """Start the missing service attempts in dependency order; a barrier or a teardown refuses it (D1 section 8 item 2)."""
@@ -6250,6 +6909,8 @@ class Launcher:
     def m_catalog_down(self, ctx: Ctx) -> dict[str, Any]:
         """Record a teardown barrier before any side effect (D1 section 8 item 3)."""
         catalog = self.catalog_record(ctx.state)
+        if any("catalog_user" in run.get("registrations", []) for run in ctx.state["runs"].values()):
+            raise LauncherError("catalog users remain registered", "refused")
         if catalog["phase"] == "down":
             return {"phase": "down"}
         if ctx.state["launcher"].get("barrier"):
@@ -6972,8 +7633,8 @@ class Launcher:
         return {"phase": "tearing_down"}
 
     def template_images(self) -> set[str]:
-        """Every image reference the Compose models of the launcher's own checkout name: what the templates can run."""
-        found: set[str] = set()
+        """Return only pinned images declared by Compose or the closed pipeline proxy policy: what the templates can run."""
+        found: set[str] = {network_policy.PROXY_IMAGE}
         for path in (self.cfg.root / "docker-compose.yaml", self.cfg.root / ORCHESTRATION_COMPOSE, self.cfg.root / LINEAGE_COMPOSE):
             if path.is_file():
                 found |= {str(service["image"]) for service in ComposeModel(path).services.values() if service.get("image")}
@@ -7621,6 +8282,10 @@ class Patience:
             raise self.client.note_failure(error, self.principal, attempt_id)
 
 
+class StartTimeout(TimeoutError):
+    """The budget ended while the launcher was being started. Its text comes from a process ID, signal names and fixed phrases only, so a caller can show it."""
+
+
 class LauncherClient:
     """A client of the launcher's socket. It makes no Docker call (D1 section 2 item 4)."""
 
@@ -7644,20 +8309,44 @@ class LauncherClient:
 
     # -- connection ------------------------------------------------------------------------------------------------
 
-    def connect(self) -> socket.socket:
-        """Connect to the socket, starting the launcher on demand."""
+    @staticmethod
+    def seconds_left(limit: float | None, before: str) -> float | None:
+        """Seconds until ``limit`` (``None`` without one); a spent budget raises ``TimeoutError`` naming what it ended before."""
+        if limit is None:
+            return None
+        left = limit - time.monotonic()
+        if left <= 0:
+            raise TimeoutError(f"the budget ended before {before}")
+        return left
+
+    def connect(self, budget: float | None = None) -> socket.socket:
+        """Connect to the socket, starting the launcher on demand.
+
+        With ``budget`` seconds, every connection attempt, the wait for a started launcher and its pauses share that one limit, and a spent budget
+        raises ``TimeoutError``. Cleaning up an intermediate process that outlived the budget can add up to two ``REAP_SECONDS`` waits beyond it
+        (``start_launcher``). Without a budget, attempts are unbounded and the wait for a started launcher is 45 seconds.
+        """
+        limit = None if budget is None else time.monotonic() + budget
+        first = self.seconds_left(limit, "connecting to the launcher")
         try:
-            return self.open_socket()
+            return self.open_socket(first)
         except OSError:
+            if limit is not None and time.monotonic() >= limit:
+                raise TimeoutError("the budget ended while connecting to the launcher") from None
             if not self.start:
                 raise ClientError("the launcher is not running", "unavailable") from None
-        self.start_launcher()
-        deadline = time.monotonic() + 45
-        while time.monotonic() < deadline:
+        self.start_launcher(None if limit is None else self.seconds_left(limit, "starting the launcher"))
+        deadline = time.monotonic() + 45 if limit is None else min(time.monotonic() + 45, limit)
+        while (left := deadline - time.monotonic()) > 0:
             try:
-                return self.open_socket()
+                return self.open_socket(None if limit is None else left)
             except OSError:
-                time.sleep(0.1)
+                if limit is None:
+                    time.sleep(0.1)
+                elif (remaining := deadline - time.monotonic()) > 0:
+                    time.sleep(min(0.1, remaining))
+        if limit is not None and time.monotonic() >= limit:
+            raise TimeoutError("the budget ended while the launcher was starting")
         raise ClientError(f"the launcher did not start: {self.log_tail()}", "unavailable")
 
     def open_socket(self, timeout: float | None = None) -> socket.socket:
@@ -7677,8 +8366,18 @@ class LauncherClient:
         log = self.config.registry.path / "launcher.log"
         return log.read_text()[-400:].strip() if log.is_file() else "no log"
 
-    def start_launcher(self) -> None:
-        """Start ``serve`` detached from this process: fork, new session, spawn, exit the middle process."""
+    REAP_SECONDS = 0.5
+    REAP_POLL = 0.005
+
+    def start_launcher(self, budget: float | None = None) -> None:
+        """Start ``serve`` detached from this process: fork, new session, spawn, exit the middle process.
+
+        With ``budget`` seconds the wait for the middle process ends within them. One still running then gets SIGTERM and SIGKILL, each followed by a
+        wait of up to ``REAP_SECONDS`` for it to end, so the call can take up to two of those waits longer than ``budget`` (a slow scheduler or kernel
+        adds to that). It raises ``StartTimeout`` naming the process, the signals attempted and whether the process was reaped: after both signals
+        it can remain unreaped. A launcher it had already spawned is detached and may keep running. Without a budget the wait has no limit.
+        """
+        limit = None if budget is None else time.monotonic() + budget
         self.config.registry.path.mkdir(parents=True, exist_ok=True)
         self.config.registry.path.chmod(0o700)
         log = str(self.config.registry.path / "launcher.log")
@@ -7703,7 +8402,49 @@ class LauncherClient:
                 os.posix_spawn(sys.executable, arguments, environment, file_actions=actions)
             finally:
                 os._exit(0)
-        os.waitpid(middle, 0)
+        if limit is None:
+            os.waitpid(middle, 0)
+        elif not self.reap_within(middle, limit - time.monotonic()):
+            raise StartTimeout(self.discard_child(middle))
+
+    def reap_within(self, pid: int, seconds: float) -> bool:
+        """Reap a child of this process without blocking, polling for up to ``seconds``; False when it is still running."""
+        limit = time.monotonic() + seconds
+        while True:
+            if os.waitpid(pid, os.WNOHANG)[0]:
+                return True
+            left = limit - time.monotonic()
+            if left <= 0:
+                return False
+            time.sleep(min(self.REAP_POLL, left))
+
+    def discard_child(self, pid: int) -> str:
+        """Send a middle process that outlived the budget SIGTERM, then SIGKILL, waiting up to ``REAP_SECONDS`` after each for it to end.
+
+        Returns the attempts and the observed outcome (reaped, no such child or not reaped), crediting no signal with an exit, and that a launcher the
+        process had already spawned may still be running.
+        """
+        attempts: list[str] = []
+        for sent in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.kill(pid, sent)
+            except OSError as error:
+                attempts.append(f"{sent.name} not sent ({type(error).__name__})")
+            else:
+                attempts.append(f"{sent.name} sent")
+            try:
+                if self.reap_within(pid, self.REAP_SECONDS):
+                    observed = "the process then ended and was reaped"
+                    break
+            except ChildProcessError:
+                observed = "waitpid reported no such child, so the process was already gone"
+                break
+        else:
+            observed = f"the process had not ended {self.REAP_SECONDS:g} s after the last signal and was not reaped"
+        return (
+            f"the budget ended while the launcher was being started and the intermediate process {pid} had not ended. {', '.join(attempts)}; {observed}. "
+            "A launcher that process had already spawned is detached and may still be running."
+        )
 
     # -- requests --------------------------------------------------------------------------------------------------
 
@@ -7722,31 +8463,51 @@ class LauncherClient:
         return {"kind": "alloc", "alloc_id": alloc_id}
 
     def call(
-        self, method: str, params: dict[str, Any] | None = None, principal: dict[str, Any] | None = None, request_id: str | None = None, timeout: float = 120.0
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        principal: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        timeout: float = 120.0,
+        budget: float | None = None,
     ) -> Any:
-        """One request and its reply; a refusal raises ``ClientError``."""
+        """One request and its reply; a refusal raises ``ClientError``.
+
+        ``timeout`` bounds each exchange. With ``budget`` seconds the whole request (connecting, starting the launcher, each exchange and every pause
+        before a repeat) ends within them, an exchange gets at most the time left and a spent budget raises ``TimeoutError``. Cleaning up an
+        intermediate launcher process that outlived the budget can add up to two ``REAP_SECONDS`` waits (1.0 s in all) beyond it (``start_launcher``).
+        """
         try:
-            result = self.send(method, params, principal, request_id, timeout)
+            result = self.send(method, params, principal, request_id, timeout, budget)
         except (ClientError, OSError) as error:
             self.note_failure(error, principal)
             raise
         self.forget_failure(principal)
         return result
 
-    def send(self, method: str, params: dict[str, Any] | None, principal: dict[str, Any] | None, request_id: str | None, timeout: float) -> Any:
+    def send(
+        self, method: str, params: dict[str, Any] | None, principal: dict[str, Any] | None, request_id: str | None, timeout: float, budget: float | None = None
+    ) -> Any:
         request_id = request_id or self.next_id()
-        deadline = time.monotonic() + 60
+        begun = time.monotonic()
+        deadline = begun + 60
+        limit = None if budget is None else begun + budget
         while True:
-            sock = self.connect()
+            sock = self.connect(self.seconds_left(limit, f"connecting for {method}"))
             try:
-                return self.exchange(sock, method, params or {}, principal or {"kind": "any"}, request_id, timeout)
+                left = self.seconds_left(limit, f"the reply to {method}")
+                return self.exchange(sock, method, params or {}, principal or {"kind": "any"}, request_id, timeout if left is None else min(timeout, left))
             except ClientError as error:
                 # A launcher that has just started refuses work until its probe and scan are done; the same request is sent again.
-                if error.code != "degraded" or "is starting" not in str(error) or time.monotonic() > deadline:
+                if error.code != "degraded" or "is starting" not in str(error):
+                    raise
+                if limit is not None and time.monotonic() >= limit:
+                    raise TimeoutError(f"the budget ended while the launcher was starting, before {method} was answered") from error
+                if time.monotonic() > deadline:
                     raise
             finally:
                 sock.close()
-            time.sleep(0.2)
+            time.sleep(0.2 if limit is None else max(0.0, min(0.2, limit - time.monotonic())))
 
     def note_exchange(self, method: str, params: Mapping[str, Any], seconds: float, outcome: str) -> None:
         asked = float(params.get("wait") or 0.0) if method == "status" else 0.0
