@@ -15,11 +15,30 @@ mkdir -p "$out"
 results="$out/results.txt"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/acquisition_ci_gate.XXXXXX")"
 work="$scratch/worktree"
+registered() { git worktree list --porcelain | sed -n 's/^worktree //p' | sort; }
+before="$(registered)"
+shielded() ( trap '' INT TERM HUP ALRM; "$@" )
 cleanup() {
-  git worktree remove --force "$work" >/dev/null 2>&1 || true
-  rm -rf "$scratch"
+  local status=$? after interrupted=0
+  trap 'interrupted=1' INT TERM HUP ALRM
+  shielded git worktree remove --force "$work" >/dev/null 2>&1 || shielded rm -rf "$work"
+  shielded git worktree prune || echo "scratch worktree: git worktree prune failed" >&2
+  shielded rm -rf "$scratch"
+  after="$(shielded registered)"
+  printf '%s\n' "$before" >"$out/worktrees_before.txt"
+  printf '%s\n' "$after" >"$out/worktrees_after.txt"
+  if [[ "$after" == "$before" ]]; then
+    echo "PASS scratch_worktree_removed" | tee -a "$results"
+  else
+    echo "FAIL scratch_worktree_removed: the registered worktrees changed during the run; see $out/worktrees_before.txt and $out/worktrees_after.txt" | tee -a "$results" >&2
+    status=1
+  fi
+  if ((interrupted)) && [[ "$status" == 0 ]]; then status=130; fi
+  exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP ALRM
 
 GIT_LFS_SKIP_SMUDGE=1 git worktree add --quiet --detach "$work" HEAD
 cp scripts/acquisition/run_checks_ci.sh "$work/scripts/acquisition/run_checks_ci.sh"

@@ -1,7 +1,7 @@
 ---
 title: Quality checks
 description: Every repository check the pre-commit hooks and CI run, what each blocks and how to run it on its own.
-last_updated: 2026-10-19
+last_updated: 2026-10-21
 ---
 
 # Quality checks
@@ -207,10 +207,10 @@ import chains and manifest mismatches.
 **Acquisition checks** (`bash scripts/acquisition/run_checks.sh`) run Ruff, MyPy,
 registry validation, the acquisition regression tests and every offline E2E
 suite twice, with a 90% coverage gate that also counts collector command lines
-run as child processes. They take 12 to 14 minutes (up to 29 in CI), so they run only
+run as child processes. They take about 20 minutes on this machine (the recorded profile estimate) and over 29 in CI, so they run only
 when acquisition code, configuration or their dependencies change: through the
 `acquisition-checks` pre-commit hook and in a separate GitHub Actions "Acquisition
-Checks" job (30-minute limit, LFS checkout, pinned Terraform). The CI job uses the
+Checks" job (45-minute limit, LFS checkout, pinned Terraform). The CI job uses the
 hook's own path pattern through `scripts/acquisition/run_checks_ci.sh`, which also
 matches the CI workflow; a manual run, the first push of a branch or rewritten
 history runs every check. `bash scripts/acquisition/run_checks_ci_e2e.sh` tests
@@ -346,14 +346,16 @@ set (`.venv/bin/pre-commit run --all-files --hook-stage manual`, whose
 `local_ci` hook runs the full local CI) runs before every release or push.
 GitHub CI runs the manual stage on every push and pull request as parallel
 jobs: the hooks without `local_ci` (file-based hooks check the changed files of
-the range), then `scripts/run_ci.sh` as `CI_PART=core` and, when a change
-touches a path the launcher reads, the launcher E2E in two shards
+the range), then `scripts/run_ci.sh` as `CI_PART=core`, one job for each lakehouse
+layer (`CI_PART=bronze`, `silver` or `gold`, see Lakehouse layers below) and, when
+a change touches a path the launcher reads, the launcher E2E in two shards
 (`CI_PART=launcher`, `LAUNCHER_SHARD=K/2`), each for the groups the range
 touches (`CI_SCOPE=range`). Without a usable range (a manual run, the first push
-of a branch or rewritten history) every check runs. Each job caches only what a
+of a branch or rewritten history) every check runs. A job whose group the range does not reach
+reports success and writes the reason to its job summary. Each job caches only what a
 lock file or hash checks again before use (npm packages, Terraform providers,
 the dbt package archive and the SQLFluff packages); the Python environment is
-built fresh from `requirements.txt` without a pip cache. Its timeout is about
+built fresh from `requirements.txt` without a pip cache. Each job's timeout is about
 twice its measured time. Locally `scripts/run_ci.sh` runs every part: the gates
 first, then the launcher E2E and then the independent check groups, which run
 concurrently. It prints each step's seconds (GitHub CI adds them to the job
@@ -400,3 +402,37 @@ check, not a passing result.
 
 Before every commit, stage the intended files by name, then draft, complete and
 retain the ignored local documentation review record (see Docs match the code above).
+
+## Lakehouse layers
+
+The lakehouse checks are three groups in `config/quality/ci_groups.json`: `lakehouse_bronze`, `lakehouse_silver` and `lakehouse_gold`, listed in
+`layers` from upstream to downstream. Each group has its own path list and its own GitHub job (`CI_PART=bronze`, `silver` or `gold`). The bronze list is the
+broad lakehouse list. It holds the code every layer shares: the launcher, memory plan, provenance, lock and compose file, the dbt project, macros and tests.
+The silver and gold lists name only the files that belong to that layer. Each file is listed for the layer that reads it first. No later layer's pattern
+may match it. A file that an upstream layer's checks read although a later layer's list also matches it is named in `upstream_inputs` for the
+earliest layer that reads it and belongs to that layer. The bronze entries are the gold macros and dimension models, the bronze staging models, the
+silver build marker model and the saved suites that the bronze storage and provenance runners read. The silver suite check reads the saved suites in `features/great_expectations`, the suites and baselines in `data_contracts/great_expectations`
+(the gold suite folder included) and the gold contract, so those select silver and gold. A path that several lists match belongs to the most downstream
+of them. A changed path selects its layer and every layer downstream of it. A bronze or shared change selects all three. A silver change selects
+silver and gold. A gold change selects gold. A job whose layer the range does not reach exits 0 and writes `skipped <group>: <reason>` to the job summary. The
+gates never skip. `lakehouse_bronze` runs the platform checks (resource limits, run lock, provenance, storage single copy and contracts), `lakehouse_silver` runs the silver
+suite check and `lakehouse_gold` runs the gold reference seeds, identity and label checks, gold suites, the gold publish contract check and the model metadata check. The
+`orchestration_checks` group also lists `scripts/lakehouse/`, `dbt/`, `data_contracts/lakehouse/` and `data_contracts/great_expectations/`, because its publish contract and pipeline
+checks read them, so a change to those paths runs it beside the layers. Put a new check in the most downstream layer whose files it reads. `.venv/bin/python -m scripts.quality.run_ci_groups_e2e` checks the selection for bronze-only, silver-only, gold-only and shared changes
+and the real inputs. It reads the source of the modules each layer's function starts (and of the gold checks the silver suite check calls and of the storage
+metadata comparison the bronze storage runner calls) and requires every tracked file they name to select that layer. A name is a module-level
+constant, a path string or a `/` join inside a function or an f-string whose placeholders are strings of the module; a folder that a function
+only creates is not a read. A path built from a variable the scan cannot resolve is not seen, so a new reader of another layer's file needs an
+`upstream_inputs` entry written by hand. It requires every file the runner copies to select
+`repository_code_checks`. A check whose inputs no path list can name
+completely belongs in `always` in `config/quality/ci_groups.json`.
+
+## Scratch worktrees in E2E runners
+
+These runners add a scratch Git worktree of HEAD: `run_ci_groups_e2e` and `run_checks_ci_e2e.sh`. Each removes it on every exit path: a pass or a failed case, an exception, an interrupt or a deadline.
+The Python runner adds the worktree through `scripts/quality/scratch_worktree.py`, which turns SIGTERM, SIGHUP and SIGALRM (the deadline wrapper's signal) into an exit that runs the removal.
+The removal runs `git worktree remove --force` and `git worktree prune`. If the removal fails, the folder is deleted instead. The report notes it.
+While the removal and the check of the registered worktrees run, the helper and the shell runner hold SIGINT (Ctrl-C) and those three signals, also for the Git processes they start;
+one that arrives then takes effect when the cleanup is done. The case `scratch_worktree_cleanup_holds_an_interrupt_until_it_is_done` of `run_ci_groups_e2e` checks it.
+Each run lists the registered worktrees (`git worktree list --porcelain`) before and after. A difference fails the run with the paths named. The report keeps both lists.
+A SIGKILL cannot be handled. A worktree left by one shows in the next run's list as the starting state. Clear it with `git worktree remove --force` and `git worktree prune`.

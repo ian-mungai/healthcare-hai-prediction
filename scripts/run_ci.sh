@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# CI_PART selects what runs: "all" (the default, every part), "core" (everything except the launcher E2E and the
-# acquisition gate) or "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it if set). GitHub CI runs
-# "core" and the launcher shards as parallel jobs.
+# CI_PART selects what runs: "all" (the default, every part), "core" (everything except the launcher E2E, the
+# acquisition gate and the three lakehouse layers), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
+# if set) or "bronze", "silver" or "gold" (the gates and that lakehouse layer's checks). GitHub CI runs "core", the launcher
+# shards and the three layers as parallel jobs.
 # CI_SCOPE selects the check groups (scripts/quality/ci_groups.py, config/quality/ci_groups.json): "full" (the default,
 # every group: run it before every push), "staged" (the groups the staged paths touch: the local_ci_affected commit
 # hook) or "range" (the groups RANGE_START..RANGE_END touches: GitHub CI). The privacy, secret, credential, data-file,
@@ -15,8 +16,8 @@ bash -n scripts/run_ci.sh scripts/infrastructure/*.sh
 python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 part="${CI_PART:-all}"
 case "$part" in
-  all | core | launcher) ;;
-  *) printf 'CI_PART must be all, core or launcher, not %s\n' "$part" >&2; exit 2 ;;
+  all | core | launcher | bronze | silver | gold) ;;
+  *) printf 'CI_PART must be all, core, launcher, bronze, silver or gold, not %s\n' "$part" >&2; exit 2 ;;
 esac
 scope="${CI_SCOPE:-full}"
 case "$scope" in
@@ -94,7 +95,20 @@ python_lint() {
   "$python_bin" -m scripts.quality.typecheck --check-untyped-defs --disallow-untyped-defs
 }
 
-lakehouse_checks() {
+lakehouse_bronze() {
+  "$python_bin" -m scripts.lakehouse.run_resource_checks
+  "$python_bin" -m scripts.lakehouse.run_lock_e2e
+  "$python_bin" -m scripts.lakehouse.run_provenance_e2e
+  "$python_bin" -m scripts.lakehouse.run_storage_single_copy_e2e --report "$quality_output/storage_single_copy.json"
+  "$python_bin" -m scripts.orchestration.run_contracts_e2e
+}
+
+lakehouse_silver() {
+  # The silver suites must match the kept-model contract, the moved checks and the baselines they are generated from.
+  "$python_bin" -m scripts.lakehouse.run_silver_e2e --check-suites
+}
+
+lakehouse_gold() {
   # Reference seeds of the gold control bridge, the formula recipes and the repeatable negative cases of their check.
   "$python_bin" -m scripts.lakehouse.bridge_references --check
   "$python_bin" -m scripts.lakehouse.run_bridge_references_e2e
@@ -103,16 +117,9 @@ lakehouse_checks() {
   "$python_bin" -m scripts.lakehouse.run_identity_seeds_e2e
   # The gold Great Expectations suites must match the gold contract they are generated from.
   "$python_bin" -m scripts.lakehouse.gold_checks check-suites
-  # The silver suites must match the kept-model contract, the moved checks and the baselines they are generated from.
-  "$python_bin" -m scripts.lakehouse.run_silver_e2e --check-suites
   "$python_bin" -m scripts.lakehouse.run_gold_publish_e2e --mode contract
-  "$python_bin" -m scripts.lakehouse.run_resource_checks
   "$python_bin" -m scripts.quality.model_metadata
   "$python_bin" -m scripts.quality.run_model_metadata_e2e
-  "$python_bin" -m scripts.lakehouse.run_lock_e2e
-  "$python_bin" -m scripts.lakehouse.run_provenance_e2e
-  "$python_bin" -m scripts.lakehouse.run_storage_single_copy_e2e --report "$quality_output/storage_single_copy.json"
-  "$python_bin" -m scripts.orchestration.run_contracts_e2e
 }
 
 orchestration_checks() {
@@ -199,7 +206,7 @@ terraform_checks() {
 }
 
 groups=()
-for group in python_lint lakehouse_checks orchestration_checks repository_code_checks configuration_checks sql_style terraform_checks; do
+for group in python_lint lakehouse_bronze lakehouse_silver lakehouse_gold orchestration_checks repository_code_checks configuration_checks sql_style terraform_checks; do
   if is_selected "$group"; then
     groups+=("$group")
   fi
