@@ -18,7 +18,7 @@ from scripts.acquisition import bls_api_transport as transport
 from scripts.acquisition.collect_bls_api import execute, verify_local
 from scripts.acquisition.s3_store import encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json, require
-from scripts.acquisition.tests.test_s3_store import OUTPUTS, FakeS3
+from scripts.acquisition.tests.test_s3_store import OUTPUTS, FakeS3, identity_bound, key_reader, no_publisher_request, settings_refused
 
 
 def fixture(batch: dict) -> bytes:
@@ -38,6 +38,40 @@ def fixture(batch: dict) -> bytes:
         ]
         series.append({"seriesID": sid, "data": rows})
     return encoded_json({"status": "REQUEST_SUCCEEDED", "message": [], "Results": {"series": series}})
+
+
+REPEATED = "repeatedname"
+
+
+def hidden_echoes(canary: str, shape: str) -> dict[str, str]:
+    """Reply texts that hide the key from a check of the parsed result or of the raw bytes; ``shape`` wraps one JSON value."""
+    first = f"\\u{ord(canary[0]):04x}{canary[1:]}"
+    every = "".join(f"\\u{ord(character):04x}" for character in canary)
+    texts = {
+        "nested_repeated_name": f'{{"inner": {{"{REPEATED}": "{first}", "{REPEATED}": "public"}}}}',
+        "repeated_name_subtree": f'{{"{REPEATED}": {{"rows": [["{first}"]]}}, "{REPEATED}": {{}}}}',
+        "fully_escaped_key": f'{{"echo": "{every}"}}',
+        "invalid_json": f'{{"echo": "{first}"',
+        "not_a_number": '{"echo": NaN}',
+        "infinity": '{"echo": Infinity}',
+        "negative_infinity": '{"echo": -Infinity}',
+    }
+    require(all(canary.encode() not in text.encode() for text in texts.values()), "Hidden echo fixture invalid")
+    return {name: shape % text for name, text in texts.items()}
+
+
+def hidden_echoes_refused(transport: Any, plan: dict, batch: dict, root: Path, client: Any, connection: Any, canary: str, shape: str) -> None:
+    """Each hidden echo, fetched through the real transport, must be refused with a value-free message and leave no cache file."""
+    for name, text in hidden_echoes(canary, shape).items():
+        connection.body = text.encode()
+        echo_root = root / f"echo_{name}"
+        try:
+            transport.fetch(plan, batch, echo_root, True, client, sleep=lambda _: None)
+        except ValueError as error:
+            require(canary not in str(error) and REPEATED not in str(error), f"Unsafe diagnostic for {name}")
+        else:
+            raise ValueError(f"Accepted {name}")
+        require(not any(item.is_file() for item in (echo_root / "batches").rglob("*")), f"{name} wrote a transport cache")
 
 
 def inventory(root: Path) -> dict:
@@ -290,7 +324,7 @@ def secret_scenarios(plan: dict, batch: dict, payload: bytes, root: Path) -> Non
     """Exercise runtime credentials with a synthetic canary and HTTPS substitution only."""
     canary = "SYNTHETIC_BLS_CREDENTIAL_FOR_E2E"
     client = FakeS3()
-    client.overrides["get-secret-value"] = {"SecretString": json.dumps({"api_key": canary})}
+    client.overrides["get-secret-value"] = {"SecretString": canary}
 
     class Connection:
         status = 200
@@ -314,11 +348,23 @@ def secret_scenarios(plan: dict, batch: dict, payload: bytes, root: Path) -> Non
             return
 
     connection = Connection()
-    with patch.object(transport.http.client, "HTTPSConnection", return_value=connection):
+    with patch.object(transport.http.client, "HTTPSConnection", return_value=connection), patch.object(transport.api_keys, "read", key_reader(client)):
         require(transport.request_live(plan, batch, client) == payload, "Synthetic credential request failed")
         execute(plan, batch, root, True, True, client, OUTPUTS)
         require(all(canary.encode() not in p.read_bytes() for p in root.rglob("*") if p.is_file()), "Credential persisted locally")
         require(all(canary.encode() not in value["body"] for value in client.objects.values()), "Credential persisted in S3")
+        settings_refused(client, lambda: transport.request_live(plan, batch, client))
+        identity_bound(lambda: transport.request_live(plan, batch, client), plan["credential_reference"], canary)
+        for stored in (json.dumps({"api_key": canary}), json.dumps([canary]), json.dumps(canary)):
+            client.overrides["get-secret-value"] = {"SecretString": stored}
+            with no_publisher_request():
+                try:
+                    transport.request_live(plan, batch, client)
+                except ValueError as error:
+                    require("credential structure invalid" in str(error) and canary not in str(error), "Serialized JSON key refusal missing")
+                else:
+                    raise ValueError("Serialized JSON key accepted")
+        client.overrides["get-secret-value"] = {"SecretString": canary}
         client.overrides["get-caller-identity"] = {"Account": "wrong", "Arn": "wrong"}
         count = len([c for c in client.calls if c[0] == "get-secret-value"])
         try:
@@ -336,6 +382,7 @@ def secret_scenarios(plan: dict, batch: dict, payload: bytes, root: Path) -> Non
             require("echoed credential" in str(error) and canary not in str(error), "Unsafe credential diagnostic")
         else:
             raise ValueError("Credential echo accepted")
+        hidden_echoes_refused(transport, plan, batch, root, client, connection, canary, '{"status": "REQUEST_SUCCEEDED", "data": %s}')
         connection.status = 302
         try:
             transport.request_live(plan, batch, client)

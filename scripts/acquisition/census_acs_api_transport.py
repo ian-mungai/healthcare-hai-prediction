@@ -1,13 +1,13 @@
 """Bounded Census GET transport: runtime-only key, no redirects and safe immutable cache."""
 
 import http.client
-import json
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
+from scripts.acquisition import api_keys, echo_guard
 from scripts.acquisition import census_acs_api_contract as contract
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition.bls_api_transport import RetryableRequest
@@ -28,12 +28,8 @@ def request_json(endpoint: str, parameters: dict, client: AwsCli) -> bytes:
     identity, settings = client.call("sts", "get-caller-identity"), client.configuration
     expected = f"arn:aws:iam::{settings['expected_account_id']}:user/{settings['aws_profile']}"
     require(identity.get("Account") == settings["expected_account_id"] and identity.get("Arn") == expected, "Census project identity differs; secret not read")
-    secret = client.call("secretsmanager", "get-secret-value", ["--secret-id", "census_api_key"])
-    try:
-        credential = json.loads(secret["SecretString"])["api_key"]
-        require(isinstance(credential, str) and len(credential) >= 16 and credential.isascii() and credential.isalnum(), "Census credential structure invalid")
-    except (KeyError, TypeError, json.JSONDecodeError):
-        raise ValueError("Census credential structure invalid") from None
+    credential = api_keys.read("census_api_key", settings.get("aws_profile", ""), settings.get("aws_region", ""), identity["Account"], identity["Arn"])
+    require(len(credential) >= 16 and credential.isascii() and credential.isalnum(), "Census credential structure invalid")
     parsed = urlsplit(endpoint)
     connection = http.client.HTTPSConnection(parsed.netloc, timeout=120)
     try:
@@ -45,15 +41,11 @@ def request_json(endpoint: str, parameters: dict, client: AwsCli) -> bytes:
         require(response.status == 200 and "json" in response.getheader("Content-Type", ""), "Census HTTP status/type rejected; no redirect followed")
         raw = controls.read(response, 64 * 1024**2 + 1)
         require(0 < len(raw) <= 64 * 1024**2, "Census response size rejected")
-        require(credential.encode() not in raw, "Census response echoed credential; nothing persisted")
-        payload = json.loads(raw)
-        require(credential not in json.dumps(payload, ensure_ascii=False), "Census response echoed credential; nothing persisted")
+        payload = echo_guard.checked_json(raw, credential, "Census")
         require(isinstance(payload, list), "Census JSON response shape rejected")
         return raw
     except (OSError, http.client.HTTPException):
         raise RetryableRequest("Census network failure; request details withheld") from None
-    except json.JSONDecodeError:
-        raise ValueError("Census invalid JSON; response details withheld") from None
     finally:
         connection.close()
 

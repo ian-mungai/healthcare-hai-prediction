@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from scripts.acquisition import bls_api_transport
+from scripts.acquisition import api_keys, bls_api_transport
 from scripts.acquisition import redownload as harness
 from scripts.acquisition.s3_store import encoded_json
 from scripts.acquisition.source_registry import RegistryError, read_json, require
-from scripts.acquisition.tests.test_s3_store import FakeS3
+from scripts.acquisition.tests.test_s3_store import FakeS3, key_reader
 
 
 def approve_fixture(run: Any) -> None:
@@ -66,7 +66,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("changed_execution_controls_refuse_before_dispatch", stale, "Execution controls changed")
 
     def code_versions_bound() -> None:
-        # Failure mode S16: a code-version list changed after the review invalidates it, like any other input.
         run, _unit, _web = build("code_versions_bound")
         listed = run.base / "config/acquisition/fixture_code_versions.json"
         listed.parent.mkdir(parents=True, exist_ok=True)
@@ -193,7 +192,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("interrupted_byte_reservations_remain_charged_on_restart", bytes_on_crash, "Byte cap would be exceeded")
 
     marker = "synthetic-private-value"
-    # Each credential form the delta review found surviving redaction, plus home paths that are not the current user's.
     credential_forms = [
         f"Authorization: Bearer {marker}",
         f"Authorization: Basic {marker}",
@@ -204,7 +202,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
         f"https://synthetic-user:{marker}@example.invalid/x",
         f"https://example.invalid/x?signature={marker}",
         f"token={marker}",
-        # Forms the rereview found surviving pattern redaction.
         f'{{"access_token": "{marker}"}}',
         f"{{'refresh_token': '{marker}'}}",
         f"SecretAccessKey: {marker}",
@@ -268,7 +265,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
             text = found[-1].read_text()
             require(marker not in text, f"Diagnostic kept a credential (form {number})")
             require(person not in text and str(Path.home()) not in text, f"Diagnostic kept a home path (form {number})")
-            # Failure mode 43: only fixed categories and reviewed file paths with line numbers are kept.
             diagnostic = read_json(found[-1])
             require(
                 set(diagnostic) == {"error_categories", "frames", "unverified_frames"} and diagnostic["error_categories"] == ["registry_contract"],
@@ -299,7 +295,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("collector_exception_diagnostic_keeps_only_categories_and_reviewed_locations", private_diagnostic)
 
     def runtime_strings() -> None:
-        # Failure modes 43-45: cached source, function names and class names are run-time strings, never kept.
         run, unit, _web = build("runtime_strings")
         harness.review_gate(run)
         named = type(marker, (ValueError,), {})
@@ -335,7 +330,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("runtime_source_function_and_class_names_never_persist", runtime_strings)
 
     def transport_names() -> None:
-        # Failure mode 47: the shared downloader records fixed failure codes, never a run-time class name.
         cases = [
             ("os", OSError, "OSError", 1),
             ("refused", ConnectionRefusedError, "OSError", 1),
@@ -369,7 +363,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("generic_download_exceptions_store_only_fixed_failure_codes", transport_names)
 
     def unverified_frames() -> None:
-        # Failure mode 43: a frame counts only when its file is in the reviewed snapshot with unchanged bytes.
         run, unit, _web = build("unverified_frames")
 
         def adapter(*_args: Any) -> Path:
@@ -394,7 +387,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
             raise ValueError("Synthetic module did not load")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        # The file changes after import, as in the review's probe.
         outside.write_text(f"def fail():\n    raise ValueError('{marker}')\n")
         harness.collector_unit(unit, run, lambda *_args: module.fail())
         latest = diagnostics_of(run, unit)[-1]
@@ -404,7 +396,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("frames_outside_or_changed_since_review_are_only_counted", unverified_frames)
 
     def receipt_reference() -> None:
-        # Failure mode 46: receipt references are state-root relative, and a receipt outside the root is refused.
         run, unit, _web = build("receipt_reference")
         stored = read_json(run.base / unit["receipt"])
 
@@ -432,7 +423,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("fresh_receipt_references_are_state_root_relative", receipt_reference)
 
     def run_records() -> None:
-        # Failure modes 48-49: each run's controls and review sit beside its own queue; run 1 keeps its original files.
         repo = harness.REPO_ROOT
         run1 = harness.Run(repo / "data/redownload_checks/20260929/queue.json", repo / "data/redownload_checks/20260929/run", base=repo)
         run2 = harness.Run(repo / "data/redownload_checks/20261001/queue.json", repo / "data/redownload_checks/20261001/run", base=repo)
@@ -497,7 +487,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("scope_changed_after_review_is_refused", scope_changed, "Execution controls changed")
 
     def transient_scope(pilot: bool) -> None:
-        # Failure mode 56: an expansion restored before the review gate must not widen dispatch.
         run, alpha, beta, web = scoped(f"transient_scope_{'pilot' if pilot else 'full'}")
         scope_file = run.queue_path.with_name("scope.json")
         scope_file.write_bytes(encoded_json({"sources": ["ALPHA", "BETA"]}))
@@ -515,7 +504,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("transient_scope_expansion_cannot_widen_pilot_dispatch", lambda: transient_scope(True))
 
     def preview_scope() -> None:
-        # Failure mode 57: with frozen controls, a preview refuses an expanded or missing scope file.
         run, _alpha, _beta, _web = scoped("preview_scope")
         scope_file = run.queue_path.with_name("scope.json")
         refused = 0
@@ -533,7 +521,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("preview_refuses_a_scope_that_differs_from_the_frozen_controls", preview_scope)
 
     def caller_widens(pilot: bool) -> None:
-        # Failure mode 59: a caller-owned list widened after the check (here by the progress log) must not dispatch.
         run, alpha, beta, web = scoped(f"caller_widens_{'pilot' if pilot else 'full'}")
         chosen = {"ALPHA"}
 
@@ -549,7 +536,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("caller_widened_list_cannot_dispatch_in_pilot", lambda: caller_widens(True))
 
     def resume_scope() -> None:
-        # Failure mode 60: resume refuses a source outside the reviewed scope, even with a pending outcome.
         run, _alpha, beta, _web = scoped("resume_scope")
         harness.execute(run)
         record = {"snapshot_id": beta["snapshot_id"], "source_id": "BETA", "outcome": "changed_needs_review"}
@@ -564,7 +550,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("resume_refuses_a_source_outside_the_reviewed_scope", resume_scope)
 
     def report_binding() -> None:
-        # Failure mode 61: a report refuses a state root owned by another run's controls and writes nothing there.
         run, _alpha, _beta, _web = scoped("report_binding")
         harness.execute(run)
         second_queue = run.queue_path.parent / "second" / "queue.json"
@@ -605,7 +590,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
         return {str(path.relative_to(root)): harness.digest(path.read_bytes()) for path in root.rglob("*") if path.is_file()}
 
     def preview_binding() -> None:
-        # Failure mode 62: a preview reads persisted state only from the root the queue's frozen controls bind.
         run, second = second_run("preview_binding")
         before = tree(run.state_root)
         refused = []
@@ -635,7 +619,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("preview_refuses_a_state_root_owned_by_another_run", preview_binding)
 
     def unfrozen_preview_binding() -> None:
-        # Failure mode 62: without frozen controls nothing proves which run owns an existing root, so it is refused.
         run, second = second_run("unfrozen_preview_binding", frozen=False)
         try:
             harness.execute(harness.Run(second.queue_path, run.state_root, base=run.base), allow_network=False)
@@ -647,7 +630,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("unfrozen_preview_refuses_an_existing_owned_root", unfrozen_preview_binding)
 
     def report_reader_binding() -> None:
-        # Failure mode 63: the report reader itself refuses a foreign root before reading anything.
         run, second = second_run("report_reader_binding")
         try:
             harness.report(harness.Run(second.queue_path, run.state_root, base=run.base))
@@ -660,9 +642,7 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("report_reader_refuses_a_state_root_owned_by_another_run", report_reader_binding)
 
     def cli_default_root() -> None:
-        # Failure mode 58: drive the command line with --queue only and check the root it resolves.
         run, _alpha, _beta, _web = scoped("cli_default_root")
-        # The fixture's queue sits outside data/redownload_checks, so freeze controls that bind the default root (failure mode 62).
         approve_fixture(harness.Run(run.queue_path, run.queue_path.with_name("run"), base=run.base))
         seen: list[Any] = []
         original = harness.execute
@@ -689,7 +669,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     def mmd_binding() -> None:
         from scripts.acquisition import collect_mmd_api, mmd_api_contract
 
-        # The fingerprint the collector writes today must pass the real verify_capture; failure modes 29 and 42.
         class PastBinding(Exception):
             """Raised by the first step after the code binding checks, so reaching it proves the binding was accepted."""
 
@@ -710,7 +689,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
             def past(*_args: Any) -> dict:
                 raise PastBinding
 
-            # Synthetic approval in memory only: the production catalog is never read or written.
             with (
                 patch.object(mmd_api_contract, "load_plan", lambda _sha: {}),
                 patch.object(mmd_api_contract, "reviewed_code_versions", lambda: [current, historical]),
@@ -761,8 +739,8 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
                 pass
 
         client = FakeS3()
-        client.overrides["get-secret-value"] = {"SecretString": json.dumps({"api_key": "s" * 24})}
-        with controls.active(guard), patch.object(http.client, "HTTPSConnection", Connection):
+        client.overrides["get-secret-value"] = {"SecretString": "s" * 24}
+        with controls.active(guard), patch.object(http.client, "HTTPSConnection", Connection), patch.object(api_keys, "read", key_reader(client)):
             try:
                 if mode == "bls":
                     bls_api_transport.fetch(
@@ -949,7 +927,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("approved_mmd_browser_api_mapping_uses_the_same_measure_year_identity", mmd_browser_identity)
 
     def all_mmd_browser_identities() -> None:
-        # This is the approved frozen metadata contract, covering all three published layouts.
         run, unit, _web = build("all_mmd_browser_identities")
         unit["flags"] = [harness.MMD_API_FLAG]
         cases = [("C258.01", 2023, "mmd_data.csv")]
@@ -1092,7 +1069,6 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("runtime_settings_change_invalidates_review_without_logging_values", environment_change)
 
     def path_map_change(after_gate: bool) -> None:
-        # Failure mode S46 (R3P2-CONTROLS-015): the map that resolves recorded receipt paths is bound to the review.
         run, unit, web = build(f"path_map_{'after_gate' if after_gate else 'before_gate'}")
         web.serve(unit["url"], (200, b"a\n1\n"))
         original_read = Path.read_bytes

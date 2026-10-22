@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from scripts.acquisition import api_keys, echo_guard
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition.bls_api_contract import digest, request_for
 from scripts.acquisition.s3_store import AwsCli, encoded_json, write_once
@@ -50,17 +51,15 @@ def reserve(root: Path, identity: str, limit: int, now: datetime) -> None:
 
 
 def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
-    """Consume the AWS secret only inside this runtime boundary; return public data bytes."""
+    """Read the key from Secrets Manager only inside this runtime boundary, after the identity check; return public data bytes."""
     identity = client.call("sts", "get-caller-identity")
     settings = client.configuration
     expected = f"arn:aws:iam::{settings['expected_account_id']}:user/{settings['aws_profile']}"
     require(identity.get("Account") == settings["expected_account_id"] and identity.get("Arn") == expected, "BLS project identity differs; secret not read")
-    secret = client.call("secretsmanager", "get-secret-value", ["--secret-id", plan["credential_reference"]])
-    try:
-        credential = json.loads(secret["SecretString"])["api_key"]
-        require(isinstance(credential, str) and len(credential) >= 16 and credential.strip() == credential, "BLS credential structure invalid")
-    except (KeyError, TypeError, json.JSONDecodeError):
-        raise ValueError("BLS credential structure invalid") from None
+    credential = api_keys.read(
+        plan["credential_reference"], settings.get("aws_profile", ""), settings.get("aws_region", ""), identity["Account"], identity["Arn"]
+    )
+    require(len(credential) >= 16 and credential.strip() == credential and not credential.startswith(("{", "[", '"')), "BLS credential structure invalid")
     parsed = urlsplit(plan["endpoint"])
     connection = http.client.HTTPSConnection(parsed.netloc, timeout=60)
     try:
@@ -75,9 +74,7 @@ def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
         require(response.status == 200 and "json" in response.getheader("Content-Type", ""), "BLS HTTP status/type rejected; no redirect followed")
         raw = controls.read(response, 32 * 1024**2 + 1)
         require(0 < len(raw) <= 32 * 1024**2, "BLS response size rejected")
-        require(credential.encode() not in raw and json.dumps(credential)[1:-1].encode() not in raw, "BLS response echoed credential; nothing persisted")
-        payload = json.loads(raw)
-        require(credential not in json.dumps(payload, ensure_ascii=False), "BLS response echoed credential; nothing persisted")
+        payload = echo_guard.checked_json(raw, credential, "BLS")
         require(isinstance(payload, dict), "BLS response envelope invalid")
         if payload.get("status") != "REQUEST_SUCCEEDED":
             messages = str(payload.get("message", [])).lower()
@@ -87,8 +84,6 @@ def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
         return raw
     except (OSError, http.client.HTTPException):
         raise RetryableRequest("BLS network request failed; response details withheld") from None
-    except json.JSONDecodeError:
-        raise ValueError("BLS returned invalid JSON; response details withheld") from None
     finally:
         connection.close()
 

@@ -1,7 +1,6 @@
 """Bounded HUD GET transport: runtime-only bearer token, no redirects and safe immutable cache."""
 
 import http.client
-import json
 import re
 import time
 from collections.abc import Callable
@@ -9,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
+from scripts.acquisition import api_keys, echo_guard
 from scripts.acquisition import hud_api_contract as contract
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition.bls_api_transport import RetryableRequest
@@ -24,13 +24,8 @@ def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
     identity, settings = client.call("sts", "get-caller-identity"), client.configuration
     expected = f"arn:aws:iam::{settings['expected_account_id']}:user/{settings['aws_profile']}"
     require(identity.get("Account") == settings["expected_account_id"] and identity.get("Arn") == expected, "HUD project identity differs; secret not read")
-    secret = client.call("secretsmanager", "get-secret-value", ["--secret-id", contract.CREDENTIAL])
-    # Same JSON {"api_key": ...} shape as the shared BLS and Census secrets.
-    try:
-        credential = json.loads(secret["SecretString"])["api_key"]
-    except (KeyError, TypeError, json.JSONDecodeError):
-        raise ValueError("HUD credential structure invalid") from None
-    require(isinstance(credential, str) and re.fullmatch(r"[A-Za-z0-9._-]{20,4096}", credential) is not None, "HUD credential structure invalid")
+    credential = api_keys.read(contract.CREDENTIAL, settings.get("aws_profile", ""), settings.get("aws_region", ""), identity["Account"], identity["Arn"])
+    require(re.fullmatch(r"[A-Za-z0-9._-]{20,4096}", credential) is not None, "HUD credential structure invalid")
     parsed = urlsplit(contract.ENDPOINT)
     connection = http.client.HTTPSConnection(parsed.netloc, timeout=300)
     try:
@@ -46,14 +41,10 @@ def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
         )
         raw = controls.read(response, 256 * 1024**2 + 1)
         require(0 < len(raw) <= 256 * 1024**2, "HUD response size rejected")
-        require(credential.encode() not in raw, "HUD response echoed credential; nothing persisted")
-        # Envelope and field checks run after caching, so a schema change is reviewable offline.
-        json.loads(raw)
+        echo_guard.checked_json(raw, credential, "HUD")
         return raw
     except (OSError, http.client.HTTPException):
         raise RetryableRequest("HUD network failure; request details withheld") from None
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        raise ValueError("HUD invalid JSON; response details withheld") from None
     finally:
         connection.close()
 
