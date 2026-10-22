@@ -51,6 +51,7 @@ from urllib.parse import parse_qs
 import scripts.orchestration as orchestration_package
 import scripts.orchestration.airflow_api as airflow_api_module
 from orchestration import launcher
+from scripts.infrastructure.secret_store_stand_in import StandIn, stack_seeds
 from scripts.lakehouse import run_lock
 from scripts.orchestration import broker as broker_module
 from scripts.orchestration import run_control, sentinel, transform_fixtures
@@ -496,7 +497,10 @@ class Stack:
         self.registry.mkdir(mode=0o700)
         for folder in (self.seeds, self.packages, self.runs_root):
             folder.mkdir()
+        self.stand_in = StandIn(stack_seeds())
+        self.stand_in.__enter__()
         settings = {
+            "secrets_endpoint": self.stand_in.endpoint,
             "docker_socket": launcher.docker_socket_path(),
             "timings": {"health_wait": 300.0, "stop_grace": 30, "docker_call_timeout": 120.0},
             "allowed_roots": [str(self.state), str(self.runs_root), str(self.packages)],
@@ -554,8 +558,7 @@ class Stack:
                 if "postgres ended" not in str(error) or attempt == START_ATTEMPTS:
                     raise
                 shutil.rmtree(self.state / "postgres", ignore_errors=True)
-        secret = (self.state / "metadata" / "jwt_secret").read_text().strip()
-        self.api = AirflowApi(self.supervisor.api_port, secret)
+        self.api = AirflowApi(self.supervisor.api_port, self.supervisor.jwt_secret)
 
     def prepare_checkout(self, extra: dict[str, str]) -> None:
         """Prepare the isolated combined-DAG regression checkout."""
@@ -1974,6 +1977,7 @@ def finish(stack: Stack, work: Path) -> dict[str, Any]:
         errors.append(f"launcher shutdown: {type(error).__name__}: {error}"[:300])
     for name in SENTINELS:
         os.environ.pop(name, None)
+    stack.stand_in.__exit__()
     if not stack.launcher_process:
         errors.append("the launcher process was never identified, so its exit cannot be confirmed")
     elif problem := launcher_exit_problem(stack.launcher_process):

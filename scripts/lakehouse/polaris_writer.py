@@ -127,7 +127,7 @@ def ensure_writer(writer: Writer, access: str, catalog: str, known: dict[str, st
 
 
 def main(writer: Writer, description: str, argv: list[str] | None = None) -> int:
-    """Print the plan (``--dry-run``) or run the set-up against the local Polaris."""
+    """Print the plan (``--dry-run``). A real run is refused until this set-up keeps its pair in Secrets Manager."""
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dry-run", action="store_true", help="print the requests and send none")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
@@ -137,13 +137,7 @@ def main(writer: Writer, description: str, argv: list[str] | None = None) -> int
         for method, path, body in planned_requests(writer, catalog.CATALOG):
             sys.stdout.write(f"{method} {path} {json.dumps(body, sort_keys=True) if body else ''}".rstrip() + "\n")
         return 0
-    try:
-        known = catalog.credentials()
-        access = catalog.token(known)
-        outcome = ensure_writer(writer, access, catalog.CATALOG, known, catalog.request, lambda values: catalog.write_private(catalog.SECRETS, values))
-        catalog.write_compose_env(catalog.deployment())
-    except (SetupError, catalog.CatalogError, OSError, KeyError) as error:
-        sys.stderr.write(f"{writer.name.replace('_', ' ')} setup: {error}\n")
-        return 1
-    sys.stdout.write(f"{writer.name} principal {outcome}; it may write the {' and '.join(writer.namespaces)} namespaces only.\n")
-    return 0
+    sys.stderr.write(
+        f"{writer.name.replace('_', ' ')} setup: the credentials file this set-up writes to no longer exists; the set-up moves to Secrets Manager later\n"
+    )
+    return 1

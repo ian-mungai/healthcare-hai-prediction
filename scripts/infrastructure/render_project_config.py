@@ -16,6 +16,7 @@ from dotenv import dotenv_values
 from scripts.process import TimeoutExpired, run_command
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SECRET_RESOURCE_TYPE = re.compile(r"^aws_secretsmanager_")
 
 
 class ConfigurationError(ValueError):
@@ -122,12 +123,40 @@ def write_or_check(path: Path, values: dict[str, str], check: bool = False) -> N
 
 
 def verify_plan_variables(plan: dict, expected: dict[str, str]) -> None:
-    """Reject incomplete saved plans or any variable mismatch before apply."""
+    """Reject incomplete saved plans, any mismatch in the written inputs and any other input that is not its committed default."""
     if plan.get("errored") or not plan.get("complete"):
         raise ConfigurationError("Only a complete, successful saved plan may be applied.")
     actual = {name: item.get("value") for name, item in plan.get("variables", {}).items()}
-    if actual != expected:
+    if {name: value for name, value in actual.items() if name in expected} != expected:
         raise ConfigurationError("Saved plan inputs differ from .env or the selected profile; create and review a fresh plan.")
+    declared = plan.get("configuration", {}).get("root_module", {}).get("variables", {})
+    for name in sorted(actual.keys() - expected.keys()):
+        if "default" not in declared.get(name, {}) or actual[name] != declared[name]["default"]:
+            raise ConfigurationError(f"Saved plan input {name} is not its committed default; create and review a fresh plan.")
+
+
+def secret_resources(node: object) -> list[str]:
+    """The address of every Secrets Manager secret resource, data source or ephemeral resource anywhere in a saved plan's JSON."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        kind = node.get("type")
+        if isinstance(kind, str) and SECRET_RESOURCE_TYPE.match(kind) and ("mode" in node or "address" in node):
+            found.append(str(node.get("address") or kind))
+        for child in node.values():
+            found += secret_resources(child)
+    elif isinstance(node, list):
+        for child in node:
+            found += secret_resources(child)
+    return found
+
+
+def verify_plan_resources(plan: dict) -> None:
+    """Reject a saved plan that creates, changes, reads or only declares a Secrets Manager secret: no secret value may enter Terraform or its state."""
+    found = sorted(set(secret_resources(plan)))
+    if found:
+        raise ConfigurationError(
+            f"Saved plan declares a Secrets Manager secret resource or data source ({', '.join(found)}); no secret may be managed by Terraform."
+        )
 
 
 def main() -> None:
@@ -155,7 +184,9 @@ def main() -> None:
                 raise ConfigurationError("The saved plan could not be inspected in time; no apply was run.") from None
             if result.returncode:
                 raise ConfigurationError("The saved plan could not be inspected; no apply was run.")
-            verify_plan_variables(json.loads(result.stdout), values)
+            plan = json.loads(result.stdout)
+            verify_plan_resources(plan)
+            verify_plan_variables(plan, values)
         if arguments.verify_identity:
             verify_project_identity(storage)
         for name, (directory, values) in selected.items():

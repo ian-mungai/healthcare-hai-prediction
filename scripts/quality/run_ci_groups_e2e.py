@@ -5,10 +5,12 @@ copies the working check inputs into it, then checks which groups each scope sel
 of known content, unusable ranges, staged changes (a deletion and a rename included), explicit paths, the full scope and
 invalid input. Real runs of the CI entry check that the unconditional gates run in every part (also with an empty selection)
 and before the launcher E2E, that a failing gate fails every part, that the full Markdown lint runs as a gate in every scope
-and that the entry plan alone (``CI_LIST_ONLY=1``) runs nothing. One case runs this runner under a real pre-commit hook that
-inherits an alternate ``GIT_INDEX_FILE``, ``GIT_DIR`` and ``GIT_WORK_TREE`` and checks that the caller's index, staged diff and working files survive. Failure
-modes CS1 to CS31 (plans, local). The report goes to data/e2e/ci_groups/<UTC>_<pid>/report.json with the revision, the SHA-256
-of the files under test and the tool versions; the run fails when a file under test changes while it runs.
+and that the entry plan alone (``CI_LIST_ONLY=1``) runs nothing.
+A static case requires the group functions of scripts/run_ci.sh to start the secret store E2E and the gold writer set-up mode.
+One case runs this runner under a real pre-commit hook that inherits an alternate ``GIT_INDEX_FILE``, ``GIT_DIR`` and ``GIT_WORK_TREE`` and checks that
+the caller's index, staged diff and working files survive. Failure modes CS1 to CS31 (plans, local). The report goes to
+data/e2e/ci_groups/<UTC>_<pid>/report.json with the revision, the SHA-256 of the files under test and the tool versions;
+the run fails when a file under test changes while it runs.
 
 ``--selection-only`` runs the selector and acquisition-hook selection cases as an iteration run and not commit evidence.
 It skips every case that runs scripts/run_ci.sh or this runner. Acquisition selection uses a scratch replacement of the
@@ -658,7 +660,7 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [*silver_gold, "orchestration_checks", "sql_style"],
         ),
     ]
-    return [*cases, *reader_coverage_cases(work)]
+    return [*cases, *reader_coverage_cases(work), *entry_point_cases()]
 
 
 def module_source(module: str) -> str:
@@ -812,6 +814,41 @@ def reader_scan_case(tracked: set[str]) -> dict[str, Any]:
         "a_model_no_string_names_is_not_read": "dbt/models/gold/dimensions/dim_county.sql" not in found,
     }
     return {"case": "reader_scan_finds_paths_built_inside_functions", "passed": all(checks.values()), "checks": checks}
+
+
+HOSTED_ENTRY_POINTS = {
+    "configuration_checks": (
+        ("scripts.infrastructure.run_secret_store_e2e", ("scripts/infrastructure/run_secret_store_e2e.py", "scripts/infrastructure/secret_store.py")),
+    ),
+    "lakehouse_gold": (
+        (
+            "scripts.lakehouse.run_gold_publish_e2e --mode writer_setup",
+            ("scripts/lakehouse/run_gold_publish_e2e.py", "scripts/lakehouse/gold_writer_setup.py", "scripts/lakehouse/principal_credentials.py"),
+        ),
+    ),
+}
+
+
+def entry_point_cases() -> list[dict[str, Any]]:
+    """The offline entry points that only a check-group function runs: each is started by its group function in scripts/run_ci.sh and a change to its
+    sources selects that group, so a hosted run cannot pass without it."""
+    text = (ROOT / "scripts/run_ci.sh").read_text(encoding="utf-8")
+    missing: list[str] = []
+    not_selecting: list[str] = []
+    for function, entries in HOSTED_ENTRY_POINTS.items():
+        body = re.search(rf"^{function}\(\) \{{\n(.*?)^\}}", text, re.DOTALL | re.MULTILINE)
+        for command, sources in entries:
+            if not body or not re.search(rf"^\s*\"\$python_bin\" -m {re.escape(command)}$", body.group(1), re.MULTILINE):
+                missing.append(f"{function}: {command}")
+            not_selecting += [path for path in sources if function not in ci_groups.plan("paths", "all", paths=[path])["run"]]
+    return [
+        {
+            "case": "offline_entry_points_run_in_their_groups",
+            "passed": not missing and not not_selecting,
+            "not_run_by_the_group": missing,
+            "sources_not_selecting_the_group": not_selecting,
+        }
+    ]
 
 
 def reader_coverage_cases(work: Path) -> list[dict[str, Any]]:

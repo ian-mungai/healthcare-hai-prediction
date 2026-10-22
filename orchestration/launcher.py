@@ -55,12 +55,13 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import cache, partial
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, Literal, NamedTuple, NoReturn
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
 from orchestration import dbt_lineage, lineage_services, network_policy, pipeline_protocol, pipeline_render
+from scripts.infrastructure import secret_store
 from scripts.lakehouse import dbt_package_archive, gold_publish_record, memory_budget, pins, run_lock
 from scripts.lakehouse import provenance as build_provenance
 from scripts.process import run_command
@@ -105,7 +106,7 @@ ORCHESTRATION_MEMORY: dict[str, tuple[str, float, int]] = {
 }
 ORCHESTRATION_SCHEDULER_BASE = 1024**3
 ORCHESTRATION_WORKER_MEMORY = 256 * 1024**2
-ORCHESTRATION_STATE_FOLDERS = ("metadata", "session")
+ORCHESTRATION_STATE_FOLDERS = ("session",)
 ORCHESTRATION_DUMPS = ("metadata", "xcom")
 ORCHESTRATION_UP_PARAMETERS = ("state", "api_port", "checkout")
 PINNED_REFERENCE = re.compile(r"[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9._-]{1,128})?@sha256:[a-f0-9]{64}")
@@ -216,7 +217,10 @@ class Config:
     timings: Timings = Timings()
     images: Mapping[str, str] = field(default_factory=dict)
     restart_command: tuple[str, ...] = DOCKER_RESTART_COMMAND
-    compose_env: Path | None = None
+    secrets_endpoint: str | None = None
+    secret_fetch_seconds: float = secret_store.FETCH_DEADLINE_SECONDS
+    aws_profile: str = ""
+    aws_region: str = ""
     allowed_roots: tuple[Path, ...] = ()
     lakehouse_state: Path = Path("data/lakehouse")
     # The checkout whose data/lakehouse/ holds the catalog database: the main checkout for the real registry (amendments A85 and A86).
@@ -230,6 +234,23 @@ class Config:
         if self.registry.kind == "test" and self.token_root.is_relative_to(self.registry.path):
             return self.registry.path
         return token_anchor(self.token_root)
+
+    def secret_store(self) -> secret_store.SecretStore:
+        """The Secrets Manager client for this registry: the project profile, or the stand-in a test registry names."""
+        try:
+            return secret_store.open_store(self.catalog_checkout or self.root, self.secrets_endpoint)
+        except secret_store.SecretStoreError as error:
+            raise LauncherError(str(error), "spec") from None
+
+    def aws_settings(self) -> dict[str, str]:
+        """The project AWS profile and region: a test registry's own values, else the rendered Terraform variables."""
+        if self.secrets_endpoint is not None:
+            return {"AWS_PROFILE": self.aws_profile, "AWS_REGION": self.aws_region}
+        try:
+            settings = secret_store.project_settings(self.catalog_checkout or self.root)
+        except secret_store.SecretStoreError as error:
+            raise LauncherError(str(error), "spec") from None
+        return {"AWS_PROFILE": settings["aws_profile"], "AWS_REGION": settings["aws_region"]}
 
     @property
     def socket_path(self) -> Path:
@@ -389,13 +410,51 @@ def commit_secret(key: bytes, value: str) -> str:
     return "hmac:" + hmac.new(key, value.encode(), hashlib.sha256).hexdigest()
 
 
-class DockerError(Exception):
-    """The Docker Engine answered with an error status, or did not answer."""
+DockerReason = Literal[
+    "no connection",
+    "request refused",
+    "daemon error",
+    "unexpected reply",
+    "stop failed",
+    "kill failed",
+    "remove failed",
+    "logs failed",
+    "network remove failed",
+    "pull failed",
+    "pull stream failed",
+    "events refused",
+    "events failed",
+    "attach refused",
+    "ping failed",
+]
 
-    def __init__(self, status: int, message: str) -> None:
+
+def docker_reason(status: int) -> DockerReason:
+    """The fixed reason class of a daemon status. The daemon's own text is never kept because it can quote a container's environment."""
+    if status == 0:
+        return "no connection"
+    if 400 <= status < 500:
+        return "request refused"
+    if status >= 500:
+        return "daemon error"
+    return "unexpected reply"
+
+
+class DockerError(Exception):
+    """The Docker Engine answered with an error status, or did not answer. It keeps the status and a fixed reason class, never daemon text."""
+
+    def __init__(self, status: int, message: DockerReason) -> None:
         super().__init__(f"Docker {status}: {message}")
         self.status = status
-        self.message = message
+        self.message: DockerReason = message
+
+
+def failure_text(error: object) -> str:
+    """The text a record may keep for a failure: a Docker error as its status and reason, a launcher refusal as the launcher composed it, any other
+    exception as its type name."""
+    if isinstance(error, (DockerError, LauncherError, memory_budget.BudgetError, build_provenance.ProvenanceError)):
+        return str(error)
+    return type(error).__name__
 
 
 class UnixConnection(http.client.HTTPConnection):
@@ -463,7 +522,7 @@ class DockerApi:
             response = connection.getresponse()
             return response.status, response.read()
         except (OSError, http.client.HTTPException) as error:
-            raise DockerError(0, f"{type(error).__name__}: {error}") from error
+            raise DockerError(0, "no connection") from error
         finally:
             connection.close()
 
@@ -471,11 +530,7 @@ class DockerApi:
         """A request whose status must be in ``ok``; returns the decoded JSON body or None."""
         status, data = self.request(method, path, body, timeout)
         if status not in ok:
-            try:
-                message = json.loads(data).get("message", "")
-            except (ValueError, AttributeError):
-                message = data.decode(errors="replace")[:200]
-            raise DockerError(status, message)
+            raise DockerError(status, docker_reason(status))
         if not data:
             return None
         try:
@@ -629,14 +684,14 @@ class DockerApi:
         """Pull an image by its digest; the reply is a stream of progress lines and an ``error`` line is a failure."""
         status, data = self.request("POST", f"/images/create?fromImage={_quote(repository, safe='/')}&tag={_quote(digest)}", timeout=3600)
         if status != 200:
-            raise DockerError(status, data.decode(errors="replace")[:200])
+            raise DockerError(status, "pull failed")
         for line in data.decode(errors="replace").splitlines():
             try:
                 progress = json.loads(line)
             except ValueError:
                 continue
             if isinstance(progress, dict) and progress.get("error"):
-                raise DockerError(500, str(progress["error"])[:200])
+                raise DockerError(500, "pull stream failed")
 
     def image_history(self, reference: str) -> list[dict[str, Any]]:
         """An image's layer history."""
@@ -651,7 +706,7 @@ class DockerApi:
             response = connection.getresponse()
         except (OSError, http.client.HTTPException) as error:
             connection.close()
-            raise DockerError(0, f"events: {error}") from error
+            raise DockerError(0, "events failed") from error
         if response.status != 200:
             connection.close()
             raise DockerError(response.status, "events refused")
@@ -683,7 +738,7 @@ class DockerApi:
         status_line = head.split(b"\r\n", 1)[0].decode(errors="replace")
         if " 101 " not in status_line and " 200 " not in status_line:
             sock.close()
-            raise DockerError(0, f"attach refused: {status_line}")
+            raise DockerError(0, "attach refused")
         sock.settimeout(None)
         return sock
 
@@ -701,7 +756,6 @@ def _quote(text: str, safe: str = "") -> str:
 
 INTERPOLATION = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?])([^}]*))?\}")
 SIZE_UNITS = {"b": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
-# Compose variables the launcher fills from the allocation and from compose.env by name; nothing else is ever interpolated.
 COMPOSE_ENV_NAMES = (
     "POSTGRES_PASSWORD",
     "POLARIS_CLIENT_ID",
@@ -719,6 +773,26 @@ COMPOSE_ENV_NAMES = (
     "POLARIS_MEMORY_LIMIT",
     "POLARIS_DB_MEMORY_LIMIT",
 )
+ROOT_CLIENT_ID = "root"
+STACK_SECRETS = {
+    "AIRFLOW_DB_PASSWORD": secret_store.AIRFLOW_DB_PASSWORD,
+    "AIRFLOW_FERNET_KEY": secret_store.AIRFLOW_FERNET_KEY,
+    "AIRFLOW_JWT_SECRET": secret_store.AIRFLOW_JWT_SECRET,
+    "AIRFLOW_API_SECRET_KEY": secret_store.AIRFLOW_API_SECRET_KEY,
+    "LINEAGE_DB_PASSWORD": secret_store.MARQUEZ_DB_PASSWORD,
+}
+SQL_ALCHEMY_CONN = "AIRFLOW_SQL_ALCHEMY_CONN"
+COMPOSE_SECRETS = {
+    "POSTGRES_PASSWORD": secret_store.POSTGRES_PASSWORD,
+    "POLARIS_CLIENT_SECRET": secret_store.POLARIS_ROOT_SECRET,
+    "POLARIS_READER_CLIENT_ID": secret_store.POLARIS_READER_CLIENT_ID,
+    "POLARIS_READER_CLIENT_SECRET": secret_store.POLARIS_READER_CLIENT_SECRET,
+    "POLARIS_GOLD_WRITER_CLIENT_ID": secret_store.POLARIS_GOLD_CLIENT_ID,
+    "POLARIS_GOLD_WRITER_CLIENT_SECRET": secret_store.POLARIS_GOLD_CLIENT_SECRET,
+    "POLARIS_SILVER_WRITER_CLIENT_ID": secret_store.POLARIS_SILVER_CLIENT_ID,
+    "POLARIS_SILVER_WRITER_CLIENT_SECRET": secret_store.POLARIS_SILVER_CLIENT_SECRET,
+}
+PRINCIPAL_CREDENTIALS = frozenset(name for name in COMPOSE_SECRETS if "READER" in name or "WRITER" in name)
 
 
 @dataclass(frozen=True)
@@ -863,6 +937,79 @@ def environment_list(env: Mapping[str, str]) -> list[str]:
 def secret_command_indexes(command: Sequence[str], secret_values: frozenset[str]) -> list[int]:
     """The positions of the command parts that hold a secret value."""
     return [index for index, part in enumerate(command) if any(value and value in part for value in secret_values)]
+
+
+REDACTION_MARK = "[redacted]"
+
+
+class SecretSources(NamedTuple):
+    """Where a container holds credentials, as its create record saved them: environment names, command positions and positions inside longer values."""
+
+    env: list[str]
+    cmd: list[int]
+    spans: list[dict[str, Any]]
+
+
+NO_SECRET_SOURCES = SecretSources([], [], [])
+
+
+def embedded_spans(key: bytes, parts: Mapping[str, str], secret_values: frozenset[str]) -> list[dict[str, Any]]:
+    """Where a secret value sits inside a longer environment value or command part (a URL, an argument): the part, the offset, the length and the
+    keyed commitment of the value. The record holds no secret and none of the text around it."""
+    spans = []
+    for where, text in sorted(parts.items()):
+        for value in sorted(secret_values):
+            start = text.find(value) if value and value != text else -1
+            while start >= 0:
+                spans.append({"in": where, "start": start, "length": len(value), "commit": commit_secret(key, value)})
+                start = text.find(value, start + 1)
+    return spans
+
+
+def created_secrets(key: bytes, rendered: Rendered, effective_env: Mapping[str, str]) -> tuple[frozenset[str], list[int], list[dict[str, Any]]]:
+    """The environment names, command positions and positions inside longer values that hold a credential in a container about to be created."""
+    command = [str(part) for part in rendered.body.get("Cmd") or []]
+    parts = {f"env:{name}": value for name, value in effective_env.items()}
+    parts.update({f"cmd:{index}": part for index, part in enumerate(command)})
+    secret_env = rendered.secret_env | frozenset(name for name in effective_env if SECRET_NAME.search(name))
+    return secret_env, secret_command_indexes(command, rendered.secret_values), embedded_spans(key, parts, rendered.secret_values)
+
+
+def recovered_spans(config: Mapping[str, Any], spans: Sequence[Mapping[str, Any]], key: bytes) -> set[str]:
+    """The secret values cut from the inspected container at the recorded positions; a value whose commitment differs refuses the whole read."""
+    parts = {f"env:{name}": value for name, _, value in (str(entry).partition("=") for entry in config.get("Env") or [])}
+    parts.update({f"cmd:{index}": str(part) for index, part in enumerate(config.get("Cmd") or [])})
+    found = set()
+    for span in spans:
+        start = int(span["start"])
+        value = parts.get(span["in"], "")[start : start + int(span["length"])]
+        if commit_secret(key, value) != span["commit"]:
+            raise LauncherError("the container no longer holds the credentials its create record names", "degraded")
+        found.add(value)
+    return found
+
+
+def container_secrets(info: Mapping[str, Any] | None, sources: SecretSources, key: bytes) -> frozenset[str]:
+    """The credential values a container holds, read from its own inspected configuration: the environment values named in its create record or
+    named like a secret, each command part the record marks as holding one and each value the record places inside a longer text."""
+    config = (info or {}).get("Config") or {}
+    found = set()
+    for entry in config.get("Env") or []:
+        name, _, value = str(entry).partition("=")
+        if name in sources.env or SECRET_NAME.search(name):
+            found.add(value)
+    command = [str(part) for part in config.get("Cmd") or []]
+    found.update(command[index] for index in sources.cmd if index < len(command))
+    if info is not None:
+        found |= recovered_spans(config, sources.spans, key)
+    return frozenset(value for value in found if value)
+
+
+def redact(text: str, values: frozenset[str]) -> str:
+    """The text with every occurrence of a credential value replaced by a mark, longest values first."""
+    for value in sorted(values, key=len, reverse=True):
+        text = text.replace(value, REDACTION_MARK) if value else text
+    return text
 
 
 def commit_command(key: bytes, command: Sequence[str], indexes: Sequence[int]) -> list[str]:
@@ -1419,8 +1566,10 @@ class Renderer:
         self.checkout = checkout
         self.main = main
         self.key = key
-        self._compose_env: dict[str, str] | None = None
         self.interpolated: dict[str, str] = {}
+        self.fetched: set[str] = set()
+        self.recording: set[str] | None = None
+        self.supplied: Mapping[str, str | secret_store.SecretStoreError] | None = None
         self.builders = {
             "fixture_dbt": self.render_fixture_dbt,
             "fixture_init": self.render_fixture_init,
@@ -1455,22 +1604,70 @@ class Renderer:
         return f"hai-{registry_id[:8]}-net"
 
     def compose_values(self, wanted: Sequence[str], base: Mapping[str, str]) -> dict[str, str]:
-        """Interpolation values: the allocation's, ``HOME`` and the named entries of ``compose.env`` that the service uses."""
+        """Interpolation values: the allocation's, ``HOME``, the project AWS settings and the secret values the service uses, read from Secrets Manager
+        into memory for this call only."""
         values = {**base, "HOME": str(account_home())}
         needed = [name for name in wanted if name in COMPOSE_ENV_NAMES and name not in values]
         if needed:
-            if self._compose_env is None:
-                path = self.config.compose_env
-                if path is None or not path.is_file():
-                    raise LauncherError("compose.env is missing; set up the catalog first", "spec")
-                if path.stat().st_mode & 0o077:
-                    raise LauncherError("compose.env must be readable only by its owner", "spec")
-                self._compose_env = dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
-            for name in needed:
-                if name in self._compose_env:
-                    values[name] = self._compose_env[name]
+            values.update(self.secret_values([name for name in needed if name in COMPOSE_SECRETS]))
+            if "POLARIS_CLIENT_ID" in needed:
+                values["POLARIS_CLIENT_ID"] = ROOT_CLIENT_ID
+            if any(name in needed for name in ("AWS_PROFILE", "AWS_REGION")):
+                settings = self.config.aws_settings()
+                values.update({name: settings[name] for name in ("AWS_PROFILE", "AWS_REGION") if name in needed})
         self.interpolated.update({name: values[name] for name in wanted if name in values})
         return values
+
+    def secret_of(self, name: str) -> str:
+        """The value of a managed secret. While recording, a placeholder, and the name is noted for the fetch worker. Otherwise the value the worker
+        fetched, or the error that stopped it. A render outside the launcher (a test registry) reads the one secret itself, under the fetch deadline."""
+        if self.recording is not None:
+            self.recording.add(name)
+            return "recorded-secret"
+        if self.supplied is None:
+            if self.config.secrets_endpoint is None:
+                raise LauncherError(f"secret {name} must be fetched by the fetch worker", "spec")
+            outcome = secret_store.fetch_all(
+                self.config.catalog_checkout or self.config.root, self.config.secrets_endpoint, [name], self.config.secret_fetch_seconds
+            )[name]
+        else:
+            outcome = self.supplied.get(name) or secret_store.SecretStoreError(f"secret {name} was not fetched for this render")
+        if isinstance(outcome, secret_store.SecretStoreError):
+            raise outcome
+        return outcome
+
+    def secret_values(self, names: Sequence[str]) -> dict[str, str]:
+        """The value of each named compose variable from its secret; a missing secret refuses the render and names the secret."""
+        found = {}
+        for name in names:
+            try:
+                found[name] = self.secret_of(COMPOSE_SECRETS[name])
+            except secret_store.SecretMissing as error:
+                if name not in PRINCIPAL_CREDENTIALS:
+                    raise LauncherError(f"{error}; set up the catalog first", "spec") from None
+            except secret_store.SecretStoreError as error:
+                raise LauncherError(str(error), "spec") from None
+        self.fetched.update(found.values())
+        return found
+
+    def stack_values(self, service: str) -> dict[str, str]:
+        """The secret values the orchestration or lineage service's model names, read from Secrets Manager into memory; a missing secret refuses the render."""
+        wanted = self.service_names(service)
+        names = [name for name in wanted if name in STACK_SECRETS]
+        if SQL_ALCHEMY_CONN in wanted and "AIRFLOW_DB_PASSWORD" not in names:
+            names.append("AIRFLOW_DB_PASSWORD")
+        if not names:
+            return {}
+        found = {}
+        for name in names:
+            try:
+                found[name] = self.secret_of(STACK_SECRETS[name])
+            except secret_store.SecretStoreError as error:
+                raise LauncherError(f"{error}; run the stack setup first", "spec") from None
+        if SQL_ALCHEMY_CONN in wanted:
+            found[SQL_ALCHEMY_CONN] = f"postgresql+psycopg2://airflow:{found['AIRFLOW_DB_PASSWORD']}@postgres:5432/airflow"
+        self.fetched.update(found.values())
+        return {name: value for name, value in found.items() if name in wanted}
 
     def service_names(self, service: str) -> list[str]:
         """Variable names a service's model references."""
@@ -1524,8 +1721,6 @@ class Renderer:
                 holds_target = source_id is not None and source_id in identities(target)  # the source is one of the protected folder's ancestors
                 if spelled or inside_target or holds_target:
                     raise LauncherError(f"mount source {mount.source} equals, is inside or contains a protected folder ({guarded.name})", "mount")
-            if "compose.env" in resolved.name:
-                raise LauncherError("compose.env is never mounted", "mount")
 
     def allowed(self, path: str, what: str, extra_roots: Sequence[Path] = ()) -> Path:
         """A host path from a request: absolute, resolved and inside the data folder of this checkout or the main checkout (or a named extra root)."""
@@ -1570,9 +1765,9 @@ class Renderer:
         environment = dict(env)
         if DEADLINE_RELAY_VARIABLE in environment:
             raise LauncherError(f"{DEADLINE_RELAY_VARIABLE} belongs to the deadline entrypoint; a job may not set it", "spec")
-        secret_env = frozenset(name for name in environment if SECRET_NAME.search(name))
-        secret_values = frozenset(environment[name] for name in secret_env if environment[name])
-        secret_values |= frozenset(value for value in (secrets or {}).values() if value)
+        secret_values = frozenset(value for value in (*(secrets or {}).values(), *self.fetched) if value)
+        secret_env = frozenset(name for name, value in environment.items() if SECRET_NAME.search(name) or value in secret_values)
+        secret_values |= frozenset(environment[name] for name in secret_env if environment[name])
         command = list(command)
         wrap = finite
         if finite:
@@ -1620,6 +1815,7 @@ class Renderer:
             body["NetworkingConfig"] = {"EndpointsConfig": {network: {"Aliases": list(aliases)}}}
         interpolation = dict(self.interpolated)
         self.interpolated.clear()
+        self.fetched.clear()
         return Rendered(name, body, secret_env, secret_values, finite, inp.deadline_utc if finite else None, interpolation)
 
     def render(self, inp: RenderInput, registry_id: str) -> Rendered:
@@ -2355,7 +2551,7 @@ class Renderer:
 
     def render_orchestration_service(self, inp: RenderInput, service: str, registry_id: str) -> Rendered:
         """One orchestration service container from the orchestration Compose model (the second service stack, failure mode 933)."""
-        values = self.orchestration_values(inp)
+        values = {**self.orchestration_values(inp), **self.stack_values(service)}
         raw = self.compose.service(service)
         env = self.compose.environment(service, values)
         command = [interpolate(str(part), values) for part in raw.get("command") or []]
@@ -2394,6 +2590,7 @@ class Renderer:
         except ValueError as error:
             raise LauncherError(str(error), "args") from None
         self.allowed(values["HAI_LINEAGE_STATE"], "lineage state")
+        values = {**values, **self.stack_values(service)}
         raw = self.compose.service(service)
         ports = [tuple(interpolate(str(entry), values).split(":")) for entry in raw.get("ports") or []]
         if any(host != "127.0.0.1" for host, _, _ in ports):
@@ -2468,6 +2665,7 @@ class Renderer:
             "HAI_ORCH_STATE": str(state.resolve()),
             "HAI_ORCH_UID": str(os.getuid()),
             "JOB_MEMORY_LIMIT": inp.values["JOB_MEMORY_LIMIT"],
+            **self.stack_values("airflow-dump"),
         }
         raw = self.compose.service("airflow-dump")
         mounts = self.compose.mounts("airflow-dump", values)
@@ -2493,7 +2691,7 @@ class Renderer:
         if inp.args:
             raise LauncherError("lineage_dump takes no arguments", "args")
         state = self.allowed(str(inp.params["state"]), "state")
-        if not all((state / part).is_dir() and not (state / part).is_symlink() for part in ("private", "postgres", "config")):
+        if not all((state / part).is_dir() and not (state / part).is_symlink() for part in ("postgres", "config")):
             raise LauncherError("lineage dump state is incomplete", "args")
         (state / "dumps").mkdir(mode=0o700, exist_ok=True)
         values = {
@@ -2501,6 +2699,7 @@ class Renderer:
             "HAI_LINEAGE_STATE": str(state.resolve()),
             "HAI_ORCH_UID": str(os.getuid()),
             "JOB_MEMORY_LIMIT": inp.values["JOB_MEMORY_LIMIT"],
+            **self.stack_values("dump"),
         }
         raw = self.compose.service("dump")
         return self.assemble(
@@ -2915,6 +3114,7 @@ class Launcher:
         self.last_stale_check = 0.0
         self.main_checkout = config.root
         self.image_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self.secret_results: dict[str, tuple[float, dict[str, str | secret_store.SecretStoreError]]] = {}
         self.networks_seen: list[str] = []
         self.message_handlers: dict[str, Callable[[str, str, Any], None]] = {
             "scan": self.on_scan,
@@ -2932,6 +3132,7 @@ class Launcher:
             "planread": self.on_planread,
             "imageread": self.on_imageread,
             "imagedef": self.on_imagedef,
+            "secretfetch": self.on_secretfetch,
             "logsread": self.on_logsread,
             "runlist": self.on_runlist,
             "alloclist": self.on_alloclist,
@@ -3987,10 +4188,35 @@ class Launcher:
         kind, _, ident = str(attempt["owner"]).partition(":")
         return {"run": ident, "alloc": ident, "service": "svc", "stack": "orch", "launcher": "diag"}.get(kind, "x")
 
-    def render_attempt(self, state: Mapping[str, Any], attempt: Mapping[str, Any], op_id: str, extra: Mapping[str, str] | None) -> Rendered:
-        """Render an attempt's create specification from its template and recorded values."""
+    def render_attempt(
+        self,
+        state: Mapping[str, Any],
+        attempt: Mapping[str, Any],
+        op_id: str,
+        extra: Mapping[str, str] | None,
+        fetched: Mapping[str, str | secret_store.SecretStoreError] | None,
+    ) -> tuple[Rendered, frozenset[str]]:
+        """Render an attempt's create specification from its template and recorded values.
+
+        With no ``fetched`` secrets the render records the secret names it asks for and uses placeholders; it is a real result only when none are asked
+        for. Otherwise the fetched values (or the errors that stopped their fetch) fill the specification.
+        """
         template = TEMPLATES[attempt["template"]]
         renderer = self.renderer_of(attempt["template"], Path(attempt["checkout"]))
+        renderer.recording = set() if fetched is None else None
+        renderer.supplied = fetched
+        try:
+            rendered = self.render_with(renderer, template, state, attempt, op_id, extra)
+            return rendered, frozenset(renderer.recording or ())
+        finally:
+            renderer.recording, renderer.supplied = None, None
+            renderer.fetched.clear()
+            renderer.interpolated.clear()
+
+    def render_with(
+        self, renderer: Renderer, template: Template, state: Mapping[str, Any], attempt: Mapping[str, Any], op_id: str, extra: Mapping[str, str] | None
+    ) -> Rendered:
+        """Render an attempt's specification with a renderer whose secret source is already set."""
         labels = self.labels_for(attempt, op_id, extra)
         provenance: dict[str, str] = {}
         snapshot = run_folder = None
@@ -4111,11 +4337,25 @@ class Launcher:
         if attempt.get("probe") and extra_labels is None:
             extra_labels = {LABEL_PROBE: attempt["probe"]["nonce"]}
         op_id = new_id("op")
+        fetched = self.secret_results.get(attempt["id"])
+        if fetched is not None and time.monotonic() - fetched[0] > self.SECRET_RESULT_TTL:
+            self.secret_results.pop(attempt["id"], None)
+            fetched = None
+        fetch_key = f"secrets:{attempt['id']}"
+        if fetched is None and fetch_key in self.inflight:
+            return False
         try:
-            rendered = self.render_attempt(state, attempt, op_id, extra_labels)
-        except LauncherError as error:
-            self.finish_attempt(state, attempt, "create_failed", f"{error.code}: {error}")
+            rendered, wanted = self.render_attempt(state, attempt, op_id, extra_labels, None if fetched is None else fetched[1])
+        except (LauncherError, secret_store.SecretStoreError) as error:
+            self.secret_results.pop(attempt["id"], None)
+            code = error.code if isinstance(error, LauncherError) else "spec"
+            self.finish_attempt(state, attempt, "create_failed", f"{code}: {error}")
             return True
+        if fetched is None and wanted:
+            names = tuple(sorted(wanted))
+            actions.append(lambda: self.spawn(fetch_key, "secretfetch", self.fetch_secrets, names))
+            return False
+        self.secret_results.pop(attempt["id"], None)
         if attempt.get("capture_dbt_artifacts"):
             rendered.body.setdefault("Env", []).extend(dbt_lineage.capture_environment(attempt["id"]))
         effective_env = effective_config(rendered.body, defaults)["env"]
@@ -4124,8 +4364,7 @@ class Launcher:
                 state, attempt, "create_failed", f"spec: image {reference} sets {DEADLINE_RELAY_VARIABLE}, which belongs to the deadline entrypoint"
             )
             return True
-        secret_cmd = secret_command_indexes(rendered.body.get("Cmd") or [], rendered.secret_values)
-        secret_env = rendered.secret_env | frozenset(name for name in effective_env if SECRET_NAME.search(name))
+        secret_env, secret_cmd, secret_spans = created_secrets(self.key, rendered, effective_env)
         spec = projection(rendered.body, self.key, secret_env, secret_cmd, defaults)
         state["operations"][op_id] = {
             "op_id": op_id,
@@ -4147,6 +4386,7 @@ class Launcher:
             },
             "secret_env": sorted(secret_env),
             "secret_cmd": secret_cmd,
+            "secret_spans": secret_spans,
             "compose_sha256": self.compose_for(Path(attempt["checkout"])).sha256,
             "interpolation": {
                 name: commit_secret(self.key, value) if name in COMPOSE_ENV_NAMES else value for name, value in sorted(rendered.interpolation.items())
@@ -4158,6 +4398,18 @@ class Launcher:
         body, name = rendered.body, rendered.name
         actions.append(lambda: self.spawn(f"op:{op_id}", "create", self.docker_create, name, body))
         return True
+
+    SECRET_RESULT_TTL = 30.0
+
+    def fetch_secrets(self, names: tuple[str, ...]) -> dict[str, str | secret_store.SecretStoreError]:
+        """Worker: read the named secrets under one absolute deadline; the result stays in memory until the attempt's render uses it."""
+        return secret_store.fetch_all(self.cfg.catalog_checkout or self.cfg.root, self.cfg.secrets_endpoint, names, self.cfg.secret_fetch_seconds)
+
+    def on_secretfetch(self, key: str, outcome: str, value: Any) -> None:
+        """The fetched secrets of an attempt arrived: the queued attempt renders with them on its next pass."""
+        if outcome == "ok":
+            self.secret_results[key.split(":", 1)[1]] = (time.monotonic(), value)
+        self.changed = True
 
     def docker_create(self, name: str, body: dict[str, Any]) -> str:
         """Worker: create the container; a name that is already taken is looked up and returned, to be adopted or refused."""
@@ -4421,7 +4673,7 @@ class Launcher:
             if outcome == "docker" and value.status == 0:
                 return
             if outcome != "ok":
-                self.finish_attempt(state, a, "create_failed", f"prepare: {value}")
+                self.finish_attempt(state, a, "create_failed", f"prepare: {failure_text(value)}")
                 return
             if value["image_error"]:
                 self.finish_attempt(state, a, "create_failed", f"image_without_entrypoint: {value['image_error']}")
@@ -4579,7 +4831,8 @@ class Launcher:
                 cleanup["step"] = "remove"
                 return
             folder = self.attempt_folder(a)
-            actions.append(lambda: self.spawn(f"collect:{a['id']}", "collect", self.collect, container_id, folder, dict(a)))
+            secrets = self.attempt_secrets(state, a)
+            actions.append(lambda: self.spawn(f"collect:{a['id']}", "collect", self.collect, container_id, folder, dict(a), secrets))
         elif step == "remove":
             op = self.open_op(state, a["id"], "remove")
             op_id = op["op_id"] if op else self.record_op(state, a, "remove", "exiting")
@@ -4588,11 +4841,25 @@ class Launcher:
             name = a["container_name"]
             actions.append(lambda: self.spawn(f"confirm:{a['id']}", "confirm", self.confirm_gone, name))
 
-    def collect(self, container_id: str, folder: Path, attempt: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Worker: read the exit code and the last log lines and save them in the attempt's folder."""
+    @staticmethod
+    def attempt_secrets(state: Mapping[str, Any], attempt: Mapping[str, Any]) -> SecretSources:
+        """The secret environment names, command positions and positions inside longer values that the attempt's create record holds; they survive a
+        launcher restart in the registry."""
+        for op in state["operations"].values():
+            if op["attempt"] == attempt["id"] and op["kind"] == "create":
+                return SecretSources(list(op.get("secret_env") or []), list(op.get("secret_cmd") or []), list(op.get("secret_spans") or []))
+        return NO_SECRET_SOURCES
+
+    def collect(self, container_id: str, folder: Path, attempt: dict[str, Any] | None = None, secrets: SecretSources = NO_SECRET_SOURCES) -> dict[str, Any]:
+        """Worker: read the exit code and the last log lines and save them in the attempt's folder with the container's credentials redacted.
+
+        The credentials come from the container's own configuration, so redaction holds after a launcher restart; when the configuration cannot be read
+        nothing is saved and the step is retried."""
         info = self.docker.inspect(container_id)
         exit_code = None if info is None else int((info.get("State") or {}).get("ExitCode", 0))
         out, err = ("", "") if info is None else self.docker.logs_split(container_id, None)
+        held = container_secrets(info, secrets, self.key)
+        out, err = redact(out, held), redact(err, held)
         folder.mkdir(parents=True, exist_ok=True)
         # The whole of standard output (capped) is kept for result-bearing templates; the last lines are the human-readable tail.
         (folder / "stdout.txt").write_text(out[-CAPTURE_LIMIT:])
@@ -4622,6 +4889,7 @@ class Launcher:
     def finish_attempt(self, state: dict[str, Any], a: dict[str, Any], reason: str, detail: str = "") -> None:
         """End an attempt: record the reason, release its attempt allocation and guards, update catalog service records."""
         a.update({"phase": "ended", "reason": reason, "ended_at": utc_now(), "detail": detail})
+        self.secret_results.pop(a["id"], None)
         if a.get("attempt_alloc"):
             allocation = state["allocations"].get(a["attempt_alloc"])
             if allocation is not None:
@@ -4655,9 +4923,9 @@ class Launcher:
             if op is None or op["state"] != "open":
                 return
             a = state["attempts"].get(op["attempt"])
-            self.settle_op(state, op_id, f"refused: {value}")
+            self.settle_op(state, op_id, f"refused: {failure_text(value)}")
             if a is not None and is_open(a):
-                self.finish_attempt(state, a, "create_failed", str(value))
+                self.finish_attempt(state, a, "create_failed", failure_text(value))
 
     def on_start(self, key: str, outcome: str, value: Any) -> None:
         """A start reply: the attempt is ``started`` only if it still expects it, otherwise the start is undone (D1 section 4 item 2)."""
@@ -4672,9 +4940,9 @@ class Launcher:
             if a is None:
                 return
             if outcome != "ok":
-                self.settle_op(state, op_id, f"failed: {value}")
+                self.settle_op(state, op_id, f"failed: {failure_text(value)}")
                 if a["phase"] == "starting":
-                    a["start_error"] = str(value)
+                    a["start_error"] = failure_text(value)
                     self.begin_exit(a)
                 return
             self.settle_op(state, op_id, "started")
@@ -4699,7 +4967,7 @@ class Launcher:
             op = state["operations"].get(op_id)
             if op is None or op["state"] != "open":
                 return
-            self.settle_op(state, op_id, "stopped" if outcome == "ok" else f"failed: {value}")
+            self.settle_op(state, op_id, "stopped" if outcome == "ok" else f"failed: {failure_text(value)}")
             a = state["attempts"].get(op["attempt"])
             if a is not None and a["container_id"]:
                 entry = self.inventory.setdefault(a["container_id"], {})
@@ -4737,7 +5005,7 @@ class Launcher:
                 return
             a = state["attempts"].get(op["attempt"])
             if outcome != "ok":
-                op["last_error"] = str(value)
+                op["last_error"] = failure_text(value)
                 op["retries"] = int(op.get("retries", 0)) + 1
                 return
             self.settle_op(state, op_id, "removed")
@@ -4840,7 +5108,7 @@ class Launcher:
                 run.update({"completion": value, "build_state": "sealed"})
                 run.pop("seal_error", None)
             else:
-                run.update({"build_state": "open", "seal_error": str(value)})
+                run.update({"build_state": "open", "seal_error": failure_text(value)})
                 run.pop("completion", None)
 
     @staticmethod
@@ -5044,7 +5312,7 @@ class Launcher:
             else:
                 op = state["operations"].get(op_id)
                 if op is not None:
-                    op["last_error"] = str(value)
+                    op["last_error"] = failure_text(value)
 
     def settle_unresolved_creates(self, scan_seq: int) -> None:
         """An unresolved create settles only when the bounded timeout has passed and a fresh scan shows no container by name (D1 section 4 item 8)."""
@@ -5441,9 +5709,9 @@ class Launcher:
         if outcome == "ok":
             conn.send({"id": request_id, "ok": True, "result": value})
         elif isinstance(value, memory_budget.BudgetError):
-            conn.send({"id": request_id, "ok": False, "error": str(value), "code": "budget"})
+            conn.send({"id": request_id, "ok": False, "error": failure_text(value), "code": "budget"})
         else:
-            conn.send({"id": request_id, "ok": False, "error": str(value), "code": "degraded"})
+            conn.send({"id": request_id, "ok": False, "error": failure_text(value), "code": "degraded"})
 
     def complete_request(self, key: str, result: dict[str, Any], error: LauncherError | None = None) -> None:
         """Record the final result of a pending request and answer every connection waiting for it."""
@@ -5579,7 +5847,7 @@ class Launcher:
         if not request_key:
             return
         if outcome != "ok":
-            self.complete_request(request_key, {}, Degraded(f"cannot list the containers of run {run_id}: {value}"))
+            self.complete_request(request_key, {}, Degraded(f"cannot list the containers of run {run_id}: {failure_text(value)}"))
             return
         with self.tx() as state:
             entry = state["runs"][run_id]
@@ -5680,7 +5948,7 @@ class Launcher:
             if allocation is None or allocation["state"] != "planning":
                 return
             if outcome != "ok":
-                allocation.update({"state": "failed", "error": str(value)})
+                allocation.update({"state": "failed", "error": failure_text(value)})
                 return
             allocation.update({"state": "held", "environment": value["environment"], "record": value["record"]})
 
@@ -5710,7 +5978,7 @@ class Launcher:
             allocation = state["allocations"][allocation_id]
             if outcome != "ok":
                 allocation["state"] = "held"
-                self.complete_request(request_key, {}, Degraded(f"cannot list the containers of allocation {allocation_id}: {value}"))
+                self.complete_request(request_key, {}, Degraded(f"cannot list the containers of allocation {allocation_id}: {failure_text(value)}"))
                 return
             if value or self.open_work(state, f"alloc:{allocation_id}"):
                 allocation["state"] = "held"
@@ -5914,7 +6182,13 @@ class Launcher:
             self.gold_accepted(state, owner, template_name, params),
             pipeline,
         )
-        renderer.render(inp, self.registry_id)
+        renderer.recording = set()
+        try:
+            renderer.render(inp, self.registry_id)
+        finally:
+            renderer.recording = None
+            renderer.fetched.clear()
+            renderer.interpolated.clear()
 
     def guard_folder(self, template: Template, params: Mapping[str, Any]) -> str | None:
         """The key of the shared package folder a template touches, if any."""
@@ -6010,10 +6284,16 @@ class Launcher:
         if is_open(attempt) and container_id and self.docker_ok:
             key = f"logs:{id(ctx.conn)}:{ctx.request_id}"
             self.read_waiters[key] = (ctx.conn, ctx.request_id)
-            self.spawn(key, "logsread", lambda: {"text": self.docker.logs_tail(container_id, tail)})
+            secrets = self.attempt_secrets(ctx.state, attempt)
+            self.spawn(key, "logsread", lambda: {"text": self.live_log(container_id, tail, secrets)})
             return PENDING
         text = Path(saved).read_text() if saved and Path(saved).is_file() else ""
         return {"text": "".join(text.splitlines(keepends=True)[-tail:])}
+
+    def live_log(self, container_id: str, tail: int, secrets: SecretSources) -> str:
+        """Worker: the last log lines of a running container with its credentials redacted; without its configuration no text is returned."""
+        held = container_secrets(self.docker.inspect(container_id), secrets, self.key)
+        return redact(self.docker.logs_tail(container_id, tail), held)
 
     def on_logsread(self, key: str, outcome: str, value: Any) -> None:
         """Answer a live log request."""
@@ -6023,7 +6303,7 @@ class Launcher:
         if outcome == "ok":
             conn.send({"id": request_id, "ok": True, "result": value})
         else:
-            conn.send({"id": request_id, "ok": False, "error": str(value), "code": "degraded"})
+            conn.send({"id": request_id, "ok": False, "error": failure_text(value), "code": "degraded"})
 
     # readers and the legacy snapshot-set readers -------------------------------------------------------------
 
@@ -6635,7 +6915,7 @@ class Launcher:
             if catalog["phase"] != "starting":
                 return
             if outcome != "ok":
-                catalog.update({"phase": "tearing_down", "after": "down", "error": f"no memory limit for the catalog services: {value}"})
+                catalog.update({"phase": "tearing_down", "after": "down", "error": f"no memory limit for the catalog services: {failure_text(value)}"})
                 return
             catalog["limits"] = {variable: f"{limit // 1024**2}m" for variable, limit in value.items()}
             for variable, (service, _, _) in self.SERVICE_MEMORY.items():
@@ -6810,14 +7090,14 @@ class Launcher:
             op = state["operations"].get(op_id)
             if op is None or op["state"] != "open":
                 return  # a scan already settled it
-            self.settle_op(state, op_id, "created" if outcome == "ok" else f"failed: {value}")
+            self.settle_op(state, op_id, "created" if outcome == "ok" else f"failed: {failure_text(value)}")
             if catalog["phase"] == "tearing_down" and outcome == "ok":
                 catalog["network"] = value  # settled during a teardown: the teardown removes it
                 return
             if catalog["phase"] != "starting":
                 return
             if outcome != "ok":
-                self.fail_catalog(catalog, f"cannot create the catalog network: {value}")
+                self.fail_catalog(catalog, f"cannot create the catalog network: {failure_text(value)}")
                 return
             catalog.update({"network": value, "step": "db"})
             state["containers"]["network:" + str(value)] = {"kind": "network", "at": utc_now()}
@@ -6886,7 +7166,7 @@ class Launcher:
             op = state["operations"].get(op_id)
             if op is None or op["state"] != "open":
                 return  # a scan already settled it
-            self.settle_op(state, op_id, "removed" if outcome == "ok" else f"failed: {value}")
+            self.settle_op(state, op_id, "removed" if outcome == "ok" else f"failed: {failure_text(value)}")
             catalog = self.catalog_record(state)
             if outcome == "ok" and catalog["phase"] == "tearing_down":
                 catalog["network"] = None
@@ -7018,7 +7298,7 @@ class Launcher:
             if stack["phase"] != "starting":
                 return
             if outcome != "ok":
-                self.fail_orchestration(stack, f"no memory limit for the orchestration services: {value}")
+                self.fail_orchestration(stack, f"no memory limit for the orchestration services: {failure_text(value)}")
                 return
             settings = {
                 "HAI_ORCH_REPO": stack["checkout"],
@@ -7130,14 +7410,14 @@ class Launcher:
             op = state["operations"].get(op_id)
             if op is None or op["state"] != "open":
                 return
-            self.settle_op(state, op_id, "created" if outcome == "ok" else f"failed: {value}")
+            self.settle_op(state, op_id, "created" if outcome == "ok" else f"failed: {failure_text(value)}")
             if stack["phase"] == "tearing_down" and outcome == "ok":
                 stack["network"] = value
                 return
             if stack["phase"] != "starting":
                 return
             if outcome != "ok":
-                self.fail_orchestration(stack, f"cannot create the orchestration network: {value}")
+                self.fail_orchestration(stack, f"cannot create the orchestration network: {failure_text(value)}")
                 return
             stack.update({"network": value, "step": ORCHESTRATION_ORDER[0]})
             state["containers"]["network:" + str(value)] = {"kind": "network", "at": utc_now()}
@@ -7215,7 +7495,7 @@ class Launcher:
             op = state["operations"].get(op_id)
             if op is None or op["state"] != "open":
                 return
-            self.settle_op(state, op_id, "removed" if outcome == "ok" else f"failed: {value}")
+            self.settle_op(state, op_id, "removed" if outcome == "ok" else f"failed: {failure_text(value)}")
             stack = self.orchestration_record(state)
             if outcome == "ok" and stack["phase"] == "tearing_down":
                 stack.update({"network": None, "stop_step": "confirm"})
@@ -7240,26 +7520,40 @@ class Launcher:
         stack.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})
         return {"phase": "tearing_down"}
 
+    def ensure_lineage_password(self, folder: Path) -> None:
+        """Worker: make sure the database password exists in Secrets Manager (generated there once); refuse a new one next to an existing database.
+
+        The whole check runs under one absolute deadline and never on the launcher's loop."""
+
+        def check() -> None:
+            store = self.cfg.secret_store()
+            if (folder / "postgres" / "PG_VERSION").exists() and store.find(secret_store.MARQUEZ_DB_PASSWORD) is None:
+                raise LauncherError(
+                    f"the lineage database exists but secret {secret_store.MARQUEZ_DB_PASSWORD} is missing; run the one-time secrets move first", "refused"
+                )
+            store.ensure(secret_store.MARQUEZ_DB_PASSWORD, secret_store.new_password)
+
+        try:
+            secret_store.within(self.cfg.secret_fetch_seconds, check, "the lineage database password check")
+        except secret_store.SecretStoreError as error:
+            raise LauncherError(str(error), "spec") from None
+
     def initialize_lineage_config(self, checkout: Path, folder: Path) -> None:
-        """Generate private runtime configuration once; never return its bytes through status or events."""
-        password_file = folder / "private" / "db_password"
+        """Write the Marquez configuration once. It holds a reference to the container's ``MARQUEZ_DB_PASSWORD`` environment value and no secret."""
         config_file = folder / "config" / "marquez.yaml"
-        if password_file.exists() or config_file.exists():
-            if not password_file.is_file() or not config_file.is_file() or password_file.is_symlink() or config_file.is_symlink():
+        if config_file.exists():
+            if not config_file.is_file() or config_file.is_symlink():
                 raise LauncherError("incomplete or unsafe lineage runtime configuration", "args")
             return
-        for name in ("private", "config"):
-            os.chmod(folder / name, 0o700)
-        password = secrets.token_hex(32)
+        os.chmod(folder / "config", 0o700)
         template = (checkout / "services/lineage/marquez.yaml.tmpl").read_text()
-        if template.count("${HAI_LINEAGE_DB_PASSWORD}") != 1:
+        if template.count("${MARQUEZ_DB_PASSWORD}") != 1:
             raise LauncherError("lineage configuration has no unique password placeholder", "args")
-        for path, content in ((password_file, password + "\n"), (config_file, template.replace("${HAI_LINEAGE_DB_PASSWORD}", password))):
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-            with os.fdopen(fd, "w") as stream:
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
+        fd = os.open(config_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            stream.write(template)
+            stream.flush()
+            os.fsync(stream.fileno())
 
     def lineage_network_name(self, role: str) -> str:
         """The closed service role determines the registry-owned network name."""
@@ -7291,7 +7585,7 @@ class Launcher:
 
     def lineage_state_folder(self, checkout: Path, text: Any) -> str:
         """The stack's state folder: absolute, inside ``data/lineage/`` of the checkout or the main checkout (or a test registry's named
-        folder), outside any secrets folder and holding the private runtime, configuration and database folders."""
+        folder), outside any secrets folder and holding the configuration and database folders."""
         if not isinstance(text, str) or not Path(text).is_absolute():
             raise LauncherError("state must be an absolute folder", "args")
         candidate = Path(text)
@@ -7303,7 +7597,7 @@ class Launcher:
         resolved = candidate.resolve()
         if not resolved.is_dir():
             raise LauncherError(f"state folder {text!r} does not exist", "args")
-        missing = [name for name in ("postgres", "private", "config") if not (resolved / name).is_dir() or (resolved / name).is_symlink()]
+        missing = [name for name in ("postgres", "config") if not (resolved / name).is_dir() or (resolved / name).is_symlink()]
         if missing:
             raise LauncherError(f"state folder {text!r} lacks {', '.join(missing)}", "args")
         return str(resolved)
@@ -7354,14 +7648,15 @@ class Launcher:
         }
         own = f"hai-{self.registry_id[:8]}-svc-lineage-"
         growth = {name: limit for name, limit in self.growth_reserve_map(ctx.state).items() if not name.startswith(own)}
-        self.spawn("lineage:limits", "lineagelimits", self.compute_lineage_limits, growth)
+        self.spawn("lineage:limits", "lineagelimits", self.compute_lineage_limits, growth, Path(folder))
         return {"phase": "starting"}
 
-    def compute_lineage_limits(self, growth: dict[str, int]) -> dict[str, Any]:
-        """Worker: compute each service limit from one shared resource plan.
+    def compute_lineage_limits(self, growth: dict[str, int], folder: Path) -> dict[str, Any]:
+        """Worker: check the database password secret, then compute each service limit from one shared resource plan.
 
         One resource snapshot gives the plan; the services run at the same time, so the sum of their limits (each raised to its minimum) must fit the
         plan's free memory, or the start is refused here, before any network or container exists."""
+        self.ensure_lineage_password(folder)
         plan = memory_budget.launch_plan(self.reader(), growth)
         limits = {service: memory_budget.service_limit(plan.budget, share, minimum) for service, (_, share, minimum) in LINEAGE_MEMORY.items()}
         total = sum(limits.values())
@@ -7377,7 +7672,7 @@ class Launcher:
             if stack["phase"] != "starting":
                 return
             if outcome != "ok":
-                self.fail_lineage(stack, f"no memory limit for the lineage services: {value}")
+                self.fail_lineage(stack, f"the lineage services cannot start: {failure_text(value)}")
                 return
             settings = {
                 "HAI_LINEAGE_STATE": stack["state"],
@@ -7521,12 +7816,12 @@ class Launcher:
             if op is None or op["state"] != "open":
                 return
             role = self.lineage_network_role(op["network_name"])
-            self.settle_op(state, op_id, "created" if outcome == "ok" else f"failed: {value}")
+            self.settle_op(state, op_id, "created" if outcome == "ok" else f"failed: {failure_text(value)}")
             if outcome == "ok":
                 stack.setdefault("networks", {})[role] = value
                 state["containers"]["network:" + str(value)] = {"kind": "network", "at": utc_now()}
             elif stack["phase"] == "starting":
-                self.fail_lineage(stack, f"cannot create the lineage {role} network: {value}")
+                self.fail_lineage(stack, f"cannot create the lineage {role} network: {failure_text(value)}")
 
     def settle_lineage_network_ops(self, networks: Sequence[Mapping[str, Any]]) -> None:
         """Reconcile each durable role-specific network operation with an all-state scan."""
@@ -7607,7 +7902,7 @@ class Launcher:
             op = state["operations"].get(op_id)
             if op is None or op["state"] != "open":
                 return
-            self.settle_op(state, op_id, "removed" if outcome == "ok" else f"failed: {value}")
+            self.settle_op(state, op_id, "removed" if outcome == "ok" else f"failed: {failure_text(value)}")
             stack = self.lineage_record(state)
             if outcome == "ok" and stack["phase"] == "tearing_down":
                 stack.setdefault("networks", {}).pop(self.lineage_network_role(op["network_name"]), None)
@@ -7684,7 +7979,7 @@ class Launcher:
         elif outcome == "docker" and value.status == 0:
             self.complete_request(request_key, {}, Degraded(f"Docker does not answer: {value.message}"))
         else:
-            self.complete_request(request_key, {}, LauncherError(f"pull failed: {value}", "failed"))
+            self.complete_request(request_key, {}, LauncherError(f"pull failed: {failure_text(value)}", "failed"))
 
     def m_docker_restart(self, ctx: Ctx) -> Any:
         """Restart Docker Desktop to free the VM's memory, only when nothing of this registry and nothing foreign runs (D1 section 8 item 4)."""
@@ -7715,7 +8010,7 @@ class Launcher:
         if not request_key:
             return
         if outcome != "ok":
-            self.complete_request(request_key, {}, Degraded(f"docker_restart is refused: the running containers cannot be listed ({value})"))
+            self.complete_request(request_key, {}, Degraded(f"docker_restart is refused: the running containers cannot be listed ({failure_text(value)})"))
             return
         with self.tx() as state:
             problems = self.restart_problems(state, caller)
@@ -7750,7 +8045,7 @@ class Launcher:
         program, *arguments = self.cfg.restart_command
         result = run_command(program, arguments, timeout=self.timings.restart_wait)
         if result.returncode:
-            raise LauncherError(f"{' '.join(self.cfg.restart_command)} failed: {result.stderr.strip()[-200:]}")
+            raise LauncherError(f"{' '.join(self.cfg.restart_command)} failed with exit code {result.returncode}")
         return 0
 
     def on_restartcmd(self, key: str, outcome: str, value: Any) -> None:
@@ -7766,7 +8061,7 @@ class Launcher:
             else:
                 restart.update({"phase": "wait", "started": time.time()})
         if outcome != "ok":
-            self.complete_request(request_key, {}, LauncherError(f"docker restart failed: {value}", "refused"))
+            self.complete_request(request_key, {}, LauncherError(f"docker restart failed: {failure_text(value)}", "refused"))
 
     def on_restartping(self, key: str, outcome: str, value: Any) -> None:
         """The daemon answers again: the restart is done, with the catalog stopped."""
@@ -7892,7 +8187,7 @@ class Launcher:
                 state["guards"][copy["guard"]]["readers"].pop(key, None)
                 return
             copy["phase"] = "abandoning"
-            copy["reason"] = "cancelled" if key in self.copy_cancel or copy["cancel_requested"] else f"error: {value}"
+            copy["reason"] = "cancelled" if key in self.copy_cancel or copy["cancel_requested"] else f"error: {failure_text(value)}"
         self.copy_cancel.discard(key)
 
     def advance_copies(self, state: dict[str, Any], actions: list[Callable[[], None]]) -> None:
@@ -7979,7 +8274,7 @@ class Launcher:
                 value.close()
             return
         if outcome != "ok" or conn.closed:
-            conn.send({"id": request_id, "ok": False, "error": f"attach failed: {value}", "code": "degraded"})
+            conn.send({"id": request_id, "ok": False, "error": f"attach failed: {failure_text(value)}", "code": "degraded"})
             if outcome == "ok":
                 value.close()
             return
@@ -8147,7 +8442,10 @@ def resolve_config(test_registry: str | None, cwd: Path | None = None) -> Config
             timings=timings,
             images=dict(settings.get("images", {})),
             restart_command=tuple(settings.get("restart_command", DOCKER_RESTART_COMMAND)),
-            compose_env=Path(settings["compose_env"]) if settings.get("compose_env") else None,
+            secrets_endpoint=str(settings["secrets_endpoint"]) if settings.get("secrets_endpoint") else None,
+            secret_fetch_seconds=float(settings.get("secret_fetch_seconds", secret_store.FETCH_DEADLINE_SECONDS)),
+            aws_profile=str(settings.get("aws_profile", "")),
+            aws_region=str(settings.get("aws_region", "")),
             lakehouse_state=Path(settings.get("lakehouse_state") or folder / "lakehouse"),
             expected_uid=int(settings["expected_uid"]) if settings.get("expected_uid") is not None else None,
             # A test registry treats its own checkout as the main one; a test may name other read folders (never a real registry).
@@ -8161,7 +8459,6 @@ def resolve_config(test_registry: str | None, cwd: Path | None = None) -> Config
         docker_socket=docker_socket_path(),
         token_root=real_token_root(registry_id),
         runs_root=main / "data" / "analytics" / "dbt" / "runs",
-        compose_env=main / "data" / "lakehouse" / "secrets" / "compose.env",
         lakehouse_state=main / "data" / "lakehouse",
         catalog_checkout=main,
     )

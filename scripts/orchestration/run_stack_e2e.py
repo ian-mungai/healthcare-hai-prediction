@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 import time
 import traceback
 from collections.abc import Callable
@@ -25,7 +26,7 @@ from unittest import mock
 
 from orchestration import launcher
 from scripts.lakehouse import run_launcher_e2e
-from scripts.lakehouse.run_launcher_e2e import CaseFailure, Env, catalog_phase, catalog_script, catalog_up, refused
+from scripts.lakehouse.run_launcher_e2e import CaseFailure, Env, catalog_phase, catalog_script, catalog_up, files_holding, refused
 from scripts.orchestration.fake_engine import StackDocker
 from scripts.process import run_command
 
@@ -43,6 +44,7 @@ class StackEnv(Env):
     """A harness case that also holds an orchestration state folder and the images of the stack."""
 
     def __init__(self, name: str, report: Path, **settings: Any) -> None:
+        self.began = time.time() - 1
         with mock.patch.object(run_launcher_e2e, "FakeDocker", StackDocker):
             super().__init__(name, report, **settings)
         daemon = self.daemon
@@ -50,8 +52,7 @@ class StackEnv(Env):
             raise TypeError("the harness did not build the stack daemon")
         self.engine: StackDocker = daemon
         self.orch = self.temp / "orch"
-        for folder in ("metadata", "session"):
-            (self.orch / folder).mkdir(parents=True, mode=0o700)
+        (self.orch / "session").mkdir(parents=True, mode=0o700)
         self.settings["allowed_roots"] = [str(self.orch)]
         self.write_settings()
         labels = {launcher.DEFAULT_IMAGE_LABEL: "1", launcher.DEFAULT_IMAGE_IMPLEMENTATION: "go"}
@@ -70,7 +71,7 @@ class StackEnv(Env):
     def prepare_lineage(self) -> Path:
         """The lineage state folder, allowed to the launcher, and the pinned images of the three lineage services; call before the launcher starts."""
         folder = self.temp / "lineage"
-        for name in ("postgres", "private", "config"):
+        for name in ("postgres", "config"):
             (folder / name).mkdir(parents=True, exist_ok=True, mode=0o700)
         self.settings["allowed_roots"] = [str(self.orch), str(folder)]
         self.write_settings()
@@ -215,6 +216,16 @@ def mount_pairs(body: dict[str, Any]) -> list[tuple[str, str, bool]]:
     return [(m["Source"], m["Target"], bool(m.get("ReadOnly"))) for m in body["HostConfig"]["Mounts"]]
 
 
+def fixed_pull_failure(error: BaseException | None, daemon_text: str) -> bool:
+    """True when a pull the daemon refused is a launcher failure that keeps the fixed pull diagnostic and none of the daemon's text."""
+    return refused(error, "failed", "pull failed: Docker 500: pull stream failed") and daemon_text not in str(error)
+
+
+def fixed_join_failure(error: str, daemon_text: str) -> bool:
+    """True when a stack error names the API and the status and fixed reason of the refused join, and holds none of the daemon's text."""
+    return "api ended" in error and "Docker 404: request refused" in error and daemon_text not in error
+
+
 @case("stack_up_down")
 def stack_up_down(env: StackEnv) -> dict[str, bool]:
     """933: orchestration_up creates the network, PostgreSQL, the migration and the four Airflow services in order, each with its own labels;
@@ -280,8 +291,23 @@ def stack_up_down(env: StackEnv) -> dict[str, bool]:
         and set(state["services"]) == {f"orch-{s}" for s in STACK_SERVICES if s != "airflow-migrate"},
         "the scheduler's limit leaves room for the LocalExecutor workers": scheduler["HostConfig"]["Memory"] >= 2 * GIB
         and int(api_env["AIRFLOW__CORE__PARALLELISM"]) >= 1,
-        "the metadata secrets are read from files, never set in the environment": not any(
-            name in api_env for name in ("AIRFLOW__CORE__FERNET_KEY", "AIRFLOW__API_AUTH__JWT_SECRET", "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN")
+        "the metadata secrets are set in the environment from Secrets Manager, never read from files": api_env["AIRFLOW__CORE__FERNET_KEY"]
+        == env.secret_values["AIRFLOW_FERNET_KEY"]
+        and api_env["AIRFLOW__API_AUTH__JWT_SECRET"] == env.secret_values["AIRFLOW_JWT_SECRET"]
+        and api_env["AIRFLOW__API__SECRET_KEY"] == env.secret_values["AIRFLOW_API_SECRET_KEY"]
+        and env.secret_values["AIRFLOW_DB_PASSWORD"] in api_env["AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"]
+        and not any(name.endswith("_CMD") for name in api_env)
+        and not any(target == "/run/hai/metadata" for _, target, _ in all_mounts),
+        "the create record places the database password inside the connection string and holds only its commitment": any(
+            span["in"] == "env:AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"
+            and span["commit"] == launcher.commit_secret(launcher.launcher_key(env.config.token_root), env.secret_values["AIRFLOW_DB_PASSWORD"])
+            and api_env["AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"][span["start"] : span["start"] + span["length"]] == env.secret_values["AIRFLOW_DB_PASSWORD"]
+            for op in state["operations"].values()
+            if op["kind"] == "create"
+            for span in op.get("secret_spans", [])
+        ),
+        "no file under the repository, the scratch folder or the temporary folder holds a stack secret value": not files_holding(
+            [env.secret_values[name] for name in launcher.STACK_SECRETS], [ROOT, env.temp, Path(tempfile.gettempdir())], env.began
         ),
         "every create has a recorded effective-specification digest": all(
             op.get("spec_digest") for op in state["operations"].values() if op["kind"] == "create" and "-svc-orch-" in op["name"]
@@ -464,7 +490,7 @@ def stack_request_validation(env: StackEnv) -> dict[str, bool]:
         "a state folder inside a secrets folder is refused": refused(error_of(state=str(secrets_folder)), "mount"),
         "a relative state folder is refused": refused(error_of(state="orch"), "args"),
         "a missing state folder is refused": refused(error_of(state=str(env.orch / "missing")), "args", "does not exist"),
-        "a state folder without the metadata and session folders is refused": refused(error_of(state=str(bare)), "args", "lacks"),
+        "a state folder without the session folder is refused": refused(error_of(state=str(bare)), "args", "lacks"),
         "a port below 1024 is refused": refused(error_of(api_port=80), "args", "api_port"),
         "a port above 65535 is refused": refused(error_of(api_port=70000), "args", "api_port"),
         "a text port is refused": refused(error_of(api_port="18999"), "args", "api_port"),
@@ -553,7 +579,7 @@ def stack_memory_floor(env: StackEnv) -> dict[str, bool]:
 def orchestration_dump_template(env: StackEnv) -> dict[str, bool]:
     """932b: the metadata database dump and the logical XCom query are finite jobs of the allocation-owned orchestration_dump template: the thin
     Airflow image behind the deadline entrypoint, the stack's network, a fixed program with one closed argument (metadata or xcom), the connection string
-    only through the read-only metadata folder, one writable folder (the state folder's dumps), no capability. The stack must be up."""
+    only through the job's environment (filled from Secrets Manager), one writable folder (the state folder's dumps), no capability. The stack must be up."""
     services_script(env)
     previous = env.daemon.script
 
@@ -596,11 +622,16 @@ def orchestration_dump_template(env: StackEnv) -> dict[str, bool]:
                 and body.get("Entrypoint") == [launcher.DEADLINE_ENTRYPOINT, "python"],
                 f"{what}: its command is the dump script with the one closed argument": body.get("Cmd") == ["/opt/hai/checks/db_dump.py", what],
                 f"{what}: it joins the stack's network": body.get("HostConfig", {}).get("NetworkMode") == f"hai-{rid}-orch-net",
-                f"{what}: no password or connection string is in the environment": not any(
-                    "PASS" in name.upper() or "CONN" in name.upper() or "synthetic-password" in value for name, value in environment.items()
+                f"{what}: the connection string is set only through the one connection variable, from Secrets Manager": (
+                    env.secret_values["AIRFLOW_DB_PASSWORD"] in environment.get("AIRFLOW__DATABASE__SQL_ALCHEMY_CONN", "")
+                    and not any(
+                        env.secret_values["AIRFLOW_DB_PASSWORD"] in value
+                        for name, value in environment.items()
+                        if name != "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"
+                    )
                 ),
-                f"{what}: the metadata folder and the script are read-only and only /out is writable": ("/run/hai/metadata", True)
-                in {(t, ro) for _, t, ro in mounts}
+                f"{what}: no metadata folder is mounted, the script is read-only and only /out is writable": ("/run/hai/metadata", True)
+                not in {(t, ro) for _, t, ro in mounts}
                 and ("/opt/hai/checks/db_dump.py", True) in {(t, ro) for _, t, ro in mounts}
                 and sorted({t for _, t, ro in mounts if not ro}) == ["/out"],
                 f"{what}: /out is the state folder's dumps folder": [s for s, t, _ in mounts if t == "/out"] == [str((env.orch / "dumps").resolve())],
@@ -663,8 +694,11 @@ def pull_rules(env: StackEnv) -> dict[str, bool]:
     reply2 = client2.call("pull", {"reference": POSTGRES_IMAGE})
     results["a digest named by the orchestration Compose model is pulled"] = bool(reply2.get("pulled"))
     env.daemon.images.pop(named.partition(":")[0] + "@" + named.partition("@")[2], None)
-    env.engine.pull_error = "manifest unknown"
-    results["a pull the daemon refuses is reported as a failure"] = refused(attempt(named), None, "manifest unknown")
+    daemon_text = "manifest unknown"
+    env.engine.pull_error = daemon_text
+    results["a pull the daemon refuses is reported as a failure with the fixed diagnostic and none of the daemon's text"] = fixed_pull_failure(
+        attempt(named), daemon_text
+    )
     env.engine.pull_error = ""
     return results
 
@@ -777,10 +811,11 @@ def lineage_two_networks(env: StackEnv) -> dict[str, bool]:
 
 @case("lineage_join_refused")
 def lineage_join_refused(env: StackEnv) -> dict[str, bool]:
-    """A join the daemon refuses ends the API attempt before any start: the container is removed, the stack fails with the daemon's text and
-    tears down PostgreSQL and both networks."""
+    """A join the daemon refuses ends the API attempt before any start: the container is removed, the stack fails with the status and fixed reason of
+    the refusal, never the daemon's text, and tears down PostgreSQL and both networks."""
     folder = env.prepare_lineage()
-    env.engine.connect_refusals.append((404, "network lineage-backend not found"))
+    daemon_text = "network lineage-backend not found"
+    env.engine.connect_refusals.append((404, daemon_text))
     env.start()
     phase = env.lineage_up(folder)
     settles(env, lambda: not env.lineage_objects() and not env.daemon.networks, 40)
@@ -788,7 +823,7 @@ def lineage_join_refused(env: StackEnv) -> dict[str, bool]:
     error = env.lineage().get("error", "")
     return {
         "the stack is down": phase == "down" and env.lineage().get("phase") == "down",
-        "the error names the API and the daemon's refusal": "api ended" in error and "network lineage-backend not found" in error,
+        "the error names the API and the status and fixed reason of the refusal, not the daemon's text": fixed_join_failure(error, daemon_text),
         "one join was tried and the API was never started": len(facts["joins"]) == 1 and not facts["starts"]["api"],
         "the web service was never created": facts["bodies"]["web"] is None,
         "PostgreSQL was started and then removed": len(facts["starts"]["postgres"]) >= 1 and not env.lineage_objects(),
@@ -845,7 +880,7 @@ def lineage_unhealthy_service(env: StackEnv) -> dict[str, bool]:
 @case("lineage_request_validation")
 def lineage_request_validation(env: StackEnv) -> dict[str, bool]:
     """The lineage request names a state folder, two ports and a checkout, and the launcher validates each. Failure modes: a folder outside the
-    allowed folders, inside a secrets folder, relative, missing or without the private folders is accepted; a port is not an unprivileged integer;
+    allowed folders, inside a secrets folder, relative, missing or without the configuration folder is accepted; a port is not an unprivileged integer;
     something starts before the request is refused."""
     folder = env.prepare_lineage()
     env.start()
@@ -870,7 +905,7 @@ def lineage_request_validation(env: StackEnv) -> dict[str, bool]:
         "a state folder inside a secrets folder is refused": refused(error_of(state=str(secrets_folder)), "mount"),
         "a relative state folder is refused": refused(error_of(state="lineage"), "args"),
         "a missing state folder is refused": refused(error_of(state=str(env.orch / "missing")), "args", "does not exist"),
-        "a state folder without the private folders is refused": refused(error_of(state=str(bare)), "args", "lacks"),
+        "a state folder without the configuration folder is refused": refused(error_of(state=str(bare)), "args", "lacks"),
         "a port below 1024 is refused": refused(error_of(api_port=80), "args", "api_port"),
         "a web port equal to the API port is refused": refused(error_of(web_port=18701), "args", "web_port"),
         "an unknown parameter is refused": refused(error_of(image="evil"), "args", "image"),

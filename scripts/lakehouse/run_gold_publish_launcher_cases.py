@@ -56,12 +56,10 @@ def sealed_run(record: dict[str, Any], run_id: str = GOLD_RUN) -> dict[str, Any]
 
 
 def with_writer(env: Env) -> None:
-    """Add the gold writer's sentinel credentials to the test registry's compose file before the launcher reads it."""
-    compose_env = env.temp / "compose.env"
+    """Add the gold writer's sentinel credentials to the test registry's stand-in Secrets Manager before the launcher reads them."""
     for name, prefix in WRITER_NAMES.items():
         env.secret_values[name] = prefix + base.os.urandom(6).hex() if prefix.endswith("-") else prefix
-    compose_env.write_text("".join(f"{key}={value}\n" for key, value in env.secret_values.items()))
-    compose_env.chmod(0o600)
+        env.stand_in.values[launcher.COMPOSE_SECRETS[name]] = env.secret_values[name]
 
 
 def sealed_file(env: Env, run_id: str, content: bytes = SEALED) -> Path:

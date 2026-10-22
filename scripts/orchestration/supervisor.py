@@ -8,8 +8,9 @@ Run from the main checkout with the launcher's Docker running:
     .venv/bin/python -m scripts.orchestration.supervisor status   # the stack's record from the launcher; never a secret
 
 ``up`` pulls PostgreSQL by its digest through the launcher when it is absent and requires the Airflow image that
-``services/orchestration/Dockerfile`` builds. It writes this session's broker token (32 random bytes, owner-only, never an environment variable) and
-the metadata secrets under the ignored ``data/orchestration/airflow/``, starts the broker and its loopback listener, then asks the launcher for
+``services/orchestration/Dockerfile`` builds. It writes this session's broker token (32 random bytes, owner-only, never an environment variable)
+under the ignored ``data/orchestration/airflow/`` and stores the metadata secrets in AWS Secrets Manager (the database password and the Fernet key once,
+the JSON Web Token secret and the API secret key anew each session), starts the broker and its loopback listener, then asks the launcher for
 ``orchestration_up``: the launcher sizes every service from the memory free at that moment, starts PostgreSQL, runs the migration as a finite
 service under the deadline entrypoint and starts the four Airflow services, each after the one before is healthy. The supervisor then waits until
 the API reports every component healthy. Any failure on the way asks the launcher for ``orchestration_down`` and removes the session token. The
@@ -21,7 +22,6 @@ launcher confirms that the stack is down: a failed request or wait, or any other
 from __future__ import annotations
 
 import argparse
-import base64
 import http.client
 import json
 import secrets
@@ -35,6 +35,7 @@ from typing import Any
 from orchestration import launcher
 from orchestration.interface import SubmissionRefused, SubmissionRequest
 from orchestration.lineage import CompletionWorker
+from scripts.infrastructure import secret_store
 from scripts.lakehouse import run_lock
 from scripts.orchestration import run_control
 from scripts.orchestration.airflow_api import AirflowApi, AirflowApiError
@@ -53,7 +54,6 @@ from scripts.orchestration.broker import (
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENTS = ("metadatabase", "scheduler", "triggerer", "dag_processor")
-ROTATED_SECRETS = ("jwt_secret", "api_secret_key")
 PULL_SECONDS = 3600.0
 TRANSFORM_DAG = "transform_dag"
 PIPELINE_DAGS = ("silver_transform_dag", "gold_transform_dag", "gold_maintenance_dag")
@@ -103,6 +103,7 @@ class Supervisor:
         self.lineage_api_port = lineage_api_port
         self.transform_dag = TRANSFORM_DAG
         self.state = paths.state / "airflow"
+        self.jwt_secret = ""
         self.broker: Broker | None = None
         self.listener: Listener | None = None
         self.token = ""
@@ -147,19 +148,31 @@ class Supervisor:
             raise SupervisorError("the Airflow image does not carry the deadline entrypoint labels")
         return {"postgres": pulled, "airflow": {"image": self.platform["airflow"]["image"], "id": airflow["id"]}}
 
+    def store_metadata_secrets(self) -> None:
+        """Keep the database password and the Fernet key in Secrets Manager (generated there once) and store this session's rotated secrets.
+
+        A database that already holds data keeps working only with the password it was created with, so a missing secret next to an initialized database
+        is refused instead of generated."""
+        try:
+            store = self.client.config.secret_store()
+            initialized = (self.state / "postgres" / "PG_VERSION").exists()
+            for name, make in ((secret_store.AIRFLOW_DB_PASSWORD, secret_store.new_password), (secret_store.AIRFLOW_FERNET_KEY, secret_store.new_fernet_key)):
+                if initialized and store.find(name) is None:
+                    raise SupervisorError(f"the Airflow database exists but secret {name} is missing; run the one-time secrets move first")
+                value, _ = store.ensure(name, make)
+                if name == secret_store.AIRFLOW_FERNET_KEY and not secret_store.is_fernet_key(value):
+                    raise SupervisorError(f"secret {name} is not a Fernet key (the URL-safe base64 text of 32 bytes); Airflow could not decrypt with it")
+            self.jwt_secret = secrets.token_urlsafe(48)
+            store.put(secret_store.AIRFLOW_JWT_SECRET, self.jwt_secret)
+            store.put(secret_store.AIRFLOW_API_SECRET_KEY, secrets.token_urlsafe(48))
+        except (launcher.LauncherError, secret_store.SecretStoreError) as error:
+            raise SupervisorError(str(error)) from None
+
     def prepare_state(self, token: str, broker_port: int) -> None:
-        """Folders, metadata secrets (owner-only files read through Airflow's ``_CMD`` options) and this session's token and broker URL."""
-        for folder in ("postgres", "logs", "metadata", "session", "lineage_provider"):
+        """Folders, the metadata secrets in Secrets Manager and this session's token and broker URL."""
+        for folder in ("postgres", "logs", "session", "lineage_provider"):
             (self.state / folder).mkdir(parents=True, exist_ok=True, mode=0o700)
-        metadata = self.state / "metadata"
-        password_file = metadata / "db_password"
-        if not password_file.exists():
-            write_private(password_file, secrets.token_urlsafe(32))
-            write_private(metadata / "fernet_key", base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())
-        password = password_file.read_text().strip()
-        write_private(metadata / "sql_alchemy_conn", f"postgresql+psycopg2://airflow:{password}@postgres:5432/airflow")
-        for name in ROTATED_SECRETS:
-            write_private(metadata / name, secrets.token_urlsafe(48))
+        self.store_metadata_secrets()
         write_private(self.state / "session" / "broker_token", token + "\n")
         write_private(self.state / "session" / "client.json", json.dumps({"url": f"http://host.docker.internal:{broker_port}"}) + "\n")
 
@@ -246,8 +259,9 @@ class Supervisor:
         within ``SNAPSHOT_TOTAL_SECONDS``, because the broker calls it while it holds the run's ledger lock."""
         deadline = time.monotonic() + SNAPSHOT_TOTAL_SECONDS
         try:
-            secret = (self.state / "metadata" / "jwt_secret").read_text().strip()
-            api = AirflowApi(self.api_port, secret, timeout=SNAPSHOT_SECONDS, deadline=deadline)
+            if not self.jwt_secret:
+                return {"unavailable": "this session has not stored its JSON Web Token secret yet"}
+            api = AirflowApi(self.api_port, self.jwt_secret, timeout=SNAPSHOT_SECONDS, deadline=deadline)
             names = (
                 PIPELINE_DAGS if self.transform_dag == TRANSFORM_DAG and (self.repo_root / "dags/silver_transform_dag.py").is_file() else (self.transform_dag,)
             )

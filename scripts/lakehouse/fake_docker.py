@@ -150,6 +150,7 @@ class FakeDocker:
         self.fail_remove = 0
         self.fail_list = False
         self.connect_refusals: list[tuple[int, str]] = []
+        self.error_replies: dict[str, list[tuple[int, str]]] = {}
         self.stdout: dict[str, str] = {}
         self.create_bodies: dict[str, dict[str, Any]] = {}
         self.stopping = False
@@ -434,11 +435,23 @@ class FakeDocker:
         """The inspect-endpoint form; the daemon adds defaults and the image's own environment."""
         return {**{k: v for k, v in container.items() if not k.startswith("_")}, "Config": dict(container["Config"])}
 
+    def scripted_error(self, handler: Handler, operation: str) -> bool:
+        """Reply to this request with the next scripted error of the operation (``create``, ``start``, ``stop`` or ``remove``); True when it did."""
+        with self.lock:
+            replies = self.error_replies.get(operation)
+            if not replies:
+                return False
+            status, message = replies.pop(0)
+        handler.reply(status, {"message": message})
+        return True
+
     def create(self, handler: Handler, query: dict[str, str], body: dict[str, Any]) -> None:
         """Create a container: name conflicts and missing images are refused as the daemon does."""
         name = query.get("name", "")
         context = {"name": name, "labels": body.get("Labels", {}), "body": body}
         self.checkpoint("create", "before", context)
+        if self.scripted_error(handler, "create"):
+            return
         endpoints = (body.get("NetworkingConfig") or {}).get("EndpointsConfig") or {}
         with self.lock:
             if len(endpoints) > 1:
@@ -520,6 +533,8 @@ class FakeDocker:
             return
         context = {"name": container["Name"].lstrip("/"), "labels": container["Config"]["Labels"]}
         self.checkpoint("start", "before", context)
+        if self.scripted_error(handler, "start"):
+            return
         with self.lock:
             if container["State"]["Running"]:
                 handler.reply(304, None)
@@ -569,6 +584,8 @@ class FakeDocker:
             return
         context = {"name": container["Name"].lstrip("/"), "labels": container["Config"]["Labels"], "kind": kind}
         self.checkpoint("stop", "before", context)
+        if self.scripted_error(handler, "stop"):
+            return
         with self.lock:
             running = container["State"]["Running"]
         if not running:
@@ -589,6 +606,8 @@ class FakeDocker:
             return
         context = {"name": container["Name"].lstrip("/"), "labels": container["Config"]["Labels"]}
         self.checkpoint("remove", "before", context)
+        if self.scripted_error(handler, "remove"):
+            return
         with self.lock:
             if self.fail_remove > 0:
                 self.fail_remove -= 1

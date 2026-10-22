@@ -28,6 +28,7 @@ from typing import Any
 from unittest import mock
 
 from orchestration import launcher
+from scripts.infrastructure import secret_store
 from scripts.lakehouse import run_lock
 from scripts.lakehouse.run_launcher_e2e import CaseFailure, catalog_phase, catalog_script, catalog_up
 from scripts.orchestration import supervisor as supervisor_module
@@ -152,8 +153,8 @@ def port_open(port: int) -> bool:
 
 @case("supervisor_full_session")
 def supervisor_full_session(env: SessionEnv) -> dict[str, bool]:
-    """933: a full session through the launcher: images checked, token and metadata files owner-only, the listener serving, the stack up and
-    healthy, the lineage worker finishing a pass and failing none, then a teardown that leaves nothing."""
+    """933: a full session through the launcher: images checked, the token file owner-only, the metadata secrets in Secrets Manager and in no file,
+    the listener serving, the stack up and healthy, the lineage worker finishing a pass and failing none, then a teardown that leaves nothing."""
     services_script(env)
     env.start()
     supervisor = env.supervisor()
@@ -161,15 +162,19 @@ def supervisor_full_session(env: SessionEnv) -> dict[str, bool]:
     session = env.airflow / "session"
     token = (session / "broker_token").read_text().strip()
     port = supervisor.listener.port if supervisor.listener else 0
-    metadata = env.airflow / "metadata"
-    modes = {path.name: stat.S_IMODE(path.stat().st_mode) for path in [session / "broker_token", *metadata.iterdir()]}
+    modes = {path.name: stat.S_IMODE(path.stat().st_mode) for path in session.iterdir()}
+    stored = env.stand_in.values
     client_url = json.loads((session / "client.json").read_text())["url"]
     during = {
         "the stack is up": env.stack_phase() == "up",
         "the images were checked through the launcher": set(evidence["images"]) == {"postgres", "airflow"},
         "the health check passed": evidence["health"] == dict.fromkeys(("metadatabase", "scheduler", "triggerer", "dag_processor"), "healthy"),
         "the token is 32 random bytes in hex": len(token) == 64 and all(c in "0123456789abcdef" for c in token),
-        "the token and every metadata file are owner-only": all(mode == 0o600 for mode in modes.values()) and stat.S_IMODE(session.stat().st_mode) == 0o700,
+        "the token and every session file are owner-only": all(mode == 0o600 for mode in modes.values()) and stat.S_IMODE(session.stat().st_mode) == 0o700,
+        "no metadata file or folder exists": not (env.airflow / "metadata").exists(),
+        "the rotated secrets are in Secrets Manager and the session holds the token secret in memory": bool(supervisor.jwt_secret)
+        and stored[secret_store.AIRFLOW_JWT_SECRET] == supervisor.jwt_secret
+        and bool(stored[secret_store.AIRFLOW_API_SECRET_KEY]),
         "the client file names the listener's port": client_url == f"http://host.docker.internal:{port}" and port > 0,
         "the listener serves on the loopback": port_open(port),
         "the evidence names the sizing the launcher computed": any(key.startswith("HAI_ORCH_MEM") for key in evidence["settings"]),
@@ -436,7 +441,7 @@ def supervisor_image_missing(env: SessionEnv) -> dict[str, bool]:
         error = caught
     return {
         "the start was refused": error is not None and "not on this machine" in str(error) and "Dockerfile" in str(error),
-        "no token or metadata file was written": not (env.airflow / "session").exists(),
+        "no token or secret file was written": not (env.airflow / "session").exists(),
         "nothing was created": not env.created_names() and not env.daemon.networks,
     }
 

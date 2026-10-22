@@ -14,11 +14,14 @@ from scripts.acquisition.discover_history import Links
 from scripts.acquisition.hcai_util_contract import _Markup
 from scripts.acquisition.tests.conftest import synthetic_collection_routes
 from scripts.acquisition.transport import Download
+from scripts.infrastructure.secret_store_stand_in import StandInHandler
 
 
 def uses(download: Download, member: tarfile.TarInfo) -> tuple[object, ...]:
     """Name each entry once; vulture counts these names as used."""
     return (
+        StandInHandler.log_message,  # http.server calls it to log each request; the stand-in keeps its own call log.
+        StandInHandler.do_POST,  # http.server calls it for each POST request.
         Links.handle_data,  # HTMLParser calls it for the text inside each anchor.
         _Markup.handle_data,  # HTMLParser calls it for workbook XML text.
         _Markup.handle_startendtag,  # HTMLParser calls it for self-closing workbook XML tags.

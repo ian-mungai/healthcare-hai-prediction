@@ -1,9 +1,9 @@
 """Read-only logical dump of the Airflow metadata database for the sentinel scan (Airflow plan section 10; failure mode 932b).
 
 It runs inside the thin Airflow image as a finite job of the ``orchestration_dump`` template, on the stack's network, with the repository file mounted
-read-only. The connection string comes from the owner-only metadata folder (mounted read-only) and is never printed. ``metadata`` writes every table of the
-``public`` schema as COPY text (a column of bytes appears as hexadecimal text) to ``/out/metadata.sql``; ``xcom`` writes the XCom rows to
-``/out/xcom.txt``. The session is read-only. The job prints only the number of tables and rows it wrote.
+read-only. The connection string comes from the job's environment, which the launcher fills from AWS Secrets Manager, and is never printed.
+``metadata`` writes every table of the ``public`` schema as COPY text (a column of bytes appears as hexadecimal text) to
+``/out/metadata.sql``; ``xcom`` writes the XCom rows to ``/out/xcom.txt``. The session is read-only. The job prints only the number of tables and rows it wrote.
 
 It imports the standard library and ``psycopg2``, which the Airflow image provides.
 """
@@ -19,7 +19,7 @@ from typing import Any
 import psycopg2
 from psycopg2 import sql
 
-CONNECTION_FILE = Path("/run/hai/metadata/sql_alchemy_conn")
+CONNECTION_VARIABLE = "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"
 OUT = Path("/out")
 URL_PREFIX = "postgresql+psycopg2://"
 TARGETS = {"metadata": "metadata.sql", "xcom": "xcom.txt"}
@@ -27,7 +27,7 @@ TARGETS = {"metadata": "metadata.sql", "xcom": "xcom.txt"}
 
 def connect() -> Any:
     """A read-only connection to the metadata database; the connection string never leaves this function."""
-    url = CONNECTION_FILE.read_text().strip()
+    url = os.environ[CONNECTION_VARIABLE].strip()
     if not url.startswith(URL_PREFIX):
         raise SystemExit("the connection string is not a psycopg2 URL")
     connection = psycopg2.connect("postgresql://" + url[len(URL_PREFIX) :])

@@ -27,7 +27,8 @@ cp .env.example .env
 Fill every value in `.env`; the file stays out of Git. `AWS_PROFILE` is the
 project profile, named `<PROJECT_NAME>_<ENVIRONMENT>` after its same-named IAM
 user. IAM changes use a separate administrator profile that is never stored in
-`.env`.
+`.env`. No secret belongs in `.env` or in any other file on the host: every secret
+lives in AWS Secrets Manager (`docs/install_details.md`).
 
 The services are defined in `docker-compose.yaml`, which the launcher reads as its service model; the launcher, not
 Compose, starts every container:
@@ -54,8 +55,8 @@ Then start the catalog from the main checkout (a launcher running in another che
 .venv/bin/python -m scripts.lakehouse.catalog up
 ```
 
-`up` is idempotent. On first use it generates the catalog credentials into the ignored, owner-only
-`data/lakehouse/secrets/` and never prints them. It creates the `hai_lakehouse` catalog, limited to `lakehouse/` in the
+`up` is idempotent. On first use it generates the catalog credentials straight into AWS Secrets Manager (no file on the
+host holds them) and never prints them. It creates the `hai_lakehouse` catalog, limited to `lakehouse/` in the
 project bucket. `down` stops the containers and keeps the catalog database.
 
 ## Data layers
@@ -87,6 +88,7 @@ The E2E runners can also run on their own; each needs a new output directory:
 .venv/bin/python -m scripts.quality.run_e2e --output-directory <new_directory>
 .venv/bin/python -m scripts.quality.run_checks_e2e
 .venv/bin/python -m scripts.quality.run_documentation_review_e2e
+.venv/bin/python -m scripts.infrastructure.run_secret_store_e2e
 ```
 
 Each run writes its report under `data/e2e/` (the configuration E2E under `data/e2e/configuration/`, the quality E2E

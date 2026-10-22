@@ -118,6 +118,7 @@ lakehouse_gold() {
   # The gold Great Expectations suites must match the gold contract they are generated from.
   "$python_bin" -m scripts.lakehouse.gold_checks check-suites
   "$python_bin" -m scripts.lakehouse.run_gold_publish_e2e --mode contract
+  "$python_bin" -m scripts.lakehouse.run_gold_publish_e2e --mode writer_setup
   "$python_bin" -m scripts.quality.model_metadata
   "$python_bin" -m scripts.quality.run_model_metadata_e2e
 }
@@ -150,6 +151,7 @@ repository_code_checks() {
 configuration_checks() {
   "$python_bin" -m scripts.infrastructure.run_e2e --output-directory "$e2e_output"
   "$python_bin" -m scripts.quality.run_e2e --output-directory "$quality_output/e2e"
+  "$python_bin" -m scripts.infrastructure.run_secret_store_e2e
   "$python_bin" -m pytest --cov=scripts.infrastructure --cov-report=term-missing -q
 }
 

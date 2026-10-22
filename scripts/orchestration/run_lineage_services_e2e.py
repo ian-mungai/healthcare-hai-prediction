@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 import tempfile
 from datetime import UTC, datetime
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
+from scripts.infrastructure import secret_store
+from scripts.infrastructure.secret_store_stand_in import StandIn
 from scripts.lakehouse.run_lock import Registry
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,11 +31,13 @@ def main() -> int:
         template = launcher.TEMPLATES["lineage_service"]
         if template.finite or template.owners != ("stack",):
             raise AssertionError("lineage service has the wrong lifecycle or owner")
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory() as folder, StandIn({secret_store.MARQUEZ_DB_PASSWORD: "synthetic-" + os.urandom(6).hex()}) as stand_in:
             root = Path(folder)
-            for name in ("postgres", "private", "config"):
+            for name in ("postgres", "config"):
                 (root / name).mkdir()
-            config = launcher.Config(Registry(root / "registry", "test"), ROOT, "/unused", root / "tokens", root / "runs", allowed_roots=(root,))
+            config = launcher.Config(
+                Registry(root / "registry", "test"), ROOT, "/unused", root / "tokens", root / "runs", allowed_roots=(root,), secrets_endpoint=stand_in.endpoint
+            )
             renderer = launcher.Renderer(config, launcher.ComposeModel(ROOT / "services/lineage/docker-compose.lineage.yaml"), ROOT, ROOT, b"synthetic")
             values = {"HAI_LINEAGE_STATE": str(root), "HAI_LINEAGE_API_PORT": "15000", "HAI_LINEAGE_WEB_PORT": "13000"}
             values.update({f"HAI_LINEAGE_MEM_{name}": str(1024**3) for name in ("POSTGRES", "API", "WEB")})
