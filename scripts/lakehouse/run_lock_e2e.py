@@ -120,6 +120,21 @@ def cross_domain_reverse(sc: Scenario) -> dict[str, bool]:
     return {"pin over an acquisition write refused": refused(late_pin, "written by acquisition run acq_c")}
 
 
+def cross_domain_segments(sc: Scenario) -> dict[str, bool]:
+    """768: prefixes are compared by whole path segments, and a declaration that is not a plain path is refused."""
+    sc.acquire("run_a")
+    pinned = sc.cli("pin", "--run", "run_a", "--prefix", "lakehouse/bronze/hai/")
+    empty = sc.cli("acquire", "--domain", "acquisition", "--run", "acq_e", "--mode", "fixture", "--write-prefix", "")
+    doubled = sc.cli("acquire", "--domain", "acquisition", "--run", "acq_d", "--mode", "fixture", "--write-prefix", "lakehouse//bronze/")
+    text_only = sc.cli("acquire", "--domain", "acquisition", "--run", "acq_t", "--mode", "fixture", "--write-prefix", "lakehouse/bronze/ha")
+    return {
+        "transform pins its bronze prefix": pinned.returncode == 0,
+        "acquisition writing an empty prefix refused": refused(empty, "not a plain path"),
+        "acquisition writing a doubled slash prefix refused": refused(doubled, "not a plain path"),
+        "acquisition writing the text start of a pinned folder allowed": text_only.returncode == 0,
+    }
+
+
 def failed_run(sc: Scenario) -> dict[str, bool]:
     """776 and 885: a failed run keeps the lock until the owner releases it, after its containers are gone."""
     sc.acquire("run_a")
@@ -280,6 +295,7 @@ SCENARIOS: list[tuple[str, Callable[[Scenario], dict[str, bool]]]] = [
     ("nested and competing launches", nested_and_competing),
     ("cross-domain prefixes", cross_domain),
     ("cross-domain prefixes, reverse order", cross_domain_reverse),
+    ("cross-domain prefixes, whole segments", cross_domain_segments),
     ("failed run and owner release", failed_run),
     ("release predicates after success", success_release),
     ("16-process race", race),

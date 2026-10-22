@@ -1,0 +1,34 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageWrittenTableFiles",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": ${jsonencode([for prefix in WRITE_PREFIXES : "arn:aws:s3:::${DATA_BUCKET_NAME}/${prefix}*"])}
+    },
+    {
+      "Sid": "ListWrittenPrefixes",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ${jsonencode(flatten([for prefix in WRITE_PREFIXES : [trimsuffix(prefix, "/"), "${prefix}*"]]))}
+        }
+      }
+    },
+    {
+      "Sid": "LocateBucket",
+      "Effect": "Allow",
+      "Action": "s3:GetBucketLocation",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}"
+    }
+  ]
+}

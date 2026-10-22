@@ -29,6 +29,12 @@ plan review and preservation of existing rules. Private plans and live
 verification evidence remain untracked under
 `data/infrastructure/lifecycle_deployment/`.
 
+**Pipeline roles.** `infra/iam/` also defines two IAM roles for pipeline jobs, a lakehouse reader and a lakehouse writer. Only the project's
+own IAM user can assume them, through a policy that allows `sts:AssumeRole` on exactly these two roles. The reader reads the bronze, silver and gold
+prefixes of `lakehouse/`. The writer holds the object actions of the lakehouse policy on `lakehouse/silver/`, `lakehouse/silver_e2e/`,
+`lakehouse/gold/`, `lakehouse/gold_e2e/` and `lakehouse/catalog_backups/` only. A session lasts at most 7200 seconds. The launcher asks for a
+session per job (`docs/lakehouse_usage.md`, Pipeline AWS access), so no long-lived key reaches a container.
+
 **Single-copy content folders.** The project's S3 policy has four statements for `bronze_objects/sha256/` and
 `bronze_evidence/sha256/`, the folders that single-copy storage uses. One reads current objects and exact versions
 (`s3:GetObject` and `s3:GetObjectVersion`). One allows `s3:PutObject` only when the request carries the `If-None-Match`

@@ -15,12 +15,21 @@ from typing import Any
 from scripts.lakehouse.gold_publish_record import IDENT_MAX, RUN_ID, SHA256, PublishError, accept_consumer
 
 LAYERS = ("silver", "gold")
+SILVER_NAMESPACE = {"publish_fixture": "silver_e2e", "real": "silver"}
 MAX_RECORD = 8 << 20
 COPY_SECONDS = 600.0
 
 
 class PipelineError(RuntimeError):
     """A pipeline operation cannot prove the required input, ownership or completion."""
+
+
+def silver_namespace(mode: str) -> str:
+    """The silver namespace of a publish mode; any other mode has none."""
+    namespace = SILVER_NAMESPACE.get(mode)
+    if namespace is None:
+        raise PipelineError(f"run mode {mode!r} has no silver namespace; the publish modes are {' and '.join(SILVER_NAMESPACE)}")
+    return namespace
 
 
 def read_bytes(root: Path, relative: str, limit: int = MAX_RECORD) -> bytes:
@@ -231,7 +240,7 @@ def accept_export(state: Mapping[str, Any], run_id: str, layer: str, attempt_id:
 
 def check_pin(record: Mapping[str, Any], run_id: str, mode: str, tables: set[str]) -> None:
     """Require a complete silver pin for one consumer, mode and committed producer."""
-    wanted = "silver_e2e" if mode == "publish_fixture" else "silver"
+    wanted = silver_namespace(mode)
     if set(record) != {"schema", "run_id", "mode", "namespace", "source_run_id", "snapshot_set"} or record.get("schema") != 1:
         raise PipelineError("the silver pin has an unsupported shape")
     if record["run_id"] != run_id or record["mode"] != mode or record["namespace"] != wanted or not RUN_ID.fullmatch(str(record["source_run_id"])):

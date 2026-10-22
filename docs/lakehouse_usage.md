@@ -20,7 +20,17 @@ scripts/lakehouse/query.sh                                         # DuckDB shel
 .venv/bin/python -m scripts.lakehouse.run_silver_e2e               # silver and gold quality checks on the fixture; report: data/e2e/silver_quality/
 .venv/bin/python -m scripts.lakehouse.run_gold_e2e                 # gold on the fixture; report: data/e2e/gold/
 .venv/bin/python -m scripts.lakehouse.run_launcher_e2e             # launcher scenarios with a fake Docker; report: data/e2e/launcher/
+.venv/bin/python -m scripts.orchestration.trigger_dag --dag silver_transform_dag --mode real --wait-seconds 7200   # one workflow run on the running stack
 ```
+
+`trigger_dag` starts one silver, gold or maintenance workflow run on the stack that `scripts.orchestration.supervisor up` holds
+and waits for its end within `--wait-seconds` (at most 4 hours). Workflows start paused, so it unpauses the selected one first.
+One deadline covers the whole command: every request and every sleep stops at it. A run that ends after it is reported as
+not ended (exit 1). A gold run names the committed silver run it reads with `--silver-snapshot-run` (default `latest`). It reads
+the session's Airflow token secret from Secrets Manager into memory and prints one line: the run ID, the end state, the seconds
+and the task states. It exits 0 for a successful run. An error names the workflow, the run ID and the HTTP status or the cause,
+never a response body. The native check is the `trigger_command` case of `scripts.orchestration.run_transform_e2e`; its offline
+refusal and deadline checks run with `--trigger-check`.
 
 ## Secrets
 
@@ -52,16 +62,41 @@ publish. `--dry-run` prints the requests and sends none. A rerun changes nothing
 .venv/bin/python -m scripts.lakehouse.gold_writer_setup --dry-run     # plan of the gold_writer principal (gold and gold_e2e)
 .venv/bin/python -m scripts.lakehouse.gold_writer_setup               # create it; credentials go to AWS Secrets Manager
 .venv/bin/python -m scripts.lakehouse.silver_writer_setup --dry-run   # plan of the silver_writer principal (silver and silver_e2e)
-.venv/bin/python -m scripts.lakehouse.silver_writer_setup             # not available yet: refuses until it stores credentials in AWS Secrets Manager
+.venv/bin/python -m scripts.lakehouse.silver_writer_setup             # create it; credentials go to AWS Secrets Manager
 .venv/bin/python -m scripts.lakehouse.run_gold_publish_e2e --mode writer_setup   # both set-ups against a stand-in Polaris; no Docker
 ```
 
 A writer may create, read and write the tables of its own two namespaces and read the catalog's properties. It cannot touch the other
 layer's namespaces or bronze, manage the catalog, create or drop a namespace or drop a table. The root credentials make the set-up
-requests only. The gold writer's client ID and secret are stored in AWS Secrets Manager (see Secrets) and never printed. The real silver set-up refuses
-until it stores its pair there too. Only its `--dry-run` works now. A job receives them
+requests only. Each writer's client ID and secret are stored in AWS Secrets Manager (see Secrets) and never printed. A job receives them
 only from the launcher (`POLARIS_GOLD_WRITER_CLIENT_ID` and `_SECRET`, `POLARIS_SILVER_WRITER_CLIENT_ID` and `_SECRET`). The shared
-requests are in `scripts/lakehouse/polaris_writer.py`.
+requests and the Secrets Manager steps are in `scripts/lakehouse/polaris_writer.py`.
+
+## Pipeline AWS access
+
+A pipeline job whose class needs AWS (`lakehouse_read` or `lakehouse_write`) gets a role session, not a key. When the launcher renders the job's
+container, a worker asks AWS Security Token Service (STS) for a session of one role through the project's AWS command wrapper and the project
+profile (`orchestration/pipeline_session.py`): the lakehouse reader role for a read job and the lakehouse writer role for a write job. The session
+lasts until the job's deadline plus 300 s. The roles give at most 7200 s, so the launcher refuses a pipeline job with an AWS class at submit when its
+timeout plus 300 s is over 7200 s. The request has the same 30 s deadline as a secret fetch and fails the attempt with the role and the error code.
+
+The AWS command saves the answers of its calls in `~/.aws/cli/history/history.db` when the profile sets `cli_history` to `enabled`. The session
+answer holds all three session values. Before the request, the worker asks the same AWS command for that setting of the project profile with the
+same environment. It makes no request unless the setting is `disabled` or absent. A profile with history on fails the attempt with a message that
+names the profile. Run `aws configure set cli_history disabled --profile <profile>` and submit again. The check and the request share the 30 s deadline.
+
+The launcher passes `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and `AWS_REGION` to the container as environment values.
+No key or AWS file is stored on the host or mounted into the container. The values are hidden in saved output and kept out of the operation record
+like every other credential. Each job asks for a new session, so a retry never reuses an earlier one. A session that no longer reaches the job's
+deadline is refused. Fixture runs and jobs with no AWS access get no session. A silver build in a real run reads S3 through the dbt target
+`lakehouse_session`, which takes its S3 access from these environment values.
+
+Terraform in `infra/iam/` defines the two roles. Only the project's IAM user can assume them. A new policy of that user allows
+`sts:AssumeRole` on those two roles and no other. The reader reads `lakehouse/bronze/`, `lakehouse/silver/` and `lakehouse/gold/`. The writer
+writes `lakehouse/silver/`, `lakehouse/silver_e2e/`, `lakehouse/gold/`, `lakehouse/gold_e2e/` and `lakehouse/catalog_backups/` with the object
+actions the lakehouse policy already allows. The role names are the variables `lakehouse_reader_role_name` and `lakehouse_writer_role_name`. The
+longest session is the variable `lakehouse_session_max_seconds`, 7200 by default. Both roles must exist (apply `infra/iam/`) before a real pipeline job
+with an AWS class can start.
 
 ## Launcher
 

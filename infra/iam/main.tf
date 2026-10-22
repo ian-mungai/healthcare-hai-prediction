@@ -32,7 +32,8 @@ locals {
     var.marquez_db_password_name,
   ]
   service_descriptions = {
-    lakehouse = "Project-scoped Iceberg table files; write and delete current objects only under lakehouse/."
+    lakehouse    = "Project-scoped Iceberg table files; write and delete current objects only under lakehouse/."
+    assume_roles = "Lets the project user assume the two lakehouse roles and no other role."
   }
 }
 
@@ -47,6 +48,8 @@ resource "aws_iam_policy" "service" {
     PROJECT_NAME         = var.project_name
     SECRET_NAMES         = local.secret_names
     MANAGED_SECRET_NAMES = local.managed_secret_names
+    READER_ROLE_NAME     = var.lakehouse_reader_role_name
+    WRITER_ROLE_NAME     = var.lakehouse_writer_role_name
   })
 
   lifecycle {

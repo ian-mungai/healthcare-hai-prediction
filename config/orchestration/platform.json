@@ -6,7 +6,7 @@
     "base_image": "apache/airflow@sha256:9df9c8be4096b9cc626bd7cb1f2b8c712eef66c59c615f8c7e6200871ca10bd1",
     "official_tag": "apache/airflow:3.3.2-python3.12",
     "image": "hai-airflow:3.3.2-python3.12",
-    "builder_image": "golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59",
+    "builder_image": "golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd",
     "dockerfile": "services/orchestration/Dockerfile",
     "labels": {
       "hai.deadline_entrypoint": "1",

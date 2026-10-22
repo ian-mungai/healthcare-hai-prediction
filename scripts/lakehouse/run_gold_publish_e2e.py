@@ -572,8 +572,10 @@ def identifier_rule_steps() -> list[dict[str, Any]]:
     ]
 
 
-EXPECTED_GOLD = polaris_writer.Writer("gold_writer", ("gold", "gold_e2e"), ("POLARIS_GOLD_WRITER_CLIENT_ID", "POLARIS_GOLD_WRITER_CLIENT_SECRET"))
-EXPECTED_SILVER = polaris_writer.Writer("silver_writer", ("silver", "silver_e2e"), ("POLARIS_SILVER_WRITER_CLIENT_ID", "POLARIS_SILVER_WRITER_CLIENT_SECRET"))
+EXPECTED_GOLD = polaris_writer.Writer("gold_writer", ("gold", "gold_e2e"), (secret_store.POLARIS_GOLD_CLIENT_ID, secret_store.POLARIS_GOLD_CLIENT_SECRET))
+EXPECTED_SILVER = polaris_writer.Writer(
+    "silver_writer", ("silver", "silver_e2e"), (secret_store.POLARIS_SILVER_CLIENT_ID, secret_store.POLARIS_SILVER_CLIENT_SECRET)
+)
 EXPECTED_CATALOG_GRANTS = ("CATALOG_READ_PROPERTIES",)
 EXPECTED_NAMESPACE_GRANTS = (
     "NAMESPACE_LIST",
@@ -604,37 +606,10 @@ class WriterRun:
 Drive = Callable[[Callable[..., tuple[int, Any]], str, str, dict[str, Any], list[tuple[str, str, Any, str | None]]], WriterRun]
 
 
-def drive_file_store(ensure: Callable[..., str], expected: polaris_writer.Writer) -> Drive:
-    """Run a set-up that keeps the writer's pair in the catalog credentials file, against an in-memory store."""
-
-    def drive(
-        request: Callable[..., tuple[int, Any]], token: str, secret: str, state: dict[str, Any], calls: list[tuple[str, str, Any, str | None]]
-    ) -> WriterRun:
-        id_key, secret_key = expected.keys
-        stored: list[dict[str, str]] = []
-        first = ensure(token, "hai_lakehouse", {"POLARIS_CLIENT_ID": "root", "POLARIS_CLIENT_SECRET": "r"}, request, stored.append)
-        count_first = len(calls)
-        first_stored = len(stored) == 1 and stored[0][id_key] == "writer-id" and stored[0][secret_key] == secret
-        second = ensure(token, "hai_lakehouse", stored[-1], request, stored.append)
-        return WriterRun(
-            first,
-            second,
-            count_first,
-            len(calls),
-            first_stored,
-            len(stored) == 1,
-            lambda denied: ensure(token, "hai_lakehouse", {}, denied, stored.append),
-            [],
-        )
-
-    return drive
-
-
-def drive_secrets_manager(report: Path) -> Drive:
-    """Run the gold set-up against the Secrets Manager stand-in: one pair stored once, a half-written pair repaired and one update at a time."""
-    id_name, secret_name = secret_store.POLARIS_GOLD_CLIENT_ID, secret_store.POLARIS_GOLD_CLIENT_SECRET
-    setup = gold_writer_setup
-    lock = report / "locks" / "gold_writer.lock"
+def drive_secrets_manager(report: Path, setup: Any, expected: polaris_writer.Writer) -> Drive:
+    """Run a writer's set-up against the Secrets Manager stand-in: one pair stored once, a half-written pair repaired and one update at a time."""
+    id_name, secret_name = expected.secrets
+    lock = report / "locks" / f"{expected.name}.lock"
 
     def drive(
         request: Callable[..., tuple[int, Any]], token: str, secret: str, state: dict[str, Any], calls: list[tuple[str, str, Any, str | None]]
@@ -672,7 +647,7 @@ def drive_secrets_manager(report: Path) -> Drive:
             unchanged = stand_in.changed() == settled
         with StandIn() as stand_in:
             vault = secret_store.open_store(Path.cwd(), stand_in.endpoint)
-            with principal_credentials.serialized(lock, "gold_writer", 1.0), mock.patch.object(principal_credentials, "LOCK_WAIT_SECONDS", 0.3):
+            with principal_credentials.serialized(lock, expected.name, 1.0), mock.patch.object(principal_credentials, "LOCK_WAIT_SECONDS", 0.3):
                 began = time.monotonic()
                 try:
                     setup.ensure_writer(token, "hai_lakehouse", vault, request, lock)
@@ -687,11 +662,11 @@ def drive_secrets_manager(report: Path) -> Drive:
 
         extra = [
             step(
-                "gold_writer: a second update of the principal waits for the lock, ends at its deadline and changes nothing",
+                f"{expected.name}: a second update of the principal waits for the lock, ends at its deadline and changes nothing",
                 waited_for_lock and nothing_while_locked,
             ),
             step(
-                "gold_writer: a failure between the two writes leaves a pair that a rerun tests, resets and stores again",
+                f"{expected.name}: a failure between the two writes leaves a pair that a rerun tests, resets and stores again",
                 interrupted_failed
                 and half_written == {id_name: "writer-id", secret_name: "old-secret"}
                 and resumed == "credentials reset"
@@ -836,23 +811,27 @@ def writer_steps(
 
 
 def writer_setup(report: Path) -> list[dict[str, Any]]:
-    """The gold and silver writer set-ups against the recording stand-in; the two principals hold disjoint namespaces and credential keys."""
+    """The gold and silver writer set-ups against the recording stand-in; the two principals hold disjoint namespaces and secret names."""
     gold = writer_steps(
-        EXPECTED_GOLD, drive_secrets_manager(report), gold_writer_setup.planned_requests, gold_writer_setup.main, ("silver", "silver_e2e", "bronze")
+        EXPECTED_GOLD,
+        drive_secrets_manager(report, gold_writer_setup, EXPECTED_GOLD),
+        gold_writer_setup.planned_requests,
+        gold_writer_setup.main,
+        ("silver", "silver_e2e", "bronze"),
     )
     silver = writer_steps(
         EXPECTED_SILVER,
-        drive_file_store(lambda *args: polaris_writer.ensure_writer(silver_writer_setup.SILVER, *args), EXPECTED_SILVER),
-        lambda catalog: polaris_writer.planned_requests(silver_writer_setup.SILVER, catalog),
+        drive_secrets_manager(report, silver_writer_setup, EXPECTED_SILVER),
+        silver_writer_setup.planned_requests,
         silver_writer_setup.main,
         ("gold", "gold_e2e", "bronze"),
     )
-    pairs = (set(gold_writer_setup.GOLD.keys), set(silver_writer_setup.SILVER.keys))
+    pairs = (set(gold_writer_setup.GOLD.secrets), set(silver_writer_setup.SILVER.secrets))
     return [
         *gold,
         *silver,
         step(
-            "the gold and silver writers share no principal name, namespace or credential key",
+            "the gold and silver writers share no principal name, namespace or secret name",
             gold_writer_setup.GOLD.name != silver_writer_setup.SILVER.name
             and not set(gold_writer_setup.GOLD.namespaces) & set(silver_writer_setup.SILVER.namespaces)
             and not pairs[0] & pairs[1],

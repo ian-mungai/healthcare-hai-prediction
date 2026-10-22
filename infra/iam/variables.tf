@@ -268,3 +268,36 @@ variable "marquez_db_password_name" {
     error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
   }
 }
+
+variable "lakehouse_reader_role_name" {
+  description = "IAM role name of the lakehouse reader; only the project user may assume it, and the launcher asks for a short session of it for a read job."
+  type        = string
+  default     = "healthcare_hai_prediction_lakehouse_reader"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9+=,.@_-]{1,64}$", var.lakehouse_reader_role_name))
+    error_message = "Use 1-64 characters from letters, digits and +=,.@_-."
+  }
+}
+
+variable "lakehouse_writer_role_name" {
+  description = "IAM role name of the lakehouse writer; only the project user may assume it, and the launcher asks for a short session of it for a write job."
+  type        = string
+  default     = "healthcare_hai_prediction_lakehouse_writer"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9+=,.@_-]{1,64}$", var.lakehouse_writer_role_name))
+    error_message = "Use 1-64 characters from letters, digits and +=,.@_-."
+  }
+}
+
+variable "lakehouse_session_max_seconds" {
+  description = "Longest session either lakehouse role can give, in seconds. It must exceed the longest pipeline job deadline (3600 seconds) plus the launcher's margin."
+  type        = number
+  default     = 7200
+
+  validation {
+    condition     = var.lakehouse_session_max_seconds >= 3600 && var.lakehouse_session_max_seconds <= 43200 && var.lakehouse_session_max_seconds == floor(var.lakehouse_session_max_seconds)
+    error_message = "Use a whole number of seconds from 3600 to 43200, the range IAM accepts."
+  }
+}
