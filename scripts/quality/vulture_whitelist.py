@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import tarfile
 
-from scripts.acquisition import wonder_export_contract
+from scripts.acquisition import shards, wonder_export_contract
 from scripts.acquisition.discover_history import Links
 from scripts.acquisition.hcai_util_contract import _Markup
 from scripts.acquisition.tests.conftest import synthetic_collection_routes
@@ -26,6 +26,11 @@ def uses(download: Download, member: tarfile.TarInfo) -> tuple[object, ...]:
         _Markup.handle_data,  # HTMLParser calls it for workbook XML text.
         _Markup.handle_startendtag,  # HTMLParser calls it for self-closing workbook XML tags.
         synthetic_collection_routes,  # pytest runs autouse fixtures without a reference.
+        shards.pytest_addoption,  # pytest calls the plugin hooks of scripts/acquisition/shards.py by name.
+        shards.pytest_configure,  # pytest calls the plugin hooks of scripts/acquisition/shards.py by name.
+        shards.ShardPlugin.pytest_collection_modifyitems,  # pytest calls the registered plugin's hooks by name.
+        shards.ShardPlugin.pytest_runtest_logreport,  # pytest calls the registered plugin's hooks by name.
+        shards.ShardPlugin.pytest_sessionfinish,  # pytest calls the registered plugin's hooks by name.
         download.requested_url,  # transport.download writes it to the transport metadata through dataclasses.asdict.
         member.linkname,  # tarfile reads it when the quality E2E builds its symbolic-link archive.
         # Pending: dead, but the file is in 9 collectors' approved code hashes; delete it at the next WONDER code version.

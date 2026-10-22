@@ -41,7 +41,7 @@ from scripts.process import run_command
 CONFIG = Path("config/quality/ci_groups.json")
 SCOPES = ("full", "staged", "range", "paths")
 LAYER_PARTS = {"bronze": "lakehouse_bronze", "silver": "lakehouse_silver", "gold": "lakehouse_gold"}
-PARTS = {"all", "core", "launcher", *LAYER_PARTS}
+PARTS = {"all", "core", "launcher", "gates", *LAYER_PARTS}
 ORDER = (
     "python_lint",
     "lakehouse_bronze",
@@ -73,6 +73,8 @@ def groups_of(part: str, config: dict[str, Any]) -> list[str]:
     known = set(config["groups"]) | set(config["full_only"])
     if part == "launcher":
         wanted = {"launcher"}
+    elif part == "gates":
+        wanted = set()
     elif part in LAYER_PARTS:
         wanted = {LAYER_PARTS[part]}
     else:

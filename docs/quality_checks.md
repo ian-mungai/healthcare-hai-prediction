@@ -1,7 +1,7 @@
 ---
 title: Quality checks
 description: Every repository check the pre-commit hooks and CI run, what each blocks and how to run it on its own.
-last_updated: 2026-10-21
+last_updated: 2026-10-22
 ---
 
 # Quality checks
@@ -207,10 +207,10 @@ import chains and manifest mismatches.
 **Acquisition checks** (`bash scripts/acquisition/run_checks.sh`) run Ruff, MyPy,
 registry validation, the acquisition regression tests and every offline E2E
 suite twice, with a 90% coverage gate that also counts collector command lines
-run as child processes. They take about 20 minutes on this machine (the recorded profile estimate) and over 29 in CI, so they run only
+run as child processes. They take about 20 minutes on this machine (the recorded profile estimate), so they run only
 when acquisition code, configuration or their dependencies change: through the
-`acquisition-checks` pre-commit hook and in a separate GitHub Actions "Acquisition
-Checks" job (60-minute limit, LFS checkout, pinned Terraform). The CI job uses the
+`acquisition-checks` pre-commit hook, which is one unsharded run and in GitHub Actions, where the pytest run is two shard jobs
+and a combining job (see Sharded acquisition tests below; LFS checkout, pinned Terraform). The CI jobs use the
 hook's own path pattern through `scripts/acquisition/run_checks_ci.sh`, which also
 matches the CI workflow; a manual run, a push with no earlier commit or rewritten
 history runs every check. `bash scripts/acquisition/run_checks_ci_e2e.sh` tests
@@ -222,7 +222,8 @@ macOS browser-download metadata (the "downloaded from" attribute and file creati
 time); on a Mac the real reads run. When the private archive is absent (as in CI), the
 registry-additions suite skips its single legacy-archive check and the code-version suite its archived-original
 checks; both record the skips. Each gate run writes `run.json` beside the suite outcomes in `data/e2e/acquisition_checks/`
-with the seconds of every suite and a hash of the acquisition code and configuration; a change during the run fails it.
+with the seconds of every suite and a hash of the acquisition code and configuration; a change during the run fails it. Every command of
+the gate prints its start, end and seconds (see Command timings below).
 `ACQUISITION_E2E_MODE=iteration` runs each offline suite once instead of twice for a faster loop and marks the run
 "not commit evidence"; the hook and CI always run the full mode. The coverage gate leaves out
 the tools in `scripts/acquisition/one_off/`, which ran once and are evidenced by their run records; a
@@ -346,20 +347,21 @@ enforce these repository rules at the pinned versions. On a commit the
 set (`.venv/bin/pre-commit run --all-files --hook-stage manual`, whose
 `local_ci` hook runs the full local CI) runs before every release or push.
 GitHub CI runs the manual stage on every pull request and push to `main` as parallel
-jobs: the hooks without `local_ci` (file-based hooks check the changed files of
+jobs after a quick plan job (see Main-run reuse below): the hooks without `local_ci` (file-based hooks check the changed files of
 the range), then `scripts/run_ci.sh` as `CI_PART=core`, one job for each lakehouse
-layer (`CI_PART=bronze`, `silver` or `gold`, see Lakehouse layers below) and, when
-a change touches a path the launcher reads, the launcher E2E in two shards
-(`CI_PART=launcher`, `LAUNCHER_SHARD=K/2`), each for the groups the range
-touches (`CI_SCOPE=range`). Without a usable range (a manual run, the first push
+layer (`CI_PART=bronze`, `silver` or `gold`, see Lakehouse layers below), a job for the
+gold model metadata E2E (`CI_PART=gold` with `CI_UNITS=model_metadata_e2e`), the launcher E2E in two shards
+(`CI_PART=launcher`, `LAUNCHER_SHARD=K/2`) and the acquisition shards with their combining job, each for the groups the range
+touches (`CI_SCOPE=range`). Every checkout of a pull request run is the head commit of the pull request, not GitHub's merge of the
+head into the base, so the tree a pull request run checks is the tree that Main-run reuse compares. Without a usable range (a manual run, the first push
 of a branch or rewritten history) every check runs. A job whose group the range does not reach
 reports success and writes the reason to its job summary. Each job caches only what a
 lock file or hash checks again before use (npm packages, Terraform providers,
 the dbt package archive and the SQLFluff packages); the Python environment is
 built fresh from `requirements.txt` without a pip cache. Each job's timeout is about
-twice its measured time. Locally `scripts/run_ci.sh` runs every part: the gates
-first, then the launcher E2E and then the independent check groups, which run
-concurrently. It prints each step's seconds (GitHub CI adds them to the job
+twice its measured time (see Measured durations below). Locally `scripts/run_ci.sh` runs every part: the gates
+first, then the launcher E2E, then the units that run alone and then the independent check groups and units, which run
+concurrently. It prints each group's seconds and each command's start, end and seconds (GitHub CI adds both to the job
 summary). In the full set gitleaks scans every outgoing source file instead of
 the staged index. The acquisition checks
 run in their own CI job and through their hook only when acquisition files
@@ -418,7 +420,7 @@ silver build marker model and the saved suites that the bronze storage and prove
 of them. A changed path selects its layer and every layer downstream of it. A bronze or shared change selects all three. A silver change selects
 silver and gold. A gold change selects gold. A job whose layer the range does not reach exits 0 and writes `skipped <group>: <reason>` to the job summary. The
 gates never skip. `lakehouse_bronze` runs the platform checks (resource limits, run lock, provenance, storage single copy and contracts), `lakehouse_silver` runs the silver
-suite check and `lakehouse_gold` runs the gold reference seeds, identity and label checks, gold suites, the gold publish contract check, the gold and silver writer set-up check against a stand-in Polaris and the model metadata check. The
+suite check and `lakehouse_gold` runs the gold reference seeds, identity and label checks, gold suites, the gold publish contract check, the gold and silver writer set-up check against a stand-in Polaris, the model metadata check and the model metadata E2E, as three units (see Gold units below). The
 `orchestration_checks` group also lists `scripts/lakehouse/`, `dbt/`, `data_contracts/lakehouse/` and `data_contracts/great_expectations/`, because its publish contract and pipeline
 checks read them, so a change to those paths runs it beside the layers. Put a new check in the most downstream layer whose files it reads. `.venv/bin/python -m scripts.quality.run_ci_groups_e2e` checks the selection for bronze-only, silver-only, gold-only and shared changes
 and the real inputs. It also requires `configuration_checks` to start `scripts.infrastructure.run_secret_store_e2e` and `lakehouse_gold` to start
@@ -429,6 +431,97 @@ only creates is not a read. A path built from a variable the scan cannot resolve
 `upstream_inputs` entry written by hand. It requires every file the runner copies to select
 `repository_code_checks`. A check whose inputs no path list can name
 completely belongs in `always` in `config/quality/ci_groups.json`.
+
+## Command timings
+
+`scripts/quality/timing.sh` wraps every check command of `scripts/run_ci.sh` and the acquisition scripts in `timed <label> <command>`. The log gets
+`[timing] start <label> at <UTC time>` and `[timing] end <label> at <UTC time>: <seconds> s, exit <code>` and the command keeps its own exit code. Each
+command adds a row to a file of its own unit and when the run ends the rows of the gates, the launcher E2E and every unit are listed in the job
+summary as a table of command, start, end, seconds and exit code. In a unit that runs in the background the log is shown when the unit has ended; the
+times in it are those of the command. A wrapped function holds one command or one pipeline, because a shell function that runs under `||` ignores
+`set -e`. `scripts/quality/run_ci_groups_e2e.py` checks the wrapper, the failing and the interrupted command and the rows of parallel units.
+
+## Measured durations
+
+The longest hosted time of each job over six hosted runs and the job's timeout, in minutes. A timeout is between 1.5
+and 2.6 times the measured time (at least 5 minutes). A job marked "estimate" has no hosted measurement yet; resize it from its first complete hosted run. The
+CI-groups E2E compares this table with `.github/workflows/ci.yml`. The seconds of every command are in the job summary of each run. The longest commands are the 258 cases of the model
+metadata E2E (about 39 minutes one after another) and the 38 offline workflow tests of the acquisition gate (about 39 minutes in one process).
+
+| Job | Measured (minutes) | Timeout (minutes) | Basis |
+| --- | ---: | ---: | --- |
+| CI Plan | 1 | 5 | estimate |
+| Quick Gates of a Reused Result | 4 | 10 | estimate |
+| Repository Hooks | 20.7 | 45 | hosted, with all hooks |
+| Local CI Core | 14.1 | 30 | hosted |
+| Lakehouse Bronze Checks | 8.9 | 20 | hosted |
+| Lakehouse Silver Checks | 2.4 | 5 | hosted |
+| Lakehouse Gold Checks | 7 | 15 | estimate |
+| Lakehouse Gold Model Metadata E2E | 14 | 30 | estimate |
+| Launcher E2E (Shard 1 of 2) | 8.4 | 20 | hosted |
+| Launcher E2E (Shard 2 of 2) | 9 | 20 | hosted |
+| Acquisition Checks (Shard 1 of 4) | 13 | 30 | estimate |
+| Acquisition Checks (Shard 2 of 4) | 13 | 30 | estimate |
+| Acquisition Checks (Shard 3 of 4) | 13 | 30 | estimate |
+| Acquisition Checks (Shard 4 of 4) | 13 | 30 | estimate |
+| Acquisition Checks | 4 | 10 | estimate |
+
+## Gold units
+
+The gold layer runs as three units that share no scratch folder, report folder, port or process (each writes `data/e2e/<its own name>/<UTC
+second>` and the gold publish modes add the mode to the folder name). `CI_UNITS` selects units; the default is all three.
+
+- `checks`: the reference seeds, identity splits and source labels checks, their E2E suites, the gold suites check, the gold publish contract E2E and the model
+  metadata check. About 3 minutes.
+- `writer_setup`: the gold and silver writer set-up E2E against a stand-in secret store. It has timing assertions (a lock wait of 0.3 seconds), so it
+  runs alone: in the gold job before the other unit of that job and in a local run after the launcher E2E and before the concurrent units.
+- `model_metadata_e2e`: the 258 cases of the model metadata E2E, each with a scratch repository and a pre-commit hook run. Run one after another they take about 39 minutes,
+  so the cases run at the same time: `--workers auto` is the CPU count, at most 4 and `--workers 1` is the serial mode.
+  `--prove-parallel-equal` runs the cases both ways on the same code and fails unless the outcomes are equal.
+  Each hook or checker run has a deadline of `--case-seconds` (180 by default) and the pool has a total deadline that names the unfinished cases.
+  GitHub CI runs it as its own job ("Lakehouse Gold Model Metadata E2E").
+
+The jobs together take as long as the longest unit instead of the sum. The CI-groups E2E requires the units to hold the ten gold commands once each, to start no
+launcher mode, to be covered once by the gold jobs and to run the alone unit before the others.
+
+## Sharded acquisition tests
+
+In GitHub CI the acquisition pytest run is four jobs ("Acquisition Checks (Shard 1 of 4)" to "(Shard 4 of 4)") and a combining job ("Acquisition
+Checks"). The local hook and `bash scripts/acquisition/run_checks.sh` stay one unsharded run with the same 90% gate.
+
+- `scripts/acquisition/shards.py` gives every collected test to exactly one shard: tests in order of falling weight, each to the shard with the least
+  weight so far. The weights are the seconds of the long tests in `config/acquisition/shard_weights.json`; a test without a weight counts 0.1 second. A wrong
+  weight changes the balance only, never which tests run. Each shard writes a manifest (its tests, their outcomes, the hash of all collected test ids, the
+  pytest exit status and the CI run) and its coverage data and enforces no coverage target.
+- The combining job runs Ruff, MyPy and the registry check, then the gate of `scripts/acquisition/shards.py`. It fails unless every shard job succeeded and
+  every shard has a manifest of this run (same commit, run and attempt) that passed. The gate trusts no field that it can recompute: a manifest has exactly the fields
+  of a manifest, every outcome is `passed` or `skipped` (a `skipped` outcome stands for a test that skips itself, such as the one that needs collected data), the counters
+  equal the counters recomputed from the outcomes and every assigned test is reported once. It collects the tests itself. It requires the union of the shards' tests to
+  be exactly that set and each shard to have run the tests that the gate's own assignment gives it. Each coverage file must match the hash in its manifest and measure the
+  number of files that the manifest states. It merges the coverage files and enforces the 90% target of `config/acquisition/coverage.ini` on the merged data. One shard's
+  coverage is never judged alone.
+- A range that does not reach the acquisition checks makes each shard write a `skipped` manifest and the combining job accepts only a set of manifests that are all
+  skipped. A mix of skipped and run shards fails.
+- `.venv/bin/python -m scripts.acquisition.run_shards_e2e` checks the partition of the real tests, the balance of the committed weights and, on a synthetic
+  project, every failure of the gate (missing, failed, mixed, foreign and tampered shards, a contradictory outcome, counter, field or coverage claim in a manifest, a dropped
+  test, swapped coverage data and a merged coverage below the target). It also checks that the matrix, the shard argument, the job names, `ACQUISITION_SHARD_COUNT`, the
+  default of the combine script, `config/quality/ci_jobs.json` and `shards.CI_SHARD_COUNT` state one shard count (the launcher shard job has one count of its own). The workflow must also never set `ACQUISITION_E2E_MODE`. `bash scripts/acquisition/run_checks_ci_e2e.sh` checks the skip path with `shards.CI_SHARD_COUNT` skipped manifests.
+
+## Main-run reuse
+
+The first job of the workflow, "CI Plan", runs `python3 -m scripts.quality.ci_reuse` with a read-only token. The run after a merge to `main` skips its jobs only
+when all of this holds: the push is to `main`; exactly one merged pull request has the pushed commit as its merge commit; the tree of the pushed commit (from the API and from the
+checkout) is byte-identical to the tree of the head commit of that pull request; and the latest completed pull request run of `ci.yml` for that head commit succeeded,
+with every job listed in `config/quality/ci_jobs.json` present once and successful and no other job failed, cancelled or skipped (except the reuse job). Any other result and any
+error of the API, runs every job. A push to `main` without a pull request runs in full. Pull request runs check out the head commit, so the tree that their jobs checked is the tree
+compared. When the run is reused, the jobs of the workflow are skipped; "Quick Gates of a Reused Result" runs the commit-message and removed-names checks of the pushed range and
+`CI_PART=gates` (the privacy, secret, credential, data-file, writing, Markdown, documentation and source gates). The plan job's summary names the pull request, the head commit, the
+tree, the reused run and the conclusion of each required job. `.venv/bin/python -m scripts.quality.run_ci_reuse_e2e` checks the reuse and every case that must run in full.
+
+## Practice
+
+Keep edits to CI-wide files rare: `scripts/run_ci.sh`, `scripts/process.py`, `scripts/quality/ci_groups.py`, `config/quality/ci_groups.json`, `.github/`, `.pre-commit-config.yaml`,
+the requirements files and `pyproject.toml` select every group in every scope, so each edit runs all the checks.
 
 ## Scratch worktrees in E2E runners
 
