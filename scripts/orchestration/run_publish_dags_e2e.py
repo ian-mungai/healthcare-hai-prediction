@@ -72,8 +72,7 @@ class InterruptionControlError(RuntimeError):
 
 def bounded_api(stack: PipelineStack, deadline: float) -> AirflowApi:
     """An Airflow client of its own whose every request ends at the absolute deadline; the stack's shared client is left as it is."""
-    secret = (stack.state / "metadata" / "jwt_secret").read_text().strip()
-    return AirflowApi(stack.supervisor.api_port, secret, timeout=10, deadline=deadline)
+    return AirflowApi(stack.supervisor.api_port, stack.supervisor.jwt_secret, timeout=10, deadline=deadline)
 
 
 def wait_phase(stack: PipelineStack, phase: str, seconds: float, ready: Callable[[AirflowApi], bool], interval: float) -> bool:

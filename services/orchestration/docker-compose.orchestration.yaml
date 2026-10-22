@@ -21,11 +21,10 @@ x-airflow: &airflow
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
     AIRFLOW__CORE__PARALLELISM: ${HAI_ORCH_PARALLELISM:?run through scripts/orchestration/supervisor.py}
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
-    # Secrets are read from owner-only files the supervisor writes; they never appear in the container environment.
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN_CMD: cat /run/hai/metadata/sql_alchemy_conn
-    AIRFLOW__CORE__FERNET_KEY_CMD: cat /run/hai/metadata/fernet_key
-    AIRFLOW__API_AUTH__JWT_SECRET_CMD: cat /run/hai/metadata/jwt_secret
-    AIRFLOW__API__SECRET_KEY_CMD: cat /run/hai/metadata/api_secret_key
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW_SQL_ALCHEMY_CONN}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+    AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY}
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     # No schedule or asset trigger runs until the owner approves it (decision O3).
     AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: "false"
@@ -45,7 +44,6 @@ x-airflow: &airflow
     - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
     - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
     - ${HAI_ORCH_STATE}/logs:/opt/airflow/logs
-    - ${HAI_ORCH_STATE}/metadata:/run/hai/metadata:ro
   security_opt:
     - no-new-privileges:true
   cap_drop:
@@ -56,7 +54,7 @@ services:
     image: postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
     environment:
       POSTGRES_USER: airflow
-      POSTGRES_PASSWORD_FILE: /run/hai/metadata/db_password
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD}
       POSTGRES_DB: airflow
       POSTGRES_INITDB_ARGS: --encoding UTF8 --data-checksums
     # Computed by the launcher from the memory free when the stack starts; kept for its life.
@@ -64,7 +62,6 @@ services:
     volumes:
       # Airflow's metadata lives in the ignored data/orchestration/ folder (decision O4), never in Polaris's database.
       - ${HAI_ORCH_STATE}/postgres:/var/lib/postgresql/data
-      - ${HAI_ORCH_STATE}/metadata:/run/hai/metadata:ro
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -93,7 +90,6 @@ services:
       - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
       - ${HAI_ORCH_STATE}/lineage_provider:/opt/hai/lineage_provider
       - ${HAI_ORCH_STATE}/logs:/opt/airflow/logs
-      - ${HAI_ORCH_STATE}/metadata:/run/hai/metadata:ro
     ports:
       - "127.0.0.1:${HAI_ORCH_API_PORT:?run through scripts/orchestration/supervisor.py}:8080"
     healthcheck:
@@ -117,7 +113,6 @@ services:
       - ${HAI_ORCH_STATE}/lineage_provider:/opt/hai/lineage_provider
       - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
       - ${HAI_ORCH_STATE}/logs:/opt/airflow/logs
-      - ${HAI_ORCH_STATE}/metadata:/run/hai/metadata:ro
       # The broker URL and this session's token; only the scheduler runs tasks, so only it receives them.
       - ${HAI_ORCH_STATE}/session:/opt/hai/broker:ro
     healthcheck:
@@ -170,10 +165,6 @@ services:
       - ${HAI_ORCH_REPO}/config/orchestration/platform.json:/opt/hai/platform.json:ro
     mem_limit: ${JOB_MEMORY_LIMIT:?run through the orchestration_check template}
 
-  # A read-only logical look at the metadata database for the sentinel scan (scripts/orchestration/run_real_e2e.py): a finite job of the
-  # orchestration_dump template, allocation-owned, on the stack's network, in the same thin image as every other job (so it runs behind the deadline
-  # entrypoint). scripts/orchestration/db_dump.py reads the connection string from the owner-only metadata folder, mounted read-only, and writes the
-  # dump (`metadata`) or the XCom rows (`xcom`) to the state folder's dumps folder, the only writable mount. The launcher appends the argument.
   airflow-dump:
     <<: *airflow
     entrypoint: ["python"]
@@ -181,8 +172,8 @@ services:
     environment:
       AIRFLOW_HOME: /tmp/airflow
       PYTHONPATH: /opt/hai
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW_SQL_ALCHEMY_CONN}
     volumes:
       - ${HAI_ORCH_REPO}/scripts/orchestration/db_dump.py:/opt/hai/checks/db_dump.py:ro
-      - ${HAI_ORCH_STATE}/metadata:/run/hai/metadata:ro
       - ${HAI_ORCH_STATE}/dumps:/out
     mem_limit: ${JOB_MEMORY_LIMIT:?run through the orchestration_dump template}

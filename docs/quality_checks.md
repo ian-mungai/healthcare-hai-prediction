@@ -212,9 +212,10 @@ when acquisition code, configuration or their dependencies change: through the
 `acquisition-checks` pre-commit hook and in a separate GitHub Actions "Acquisition
 Checks" job (60-minute limit, LFS checkout, pinned Terraform). The CI job uses the
 hook's own path pattern through `scripts/acquisition/run_checks_ci.sh`, which also
-matches the CI workflow; a manual run, the first push of a branch or rewritten
+matches the CI workflow; a manual run, a push with no earlier commit or rewritten
 history runs every check. `bash scripts/acquisition/run_checks_ci_e2e.sh` tests
-that gate. CI runs on every push to any branch and on every pull request; each push gets its own run, so a newer
+that gate. CI runs on every pull request, on every push to `main` and on a manual dispatch; a push to any other
+branch runs no CI, because its pull request run checks the same commits. Each push to `main` gets its own run, so a newer
 push never cancels the check of an earlier range. They need no AWS credentials and no
 collected `data/`. Off macOS, the HUD workbook and WONDER suites substitute only the
 macOS browser-download metadata (the "downloaded from" attribute and file creation
@@ -331,7 +332,7 @@ It writes `data/e2e/model_metadata/<UTC>_<pid>/report.json`. `--case <NAME>` run
 ## How the checks run
 
 CI checks Ruff formatting and security rules, MyPy, outgoing-source secret
-scanning, repository checks, configuration and quality E2E, retained regression
+scanning, repository checks, configuration, secret store and quality E2E, retained regression
 safeguards, Terraform mock tests, TFLint, Checkov and `trivy config` (its
 embedded checks only, run offline). Pre-commit scans the actual staged index,
 including changes hidden by a clean working copy, before local CI. The source
@@ -344,7 +345,7 @@ enforce these repository rules at the pinned versions. On a commit the
 `local_ci_affected` hook runs `scripts/run_ci.sh` for the staged paths. The full
 set (`.venv/bin/pre-commit run --all-files --hook-stage manual`, whose
 `local_ci` hook runs the full local CI) runs before every release or push.
-GitHub CI runs the manual stage on every push and pull request as parallel
+GitHub CI runs the manual stage on every pull request and push to `main` as parallel
 jobs: the hooks without `local_ci` (file-based hooks check the changed files of
 the range), then `scripts/run_ci.sh` as `CI_PART=core`, one job for each lakehouse
 layer (`CI_PART=bronze`, `silver` or `gold`, see Lakehouse layers below) and, when
@@ -394,9 +395,10 @@ Files copied by the repository check E2E runners select `repository_code_checks`
 `.env.example`, the dbt project and profile files and the copied intermediate-model YAML fixture.
 
 Each CI run retains configuration evidence under `data/e2e/configuration/` and
-quality evidence under `data/e2e/quality/`. E2E reports include source hashes,
+quality evidence under `data/e2e/quality/`. The secret store E2E writes its report under `data/e2e/secret_store/` and the gold writer set-up
+check under `data/e2e/gold_publish/`. E2E reports include source hashes,
 expected and observed process outcomes, repeat commands and tested limits.
-GitHub Actions retains these synthetic artifacts for 14 days. Local TFLint
+GitHub Actions uploads the configuration, quality and broker evidence and retains it for 14 days. The secret store and gold set-up reports stay on the runner and are not uploaded. Local TFLint
 needs permission to start its bundled plugin; a sandbox denial is a blocked
 check, not a passing result.
 
@@ -416,10 +418,11 @@ silver build marker model and the saved suites that the bronze storage and prove
 of them. A changed path selects its layer and every layer downstream of it. A bronze or shared change selects all three. A silver change selects
 silver and gold. A gold change selects gold. A job whose layer the range does not reach exits 0 and writes `skipped <group>: <reason>` to the job summary. The
 gates never skip. `lakehouse_bronze` runs the platform checks (resource limits, run lock, provenance, storage single copy and contracts), `lakehouse_silver` runs the silver
-suite check and `lakehouse_gold` runs the gold reference seeds, identity and label checks, gold suites, the gold publish contract check and the model metadata check. The
+suite check and `lakehouse_gold` runs the gold reference seeds, identity and label checks, gold suites, the gold publish contract check, the gold and silver writer set-up check against a stand-in Polaris and the model metadata check. The
 `orchestration_checks` group also lists `scripts/lakehouse/`, `dbt/`, `data_contracts/lakehouse/` and `data_contracts/great_expectations/`, because its publish contract and pipeline
 checks read them, so a change to those paths runs it beside the layers. Put a new check in the most downstream layer whose files it reads. `.venv/bin/python -m scripts.quality.run_ci_groups_e2e` checks the selection for bronze-only, silver-only, gold-only and shared changes
-and the real inputs. It reads the source of the modules each layer's function starts (and of the gold checks the silver suite check calls and of the storage
+and the real inputs. It also requires `configuration_checks` to start `scripts.infrastructure.run_secret_store_e2e` and `lakehouse_gold` to start
+`scripts.lakehouse.run_gold_publish_e2e --mode writer_setup`. The sources of those two offline checks must select their group. It reads the source of the modules each layer's function starts (and of the gold checks the silver suite check calls and of the storage
 metadata comparison the bronze storage runner calls) and requires every tracked file they name to select that layer. A name is a module-level
 constant, a path string or a `/` join inside a function or an f-string whose placeholders are strings of the module; a folder that a function
 only creates is not a read. A path built from a variable the scan cannot resolve is not seen, so a new reader of another layer's file needs an

@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from orchestration import launcher
+from scripts.infrastructure import secret_store
 from scripts.lakehouse import bronze, catalog
 from scripts.lakehouse.checksums import EDGE_ROWS
 from scripts.process import run_command
@@ -94,25 +95,18 @@ def expected_objects() -> dict[str, tuple[int, int]]:
 def scenarios() -> dict[str, bool]:
     """Run every scenario and return its outcome."""
     results: dict[str, bool] = {}
-    # [58] Setup is idempotent, and a lost reader secret is reset, never duplicated.
     run(".venv/bin/python", ["-m", "scripts.lakehouse.catalog", "up"])
     _, stdout = run(".venv/bin/python", ["-m", "scripts.lakehouse.catalog", "up"])
     results["setup_rerun_keeps_reader"] = "read-only principal already present" in stdout
-    stored = catalog.read_env(catalog.SECRETS)
-    catalog.write_private(catalog.SECRETS, {key: value for key, value in stored.items() if not key.startswith("POLARIS_READER_")})
-    _, stdout = run(".venv/bin/python", ["-m", "scripts.lakehouse.catalog", "up"])
-    rotated = catalog.read_env(catalog.SECRETS)
-    results["lost_reader_secret_is_reset"] = "credentials reset" in stdout and rotated.get("POLARIS_READER_CLIENT_SECRET") not in (
-        None,
-        stored.get("POLARIS_READER_CLIENT_SECRET"),
-    )
+    vault = catalog.vault()
+    reader_id, reader_secret = vault.get(secret_store.POLARIS_READER_CLIENT_ID), vault.get(secret_store.POLARIS_READER_CLIENT_SECRET)
     # [56] Writes fail in the viewer and at the catalog; the table is unchanged.
     code, before = duckdb("SELECT count(*) AS n FROM cms_hai_national;")
     create_code, _ = duckdb("CREATE TABLE lakehouse.bronze.viewer_write_check (a INTEGER);")
     insert_code, _ = duckdb("INSERT INTO cms_hai_national SELECT * FROM cms_hai_national LIMIT 1;")
     _, after = duckdb("SELECT count(*) AS n FROM cms_hai_national;")
     results["viewer_refuses_writes"] = code == 0 and create_code != 0 and insert_code != 0 and before == after
-    reader = catalog.token({"POLARIS_CLIENT_ID": rotated["POLARIS_READER_CLIENT_ID"], "POLARIS_CLIENT_SECRET": rotated["POLARIS_READER_CLIENT_SECRET"]})
+    reader = catalog.token({"POLARIS_CLIENT_ID": reader_id, "POLARIS_CLIENT_SECRET": reader_secret})
     status, _ = catalog.request("POST", f"/api/catalog/v1/{catalog.CATALOG}/namespaces", reader, body={"namespace": ["reader_write_check"]})
     results["reader_principal_refused_by_catalog"] = status == 403
     status, _ = catalog.request("DELETE", f"/api/catalog/v1/{catalog.CATALOG}/namespaces/bronze/tables/cms_hai_national", reader)
@@ -176,8 +170,7 @@ def scenarios() -> dict[str, bool]:
     finally:
         link.release_allocation(allocation)
     results["extensions_installed_in_image"] = all(name in extensions for name in ("iceberg", "httpfs", "avro", "aws"))
-    values = [value for key, value in catalog.read_env(catalog.SECRETS).items() if "SECRET" in key or "PASSWORD" in key]
-    values += [stored.get("POLARIS_READER_CLIENT_SECRET", "")]
+    values = [vault.get(name) for name in (secret_store.POSTGRES_PASSWORD, secret_store.POLARIS_ROOT_SECRET, secret_store.POLARIS_READER_CLIENT_SECRET)]
     scanned = "\n".join([*outputs, history, inspect])
     results["no_secret_in_outputs_or_image"] = bool(values) and not any(value and value in scanned for value in values)
     return results

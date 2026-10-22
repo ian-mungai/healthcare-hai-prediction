@@ -14,10 +14,10 @@ Run from the repository root:
 
 This script is a launcher client: it makes no Docker call. The launcher (orchestration/launcher.py) creates the containers from
 ``docker-compose.yaml`` and the template table. ``up`` is idempotent. On first use it generates the PostgreSQL password and the Polaris
-root secret into the ignored, owner-only ``data/lakehouse/secrets/catalog.env`` and never prints them. It asks the launcher to start the
+root secret straight into AWS Secrets Manager and never prints them or saves them in a file. It asks the launcher to start the
 database, bootstrap the Polaris realm once and start Polaris, then creates the ``hai_lakehouse`` catalog whose only allowed
 location is ``lakehouse/`` in the project bucket. A catalog that already exists must match that location exactly.
-It also creates a read-only principal for the DuckDB viewer once and stores its credentials in the same file; a
+It also creates a read-only principal for the DuckDB viewer once and stores its credentials in Secrets Manager; a
 principal whose stored secret is missing has its credentials reset, never recreated. ``down`` stops the containers and
 keeps the database files, so the tables survive a restart. ``release`` frees the memory Docker's VM keeps after a heavy
 run: it stops the catalog and restarts Docker Desktop, but only when nothing of the registry runs and no foreign container runs;
@@ -31,7 +31,6 @@ import argparse
 import http.client
 import json
 import os
-import secrets
 import sys
 import urllib.parse
 import uuid
@@ -40,13 +39,12 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
-from scripts.lakehouse import run_lock
+from scripts.infrastructure import secret_store
+from scripts.lakehouse import principal_credentials, run_lock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # The catalog, its credentials and its database belong to the main checkout, where the registry and the launcher live.
 STATE = run_lock.main_checkout(REPO_ROOT) / "data/lakehouse"
-SECRETS = STATE / "secrets/catalog.env"
-COMPOSE_ENV = STATE / "secrets/compose.env"
 BOOTSTRAPPED = STATE / "polaris_bootstrapped"
 DEPLOYMENT = REPO_ROOT / "infra/deployment.auto.tfvars.json"
 CATALOG = "hai_lakehouse"
@@ -65,32 +63,37 @@ class CatalogError(RuntimeError):
     """A setup step failed; the message never contains a credential."""
 
 
-def read_env(path: Path) -> dict[str, str]:
-    """Read KEY=VALUE lines from an owner-only file."""
-    return dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
+def client() -> launcher.LauncherClient:
+    """A client of the launcher for the real registry (or the test registry of a test)."""
+    return launcher.load_client(TEST_REGISTRY)
 
 
-def write_private(path: Path, values: dict[str, str]) -> None:
-    """Write KEY=VALUE lines readable only by the owner, creating owner-only parent folders."""
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path.parent.chmod(0o700)
-    temporary = path.with_suffix(".tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w") as handle:
-        handle.write("".join(f"{key}={value}\n" for key, value in values.items()))
-    temporary.replace(path)
+def vault() -> secret_store.SecretStore:
+    """The project's Secrets Manager secrets, through the project profile (or the stand-in a test registry names)."""
+    try:
+        return client().config.secret_store()
+    except (launcher.ClientError, launcher.LauncherError) as error:
+        raise CatalogError(str(error)) from error
+
+
+def require_stored(store: secret_store.SecretStore, name: str, persisted: bool, what: str) -> None:
+    """Refuse to generate a secret for state that was created with an earlier value: that value would no longer match."""
+    if persisted and store.find(name) is None:
+        raise CatalogError(f"{what} already exists but secret {name} is missing; run the one-time secrets move first")
 
 
 def credentials() -> dict[str, str]:
-    """Return the local catalog credentials, generating them once."""
-    if not SECRETS.is_file():
-        write_private(
-            SECRETS,
-            {"POSTGRES_PASSWORD": secrets.token_urlsafe(32), "POLARIS_CLIENT_ID": "root", "POLARIS_CLIENT_SECRET": secrets.token_urlsafe(32)},
-        )
-    if SECRETS.stat().st_mode & 0o077:
-        raise CatalogError(f"{SECRETS.relative_to(REPO_ROOT)} must be readable only by its owner (chmod 600)")
-    return read_env(SECRETS)
+    """Return the catalog credentials from Secrets Manager, generating the database password and the root secret there once."""
+    store = vault()
+    initialized = (STATE / "polaris_db/PG_VERSION").exists()
+    require_stored(store, secret_store.POSTGRES_PASSWORD, initialized, "the catalog database")
+    require_stored(store, secret_store.POLARIS_ROOT_SECRET, initialized or BOOTSTRAPPED.exists(), "the catalog realm")
+    try:
+        password, _ = store.ensure(secret_store.POSTGRES_PASSWORD, secret_store.new_password)
+        root, _ = store.ensure(secret_store.POLARIS_ROOT_SECRET, secret_store.new_password)
+    except secret_store.SecretStoreError as error:
+        raise CatalogError(str(error)) from error
+    return {"POSTGRES_PASSWORD": password, "POLARIS_CLIENT_ID": launcher.ROOT_CLIENT_ID, "POLARIS_CLIENT_SECRET": root}
 
 
 def deployment() -> dict[str, str]:
@@ -178,7 +181,7 @@ def ensure_ok(status: int, action: str, allowed: tuple[int, ...] = (200, 201, 20
         raise CatalogError(f"{action} failed (HTTP {status})")
 
 
-def ensure_reader(access: str, secret: dict[str, str]) -> str:
+def ensure_reader(access: str) -> str:
     """Create the read-only viewer principal and its roles once; return how its credentials were obtained."""
     status, _ = request("POST", "/api/management/v1/principal-roles", access, body={"principalRole": {"name": READER}})
     ensure_ok(status, "creating the reader principal role", (200, 201, 409))
@@ -190,41 +193,26 @@ def ensure_reader(access: str, secret: dict[str, str]) -> str:
         ensure_ok(status, f"granting {privilege} to the reader")
     status, _ = request("PUT", f"/api/management/v1/principal-roles/{READER}/catalog-roles/{CATALOG}", access, body={"catalogRole": {"name": READER}})
     ensure_ok(status, "assigning the reader catalog role")
-    status, _ = request("GET", f"/api/management/v1/principals/{READER}", access)
-    if status == 404:
-        status, body = request("POST", "/api/management/v1/principals", access, body={"principal": {"name": READER}, "credentialRotationRequired": False})
-        ensure_ok(status, "creating the reader principal")
-        outcome = "created"
-    elif status == 200 and secret.get("POLARIS_READER_CLIENT_SECRET"):
-        body, outcome = None, "already present"
-    else:
-        ensure_ok(status, "reading the reader principal")
-        status, body = request("POST", f"/api/management/v1/principals/{READER}/reset", access, body={})
-        ensure_ok(status, "resetting the reader credentials")
-        outcome = "credentials reset"
-    if body is not None:
-        issued = body["credentials"]
-        write_private(SECRETS, {**secret, "POLARIS_READER_CLIENT_ID": issued["clientId"], "POLARIS_READER_CLIENT_SECRET": issued["clientSecret"]})
+    try:
+        outcome = principal_credentials.ensure_credentials(
+            principal=READER,
+            names=(secret_store.POLARIS_READER_CLIENT_ID, secret_store.POLARIS_READER_CLIENT_SECRET),
+            vault=vault(),
+            request=request,
+            access=access,
+            check=ensure_ok,
+            lock_path=STATE / "principal_locks" / f"{READER}.lock",
+        )
+    except (secret_store.SecretStoreError, principal_credentials.CredentialError) as error:
+        raise CatalogError(str(error)) from error
     status, _ = request("PUT", f"/api/management/v1/principals/{READER}/principal-roles", access, body={"principalRole": {"name": READER}})
     ensure_ok(status, "assigning the reader principal role")
     return outcome
 
 
-def write_compose_env(settings: dict[str, str]) -> None:
-    """Write the env file the launcher reads by name: the owner-only credentials and the deployment settings. The service memory limits
-    come from the launcher's own plan, not from this file."""
-    write_private(COMPOSE_ENV, {**credentials(), "AWS_PROFILE": settings["aws_profile"], "AWS_REGION": settings["aws_region"]})
-
-
-def client() -> launcher.LauncherClient:
-    """A client of the launcher for the real registry (or the test registry of a test)."""
-    return launcher.load_client(TEST_REGISTRY)
-
-
 def up() -> None:
     """Start the catalog services through the launcher and make sure the project's catalog and its read-only viewer principal exist."""
     secret, settings = credentials(), deployment()
-    write_compose_env(settings)
     (STATE / "polaris_db").mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         link = client()
@@ -236,8 +224,7 @@ def up() -> None:
         raise CatalogError(f"the catalog did not start: {record.get('error') or record.get('phase')}")
     access = token(secret)
     outcome = ensure_catalog(access, settings)
-    reader = ensure_reader(access, secret)
-    write_compose_env(settings)
+    reader = ensure_reader(access)
     sys.stdout.write(
         f"Polaris is running on 127.0.0.1:8181; catalog {CATALOG} {outcome}, limited to lakehouse/ in the project bucket; read-only principal {reader}.\n"
     )
@@ -260,8 +247,6 @@ def job(name: str, job_args: list[str]) -> None:
     template = JOBS[name]
     if template != "spark_e2e":
         up()
-    elif not COMPOSE_ENV.is_file():
-        write_compose_env(deployment())
     link = client()
     kind = link.config.registry.kind
     try:

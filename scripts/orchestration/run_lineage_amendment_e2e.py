@@ -22,6 +22,8 @@ from unittest.mock import NonCallableMock, patch
 from orchestration import dbt_lineage, launcher
 from orchestration.interface import SubmissionRequest
 from orchestration.lineage import build_events, canonical
+from scripts.infrastructure import secret_store
+from scripts.infrastructure.secret_store_stand_in import StandIn
 from scripts.lakehouse import run_lock
 from scripts.lakehouse.run_lock import Registry
 from scripts.orchestration.broker import Broker, BrokerPaths, load_templates
@@ -383,11 +385,14 @@ def startup_deadline() -> None:
 
 def dump_topology() -> None:
     """Render the finite dump on the internal backend with only its output writable."""
-    with tempfile.TemporaryDirectory() as folder:
+    synthetic = "synthetic-" + os.urandom(6).hex()
+    with tempfile.TemporaryDirectory() as folder, StandIn({secret_store.MARQUEZ_DB_PASSWORD: synthetic}) as stand_in:
         root = Path(folder).resolve()
         for part in ("postgres", "private", "config"):
             (root / part).mkdir()
-        config = launcher.Config(Registry(root / "registry", "test"), ROOT, "/unused", root / "tokens", root / "runs", allowed_roots=(root,))
+        config = launcher.Config(
+            Registry(root / "registry", "test"), ROOT, "/unused", root / "tokens", root / "runs", allowed_roots=(root,), secrets_endpoint=stand_in.endpoint
+        )
         if "lineage_dump" not in launcher.TEMPLATES:
             raise AssertionError("finite lineage dump template is not registered")
         renderer = launcher.Renderer(config, launcher.ComposeModel(ROOT / "services/lineage/docker-compose.checks.yaml"), ROOT, ROOT, b"synthetic")
@@ -404,8 +409,11 @@ def dump_topology() -> None:
         mounts = host["Mounts"]
         if {row["Target"] for row in mounts if not row["ReadOnly"]} != {"/out"}:
             raise AssertionError("lineage dump has an unexpected writable mount")
-        if any("PASSWORD" in row for row in rendered.body["Env"]) or host.get("Privileged"):
-            raise AssertionError("lineage dump passed a credential environment or privileged mode")
+        credentials = [row for row in rendered.body["Env"] if any(word in row.split("=", 1)[0] for word in ("PASSWORD", "SECRET", "TOKEN", "KEY"))]
+        if credentials != [f"MARQUEZ_DB_PASSWORD={synthetic}"] or host.get("Privileged"):
+            raise AssertionError("lineage dump passed a credential other than its database password from the secret store, or privileged mode")
+        if any(row["Target"].startswith("/run/hai/private") for row in mounts):
+            raise AssertionError("lineage dump still mounts the private password folder")
 
 
 def dump_admission() -> None:
@@ -492,9 +500,11 @@ def dump_writer() -> None:
 
 def network_case(case: str) -> None:
     """Render the actual service specification and test its final ingress and membership boundaries."""
-    with tempfile.TemporaryDirectory() as folder:
+    with tempfile.TemporaryDirectory() as folder, StandIn({secret_store.MARQUEZ_DB_PASSWORD: "synthetic-" + os.urandom(6).hex()}) as stand_in:
         root = Path(folder).resolve()
-        config = launcher.Config(Registry(root / "registry", "test"), ROOT, "/unused", root / "tokens", root / "runs", allowed_roots=(root,))
+        config = launcher.Config(
+            Registry(root / "registry", "test"), ROOT, "/unused", root / "tokens", root / "runs", allowed_roots=(root,), secrets_endpoint=stand_in.endpoint
+        )
         renderer = launcher.Renderer(config, launcher.ComposeModel(ROOT / launcher.LINEAGE_COMPOSE), ROOT, ROOT, b"synthetic")
         values = {"HAI_LINEAGE_STATE": str(root), "HAI_LINEAGE_API_PORT": "15000", "HAI_LINEAGE_WEB_PORT": "13000"}
         values.update({f"HAI_LINEAGE_MEM_{name}": str(1024**3) for name in ("POSTGRES", "API", "WEB")})

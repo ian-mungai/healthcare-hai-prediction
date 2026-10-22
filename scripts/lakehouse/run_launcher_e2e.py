@@ -42,6 +42,7 @@ from typing import Any
 from unittest import mock
 
 from orchestration import launcher
+from scripts.infrastructure.secret_store_stand_in import StandIn, stack_seeds
 from scripts.lakehouse import pins as pins_module
 from scripts.lakehouse import run_lock
 from scripts.lakehouse.fake_docker import FakeDocker, Gate
@@ -124,13 +125,19 @@ class Env:
         self.registry.mkdir(mode=0o700)
         self.daemon = FakeDocker(self.temp / "d.sock")
         self.secret_values = {name: (prefix + os.urandom(6).hex() if prefix.endswith("-") else prefix) for name, prefix in COMPOSE_ENV_NAMES.items()}
-        compose_env = self.temp / "compose.env"
-        compose_env.write_text("".join(f"{key}={value}\n" for key, value in self.secret_values.items()))
-        compose_env.chmod(0o600)
+        stack_values = {name: "stack-" + os.urandom(6).hex() for name in launcher.STACK_SECRETS}
+        stack_values["AIRFLOW_FERNET_KEY"] = stack_seeds()[launcher.STACK_SECRETS["AIRFLOW_FERNET_KEY"]]
+        self.secret_values.update(stack_values)
+        seeds = {launcher.COMPOSE_SECRETS[name]: value for name, value in self.secret_values.items() if name in launcher.COMPOSE_SECRETS}
+        seeds.update({launcher.STACK_SECRETS[name]: value for name, value in stack_values.items()})
+        self.stand_in = StandIn(seeds)
+        self.stand_in.__enter__()
         self.settings: dict[str, Any] = {
             "docker_socket": str(self.temp / "d.sock"),
             "timings": {**TIMINGS, **settings.pop("timings", {})},
-            "compose_env": str(compose_env),
+            "secrets_endpoint": self.stand_in.endpoint,
+            "aws_profile": self.secret_values["AWS_PROFILE"],
+            "aws_region": self.secret_values["AWS_REGION"],
             "lakehouse_state": str(self.temp / "lakehouse"),
             "runs_root": str(self.temp / "runs"),
             "token_root": str(self.temp / "tokens"),
@@ -390,6 +397,7 @@ class Env:
         if (self.temp / "runs").exists():
             shutil.copytree(self.temp / "runs", evidence / "runs")
         self.daemon.close()
+        self.stand_in.__exit__()
         shutil.rmtree(self.temp, ignore_errors=True)
         os.environ["PATH"] = self.saved_path
         return left
@@ -3528,6 +3536,195 @@ def cleanup_restart_each_step(env: Env) -> dict[str, bool]:
     }
 
 
+@case("container_output_redaction")
+def container_output_redaction(env: Env) -> dict[str, bool]:
+    """A container that prints its own credential leaves the redaction mark in the saved output, the live log and the output collected after a
+    launcher restart."""
+    sentinel = "leak-" + os.urandom(8).hex()
+    compose = launcher.ComposeModel(ROOT / "docker-compose.yaml")
+    env.daemon.images[compose.image("analytics-dbt")]["Config"]["Env"].append(f"HAI_LEAK_TOKEN={sentinel}")
+
+    def leak(container: dict[str, Any]) -> None:
+        if container["Config"]["Labels"].get("hai.template") == "fixture_dbt":
+            container["_out"] = f"token {sentinel} accepted\nready\n"
+            container["_err"] = f"warning: {sentinel}\n"
+
+    env.daemon.on_start = leak
+    hold_forever(env)
+    env.start()
+    run = env.acquire_run("run_a", "transform")
+
+    def saved(attempt_id: str) -> dict[str, str]:
+        folder = Path(env.attempt(attempt_id)["log_tail"]).parent
+        return {name: (folder / name).read_text() for name in ("stdout.txt", "stderr.txt", "log_tail.txt")}
+
+    live_id = env.submit(run, launch="r1", params=env.fixture_params("r1"))["attempt_id"]
+    env.wait_phase(live_id, ("started",))
+    live = str(env.client().call("logs", {"attempt_id": live_id}, run)["text"])
+    env.client().call("cancel", {"attempt_id": live_id}, run)
+    env.wait_ended(live_id, 40)
+    first = saved(live_id)
+
+    restarted_id = env.submit(run, launch="r2", params=env.fixture_params("r2"))["attempt_id"]
+    env.wait_phase(restarted_id, ("started",))
+    gate = env.daemon.add_gate("logs", "before")
+    env.client().call("cancel", {"attempt_id": restarted_id}, run)
+    gate.wait_reached(30)
+    env.kill_launcher()
+    gate.release()
+    env.start()
+    env.wait_ended(restarted_id, 40)
+    second = saved(restarted_id)
+    return {
+        "the live log hides the credential and shows the mark": sentinel not in live and launcher.REDACTION_MARK in live,
+        "the saved output hides the credential in all three files": all(sentinel not in text for text in first.values()),
+        "the saved output shows the mark in place of the credential": all(launcher.REDACTION_MARK in text for text in first.values()),
+        "the output collected after a launcher restart hides the credential": all(
+            sentinel not in text and launcher.REDACTION_MARK in text for text in second.values()
+        ),
+        "other output is kept": "accepted" in first["stdout.txt"] and "warning:" in first["stderr.txt"],
+        "no file under the registry or the runs folder holds the credential": not files_holding([sentinel], [env.registry, env.temp / "runs"], 0),
+    }
+
+
+@case("embedded_credential_redaction")
+def embedded_credential_redaction(env: Env) -> dict[str, bool]:
+    """A one-time bootstrap that prints the root secret it received inside an argument and the three-character database password it holds in its
+    environment leaves the redaction mark in the saved output in place of both, and its create record places the secret in the argument."""
+    from scripts.infrastructure import secret_store
+
+    root = "root-" + os.urandom(8).hex()
+    short = "q" + os.urandom(1).hex()
+    env.stand_in.values[secret_store.POLARIS_ROOT_SECRET] = root
+    env.stand_in.values[secret_store.POSTGRES_PASSWORD] = short
+
+    def leak(container: dict[str, Any]) -> None:
+        if container["Config"]["Labels"].get("hai.service") == "polaris-bootstrap":
+            container["_out"] = f"credential {root} accepted\nready\n"
+            container["_err"] = f"password {short} refused\n"
+
+    env.daemon.on_start = leak
+    catalog_script(env)
+    env.start()
+    phase = catalog_up(env)
+    state = env.state()
+    attempt = next(a for a in state["attempts"].values() if a["params"].get("service") == "polaris-bootstrap")
+    folder = Path(attempt["log_tail"]).parent
+    saved = {name: (folder / name).read_text() for name in ("stdout.txt", "stderr.txt", "log_tail.txt")}
+    spans = [span for op in state["operations"].values() if op["attempt"] == attempt["id"] and op["kind"] == "create" for span in op["secret_spans"]]
+    return {
+        "the catalog came up": phase == "up",
+        "the saved output hides the root secret that the argument held": all(root not in text for text in saved.values()),
+        "the saved output hides the short database password": all(short not in text for text in saved.values()),
+        "the mark stands in place of both": launcher.REDACTION_MARK in saved["stdout.txt"] and launcher.REDACTION_MARK in saved["stderr.txt"],
+        "other output is kept": "accepted" in saved["stdout.txt"] and "refused" in saved["stderr.txt"],
+        "the create record places the root secret inside the third argument": any(
+            span["in"] == "cmd:2" and span["length"] == len(root) and span["commit"].startswith("hmac:") for span in spans
+        ),
+        "no file under the registry or the scratch folder holds the root secret": not files_holding([root], [env.registry, env.temp], 0),
+    }
+
+
+FIXED_DAEMON_DIAGNOSTICS = {
+    "create": "Docker 400: request refused",
+    "start": "Docker 500: daemon error",
+    "stop": "Docker 500: stop failed",
+    "remove": "Docker 500: remove failed",
+}
+
+
+def daemon_diagnostics_by_operation(state: dict[str, Any]) -> dict[str, set[str]]:
+    """The Docker diagnostics that the operation records of each scripted kind keep, in their result and in the last error of a retried removal."""
+    found: dict[str, set[str]] = {kind: set() for kind in FIXED_DAEMON_DIAGNOSTICS}
+    for op in state["operations"].values():
+        if op["kind"] in found:
+            found[op["kind"]].update(re.findall(r"Docker \d+: [a-z]+(?: [a-z]+)*", json.dumps([op.get("result"), op.get("last_error")])))
+    return found
+
+
+@case("daemon_error_text")
+def daemon_error_text(env: Env) -> dict[str, bool]:
+    """A daemon error that quotes a container's credential, on the create, start, stop and removal paths, leaves only the status and a fixed reason in the
+    registry, the operation results, the attempt details and the run files."""
+    sentinel = "daemon-" + os.urandom(8).hex()
+    hold_forever(env)
+    env.start()
+    run = env.acquire_run("run_a", "transform")
+    env.daemon.error_replies = {
+        operation: [(status, f"{operation} refused: environment HAI_LEAK_TOKEN={sentinel}")]
+        for operation, status in (("create", 400), ("start", 500), ("stop", 500), ("remove", 500))
+    }
+    attempts = []
+    for launch in ("r1", "r2"):
+        attempt_id = env.submit(run, launch=launch, params=env.fixture_params(launch))["attempt_id"]
+        env.wait_ended(attempt_id, 60)
+        attempts.append(attempt_id)
+    if env.daemon.error_replies["stop"]:
+        running_id = env.submit(run, launch="r3", params=env.fixture_params("r3"))["attempt_id"]
+        env.wait_phase(running_id, ("started",))
+        env.client().call("cancel", {"attempt_id": running_id}, run)
+        env.wait_ended(running_id, 60)
+        attempts.append(running_id)
+    registry = env.state()
+    state = json.dumps(registry)
+    diagnostics = set(re.findall(r"Docker \d+: [a-z]+(?: [a-z]+)*", state))
+    return {
+        "every scripted daemon error reached the launcher": not any(env.daemon.error_replies.values()),
+        "the registry does not hold the credential the errors quoted": sentinel not in state,
+        "no file under the registry or the runs folder holds the credential": not files_holding([sentinel], [env.registry, env.temp / "runs"], 0),
+        "the create refusal is recorded as its status and a fixed reason": env.attempt(attempts[0])["detail"] == "Docker 400: request refused",
+        "each scripted operation recorded its own fixed diagnostic": daemon_diagnostics_by_operation(registry)
+        == {kind: {text} for kind, text in FIXED_DAEMON_DIAGNOSTICS.items()},
+        "the registry holds no other daemon diagnostic": diagnostics == set(FIXED_DAEMON_DIAGNOSTICS.values()),
+    }
+
+
+@case("secret_fetch_stall")
+def secret_fetch_stall(env: Env) -> dict[str, bool]:
+    """A stalled secret fetch leaves the launcher's status, ping and cancellation quick and ends at its deadline with a named cause."""
+    env.settings["secret_fetch_seconds"] = 6.0
+    env.write_settings()
+    catalog_script(env)
+    env.start()
+    run = env.acquire_run("run_a", "transform")
+    other = env.submit(run, launch="r1", params=env.fixture_params("r1"))["attempt_id"]
+    env.wait_phase(other, ("started",))
+    env.stand_in.stalled.add("GetSecretValue")
+    env.client().call("catalog_up")
+    time.sleep(1.5)
+
+    def seconds(call: Callable[[], Any]) -> float:
+        began = time.monotonic()
+        call()
+        return time.monotonic() - began
+
+    ping_seconds = max(seconds(env.ping) for _ in range(5))
+    status_seconds = seconds(lambda: env.client().call("status", {"what": "catalog"}))
+    cancel_seconds = seconds(lambda: env.client().call("cancel", {"attempt_id": other}, run))
+    env.wait_ended(other, 10)
+    waiting = catalog_phase(env) == "starting"
+    env.wait(lambda: catalog_phase(env) == "down", 30, "the stalled start ends at the fetch deadline")
+    causes = [a["detail"] for a in env.state()["attempts"].values() if a["owner"].startswith("service:") and a["reason"] == "create_failed"]
+    env.stand_in.released.set()
+    return {
+        "the catalog start waited for the stalled fetch": waiting,
+        "ping stayed quick while the fetch stalled": ping_seconds < 1.0,
+        "status stayed quick while the fetch stalled": status_seconds < 1.0,
+        "cancellation of an unrelated attempt was answered and finished while the fetch stalled": cancel_seconds < 1.0,
+        "the stalled start failed at the deadline and its cause names the secret and the deadline": any(
+            "did not finish within 6 s" in cause and secret_store_name_in(cause) for cause in causes
+        ),
+        "no container of the catalog was created": not any(c["Labels"].get("hai.service") for c in env.daemon.create_bodies.values()),
+    }
+
+
+def secret_store_name_in(text: str) -> bool:
+    """True when the text names one of the managed secrets."""
+    from scripts.infrastructure import secret_store
+
+    return any(name in text for name in secret_store.MANAGED)
+
+
 @case("peer_user_rejection")
 def peer_user_rejection(env: Env) -> dict[str, bool]:
     """913 (F17): a connection from another user is refused. The test registry names another user ID as the launcher's own, so every peer is a stranger."""
@@ -4115,7 +4312,6 @@ def mount_and_argument_refusals(env: Env) -> dict[str, bool]:
         and refused(helper(str(ROOT / "data" / "lakehouse")), "mount"),
         "a folder outside the data folder is refused": refused(helper("/etc"), "args"),
         "a container path with traversal is refused": refused(helper(str(case_folder), "/workspace/../etc"), "args"),
-        "compose.env is never mounted": refused(helper(str(env.temp / "compose.env")), "args"),
     }
     base = {"build": ["build"]}
     del base
@@ -4333,6 +4529,29 @@ def compose_service_mounts(service: str, home: str) -> set[tuple[str, str, bool]
         source = source.replace("${HOME}", home)
         mounts.add((str((ROOT / source).resolve()) if source.startswith(".") else source, target, read_only))
     return mounts
+
+
+class NotingRenderer(launcher.Renderer):
+    """A renderer that notes the template of every render that returns a specification, to show which templates a case rendered. It watches the
+    public render calls, so a template that builds its specification without ``assemble`` (the probe) is seen like any other."""
+
+    ENTRY_POINTS = ("render", "render_service", "render_orchestration_service", "render_lineage_service")
+
+    def __init__(self, *arguments: Any, noted: set[str], **options: Any) -> None:
+        super().__init__(*arguments, **options)
+        self.noted = noted
+        for name in self.ENTRY_POINTS:
+            setattr(self, name, self.noting(getattr(self, name)))
+
+    def noting(self, method: Callable[..., launcher.Rendered]) -> Callable[..., launcher.Rendered]:
+        """``method`` with a note of the template of each call that returned a specification; a call that raised is not noted."""
+
+        def call(inp: launcher.RenderInput, *arguments: Any, **options: Any) -> launcher.Rendered:
+            rendered = method(inp, *arguments, **options)
+            self.noted.add(inp.template)
+            return rendered
+
+        return call
 
 
 def facts(rendered: launcher.Rendered) -> dict[str, Any]:
@@ -4555,18 +4774,19 @@ def render_templates(env: Env) -> dict[str, bool]:
     """916: each template's effective specification against docker-compose.yaml and the template table (fake Docker; nothing is started)."""
     config = env.config
     compose = launcher.ComposeModel(ROOT / "docker-compose.yaml")
-    renderer = launcher.Renderer(config, compose, ROOT, ROOT, b"k" * 32)
+    rendered_templates: set[str] = set()
+    renderer = NotingRenderer(config, compose, ROOT, ROOT, b"k" * 32, noted=rendered_templates)
     registry_id = json.loads((env.registry / "registry_id").read_text())["registry_id"]
     network = f"hai-{registry_id[:8]}-net"
     home = str(launcher.account_home())
-    values = dict(launcher.Launcher.PLACEHOLDER_ENV)
+    values = {**launcher.Launcher.PLACEHOLDER_ENV, **{name: env.secret_values[name] for name in ("POLARIS_MEMORY_LIMIT", "POLARIS_DB_MEMORY_LIMIT")}}
     case_folder, packages = env.case_folders("rc")
     run_folder = env.work / "runs" / PINS_RUN
     snapshot = env.work / "snapshot"
     for folder in (run_folder, snapshot / "project", snapshot / "packages"):
         folder.mkdir(parents=True, exist_ok=True)
     resources = (str(ROOT / "services/analytics/resources.sql"), "/opt/analytics/resources.sql", True)
-    secrets_file = {line.split("=", 1)[0]: line.split("=", 1)[1] for line in (env.temp / "compose.env").read_text().splitlines()}
+    secrets_file = dict(env.secret_values)
 
     def render(template: str, args: list[str], params: dict[str, Any], **extra: Any) -> dict[str, Any]:
         inp = launcher.RenderInput(
@@ -4778,14 +4998,18 @@ def render_templates(env: Env) -> dict[str, bool]:
         and f["cmd"][0] == "bootstrap"
         and f["cmd"][2] == f"--credential=POLARIS,{secrets_file['POLARIS_CLIENT_ID']},{secrets_file['POLARIS_CLIENT_SECRET']}"
     )
-    probe = renderer.render_probe(
-        launcher.RenderInput("probe", "diag", "p", 1, 1, "op", values, 0, [], {}, {"hai.registry_id": registry_id}),
-        launcher.TEMPLATES["probe"],
-        "n",
-        registry_id,
+    pf = render("probe", [], {})
+    out["probe"] = (
+        pf["image"] == compose.image("analytics")
+        and pf["entrypoint"] == ["true"]
+        and pf["cmd"] == []
+        and pf["env"] == {}
+        and pf["mounts"] == set()
+        and pf["network"] == "none"
+        and pf["memory"] == 0
+        and pf["body"]["HostConfig"]["RestartPolicy"] == {"Name": "no"}
+        and pf["body"]["Labels"] == {"hai.registry_id": registry_id}
     )
-    pf = facts(probe)
-    out["probe"] = pf["image"] == compose.image("analytics") and pf["entrypoint"] == ["true"] and pf["mounts"] == set() and pf["network"] == "none"
     digest = "d" * 64
     f = render(
         "sealed_consumer",
@@ -4834,8 +5058,9 @@ def render_templates(env: Env) -> dict[str, bool]:
         and f["entrypoint"] == wrapped(["python", "-m", "scripts.lakehouse.gold_publish"])
     )
     lineage_state = (env.work / "lineage").resolve()
-    for part in ("postgres", "private", "config"):
+    for part in ("postgres", "config"):
         (lineage_state / part).mkdir(parents=True, exist_ok=True)
+    lineage_password = env.secret_values["LINEAGE_DB_PASSWORD"]
     lineage_limits = {"postgres": 512 * 1024**2, "api": 768 * 1024**2, "web": 256 * 1024**2}
     lineage_values = {
         **values,
@@ -4846,8 +5071,8 @@ def render_templates(env: Env) -> dict[str, bool]:
     }
     lineage_model = launcher.ComposeModel(ROOT / launcher.LINEAGE_COMPOSE)
     checks_model = launcher.ComposeModel(ROOT / launcher.LINEAGE_CHECKS_COMPOSE)
-    lineage_renderer = launcher.Renderer(config, lineage_model, ROOT, ROOT, b"k" * 32)
-    dump_renderer = launcher.Renderer(config, checks_model, ROOT, ROOT, b"k" * 32)
+    lineage_renderer = NotingRenderer(config, lineage_model, ROOT, ROOT, b"k" * 32, noted=rendered_templates)
+    dump_renderer = NotingRenderer(config, checks_model, ROOT, ROOT, b"k" * 32, noted=rendered_templates)
     lineage_document = importlib.import_module("yaml").safe_load((ROOT / launcher.LINEAGE_COMPOSE).read_text())["services"]
     backend, frontend = f"hai-{registry_id[:8]}-lineage-backend", f"hai-{registry_id[:8]}-lineage-frontend"
 
@@ -4868,7 +5093,8 @@ def render_templates(env: Env) -> dict[str, bool]:
             f["image"] == lineage_model.image(service)
             and "@sha256:" in f["image"]
             and f["memory"] == lineage_limits[service]
-            and f["env"] == {key: str(value) for key, value in lineage_document[service]["environment"].items()}
+            and f["env"]
+            == {key: str(value).replace("${LINEAGE_DB_PASSWORD}", lineage_password) for key, value in lineage_document[service]["environment"].items()}
             and "Entrypoint" not in f["body"]
             and "HAI_DEADLINE_UTC" not in f["env"]
             and "User" not in f["body"]
@@ -4878,13 +5104,12 @@ def render_templates(env: Env) -> dict[str, bool]:
             and f["body"]["Healthcheck"]["Test"][0] == "CMD"
             and f["init"] is True
         )
-    out["lineage_service postgres: backend network only, no published port, private folder read-only"] = (
+    out["lineage_service postgres: backend network only, no published port, only its data folder mounted"] = (
         stacks["postgres"]["network"] == backend
         and endpoints(stacks["postgres"]) == {backend: ["lineage-postgres"]}
         and stacks["postgres"]["joins"] == {}
         and stacks["postgres"]["ports"] == {}
-        and stacks["postgres"]["mounts"]
-        == {(str(lineage_state / "postgres"), "/var/lib/postgresql/data", False), (str(lineage_state / "private"), "/run/hai/private", True)}
+        and stacks["postgres"]["mounts"] == {(str(lineage_state / "postgres"), "/var/lib/postgresql/data", False)}
     )
     out["lineage_service api: created on the frontend network and joined to the backend before it starts, loopback port, config read-only"] = (
         stacks["api"]["network"] == frontend
@@ -4918,27 +5143,20 @@ def render_templates(env: Env) -> dict[str, bool]:
         and f["mounts"]
         == {
             (str(ROOT / "services/lineage/db_dump.py"), "/opt/hai/lineage_dump.py", True),
-            (str(lineage_state / "private"), "/run/hai/private", True),
             (str(lineage_state / "dumps"), "/out", False),
         }
-        and set(f["env"]) == {"HAI_DEADLINE_UTC"}
+        and f["env"] == {"HAI_DEADLINE_UTC": f["env"]["HAI_DEADLINE_UTC"], "MARQUEZ_DB_PASSWORD": lineage_password}
         and f["init"] is True
         and (lineage_state / "dumps").stat().st_mode & 0o777 == 0o700
     )
     incomplete = env.work / "lineage_incomplete"
-    for part in ("postgres", "config"):
-        (incomplete / part).mkdir(parents=True, exist_ok=True)
+    (incomplete / "postgres").mkdir(parents=True, exist_ok=True)
     refusal = expect_error_of(lambda: dump_renderer.render(lineage_input("lineage_dump", {"state": str(incomplete)}), registry_id))
-    out["lineage_dump: a state folder without the private folder is refused and nothing is created in it"] = (
-        isinstance(refusal, launcher.LauncherError)
-        and refusal.code == "args"
-        and "incomplete" in str(refusal)
-        and not (incomplete / "dumps").exists()
-        and not (incomplete / "private").exists()
+    out["lineage_dump: a state folder without the config folder is refused and nothing is created in it"] = (
+        isinstance(refusal, launcher.LauncherError) and refusal.code == "args" and "incomplete" in str(refusal) and not (incomplete / "dumps").exists()
     )
     from orchestration import network_policy
 
-    pipeline_rendered: set[str] = set()
     names = network_policy.names(registry_id, PINS_RUN)
     layer_completion = {**completion, "run_id": PINS_RUN, "generation": 1}
     pipeline = {
@@ -4954,9 +5172,7 @@ def render_templates(env: Env) -> dict[str, bool]:
     }
 
     def pipeline_facts(name: str, params: dict[str, Any]) -> dict[str, Any]:
-        found = render(name, [], params, run_folder=run_folder, snapshot=snapshot, run_mode="publish_fixture", pipeline=pipeline)
-        pipeline_rendered.add(name)
-        return found
+        return render(name, [], params, run_folder=run_folder, snapshot=snapshot, run_mode="publish_fixture", pipeline=pipeline)
 
     def credential_free(found: dict[str, Any]) -> bool:
         return not any(name.startswith(("AWS", "POLARIS")) for name in found["env"])
@@ -5036,30 +5252,15 @@ def render_templates(env: Env) -> dict[str, bool]:
         and f["body"]["HostConfig"]["SecurityOpt"] == ["no-new-privileges:true"]
         and credential_free(f)
     )
+    requests_before = len(env.stand_in.requests())
+    renderer.recording = set()
+    render("catalog_service", [], {"service": "polaris-db"})
+    asked, renderer.recording = renderer.recording, None
+    out["a recording render reads no secret and names the one the service needs"] = len(env.stand_in.requests()) == requests_before and asked == {
+        launcher.COMPOSE_SECRETS["POSTGRES_PASSWORD"]
+    }
     out["every template of the table was rendered"] = (
-        set(launcher.TEMPLATES) - {"orchestration_service", "orchestration_check", "orchestration_dump"}
-        <= {
-            "lineage_service",
-            "lineage_dump",
-            "fixture_dbt",
-            "fixture_init",
-            "duckdb_helper",
-            "dbt_deps",
-            "quality_validate",
-            "quality_reconcile",
-            "query_reader",
-            "ui_reader",
-            "real_dbt",
-            "sealed_consumer",
-            "spark_read",
-            "spark_write",
-            "spark_e2e",
-            "gold_export",
-            "gold_publish",
-            "catalog_service",
-            "probe",
-        }
-        | pipeline_rendered
+        set(launcher.TEMPLATES) - {"orchestration_service", "orchestration_check", "orchestration_dump"} <= rendered_templates
     )
     return out
 
@@ -5927,39 +6128,70 @@ def dbt_and_silver_clients(env: Env) -> dict[str, bool]:
     }
 
 
+def files_holding(values: Iterable[str], roots: Iterable[Path], since: float) -> list[str]:
+    """Every file under the roots written since ``since`` whose bytes hold one of the values; the repository's tool folders and links are skipped."""
+    needles = [value.encode() for value in values if len(value) > 8]
+    found = []
+    for root in roots:
+        for folder, names, files in os.walk(root):
+            names[:] = [name for name in names if name not in (".git", ".venv", ".tools", "node_modules")]
+            for name in files:
+                path = Path(folder) / name
+                try:
+                    if path.is_symlink() or not path.is_file() or path.stat().st_mtime < since or path.stat().st_size > 8 * 1024 * 1024:
+                        continue
+                    content = path.read_bytes()
+                except OSError:
+                    continue
+                if any(needle in content for needle in needles):
+                    found.append(str(path))
+    return found
+
+
 @case("catalog_client")
 def catalog_client(env: Env) -> dict[str, bool]:
-    """919: scripts/lakehouse/catalog.py starts, reports, runs jobs and stops the catalog through the launcher; the Polaris API is a stand-in."""
+    """919: scripts/lakehouse/catalog.py starts, reports, runs jobs and stops the catalog through the launcher; the Polaris API and Secrets Manager are
+    stand-ins. The first start generates the catalog secrets in Secrets Manager, a rerun changes nothing, a missing permission fails and names the secret,
+    the launcher refuses to start a service whose secret is missing, and no file holds a secret value."""
+    from scripts.infrastructure import secret_store
     from scripts.lakehouse import catalog
 
+    began = time.time() - 1
     state = env.temp / "lakehouse_cli"
-    secrets_file = state / "secrets" / "catalog.env"
-    values = {
-        "POSTGRES_PASSWORD": "pg-x",
-        "POLARIS_CLIENT_ID": "root",
-        "POLARIS_CLIENT_SECRET": "pcs-x",
-        "POLARIS_READER_CLIENT_ID": "reader-id",
-        "POLARIS_READER_CLIENT_SECRET": "prs-x",
-    }
-    catalog.write_private(secrets_file, values)
+    state.mkdir()
+    issued = {"clientId": "issued-reader-" + os.urandom(6).hex(), "clientSecret": "issued-secret-" + os.urandom(6).hex()}
+    first_use = (
+        secret_store.POSTGRES_PASSWORD,
+        secret_store.POLARIS_ROOT_SECRET,
+        secret_store.POLARIS_READER_CLIENT_ID,
+        secret_store.POLARIS_READER_CLIENT_SECRET,
+    )
+    for name in first_use:
+        env.stand_in.values.pop(name, None)
     deployment = env.temp / "deployment.json"
     deployment.write_text(json.dumps({"aws_profile": "fake-profile", "aws_region": "us-fake-1", "data_bucket_name": "fake-bucket"}))
-    env.settings.update({"compose_env": str(state / "secrets" / "compose.env"), "lakehouse_state": str(state)})
+    env.settings.update({"lakehouse_state": str(state)})
     env.write_settings()
-    saved = (catalog.STATE, catalog.SECRETS, catalog.COMPOSE_ENV, catalog.BOOTSTRAPPED, catalog.DEPLOYMENT, catalog.TEST_REGISTRY, catalog.request)
+    saved = (catalog.STATE, catalog.BOOTSTRAPPED, catalog.DEPLOYMENT, catalog.TEST_REGISTRY, catalog.request)
     location = "s3://fake-bucket/lakehouse/"
+    reader_seen: list[int] = []
 
     def fake_request(
         method: str, path: str, token: str | None = None, body: dict[str, Any] | None = None, form: dict[str, str] | None = None
     ) -> tuple[int, Any]:
         if path.endswith("/oauth/tokens"):
-            return 200, {"access_token": "t"}
+            return (401, None) if (form or {}).get("client_id", "").startswith("stale-") else (200, {"access_token": "t"})
         if method == "GET" and path.endswith(f"/catalogs/{catalog.CATALOG}"):
             return 200, {"properties": {"default-base-location": location}, "storageConfigInfo": {"allowedLocations": [location], "stsUnavailable": True}}
+        if method == "GET" and path.endswith(f"/principals/{catalog.READER}"):
+            reader_seen.append(1)
+            return (404, None) if len(reader_seen) == 1 else (200, {})
+        if method == "POST" and "/principals" in path and not path.endswith("/principal-roles"):
+            return 200, {"credentials": issued}
         return 200, {}
 
-    catalog.STATE, catalog.SECRETS, catalog.COMPOSE_ENV = state, secrets_file, state / "secrets" / "compose.env"
-    catalog.BOOTSTRAPPED, catalog.DEPLOYMENT, catalog.TEST_REGISTRY, catalog.request = (
+    catalog.STATE, catalog.BOOTSTRAPPED, catalog.DEPLOYMENT, catalog.TEST_REGISTRY, catalog.request = (
+        state,
         state / "polaris_bootstrapped",
         deployment,
         str(env.registry),
@@ -5970,6 +6202,7 @@ def catalog_client(env: Env) -> dict[str, bool]:
     env.write_settings()
     outputs: dict[str, str] = {}
     fixture_writer: list[str | None] = []
+    writes: dict[str, int] = {}
 
     def refusal_text(call: Callable[[], Any]) -> str | None:
         """The catalog client's refusal text of a call, or None when it was accepted."""
@@ -5980,8 +6213,44 @@ def catalog_client(env: Env) -> dict[str, bool]:
         return None
 
     try:
+        env.start()
+        created_at_start = set(env.daemon.create_bodies)
+
+        def create_denied() -> None:
+            env.stand_in.denied.add("CreateSecret")
+            catalog.credentials()
+
+        def stale_reader_id() -> None:
+            env.stand_in.values[secret_store.POLARIS_READER_CLIENT_ID] = "stale-" + os.urandom(4).hex()
+            catalog.up()
+
+        def lose_reader_secret() -> None:
+            env.stand_in.values.pop(secret_store.POLARIS_READER_CLIENT_SECRET, None)
+            catalog.up()
+
+        (state / "polaris_db").mkdir()
+        (state / "polaris_db" / "PG_VERSION").write_text("17\n")
+        env.stand_in.values[secret_store.POSTGRES_PASSWORD] = "stored-" + os.urandom(4).hex()
+        writes_before_interruption = env.stand_in.writes()
+        interrupted = refusal_text(catalog.credentials)
+        interrupted_writes = env.stand_in.writes() - writes_before_interruption
+        interrupted_stored = secret_store.POLARIS_ROOT_SECRET in env.stand_in.values
+        (state / "polaris_db" / "PG_VERSION").unlink()
+        env.stand_in.values.pop(secret_store.POSTGRES_PASSWORD)
+        denied = refusal_text(create_denied)
+        env.stand_in.denied.clear()
+        link = env.client()
+        link.call("catalog_up")
+        refused_start = link.wait_for("catalog", "", "phase", ("up", "down"), {"kind": "any"}, 60)
+        refused_creates = [name for name in env.daemon.create_bodies if name not in created_at_start]
+        refusals = [
+            a["detail"] for a in env.state()["attempts"].values() if a["owner"].startswith("service:") and a["reason"] == "create_failed" and a["detail"]
+        ]
         for label, call in (
             ("up", lambda: catalog.up()),
+            ("up_again", lambda: catalog.up()),
+            ("up_stale", stale_reader_id),
+            ("up_reset", lose_reader_secret),
             ("status", lambda: catalog.status()),
             ("job_e2e", lambda: catalog.job("bronze_e2e", [])),
             ("job_smoke", lambda: fixture_writer.append(refusal_text(lambda: catalog.job("smoke", [])))),
@@ -5991,6 +6260,7 @@ def catalog_client(env: Env) -> dict[str, bool]:
             with contextlib.redirect_stdout(buffer):
                 call()
             outputs[label] = buffer.getvalue()
+            writes[label] = env.stand_in.writes()
         with contextlib.redirect_stdout(io.StringIO()):
             released = catalog.release()
         refused_job = None
@@ -6000,10 +6270,31 @@ def catalog_client(env: Env) -> dict[str, bool]:
             refused_job = str(error)
 
     finally:
-        (catalog.STATE, catalog.SECRETS, catalog.COMPOSE_ENV, catalog.BOOTSTRAPPED, catalog.DEPLOYMENT, catalog.TEST_REGISTRY, catalog.request) = saved
-    compose_env = (state / "secrets" / "compose.env").read_text()
+        (catalog.STATE, catalog.BOOTSTRAPPED, catalog.DEPLOYMENT, catalog.TEST_REGISTRY, catalog.request) = saved
+    stored = {name: env.stand_in.values.get(name, "") for name in first_use}
+    values = [*env.stand_in.values.values(), *issued.values()]
     return {
         "up started Polaris through the launcher and reported it": "Polaris is running on 127.0.0.1:8181" in outputs["up"],
+        "the first start generated the catalog secrets in Secrets Manager": all(stored.values())
+        and stored[secret_store.POLARIS_READER_CLIENT_SECRET] == issued["clientSecret"],
+        "a second start changed nothing in Secrets Manager": writes["up_again"] == writes["up"],
+        "a stored pair that Polaris refuses was reset and stored again": "credentials reset" in outputs["up_stale"]
+        and env.stand_in.values.get(secret_store.POLARIS_READER_CLIENT_ID) == issued["clientId"],
+        "a lost reader secret was reset and stored again, never created twice": "credentials reset" in outputs["up_reset"]
+        and env.stand_in.values.get(secret_store.POLARIS_READER_CLIENT_SECRET) == issued["clientSecret"],
+        "an initialized database with no bootstrap marker and no root secret (an interruption after the realm was created) is refused and creates nothing": (
+            interrupted is not None and secret_store.POLARIS_ROOT_SECRET in interrupted and not interrupted_writes and not interrupted_stored
+        ),
+        "a missing create permission failed and named the secret": denied is not None and secret_store.POSTGRES_PASSWORD in denied,
+        "no secret value is in any message": not any(value in text for value in values for text in [str(denied), *outputs.values()]),
+        "the launcher refused to start a service with a missing secret and created no container after its startup": refused_start.get("phase") == "down"
+        and not refused_creates,
+        "the failed service attempt names the missing secret as its cause": any(
+            f"secret {secret_store.POSTGRES_PASSWORD} is missing or empty" in detail and "set up the catalog first" in detail for detail in refusals
+        ),
+        "no file under the repository or the scratch folder holds a secret value": not files_holding(
+            values, [ROOT, env.temp, Path(tempfile.gettempdir())], began
+        ),
         "status names the services": "polaris-db=" in outputs["status"] and "polaris=" in outputs["status"],
         "a throwaway-catalog job ran as spark_e2e": any(c["Labels"]["hai.template"] == "spark_e2e" for c in env.daemon.create_bodies.values()),
         "a loader job in a test registry (a fixture run) is refused by the launcher, its run is released and no spark_write container exists": (
@@ -6016,7 +6307,7 @@ def catalog_client(env: Env) -> dict[str, bool]:
         "down stopped the catalog": "Catalog services stopped" in outputs["down"] and catalog_phase(env) == "down",
         "release restarted Docker": released.startswith("Docker restarted"),
         "an unknown job is refused": refused_job is not None and "unknown job" in refused_job,
-        "compose.env holds credentials by name and no memory limit": "POSTGRES_PASSWORD=" in compose_env and "MEMORY_LIMIT" not in compose_env,
+        "no credentials file or compose file exists": not (state / "secrets").exists() and not (env.temp / "compose.env").exists(),
     }
 
 
@@ -7499,9 +7790,8 @@ def client_cleanup_wrappers(env: Env) -> dict[str, bool]:
             path.write_text(text)
             made.append(path)
     results_before = set(silver.RESULTS.glob("*")) if silver.RESULTS.exists() else set()
-    saved = (catalog.TEST_REGISTRY, catalog.COMPOSE_ENV, silver.TEST_REGISTRY)
+    saved = (catalog.TEST_REGISTRY, silver.TEST_REGISTRY)
     catalog.TEST_REGISTRY = silver.TEST_REGISTRY = str(env.registry)
-    catalog.COMPOSE_ENV = env.temp / "compose.env"
     outcomes: dict[str, Any] = {}
     took: dict[str, float] = {}
     held: dict[str, list[str]] = {}
@@ -7529,7 +7819,7 @@ def client_cleanup_wrappers(env: Env) -> dict[str, bool]:
                 env.wait(partial(attempt_started, env, prefix), 15, "the blocked submit is handled")
                 env.teardown()
     finally:
-        catalog.TEST_REGISTRY, catalog.COMPOSE_ENV, silver.TEST_REGISTRY = saved
+        catalog.TEST_REGISTRY, silver.TEST_REGISTRY = saved
         for path in made:
             path.unlink(missing_ok=True)
         if silver.RESULTS.exists():
@@ -8353,6 +8643,10 @@ ALL_CASES = (
     kit_launcher_client,
     dbt_and_silver_clients,
     catalog_client,
+    container_output_redaction,
+    embedded_credential_redaction,
+    daemon_error_text,
+    secret_fetch_stall,
     staging_runner_conversion,
     staging_read_share,
     staging_read_plan_shrinks,
@@ -8368,6 +8662,35 @@ def shard_of(names: list[str], shard: str) -> list[str]:
     return [name for position, name in enumerate(names) if position % count == index]
 
 
+def file_digest(path: Path) -> str:
+    """The SHA-256 of a file's bytes, of a link's target, or ``absent`` for a path that is gone."""
+    if path.is_symlink():
+        return hashlib.sha256(b"link:" + os.readlink(path).encode()).hexdigest()
+    if path.is_file():
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    return "absent"
+
+
+def source_snapshot() -> dict[str, Any]:
+    """The source inputs of this run: the SHA-256 of every file Git tracks (staged changes included) or does not ignore, and the staged diff hash.
+    An empty inventory is refused, so a snapshot of nothing can never show a source as unchanged."""
+    listed = run_command("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=ROOT)
+    staged = run_command("git", ["diff", "--cached"], cwd=ROOT)
+    if listed.returncode or staged.returncode:
+        raise SystemExit("the source inventory could not be read from Git")
+    names = sorted({name for name in listed.stdout.split("\0") if name})
+    if not names:
+        raise SystemExit("the source inventory is empty: the run cannot show that its sources stayed unchanged")
+    return {"files": {name: file_digest(ROOT / name) for name in names}, "staged_diff_sha256": hashlib.sha256(staged.stdout.encode()).hexdigest()}
+
+
+def source_changes(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    """The files whose digest differs between two snapshots, and ``staged diff`` when the staged diff differs."""
+    names = sorted(set(before["files"]) | set(after["files"]))
+    changed = [name for name in names if before["files"].get(name) != after["files"].get(name)]
+    return [*changed, *(["staged diff"] if before["staged_diff_sha256"] != after["staged_diff_sha256"] else [])]
+
+
 def run_cases(selected: list[str], shard: str = "") -> int:
     """Run the selected cases (all by default, or one shard of them), write the report and return the exit code."""
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + (f"_shard{shard.replace('/', 'of')}" if shard else "")
@@ -8375,8 +8698,7 @@ def run_cases(selected: list[str], shard: str = "") -> int:
     report.mkdir(parents=True)
     if {function.__name__ for function in ALL_CASES} != {function.__name__ for function, _ in CASES.values()}:
         raise SystemExit("ALL_CASES differs from the registered cases")
-    changed = run_command("git", ["diff", "--name-only"], cwd=ROOT).stdout.splitlines()
-    sources = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in changed if (ROOT / name).is_file()}
+    sources = source_snapshot()
     names = selected or list(CASES)
     if shard:
         names = shard_of(names, shard)
@@ -8404,20 +8726,23 @@ def run_cases(selected: list[str], shard: str = "") -> int:
         if error:
             sys.stdout.write(f"      error: {error.splitlines()[0]}\n")
     head = run_command("git", ["rev-parse", "HEAD"], cwd=ROOT).stdout.strip()
+    source_changed = source_changes(sources, source_snapshot())
     summary = {
         "feature": "single launcher, fake Docker, test registries",
         "command": ".venv/bin/python -m scripts.lakehouse.run_launcher_e2e",
         "started_utc": stamp,
         "head": head,
-        "source_snapshot": sources,
-        "source_unchanged": all(
-            (ROOT / name).is_file() and hashlib.sha256((ROOT / name).read_bytes()).hexdigest() == digest for name, digest in sources.items()
-        ),
+        "staged_diff_sha256": sources["staged_diff_sha256"],
+        "source_file_count": len(sources["files"]),
+        "source_changed": source_changed,
+        "source_unchanged": not source_changed,
         "python": sys.version.split()[0],
         "cases": results,
         "passed": sum(1 for r in results if r["status"] == "pass"),
         "total": len(results),
     }
+    if source_changed:
+        sys.stdout.write(f"      failed: the sources changed during the run: {', '.join(source_changed[:10])}\n")
     (report / "report.json").write_text(json.dumps(summary, indent=2) + "\n")
     sys.stdout.write(f"{summary['passed']}/{summary['total']}: {report.relative_to(ROOT)}/report.json\n")
     return 0 if summary["passed"] == summary["total"] and summary["source_unchanged"] else 1

@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
+from scripts.infrastructure.secret_store_stand_in import StandIn, stack_seeds
 from scripts.lakehouse import run_lock
 from scripts.orchestration import sentinel
 from scripts.orchestration.broker import BrokerPaths
@@ -217,7 +218,7 @@ def prepare_checkout(folder: Path) -> Path:
     return inventory
 
 
-def write_registry_settings(registry: Path, work: Path) -> None:
+def write_registry_settings(registry: Path, work: Path, endpoint: str) -> None:
     """The launcher's settings for this test registry: the real Docker socket, a longer health wait and the state, case and package folders as allowed roots."""
     settings = {
         "docker_socket": launcher.docker_socket_path(),
@@ -225,6 +226,7 @@ def write_registry_settings(registry: Path, work: Path) -> None:
         "allowed_roots": [str(work / "airflow"), str(work / "cases"), str(work / "packages")],
         "token_root": str(registry / "run_tokens" / "t"),
         "runs_root": str(work / "runs"),
+        "secrets_endpoint": endpoint,
     }
     (registry / "launcher_test.json").write_text(json.dumps(settings, indent=2))
 
@@ -236,11 +238,17 @@ def task_log(logs: Path, task_id: str) -> str:
 
 
 def run(checks: Checks, work: Path) -> dict[str, Any]:
-    """The whole scenario; the caller removes the folder and stops what is left."""
+    """The whole scenario against a stand-in Secrets Manager; the caller removes the folder and stops what is left."""
+    with StandIn(stack_seeds()) as stand_in:
+        return run_session(checks, work, stand_in.endpoint)
+
+
+def run_session(checks: Checks, work: Path, endpoint: str) -> dict[str, Any]:
+    """The scenario with the launcher's secrets read from the stand-in at ``endpoint``."""
     evidence: dict[str, Any] = {}
     registry = work / "registry"
     registry.mkdir(mode=0o700)
-    write_registry_settings(registry, work)
+    write_registry_settings(registry, work, endpoint)
     checkout = work / "checkout"
     inventory = prepare_checkout(checkout)
     os.environ.update(SENTINELS)

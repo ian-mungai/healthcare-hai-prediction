@@ -1,8 +1,5 @@
 # Local lakehouse services: the Apache Polaris Iceberg REST catalog, its PostgreSQL database, the Spark job image and
 # the DuckDB analytics image for read-only queries and the dbt staging models.
-# Compose is a specification only: orchestration/launcher.py reads this file, builds every container's create specification from it and
-# the template table, and creates the containers itself; no `docker compose` command runs (D1 section 8 item 1). scripts/lakehouse/catalog.py
-# supplies the env files from the ignored data/lakehouse/ folder; the repository's .env is never read.
 # Images are pinned by digest and every port listens only on this Mac.
 name: hai-lakehouse
 

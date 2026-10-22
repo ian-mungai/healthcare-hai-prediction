@@ -22,6 +22,27 @@ scripts/lakehouse/query.sh                                         # DuckDB shel
 .venv/bin/python -m scripts.lakehouse.run_launcher_e2e             # launcher scenarios with a fake Docker; report: data/e2e/launcher/
 ```
 
+## Secrets
+
+No secret is saved in a file on the host. The catalog database password, the root client secret and each principal's client
+ID and secret live in AWS Secrets Manager under `healthcare-hai-prediction/` (the names are in `docs/install_details.md`). The
+catalog commands and the writer principal setup generate or store them there, the launcher reads them into memory when it
+creates a container and sets them in that container's environment. The workflow supervisor stores its session secrets
+the same way. Reading or storing a secret needs the IAM grant of the project profile; a missing grant fails and names the secret.
+
+The launcher fetches the secrets of a container in a worker, never on its main loop. One deadline of 30 s covers the client setup,
+every read and every retry (5 s to connect, 10 s per read, 2 requests in all). A fetch that does not finish fails the attempt and
+names the secret.
+
+The launcher saves a container's output only after it replaces every credential the container holds with `[redacted]`. It takes the
+credentials from the container's own configuration, so this also holds after a launcher restart. The launcher also keeps no text that the
+Docker daemon returns with an error, because that text can quote a credential. A record holds the HTTP status and a fixed reason, such as
+`Docker 400: request refused`.
+
+A secret that exists with no value is refused until you fill it by hand. A secret that does not exist is created once. A caller that
+loses a create race reads the winner's value. A stored principal pair is kept only when Polaris accepts it. Otherwise the next run
+resets the principal and stores a new pair, one run at a time.
+
 ## Writer principals
 
 Each publish layer writes the catalog as its own principal. Run each set-up once with the catalog up, before that layer's first real
@@ -29,15 +50,16 @@ publish. `--dry-run` prints the requests and sends none. A rerun changes nothing
 
 ```sh
 .venv/bin/python -m scripts.lakehouse.gold_writer_setup --dry-run     # plan of the gold_writer principal (gold and gold_e2e)
-.venv/bin/python -m scripts.lakehouse.gold_writer_setup               # create it; credentials go to data/lakehouse/secrets/
+.venv/bin/python -m scripts.lakehouse.gold_writer_setup               # create it; credentials go to AWS Secrets Manager
 .venv/bin/python -m scripts.lakehouse.silver_writer_setup --dry-run   # plan of the silver_writer principal (silver and silver_e2e)
-.venv/bin/python -m scripts.lakehouse.silver_writer_setup             # create it; credentials go to data/lakehouse/secrets/
+.venv/bin/python -m scripts.lakehouse.silver_writer_setup             # not available yet: refuses until it stores credentials in AWS Secrets Manager
 .venv/bin/python -m scripts.lakehouse.run_gold_publish_e2e --mode writer_setup   # both set-ups against a stand-in Polaris; no Docker
 ```
 
 A writer may create, read and write the tables of its own two namespaces and read the catalog's properties. It cannot touch the other
 layer's namespaces or bronze, manage the catalog, create or drop a namespace or drop a table. The root credentials make the set-up
-requests only. The writer's client ID and secret are stored in the owner-only credentials file and never printed. A job receives them
+requests only. The gold writer's client ID and secret are stored in AWS Secrets Manager (see Secrets) and never printed. The real silver set-up refuses
+until it stores its pair there too. Only its `--dry-run` works now. A job receives them
 only from the launcher (`POLARIS_GOLD_WRITER_CLIENT_ID` and `_SECRET`, `POLARIS_SILVER_WRITER_CLIENT_ID` and `_SECRET`). The shared
 requests are in `scripts/lakehouse/polaris_writer.py`.
 

@@ -39,10 +39,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from orchestration import launcher
 from orchestration.pipeline_protocol import PipelineError, safe_name
-from scripts.lakehouse import gold_export, gold_publish, gold_writer_setup, polaris_writer, run_lock, silver_writer_setup
+from scripts.infrastructure import secret_store
+from scripts.infrastructure.secret_store_stand_in import StandIn
+from scripts.lakehouse import gold_export, gold_publish, gold_writer_setup, polaris_writer, principal_credentials, run_lock, silver_writer_setup
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -149,13 +152,12 @@ class Session:
     def start(self) -> None:
         """Write the test registry's settings, start the launcher on demand, wait until it serves and take the allocation."""
         self.registry.mkdir(mode=0o700)
-        compose_env = self.temp / "compose.env"
-        compose_env.write_text("".join(f"{key}={value}\n" for key, value in self.sentinels.items()))
-        compose_env.chmod(0o600)
+        self.stand_in = StandIn({launcher.COMPOSE_SECRETS[name]: value for name, value in self.sentinels.items() if name in launcher.COMPOSE_SECRETS})
+        self.stand_in.__enter__()
         settings = {
             "docker_socket": launcher.docker_socket_path(),
             "timings": {"tick": 0.1, "backoff_start": 0.5, "backoff_cap": 4},
-            "compose_env": str(compose_env),
+            "secrets_endpoint": self.stand_in.endpoint,
             "token_root": str(self.temp / "tokens"),
             "runs_root": str(self.temp / "runs"),
             "lakehouse_state": str(self.temp / "lakehouse"),
@@ -328,6 +330,8 @@ class Session:
             except Exception as error:
                 self.cleanup_errors.append(f"the containers cannot be listed: {type(error).__name__}")
         gone = self.stop_launcher()
+        if hasattr(self, "stand_in"):
+            self.stand_in.__exit__()
         resolved = gone and not containers and not self.cleanup_errors
         if resolved:
             shutil.rmtree(self.temp, ignore_errors=True)
@@ -583,9 +587,129 @@ EXPECTED_NAMESPACE_GRANTS = (
 )
 
 
+@dataclass
+class WriterRun:
+    """What one writer's set-up did against the recording stand-in: how far its calls went and how it handled the credentials."""
+
+    first: str
+    second: str
+    count_first: int
+    count_second: int
+    first_stored: bool
+    second_stored_nothing: bool
+    refuse: Callable[[Callable[..., tuple[int, Any]]], object]
+    extra: list[dict[str, Any]]
+
+
+Drive = Callable[[Callable[..., tuple[int, Any]], str, str, dict[str, Any], list[tuple[str, str, Any, str | None]]], WriterRun]
+
+
+def drive_file_store(ensure: Callable[..., str], expected: polaris_writer.Writer) -> Drive:
+    """Run a set-up that keeps the writer's pair in the catalog credentials file, against an in-memory store."""
+
+    def drive(
+        request: Callable[..., tuple[int, Any]], token: str, secret: str, state: dict[str, Any], calls: list[tuple[str, str, Any, str | None]]
+    ) -> WriterRun:
+        id_key, secret_key = expected.keys
+        stored: list[dict[str, str]] = []
+        first = ensure(token, "hai_lakehouse", {"POLARIS_CLIENT_ID": "root", "POLARIS_CLIENT_SECRET": "r"}, request, stored.append)
+        count_first = len(calls)
+        first_stored = len(stored) == 1 and stored[0][id_key] == "writer-id" and stored[0][secret_key] == secret
+        second = ensure(token, "hai_lakehouse", stored[-1], request, stored.append)
+        return WriterRun(
+            first,
+            second,
+            count_first,
+            len(calls),
+            first_stored,
+            len(stored) == 1,
+            lambda denied: ensure(token, "hai_lakehouse", {}, denied, stored.append),
+            [],
+        )
+
+    return drive
+
+
+def drive_secrets_manager(report: Path) -> Drive:
+    """Run the gold set-up against the Secrets Manager stand-in: one pair stored once, a half-written pair repaired and one update at a time."""
+    id_name, secret_name = secret_store.POLARIS_GOLD_CLIENT_ID, secret_store.POLARIS_GOLD_CLIENT_SECRET
+    setup = gold_writer_setup
+    lock = report / "locks" / "gold_writer.lock"
+
+    def drive(
+        request: Callable[..., tuple[int, Any]], token: str, secret: str, state: dict[str, Any], calls: list[tuple[str, str, Any, str | None]]
+    ) -> WriterRun:
+        with StandIn() as stand_in:
+            vault = secret_store.open_store(Path.cwd(), stand_in.endpoint)
+            first = setup.ensure_writer(token, "hai_lakehouse", vault, request, lock)
+            stored = dict(stand_in.values)
+            changes_first = stand_in.changed()
+            count_first = len(calls)
+            second = setup.ensure_writer(token, "hai_lakehouse", vault, request, lock)
+            changes_second = stand_in.changed()
+            count_second = len(calls)
+        with StandIn({secret_name: "old-secret"}) as stand_in:
+            vault = secret_store.open_store(Path.cwd(), stand_in.endpoint)
+            real_put = vault.put
+
+            def interrupted(name: str, value: str) -> None:
+                if name == secret_name:
+                    raise secret_store.SecretStoreError("simulated failure between the two writes")
+                real_put(name, value)
+
+            state.update({"principal": True, "secret": secret + "-issued-before"})
+            with mock.patch.object(vault, "put", interrupted):
+                try:
+                    setup.ensure_writer(token, "hai_lakehouse", vault, request, lock)
+                    interrupted_failed = False
+                except secret_store.SecretStoreError:
+                    interrupted_failed = True
+            half_written = dict(stand_in.values)
+            resumed = setup.ensure_writer(token, "hai_lakehouse", vault, request, lock)
+            repaired = dict(stand_in.values)
+            settled = stand_in.changed()
+            again = setup.ensure_writer(token, "hai_lakehouse", vault, request, lock)
+            unchanged = stand_in.changed() == settled
+        with StandIn() as stand_in:
+            vault = secret_store.open_store(Path.cwd(), stand_in.endpoint)
+            with principal_credentials.serialized(lock, "gold_writer", 1.0), mock.patch.object(principal_credentials, "LOCK_WAIT_SECONDS", 0.3):
+                began = time.monotonic()
+                try:
+                    setup.ensure_writer(token, "hai_lakehouse", vault, request, lock)
+                    waited_for_lock = False
+                except principal_credentials.CredentialError:
+                    waited_for_lock = time.monotonic() - began < 3
+            nothing_while_locked = not stand_in.changed()
+
+        def refuse(denied: Callable[..., tuple[int, Any]]) -> None:
+            with StandIn() as refusing:
+                setup.ensure_writer(token, "hai_lakehouse", secret_store.open_store(Path.cwd(), refusing.endpoint), denied, lock)
+
+        extra = [
+            step(
+                "gold_writer: a second update of the principal waits for the lock, ends at its deadline and changes nothing",
+                waited_for_lock and nothing_while_locked,
+            ),
+            step(
+                "gold_writer: a failure between the two writes leaves a pair that a rerun tests, resets and stores again",
+                interrupted_failed
+                and half_written == {id_name: "writer-id", secret_name: "old-secret"}
+                and resumed == "credentials reset"
+                and repaired[secret_name] == state["secret"]
+                and repaired[id_name] == "writer-id"
+                and again == "already present"
+                and unchanged,
+            ),
+        ]
+        first_stored = stored == {id_name: "writer-id", secret_name: secret} and changes_first == [("CreateSecret", id_name), ("CreateSecret", secret_name)]
+        return WriterRun(first, second, count_first, count_second, first_stored, changes_second == changes_first, refuse, extra)
+
+    return drive
+
+
 def writer_steps(
     expected: polaris_writer.Writer,
-    ensure: Callable[..., str],
+    drive: Drive,
     planned: Callable[[str], list[tuple[str, str, dict[str, Any] | None]]],
     main: Callable[[list[str]], int],
     refused: tuple[str, ...],
@@ -593,36 +717,40 @@ def writer_steps(
     """One writer's set-up requests against a recording stand-in, judged against ``expected``: exact scope and privileges, idempotence, failures, secrets."""
     secret = "writer-secret-" + os.urandom(6).hex()
     token = "access-token-" + os.urandom(6).hex()
-    stored: list[dict[str, str]] = []
     calls: list[tuple[str, str, Any, str | None]] = []
-    state = {"principal": False}
+    state: dict[str, Any] = {"principal": False, "secret": secret, "resets": 0}
     own = list(expected.namespaces)
-    id_key, secret_key = expected.keys
 
     def request(method: str, path: str, access: str | None = None, body: Any = None, form: Any = None) -> tuple[int, Any]:
+        if path.endswith("/oauth/tokens"):
+            accepted = form["client_id"] == "writer-id" and form["client_secret"] == state["secret"]
+            return (200, {"access_token": "t"}) if accepted else (401, None)
         calls.append((method, path, body, access))
         if method == "GET" and "/principals/" in path:
             return (200, {}) if state["principal"] else (404, None)
         if method == "POST" and path.endswith("/principals"):
             state["principal"] = True
-            return 201, {"credentials": {"clientId": "writer-id", "clientSecret": secret}}
+            return 201, {"credentials": {"clientId": "writer-id", "clientSecret": state["secret"]}}
+        if method == "POST" and path.endswith("/reset"):
+            state["resets"] += 1
+            state["secret"] = f"{secret}-reset{state['resets']}"
+            return 200, {"credentials": {"clientId": "writer-id", "clientSecret": state["secret"]}}
         if method == "POST" and path.endswith(("principal-roles", "catalog-roles", "/namespaces")):
             return (409, None) if any(c[0] == method and c[1] == path and c[2] == body for c in calls[:-1]) else (201, {})
         return 200, {}
 
-    first = ensure(token, "hai_lakehouse", {"POLARIS_CLIENT_ID": "root", "POLARIS_CLIENT_SECRET": "r"}, request, stored.append)
-    grants = [c[2]["grant"] for c in calls if c[0] == "PUT" and c[1].endswith("/grants")]
+    run = drive(request, token, secret, state, calls)
+    grants = [c[2]["grant"] for c in calls[: run.count_first] if c[0] == "PUT" and c[1].endswith("/grants")]
     namespace_grants = [g for g in grants if g["type"] == "namespace"]
-    created = [c[2]["namespace"] for c in calls if c[0] == "POST" and c[1].endswith("/namespaces")]
-    count_first = len(calls)
-    second = ensure(token, "hai_lakehouse", stored[-1], request, stored.append)
+    created = [c[2]["namespace"] for c in calls[: run.count_first] if c[0] == "POST" and c[1].endswith("/namespaces")]
+    count_first = run.count_first
     text = json.dumps([c[:3] for c in calls])
 
     def denied(method: str, path: str, access: str | None = None, body: Any = None, form: Any = None) -> tuple[int, Any]:
         return 403, {"detail": token}
 
     try:
-        ensure(token, "hai_lakehouse", {}, denied, stored.append)
+        run.refuse(denied)
         refusal = ""
     except polaris_writer.SetupError as error:
         refusal = str(error)
@@ -645,8 +773,9 @@ def writer_steps(
     return [
         step(
             label + "first run creates the principal and stores its pair once",
-            first == "created" and len(stored) == 1 and stored[0][id_key] == "writer-id" and stored[0][secret_key] == secret,
+            run.first == "created" and run.first_stored,
         ),
+        *run.extra,
         step(
             label + f"the namespaces granted are exactly {' and '.join(own)}",
             bool(namespace_grants) and {tuple(g["namespace"]) for g in namespace_grants} == owned,
@@ -689,7 +818,7 @@ def writer_steps(
         step(label + "the writer's secret is never sent in a request body or path", secret not in text),
         step(
             label + "a second run stores nothing and resets nothing",
-            second == "already present" and len(stored) == 1 and not any(c[1].endswith("/reset") for c in calls[count_first:]),
+            run.second == "already present" and run.second_stored_nothing and not any(c[1].endswith("/reset") for c in calls[count_first : run.count_second]),
         ),
         step(
             label + "the planned requests match the sent requests of a first run",
@@ -709,11 +838,11 @@ def writer_steps(
 def writer_setup(report: Path) -> list[dict[str, Any]]:
     """The gold and silver writer set-ups against the recording stand-in; the two principals hold disjoint namespaces and credential keys."""
     gold = writer_steps(
-        EXPECTED_GOLD, gold_writer_setup.ensure_writer, gold_writer_setup.planned_requests, gold_writer_setup.main, ("silver", "silver_e2e", "bronze")
+        EXPECTED_GOLD, drive_secrets_manager(report), gold_writer_setup.planned_requests, gold_writer_setup.main, ("silver", "silver_e2e", "bronze")
     )
     silver = writer_steps(
         EXPECTED_SILVER,
-        lambda *args: polaris_writer.ensure_writer(silver_writer_setup.SILVER, *args),
+        drive_file_store(lambda *args: polaris_writer.ensure_writer(silver_writer_setup.SILVER, *args), EXPECTED_SILVER),
         lambda catalog: polaris_writer.planned_requests(silver_writer_setup.SILVER, catalog),
         silver_writer_setup.main,
         ("gold", "gold_e2e", "bronze"),

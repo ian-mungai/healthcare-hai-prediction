@@ -140,7 +140,7 @@ class CachedSupervisor(Supervisor):
 
 def start_marquez(stack: fixture.Stack, port: int, web_port: int) -> dict[str, Any]:
     state = stack.state / "lineage"
-    for name in ("postgres", "private", "config"):
+    for name in ("postgres", "config"):
         (state / name).mkdir(parents=True, exist_ok=True, mode=0o700)
     for service in launcher.ComposeModel(ROOT / launcher.LINEAGE_COMPOSE).services:
         found = stack.client.call("image", {"service": service, "compose": "lineage", "checkout": str(stack.checkout)}, timeout=15)

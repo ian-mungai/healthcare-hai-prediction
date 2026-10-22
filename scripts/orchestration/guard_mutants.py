@@ -1033,7 +1033,7 @@ GUARDS: dict[str, dict[str, tuple[Guard, ...]]] = {
         ),
     },
     "supervisor": {
-        "supervisor_full_session": (Guard("session_files_world_readable", "the token and every metadata file are owner-only"),),
+        "supervisor_full_session": (Guard("session_files_world_readable", "the token and every session file are owner-only"),),
         "supervisor_partial_start": (Guard("no_cleanup_on_failure", "the session token is deleted"),),
         "supervisor_failure_after_start": (Guard("no_cleanup_on_failure", "everything was taken down"),),
         "supervisor_image_missing": (Guard("airflow_image_unchecked", "the start was refused"),),

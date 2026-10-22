@@ -3,6 +3,7 @@ name: CI
 on:
   pull_request:
   push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -216,7 +217,7 @@ jobs:
           python -m venv .venv
           .venv/bin/python -m pip install --no-cache-dir -r requirements.txt
 
-      # Same paths as the local acquisition-checks hook; a manual run, a new branch or rewritten history runs every check.
+      # Same paths as the local acquisition-checks hook; a manual run, a push with no earlier commit or rewritten history runs every check.
       - name: Run acquisition checks without AWS credentials or collected data
         env:
           RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}

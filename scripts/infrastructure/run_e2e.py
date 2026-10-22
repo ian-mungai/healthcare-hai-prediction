@@ -219,6 +219,75 @@ def copied_workspace(temporary: Path, name: str, sources: dict[str, bytes], valu
     return workspace
 
 
+def check_saved_plans(evidence: Evidence, sources: dict[str, bytes], renderer: list[str], shell_renderer: list[str]) -> None:
+    """Plan the real IAM variables with the real terraform command, then check which saved plans the renderer accepts."""
+    workspace = copied_workspace(evidence.temporary, "saved_plan", sources, FIXTURE)
+    step, result = evidence.run("render_for_saved_plan", shell_renderer, workspace)
+    evidence.check(step, "render_succeeded", result.returncode == 0 and not result.stderr)
+    variables = (REPO_ROOT / "infra/iam/variables.tf").read_bytes()
+    evidence.report["source_hashes"]["infra/iam/variables.tf"] = {"original_sha256": sha256(variables), "fixture_sha256": sha256(variables)}
+    stack = workspace / "infra" / "iam"
+    (stack / "variables.tf").write_bytes(variables)
+    terraform_environment = {"CHECKPOINT_DISABLE": "1", "TF_IN_AUTOMATION": "1"}
+    terraform = ["terraform", f"-chdir={stack}"]
+    plan_arguments = ["plan", "-input=false", "-lock=false", f"-var=admin_profile={ADMIN}", "-var=example_extra_input=example_value"]
+    check_plan = [*renderer, "--stack", "iam", "--admin-profile", ADMIN, "--check"]
+    step, result = evidence.run("terraform_init", [*terraform, "init", "-input=false", "-backend=false"], workspace, terraform_environment)
+    evidence.check(step, "init_succeeded", result.returncode == 0)
+    step, result = evidence.run("plan_with_defaults", [*terraform, *plan_arguments[:-1], "-out=defaults.tfplan"], workspace, terraform_environment)
+    evidence.check(step, "plan_succeeded", result.returncode == 0)
+    step, result = evidence.run(
+        "accept_saved_plan_with_defaults", [*check_plan, "--check-plan", str(stack / "defaults.tfplan")], workspace, terraform_environment
+    )
+    evidence.check(step, "committed_defaults_accepted", result.returncode == 0 and "Verified .env-derived" in result.stdout)
+    override = "example-overridden-name"
+    evidence.redactions[override] = "<REDACTED_OVERRIDE>"
+    (stack / "override.auto.tfvars.json").write_text(json.dumps({"bls_secret_name": override}), encoding="utf-8")
+    step, result = evidence.run("plan_with_file_override", [*terraform, *plan_arguments[:-1], "-out=file_override.tfplan"], workspace, terraform_environment)
+    evidence.check(step, "plan_succeeded", result.returncode == 0)
+    step, result = evidence.run("reject_file_override", [*check_plan, "--check-plan", str(stack / "file_override.tfplan")], workspace, terraform_environment)
+    evidence.check(step, "override_rejected", result.returncode == 2 and "bls_secret_name" in result.stderr and not result.stdout)
+    evidence.check(step, "value_not_echoed", override not in result.stdout + result.stderr)
+    (stack / "override.auto.tfvars.json").unlink()
+    step, result = evidence.run(
+        "plan_with_command_line_override",
+        [*terraform, *plan_arguments[:-1], f"-var=hud_secret_name={override}", "-out=line_override.tfplan"],
+        workspace,
+        terraform_environment,
+    )
+    evidence.check(step, "plan_succeeded", result.returncode == 0)
+    step, result = evidence.run(
+        "reject_command_line_override", [*check_plan, "--check-plan", str(stack / "line_override.tfplan")], workspace, terraform_environment
+    )
+    evidence.check(step, "override_rejected", result.returncode == 2 and "hud_secret_name" in result.stderr and not result.stdout)
+    evidence.check(step, "value_not_echoed", override not in result.stdout + result.stderr)
+    for label, value in {"empty": "", "wildcard": "example*", "question": "example?"}.items():
+        step, result = evidence.run(
+            f"reject_terraform_{label}_name", [*terraform, *plan_arguments[:-1], f"-var=jev_secret_name={value}"], workspace, terraform_environment
+        )
+        evidence.check(step, "variable_rule_rejected", result.returncode != 0 and "var.jev_secret_name" in result.stderr)
+    step, result = evidence.run(
+        "plan_with_managed_secret_override",
+        [*terraform, *plan_arguments[:-1], f"-var=airflow_jwt_secret_name={override}", "-out=managed_override.tfplan"],
+        workspace,
+        terraform_environment,
+    )
+    evidence.check(step, "plan_succeeded", result.returncode == 0)
+    step, result = evidence.run(
+        "reject_managed_secret_override", [*check_plan, "--check-plan", str(stack / "managed_override.tfplan")], workspace, terraform_environment
+    )
+    evidence.check(step, "override_rejected", result.returncode == 2 and "airflow_jwt_secret_name" in result.stderr and not result.stdout)
+    evidence.check(step, "value_not_echoed", override not in result.stdout + result.stderr)
+    (stack / "extra.tf").write_text('variable "example_extra_input" {\n  type = string\n}\n', encoding="utf-8")
+    step, result = evidence.run("plan_with_extra_input", [*terraform, *plan_arguments, "-out=extra.tfplan"], workspace, terraform_environment)
+    evidence.check(step, "plan_succeeded", result.returncode == 0)
+    step, result = evidence.run(
+        "reject_extra_input_without_default", [*check_plan, "--check-plan", str(stack / "extra.tfplan")], workspace, terraform_environment
+    )
+    evidence.check(step, "extra_input_rejected", result.returncode == 2 and "example_extra_input" in result.stderr and not result.stdout)
+    evidence.check(step, "value_not_echoed", "example_value" not in result.stdout + result.stderr)
+
+
 def run_suite(evidence: Evidence) -> None:
     """Verify configuration lifecycle and pre-deployment guards without AWS access."""
     sources = fixture_sources(evidence)
@@ -230,6 +299,10 @@ def run_suite(evidence: Evidence) -> None:
     if not dirname or not bash:
         raise CheckFailed("This check requires the real bash and dirname utilities")
     (tools / "dirname").symlink_to(dirname)
+    terraform = shutil.which("terraform")
+    if not terraform:
+        raise CheckFailed("This check requires the real terraform command")
+    (tools / "terraform").symlink_to(terraform)
     workspace = copied_workspace(evidence.temporary, "lifecycle", sources, FIXTURE)
     renderer = [sys.executable, "-m", "scripts.infrastructure.render_project_config"]
     shell_renderer = [bash, "scripts/infrastructure/render_project_config.sh", "--admin-profile", ADMIN]
@@ -328,6 +401,8 @@ def run_suite(evidence: Evidence) -> None:
         evidence.check(step, "guard_rejected_before_renderer", result.returncode == 2 and message in result.stderr and "must_not_run" not in result.stderr)
         evidence.check(step, "no_output", not result.stdout and not (isolated / "infra").exists())
         evidence.check(step, "no_injected_value_disclosure", "example_unapproved" not in result.stderr)
+
+    check_saved_plans(evidence, sources, renderer, shell_renderer)
 
     before = {path.relative_to(evidence.output).as_posix(): sha256(path.read_bytes()) for path in evidence.output.rglob("*") if path.is_file()}
     step, result = evidence.run(

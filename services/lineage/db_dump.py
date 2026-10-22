@@ -47,7 +47,7 @@ def main() -> int:
             host="lineage-postgres",
             dbname="marquez",
             user="marquez",
-            password=Path("/run/hai/private/db_password").read_text().strip(),
+            password=os.environ["MARQUEZ_DB_PASSWORD"],
             connect_timeout=5,
             options="-c statement_timeout=15000 -c default_transaction_read_only=on",
         )

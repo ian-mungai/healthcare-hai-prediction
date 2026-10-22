@@ -1,6 +1,4 @@
 # Proposal consumed only by the launcher after its lineage service patch is accepted.
-# The launcher generates private config, computes limits, creates the backend and frontend networks,
-# waits for health in postgres/api/web order and tears down only this registry's services.
 name: hai-lineage
 
 services:
@@ -9,12 +7,11 @@ services:
     environment:
       POSTGRES_USER: marquez
       POSTGRES_DB: marquez
-      POSTGRES_PASSWORD_FILE: /run/hai/private/db_password
+      POSTGRES_PASSWORD: ${LINEAGE_DB_PASSWORD}
       POSTGRES_INITDB_ARGS: --encoding UTF8 --data-checksums
     mem_limit: ${HAI_LINEAGE_MEM_POSTGRES}
     volumes:
       - ${HAI_LINEAGE_STATE}/postgres:/var/lib/postgresql/data
-      - ${HAI_LINEAGE_STATE}/private:/run/hai/private:ro
     networks: [backend]
     security_opt: [no-new-privileges:true]
     healthcheck:
@@ -27,6 +24,7 @@ services:
     image: marquezproject/marquez@sha256:6d8a2c2cdb28a4f6d13f9ca6f8cc055d8312c4dee204ebeb848efdd76e6ab30e
     environment:
       MARQUEZ_CONFIG: /run/hai/config/marquez.yaml
+      MARQUEZ_DB_PASSWORD: ${LINEAGE_DB_PASSWORD}
     mem_limit: ${HAI_LINEAGE_MEM_API}
     volumes:
       - ${HAI_LINEAGE_STATE}/config:/run/hai/config:ro

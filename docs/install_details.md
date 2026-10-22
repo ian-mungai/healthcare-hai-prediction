@@ -80,15 +80,47 @@ the shared system tools to satisfy this project.
 
 Named manual steps. These are the only setup steps no script performs:
 
-1. **API keys.** Request the Census and BLS API keys from their publishers and
-   store each in AWS Secrets Manager, in the configured region, as a secret named
-   `census_api_key` or `bls_api_key` holding JSON with one field, `api_key`.
-   The keys are shared by several projects, so they are created by hand outside
-   Terraform. Store the HUD USPS crosswalk token separately as `hud_api_key`,
-   in the same JSON shape with the token alone in `api_key` (no `Bearer`
-   prefix; the collector adds the header). Store the TypeSafe Jev API key as
-   `jev_api_key` in the same shape. The IAM
-   configuration grants read access to these four names and never reads a
-   value; each permission update requires a reviewed saved plan before apply.
+1. **Secrets.** Request the Census and BLS API keys from their publishers.
+   Store every secret in AWS Secrets Manager, in the configured region, under
+   the name that its variable in `infra/iam/variables.tf` holds as default:
+   `census_api_key` (`census_secret_name`, the Census API key), `bls_api_key`
+   (`bls_secret_name`, the BLS API key), `hud_api_key` (`hud_secret_name`, the
+   HUD USPS crosswalk token), `jev_api_key` (`jev_secret_name`, the TypeSafe Jev
+   API key) and `healthcare-hai-prediction/airflow-admin`
+   (`airflow_admin_secret_name`, the Airflow administrator password; the
+   username is `admin`). Every secret holds its value as plain text, with no
+   JSON; the HUD secret holds the token alone, with no `Bearer` prefix (the
+   collector adds the header). The BLS, Census and HUD collectors still parse
+   the JSON form (one field, `api_key`), so a collector run fails until their
+   later reader change. The keys are shared by several projects, so they are
+   created by hand outside Terraform. The IAM configuration grants read access
+   to exactly these five names and never reads a value; each permission update
+   requires a reviewed saved plan before apply. The saved-plan check accepts
+   only these committed names. To add a secret, add one more variable with its
+   name as default to `infra/iam/variables.tf` and add it to the `secret_names`
+   list in `infra/iam/main.tf`; every name must differ.
+
+   The project profile also manages 13 secrets that no person creates by hand.
+   They hold the local catalog, workflow and lineage credentials, each as plain
+   text under `healthcare-hai-prediction/`: `postgres-password`,
+   `polaris-root-secret`, `polaris-reader-client-id`,
+   `polaris-reader-client-secret`, `polaris-gold-client-id`,
+   `polaris-gold-client-secret`, `polaris-silver-client-id`,
+   `polaris-silver-client-secret`, `airflow-db-password`, `airflow-fernet-key`,
+   `airflow-jwt-secret`, `airflow-api-secret-key` and `marquez-db-password`.
+   Each name is a root variable in `infra/iam/variables.tf` (the secret's last
+   path part with `_name`, for example `postgres_password_name`) with its name as
+   default. The IAM configuration grants the project profile read, describe,
+   create and put on exactly these names. Terraform never creates a secret or a
+   secret version, so no value enters a plan or the state; the saved-plan check
+   (`render_project_config.py --check-plan`) refuses any plan that holds a secret
+   resource or data source. The setup code
+   (`scripts.lakehouse.catalog up`, the writer principal setup, the orchestration
+   supervisor and the launcher) generates or reads each value in memory, stores
+   it in Secrets Manager and passes it to a container through its environment.
+   No file on the host holds a secret. State that already exists keeps the value
+   it was created with: the code refuses to generate a replacement next to an
+   existing database or catalog realm, so copy the current value to the same
+   secret name first.
 2. **Administrator profile.** Configure an AWS CLI profile with IAM permissions
    for the IAM stack. It is passed on the command line, never stored in `.env`.

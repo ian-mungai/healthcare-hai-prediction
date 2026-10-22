@@ -246,21 +246,65 @@ run "scoped_project_permissions" {
   }
 
   assert {
-    condition = alltrue(flatten([
-      for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : [
-        for action in flatten([statement.Action]) : contains(["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"], action)
-      ]
-    ]))
-    error_message = "The secrets policy may only read secret values and metadata."
+    condition     = toset([for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : statement.Sid]) == toset(["ReadProjectSecrets", "ManageProjectSecrets"])
+    error_message = "The secrets policy holds exactly one read statement and one manage statement."
   }
 
   assert {
-    condition = toset(flatten([
-      for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : flatten([statement.Resource])
-      ])) == toset([
-      for name in ["bls_api_key", "census_api_key", "hud_api_key", "jev_api_key"] : "arn:aws:secretsmanager:${var.aws_region}:${var.expected_account_id}:secret:${name}-??????"
+    condition     = alltrue([for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : statement.Effect == "Allow" && !can(statement.Condition)])
+    error_message = "Every secrets policy statement is an unconditional allow."
+  }
+
+  assert {
+    condition = one([
+      for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : toset(flatten([statement.Action]))
+      if statement.Sid == "ReadProjectSecrets"
+    ]) == toset(["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"])
+    error_message = "The shared secrets stay read-only: reading secret values and metadata, nothing else."
+  }
+
+  assert {
+    condition = one([
+      for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : toset(flatten([statement.Resource]))
+      if statement.Sid == "ReadProjectSecrets"
+      ]) == toset([
+      for name in ["census_api_key", "bls_api_key", "hud_api_key", "jev_api_key", "healthcare-hai-prediction/airflow-admin"] : "arn:aws:secretsmanager:eu-west-1:111111111111:secret:${name}-??????"
     ])
-    error_message = "Secret read access must be limited to the named shared API keys in the approved account and region."
+    error_message = "Secret read access must be limited to the five shared project secrets in the approved account and region."
+  }
+
+  assert {
+    condition = one([
+      for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : toset(flatten([statement.Action]))
+      if statement.Sid == "ManageProjectSecrets"
+      ]) == toset([
+      "secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret", "secretsmanager:CreateSecret", "secretsmanager:PutSecretValue"
+    ])
+    error_message = "The managed secrets allow exactly reading, describing, creating and putting a value."
+  }
+
+  assert {
+    condition = one([
+      for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : toset(flatten([statement.Resource]))
+      if statement.Sid == "ManageProjectSecrets"
+      ]) == toset([
+      for name in [
+        "healthcare-hai-prediction/postgres-password",
+        "healthcare-hai-prediction/polaris-root-secret",
+        "healthcare-hai-prediction/polaris-reader-client-id",
+        "healthcare-hai-prediction/polaris-reader-client-secret",
+        "healthcare-hai-prediction/polaris-gold-client-id",
+        "healthcare-hai-prediction/polaris-gold-client-secret",
+        "healthcare-hai-prediction/polaris-silver-client-id",
+        "healthcare-hai-prediction/polaris-silver-client-secret",
+        "healthcare-hai-prediction/airflow-db-password",
+        "healthcare-hai-prediction/airflow-fernet-key",
+        "healthcare-hai-prediction/airflow-jwt-secret",
+        "healthcare-hai-prediction/airflow-api-secret-key",
+        "healthcare-hai-prediction/marquez-db-password",
+      ] : "arn:aws:secretsmanager:eu-west-1:111111111111:secret:${name}-??????"
+    ])
+    error_message = "Secret write access must be limited to exactly the 13 managed secrets in the approved account and region."
   }
 
   assert {
@@ -373,4 +417,214 @@ run "reject_legacy_user_profile" {
   }
 
   expect_failures = [var.aws_profile]
+}
+
+run "reject_empty_secret_name" {
+  command = plan
+
+  variables {
+    hud_secret_name = ""
+  }
+
+  expect_failures = [var.hud_secret_name]
+}
+
+run "reject_wildcard_secret_name" {
+  command = plan
+
+  variables {
+    bls_secret_name = "example*"
+  }
+
+  expect_failures = [var.bls_secret_name]
+}
+
+run "reject_single_character_wildcard_secret_name" {
+  command = plan
+
+  variables {
+    jev_secret_name = "example?key"
+  }
+
+  expect_failures = [var.jev_secret_name]
+}
+
+run "reject_secret_name_with_space" {
+  command = plan
+
+  variables {
+    census_secret_name = "example key"
+  }
+
+  expect_failures = [var.census_secret_name]
+}
+
+run "reject_equal_secret_names" {
+  command = plan
+
+  variables {
+    bls_secret_name = "census_api_key"
+  }
+
+  expect_failures = [aws_iam_policy.service]
+}
+
+run "reject_overlong_secret_name" {
+  command = plan
+
+  variables {
+    hud_secret_name = join("", [for index in range(513) : "a"])
+  }
+
+  expect_failures = [var.hud_secret_name]
+}
+
+run "reject_empty_postgres_password_name" {
+  command = plan
+
+  variables {
+    postgres_password_name = ""
+  }
+
+  expect_failures = [var.postgres_password_name]
+}
+
+run "reject_wildcard_polaris_root_secret_name" {
+  command = plan
+
+  variables {
+    polaris_root_secret_name = "example*"
+  }
+
+  expect_failures = [var.polaris_root_secret_name]
+}
+
+run "reject_question_polaris_reader_client_id_name" {
+  command = plan
+
+  variables {
+    polaris_reader_client_id_name = "example?key"
+  }
+
+  expect_failures = [var.polaris_reader_client_id_name]
+}
+
+run "reject_space_polaris_reader_client_secret_name" {
+  command = plan
+
+  variables {
+    polaris_reader_client_secret_name = "example key"
+  }
+
+  expect_failures = [var.polaris_reader_client_secret_name]
+}
+
+run "reject_overlong_polaris_gold_client_id_name" {
+  command = plan
+
+  variables {
+    polaris_gold_client_id_name = join("", [for index in range(513) : "a"])
+  }
+
+  expect_failures = [var.polaris_gold_client_id_name]
+}
+
+run "reject_empty_polaris_gold_client_secret_name" {
+  command = plan
+
+  variables {
+    polaris_gold_client_secret_name = ""
+  }
+
+  expect_failures = [var.polaris_gold_client_secret_name]
+}
+
+run "reject_wildcard_polaris_silver_client_id_name" {
+  command = plan
+
+  variables {
+    polaris_silver_client_id_name = "example*"
+  }
+
+  expect_failures = [var.polaris_silver_client_id_name]
+}
+
+run "reject_question_polaris_silver_client_secret_name" {
+  command = plan
+
+  variables {
+    polaris_silver_client_secret_name = "example?key"
+  }
+
+  expect_failures = [var.polaris_silver_client_secret_name]
+}
+
+run "reject_space_airflow_db_password_name" {
+  command = plan
+
+  variables {
+    airflow_db_password_name = "example key"
+  }
+
+  expect_failures = [var.airflow_db_password_name]
+}
+
+run "reject_overlong_airflow_fernet_key_name" {
+  command = plan
+
+  variables {
+    airflow_fernet_key_name = join("", [for index in range(513) : "a"])
+  }
+
+  expect_failures = [var.airflow_fernet_key_name]
+}
+
+run "reject_empty_airflow_jwt_secret_name" {
+  command = plan
+
+  variables {
+    airflow_jwt_secret_name = ""
+  }
+
+  expect_failures = [var.airflow_jwt_secret_name]
+}
+
+run "reject_wildcard_airflow_api_secret_key_name" {
+  command = plan
+
+  variables {
+    airflow_api_secret_key_name = "example*"
+  }
+
+  expect_failures = [var.airflow_api_secret_key_name]
+}
+
+run "reject_question_marquez_db_password_name" {
+  command = plan
+
+  variables {
+    marquez_db_password_name = "example?key"
+  }
+
+  expect_failures = [var.marquez_db_password_name]
+}
+
+run "reject_equal_managed_secret_names" {
+  command = plan
+
+  variables {
+    airflow_jwt_secret_name = "healthcare-hai-prediction/airflow-api-secret-key"
+  }
+
+  expect_failures = [aws_iam_policy.service]
+}
+
+run "reject_managed_name_equal_to_shared_name" {
+  command = plan
+
+  variables {
+    postgres_password_name = "healthcare-hai-prediction/airflow-admin"
+  }
+
+  expect_failures = [aws_iam_policy.service]
 }
