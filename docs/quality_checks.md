@@ -210,7 +210,7 @@ suite twice, with a 90% coverage gate that also counts collector command lines
 run as child processes. They take about 20 minutes on this machine (the recorded profile estimate) and over 29 in CI, so they run only
 when acquisition code, configuration or their dependencies change: through the
 `acquisition-checks` pre-commit hook and in a separate GitHub Actions "Acquisition
-Checks" job (45-minute limit, LFS checkout, pinned Terraform). The CI job uses the
+Checks" job (60-minute limit, LFS checkout, pinned Terraform). The CI job uses the
 hook's own path pattern through `scripts/acquisition/run_checks_ci.sh`, which also
 matches the CI workflow; a manual run, the first push of a branch or rewritten
 history runs every check. `bash scripts/acquisition/run_checks_ci_e2e.sh` tests
