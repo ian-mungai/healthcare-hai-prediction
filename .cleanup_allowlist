@@ -64,6 +64,7 @@ dbt features/tests/assert_operations_measures_as_of_start.sql -- saved copy of a
 dbt features/tests/assert_spine_as_of_window_start.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
 dbt features/tests/assert_validation_measures_overlap.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
 dbt scripts/lakehouse/archive_saved_models.py -- the archive tool lists the saved model files it verifies by name
+unused-code scripts/acquisition/tests/aws_stand_in.py -- http.server calls handle_error with client_address and reads daemon_threads of the loopback STS and Secrets Manager stand-in
 unused-code scripts/lakehouse/fake_docker.py -- http.server calls the do_* hooks, log_message and address_string and reads protocol_version, daemon_threads and close_connection
 unused-code scripts/orchestration/broker.py -- http.server calls the do_* hooks, handle_error and log_message and reads server_version, sys_version, timeout and daemon_threads
 unused-code scripts/orchestration/run_supervisor_e2e.py -- http.server calls the do_* hooks and log_message of the stand-in health endpoint

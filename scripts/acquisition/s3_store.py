@@ -79,6 +79,14 @@ def encoded_json(value: dict) -> bytes:
     return (json.dumps(value, sort_keys=True, indent=2, ensure_ascii=True, allow_nan=False) + "\n").encode()
 
 
+def aws_environment() -> dict[str, str]:
+    """The environment of every project AWS call: this process's variables without any inherited ``AWS_*`` one, plus fixed endpoint and retry
+    settings, so only the explicit profile and region select the identity."""
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("AWS_")}
+    environment.update(AWS_IGNORE_CONFIGURED_ENDPOINT_URLS="true", AWS_MAX_ATTEMPTS="3", AWS_RETRY_MODE="standard")
+    return environment
+
+
 class AwsCli:
     """Project-scoped AWS CLI adapter with bounded calls and sanitized errors."""
 
@@ -94,8 +102,7 @@ class AwsCli:
         if CURRENT.get() is not None and (service, operation) not in {("sts", "get-caller-identity"), ("secretsmanager", "get-secret-value")}:
             raise ValueError("AWS action outside redownload read-only scope")
         settings = self.configuration
-        environment = {key: value for key, value in os.environ.items() if not key.startswith("AWS_")}
-        environment.update(AWS_IGNORE_CONFIGURED_ENDPOINT_URLS="true", AWS_MAX_ATTEMPTS="3", AWS_RETRY_MODE="standard")
+        environment = aws_environment()
         command = [
             "aws",
             service,

@@ -90,9 +90,8 @@ Named manual steps. These are the only setup steps no script performs:
    (`airflow_admin_secret_name`, the Airflow administrator password; the
    username is `admin`). Every secret holds its value as plain text, with no
    JSON; the HUD secret holds the token alone, with no `Bearer` prefix (the
-   collector adds the header). The BLS, Census and HUD collectors still parse
-   the JSON form (one field, `api_key`), so a collector run fails until their
-   later reader change. The keys are shared by several projects, so they are
+   collector adds the header). The BLS, Census and HUD collectors read the
+   plain-text value with boto3. The keys are shared by several projects, so they are
    created by hand outside Terraform. The IAM configuration grants read access
    to exactly these five names and never reads a value; each permission update
    requires a reviewed saved plan before apply. The saved-plan check accepts

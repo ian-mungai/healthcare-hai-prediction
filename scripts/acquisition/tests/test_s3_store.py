@@ -2,20 +2,32 @@ from __future__ import annotations
 
 import base64
 import copy
+import functools
 import hashlib
+import http.client
 import io
 import json
+import math
+import os
 import sys
+import tempfile
+import time
+import urllib.request
 import zipfile
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
+from scripts.acquisition import api_keys
 from scripts.acquisition import s3_store as storage
 from scripts.acquisition.capture import capture
 from scripts.acquisition.source_registry import read_json
+from scripts.acquisition.tests.aws_stand_in import AwsStandIn, InterceptingProxy, refreshing_process, write_certificate, write_profile
 from scripts.acquisition.tests.test_capture import Opener, Response
 from scripts.acquisition.tests.test_capture import setup_capture as setup_capture
 from scripts.acquisition.transport import Limits
@@ -39,6 +51,222 @@ OUTPUTS = {
 }
 
 
+REAL_READ = api_keys.read
+CHECKED_KEY = "AKIASTANDINCHECKED01"
+ENVIRONMENT_KEY = "AKIASTANDINENVIRON01"
+FILE_KEY = "AKIASTANDINOVERRIDE1"
+OTHER_ACCOUNT_KEY = "AKIASTANDINACCOUNT01"
+OTHER_USER_KEY = "AKIASTANDINUSER00001"
+READ_SECONDS = 20.0
+NUMBER_SHAPED_KEY = "10000000000000000000"
+NUMBER_SPELLED_KEY = "-1.5E+3"
+NUMBER_LOOKALIKE_KEY = "10000000000000000x"
+STALL_SECONDS = 6.5
+REFRESH_LEAD_SECONDS = 5
+REFRESH_HOLD_SECONDS = 0.25
+
+
+def verified_identity() -> tuple[str, str]:
+    """The account and ARN that the fake client's identity check answers and the transports verify."""
+    account = SETTINGS["expected_account_id"]
+    return account, f"arn:aws:iam::{account}:user/{SETTINGS['aws_profile']}"
+
+
+def key_reader(client: FakeS3) -> Callable[..., str]:
+    """A stand-in for ``api_keys.read``: it refuses settings or an identity other than the ones the fake client verified, records each accepted
+    read in the client's calls and returns the plain-text override."""
+
+    def read(name: str, profile: str, region: str, account: str, arn: str, seconds: float = api_keys.READ_DEADLINE_SECONDS, endpoint: str | None = None) -> str:
+        if (profile, region) != (SETTINGS["aws_profile"], SETTINGS["aws_region"]):
+            raise api_keys.ApiKeyError(f"reading secret {name} failed: settings differ from the checked client")
+        if (account, arn) != verified_identity():
+            raise api_keys.ApiKeyError(f"reading secret {name} failed: the SDK credentials belong to another identity than the checked one")
+        client.calls.append(("get-secret-value", ["--secret-id", name]))
+        return client.overrides["get-secret-value"]["SecretString"]
+
+    return read
+
+
+@contextmanager
+def no_publisher_request() -> Iterator[None]:
+    """Fail at once when code opens a publisher connection."""
+
+    class Refused:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            raise AssertionError("a publisher request was opened")
+
+    with patch.object(http.client, "HTTPSConnection", Refused):
+        yield
+
+
+def settings_refused(client: FakeS3, request: Callable[[], object]) -> None:
+    """Run a live request whose checked client carries unusable key-read settings and require refusal before any reader process, key request or
+    publisher request: a region other than the verified one (the stand-in reader refuses it) and a blank region (the real reader refuses it)."""
+    verified = client.configuration
+    reads = sum(call[0] == "get-secret-value" for call in client.calls)
+    started: list[object] = []
+
+    def no_process(*args: Any, **_kwargs: Any) -> None:
+        started.append(args)
+        raise AssertionError("a key reader process was started")
+
+    for region, real in (("other-region-1", False), ("", True)):
+        client.configuration = verified | {"aws_region": region}
+        try:
+            with ExitStack() as stack:
+                stack.enter_context(no_publisher_request())
+                stack.enter_context(patch.object(api_keys, "run_argv", no_process))
+                if real:
+                    stack.enter_context(patch.object(api_keys, "read", REAL_READ))
+                request()
+        except api_keys.ApiKeyError:
+            pass
+        else:
+            raise AssertionError(f"settings with region {region!r} were accepted")
+        finally:
+            client.configuration = verified
+    check(not started, "not started")
+    check(sum(call[0] == "get-secret-value" for call in client.calls) == reads, "a key request was recorded for refused settings")
+
+
+def refused(request: Callable[[], object], canary: str) -> api_keys.ApiKeyError:
+    """Run a live request that the key reader must refuse before any publisher request; return the error after checking that it holds no value."""
+    try:
+        with no_publisher_request():
+            request()
+    except api_keys.ApiKeyError as error:
+        check(canary not in str(error) and canary not in repr(error) and error.__context__ is None, "a refusal kept the value")
+        return error
+    raise AssertionError("the key reader accepted the request")
+
+
+def interception_bound(request: Callable[[], object], name: str, canary: str, home: Path, folder: Path, identities: dict[str, tuple[str, str]]) -> None:
+    """Run the real key reader, without a test endpoint, through a loopback HTTPS proxy named in ``HTTPS_PROXY`` that presents its own certificate
+    and relays the decrypted traffic to a second loopback stand-in. The project profile and the default profile trust different certificates.
+
+    Required: when only the default profile trusts the proxy's certificate, the read fails with the fixed ``sdk`` cause, the second stand-in receives
+    no request and the proxy decrypts no byte, so the key never reaches it. When the project profile trusts the proxy's certificate the same proxy
+    carries the identity request and the key request, both signed with the checked key, so the trust in force is the project profile's.
+    """
+    profile, region = SETTINGS["aws_profile"], SETTINGS["aws_region"]
+    account, arn = verified_identity()
+    hosts = [f"sts.{region}.amazonaws.com", f"secretsmanager.{region}.amazonaws.com", "sts.amazonaws.com"]
+    proxy_certificate, proxy_key = write_certificate(folder, "proxy", hosts)
+    other_certificate, _ = write_certificate(folder, "other", hosts)
+    with AwsStandIn(identities, {name: canary}) as upstream, InterceptingProxy(proxy_certificate, proxy_key, upstream.server.server_address[1]) as proxy:
+        proxies = {"HTTPS_PROXY": proxy.url, "https_proxy": proxy.url, "NO_PROXY": "", "no_proxy": ""}
+        with patch.dict(os.environ, proxies), patch.object(api_keys, "read", functools.partial(REAL_READ, seconds=READ_SECONDS)):
+            check(urllib.request.getproxies().get("https") == proxy.url, "the HTTPS proxy setting is not in force")
+            write_profile(home, profile, region, CHECKED_KEY, ca_bundle=other_certificate, default_ca_bundle=proxy_certificate)
+            error = refused(request, canary)
+            check(api_keys.FAILURES["sdk"][1] in str(error), "an untrusted proxy certificate was not refused with the SDK cause")
+            check(proxy.targets and proxy.refused_handshakes == len(proxy.targets), "the proxy was not tried or a handshake succeeded")
+            check(not upstream.requests() and not proxy.intercepted, "a request or a byte reached the service side of an untrusted proxy")
+            write_profile(home, profile, region, CHECKED_KEY, ca_bundle=proxy_certificate, default_ca_bundle=other_certificate)
+            check(api_keys.read(name, profile, region, account, arn) == canary, "the read through the trusted proxy returned another value")
+            check(
+                [(item.action, item.key) for item in upstream.requests()] == [("GetCallerIdentity", CHECKED_KEY), ("GetSecretValue", CHECKED_KEY)],
+                "the read through the trusted proxy did not use only the checked credentials, identity first",
+            )
+            check(canary.encode() in proxy.intercepted, "the trusted proxy did not carry the answer")
+
+
+def number_shaped_refused(request: Callable[[], object], name: str, identities: dict[str, tuple[str, str]]) -> None:
+    """Run the real key reader against a loopback stand-in whose secret is made only of characters a JSON number can hold.
+
+    Required: for each such secret the read is refused with a fixed message that tells the owner to rotate the key and holds no part of the value, and
+    no publisher request follows, so no JSON number can ever equal a key. A secret with one other character still reads.
+    """
+    profile, region = SETTINGS["aws_profile"], SETTINGS["aws_region"]
+    account, arn = verified_identity()
+    for secret in (NUMBER_SHAPED_KEY, NUMBER_SPELLED_KEY):
+        with (
+            AwsStandIn(identities, {name: secret}) as stand_in,
+            patch.object(api_keys, "read", functools.partial(REAL_READ, seconds=READ_SECONDS, endpoint=stand_in.endpoint)),
+        ):
+            error = refused(request, secret)
+            check("rotate" in str(error) and name in str(error), "a number-shaped key was refused without the rotate message")
+            check(len(stand_in.requests("GetSecretValue")) == 1, "the number-shaped key was not read exactly once")
+    with AwsStandIn(identities, {name: NUMBER_LOOKALIKE_KEY}) as stand_in:
+        check(
+            REAL_READ(name, profile, region, account, arn, seconds=READ_SECONDS, endpoint=stand_in.endpoint) == NUMBER_LOOKALIKE_KEY,
+            "a key with a character a number cannot hold was refused",
+        )
+
+
+def identity_bound(request: Callable[[], object], name: str, canary: str) -> None:
+    """Run the real key reader, in its child process, against the loopback STS and Secrets Manager stand-in while this process carries
+    ``AWS_SHARED_CREDENTIALS_FILE``, ``AWS_CONFIG_FILE``, ``AWS_PROFILE`` and key variables toward other synthetic credentials.
+
+    Required: the read succeeds and every request is signed with the checked profile's credentials, the identity request first; credentials of
+    another account or another user under the same profile name are refused with no key request; when a credential process refreshes to another
+    user while the identity answer is held, STS and the key request are both still signed with the checked key; when the project profile and the
+    default profile trust different certificates and an HTTPS proxy in the environment presents the one only the default profile trusts, the read
+    fails with the fixed ``sdk`` cause before any service receives a request and the proxy decrypts nothing, while the same proxy is used when the
+    project profile trusts its certificate; a stalled identity request ends at the deadline and no key request follows it. ``HOME`` points at
+    synthetic AWS files, so no real one is read.
+    """
+    account, arn = verified_identity()
+    profile, region = SETTINGS["aws_profile"], SETTINGS["aws_region"]
+    identities = {
+        CHECKED_KEY: (account, arn),
+        ENVIRONMENT_KEY: ("2" * 12, f"arn:aws:iam::{'2' * 12}:user/{profile}"),
+        FILE_KEY: ("3" * 12, f"arn:aws:iam::{'3' * 12}:user/{profile}"),
+        OTHER_ACCOUNT_KEY: ("4" * 12, f"arn:aws:iam::{'4' * 12}:user/{profile}"),
+        OTHER_USER_KEY: (account, f"arn:aws:iam::{account}:user/{profile}-other"),
+    }
+    with tempfile.TemporaryDirectory(prefix="key_read_") as temporary, AwsStandIn(identities, {name: canary}) as stand_in:
+        home = Path(temporary) / "home"
+        write_profile(home, profile, region, CHECKED_KEY)
+        overrides = write_profile(Path(temporary) / "other", profile, region, FILE_KEY) | {
+            "HOME": str(home),
+            "AWS_PROFILE": profile,
+            "AWS_DEFAULT_PROFILE": profile,
+            "AWS_ACCESS_KEY_ID": ENVIRONMENT_KEY,
+            "AWS_SECRET_ACCESS_KEY": "stand-in-secret",
+            "AWS_SESSION_TOKEN": "stand-in-token",
+            "AWS_REGION": "us-east-2",
+        }
+        reader = functools.partial(REAL_READ, seconds=READ_SECONDS, endpoint=stand_in.endpoint)
+        with patch.dict(os.environ, overrides), patch.object(api_keys, "read", reader):
+            request()
+            check(
+                [(item.action, item.key) for item in stand_in.requests()] == [("GetCallerIdentity", CHECKED_KEY), ("GetSecretValue", CHECKED_KEY)],
+                "the key read did not use only the checked credentials, identity first",
+            )
+            for key in (OTHER_ACCOUNT_KEY, OTHER_USER_KEY):
+                write_profile(home, profile, region, key)
+                before = len(stand_in.requests())
+                check("another identity" in str(refused(request, canary)), "an identity mismatch was not named")
+                check([item.action for item in stand_in.requests()[before:]] == ["GetCallerIdentity"], "a key request followed an identity mismatch")
+            moment = math.ceil(time.time()) + REFRESH_LEAD_SECONDS
+            command = refreshing_process(Path(temporary) / "process", CHECKED_KEY, OTHER_USER_KEY, moment)
+            write_profile(home, profile, region, None, credential_process=command)
+            refresh_at = time.monotonic() + moment - time.time()
+            stand_in.held_until["GetCallerIdentity"] = moment + REFRESH_HOLD_SECONDS
+            before = len(stand_in.requests())
+            request()
+            stand_in.held_until.clear()
+            refreshed = stand_in.requests()[before:]
+            check(
+                [item.action for item in refreshed] == ["GetCallerIdentity", "GetSecretValue"] and refreshed[0].at < refresh_at,
+                "the identity request did not arrive before the credential refresh",
+            )
+            check({item.key for item in refreshed} == {CHECKED_KEY}, "a request after a credential refresh was not signed with the checked credentials")
+            interception_bound(request, name, canary, home, Path(temporary) / "interception", identities)
+            write_profile(home, profile, region, CHECKED_KEY)
+            number_shaped_refused(request, name, identities)
+            stand_in.stalled.add("GetCallerIdentity")
+            with patch.object(api_keys, "read", functools.partial(REAL_READ, seconds=STALL_SECONDS, endpoint=stand_in.endpoint)):
+                began = time.monotonic()
+                check("did not finish" in str(refused(request, canary)), "a stalled read did not end at its deadline")
+                check(time.monotonic() - began < STALL_SECONDS, "a stalled read outlived its deadline")
+            stand_in.released.set()
+            time.sleep(1.0)
+        check(len(stand_in.requests("GetSecretValue")) == 2, "a key request arrived after a refusal or a stalled read")
+        check(not {item.key for item in stand_in.requests()} & {ENVIRONMENT_KEY, FILE_KEY}, "a request used the inherited override credentials")
+
+
 class FakeS3(storage.AwsCli):
     def __init__(self) -> None:
         self.configuration = SETTINGS.copy()
@@ -51,6 +279,8 @@ class FakeS3(storage.AwsCli):
         self.corrupt = False
 
     def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict:
+        if service == "secretsmanager":
+            raise AssertionError("a key read must use api_keys.read, not the AWS command-line tool")
         args = arguments or []
         self.calls.append((operation, args))
         if operation in self.overrides:

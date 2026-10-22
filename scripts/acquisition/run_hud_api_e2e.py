@@ -17,10 +17,10 @@ from scripts.acquisition import hud_api_transport as transport
 from scripts.acquisition import s3_store
 from scripts.acquisition.build_hud_api_plan import build, build_range
 from scripts.acquisition.collect_hud_api import execute, verify_local
-from scripts.acquisition.run_bls_api_e2e import inventory
+from scripts.acquisition.run_bls_api_e2e import hidden_echoes_refused, inventory
 from scripts.acquisition.s3_store import encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import canonical_hash, read_json, require
-from scripts.acquisition.tests.test_s3_store import OUTPUTS, FakeS3
+from scripts.acquisition.tests.test_s3_store import OUTPUTS, FakeS3, identity_bound, key_reader, settings_refused
 
 PRECISE = "0.123456789012"
 
@@ -404,7 +404,7 @@ def secret_checks(plan: dict, batch: dict, payload: bytes, root: Path) -> None:
     """Token only in the Authorization header; reject redirects, HTML, echoes and wrong identities."""
     canary = "SYNTHETIC.HUD-TOKEN_FOR.E2E.ONLY"
     client = FakeS3()
-    client.overrides["get-secret-value"] = {"SecretString": json.dumps({"api_key": canary})}
+    client.overrides["get-secret-value"] = {"SecretString": canary}
 
     class Connection:
         status, content_type, body = 200, "application/json", payload
@@ -425,9 +425,23 @@ def secret_checks(plan: dict, batch: dict, payload: bytes, root: Path) -> None:
             return
 
     connection = Connection()
-    with patch.object(transport.http.client, "HTTPSConnection", return_value=connection):
+    with patch.object(transport.http.client, "HTTPSConnection", return_value=connection), patch.object(transport.api_keys, "read", key_reader(client)):
         execute(plan, batch, root, True, False, client, OUTPUTS)
         require(all(canary.encode() not in p.read_bytes() for p in root.rglob("*") if p.is_file()), "Secret persisted locally")
+        settings_refused(client, lambda: transport.request_live(plan, batch, client))
+        identity_bound(lambda: transport.request_live(plan, batch, client), contract.CREDENTIAL, canary)
+        escaped = ('{"data": "\\u' + f"{ord(canary[0]):04x}" + canary[1:] + '"}').encode()
+        require(canary.encode() not in escaped and canary in json.loads(escaped)["data"], "Escaped echo fixture invalid")
+        connection.body = escaped
+        escaped_root = root / "escaped_echo"
+        try:
+            transport.fetch(plan, batch, escaped_root, True, client)
+        except ValueError as error:
+            require("echoed credential" in str(error) and canary not in str(error), "Escaped echo refused for another cause")
+        else:
+            raise ValueError("Accepted escaped credential echo")
+        require(not any(item.is_file() for item in escaped_root.rglob("*")), "Escaped echo wrote a file")
+        hidden_echoes_refused(transport, plan, batch, root, client, connection, canary, '{"data": %s}')
         for kind in ["redirect", "html", "echo", "identity", "malformed_secret"]:
             connection.status, connection.content_type, connection.body = 200, "application/json", payload
             count = sum(c[0] == "get-secret-value" for c in client.calls)
@@ -438,7 +452,7 @@ def secret_checks(plan: dict, batch: dict, payload: bytes, root: Path) -> None:
             elif kind == "echo":
                 connection.body = json.dumps({"data": canary}).encode()
             elif kind == "malformed_secret":
-                client.overrides["get-secret-value"] = {"SecretString": json.dumps({"api_key": "Bearer " + canary})}
+                client.overrides["get-secret-value"] = {"SecretString": "Bearer " + canary}
             else:
                 client.overrides["get-caller-identity"] = {"Account": "wrong", "Arn": "wrong"}
             try:
