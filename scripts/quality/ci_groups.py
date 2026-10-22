@@ -9,7 +9,12 @@ GitHub CI and local commits use the same lists. Scopes:
 - ``paths``: the paths given with ``--path`` (to see what a change would run).
 
 A path in ``global`` or a path that no group lists and that is not ``passive`` selects every group. Renames count with both
-names. Groups in ``always`` run in every applicable part because their inputs cannot be completely enumerated. Groups in
+names.
+The lakehouse layers (``layers`` in the configuration, upstream first) select one another: a changed path belongs to the most downstream layer whose
+list matches it, and that layer and every layer downstream of it run. A path that an upstream layer's checks read although a later layer's list also
+matches it is named in ``upstream_inputs`` for the earliest layer that reads it, and belongs to that layer. Each other path is listed for the layer that
+reads it first, and no later layer's pattern may match it.
+Groups in ``always`` run in every applicable part because their inputs cannot be completely enumerated. Groups in
 ``always_except_commits`` run unconditionally in the ``full`` and ``range`` scopes (the run before a push and GitHub CI) and
 follow their path list in the ``staged`` and ``paths`` scopes (commits).
 The unconditional source, privacy, secret, credential, data-file, writing, Markdown and documentation gates are not
@@ -35,10 +40,13 @@ from scripts.process import run_command
 
 CONFIG = Path("config/quality/ci_groups.json")
 SCOPES = ("full", "staged", "range", "paths")
-PARTS = {"all", "core", "launcher"}
+LAYER_PARTS = {"bronze": "lakehouse_bronze", "silver": "lakehouse_silver", "gold": "lakehouse_gold"}
+PARTS = {"all", "core", "launcher", *LAYER_PARTS}
 ORDER = (
     "python_lint",
-    "lakehouse_checks",
+    "lakehouse_bronze",
+    "lakehouse_silver",
+    "lakehouse_gold",
     "orchestration_checks",
     "repository_code_checks",
     "configuration_checks",
@@ -54,13 +62,38 @@ def load() -> dict[str, Any]:
     unknown = (set(config["groups"]) | set(config["full_only"]) | set(config.get("always", [])) | set(config.get("always_except_commits", []))) - set(ORDER)
     if unknown:
         raise ValueError(f"unknown groups in {CONFIG}: {', '.join(sorted(unknown))}")
+    if set(config.setdefault("upstream_inputs", {})) - set(config["layers"]):
+        raise ValueError(f"upstream_inputs in {CONFIG} may name only layers: {', '.join(sorted(set(config['upstream_inputs']) - set(config['layers'])))}")
+    if [layer for layer in ORDER if layer in config["layers"]] != config["layers"] or set(config["layers"]) - set(config["groups"]):
+        raise ValueError(f"layers in {CONFIG} must be groups listed from upstream to downstream in the order of ci_groups.ORDER")
     return config
 
 
 def groups_of(part: str, config: dict[str, Any]) -> list[str]:
     known = set(config["groups"]) | set(config["full_only"])
-    wanted = {"launcher"} if part == "launcher" else known - ({"launcher", "acquisition"} if part == "core" else set())
+    if part == "launcher":
+        wanted = {"launcher"}
+    elif part in LAYER_PARTS:
+        wanted = {LAYER_PARTS[part]}
+    else:
+        wanted = known - ({"launcher", "acquisition", *LAYER_PARTS.values()} if part == "core" else set())
     return [group for group in ORDER if group in wanted]
+
+
+def selected_layers(changed: list[str], config: dict[str, Any]) -> set[str]:
+    """The layers a change selects. A path that a layer's ``upstream_inputs`` list names belongs to the earliest layer that names it (that layer's checks read
+    it although a later layer's list also matches it); any other path belongs to the most downstream layer whose list matches it. The owner and every layer
+    after it are selected."""
+    layers: list[str] = config["layers"]
+    selected: set[str] = set()
+    for path in changed:
+        pinned = [index for index, layer in enumerate(layers) if any(re.search(pattern, path) for pattern in config["upstream_inputs"].get(layer, []))]
+        owners = [index for index, layer in enumerate(layers) if any(re.search(pattern, path) for pattern in config["groups"][layer])]
+        if pinned:
+            selected.update(layers[min(pinned) :])
+        elif owners:
+            selected.update(layers[max(owners) :])
+    return selected
 
 
 def git_paths(*args: str) -> list[str]:
@@ -98,8 +131,14 @@ def plan(scope: str, part: str, start: str = "", end: str = "", paths: list[str]
             changed, reason = None, f"{reason}; unclassified path {unclassified} selects every group"
     run: list[str] = []
     skip: dict[str, str] = {}
+    layers = selected_layers(changed, config) if changed is not None else set()
     for group in groups:
-        if group in config["full_only"]:
+        if group in config["layers"] and changed is not None:
+            if group in layers:
+                run.append(group)
+            else:
+                skip[group] = "no changed path is on its list or on an upstream layer's list"
+        elif group in config["full_only"]:
             if scope == "full":
                 run.append(group)
             else:
