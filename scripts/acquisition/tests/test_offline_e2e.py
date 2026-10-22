@@ -38,16 +38,13 @@ SUITES = [
     "redownload",
     "registry_additions",
     "manifest_correction",
+    "single_copy_index",
     # Off macOS, the HUD and WONDER suites substitute only the browser-download metadata reads (see run_hud_xlsx_e2e).
     "hud_xlsx",
 ]
-# These suites write a folder whose artifact.json holds the outcome.
 DIRECTORY_SUITES = {"privacy", "registry_additions"}
-# Its folder also holds a copy of the 17 MB registry per case (about 300 MB); retain only the artifact.
 ARTIFACT_ONLY_SUITES = {"registry_additions"}
-# An iteration run skips only each suite's second, repeatability run; it is never commit evidence [709].
 MODE = os.environ.get("ACQUISITION_E2E_MODE", "full")
-# The code under test: a change during the run fails it, so one run never mixes versions [711].
 SNAPSHOT_ROOTS = ("scripts/acquisition", "config/acquisition")
 SECONDS: dict[str, float] = {}
 
@@ -64,7 +61,7 @@ def code_sha256() -> str:
 
 @pytest.fixture(scope="session")
 def offline_artifact_root() -> Iterator[Path]:
-    """Keep suite outcomes after temporary synthetic source files are removed; record the run in run.json [709] to [712]."""
+    """Keep suite outcomes after temporary synthetic source files are removed; record the run in run.json."""
     check(MODE in ("full", "iteration"), f"ACQUISITION_E2E_MODE must be full or iteration, not {MODE!r}")
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     root = REPO_ROOT / "data/e2e/acquisition_checks" / f"{stamp}_{os.getpid()}"

@@ -87,6 +87,63 @@
         "arn:aws:s3:::${DATA_BUCKET_NAME}/*/audit/*",
         "arn:aws:s3:::${DATA_BUCKET_NAME}/*/*/datasets/*"
       ]
+    },
+    {
+      "Sid": "ReadSingleCopyContentObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_objects/sha256/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_evidence/sha256/*"
+      ]
+    },
+    {
+      "Sid": "CreateSingleCopyContentObjectsOnce",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_objects/sha256/????????????????????????????????????????????????????????????????",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_evidence/sha256/????????????????????????????????????????????????????????????????"
+      ],
+      "Condition": {
+        "Null": {
+          "s3:if-none-match": "false"
+        }
+      }
+    },
+    {
+      "Sid": "DenyOlderGrantsInSingleCopyFolders",
+      "Effect": "Deny",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:PutObjectVersionTagging",
+        "s3:AbortMultipartUpload"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_objects/data/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_objects/references/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_objects/manifests/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_objects/audit/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_objects/*/*/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_evidence/data/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_evidence/references/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_evidence/manifests/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_evidence/audit/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_evidence/*/*/*"
+      ]
+    },
+    {
+      "Sid": "DenyPercentSignInSingleCopyKeys",
+      "Effect": "Deny",
+      "Action": "s3:PutObject",
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_objects/sha256/*%*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_evidence/sha256/*%*"
+      ]
     }
   ]
 }

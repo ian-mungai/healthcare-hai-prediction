@@ -137,11 +137,11 @@
     },
     {
       "path": "scripts/acquisition/run_storage_records_e2e.py",
-      "line": 96,
+      "line": 95,
       "code_sha256": "d1b67767856a66cc1b58cbb3554064564c48816c6c3837dae0852166ea586785",
       "problem": "whose program the check cannot prove",
       "occurrences": 7,
-      "file_sha256": "6d02232e96dcc790a97216fab37c173bb9986ece55f7f40eb5b83a6d2c9242c6",
+      "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/infrastructure/render_project_config.py": "sha256:7a599c31b2aa43f5e616f31db9f5a65f3c2dc08dd5bd5fa25f576f65530dfde2",
@@ -149,22 +149,22 @@
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
       "lines": [
-        96,
-        122,
-        128,
-        139,
-        178,
-        239,
-        249
+        95,
+        121,
+        127,
+        137,
+        198,
+        257,
+        267
       ]
     },
     {
       "path": "scripts/acquisition/run_storage_records_e2e.py",
-      "line": 152,
+      "line": 149,
       "code_sha256": "6a02246ce4d7a7dd874d97226d837f169302f06c53e11409b618cbb9ef83c647",
       "problem": "whose program the check cannot prove",
       "occurrences": 2,
-      "file_sha256": "6d02232e96dcc790a97216fab37c173bb9986ece55f7f40eb5b83a6d2c9242c6",
+      "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/infrastructure/render_project_config.py": "sha256:7a599c31b2aa43f5e616f31db9f5a65f3c2dc08dd5bd5fa25f576f65530dfde2",
@@ -172,17 +172,34 @@
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
       "lines": [
-        152,
-        161
+        149,
+        182
       ]
     },
     {
       "path": "scripts/acquisition/run_storage_records_e2e.py",
-      "line": 198,
+      "line": 167,
+      "code_sha256": "27f438ed338cd320a669f6d93530fa72b80c7e9545c791a3cf5372f09f463ae0",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
+      "dependencies": {
+        "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
+        "scripts/infrastructure/render_project_config.py": "sha256:7a599c31b2aa43f5e616f31db9f5a65f3c2dc08dd5bd5fa25f576f65530dfde2",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
+      "lines": [
+        167
+      ]
+    },
+    {
+      "path": "scripts/acquisition/run_storage_records_e2e.py",
+      "line": 218,
       "code_sha256": "8264903c0ab7864b62d2f5860615c988de2382d8d31f47e57c89e10e757aa76d",
       "problem": "whose program the check cannot prove",
       "occurrences": 2,
-      "file_sha256": "6d02232e96dcc790a97216fab37c173bb9986ece55f7f40eb5b83a6d2c9242c6",
+      "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/infrastructure/render_project_config.py": "sha256:7a599c31b2aa43f5e616f31db9f5a65f3c2dc08dd5bd5fa25f576f65530dfde2",
@@ -190,17 +207,17 @@
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
       "lines": [
-        198,
-        203
+        218,
+        223
       ]
     },
     {
       "path": "scripts/acquisition/run_storage_records_e2e.py",
-      "line": 229,
+      "line": 248,
       "code_sha256": "e350187ba1b0c2144bbda53f451728bb8419ac625b61e0dbaa0fe783a3c3236c",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "6d02232e96dcc790a97216fab37c173bb9986ece55f7f40eb5b83a6d2c9242c6",
+      "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/infrastructure/render_project_config.py": "sha256:7a599c31b2aa43f5e616f31db9f5a65f3c2dc08dd5bd5fa25f576f65530dfde2",
@@ -208,7 +225,7 @@
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
       "lines": [
-        229
+        248
       ]
     },
     {
@@ -257,20 +274,20 @@
     },
     {
       "path": "scripts/acquisition/tests/test_offline_e2e.py",
-      "line": 101,
+      "line": 98,
       "code_sha256": "c778c734aa2a198b9557d74507cafc1069d4045bcfc914d4e529fd92e245b12e",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "620b6d775214f2322720a2316544c80eef89504812ef329c92f6db737ce4957a",
+      "file_sha256": "df498396aea58f42c9dc399d62ffbc9d84575cfd7e698817edda199d3fea4e62",
       "dependencies": {
         "scripts/acquisition/collection_layout.py": "sha256:9b74b4bc5082fcf657217407687bd7e24b4a04bdd551d59c85b079b087792693",
         "scripts/acquisition/s3_store.py": "sha256:08e28d4b5c9641ca4e6cb284b43c42848f653bc72cb654c325d8b51c032d69b8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "tests/support.py": "sha256:d94c83009e222255d9076939b6826d80dcf6face84d56e9efdcd86fb14bbd11f"
       },
-      "reason": "imports one of the scripts.acquisition run_<suite>_e2e runners named by the test parameter; they start the Python CLI, aws stubs and xattr (HUD workbook suite), never Docker",
+      "reason": "imports one of the scripts.acquisition run_<suite>_e2e runners named by the test parameter; they start the Python CLI, aws stubs, xattr (HUD workbook suite) and git check-ignore (single-copy index suite), never Docker",
       "lines": [
-        101
+        98
       ]
     },
     {

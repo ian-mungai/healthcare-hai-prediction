@@ -21,6 +21,7 @@ import json
 import os
 import sys
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -30,7 +31,6 @@ from scripts.acquisition.s3_store import AwsCli, encoded_json, write_once
 from scripts.acquisition.transport import CaptureError
 from scripts.infrastructure.render_project_config import REPO_ROOT, load_configuration, verify_project_identity
 
-# Retirements: the privacy deletion and the removal of byte-identical duplicates.
 RETIREMENTS = ("data/privacy_review/*/retired_objects*.json", "data/lakehouse_planning/dedup_*/retired_objects*.json")
 REPLACEMENTS = "data/privacy_review/*/replacements*.json"
 SKIPPED_FOLDERS = {"private_original", "storage_checks", "redacted_copies"}
@@ -40,7 +40,7 @@ NON_STORAGE_ROOTS = {
     "schema_review": "Derived schema-review outputs, not upload records.",
 }
 MAX_RECORD_FILE = 50 * 1024**2
-# Failure modes 237 to 240: only the exact first path segment matches; recorded versions there are still checked.
+SIZE_FIELDS = ("byte_count", "bytes", "Size")
 TABLE_FILE_PREFIXES = {"lakehouse/": "Iceberg table files written by the lakehouse jobs, which Terraform scopes to this folder."}
 
 
@@ -49,16 +49,34 @@ def table_file(key: str) -> bool:
 
 
 def size_of(node: dict[str, Any]) -> int | None:
-    for field in ("byte_count", "bytes", "Size"):
+    for field in SIZE_FIELDS:
         if isinstance(node.get(field), int):
             return int(node[field])
     return None
 
 
+def exact_size(node: dict[str, Any]) -> int | None:
+    """Return the recorded size when the record has size fields and all of them are the same nonnegative integer; otherwise None."""
+    values = [node[field] for field in SIZE_FIELDS if field in node]
+    if not values or any(type(value) is not int or value < 0 for value in values) or len(set(values)) > 1:
+        return None
+    return values[0]
+
+
+def is_index_document(document: object) -> bool:
+    """Return True for a single-copy index by its format (a schema version, a generation and a checksum map), wherever the file is stored."""
+    return (
+        isinstance(document, dict) and "schema_version" in document and "generation" in document and ("objects" in document or "evidence_objects" in document)
+    )
+
+
 def collect(
-    root: Path, bucket: str, empty_captures: set[str] | None = None
+    root: Path, bucket: str, empty_captures: set[str] | None = None, *, record_size: Callable[[dict[str, Any]], int | None] = size_of
 ) -> tuple[dict[tuple[str, str], set[int | None]], set[tuple[str, str]], Counter[str]]:
-    """Return upload records (identity to recorded sizes), identities seen in saved S3 listings, and walk counts."""
+    """Return upload records (identity to recorded sizes), identities seen in saved S3 listings, and walk counts.
+
+    A single-copy index is skipped by its format and counted. ``record_size`` reads the size of one record; the default is the lenient reader.
+    """
     uploads: dict[tuple[str, str], set[int | None]] = {}
     observed: set[tuple[str, str]] = set()
     counts: Counter[str] = Counter()
@@ -66,7 +84,7 @@ def collect(
     def walk(node: Any) -> None:
         if isinstance(node, dict):
             if isinstance(node.get("key"), str) and isinstance(node.get("version_id"), str) and node.get("bucket") == bucket:
-                uploads.setdefault((node["key"], node["version_id"]), set()).add(size_of(node))
+                uploads.setdefault((node["key"], node["version_id"]), set()).add(record_size(node))
             elif isinstance(node.get("Key"), str) and isinstance(node.get("VersionId"), str):
                 observed.add((node["Key"], node["VersionId"]))
             for value in node.values():
@@ -94,10 +112,14 @@ def collect(
             if path.stat().st_size > MAX_RECORD_FILE:
                 raise CaptureError(f"Unreviewed evidence exceeds the JSON inspection limit: {path.relative_to(root)}")
             try:
-                walk(json.loads(path.read_bytes()))
-                counts["json_files_read"] += 1
+                document = json.loads(path.read_bytes())
             except (ValueError, UnicodeDecodeError):
                 raise CaptureError(f"Unparseable JSON evidence requires a recorded disposition: {path.relative_to(root)}") from None
+            if is_index_document(document):
+                counts["single_copy_index_files_skipped"] += 1
+                continue
+            walk(document)
+            counts["json_files_read"] += 1
     return uploads, observed, counts
 
 
@@ -111,7 +133,6 @@ def load_empty_captures(path: Path | None, root: Path) -> set[str]:
     accepted: set[str] = set()
     for item in record["files"]:
         relative = Path(item["path"])
-        # A disposition written before the dataset move names the old folder [226].
         located = current(item["path"])
         target = root / located
         if (

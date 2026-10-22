@@ -335,7 +335,73 @@ categories use `bronze_objects/sha256/<sha256>`. Audit payloads and evidence-onl
 and audit bytes remain one physical object in each namespace. The immutable bootstrap format has separate `objects`
 and `evidence_objects` maps; a reference cannot cross between them. Category determines routing. An unknown category
 fails closed. Manifests retain their collection paths, including evidence-only manifests under `audit`.
-Both content prefixes remain inactive until the owner's IAM and storage review permits activation.
+Both content prefixes stay inactive until the owner applies the access rules and changes the setting (see
+[Switching on single-copy storage](#switching-on-single-copy-storage)).
+
+### Switching on single-copy storage
+
+Two parts must be ready before `single_copy_enabled` is `true`: the access rules for the two content folders and a
+starting index that names the objects already in the bucket. The setting stays `false` in Git. The owner changes it in
+the working tree only.
+
+**Part 1: access rules.** The change is in `infra/iam/policies/s3_policy.json`. It adds four statements for
+`bronze_objects/sha256/` and `bronze_evidence/sha256/` in the project bucket. One reads current objects and exact
+versions (`s3:GetObject` and `s3:GetObjectVersion`). One creates objects (`s3:PutObject`) only when the request carries
+the `If-None-Match` header, so an existing key cannot be overwritten. It allows only a leaf of exactly 64 characters.
+Deletion, tagging and multipart actions are not granted. One denies writes, tagging and multipart actions in these two
+folders for every key shape that the older wildcard grants match, such as `bronze_objects/sha256/<hash>/references/x`.
+One denies `s3:PutObject` for every key under `sha256/` that holds a percent sign. IAM resource patterns have only `*`
+and `?`, so the policy cannot limit the 64 characters to hexadecimal digits. The length-only pattern is the strongest
+form that IAM can express. The only writer is the store step, which computes the leaf as the SHA-256 of the file. The
+index loader refuses any other key. The plan tests in `infra/iam/tests/policies.tftest.hcl` fail when a statement is missing,
+reaches past these two folders, has no condition or leaves an empty, short, long, percent or nested key writable.
+
+1. Read the change: `git diff main -- infra/iam`
+2. Plan with the administrator profile and save the plan:
+   `scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE> plan -out=single_copy_grant.tfplan`
+3. Read the saved plan: `terraform -chdir=infra/iam show -no-color single_copy_grant.tfplan`. It must say
+   `Plan: 0 to add, 1 to change, 0 to destroy.` and change only `aws_iam_policy.service["s3"]`, in place. Stop on any
+   other change, any replacement or any destroy.
+4. Apply the saved plan:
+   `scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE> apply single_copy_grant.tfplan`
+5. Plan again with the command from step 2, without `-out`. It must say `No changes.`
+
+The create-once condition (`Null` on `s3:if-none-match`) follows the form that AWS documents for conditional writes. No
+test against real AWS covers it. If the first single-copy write returns `AccessDenied`, stop and review the condition
+before any other change.
+
+**Part 2: starting index.** Run these steps from the repository root. The builder checks the project identity and lists
+every object version of the bucket with read-only requests under the project profile from `.env`. It writes one new
+local file and nothing to S3.
+
+1. Build the index: `.venv/bin/python -m scripts.acquisition.single_copy_index --output data/single_copy/index_<DATE>.json`
+   One deadline (`--deadline`, 1800 seconds) covers the identity check and all listing requests. The local download
+   records in `data/datasets` are the cross-check: pass `--records <FOLDER>` when they are elsewhere. It finds the
+   privacy, duplicate-removal and license-removal retirement records by default. Pass `--retirements <FILE>...` to name
+   them yourself (the list replaces the default). Pass `--dispositions <FILE>` for acquired captures that have no storage
+   record on purpose. The file is JSON with `"kind": "unstored_capture_dispositions"` and a `captures` list. Each line
+   has the capture `path` (relative to the records folder), the `receipt_sha256` (the SHA-256 of that capture's
+   `receipt.json`) and a `reason`.
+   The upload records under `--evidence-root` (default `data`) also name objects, by exact bucket, key and version. Pass
+   `--empty-capture-dispositions <FILE>` when that folder holds reviewed empty publisher captures, as for
+   `verify_storage_records`. Saved bucket listings are not names. A recorded size must be a whole number equal to the
+   listing size. The reader skips every single-copy index by its format, wherever the file is stored, so an earlier index
+   is never a name. For each stored object that no record names, pass `--object-dispositions <FILE>`. The
+   file is JSON with `"kind": "unnamed_object_dispositions"` and an `objects` list. Each line has the `key`, `version_id`,
+   `byte_count` and `sha256` of the stored object and a `reason`. The builder refuses a line that matches no stored
+   object, a second line for one object, a line without a reason and a line for an object that a record already names.
+   When identical bytes sit under more than one key, the index names the copy stored first and the report lists every
+   other copy under `aliases`. Read that list before you switch the setting on.
+2. If the builder refuses, it writes nothing and lists each reason with a count and examples. The reasons and their
+   fixes are in [Single-Copy Starting Index](acquisition_design.md#single-copy-starting-index). Fix the cause and build
+   again into a new file name.
+3. Switch the setting on with the command the builder printed. It writes `config/acquisition/storage_policy.json` with
+   the index path and its SHA-256.
+4. Check the policy loads:
+   `.venv/bin/python -c "from scripts.acquisition.single_copy import load_policy; p = load_policy(); print(p['enabled'], len(p['objects']), len(p['evidence_objects']))"`
+
+Do not commit the changed policy file. The index is a local file, so a clone or a CI run cannot read it. To switch the
+setting off again, run `git checkout -- config/acquisition/storage_policy.json`.
 
 `stg_bronze__release_observations` covers the 70 analytical tables in the `copy_tables` family map, including aliases
 and retired observations. Adding a table to that map includes its observations. Readers needing the full set use

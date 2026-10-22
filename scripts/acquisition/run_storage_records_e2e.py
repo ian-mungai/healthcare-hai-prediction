@@ -71,7 +71,6 @@ def main() -> int:
         ("inventory_version_missing", {"Versions": [item for item in base if item["Key"] != "old/raw.csv"]}, 1, {"failure_counts.inventory_missing": 1}),
         ("malformed_listing", {"Versions": "invalid"}, 2, {}),
         ("duplicate_listing", {"Versions": [*base, base[0]]}, 2, {}),
-        # Iceberg table files under lakehouse/ are counted apart, never as unrecorded (failure modes 237 to 240).
         (
             "lakehouse_versions_counted_apart",
             {"Versions": [*base, version(LAKEHOUSE_FILE, "l1", 7)], "DeleteMarkers": [{"Key": LAKEHOUSE_FILE, "VersionId": "l0"}]},
@@ -130,11 +129,10 @@ def main() -> int:
         if result.returncode != 2:
             raise AssertionError("nested_same_name_not_excluded")
         nested.unlink()
-        # Schema-review outputs are derived review evidence, not upload records.
         review = evidence / "schema_review" / "final_pass"
         write_once(review / "broken_review.json", b"{intentional invalid review output")
         with (review / "oversized_keysets.json").open("wb") as handle:
-            handle.truncate(51 * 1024**2)  # Sparse: over the inspection limit without writing 51 MB.
+            handle.truncate(51 * 1024**2)
         arguments[arguments.index("--output") + 1] = str(root / "runs" / "schema_review_scope")
         result = run_command(sys.executable, arguments, cwd=REPO_ROOT, timeout=120)
         walk = (json.loads(result.stdout) if result.stdout.strip() else {}).get("evidence_walk", {})
@@ -142,7 +140,6 @@ def main() -> int:
         cases.append({"case": "schema_review_root_excluded_and_counted", "passed": excluded, "evidence_walk": walk})
         if not excluded:
             raise AssertionError("schema_review_root_excluded_and_counted")
-        # An upload record kept only under schema_review is never verified (review STORAGE_SCHEMA_REVIEW_R1).
         hidden = {"bucket": BUCKET, "key": "hidden/x.csv", "version_id": "h1", "byte_count": 10}
         write_once(evidence / "schema_review" / "upload.json", encoded_json({"object": hidden}))
         write_once(root / "listings" / "hidden_live.json", encoded_json({"Versions": [*base, version("hidden/x.csv", "h1", 11)]}))
@@ -155,12 +152,35 @@ def main() -> int:
         cases.append({"case": "excluded_upload_reported_unrecorded", "passed": unrecorded})
         if not unrecorded:
             raise AssertionError("excluded_upload_reported_unrecorded")
+        earlier_index = {
+            "schema_version": 2,
+            "generation": "0" * 64,
+            "objects": {"0" * 64: {"bucket": BUCKET, "key": "stray/object.csv", "version_id": "v7", "byte_count": 3, "sha256": "0" * 64}},
+            "evidence_objects": {},
+        }
+        write_once(evidence / "review" / "nested" / "index_earlier.json", encoded_json(earlier_index))
+        write_once(evidence / "single_copy" / "index_earlier.json", encoded_json(earlier_index))
+        write_once(root / "listings" / "stray_live.json", encoded_json({"Versions": [*base, version("stray/object.csv", "v7", 3)]}))
+        stray_args = [*arguments]
+        stray_args[stray_args.index("--listing") + 1] = str(root / "listings" / "stray_live.json")
+        stray_args[stray_args.index("--output") + 1] = str(root / "runs" / "stray_with_earlier_index")
+        result = run_command(sys.executable, stray_args, cwd=REPO_ROOT, timeout=120)
+        summary = json.loads(result.stdout) if result.stdout.strip() else {}
+        walk = summary.get("evidence_walk", {})
+        not_a_record = (
+            result.returncode == 1
+            and summary.get("unrecorded") == 1
+            and summary.get("recorded_versions") == 3
+            and walk.get("single_copy_index_files_skipped") == 2
+        )
+        cases.append({"case": "earlier_index_is_not_an_upload_record_wherever_it_is_stored", "passed": not_a_record, "evidence_walk": walk})
+        if not not_a_record:
+            raise AssertionError("earlier_index_is_not_an_upload_record_wherever_it_is_stored")
         inventory = evidence / "inventory" / "hidden.json"
         write_once(inventory, encoded_json({"versions": [version("hidden/x.csv", "h1", 10)]}))
         hidden_args[hidden_args.index("--output") + 1] = str(root / "runs" / "hidden_inventory_only")
         result = run_command(sys.executable, hidden_args, cwd=REPO_ROOT, timeout=120)
         summary = json.loads(result.stdout) if result.stdout.strip() else {}
-        # Existing policy: a saved inventory accounts for the version without a size check; it is never counted as verified.
         inventory_only = (
             result.returncode == 0
             and summary.get("live_versions_known_only_from_saved_inventories") == 2
@@ -205,7 +225,6 @@ def main() -> int:
         if result.returncode != 2:
             raise AssertionError("changed_disposed_capture_rejected")
         empty.unlink()
-        # A disposition written before the dataset move names the old folder; the check reads it through the path map.
         moved_empty = evidence / "datasets" / "historical_acquisition" / "discovery" / "groups.json"
         write_once(moved_empty, b"")
         moved_dispositions = root / "moved_empty_dispositions.json"
@@ -231,7 +250,6 @@ def main() -> int:
         if result.returncode != 0:
             raise AssertionError("moved_empty_capture_read_through_path_map")
         moved_empty.unlink()
-        # A recorded version under lakehouse/ is still checked: the exclusion covers unrecorded versions only (238).
         lakehouse_record = evidence / "lakehouse_record" / "upload.json"
         write_once(lakehouse_record, encoded_json({"object": {"bucket": BUCKET, "key": "lakehouse/recorded.csv", "version_id": "l2", "byte_count": 4}}))
         arguments[arguments.index("--listing") + 1] = str(root / "listings" / "all_accounted.json")

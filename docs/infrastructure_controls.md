@@ -29,6 +29,24 @@ plan review and preservation of existing rules. Private plans and live
 verification evidence remain untracked under
 `data/infrastructure/lifecycle_deployment/`.
 
+**Single-copy content folders.** The project's S3 policy has four statements for `bronze_objects/sha256/` and
+`bronze_evidence/sha256/`, the folders that single-copy storage uses. One reads current objects and exact versions
+(`s3:GetObject` and `s3:GetObjectVersion`). One allows `s3:PutObject` only when the request carries the `If-None-Match`
+header and only for a key whose leaf after `sha256/` has exactly 64 characters (64 `?` wildcards), so an empty, a shorter
+and a longer leaf are not created. Deletion, tagging and multipart actions are not granted there. One denies writes,
+tagging and multipart actions in these two folders for the key shapes that the older wildcard grants (`*/references/*`,
+`*/data/*`, `*/audit/*`, `*/manifests/*` and `*/*/datasets/*`) match. One denies `s3:PutObject` for every key under
+`sha256/` that holds a percent sign, so a leaf with a literal encoded separator is not created. IAM resource patterns
+have only `*` and `?`, so no pattern limits the leaf to hexadecimal characters. The length-only pattern is the
+strongest form that IAM can express, so the policy does not prove that the 64 characters are hexadecimal digits. The
+only writer is the store step. It computes the leaf as the SHA-256 of the file. The index loader checks the leaf: it
+refuses every key that is not exactly `sha256/<checksum>`, where the checksum is the SHA-256 recorded for that object.
+The plan tests evaluate the rendered policy for nested keys, empty, short, long and percent leaves and the older
+wildcard shapes in both folders. They fail when a write is allowed there. They also fail when the exact key loses its
+conditional create or when a statement is missing or wider than these folders. The owner reviews and applies the policy
+with the steps in [Switching on single-copy storage](lakehouse_usage.md#switching-on-single-copy-storage). The condition
+is untested against real AWS.
+
 **Deferred controls.** Apply the project's engineering requirements when
 development reaches the relevant stage. Future requirements guide later work;
 deferral does not mean a control is implemented. The following
