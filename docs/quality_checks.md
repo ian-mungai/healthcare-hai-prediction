@@ -359,14 +359,21 @@ reports success and writes the reason to its job summary. Each job caches only w
 lock file or hash checks again before use (npm packages, Terraform providers,
 the dbt package archive and the SQLFluff packages); the Python environment is
 built fresh from `requirements.txt` without a pip cache. Each job's timeout is about
-twice its measured time (see Measured durations below). Locally `scripts/run_ci.sh` runs every part: the gates
-first, then the launcher E2E, then the units that run alone and then the independent check groups and units, which run
-concurrently. It prints each group's seconds and each command's start, end and seconds (GitHub CI adds both to the job
-summary). In the full set gitleaks scans every outgoing source file instead of
+twice its measured time (see Measured durations below). Locally `scripts/run_ci.sh` runs every part the way the GitHub jobs do: the gates
+first, then the launcher E2E, then the units that run alone (the gold writer set-up) and then the independent check groups and units, which run
+concurrently: Local CI Core, the three lakehouse layers, the gold model metadata E2E with its workers and the four acquisition shards. After them the
+combining step of the acquisition gate merges the four shard folders and enforces the 90% coverage gate. The full local CI is expected to take about 32 minutes (the
+launcher E2E about 13 minutes, then the parallel set whose longest part is the acquisition shards at about 17 minutes). This is an estimate until the
+first full local run on this layout measures it. A separate measured trial runs the
+launcher E2E in the parallel set five times on this Mac (16 cores, 48 GiB). Only if all five runs pass does the launcher join the parallel set, which should
+take about 20 minutes. The exception to the run alone rule is recorded with the evidence. Until then the launcher stays alone, first. The commit hook
+(`CI_SCOPE=staged`) always runs the groups the staged paths select and reuses no earlier result. The run prints each group's seconds and each command's
+start, end and seconds (GitHub CI adds both to the job summary). In the full set gitleaks scans every outgoing source file instead of
 the staged index. The acquisition checks
-run in their own CI job and through their hook only when acquisition files
-change. The full local CI also runs them. Run them directly before a release
-with `bash scripts/acquisition/run_checks.sh`.
+run in their own CI jobs and through their hook only when acquisition files
+change. The full local CI runs them as the same four shards and combining step as GitHub CI, each shard in its own folder
+under the quality evidence folder of the run. The hook and `bash scripts/acquisition/run_checks.sh` run them unsharded. Run
+them directly before a release with that command.
 
 The checks cover secrets and credential files, data files (allowed only in `tests/fixtures/`, `dbt/seeds/`, `features/recipes/` and the one file `config/lakehouse/identity_classification.csv`), a
 privacy scan of every non-ignored file, prose style, Markdown syntax, front matter, commit messages, documentation that
@@ -406,6 +413,49 @@ check, not a passing result.
 
 Before every commit, stage the intended files by name, then draft, complete and
 retain the ignored local documentation review record (see Docs match the code above).
+
+## Check group files
+
+`scripts/run_ci.sh` is the dispatcher: the gates, timing, parts, scopes, the parallel unit runner and the exit trap. The commands of each check group are in
+`scripts/ci/groups/<group>.sh`, one file for each group of `config/quality/ci_groups.json` (the gold layer's three units are in `lakehouse_gold.sh` and the
+launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no file because their commands are the scripts in `scripts/acquisition/`.
+
+- **Each group runs in its own shell process.** The dispatcher starts `bash --noprofile --norc` for every group, loads only `scripts/quality/timing.sh` (the
+  `timed` wrapper) and that group's file and calls the entry function: the group name, `launcher_e2e` for the launcher and `lakehouse_gold_<unit>` for each
+  gold unit. The process gets these variables beside the exported environment of the run and nothing else of the dispatcher: `python_bin`, `repo_root`,
+  `scratch`, `quality_output`, `e2e_output` and `CI_TIMING_FILE` (`MODEL_METADATA_WORKERS`, `LAUNCHER_SHARD` and `TF_PLUGIN_CACHE_DIR` come from the exported
+  environment). Give a group any other dispatcher value in `run_group` of `scripts/run_ci.sh`. A missing or unreadable file stops the run with
+  the file and the group named.
+- **What the separate shell isolates (owner decision, 23 October 2026).** The shell of a group isolates shell state only: its functions (a redefined `timed`,
+  a Bash builtin or the name of another group's function), its variables, its shell options and traps, its working directory, its exported functions and its
+  exported environment. A change of any of these exists only in that group's process, so it cannot reach another group or the dispatcher.
+- **What it does not isolate (accepted by the owner).** The groups share the host. Group files are reviewed code. A group can write files in the checkout
+  or in the scratch folders. That includes the files of other groups and the timing table of the run. It can also signal the process group of the run. The guard
+  checks the shape of the files and does not defend against these effects. Operating-system isolation (separate users, containers or read-only mounts) would be
+  needed for that and is not part of this change.
+- A body file is listed in its own group's path list and in no other list. An edit to it selects that group, the lakehouse layers downstream of it (a bronze file
+  selects the three layers and a silver file selects silver and gold) and `repository_code_checks`, which matches every `.sh` file and runs the guard. It selects no
+  other group. The launcher list leaves the folder out of its `scripts/` pattern for this reason.
+- The dispatcher, the timing wrapper, the selector, `config/quality/ci_groups.json`, `.github/workflows/`, `.github/actions/`, `.pre-commit-config.yaml`, the
+  requirements files and `pyproject.toml` still select every group. Other files under `.github/` (the pull request template) are documents and select no group.
+- The guard `scripts/quality/ci_group_files.py` runs in `repository_code_checks`. It fails with the file and the group named when a group has no body file or
+  a body file belongs to no group, when a file lacks its entry function, when the dispatcher text declares a function of a group (continued lines, quotes,
+  backslashes and `$'...'` escapes in names are removed first), when a body file is missing from its group's list or another list also matches it. Bash lists the
+  functions: the guard sources each file alone in a clean shell (`env -i`, `--noprofile --norc`, an empty temporary folder, 30 seconds at most) and prints
+  `declare -F`. A DEBUG trap stops that shell at the first command the file would run, so a body file holds function definitions and comments only and listing it
+  runs none of its commands. The trap keeps the listing free of side effects. It is not a security boundary, because a file can shadow the commands of the trap. The guard no longer checks function names across files, builtin names, nested definitions or
+  redirections, because each group runs in its own shell: their shell-state changes stay within that group. File writes and process
+  signals remain shared, as described above.
+- The guard needs Bash 3.2 (macOS `/bin/bash`) or later. The cases of `run_ci_groups_e2e` that plant drift in the body files run in the "Local CI Core" job of
+  GitHub CI (`repository_code_checks`, command "CI groups selection E2E"), whose runner has Bash 5. The job log names the Bash version they used.
+- To add a group, add its entry to `groups` in `config/quality/ci_groups.json` (the order of the file is the run order) with the pattern
+  `^scripts/ci/groups/<group>\.sh$`. Add the file `scripts/ci/groups/<group>.sh` with a function named exactly like the group, because the dispatcher calls it by
+  that name. The two exceptions are the launcher (`launcher_e2e`) and the gold layer (one function `lakehouse_gold_<unit>` for each unit in `gold_units` of the
+  dispatcher). Helper functions are allowed. Add the group's expected selection to the body-file cases of `run_ci_groups_e2e` and its job to the workflow.
+- `run_ci_groups_e2e` proves the selection of each body file, plants drift for every guard rule and runs the dispatcher with a `timed` that only prints the
+  command. These dry runs prove that a missing body file stops a run, that the full local plan names the same groups, gold units and acquisition shards as the
+  GitHub jobs and that each of 15 hostile group files leaves the shell state of the other groups and of the dispatcher unchanged. Before the move the plans (`CI_LIST_ONLY=1`) and command lists of every part
+  and scope were captured and compared with the result.
 
 ## Lakehouse layers
 
@@ -523,8 +573,9 @@ tree, the reused run and the conclusion of each required job. `.venv/bin/python 
 
 ## Practice
 
-Keep edits to CI-wide files rare: `scripts/run_ci.sh`, `scripts/process.py`, `scripts/quality/ci_groups.py`, `config/quality/ci_groups.json`, `.github/`, `.pre-commit-config.yaml`,
-the requirements files and `pyproject.toml` select every group in every scope, so each edit runs all the checks.
+Keep edits to CI-wide files rare: `scripts/run_ci.sh` (the dispatcher), `scripts/quality/timing.sh`, `scripts/process.py`, `scripts/quality/ci_groups.py`,
+`config/quality/ci_groups.json`, `.github/workflows/`, `.github/actions/`, `.pre-commit-config.yaml`, the requirements files and `pyproject.toml` select every group
+in every scope, so each edit runs all the checks. Put a check command in the body file of its group (see Check group files) so that the edit selects only that group.
 
 ## Scratch worktrees in E2E runners
 

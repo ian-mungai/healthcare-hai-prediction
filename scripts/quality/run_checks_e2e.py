@@ -35,6 +35,7 @@ COPIED = [
     "dbt/dbt_project.yml",
     "dbt/profiles.yml",
     "scripts/run_ci.sh",
+    "scripts/ci/groups/python_lint.sh",
 ]
 NOQA = "no" + "qa"
 TYPE_IGNORE = "type" + ": ignore"
@@ -47,7 +48,7 @@ SESSION = "Claude" + "-Session"
 SCISSORS = "# ------------------------ >8 ------------------------"
 PROCESS_MODULE = "sub" + "process"
 LAUNCHER_SOURCE = (ROOT / "scripts" / "process.py").read_text()
-CI_SOURCE = (ROOT / "scripts" / "run_ci.sh").read_text()
+CI_SOURCE = (ROOT / "scripts" / "ci" / "groups" / "python_lint.sh").read_text()
 ALLOWLIST = ".privacy_allowlist"
 ALLOWLIST_SOURCE = (ROOT / ALLOWLIST).read_text()
 ENV_EXAMPLE_SOURCE = (ROOT / ".env.example").read_text()
@@ -172,7 +173,10 @@ CASES = [
     ),
     Case("Ruff line length raised", "lint-settings", False, {"pyproject.toml": RUFF_STANDARD.replace("160", "200")}),
     Case(
-        "MyPy flag removed", "lint-settings", False, {"pyproject.toml": RUFF_STANDARD, "scripts/run_ci.sh": CI_SOURCE.replace(" --disallow-untyped-defs", "")}
+        "MyPy flag removed",
+        "lint-settings",
+        False,
+        {"pyproject.toml": RUFF_STANDARD, "scripts/ci/groups/python_lint.sh": CI_SOURCE.replace(" --disallow-untyped-defs", "")},
     ),
     Case("MyPy loosened in settings", "lint-settings", False, {"pyproject.toml": RUFF_STANDARD + "\n[tool.mypy]\nignore_errors = true\n"}),
     Case("MyPy alternate profile", "lint-settings", True, {"config/quality/mypy.ini": "[mypy]\npython_version = 3.12\n"}),

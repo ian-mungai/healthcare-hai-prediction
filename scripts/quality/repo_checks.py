@@ -52,6 +52,7 @@ RUFF_LOOSENING_KEYS = {"ignore", "extend-ignore", "per-file-ignores", "extend-pe
 MYPY_FLAGS = ("--check-untyped-defs", "--disallow-untyped-defs")
 MYPY_LOOSENING_KEYS = {"ignore_errors", "ignore_missing_imports", "follow_imports", "disable_error_code", "allow_untyped_defs", "allow_incomplete_defs"}
 CI_SCRIPT = "scripts/run_ci.sh"
+CI_GROUP_FILES = "scripts/ci/groups"
 
 ENV_READ = re.compile(r"""(?:os\.environ(?:\.get)?\s*[\[(]\s*|os\.getenv\s*\(\s*)["']([A-Z][A-Z0-9_]*)["']""")
 ENV_EXAMPLE_NAME = re.compile(r"^\s*#?\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=", re.MULTILINE)
@@ -278,9 +279,16 @@ def lint_settings() -> list[Finding]:
         )
     findings.extend(mypy_profiles())
     findings.extend(mypy_commands())
-    ci = Path(CI_SCRIPT).read_text()
+    ci = "\n".join(path.read_text() for path in (Path(CI_SCRIPT), *sorted(Path(CI_GROUP_FILES).glob("*.sh"))))
     if not any(re.search(r"\b(?:mypy|scripts\.quality\.typecheck)\b", line) and all(flag in line for flag in MYPY_FLAGS) for line in ci.splitlines()):
-        findings.append(Finding(CI_SCRIPT, f"MyPy no longer runs with {' and '.join(MYPY_FLAGS)}", f"{POLICY}: lint settings", "restore both flags"))
+        findings.append(
+            Finding(
+                f"{CI_SCRIPT} or {CI_GROUP_FILES}/python_lint.sh",
+                f"MyPy no longer runs with {' and '.join(MYPY_FLAGS)}",
+                f"{POLICY}: lint settings",
+                "restore both flags",
+            )
+        )
     return findings
 
 
