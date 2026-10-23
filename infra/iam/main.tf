@@ -12,10 +12,32 @@ provider "aws" {
   }
 }
 
+# The project user's permissions are one policy file per service in policies/, rendered and applied by the owner with
+# scripts/manage_policies.py (README, Install). An earlier version of this stack created and attached them, so Terraform
+# now forgets those resources without deleting them: the script updates the policies in place, moves the grants to two
+# groups and then removes the old grouped policies. Remove these blocks after the first policy apply.
+removed {
+  from = aws_iam_user_policy_attachment.service
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_iam_policy.service
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+# The secret and parameter names are root variables whose defaults are the real names; the policy files take them from those
+# defaults (scripts/infrastructure/secret_store.py reads variables.tf), so this file holds no second list of values, only the
+# grouping that the output below checks. The four shared API keys stay in Secrets Manager and are read only; every project
+# secret is a Parameter Store SecureString, and the Airflow administrator password is read only.
 locals {
-  service_templates = { for filename in fileset("${path.module}/policies", "*_policy.json") : trimsuffix(filename, "_policy.json") => filename }
-  # The four shared API keys stay in Secrets Manager; every project secret is a Parameter Store SecureString named by a root variable.
-  secret_names = [var.census_secret_name, var.bls_secret_name, var.hud_secret_name, var.jev_secret_name]
+  shared_secret_names = [var.census_secret_name, var.bls_secret_name, var.hud_secret_name, var.jev_secret_name]
   managed_parameter_names = [
     var.postgres_password_name,
     var.polaris_root_secret_name,
@@ -33,41 +55,4 @@ locals {
     var.redis_password_name,
   ]
   read_parameter_names = concat([var.airflow_admin_secret_name], local.managed_parameter_names)
-  # A description change replaces the policy, which prevent_destroy blocks, so existing policies keep the shared text.
-  service_descriptions = {
-    lakehouse    = "Project-scoped Iceberg table files; write and delete current objects only under lakehouse/."
-    assume_roles = "Lets the project user assume the two lakehouse roles and no other role."
-  }
-}
-
-resource "aws_iam_policy" "service" {
-  for_each    = local.service_templates
-  name        = "${var.project_name}_${each.key}_policy"
-  description = lookup(local.service_descriptions, each.key, "Project-scoped HAI storage permissions; no IAM administration or data deletion.")
-  policy = templatefile("${path.module}/policies/${each.value}", {
-    DATA_BUCKET_NAME        = var.data_bucket_name
-    AWS_REGION              = var.aws_region
-    AWS_ACCOUNT_ID          = var.expected_account_id
-    PROJECT_NAME            = var.project_name
-    SECRET_NAMES            = local.secret_names
-    READ_PARAMETER_NAMES    = local.read_parameter_names
-    MANAGED_PARAMETER_NAMES = local.managed_parameter_names
-    READER_ROLE_NAME        = var.lakehouse_reader_role_name
-    WRITER_ROLE_NAME        = var.lakehouse_writer_role_name
-  })
-
-  lifecycle {
-    prevent_destroy = true
-
-    precondition {
-      condition     = length(distinct(concat(local.secret_names, local.read_parameter_names))) == length(local.secret_names) + length(local.read_parameter_names)
-      error_message = "Each secret name must be different."
-    }
-  }
-}
-
-resource "aws_iam_user_policy_attachment" "service" {
-  for_each   = aws_iam_policy.service
-  user       = var.aws_profile
-  policy_arn = each.value.arn
 }

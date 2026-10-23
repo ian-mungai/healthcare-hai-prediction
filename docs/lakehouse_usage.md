@@ -401,7 +401,7 @@ Two parts must be ready before `single_copy_enabled` is `true`: the access rules
 starting index that names the objects already in the bucket. The setting stays `false` in Git. The owner changes it in
 the working tree only.
 
-**Part 1: access rules.** The change is in `infra/iam/policies/s3_policy.json`. It adds four statements for
+**Part 1: access rules.** The change is in `infra/iam/policies/healthcare_hai_prediction_s3_policy.json`. It adds four statements for
 `bronze_objects/sha256/` and `bronze_evidence/sha256/` in the project bucket. One reads current objects and exact
 versions (`s3:GetObject` and `s3:GetObjectVersion`). One creates objects (`s3:PutObject`) only when the request carries
 the `If-None-Match` header, so an existing key cannot be overwritten. It allows only a leaf of exactly 64 characters.
@@ -410,18 +410,18 @@ folders for every key shape that the older wildcard grants match, such as `bronz
 One denies `s3:PutObject` for every key under `sha256/` that holds a percent sign. IAM resource patterns have only `*`
 and `?`, so the policy cannot limit the 64 characters to hexadecimal digits. The length-only pattern is the strongest
 form that IAM can express. The only writer is the store step, which computes the leaf as the SHA-256 of the file. The
-index loader refuses any other key. The plan tests in `infra/iam/tests/policies.tftest.hcl` fail when a statement is missing,
-reaches past these two folders, has no condition or leaves an empty, short, long, percent or nested key writable.
+index loader refuses any other key. The policy evaluator cases (`scripts/infrastructure/policy_cases.py`, run by
+`scripts.infrastructure.run_policy_e2e`) fail when a statement is missing, reaches past these two folders, has no
+condition or leaves an empty, short, long, percent or nested key writable.
 
 1. Read the change: `git diff main -- infra/iam`
-2. Plan with the administrator profile and save the plan:
-   `scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE> plan -out=single_copy_grant.tfplan`
-3. Read the saved plan: `terraform -chdir=infra/iam show -no-color single_copy_grant.tfplan`. It must say
-   `Plan: 0 to add, 1 to change, 0 to destroy.` and change only `aws_iam_policy.service["s3"]`, in place. Stop on any
-   other change, any replacement or any destroy.
-4. Apply the saved plan:
-   `scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE> apply single_copy_grant.tfplan`
-5. Plan again with the command from step 2, without `-out`. It must say `No changes.`
+2. Plan with the administrator profile; the plan changes nothing:
+   `.venv/bin/python -m infra.iam.scripts.manage_policies plan --admin-profile <ADMIN_PROFILE> --policy s3`
+3. Read the plan. When the policy set of the README (Install) is already applied, it must list only `UPDATE POLICY` for `healthcare_hai_prediction_s3_policy` and end with
+   `Summary: 1 change(s), 0 unchanged.` Stop on any other line.
+4. Apply it, with the confirmation word on the same command line:
+   `CONFIRM_IAM_POLICIES=apply-healthcare-hai-prediction-policies .venv/bin/python -m infra.iam.scripts.manage_policies apply --admin-profile <ADMIN_PROFILE> --policy s3`
+5. Plan again with the command from step 2. It must end with `Summary: 0 change(s), 1 unchanged.`
 
 The create-once condition (`Null` on `s3:if-none-match`) follows the form that AWS documents for conditional writes. No
 test against real AWS covers it. If the first single-copy write returns `AccessDenied`, stop and review the condition

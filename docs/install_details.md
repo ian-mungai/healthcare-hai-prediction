@@ -89,11 +89,11 @@ Named manual steps. These are the only setup steps no script performs:
    (`jev_secret_name`, the TypeSafe Jev API key). Every secret holds its value
    as plain text, with no JSON; the HUD secret holds the token alone, with no
    `Bearer` prefix (the collector adds the header). The BLS, Census and HUD
-   collectors read the plain-text value with boto3. The keys are shared by several
-   projects, so they are created by hand outside Terraform. The IAM
-   configuration grants read and describe on exactly these four names and never
-   reads a value; each permission update requires a reviewed saved plan before
-   apply.
+   collectors read the plain-text value with boto3. The keys are shared by
+   several projects, so they are created by hand outside Terraform. The
+   `secretsmanager` policy file grants read and describe on exactly these four
+   names and never reads a value. Each permission update is read with
+   `manage_policies plan` and applied only with the confirmation word.
 
    Every project secret is an AWS Systems Manager Parameter Store SecureString
    parameter in the configured region, named
@@ -114,8 +114,8 @@ Named manual steps. These are the only setup steps no script performs:
    (the secret's last path part with `_name`, for example
    `postgres_password_name`) with its full name as default. A name starts with a
    slash and has up to 15 parts of letters, digits and underscores. It never
-   starts with `aws` or `ssm` (the AWS naming rules for a hierarchy). The IAM
-   configuration grants the project profile `ssm:GetParameter` on the 15 parameter
+   starts with `aws` or `ssm` (the AWS naming rules for a hierarchy). The `ssm`
+   policy file grants the project profile `ssm:GetParameter` on the 15 parameter
    ARNs and `ssm:PutParameter` on the 14 managed ones. It grants nothing else: no
    `kms` action (the key policy of the AWS managed key admits the account's
    principals through Parameter Store), no `DescribeParameters`, no
@@ -125,9 +125,21 @@ Named manual steps. These are the only setup steps no script performs:
    so no value enters a plan or the state; the saved-plan check
    (`render_project_config.py --check-plan`) refuses any plan that holds a
    Secrets Manager or Parameter Store resource or data source (the one exception
-   is a data source of a public AWS parameter under `/aws/service/`). The saved-plan check accepts only the committed names. To add a secret, add one more variable with its
-   name as default to `infra/iam/variables.tf` and add it to the matching list
-   in `infra/iam/main.tf`; every name must differ. The setup code
+   is a data source of a public AWS parameter under `/aws/service/`). The saved-plan check accepts only the committed names.
+   The names appear once: the defaults of those variables. The policy files hold
+   no name; `render_policy` repeats the list elements that hold
+   `${SHARED_SECRET_NAME}`, `${READ_PARAMETER_NAME}` and `${MANAGED_PARAMETER_NAME}`
+   once per name, taking the names from the variable defaults through
+   `scripts/infrastructure/secret_store.py`. The `sts` policy file takes the two
+   lakehouse role names (`lakehouse_reader_role_name`, `lakehouse_writer_role_name`)
+   and the task execution policy takes its eight parameter names from the same
+   variables, not from `PROJECT_NAME`. To add a secret, add one more
+   variable with its name as default to `infra/iam/variables.tf` and add it to
+   the matching list in `infra/iam/main.tf` (the output `project_secret_names`
+   checks that every name differs) and to the names in `secret_store.py` (a new
+   shared key also needs its variable in `SHARED_VARIABLES`); the policy files
+   follow the default. `run_policy_e2e` and `run_secret_store_e2e` fail until the
+   lists agree. The setup code
    (`scripts.lakehouse.catalog up`, the writer principal setup, the orchestration
    supervisor and the launcher) generates or reads each value in memory through
    `scripts/infrastructure/secret_store.py`, stores it in Parameter Store (a
@@ -161,4 +173,4 @@ Named manual steps. These are the only setup steps no script performs:
    `AccessDeniedException` on `kms:Decrypt`, the key policy of `aws/ssm` does not
    admit the profile; report it instead of widening the grant.
 2. **Administrator profile.** Configure an AWS CLI profile with IAM permissions
-   for the IAM stack. It is passed on the command line, never stored in `.env`.
+   for the IAM stack and the policy scripts. It is passed on the command line, never stored in `.env`.

@@ -1,0 +1,171 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DescribeProjectInfrastructure",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeAddresses",
+        "ec2:DescribeAddressesAttribute",
+        "ec2:DescribeAvailabilityZones",
+        "ec2:DescribeInstances",
+        "ec2:DescribeInternetGateways",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeRouteTables",
+        "ec2:DescribeSecurityGroupRules",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeTags",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeVolumesModifications",
+        "ec2:DescribeVpcAttribute",
+        "ec2:DescribeVpcs"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "${AWS_REGION}"
+        }
+      }
+    },
+    {
+      "Sid": "CreateTaggedDataVolumes",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateVolume"
+      ],
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:volume/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "AllocateTaggedAddresses",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AllocateAddress"
+      ],
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:elastic-ip/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "TagVolumesAndAddressesWhileCreating",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateTags"
+      ],
+      "Resource": [
+        "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:volume/*",
+        "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:elastic-ip/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": [
+            "CreateVolume",
+            "AllocateAddress"
+          ],
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DeleteProjectVolumes",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DeleteVolume"
+      ],
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:volume/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "ReleaseProjectAddresses",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:ReleaseAddress"
+      ],
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:elastic-ip/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "DenyCreatesWithoutProjectTagValue",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:CreateVolume",
+        "ec2:AllocateAddress"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "DenyCreatesWithoutExactProjectKey",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:CreateVolume",
+        "ec2:AllocateAddress"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ForAllValues:StringNotEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyTaggingAfterCreate",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:CreateTags"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "Null": {
+          "ec2:CreateAction": "true"
+        }
+      }
+    },
+    {
+      "Sid": "DenyRemovingTags",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:DeleteTags"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "GetRegistryLoginToken",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "${AWS_REGION}"
+        }
+      }
+    },
+    {
+      "Sid": "PushAndPullProjectImages",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:PutImage",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:DescribeImages",
+        "ecr:ListImages"
+      ],
+      "Resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_*_${ENVIRONMENT}"
+    },
+    {
+      "Sid": "CreateTaggedRepositories",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:CreateRepository"
+      ],
+      "Resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_*_${ENVIRONMENT}",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ManageProjectRepositories",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:DeleteRepository",
+        "ecr:DescribeRepositories",
+        "ecr:PutLifecyclePolicy",
+        "ecr:GetLifecyclePolicy",
+        "ecr:DeleteLifecyclePolicy",
+        "ecr:ListTagsForResource",
+        "ecr:TagResource",
+        "ecr:UntagResource"
+      ],
+      "Resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_*_${ENVIRONMENT}"
+    },
+    {
+      "Sid": "DenyRepositoriesWithoutProjectTagValue",
+      "Effect": "Deny",
+      "Action": [
+        "ecr:CreateRepository"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "DenyRepositoriesWithoutExactProjectKey",
+      "Effect": "Deny",
+      "Action": [
+        "ecr:CreateRepository"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ForAllValues:StringNotEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyRemovingProjectTag",
+      "Effect": "Deny",
+      "Action": [
+        "ecr:UntagResource"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ForAnyValue:StringEqualsIgnoreCase": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyChangingProjectTag",
+      "Effect": "Deny",
+      "Action": [
+        "ecr:TagResource"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ForAnyValue:StringEqualsIgnoreCase": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        },
+        "Null": {
+          "aws:ResourceTag/Project": "false"
+        }
+      }
+    }
+  ]
+}

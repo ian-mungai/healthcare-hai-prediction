@@ -1,0 +1,134 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CreateTaggedSnapshotSchedule",
+      "Effect": "Allow",
+      "Action": [
+        "dlm:CreateLifecyclePolicy"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}",
+          "aws:RequestedRegion": "${AWS_REGION}"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ManageProjectSnapshotSchedule",
+      "Effect": "Allow",
+      "Action": [
+        "dlm:GetLifecyclePolicy",
+        "dlm:UpdateLifecyclePolicy",
+        "dlm:DeleteLifecyclePolicy",
+        "dlm:ListTagsForResource",
+        "dlm:TagResource",
+        "dlm:UntagResource"
+      ],
+      "Resource": "arn:aws:dlm:${AWS_REGION}:${AWS_ACCOUNT_ID}:policy/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "TagScheduleWhileCreating",
+      "Effect": "Allow",
+      "Action": [
+        "dlm:TagResource"
+      ],
+      "Resource": "arn:aws:dlm:${AWS_REGION}:${AWS_ACCOUNT_ID}:policy/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ListSnapshotSchedules",
+      "Effect": "Allow",
+      "Action": [
+        "dlm:GetLifecyclePolicies"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "${AWS_REGION}"
+        }
+      }
+    },
+    {
+      "Sid": "DenyScheduleWithoutProjectTagValue",
+      "Effect": "Deny",
+      "Action": [
+        "dlm:CreateLifecyclePolicy"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "DenyScheduleWithoutExactProjectKey",
+      "Effect": "Deny",
+      "Action": [
+        "dlm:CreateLifecyclePolicy"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ForAllValues:StringNotEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyRemovingProjectTag",
+      "Effect": "Deny",
+      "Action": [
+        "dlm:UntagResource"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ForAnyValue:StringEqualsIgnoreCase": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyChangingProjectTag",
+      "Effect": "Deny",
+      "Action": [
+        "dlm:TagResource"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ForAnyValue:StringEqualsIgnoreCase": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        },
+        "Null": {
+          "aws:ResourceTag/Project": "false"
+        }
+      }
+    }
+  ]
+}

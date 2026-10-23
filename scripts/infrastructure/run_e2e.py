@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import stat
 import sys
@@ -17,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from scripts.infrastructure import systemd_model
 from scripts.process import TimeoutExpired, run_command
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -28,10 +30,249 @@ DISCLOSURE_SENTINEL = "example_e2e_value_do_not_print"
 SOURCE_PATHS = (
     "scripts/process.py",
     "scripts/infrastructure/render_project_config.py",
+    "scripts/infrastructure/render_platform_config.py",
     "scripts/infrastructure/render_project_config.sh",
     "scripts/infrastructure/terraform.sh",
 )
+# The resource types the platform stack (the project profile) may declare, and the ones the IAM stack (the administrator) must keep.
+PLATFORM_RESOURCE_TYPES = {
+    "aws_cloudwatch_log_group",
+    "aws_cloudwatch_metric_alarm",
+    "aws_dlm_lifecycle_policy",
+    "aws_ebs_volume",
+    "aws_ecr_lifecycle_policy",
+    "aws_ecr_repository",
+    "aws_ecs_capacity_provider",
+    "aws_ecs_cluster",
+    "aws_ecs_cluster_capacity_providers",
+    "aws_eip",
+    "aws_sns_topic",
+}
+OWNER_RESOURCE_TYPES = {
+    "aws_autoscaling_group",
+    "aws_budgets_budget",
+    "aws_iam_instance_profile",
+    "aws_iam_role",
+    "aws_iam_role_policy",
+    "aws_internet_gateway",
+    "aws_launch_template",
+    "aws_route",
+    "aws_route_table",
+    "aws_route_table_association",
+    "aws_security_group",
+    "aws_sns_topic_policy",
+    "aws_subnet",
+    "aws_vpc",
+    "aws_vpc_security_group_egress_rule",
+    "aws_vpc_security_group_ingress_rule",
+}
 OUTPUT_NAMES = ("infra/deployment.auto.tfvars.json", "infra/iam/deployment.auto.tfvars.json")
+PLATFORM_OUTPUT = "infra/platform/deployment.auto.tfvars.json"
+BOOT_TEMPLATE = "infra/iam/host_boot.sh.tftpl"
+# The host paths the boot script names in its first lines, moved under a temporary root for each run.
+BOOT_PATHS = {
+    "log_file": "boot.log",
+    "fstab_file": "fstab",
+    "ecs_config_file": "ecs.config",
+    "device_directory": "devices",
+    "systemd_directory": "systemd",
+    "sysctl_file": "sysctl.d/90-platform-core-dumps.conf",
+    "nft_rules_file": "nftables/platform_imds.nft",
+    "nftables_config": "nftables.conf",
+    "guard_script": "sbin/platform_imds_guard",
+}
+BOOT_VALUES = {
+    "region": "eu-west-1",
+    "cluster_name": "example_project_cluster_dev",
+    "data_volume_name": "example_project_host_data_dev",
+    "address_name": "example_project_host_dev",
+    "project_tag": "example_project",
+}
+# The host finds its data volume and Elastic IP by their Name and Project tags; the aws stand-in answers the two describe calls with these IDs.
+BOOT_IDS = {"volume": "vol-0123456789abcdef0", "allocation": "eipalloc-0123456789abcdef0"}
+# Stand-in system commands: each succeeds at once unless a case replaces it with one that stalls.
+BOOT_STUBS = {
+    "dnf": "exit 0",
+    "rpm": "exit 0",
+    "mkfs.xfs": "exit 0",
+    "mount": "exit 0",
+    "mountpoint": "exit 1",
+    "blkid": 'case "$1" in -p) exit 2 ;; *) echo 00000000-0000-0000-0000-000000000000 ;; esac',
+}
+STALL = "exec /bin/sleep 45"
+STALL_IGNORING_TERM = "trap '' TERM; exec /bin/sleep 45"
+# Stateful stand-ins, in Python, for the commands whose effect later steps read back. They keep their state in
+# BOOT_STATE: the nftables table, the kernel settings, each systemctl call and each metadata request with its outcome.
+# The metadata stand-in drops a request from a non-root user only while the table holds the root-only rule, which is
+# what the kernel does with that rule; the kernel and systemd themselves are not exercised.
+BOOT_PYTHON_STUBS = {
+    "aws": """
+import json, os, sys
+from pathlib import Path
+state = Path(os.environ["BOOT_STATE"])
+arguments = sys.argv[1:]
+with (state / "aws_calls.log").open("a", encoding="utf-8") as log:
+    log.write(" ".join(arguments) + "\\n")
+ids = json.loads(os.environ["BOOT_IDS"])
+filters = {argument for argument in arguments if argument.startswith("Name=")}
+if os.environ.get("BOOT_AWS_FAIL", "\\0") in " ".join(arguments):
+    sys.exit("aws stand-in: simulated failure")
+if arguments[:2] == ["ec2", "describe-volumes"]:
+    wanted = {"Name=tag:Name,Values=" + os.environ["BOOT_DATA_VOLUME_NAME"], "Name=tag:Project,Values=" + os.environ["BOOT_PROJECT_TAG"]}
+    print(os.environ.get("BOOT_VOLUME_RESULT", ids["volume"]) if filters == wanted else "", end="")
+elif arguments[:2] == ["ec2", "describe-addresses"]:
+    wanted = {"Name=tag:Name,Values=" + os.environ["BOOT_ADDRESS_NAME"], "Name=tag:Project,Values=" + os.environ["BOOT_PROJECT_TAG"]}
+    print(os.environ.get("BOOT_ALLOCATION_RESULT", ids["allocation"]) if filters == wanted else "", end="")
+elif arguments[:2] not in (["ec2", "associate-address"], ["ec2", "attach-volume"]):
+    sys.exit(f"aws stand-in: unsupported arguments {arguments}")
+""",
+    "nft": """
+import json, os, sys
+from pathlib import Path
+state = Path(os.environ["BOOT_STATE"])
+table = state / "nft_table"
+arguments = sys.argv[1:]
+if os.environ.get("BOOT_NFT_FAIL"):
+    sys.exit("Error: Could not process rule: Operation not supported")
+def event(text):
+    with (state / "events.log").open("a", encoding="utf-8") as log:
+        log.write(text + "\\n")
+def remove():
+    if table.exists():
+        table.unlink()
+        active = json.loads((state / "active.json").read_text(encoding="utf-8")) if (state / "active.json").exists() else []
+        running = [unit for unit in ("docker.service", "ecs.service") if unit in active]
+        event("rule_removed containers_running=" + (",".join(running) or "none"))
+def process(path):
+    text = Path(path).read_text(encoding="utf-8")
+    for line in (line.strip() for line in text.splitlines()):
+        if line in ("flush ruleset", "delete table inet platform_imds"):
+            table.unlink(missing_ok=True)
+        elif line.startswith("include "):
+            process(line.split('"')[1])
+    if "table inet platform_imds {" in text:
+        table.write_text(text[text.index("table inet platform_imds {"):], encoding="utf-8")
+def load(path):
+    # One nft -f file is one transaction: a table that the file deletes and adds again is never absent in between.
+    before = table.read_text(encoding="utf-8") if table.exists() else None
+    process(path)
+    after = table.read_text(encoding="utf-8") if table.exists() else None
+    if before is not None and after is None:
+        table.write_text(before, encoding="utf-8")
+        remove()
+    elif after is not None:
+        event("rule_loaded")
+if arguments[:1] == ["-f"]:
+    load(arguments[1])
+elif arguments == ["list", "table", "inet", "platform_imds"]:
+    if not table.exists():
+        sys.exit("Error: No such file or directory")
+    print(table.read_text(encoding="utf-8"), end="")
+elif arguments in (["flush", "ruleset"], ["delete", "table", "inet", "platform_imds"]):
+    remove()
+else:
+    sys.exit(f"nft stand-in: unsupported arguments {arguments}")
+""",
+    "curl": """
+import json, os, sys
+from pathlib import Path
+state = Path(os.environ["BOOT_STATE"])
+url = next((argument for argument in sys.argv[1:] if "169.254.169.254" in argument), "")
+if url:
+    uid = int(os.environ.get("PROBE_UID", "0"))
+    table = state / "nft_table"
+    rule = table.exists() and all(text in table.read_text(encoding="utf-8") for text in ("hook output", "ip daddr 169.254.169.254 meta skuid != 0 drop"))
+    with (state / "metadata_requests.log").open("a", encoding="utf-8") as log:
+        log.write(f"{uid} {'dropped' if uid != 0 and rule else 'reached'}\\n")
+    if uid != 0 and rule:
+        sys.exit(28)
+    if "/tags/instance/" in url:
+        sys.exit(22)
+print("i-0123456789abcdef0", end="")
+""",
+    "setpriv": """
+import os, sys
+arguments = sys.argv[1:]
+uid = next(argument.split("=", 1)[1] for argument in arguments if argument.startswith("--reuid="))
+command = arguments[arguments.index("--") + 1:]
+os.execvpe(command[0], command, {**os.environ, "PROBE_UID": uid})
+""",
+    "sysctl": """
+import os, sys
+from pathlib import Path
+settings = Path(os.environ["BOOT_STATE"]) / "sysctl"
+arguments = sys.argv[1:]
+if arguments[:2] == ["-q", "-p"] and len(arguments) == 3:
+    if not os.environ.get("BOOT_SYSCTL_IGNORE"):
+        for line in Path(arguments[2]).read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            if value:
+                (settings / key.strip()).write_text(value.strip(), encoding="utf-8")
+elif arguments[:1] == ["-n"] and len(arguments) == 2:
+    print((settings / arguments[1]).read_text(encoding="utf-8"))
+else:
+    sys.exit(f"sysctl stand-in: unsupported arguments {arguments}")
+""",
+}
+# systemctl runs the dependency model in systemd_model.py: the model's source is copied into the stand-in, which adds the units the
+# image ships (the firewall service, Docker and the ECS agent) and the stall hook.
+SYSTEMCTL_STUB_BODY = """
+import os, subprocess, sys
+config = os.environ["BOOT_NFTABLES_CONFIG"]
+BUILTIN = {
+    "nftables.service": (
+        "[Unit]\\nDescription=Netfilter Tables\\n\\n[Service]\\nType=oneshot\\nRemainAfterExit=yes\\n"
+        f"ExecStart=nft -f {config}\\nExecReload=nft -f {config}\\nExecStop=nft flush ruleset\\n"
+    ),
+    "docker.service": "[Unit]\\nDescription=Docker Application Container Engine\\n\\n[Service]\\nType=notify\\nExecStart=true\\n",
+    "ecs.service": (
+        "[Unit]\\nDescription=Amazon ECS container agent\\nRequires=docker.service\\nAfter=docker.service\\n\\n"
+        "[Service]\\nType=simple\\nExecStart=true\\n"
+    ),
+}
+def execute(command):
+    return subprocess.run(command, check=False).returncode
+arguments = sys.argv[1:]
+with (Path(os.environ["BOOT_STATE"]) / "systemctl.log").open("a", encoding="utf-8") as log:
+    log.write(" ".join(arguments) + "\\n")
+if os.environ.get("BOOT_SYSTEMCTL_STALL", "\\0") in " ".join(arguments):
+    os.execv("/bin/sleep", ["sleep", "45"])
+main(arguments, BUILTIN, execute)
+"""
+# The ECS-optimized image ships a systemd-coredump pipe handler and set-user-ID dumps on.
+BOOT_KERNEL_DEFAULTS = {"kernel.core_pattern": "|/usr/lib/systemd/systemd-coredump %P %u %g %s %t %c %h", "fs.suid_dumpable": "2"}
+# Logs each requested deadline, then runs GNU timeout when the runner found one, or else does what GNU timeout does: TERM at
+# the deadline, KILL after the grace period, status 124 or 137. Deadlines are capped at BOOT_TIMEOUT_CAP and grace
+# periods at BOOT_GRACE_CAP seconds.
+TIMEOUT_STUB = """#!/usr/bin/perl
+use strict;
+my @request = @ARGV;
+my $grace = 0;
+if ($ARGV[0] =~ /^--kill-after=(\\d+)$/) { $grace = $1; shift @ARGV; }
+my $limit = shift @ARGV;
+open(my $log, ">>", $ENV{BOOT_TIMEOUT_LOG}) or die;
+print $log "@request\\n";
+close $log;
+$limit = $ENV{BOOT_TIMEOUT_CAP} if $ENV{BOOT_TIMEOUT_CAP} < $limit;
+$grace = $ENV{BOOT_GRACE_CAP} if $grace && $ENV{BOOT_GRACE_CAP} < $grace;
+if ($ENV{BOOT_GNU_TIMEOUT}) { exec($ENV{BOOT_GNU_TIMEOUT}, ($grace ? ("--kill-after=$grace") : ()), $limit, @ARGV) or exit 125; }
+my $pid = fork();
+if ($pid == 0) { exec(@ARGV) or exit 127; }
+local $SIG{ALRM} = sub { die "deadline\\n" };
+my $status;
+eval { alarm $limit; waitpid($pid, 0); $status = $?; alarm 0; };
+if ($@ eq "deadline\\n") {
+  kill "TERM", $pid;
+  if ($grace) {
+    eval { alarm $grace; waitpid($pid, 0); alarm 0; };
+    if ($@ eq "deadline\\n") { kill "KILL", $pid; waitpid($pid, 0); exit 137; }
+  } else {
+    waitpid($pid, 0);
+  }
+  exit 124;
+}
+exit(($status & 127) ? 128 + ($status & 127) : $status >> 8);
+"""
 FIXTURE = {
     "AWS_ACCOUNT_ID": "111111111111",
     "AWS_PROFILE": PROFILE,
@@ -110,7 +351,7 @@ class Evidence:
             value = value.replace(raw, replacement)
         return value
 
-    def run(self, name: str, command: list[str], workspace: Path, extra_environment: dict[str, str] | None = None) -> tuple[dict, Any]:
+    def run(self, name: str, command: list[str], workspace: Path, extra_environment: dict[str, str] | None = None) -> tuple[dict[str, Any], Any]:
         """Execute a real local process with synthetic inputs and record assertions."""
         step: dict[str, Any] = {
             "name": name,
@@ -133,13 +374,13 @@ class Evidence:
             step["duration_seconds"] = round(time.perf_counter() - started, 6)
 
     @staticmethod
-    def check(step: dict, name: str, condition: bool) -> None:
+    def check(step: dict[str, Any], name: str, condition: bool) -> None:
         """Append an assertion and stop the suite when it fails."""
         step["assertions"].append({"name": name, "passed": condition})
         if not condition:
             raise CheckFailed(f"{step['name']}: {name}")
 
-    def capture_outputs(self, step: dict, workspace: Path, region: str, project: str = "example_project") -> dict[str, str]:
+    def capture_outputs(self, step: dict[str, Any], workspace: Path, region: str, project: str = "example_project") -> dict[str, str]:
         """Verify exact synthetic outputs, private modes and stable hashes."""
         common = {
             "expected_account_id": "111111111111",
@@ -178,7 +419,11 @@ class Evidence:
         self.report["assertion_count"] = sum(len(step["assertions"]) for step in self.report["steps"])
         self.report["requirements_sha256"] = sha256((REPO_ROOT / "requirements.txt").read_bytes())
         self.report["prerequisites"] = "Project Python 3.12 environment with pinned requirements; real bash and dirname. No cloud credentials needed."
-        self.report["limits"] = "Configuration processes and pre-deployment guards only. No Terraform deployment or live AWS identity verified."
+        self.report["limits"] = (
+            "Configuration processes and pre-deployment guards only. No Terraform deployment or live AWS identity verified. The host boot"
+            " script runs in a temporary root against stand-in system commands, not on a host: stateful stand-ins model the"
+            " nftables table, kernel settings, systemd starts and metadata requests, so the kernel and systemd are not exercised."
+        )
         self.report["cleanup"] = "Temporary synthetic workspace is removed when the runner exits; immutable evidence is retained."
         write_json(self.output / "report.json", self.report)
         hashes = {path.relative_to(self.output).as_posix(): sha256(path.read_bytes()) for path in sorted(self.output.rglob("*")) if path.is_file()}
@@ -291,6 +536,484 @@ def check_saved_plans(evidence: Evidence, sources: dict[str, bytes], renderer: l
     evidence.check(step, "value_not_echoed", "example_value" not in result.stdout + result.stderr)
 
 
+def platform_plan(values: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    """Build a synthetic saved-plan document with the platform stack's declared variables and committed defaults."""
+    declared: dict[str, dict[str, Any]] = {name: {} for name in values}
+    declared |= {"data_volume_gb": {"default": 60}, "snapshot_retain_count": {"default": 7}}
+    variables = {name: {"value": value} for name, value in values.items()}
+    variables |= {"data_volume_gb": {"value": 60}, "snapshot_retain_count": {"value": 7}}
+    plan = {"complete": True, "errored": False, "variables": variables, "configuration": {"root_module": {"variables": declared}}}
+    for key, value in changes.items():
+        if key == "variables":
+            plan["variables"] = {**variables, **value}
+        else:
+            plan[key] = value
+    return plan
+
+
+def run_platform_cases(evidence: Evidence, sources: dict[str, bytes]) -> None:
+    """Render platform inputs, reject stale ones and check saved platform plans through a stand-in terraform."""
+    renderer = [sys.executable, "-m", "scripts.infrastructure.render_platform_config"]
+    workspace = copied_workspace(evidence.temporary, "platform", sources, FIXTURE)
+    expected = {
+        "aws_profile": PROFILE,
+        "aws_region": FIXTURE["AWS_REGION"],
+        "environment": "dev",
+        "expected_account_id": FIXTURE["AWS_ACCOUNT_ID"],
+        "project_name": FIXTURE["PROJECT_NAME"],
+    }
+    step, result = evidence.run("render_platform", renderer, workspace)
+    evidence.check(step, "render_succeeded", result.returncode == 0 and "Rendered private platform inputs" in result.stdout)
+    path = workspace / PLATFORM_OUTPUT
+    evidence.check(step, "exact_platform_inputs", path.is_file() and json.loads(path.read_bytes()) == expected)
+    evidence.check(step, "owner_only_permissions", stat.S_IMODE(path.stat().st_mode) == 0o600)
+    evidence.check(step, "only_platform_output", not (workspace / OUTPUT_NAMES[0]).exists() and not (workspace / OUTPUT_NAMES[1]).exists())
+    step, result = evidence.run("check_platform", [*renderer, "--check"], workspace)
+    evidence.check(step, "matching_inputs_accepted", result.returncode == 0 and "Verified .env-derived platform inputs" in result.stdout)
+    write_environment(workspace, {**FIXTURE, "AWS_REGION": "us-east-2"})
+    before = sha256(path.read_bytes())
+    step, result = evidence.run("reject_stale_platform", [*renderer, "--check"], workspace)
+    evidence.check(step, "stale_inputs_rejected", result.returncode == 2 and "Generated configuration is stale" in result.stderr)
+    evidence.check(step, "output_unchanged", sha256(path.read_bytes()) == before)
+    write_environment(workspace, FIXTURE)
+
+    # The stand-in prints the synthetic plan document passed as the saved-plan path; the real CLI is never run. It sits in a folder of its own
+    # that only these runs put on the PATH, because the IAM saved-plan cases need the real terraform in the shared tools folder.
+    stand_in = evidence.temporary / "platform_tools"
+    stand_in.mkdir(exist_ok=True)
+    (stand_in / "terraform").write_text('#!/bin/sh\nexec /bin/cat "$4"\n', encoding="utf-8")
+    (stand_in / "terraform").chmod(0o700)
+    cases = {
+        "accept_matching_platform_plan": (platform_plan(expected), 0, "Rendered private platform inputs"),
+        "reject_changed_default": (
+            platform_plan(expected, variables={"data_volume_gb": {"value": 200}}),
+            2,
+            "differ from .env or the committed defaults",
+        ),
+        "reject_changed_env_input": (
+            platform_plan(expected, variables={"aws_region": {"value": "us-east-2"}}),
+            2,
+            "differ from .env or the committed defaults",
+        ),
+        "reject_undeclared_variable": (platform_plan(expected, variables={"example_extra": {"value": "x"}}), 2, "declared variables"),
+        "reject_incomplete_plan": (platform_plan(expected, complete=False), 2, "Only a complete, successful saved plan"),
+    }
+    for name, (plan, returncode, message) in cases.items():
+        plan_path = workspace / f"{name}.json"
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+        step, result = evidence.run(name, [*renderer, "--check-plan", str(plan_path)], workspace, {"PATH": str(stand_in)})
+        evidence.check(step, "expected_outcome", result.returncode == returncode and message in result.stdout + result.stderr)
+
+    # The project user must not own anything a launch or the cost budget is built from: the network, the launch template, the host
+    # group, the budget and every role belong to the administrator-applied IAM stack. The platform stack may declare only what
+    # the approved permissions list gives the project profile, and the IAM stack must declare the moved resources.
+    declared = re.compile(r'^resource\s+"(aws_[a-z0-9_]+)"\s+"([a-z_]+)"', re.MULTILINE)
+
+    def resource_types(stack: str) -> set[str]:
+        return {match[1] for path in (REPO_ROOT / "infra" / stack).glob("*.tf") for match in declared.finditer(path.read_text(encoding="utf-8"))}
+
+    platform_types, iam_types = resource_types("platform"), resource_types("iam")
+    step = evidence.report["steps"][-1]
+    evidence.check(step, "platform_stack_declares_only_what_the_project_profile_may_create", platform_types <= PLATFORM_RESOURCE_TYPES)
+    evidence.check(step, "platform_stack_owns_no_template_network_group_budget_or_role", not platform_types & OWNER_RESOURCE_TYPES)
+    evidence.check(step, "iam_stack_declares_the_moved_resources", iam_types >= OWNER_RESOURCE_TYPES)
+    evidence.check(step, "iam_stack_has_no_budget_action_so_nothing_stops_spending", "aws_budgets_budget_action" not in iam_types)
+    evidence.check(step, "iam_stack_declares_nothing_the_project_profile_owns", iam_types & PLATFORM_RESOURCE_TYPES <= {"aws_sns_topic"})
+    evidence.check(
+        step,
+        "iam_stack_attaches_nothing_to_users_or_groups",
+        not {name for name in iam_types if re.search(r"(user|group)_?(policy|membership|attachment)|policy_attachment", name)},
+    )
+
+
+def render_host_boot(template: str, root: Path) -> str:
+    """Fill the boot template as Terraform does and move its host paths under a temporary root."""
+    script = template
+    for name, value in {**BOOT_VALUES, "mount_path": str(root / "data")}.items():
+        script = script.replace("${" + name + "}", value)
+    if "${" in script or "%{" in script:
+        raise CheckFailed("The boot template holds an expression the runner does not fill")
+    for name, relative in BOOT_PATHS.items():
+        script, count = re.subn(rf'^{name}="[^"]*"$', f'{name}="{root / relative}"', script, flags=re.MULTILINE)
+        if count != 1:
+            raise CheckFailed(f"The boot template must set {name} once on its own line")
+    return script
+
+
+PRIVILEGE_SETTING = "ECS_DISABLE_PRIVILEGED=true\n"
+
+
+def privileged_containers_disabled(config: str) -> bool:
+    """True when the last ECS_DISABLE_PRIVILEGED line of the agent configuration is true: the agent reads the last value of a variable."""
+    values = [line.partition("=")[2] for line in config.splitlines() if line.startswith("ECS_DISABLE_PRIVILEGED=")]
+    return bool(values) and values[-1] == "true"
+
+
+def allow_privileged_containers(template: str, how: str) -> str:
+    """Plant the defect of review round 5: the setting is missing, false or overridden later, so a task definition could ask for a privileged container."""
+    if template.count(PRIVILEGE_SETTING) != 1:
+        raise CheckFailed("The boot template must write the privileged-container setting once")
+    replacement = {"missing": "", "false": "ECS_DISABLE_PRIVILEGED=false\n", "overridden": PRIVILEGE_SETTING + "ECS_DISABLE_PRIVILEGED=false\n"}[how]
+    return template.replace(PRIVILEGE_SETTING, replacement)
+
+
+def misplace_dependency(template: str) -> str:
+    """Plant the defect the review found: the Docker and ECS drop-ins keep Requires= but in [Service], where systemd ignores it."""
+    correct = "[Unit]\nRequires=platform_imds_guard.service\nAfter=platform_imds_guard.service\n\n[Service]\nExecStartPre=$guard_script apply\n"
+    misplaced = "[Unit]\nAfter=platform_imds_guard.service\n\n[Service]\nRequires=platform_imds_guard.service\nExecStartPre=$guard_script apply\n"
+    if template.count(correct) != 1:
+        raise CheckFailed("The boot template must hold the Docker and ECS drop-in text the planted defect replaces")
+    return template.replace(correct, misplaced)
+
+
+def prepare_host_root(root: Path, template: str, stub_overrides: dict[str, str]) -> Path:
+    """Create a temporary host root with stand-in commands, a data volume device and the image's kernel defaults."""
+    tools = root / "tools"
+    for directory in (tools, root / "devices", root / "systemd", root / "state" / "sysctl"):
+        directory.mkdir(parents=True)
+    for command, body in {**BOOT_STUBS, **stub_overrides}.items():
+        (tools / command).write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+    for command, source in BOOT_PYTHON_STUBS.items():
+        (tools / command).write_text(f"#!{sys.executable} -I\n{source}", encoding="utf-8")
+    (tools / "systemctl").write_text(
+        f"#!{sys.executable} -I\n{Path(systemd_model.__file__).read_text(encoding='utf-8')}\n{SYSTEMCTL_STUB_BODY}", encoding="utf-8"
+    )
+    (tools / "timeout").write_text(TIMEOUT_STUB, encoding="utf-8")
+    for tool in tools.iterdir():
+        tool.chmod(0o700)
+    for key, value in BOOT_KERNEL_DEFAULTS.items():
+        (root / "state" / "sysctl" / key).write_text(value, encoding="utf-8")
+    (root / "devices" / f"nvme-Amazon_Elastic_Block_Store_{BOOT_IDS['volume'].replace('-', '')}").touch()
+    (root / "fstab").touch()
+    script = root / "host_boot.sh"
+    script.write_text(render_host_boot(template, root), encoding="utf-8")
+    return script
+
+
+def read_lines(path: Path) -> list[str]:
+    """Return a state file's lines, or none when the step never wrote it."""
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+def probe_metadata(evidence: Evidence, root: Path, environment: dict[str, str], name: str, uid: int) -> int | None:
+    """Request the metadata service as one user through the stand-ins and return curl's exit status."""
+    tools = root / "tools"
+    request = ["curl", "-s", "-o", "/dev/null", "--max-time", "3", "http://169.254.169.254/latest/meta-data/"]
+    command = (
+        [str(tools / "curl"), *request[1:]] if uid == 0 else [str(tools / "setpriv"), f"--reuid={uid}", f"--regid={uid}", "--clear-groups", "--", *request]
+    )
+    _, result = evidence.run(name, command, root, environment)
+    status: int | None = result.returncode
+    return status
+
+
+def check_metadata_isolation(evidence: Evidence, root: Path, environment: dict[str, str], name: str) -> None:
+    """Require root to reach the metadata service and two application users to be dropped."""
+    outcomes = {uid: probe_metadata(evidence, root, environment, f"{name}_uid_{uid}", uid) for uid in (0, 1000, 50000)}
+    step = evidence.report["steps"][-1]
+    evidence.check(step, f"{name}_root_allowed_application_users_denied", outcomes == {0: 0, 1000: 28, 50000: 28})
+
+
+def unit_command(root: Path, unit: str, key: str) -> list[str]:
+    """Return the one command a written unit file sets for a key, split as systemd splits a plain command line."""
+    lines = [line.removeprefix(key) for line in read_lines(root / "systemd" / unit) if line.startswith(key)]
+    if len(lines) != 1:
+        raise CheckFailed(f"{unit} must set {key} once")
+    return lines[0].split()
+
+
+def parsed_unit(root: Path, unit: str) -> dict[str, dict[str, list[str]]]:
+    """Read a written unit and its drop-ins the way systemd does: each directive only in the section that defines it."""
+    sections: dict[str, dict[str, list[str]]] = systemd_model.read_unit(root / "systemd", unit, {}, [])
+    return sections
+
+
+def unit_values(root: Path, unit: str, section: str, key: str) -> list[str]:
+    """Return the values of one directive as systemd reads them, or none when the section does not define it."""
+    return parsed_unit(root, unit).get(section, {}).get(key, [])
+
+
+def check_unit_sections(evidence: Evidence, root: Path) -> None:
+    """Require every written unit to keep each directive in its own section and the dependencies to read as intended."""
+    step = evidence.report["steps"][-1]
+    guard = str(root / BOOT_PATHS["guard_script"])
+    firewall = "platform_imds_guard.service"
+    evidence.check(step, "units_have_no_misplaced_directive", not set(read_lines(root / "state" / "systemd_warnings.log")))
+    evidence.check(
+        step,
+        "guard_unit_dependencies_in_unit_section",
+        unit_values(root, firewall, "Unit", "PartOf") == ["nftables.service"]
+        and unit_values(root, firewall, "Unit", "ReloadPropagatedFrom") == ["nftables.service"]
+        and unit_values(root, firewall, "Unit", "After") == ["nftables.service"]
+        and unit_values(root, firewall, "Unit", "Before") == ["docker.service", "ecs.service"],
+    )
+    evidence.check(
+        step,
+        "guard_unit_commands_in_service_section",
+        unit_values(root, firewall, "Service", "Type") == ["oneshot"]
+        and unit_values(root, firewall, "Service", "RemainAfterExit") == ["yes"]
+        and unit_values(root, firewall, "Service", "ExecStart") == [f"{guard} apply"],
+    )
+    for name in ("docker.service", "ecs.service"):
+        evidence.check(
+            step,
+            f"{name.removesuffix('.service')}_requires_the_guard",
+            unit_values(root, name, "Unit", "Requires") == [firewall]
+            and unit_values(root, name, "Unit", "After") == [firewall]
+            and unit_values(root, name, "Service", "ExecStartPre") == [f"{guard} apply"]
+            and not unit_values(root, name, "Service", "Requires"),
+        )
+    evidence.check(
+        step,
+        "timer_directives_in_timer_section",
+        unit_values(root, "platform_imds_watch.timer", "Timer", "OnUnitActiveSec") == ["10s"]
+        and unit_values(root, "platform_imds_watch.timer", "Install", "WantedBy") == ["timers.target"],
+    )
+
+
+def restart_firewall(evidence: Evidence, root: Path, environment: dict[str, str], label: str) -> list[str]:
+    """Start the ECS agent as the image does after boot, restart the firewall service and return what happened in order."""
+    tools = root / "tools"
+    state = root / "state"
+    step, result = evidence.run(f"{label}_start_agent", [str(tools / "systemctl"), "start", "ecs.service"], root, environment)
+    evidence.check(
+        step, "docker_and_agent_running", result.returncode == 0 and {"docker.service", "ecs.service"} <= set(json.loads((state / "active.json").read_text()))
+    )
+    (state / "events.log").write_text("", encoding="utf-8")
+    step, result = evidence.run(f"{label}_restart_firewall", [str(tools / "systemctl"), "restart", "nftables.service"], root, environment)
+    evidence.check(step, "restart_succeeded", result.returncode == 0)
+    return read_lines(state / "events.log")
+
+
+def run_firewall_cases(evidence: Evidence, root: Path, environment: dict[str, str]) -> None:
+    """After a successful boot, reload, flush and restart the firewall and restart Docker and the ECS agent."""
+    tools = root / "tools"
+    state = root / "state"
+    check_unit_sections(evidence, root)
+    events = restart_firewall(evidence, root, environment, "dependency")
+    step = evidence.report["steps"][-1]
+    step["events"] = [evidence.redact(line) for line in events]
+    removed = [index for index, line in enumerate(events) if line.startswith("rule_removed")]
+    stopped = [events.index(f"stop {unit}") for unit in ("ecs.service", "docker.service") if f"stop {unit}" in events]
+    evidence.check(step, "containers_stopped_with_the_firewall", len(stopped) == 2 and events.index("stop platform_imds_guard.service") > max(stopped))
+    evidence.check(
+        step,
+        "containers_stopped_before_the_rule_went",
+        bool(removed) and all(events[index].endswith("containers_running=none") for index in removed) and max(stopped) < min(removed),
+    )
+    loaded = events.index("rule_loaded") if "rule_loaded" in events else len(events)
+    evidence.check(
+        step,
+        "containers_started_after_the_rule_returned",
+        all(f"start {unit}" in events and events.index(f"start {unit}") > loaded for unit in ("docker.service", "ecs.service")),
+    )
+    evidence.check(step, "containers_running_again", {"docker.service", "ecs.service"} <= set(json.loads((state / "active.json").read_text())))
+    check_metadata_isolation(evidence, root, environment, "after_firewall_restart")
+
+    check_metadata_isolation(evidence, root, environment, "after_boot")
+    reload_file = root / "nftables_reload.nft"
+    reload_file.write_text(f'flush ruleset\ninclude "{root / BOOT_PATHS["nftables_config"]}"\n', encoding="utf-8")
+    step, result = evidence.run("nftables_include_reload", [str(tools / "nft"), "-f", str(reload_file)], root, environment)
+    evidence.check(step, "reload_succeeded", result.returncode == 0)
+    check_metadata_isolation(evidence, root, environment, "after_nftables_reload")
+    (state / "events.log").write_text("", encoding="utf-8")
+    step, result = evidence.run("nftables_service_reload", [str(tools / "systemctl"), "reload", "nftables.service"], root, environment)
+    events = read_lines(state / "events.log")
+    evidence.check(
+        step,
+        "reload_reaches_the_guard_and_stops_nothing",
+        result.returncode == 0 and "reload platform_imds_guard.service" in events and not any(line.startswith(("stop ", "rule_removed")) for line in events),
+    )
+    check_metadata_isolation(evidence, root, environment, "after_firewall_service_reload")
+
+    watch = unit_command(root, "platform_imds_watch.service", "ExecStart=")
+    for restart in ("docker.service", "ecs.service", None):
+        step, result = evidence.run(f"flush_before_{restart or 'timer'}", [str(tools / "nft"), "flush", "ruleset"], root, environment)
+        evidence.check(
+            step, "rule_removed", result.returncode == 0 and probe_metadata(evidence, root, environment, f"flushed_before_{restart or 'timer'}", 50000) == 0
+        )
+        command = [str(tools / "systemctl"), "restart", restart] if restart else watch
+        step, result = evidence.run(f"restart_{restart}" if restart else "timer_check_restores_rule", command, root, environment)
+        evidence.check(step, "rule_loaded_before_start", result.returncode == 0)
+        check_metadata_isolation(evidence, root, environment, f"after_{restart or 'timer'}")
+    evidence.check(evidence.report["steps"][-1], "timer_stopped_nothing", not any(line.startswith("stop ") for line in read_lines(state / "systemctl.log")))
+
+    failing = {**environment, "BOOT_NFT_FAIL": "1"}
+    for restart in ("docker.service", "ecs.service"):
+        evidence.run(f"flush_before_failed_{restart}", [str(tools / "nft"), "flush", "ruleset"], root, environment)
+        step, result = evidence.run(f"restart_{restart}_without_rule", [str(tools / "systemctl"), "restart", restart], root, failing)
+        evidence.check(step, "start_refused", result.returncode != 0 and "Could not load the metadata firewall rule." in result.stderr)
+    step, result = evidence.run("timer_check_cannot_restore_rule", watch, root, failing)
+    evidence.check(step, "timer_failed", result.returncode != 0 and "stopping the ECS agent and Docker" in result.stderr)
+    evidence.check(step, "containers_stopped", read_lines(state / "systemctl.log")[-1].split()[:3] == ["stop", "ecs.service", "docker.service"])
+
+
+def run_planted_dependency_defect(evidence: Evidence, root: Path, environment: dict[str, str]) -> None:
+    """Prove the dependency checks catch the review's defect: Requires= in [Service] is reported and leaves containers running while the rule is gone."""
+    state = root / "state"
+    warnings = set(read_lines(state / "systemd_warnings.log"))
+    step = evidence.report["steps"][-1]
+    evidence.check(
+        step,
+        "misplaced_directive_reported",
+        any("Unknown key name 'Requires' in section 'Service'" in line for line in warnings)
+        and not warnings.isdisjoint({line for line in warnings if "docker.service.d" in line}),
+    )
+    evidence.check(step, "misplaced_directive_is_not_a_dependency", not unit_values(root, "docker.service", "Unit", "Requires"))
+    events = restart_firewall(evidence, root, environment, "planted")
+    step = evidence.report["steps"][-1]
+    step["events"] = [evidence.redact(line) for line in events]
+    unsafe = [line for line in events if line.startswith("rule_removed") and not line.endswith("containers_running=none")]
+    evidence.check(step, "containers_keep_running_while_the_rule_is_gone", bool(unsafe))
+    stopped = [unit_name for unit_name in ("docker.service", "ecs.service") if f"stop {unit_name}" in events]
+    evidence.check(step, "firewall_restart_did_not_stop_the_containers", not stopped)
+
+
+def boot_host(
+    evidence: Evidence, bash: str, name: str, template: str, stub_overrides: dict[str, str], case_environment: dict[str, str], gnu_timeout: str
+) -> tuple[Path, dict[str, str], dict[str, Any], Any]:
+    """Run the boot script once in its own temporary host root and return the root, the stand-in environment, the step and the result."""
+    root = evidence.temporary / name
+    script = prepare_host_root(root, template, stub_overrides)
+    environment = {
+        "PATH": f"{root / 'tools'}:/usr/bin:/bin",
+        "BOOT_TIMEOUT_LOG": str(root / "deadlines.log"),
+        "BOOT_TIMEOUT_CAP": "2",
+        "BOOT_GRACE_CAP": "1",
+        "BOOT_GNU_TIMEOUT": gnu_timeout,
+        "BOOT_STATE": str(root / "state"),
+        "BOOT_SYSTEMD": str(root / "systemd"),
+        "BOOT_IDS": json.dumps(BOOT_IDS),
+        "BOOT_DATA_VOLUME_NAME": BOOT_VALUES["data_volume_name"],
+        "BOOT_ADDRESS_NAME": BOOT_VALUES["address_name"],
+        "BOOT_PROJECT_TAG": BOOT_VALUES["project_tag"],
+        "BOOT_NFTABLES_CONFIG": str(root / BOOT_PATHS["nftables_config"]),
+        "BOOT_STATE_INITIAL": "nftables.service",
+    }
+    step, result = evidence.run(name, [bash, str(script)], root, {**environment, **case_environment})
+    return root, environment, step, result
+
+
+def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
+    """Run the host boot script against stand-in system commands; a stalled or failed step must stop the boot in time."""
+    template = (REPO_ROOT / BOOT_TEMPLATE).read_text(encoding="utf-8")
+    evidence.report["source_hashes"][BOOT_TEMPLATE] = {"original_sha256": sha256(template.encode())}
+    gnu_timeout = shutil.which("gtimeout") or shutil.which("timeout") or ""
+    evidence.report["boot_timeout"] = gnu_timeout or "the GNU-compatible stand-in in TIMEOUT_STUB; no GNU timeout on PATH"
+    cases: dict[str, tuple[dict[str, str], dict[str, str], str | None]] = {
+        "boot_completes": ({}, {}, None),
+        "boot_stalled_service_start": (
+            {},
+            {"BOOT_SYSTEMCTL_STALL": "amazon-ssm-agent"},
+            "Starting the Session Manager agent did not finish within 120 seconds.",
+        ),
+        "boot_stalled_format": ({"mkfs.xfs": STALL}, {}, "Formatting the data volume did not finish within 300 seconds."),
+        "boot_stalled_mount": ({"mount": STALL}, {}, "Mounting the data volume did not finish within 120 seconds."),
+        "boot_format_ignores_term": (
+            {"mkfs.xfs": STALL_IGNORING_TERM},
+            {},
+            "Formatting the data volume did not finish within 300 seconds and ignored the stop signal, so it was killed 10 seconds later.",
+        ),
+        "boot_firewall_fails_to_load": ({}, {"BOOT_NFT_FAIL": "1"}, "The metadata firewall did not start, so the host does not join the cluster."),
+        "boot_core_dump_settings_ignored": ({}, {"BOOT_SYSCTL_IGNORE": "1"}, "The core dump settings did not take effect"),
+        "boot_data_volume_not_found": ({}, {"BOOT_VOLUME_RESULT": ""}, "Exactly one data volume must carry the project tags"),
+        "boot_data_volume_duplicated": (
+            {},
+            {"BOOT_VOLUME_RESULT": "vol-0123456789abcdef0\tvol-0fedcba987654321"},
+            "Exactly one data volume must carry the project tags",
+        ),
+        "boot_data_volume_malformed": ({}, {"BOOT_VOLUME_RESULT": "not-an-id"}, "Exactly one data volume must carry the project tags"),
+        "boot_data_volume_search_fails": ({}, {"BOOT_AWS_FAIL": "describe-volumes"}, "The data volume could not be listed."),
+        "boot_elastic_ip_not_found": ({}, {"BOOT_ALLOCATION_RESULT": ""}, "Exactly one Elastic IP must carry the project tags"),
+        "boot_elastic_ip_duplicated": (
+            {},
+            {"BOOT_ALLOCATION_RESULT": "eipalloc-0123456789abcdef0\teipalloc-0fedcba987654321"},
+            "Exactly one Elastic IP must carry the project tags",
+        ),
+        "boot_elastic_ip_malformed": ({}, {"BOOT_ALLOCATION_RESULT": "not-an-id"}, "Exactly one Elastic IP must carry the project tags"),
+        "boot_elastic_ip_search_fails": ({}, {"BOOT_AWS_FAIL": "describe-addresses"}, "The Elastic IP could not be listed."),
+        "boot_with_misplaced_dependency": ({}, {}, None),
+        "boot_with_privileged_containers_allowed": ({}, {}, None),
+        "boot_without_the_privilege_setting": ({}, {}, None),
+        "boot_with_the_privilege_setting_overridden": ({}, {}, None),
+    }
+    planted_privilege = {
+        "boot_with_privileged_containers_allowed": "false",
+        "boot_without_the_privilege_setting": "missing",
+        "boot_with_the_privilege_setting_overridden": "overridden",
+    }
+    for name, (stub_overrides, case_environment, message) in cases.items():
+        planted = name == "boot_with_misplaced_dependency"
+        case_template = (
+            misplace_dependency(template)
+            if planted
+            else allow_privileged_containers(template, planted_privilege[name])
+            if name in planted_privilege
+            else template
+        )
+        root, environment, step, result = boot_host(evidence, bash, name, case_template, stub_overrides, case_environment, gnu_timeout)
+        log = (root / "boot.log").read_text(encoding="utf-8") if (root / "boot.log").exists() else ""
+        config = (root / "ecs.config").read_text(encoding="utf-8") if (root / "ecs.config").exists() else ""
+        deadlines = read_lines(root / "deadlines.log")
+        metadata = read_lines(root / "state" / "metadata_requests.log")
+        step["boot_log"] = evidence.redact(log)
+        step["requested_deadlines"] = [evidence.redact(line) for line in deadlines]
+        step["metadata_requests"] = metadata
+        evidence.check(step, "every_deadline_kills_after_a_grace_period", all(line.startswith("--kill-after=") for line in deadlines))
+        rule_checked_first = "65534 dropped" in metadata and metadata.index("65534 dropped") < metadata.index("0 reached") if "0 reached" in metadata else True
+        evidence.check(step, "no_root_metadata_read_before_the_rule", rule_checked_first)
+        if message is None:
+            sysctl = root / "state" / "sysctl"
+            evidence.check(step, "boot_succeeded", result.returncode == 0)
+            evidence.check(step, "cluster_joined_last", config.rstrip("\n").splitlines()[-1] == f"ECS_CLUSTER={BOOT_VALUES['cluster_name']}")
+            evidence.check(step, "host_network_task_roles", "ECS_ENABLE_TASK_IAM_ROLE_NETWORK_HOST=true" in config.splitlines())
+            if name in planted_privilege:
+                evidence.check(step, "planted_privileged_containers_are_detected", not privileged_containers_disabled(config))
+            else:
+                evidence.check(step, "privileged_containers_disabled", privileged_containers_disabled(config))
+            evidence.check(
+                step,
+                "every_slow_step_bounded",
+                {
+                    "--kill-after=10 120 systemctl enable --now platform_imds_guard.service",
+                    "--kill-after=10 120 systemctl enable --now amazon-ssm-agent",
+                    f"--kill-after=10 300 mkfs.xfs {(root / 'devices').resolve()}/nvme-Amazon_Elastic_Block_Store_{BOOT_IDS['volume'].replace('-', '')}",
+                    f"--kill-after=10 120 mount {root / 'data'}",
+                    f"--kill-after=10 30 sysctl -q -p {root / BOOT_PATHS['sysctl_file']}",
+                }
+                <= set(deadlines),
+            )
+            calls = read_lines(root / "state" / "aws_calls.log")
+            step["aws_calls"] = calls
+            evidence.check(
+                step,
+                "volume_and_address_found_by_tag_under_a_deadline",
+                all(any(line.startswith(f"--kill-after=10 60 aws ec2 {call}") for line in deadlines) for call in ("describe-volumes", "describe-addresses")),
+            )
+            evidence.check(
+                step,
+                "found_ids_used_for_association_and_attach",
+                any("associate-address" in line and BOOT_IDS["allocation"] in line for line in calls)
+                and any("attach-volume" in line and BOOT_IDS["volume"] in line for line in calls),
+            )
+            evidence.check(step, "data_volume_in_fstab", f"{root / 'data'} xfs defaults,nofail 0 2" in (root / "fstab").read_text(encoding="utf-8"))
+            evidence.check(
+                step,
+                "plain_core_dumps_without_set_user_id",
+                (sysctl / "kernel.core_pattern").read_text(encoding="utf-8") == "core" and (sysctl / "fs.suid_dumpable").read_text(encoding="utf-8") == "0",
+            )
+            evidence.check(step, "timer_started", "enable --now platform_imds_watch.timer" in read_lines(root / "state" / "systemctl.log"))
+            if planted:
+                run_planted_dependency_defect(evidence, root, environment)
+            elif name not in planted_privilege:
+                run_firewall_cases(evidence, root, environment)
+        else:
+            evidence.check(step, "boot_failed", result.returncode not in (0, None))
+            evidence.check(step, "failure_reported", message in log)
+            evidence.check(step, "stopped_within_deadline", step["duration_seconds"] < 15)
+            evidence.check(step, "cluster_not_joined", "ECS_CLUSTER=" not in config)
+
+
 def run_suite(evidence: Evidence) -> None:
     """Verify configuration lifecycle and pre-deployment guards without AWS access."""
     sources = fixture_sources(evidence)
@@ -324,6 +1047,8 @@ def run_suite(evidence: Evidence) -> None:
     evidence.capture_outputs(step, workspace, "us-east-2")
     step, result = evidence.run("check_refreshed", [*renderer, "--check"], workspace)
     evidence.check(step, "refreshed_inputs_accepted", result.returncode == 0 and "Verified .env-derived" in result.stdout)
+    run_platform_cases(evidence, sources)
+    run_host_boot_cases(evidence, bash)
 
     alternate = copied_workspace(
         evidence.temporary,
@@ -380,6 +1105,10 @@ def run_suite(evidence: Evidence) -> None:
     guards: list[tuple[list[str], dict[str, str], str]] = [
         (["--iam", "plan"], {}, "IAM updates require --admin-profile."),
         (["--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
+        (["--platform", "--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
+        (["--iam", "--platform", "plan"], {}, "Choose one stack: --iam or --platform."),
+        (["--platform", "--platform", "plan"], {}, "Choose one stack: --iam or --platform."),
+        (["--platform", "apply"], {}, "Apply requires one reviewed saved-plan path."),
         (["apply"], {}, "Apply requires one reviewed saved-plan path."),
         (["plan", "-var=aws_profile=example_unapproved"], {}, "Set project inputs only in .env."),
         (["plan", "-chdir=example_other"], {}, "Set project inputs only in .env."),

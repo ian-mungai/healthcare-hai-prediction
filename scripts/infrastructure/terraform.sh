@@ -9,7 +9,11 @@ admin_profile=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --iam) stack=iam; shift ;;
+    --iam | --platform)
+      [[ "$stack" == storage ]] || { printf 'Choose one stack: --iam or --platform.\n' >&2; exit 2; }
+      stack="${1#--}"
+      shift
+      ;;
     --admin-profile) admin_profile="${2:?Supply the approved administrator profile}"; shift 2 ;;
     *) break ;;
   esac
@@ -39,7 +43,14 @@ for name in "${!TF_CLI_ARGS@}"; do
 done
 
 directory="$repo_root/infra"
+renderer=scripts.infrastructure.render_project_config
 render_args=(--stack "$stack")
+if [[ "$stack" == platform ]]; then
+  # The platform stack has its own renderer, which writes only the inputs that stack declares.
+  directory="$directory/platform"
+  renderer=scripts.infrastructure.render_platform_config
+  render_args=()
+fi
 if [[ "$stack" == iam ]]; then
   [[ -n "$admin_profile" ]] || { printf 'IAM updates require --admin-profile.\n' >&2; exit 2; }
   directory="$directory/iam"
@@ -62,7 +73,7 @@ if [[ "$action" != validate ]]; then
   render_args+=(--verify-identity)
 fi
 unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
-"$python_bin" -m scripts.infrastructure.render_project_config "${render_args[@]}"
+"$python_bin" -m "$renderer" ${render_args[@]+"${render_args[@]}"}
 if [[ "$action" == validate ]]; then
   exec terraform -chdir="$directory" validate "$@"
 fi
