@@ -13,15 +13,13 @@ one file per component in a single root.
 **Who applies what.** Three things build the AWS runtime. The owner runs the first two with the administrator profile.
 The project profile runs the third.
 
-1. The IAM stack (`infra/iam/`, `scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE>`) creates what
+1. The IAM stack (`infra/iam/`, `bash scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE>`) creates what
    the project profile must not control. That is every role (the host, task execution, Polaris task, control-plane task,
    and snapshot roles and the host instance profile), the network, the host launch template, the host's Auto
    Scaling group and the cost budget. The network is the VPC, two public subnets in two availability zones with no NAT
    gateway, the internet gateway, the route table and route, the host security group and the run-task security group with
    their rules. The cost budget is the $150 quarterly budget with its 50% and 80% email alerts and its own alert topic. It only
-   informs: the owner tracks spend by hand and no action stops spending. The stack attaches no policy to the project user. An earlier version created the user's policies, so
-   `removed` blocks in `infra/iam/main.tf` make Terraform forget them without deleting them. Delete the blocks after the first
-   policy apply.
+   informs: the owner tracks spend by hand and no action stops spending. The stack attaches no policy to the project user.
 2. The policy scripts (`infra/iam/scripts/`, run from the repository root) apply the project profile's policies, one JSON
    file per service in `infra/iam/policies/`. `render_policy` renders the templates with the values of `.env` into a review
    directory. `manage_policies plan` is the dry run: it reads IAM and prints what `apply` would do. `manage_policies apply`
@@ -41,7 +39,7 @@ The project profile runs the third.
    inline policy or group of the project user as a `NOTE` line. The administrator profile is a required argument,
    is never read from `.env`, must differ from the project profile and must be in the account that `.env` names.
    `export_policies` writes the policies in IAM back as templates with placeholders, to compare with Git.
-3. The platform stack (`infra/platform/`, `scripts/infrastructure/terraform.sh --platform`) creates what the project profile
+3. The platform stack (`infra/platform/`, `bash scripts/infrastructure/terraform.sh --platform`) creates what the project profile
    may: the ECS cluster and its capacity providers (the host group, Fargate Spot and Fargate), the ECR repositories, the log
    groups, the run-failure alert topic, the host's gp3 data volume, one Elastic IP and the daily snapshot schedule. It
    reads the VPC, both subnets, both security groups and the host group by their `Name` and `Project` tags. The plan
@@ -66,7 +64,7 @@ Scaling and ECS. The account may already hold them: `aws iam get-role --role-nam
 | `secretsmanager` | `GetSecretValue` and `DescribeSecret` | The four shared API keys only, named by the defaults of their variables in `infra/iam/variables.tf` |
 | `ecr` | Log in, push and pull images, create, delete, describe and set the lifecycle of repositories | `<PROJECT_NAME>_*_<ENVIRONMENT>` repositories |
 | `ecs` | Create, update, delete and describe the cluster, the capacity provider and services; register and describe task definitions; run, stop, describe and list tasks; describe container instances | The project cluster, services, task definition families, tasks and container instances (`container-instance/<cluster>/*`); no deregistering of task definitions |
-| `autoscaling` | `SetDesiredCapacity`, describe calls | The host group only |
+| `autoscaling` | `SetDesiredCapacity`, describe calls; `CreateOrUpdateTags` with the `AmazonECSManaged` key only, which ECS adds while it creates the capacity provider | The host group only |
 | `ec2` | Describe calls; create and delete the data volume; allocate and release the Elastic IP; tag them while creating | Volumes and addresses with the exact `Project` tag; no launch, template, network, image, snapshot or copy action |
 | `dlm` | Create, update, delete and read the snapshot schedule | Schedules tagged `Project` |
 | `logs` | Create, delete and set the retention of log groups; read log events | `<PROJECT_NAME>_*_<ENVIRONMENT>` log groups |
@@ -86,8 +84,11 @@ every create that can carry tags needs exactly that. A request-tag condition ign
 (`StringNotEquals` on the value and `ForAllValues:StringNotEquals` on the key set) that hold even if an allow is weakened
 later. Nothing changes or removes `Project` afterwards. EC2 and ECS allow `CreateTags`, `TagResource` and `UntagResource`
 only while a resource is created (`ec2:CreateAction`, `ecs:CreateAction`) and deny them otherwise. The other services deny
-a request that names `Project` (in any letter case) when it removes the tag or changes it on a resource that has it.
-They allow other tags. An ECS service must carry `ecs:propagate-tags` of `SERVICE` or `TASK_DEFINITION`, a run task
+a request that names `Project` (in any letter case) when it removes the tag or sets it to any value other than the project
+name. A Deny that keys on an existing `Project` tag also refuses the tag step of a create for image repositories, the alert
+topic and the snapshot schedule, because AWS treats the new tags as `aws:ResourceTag` there. Log groups and alarms need the
+same tag permission when they are created with tags. DLM grants management by the `Project` tag, so its tag statement also requires the resource's
+`Project` tag, when present, to be the project name. These services allow other tags. An ECS service must carry `ecs:propagate-tags` of `SERVICE` or `TASK_DEFINITION`, a run task
 `TASK_DEFINITION`. A service update must not set `NONE`. A run task, a service create or an ECS tag request that sets its own
 `Project` tag to any other value is refused (a Deny on `aws:RequestTag/Project` that applies only when the tag is present).
 The policy does not restrict which definition a service propagates from. That open item is in `plans/full_scope_20261022/iam_least_privilege/hardening_backlog.md` (local record, not in the repository). The tasks then carry the tag of the service or the task
@@ -164,8 +165,10 @@ the first deploy.
   refresh, network, image or snapshot-copy permission, so it cannot choose what a host boots with. AWS's own scaling service
   launches the host from the template that the IAM stack owns, with the group at a template version that is a number
   (`tostring(latest_version)`, never `$Latest` or `$Default`), a minimum size of 0 and a maximum size of 1. The project
-  user's only Auto Scaling permission is `autoscaling:SetDesiredCapacity` on that one group, which turns the host on
-  (1) and off (0); the group's maximum size keeps the count at 0 or 1, because Auto Scaling has no capacity condition key.
+  user has two Auto Scaling permissions on that one group. `autoscaling:SetDesiredCapacity` turns the host on (1) and off
+  (0); the group's maximum size keeps the count at 0 or 1, because Auto Scaling has no capacity condition key.
+  `autoscaling:CreateOrUpdateTags` allows the `AmazonECSManaged` key only, which ECS adds with the project user's
+  permissions while it creates the capacity provider.
   Terraform ignores the desired capacity after creation. A new template version (a resize, a new image or a new boot
   script) is a change the owner applies in the IAM stack. The group then replaces a running host through an instance
   refresh. To resize the host, edit `host_instance_type` in `infra/iam/host.tf`.

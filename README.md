@@ -46,7 +46,7 @@ CONFIRM_IAM_POLICIES=apply-healthcare-hai-prediction-policies .venv/bin/python -
 The apply creates or updates the policies, attaches them to two groups and adds the project user to both. It also removes
 the earlier grouped policies. `infra.iam.scripts.export_policies` writes the policies in IAM back as templates, to see
 drift. The roles, the network, the host launch template and Auto Scaling group and the cost budget stay in the IAM
-Terraform stack (`scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE>`), which the owner applies
+Terraform stack (`bash scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE>`), which the owner applies
 first; the project profile then applies the platform stack (`--platform`). The order and the checks are in
 `docs/infrastructure_controls.md`.
 

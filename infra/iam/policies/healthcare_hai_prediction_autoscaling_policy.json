@@ -10,6 +10,24 @@
       "Resource": "arn:aws:autoscaling:${AWS_REGION}:${AWS_ACCOUNT_ID}:autoScalingGroup:*:autoScalingGroupName/${PROJECT_NAME}_host_${ENVIRONMENT}"
     },
     {
+      "Sid": "LetEcsTagProjectHostGroup",
+      "Effect": "Allow",
+      "Action": [
+        "autoscaling:CreateOrUpdateTags"
+      ],
+      "Resource": "arn:aws:autoscaling:${AWS_REGION}:${AWS_ACCOUNT_ID}:autoScalingGroup:*:autoScalingGroupName/${PROJECT_NAME}_host_${ENVIRONMENT}",
+      "Condition": {
+        "ForAllValues:StringEquals": {
+          "aws:TagKeys": [
+            "AmazonECSManaged"
+          ]
+        },
+        "Null": {
+          "aws:TagKeys": "false"
+        }
+      }
+    },
+    {
       "Sid": "DescribeAutoScaling",
       "Effect": "Allow",
       "Action": [
