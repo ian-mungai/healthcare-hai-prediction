@@ -237,7 +237,9 @@ def coverage_path(directory: Path, index: int) -> Path:
 
 
 def seal(directory: Path, shard: tuple[int, int], pytest_exit: int, config: Path) -> None:
-    """Complete the manifest of a shard after pytest ended; a missing manifest or coverage file makes it a failed one."""
+    """Complete the manifest of a shard after pytest ended; a missing manifest or coverage file makes it a failed one.
+
+    A failed shard raises ShardError after its manifest is written, so the shard job fails itself instead of only the combining gate."""
     index, count = shard
     path = directory / f"shard_{index}_of_{count}.json"
     try:
@@ -254,6 +256,9 @@ def seal(directory: Path, shard: tuple[int, int], pytest_exit: int, config: Path
         pytest_exit = pytest_exit or 1
     manifest["status"] = "passed" if pytest_exit == 0 and manifest.get("plugin_exit_status") == 0 else "failed"
     write_json(path, manifest)
+    if manifest["status"] == "failed":
+        cause = manifest.get("coverage_error") or f"pytest exit {pytest_exit}, plugin exit {manifest.get('plugin_exit_status')}"
+        raise ShardError(f"shard {index} of {count} sealed as failed: {cause}")
 
 
 def skip(directory: Path, shard: tuple[int, int], reason: str) -> None:

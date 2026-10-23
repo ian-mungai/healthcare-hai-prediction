@@ -492,7 +492,9 @@ Checks"). The local hook and `bash scripts/acquisition/run_checks.sh` stay one u
 - `scripts/acquisition/shards.py` gives every collected test to exactly one shard: tests in order of falling weight, each to the shard with the least
   weight so far. The weights are the seconds of the long tests in `config/acquisition/shard_weights.json`; a test without a weight counts 0.1 second. A wrong
   weight changes the balance only, never which tests run. Each shard writes a manifest (its tests, their outcomes, the hash of all collected test ids, the
-  pytest exit status and the CI run) and its coverage data and enforces no coverage target.
+  pytest exit status and the CI run) and its coverage data and enforces no coverage target. A shard whose pytest run, plugin or coverage data fails writes a failed
+  manifest and its own job fails. Coverage leaves out `registry_additions_probe.py`, the changed copy of the registry validator that a boundary case loads
+  from a temporary folder: coverage cannot read that copy after the folder is removed.
 - The combining job runs Ruff, MyPy and the registry check, then the gate of `scripts/acquisition/shards.py`. It fails unless every shard job succeeded and
   every shard has a manifest of this run (same commit, run and attempt) that passed. The gate trusts no field that it can recompute: a manifest has exactly the fields
   of a manifest, every outcome is `passed` or `skipped` (a `skipped` outcome stands for a test that skips itself, such as the one that needs collected data), the counters
@@ -502,9 +504,10 @@ Checks"). The local hook and `bash scripts/acquisition/run_checks.sh` stay one u
   coverage is never judged alone.
 - A range that does not reach the acquisition checks makes each shard write a `skipped` manifest and the combining job accepts only a set of manifests that are all
   skipped. A mix of skipped and run shards fails.
-- `.venv/bin/python -m scripts.acquisition.run_shards_e2e` checks the partition of the real tests, the balance of the committed weights and, on a synthetic
+- `.venv/bin/python -m scripts.acquisition.run_shards_e2e` checks the partition of the real tests, that two collections a few seconds apart give the same test ids (each shard and the gate collect on their own), the balance of the committed weights and, on a synthetic
   project, every failure of the gate (missing, failed, mixed, foreign and tampered shards, a contradictory outcome, counter, field or coverage claim in a manifest, a dropped
-  test, swapped coverage data and a merged coverage below the target). It also checks that the matrix, the shard argument, the job names, `ACQUISITION_SHARD_COUNT`, the
+  test, swapped coverage data, a measured file in a removed folder and a merged coverage below the target). It also checks that every probe copy that acquisition code writes is
+  left out of coverage. It also checks that the matrix, the shard argument, the job names, `ACQUISITION_SHARD_COUNT`, the
   default of the combine script, `config/quality/ci_jobs.json` and `shards.CI_SHARD_COUNT` state one shard count (the launcher shard job has one count of its own). The workflow must also never set `ACQUISITION_E2E_MODE`. `bash scripts/acquisition/run_checks_ci_e2e.sh` checks the skip path with `shards.CI_SHARD_COUNT` skipped manifests.
 
 ## Main-run reuse

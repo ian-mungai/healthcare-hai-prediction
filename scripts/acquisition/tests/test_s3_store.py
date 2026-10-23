@@ -391,10 +391,13 @@ def test_complete_storage_and_replay_are_identical(bundle: tuple) -> None:
 
 
 def zip_bytes(members: dict[str, bytes]) -> bytes:
+    """A ZIP with a fixed timestamp, so a test id built from its bytes is the same in every collection."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         for name, body in members.items():
-            archive.writestr(name, body)
+            member = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            member.external_attr = 0o600 << 16
+            archive.writestr(member, body)
     return buffer.getvalue()
 
 

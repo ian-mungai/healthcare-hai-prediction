@@ -15,6 +15,7 @@ the code under test and the tool versions.
 
 from __future__ import annotations
 
+import configparser
 import hashlib
 import json
 import os
@@ -22,6 +23,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -76,7 +78,9 @@ if __name__ == "__main__":
     main()
 """
 TESTS = """import subprocess
+import os
 import sys
+import tempfile
 
 from pkg import core
 
@@ -92,6 +96,23 @@ def test_second():
 def test_child_process():
     result = subprocess.run([sys.executable, "-m", "pkg.child", "a", "b"], capture_output=True, text=True, check=True)
     assert result.stdout == "A\\nB\\n"
+
+
+def test_copy_loaded_under_the_package_name():
+    with tempfile.TemporaryDirectory(dir=os.path.dirname(core.__file__)) as folder:
+        result = subprocess.run([sys.executable, "-c", PROBE, folder], capture_output=True, text=True, check=True)
+    assert result.stdout == "3\\n"
+
+
+PROBE = (
+    "import pathlib, sys\\n"
+    "from importlib.machinery import SourceFileLoader\\n"
+    "import pkg.core as module\\n"
+    "copy = pathlib.Path(sys.argv[1]) / 'core_probe.py'\\n"
+    "copy.write_text(pathlib.Path(module.__file__).read_text())\\n"
+    "SourceFileLoader(module.__name__, str(copy)).exec_module(module)\\n"
+    "print(module.first(3))\\n"
+)
 """
 FAILING = """
 
@@ -102,7 +123,7 @@ WEIGHTS = {
     "default_seconds": 0.1,
     "seconds": {"tests/test_pkg.py::test_first": 10.0, "tests/test_pkg.py::test_second": 10.0, "tests/test_pkg.py::test_child_process": 1.0},
 }
-COVERAGE_CONFIG = "[run]\npatch = subprocess\n\n[report]\nshow_missing = True\nfail_under = 90\n"
+COVERAGE_CONFIG = "[run]\npatch = subprocess\nomit =\n    */core_probe.py\n\n[report]\nshow_missing = True\nfail_under = 90\n"
 
 
 def sha256_of(path: Path) -> str:
@@ -113,7 +134,7 @@ def environment(**extra: str) -> dict[str, str]:
     return {**os.environ, "PYTHONPATH": str(ROOT), "GITHUB_SHA": "a" * 40, "GITHUB_RUN_ID": "100", "GITHUB_RUN_ATTEMPT": "1", **extra}
 
 
-def build_project(folder: Path, failing: bool = False) -> Path:
+def build_project(folder: Path, failing: bool = False, coverage_config: str = COVERAGE_CONFIG) -> Path:
     project = folder / "project"
     (project / "pkg").mkdir(parents=True)
     (project / "tests").mkdir()
@@ -122,7 +143,7 @@ def build_project(folder: Path, failing: bool = False) -> Path:
     (project / "pkg" / "child.py").write_text(CHILD)
     (project / "tests" / "test_pkg.py").write_text(TESTS + (FAILING if failing else ""))
     (project / "weights.json").write_text(json.dumps(WEIGHTS))
-    (project / "coverage.ini").write_text(COVERAGE_CONFIG)
+    (project / "coverage.ini").write_text(coverage_config)
     (project / "pytest.ini").write_text("[pytest]\n")
     return project
 
@@ -355,6 +376,17 @@ def real_collection_cases() -> list[dict[str, Any]]:
     ids = shards.collect_ids(TEST_PATHS)
     weights, default = shards.load_weights(shards.WEIGHTS)
     cases: list[dict[str, Any]] = []
+    # Every shard and the gate collect on their own, at different times; ZIP timestamps have a two-second resolution.
+    time.sleep(2.5)
+    again = shards.collect_ids(TEST_PATHS)
+    cases.append(
+        {
+            "case": "real_collection_ids_are_stable_over_time",
+            "passed": again == ids,
+            "only_first": sorted(set(ids) - set(again))[:3],
+            "only_second": sorted(set(again) - set(ids))[:3],
+        }
+    )
     partition: dict[str, Any] = {}
     for count in (1, 2, 3, shards.CI_SHARD_COUNT):
         owner = shards.assign(ids, count, weights, default)
@@ -367,6 +399,20 @@ def real_collection_cases() -> list[dict[str, Any]]:
             "case": "real_collection_is_partitioned_exactly_once",
             "passed": all(item["exact"] for item in partition.values()) and len(ids) > 400,
             "partition": partition,
+        }
+    )
+    config = configparser.ConfigParser()
+    config.read(ROOT / "config/acquisition/coverage.ini")
+    omitted = set(config.get("run", "omit", fallback="").split())
+    probes = sorted(
+        {name for path in (ROOT / "scripts/acquisition").glob("*.py") for name in re.findall(r'/ "([a-z_]+_probe\.py)"', path.read_text(encoding="utf-8"))}
+    )
+    cases.append(
+        {
+            "case": "every_probe_copy_is_omitted_from_coverage",
+            "passed": bool(probes) and all(f"*/{name}" in omitted for name in probes),
+            "probe_files": probes,
+            "note": "a probe is a changed copy of a package module run from a temporary folder; coverage cannot read it after the folder is removed",
         }
     )
     loads = shards.shard_loads(ids, shards.CI_SHARD_COUNT, weights, default)
@@ -580,6 +626,25 @@ def synthetic_cases(scratch: Path) -> list[dict[str, Any]]:
     )
     child_lines = json.loads((scratch / "shard1.json").read_text())["files"].get("pkg/child.py", {}).get("executed_lines", []) if merged.returncode == 0 else []
     cases.append({"case": "subprocess_lines_survive_the_merge", "passed": len(child_lines) >= 4, "child_lines_executed_in_the_shard": child_lines})
+
+    unscoped = build_project(scratch / "unscoped", coverage_config=COVERAGE_CONFIG.replace("omit =\n    */core_probe.py\n", ""))
+    unscoped_run = scratch / "unscoped_run"
+    shard_exits = [run_shard(unscoped, unscoped_run, shard) for shard in ("1/2", "2/2")]
+    errors = [manifest(unscoped_run, index).get("coverage_error", "") for index in (1, 2)]
+    code, out = run_gate(unscoped, unscoped_run)
+    cases.append(
+        {
+            "case": "measured_copy_in_a_removed_folder_fails_the_shard",
+            "passed": code != 0
+            and "failed: status failed" in out
+            and all((exit_code != 0) == ("No source for code" in error) for exit_code, error in zip(shard_exits, errors, strict=True))
+            and any(shard_exits),
+            "shard_exits": shard_exits,
+            "coverage_errors": [error[-200:] for error in errors],
+            "gate_exit": code,
+            "note": "without the omit entry a child measures a package module loaded from a removed folder and the shard cannot read its own coverage data",
+        }
+    )
 
     below_code, below_out = run_gate(project, good, fail_under=100.0)
     cases.append(negative("merged_coverage_below_target_fails", below_code, below_out, "is below 100.0%"))
