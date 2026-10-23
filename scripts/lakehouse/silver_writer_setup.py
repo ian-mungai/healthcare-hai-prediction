@@ -4,8 +4,8 @@ Run ``.venv/bin/python -m scripts.lakehouse.silver_writer_setup`` once with the 
 silver publish. ``--dry-run`` prints the requests it would send and sends none. The principal may write the tables of the ``silver`` and
 ``silver_e2e`` namespaces and nothing else: no access to ``gold``, ``gold_e2e`` or bronze, no catalog-wide management, no namespace creation or
 removal and no table removal. The root credentials make the token and the set-up requests only; they are never passed on. The writer's client ID
-and secret go straight to AWS Secrets Manager next to the gold writer's pair, and reach a job only through the launcher's ``lakehouse_write`` class
-(``POLARIS_SILVER_WRITER_CLIENT_ID`` and ``_SECRET``, which the launcher reads from Secrets Manager into memory).
+and secret go straight to Parameter Store next to the gold writer's pair, and reach a job only through the launcher's ``lakehouse_write`` class
+(``POLARIS_SILVER_WRITER_CLIENT_ID`` and ``_SECRET``, which the launcher reads from Parameter Store into memory).
 
 The silver publish uses the gold publish engine, so the privilege list is the gold writer's; the write spike on ``silver_e2e`` proves it against
 Polaris at the first real silver publish.

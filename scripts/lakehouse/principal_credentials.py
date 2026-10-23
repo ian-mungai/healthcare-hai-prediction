@@ -1,4 +1,4 @@
-"""Issue a Polaris principal's credentials once and keep the pair in Secrets Manager, whatever interrupts the update.
+"""Issue a Polaris principal's credentials once and keep the pair in Parameter Store, whatever interrupts the update.
 
 A stored pair is accepted only when Polaris itself accepts it, so a client ID and secret that belong to different issues, or a half-written pair,
 are reset and stored again. Updates of one principal run one at a time under a file lock that holds no secret.
@@ -68,7 +68,7 @@ def ensure_credentials(
     check: Check,
     lock_path: Path,
 ) -> str:
-    """Make sure the principal exists and its working client ID and secret are in Secrets Manager; returns how the credentials were obtained.
+    """Make sure the principal exists and its working client ID and secret are in Parameter Store; returns how the credentials were obtained.
 
     A stored pair that Polaris accepts is left alone. A missing, half-written or refused pair is replaced: the principal is created, or its
     credentials are reset, and both new values are stored.

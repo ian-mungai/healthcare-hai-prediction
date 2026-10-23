@@ -291,7 +291,7 @@ def stack_up_down(env: StackEnv) -> dict[str, bool]:
         and set(state["services"]) == {f"orch-{s}" for s in STACK_SERVICES if s != "airflow-migrate"},
         "the scheduler's limit leaves room for the LocalExecutor workers": scheduler["HostConfig"]["Memory"] >= 2 * GIB
         and int(api_env["AIRFLOW__CORE__PARALLELISM"]) >= 1,
-        "the metadata secrets are set in the environment from Secrets Manager, never read from files": api_env["AIRFLOW__CORE__FERNET_KEY"]
+        "the metadata secrets are set in the environment from Parameter Store, never read from files": api_env["AIRFLOW__CORE__FERNET_KEY"]
         == env.secret_values["AIRFLOW_FERNET_KEY"]
         and api_env["AIRFLOW__API_AUTH__JWT_SECRET"] == env.secret_values["AIRFLOW_JWT_SECRET"]
         and api_env["AIRFLOW__API__SECRET_KEY"] == env.secret_values["AIRFLOW_API_SECRET_KEY"]
@@ -579,7 +579,7 @@ def stack_memory_floor(env: StackEnv) -> dict[str, bool]:
 def orchestration_dump_template(env: StackEnv) -> dict[str, bool]:
     """932b: the metadata database dump and the logical XCom query are finite jobs of the allocation-owned orchestration_dump template: the thin
     Airflow image behind the deadline entrypoint, the stack's network, a fixed program with one closed argument (metadata or xcom), the connection string
-    only through the job's environment (filled from Secrets Manager), one writable folder (the state folder's dumps), no capability. The stack must be up."""
+    only through the job's environment (filled from Parameter Store), one writable folder (the state folder's dumps), no capability. The stack must be up."""
     services_script(env)
     previous = env.daemon.script
 
@@ -622,7 +622,7 @@ def orchestration_dump_template(env: StackEnv) -> dict[str, bool]:
                 and body.get("Entrypoint") == [launcher.DEADLINE_ENTRYPOINT, "python"],
                 f"{what}: its command is the dump script with the one closed argument": body.get("Cmd") == ["/opt/hai/checks/db_dump.py", what],
                 f"{what}: it joins the stack's network": body.get("HostConfig", {}).get("NetworkMode") == f"hai-{rid}-orch-net",
-                f"{what}: the connection string is set only through the one connection variable, from Secrets Manager": (
+                f"{what}: the connection string is set only through the one connection variable, from Parameter Store": (
                     env.secret_values["AIRFLOW_DB_PASSWORD"] in environment.get("AIRFLOW__DATABASE__SQL_ALCHEMY_CONN", "")
                     and not any(
                         env.secret_values["AIRFLOW_DB_PASSWORD"] in value

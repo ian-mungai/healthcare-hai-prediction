@@ -3,9 +3,9 @@
 Run ``.venv/bin/python -m scripts.lakehouse.gold_writer_setup`` with the catalog up (``scripts.lakehouse.catalog up``). ``--dry-run`` prints the
 requests it would send and sends none. The principal may write the tables of the ``gold`` and ``gold_e2e`` namespaces and nothing else: no
 catalog-wide management, no namespace creation or removal and no table removal. The root credentials make the token and the set-up requests
-only; they are never passed on. The writer's client ID and secret go straight to AWS Secrets Manager, the same way the read-only
+only; they are never passed on. The writer's client ID and secret go straight to AWS Parameter Store, the same way the read-only
 principal's do, and reach a job only through the launcher's ``lakehouse_write`` class (``POLARIS_GOLD_WRITER_CLIENT_ID`` and ``_SECRET``, which the
-launcher reads from Secrets Manager into memory).
+launcher reads from Parameter Store into memory).
 
 The exact privilege list is a phase 2 finding: the write spike on ``gold_e2e`` proves it against Polaris before the first real publish.
 """

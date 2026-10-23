@@ -239,7 +239,7 @@ class Config:
         return token_anchor(self.token_root)
 
     def secret_store(self) -> secret_store.SecretStore:
-        """The Secrets Manager client for this registry: the project profile, or the stand-in a test registry names."""
+        """The Parameter Store client for this registry: the project profile, or the stand-in a test registry names."""
         try:
             return secret_store.open_store(self.catalog_checkout or self.root, self.secrets_endpoint)
         except secret_store.SecretStoreError as error:
@@ -1650,7 +1650,7 @@ class Renderer:
         return f"hai-{registry_id[:8]}-net"
 
     def compose_values(self, wanted: Sequence[str], base: Mapping[str, str]) -> dict[str, str]:
-        """Interpolation values: the allocation's, ``HOME``, the project AWS settings and the secret values the service uses, read from Secrets Manager
+        """Interpolation values: the allocation's, ``HOME``, the project AWS settings and the secret values the service uses, read from Parameter Store
         into memory for this call only."""
         values = {**base, "HOME": str(account_home())}
         needed = [name for name in wanted if name in COMPOSE_ENV_NAMES and name not in values]
@@ -1725,7 +1725,7 @@ class Renderer:
         return found
 
     def stack_values(self, service: str) -> dict[str, str]:
-        """The secret values the orchestration or lineage service's model names, read from Secrets Manager into memory; a missing secret refuses the render."""
+        """The secret values the orchestration or lineage service's model names, read from Parameter Store into memory; a missing secret refuses the render."""
         wanted = self.service_names(service)
         names = [name for name in wanted if name in STACK_SECRETS]
         if SQL_ALCHEMY_CONN in wanted and "AIRFLOW_DB_PASSWORD" not in names:
@@ -7661,7 +7661,7 @@ class Launcher:
         return {"phase": "tearing_down"}
 
     def ensure_lineage_password(self, folder: Path) -> None:
-        """Worker: make sure the database password exists in Secrets Manager (generated there once); refuse a new one next to an existing database.
+        """Worker: make sure the database password exists in Parameter Store (generated there once); refuse a new one next to an existing database.
 
         The whole check runs under one absolute deadline and never on the launcher's loop."""
 

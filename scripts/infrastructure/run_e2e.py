@@ -266,9 +266,12 @@ def check_saved_plans(evidence: Evidence, sources: dict[str, bytes], renderer: l
             f"reject_terraform_{label}_name", [*terraform, *plan_arguments[:-1], f"-var=jev_secret_name={value}"], workspace, terraform_environment
         )
         evidence.check(step, "variable_rule_rejected", result.returncode != 0 and "var.jev_secret_name" in result.stderr)
+    # A parameter name must be a slash path of letters, digits and underscores, so the dashed override above would fail the variable's own rule.
+    managed_override = "/example_overridden/name"
+    evidence.redactions[managed_override] = "<REDACTED_MANAGED_OVERRIDE>"
     step, result = evidence.run(
         "plan_with_managed_secret_override",
-        [*terraform, *plan_arguments[:-1], f"-var=airflow_jwt_secret_name={override}", "-out=managed_override.tfplan"],
+        [*terraform, *plan_arguments[:-1], f"-var=airflow_jwt_secret_name={managed_override}", "-out=managed_override.tfplan"],
         workspace,
         terraform_environment,
     )
@@ -277,7 +280,7 @@ def check_saved_plans(evidence: Evidence, sources: dict[str, bytes], renderer: l
         "reject_managed_secret_override", [*check_plan, "--check-plan", str(stack / "managed_override.tfplan")], workspace, terraform_environment
     )
     evidence.check(step, "override_rejected", result.returncode == 2 and "airflow_jwt_secret_name" in result.stderr and not result.stdout)
-    evidence.check(step, "value_not_echoed", override not in result.stdout + result.stderr)
+    evidence.check(step, "value_not_echoed", managed_override not in result.stdout + result.stderr)
     (stack / "extra.tf").write_text('variable "example_extra_input" {\n  type = string\n}\n', encoding="utf-8")
     step, result = evidence.run("plan_with_extra_input", [*terraform, *plan_arguments, "-out=extra.tfplan"], workspace, terraform_environment)
     evidence.check(step, "plan_succeeded", result.returncode == 0)

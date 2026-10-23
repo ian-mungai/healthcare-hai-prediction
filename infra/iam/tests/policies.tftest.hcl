@@ -15,7 +15,7 @@ run "scoped_project_permissions" {
 
   assert {
     condition     = toset(keys(aws_iam_policy.service)) == toset(["s3", "secrets", "lakehouse", "assume_roles"]) && length(aws_iam_user_policy_attachment.service) == 4
-    error_message = "Only the consolidated S3 policy, the shared-secret read policy, the lakehouse table policy and the policy that assumes the two lakehouse roles may be attached."
+    error_message = "Only the consolidated S3 policy, the secrets policy, the lakehouse table policy and the policy that assumes the two lakehouse roles may be attached."
   }
 
   # Changing a policy description forces replacement, which prevent_destroy blocks; existing descriptions stay fixed.
@@ -246,8 +246,8 @@ run "scoped_project_permissions" {
   }
 
   assert {
-    condition     = toset([for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : statement.Sid]) == toset(["ReadProjectSecrets", "ManageProjectSecrets"])
-    error_message = "The secrets policy holds exactly one read statement and one manage statement."
+    condition     = toset([for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : statement.Sid]) == toset(["ReadSharedSecrets", "ReadProjectParameters", "WriteProjectParameters"])
+    error_message = "The secrets policy holds exactly one statement for the shared keys, one for reading parameters and one for writing parameters."
   }
 
   assert {
@@ -258,7 +258,7 @@ run "scoped_project_permissions" {
   assert {
     condition = one([
       for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : toset(flatten([statement.Action]))
-      if statement.Sid == "ReadProjectSecrets"
+      if statement.Sid == "ReadSharedSecrets"
     ]) == toset(["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"])
     error_message = "The shared secrets stay read-only: reading secret values and metadata, nothing else."
   }
@@ -266,45 +266,96 @@ run "scoped_project_permissions" {
   assert {
     condition = one([
       for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : toset(flatten([statement.Resource]))
-      if statement.Sid == "ReadProjectSecrets"
+      if statement.Sid == "ReadSharedSecrets"
       ]) == toset([
-      for name in ["census_api_key", "bls_api_key", "hud_api_key", "jev_api_key", "healthcare-hai-prediction/airflow-admin"] : "arn:aws:secretsmanager:eu-west-1:111111111111:secret:${name}-??????"
+      for name in ["census_api_key", "bls_api_key", "hud_api_key", "jev_api_key"] : "arn:aws:secretsmanager:eu-west-1:111111111111:secret:${name}-??????"
     ])
-    error_message = "Secret read access must be limited to the five shared project secrets in the approved account and region."
+    error_message = "Secrets Manager access must be limited to the four shared keys in the approved account and region."
   }
 
   assert {
     condition = one([
       for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : toset(flatten([statement.Action]))
-      if statement.Sid == "ManageProjectSecrets"
-      ]) == toset([
-      "secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret", "secretsmanager:CreateSecret", "secretsmanager:PutSecretValue"
-    ])
-    error_message = "The managed secrets allow exactly reading, describing, creating and putting a value."
+      if statement.Sid == "ReadProjectParameters"
+    ]) == toset(["ssm:GetParameter"])
+    error_message = "Reading project parameters allows ssm:GetParameter only."
   }
 
   assert {
     condition = one([
       for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : toset(flatten([statement.Resource]))
-      if statement.Sid == "ManageProjectSecrets"
+      if statement.Sid == "ReadProjectParameters"
       ]) == toset([
       for name in [
-        "healthcare-hai-prediction/postgres-password",
-        "healthcare-hai-prediction/polaris-root-secret",
-        "healthcare-hai-prediction/polaris-reader-client-id",
-        "healthcare-hai-prediction/polaris-reader-client-secret",
-        "healthcare-hai-prediction/polaris-gold-client-id",
-        "healthcare-hai-prediction/polaris-gold-client-secret",
-        "healthcare-hai-prediction/polaris-silver-client-id",
-        "healthcare-hai-prediction/polaris-silver-client-secret",
-        "healthcare-hai-prediction/airflow-db-password",
-        "healthcare-hai-prediction/airflow-fernet-key",
-        "healthcare-hai-prediction/airflow-jwt-secret",
-        "healthcare-hai-prediction/airflow-api-secret-key",
-        "healthcare-hai-prediction/marquez-db-password",
-      ] : "arn:aws:secretsmanager:eu-west-1:111111111111:secret:${name}-??????"
+        "airflow_admin",
+        "postgres_password",
+        "polaris_root_secret",
+        "polaris_reader_client_id",
+        "polaris_reader_client_secret",
+        "polaris_gold_client_id",
+        "polaris_gold_client_secret",
+        "polaris_silver_client_id",
+        "polaris_silver_client_secret",
+        "airflow_db_password",
+        "airflow_fernet_key",
+        "airflow_jwt_secret",
+        "airflow_api_secret_key",
+        "marquez_db_password",
+        "redis_password",
+      ] : "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/${name}"
     ])
-    error_message = "Secret write access must be limited to exactly the 13 managed secrets in the approved account and region."
+    error_message = "Parameter read access must be limited to exactly the 15 project parameters in the approved account and region."
+  }
+
+  assert {
+    condition = one([
+      for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : toset(flatten([statement.Action]))
+      if statement.Sid == "WriteProjectParameters"
+    ]) == toset(["ssm:PutParameter"])
+    error_message = "Writing project parameters allows ssm:PutParameter only."
+  }
+
+  assert {
+    condition = one([
+      for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : toset(flatten([statement.Resource]))
+      if statement.Sid == "WriteProjectParameters"
+      ]) == toset([
+      for name in [
+        "postgres_password",
+        "polaris_root_secret",
+        "polaris_reader_client_id",
+        "polaris_reader_client_secret",
+        "polaris_gold_client_id",
+        "polaris_gold_client_secret",
+        "polaris_silver_client_id",
+        "polaris_silver_client_secret",
+        "airflow_db_password",
+        "airflow_fernet_key",
+        "airflow_jwt_secret",
+        "airflow_api_secret_key",
+        "marquez_db_password",
+        "redis_password",
+      ] : "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/${name}"
+    ])
+    error_message = "Parameter write access must be limited to exactly the 14 managed parameters (not the Airflow administrator password) in the approved account and region."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : [
+        for resource in flatten([statement.Resource]) : !strcontains(resource, "*") && (startswith(resource, "arn:aws:secretsmanager:") || !strcontains(resource, "?"))
+      ]
+    ]))
+    error_message = "No parameter ARN may hold a wildcard."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for statement in jsondecode(aws_iam_policy.service["secrets"].policy).Statement : [
+        for action in flatten([statement.Action]) : !startswith(action, "kms:") && !startswith(action, "ssm:Describe") && !startswith(action, "ssm:GetParameters") && !startswith(action, "ssm:Delete")
+      ]
+    ]))
+    error_message = "The secrets policy grants no KMS action (the AWS managed key needs none), no listing, no batch or path read and no delete."
   }
 
   assert {
@@ -735,7 +786,7 @@ run "reject_overlong_polaris_gold_client_id_name" {
   command = plan
 
   variables {
-    polaris_gold_client_id_name = join("", [for index in range(513) : "a"])
+    polaris_gold_client_id_name = "/${join("", [for index in range(513) : "a"])}"
   }
 
   expect_failures = [var.polaris_gold_client_id_name]
@@ -785,7 +836,7 @@ run "reject_overlong_airflow_fernet_key_name" {
   command = plan
 
   variables {
-    airflow_fernet_key_name = join("", [for index in range(513) : "a"])
+    airflow_fernet_key_name = "/${join("", [for index in range(513) : "a"])}"
   }
 
   expect_failures = [var.airflow_fernet_key_name]
@@ -825,7 +876,7 @@ run "reject_equal_managed_secret_names" {
   command = plan
 
   variables {
-    airflow_jwt_secret_name = "healthcare-hai-prediction/airflow-api-secret-key"
+    airflow_jwt_secret_name = "/healthcare_hai_prediction/airflow_api_secret_key"
   }
 
   expect_failures = [aws_iam_policy.service]
@@ -835,7 +886,67 @@ run "reject_managed_name_equal_to_shared_name" {
   command = plan
 
   variables {
-    postgres_password_name = "healthcare-hai-prediction/airflow-admin"
+    postgres_password_name = "/healthcare_hai_prediction/airflow_admin"
+  }
+
+  expect_failures = [aws_iam_policy.service]
+}
+
+run "reject_parameter_name_without_leading_slash" {
+  command = plan
+
+  variables {
+    postgres_password_name = "healthcare_hai_prediction/postgres_password"
+  }
+
+  expect_failures = [var.postgres_password_name]
+}
+
+run "reject_parameter_name_with_dashes" {
+  command = plan
+
+  variables {
+    airflow_fernet_key_name = "/healthcare-hai-prediction/airflow-fernet-key"
+  }
+
+  expect_failures = [var.airflow_fernet_key_name]
+}
+
+run "reject_parameter_name_with_aws_prefix" {
+  command = plan
+
+  variables {
+    redis_password_name = "/aws/redis_password"
+  }
+
+  expect_failures = [var.redis_password_name]
+}
+
+run "reject_wildcard_parameter_name" {
+  command = plan
+
+  variables {
+    marquez_db_password_name = "/healthcare_hai_prediction/*"
+  }
+
+  expect_failures = [var.marquez_db_password_name]
+}
+
+run "reject_parameter_name_with_trailing_slash" {
+  command = plan
+
+  variables {
+    airflow_admin_secret_name = "/healthcare_hai_prediction/"
+  }
+
+  expect_failures = [var.airflow_admin_secret_name]
+}
+
+run "reject_equal_parameter_names" {
+  command = plan
+
+  variables {
+    redis_password_name = "/healthcare_hai_prediction/postgres_password"
   }
 
   expect_failures = [aws_iam_policy.service]

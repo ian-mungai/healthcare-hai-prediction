@@ -14,10 +14,10 @@ Run from the repository root:
 
 This script is a launcher client: it makes no Docker call. The launcher (orchestration/launcher.py) creates the containers from
 ``docker-compose.yaml`` and the template table. ``up`` is idempotent. On first use it generates the PostgreSQL password and the Polaris
-root secret straight into AWS Secrets Manager and never prints them or saves them in a file. It asks the launcher to start the
+root secret straight into AWS Parameter Store and never prints them or saves them in a file. It asks the launcher to start the
 database, bootstrap the Polaris realm once and start Polaris, then creates the ``hai_lakehouse`` catalog whose only allowed
 location is ``lakehouse/`` in the project bucket. A catalog that already exists must match that location exactly.
-It also creates a read-only principal for the DuckDB viewer once and stores its credentials in Secrets Manager; a
+It also creates a read-only principal for the DuckDB viewer once and stores its credentials in Parameter Store; a
 principal whose stored secret is missing has its credentials reset, never recreated. ``down`` stops the containers and
 keeps the database files, so the tables survive a restart. ``release`` frees the memory Docker's VM keeps after a heavy
 run: it stops the catalog and restarts Docker Desktop, but only when nothing of the registry runs and no foreign container runs;
@@ -69,7 +69,7 @@ def client() -> launcher.LauncherClient:
 
 
 def vault() -> secret_store.SecretStore:
-    """The project's Secrets Manager secrets, through the project profile (or the stand-in a test registry names)."""
+    """The project's Parameter Store secrets, through the project profile (or the stand-in a test registry names)."""
     try:
         return client().config.secret_store()
     except (launcher.ClientError, launcher.LauncherError) as error:
@@ -83,7 +83,7 @@ def require_stored(store: secret_store.SecretStore, name: str, persisted: bool, 
 
 
 def credentials() -> dict[str, str]:
-    """Return the catalog credentials from Secrets Manager, generating the database password and the root secret there once."""
+    """Return the catalog credentials from Parameter Store, generating the database password and the root secret there once."""
     store = vault()
     initialized = (STATE / "polaris_db/PG_VERSION").exists()
     require_stored(store, secret_store.POSTGRES_PASSWORD, initialized, "the catalog database")

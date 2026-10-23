@@ -1,7 +1,7 @@
 """Read-only logical dump of the Airflow metadata database for the sentinel scan (Airflow plan section 10; failure mode 932b).
 
 It runs inside the thin Airflow image as a finite job of the ``orchestration_dump`` template, on the stack's network, with the repository file mounted
-read-only. The connection string comes from the job's environment, which the launcher fills from AWS Secrets Manager, and is never printed.
+read-only. The connection string comes from the job's environment, which the launcher fills from AWS Parameter Store, and is never printed.
 ``metadata`` writes every table of the ``public`` schema as COPY text (a column of bytes appears as hexadecimal text) to
 ``/out/metadata.sql``; ``xcom`` writes the XCom rows to ``/out/xcom.txt``. The session is read-only. The job prints only the number of tables and rows it wrote.
 

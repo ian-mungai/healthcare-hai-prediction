@@ -1,8 +1,9 @@
-"""Read, create and put the project's managed secrets in AWS Secrets Manager; a value lives in memory and nowhere else.
+"""Read, create and put the project's managed secrets in AWS Systems Manager Parameter Store; a value lives in memory and nowhere else.
 
-The 13 names are the committed defaults of the root variables in ``infra/iam/variables.tf``; ``terraform_defaults`` reads them back so a check can
-compare the two. The project profile and region come from the rendered ``infra/deployment.auto.tfvars.json``. Errors name the secret and the action,
-never a value.
+The 14 managed names are the committed defaults of the root variables in ``infra/iam/variables.tf``; ``terraform_defaults`` reads them back so a check
+can compare the two. Each is a SecureString parameter named ``/healthcare_hai_prediction/<name_with_underscores>`` on the standard tier, encrypted with
+the AWS managed key ``aws/ssm``. The four shared API keys stay in Secrets Manager and this module only reads them. The project profile and region come
+from the rendered ``infra/deployment.auto.tfvars.json``. Errors name the secret and the action, never a value.
 """
 
 from __future__ import annotations
@@ -22,21 +23,22 @@ from typing import Any
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
-PREFIX = "healthcare-hai-prediction/"
-POSTGRES_PASSWORD = PREFIX + "postgres-password"
-POLARIS_ROOT_SECRET = PREFIX + "polaris-root-secret"
-POLARIS_READER_CLIENT_ID = PREFIX + "polaris-reader-client-id"
-POLARIS_READER_CLIENT_SECRET = PREFIX + "polaris-reader-client-secret"
-POLARIS_GOLD_CLIENT_ID = PREFIX + "polaris-gold-client-id"
-POLARIS_GOLD_CLIENT_SECRET = PREFIX + "polaris-gold-client-secret"
-POLARIS_SILVER_CLIENT_ID = PREFIX + "polaris-silver-client-id"
-POLARIS_SILVER_CLIENT_SECRET = PREFIX + "polaris-silver-client-secret"
-AIRFLOW_DB_PASSWORD = PREFIX + "airflow-db-password"
-AIRFLOW_FERNET_KEY = PREFIX + "airflow-fernet-key"
-AIRFLOW_JWT_SECRET = PREFIX + "airflow-jwt-secret"
-AIRFLOW_API_SECRET_KEY = PREFIX + "airflow-api-secret-key"
-MARQUEZ_DB_PASSWORD = PREFIX + "marquez-db-password"
-AIRFLOW_ADMIN = PREFIX + "airflow-admin"
+PREFIX = "/healthcare_hai_prediction/"
+POSTGRES_PASSWORD = PREFIX + "postgres_password"
+POLARIS_ROOT_SECRET = PREFIX + "polaris_root_secret"
+POLARIS_READER_CLIENT_ID = PREFIX + "polaris_reader_client_id"
+POLARIS_READER_CLIENT_SECRET = PREFIX + "polaris_reader_client_secret"
+POLARIS_GOLD_CLIENT_ID = PREFIX + "polaris_gold_client_id"
+POLARIS_GOLD_CLIENT_SECRET = PREFIX + "polaris_gold_client_secret"
+POLARIS_SILVER_CLIENT_ID = PREFIX + "polaris_silver_client_id"
+POLARIS_SILVER_CLIENT_SECRET = PREFIX + "polaris_silver_client_secret"
+AIRFLOW_DB_PASSWORD = PREFIX + "airflow_db_password"
+AIRFLOW_FERNET_KEY = PREFIX + "airflow_fernet_key"
+AIRFLOW_JWT_SECRET = PREFIX + "airflow_jwt_secret"
+AIRFLOW_API_SECRET_KEY = PREFIX + "airflow_api_secret_key"
+MARQUEZ_DB_PASSWORD = PREFIX + "marquez_db_password"
+AIRFLOW_ADMIN = PREFIX + "airflow_admin"
+REDIS_PASSWORD = PREFIX + "redis_password"
 MANAGED = (
     POSTGRES_PASSWORD,
     POLARIS_ROOT_SECRET,
@@ -51,7 +53,10 @@ MANAGED = (
     AIRFLOW_JWT_SECRET,
     AIRFLOW_API_SECRET_KEY,
     MARQUEZ_DB_PASSWORD,
+    REDIS_PASSWORD,
 )
+READ_ONLY = (AIRFLOW_ADMIN,)
+SHARED = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")
 DEPLOYMENT = "infra/deployment.auto.tfvars.json"
 VARIABLES = "infra/iam/variables.tf"
 LOOPBACK = {"127.0.0.1", "localhost"}
@@ -63,6 +68,9 @@ CLIENT_OPTIONS: dict[str, Any] = {
     "ignore_configured_endpoint_urls": True,
 }
 FERNET_KEY_BYTES = 32
+MAX_VALUE_BYTES = 4096
+PARAMETER_TIER = "Standard"
+PARAMETER_TYPE = "SecureString"
 FETCH_DEADLINE_SECONDS = 30.0
 COLLISION_WAIT_SECONDS = 10.0
 COLLISION_POLL_SECONDS = 0.25
@@ -115,15 +123,18 @@ def project_settings(root: Path) -> dict[str, str]:
 
 
 class SecretStore:
-    """The managed secrets through one Secrets Manager client."""
+    """The managed secrets through one Parameter Store client; the shared API keys, read only, through a Secrets Manager client made on first use."""
 
-    def __init__(self, client: Any) -> None:
-        self.client = client
+    def __init__(self, parameters: Any, shared: Callable[[], Any] | None = None) -> None:
+        self.parameters = parameters
+        self.shared = shared
+        self.shared_client: Any = None
 
     @staticmethod
-    def check(name: str) -> None:
-        """Refuse any name outside the 13 managed names before a request is made."""
-        if name not in MANAGED:
+    def check(name: str, write: bool = False) -> None:
+        """Refuse a name outside the allowed set before a request: the 14 managed names for a write, with the read-only and shared names for a read."""
+        allowed = MANAGED if write else (*MANAGED, *READ_ONLY, *SHARED)
+        if name not in allowed:
             raise SecretStoreError(f"{name} is not a managed secret name")
 
     @staticmethod
@@ -136,25 +147,22 @@ class SecretStore:
         return SecretStoreError(f"{action} on secret {name} failed: {self.code(error)}")
 
     def read(self, name: str) -> str | None:
-        """The stored value: ``None`` when the secret does not exist, an empty string when it exists with no value."""
+        """The stored value, or ``None`` when the secret does not exist; a parameter is read with decryption, a shared key from Secrets Manager."""
         self.check(name)
         try:
-            value = self.client.get_secret_value(SecretId=name).get("SecretString")
+            if name in SHARED:
+                if self.shared_client is None:
+                    if self.shared is None:
+                        raise SecretStoreError(f"{name} is a shared key and this store has no Secrets Manager client")
+                    self.shared_client = self.shared()
+                value = self.shared_client.get_secret_value(SecretId=name).get("SecretString")
+            else:
+                value = self.parameters.get_parameter(Name=name, WithDecryption=True).get("Parameter", {}).get("Value")
         except (ClientError, BotoCoreError) as error:
-            if self.code(error) != "ResourceNotFoundException":
+            if self.code(error) not in ("ParameterNotFound", "ResourceNotFoundException"):
                 raise self.failure("reading", name, error) from None
-            return "" if self.exists(name) else None
+            return None
         return value if isinstance(value, str) else ""
-
-    def exists(self, name: str) -> bool:
-        """True when the secret exists, with or without a value."""
-        try:
-            self.client.describe_secret(SecretId=name)
-        except (ClientError, BotoCoreError) as error:
-            if self.code(error) == "ResourceNotFoundException":
-                return False
-            raise self.failure("describing", name, error) from None
-        return True
 
     def find(self, name: str) -> str | None:
         """The stored value, or ``None`` when the secret is missing or empty."""
@@ -167,58 +175,48 @@ class SecretStore:
             raise SecretMissing(f"secret {name} is missing or empty")
         return value
 
+    def send(self, name: str, value: str, overwrite: bool) -> bool:
+        """One ``put_parameter`` call: a SecureString on the standard tier under the AWS managed key; false when ``overwrite`` is off and the name exists."""
+        self.check(name, write=True)
+        if not value:
+            raise SecretStoreError(f"secret {name} cannot hold an empty value")
+        if len(value.encode()) > MAX_VALUE_BYTES:
+            raise SecretStoreError(f"secret {name} value is larger than {MAX_VALUE_BYTES} bytes")
+        try:
+            self.parameters.put_parameter(Name=name, Value=value, Type=PARAMETER_TYPE, Tier=PARAMETER_TIER, Overwrite=overwrite)
+        except (ClientError, BotoCoreError) as error:
+            if not overwrite and self.code(error) == "ParameterAlreadyExists":
+                return False
+            raise self.failure("putting a value to" if overwrite else "creating", name, error) from None
+        stored = self.read(name)
+        if stored != value:
+            raise SecretStoreError(f"readback of secret {name} after the write did not match what was written")
+        return True
+
     def put(self, name: str, value: str) -> None:
-        """Store a new value, creating the secret when it does not exist; callers that update one secret from several processes serialize first."""
-        self.check(name)
-        try:
-            self.client.put_secret_value(SecretId=name, SecretString=value)
-            return
-        except (ClientError, BotoCoreError) as error:
-            if self.code(error) != "ResourceNotFoundException":
-                raise self.failure("putting a value to", name, error) from None
-        try:
-            self.client.create_secret(Name=name, SecretString=value)
-        except (ClientError, BotoCoreError) as error:
-            if self.code(error) != "ResourceExistsException":
-                raise self.failure("creating", name, error) from None
-            try:
-                self.client.put_secret_value(SecretId=name, SecretString=value)
-            except (ClientError, BotoCoreError) as retry:
-                raise self.failure("putting a value to", name, retry) from None
+        """Store a new value, creating the parameter when it does not exist, and read it back; callers that update one secret from many processes serialize."""
+        self.send(name, value, overwrite=True)
 
     def ensure(self, name: str, make: Callable[[], str], wait: float = COLLISION_WAIT_SECONDS) -> tuple[str, bool]:
         """The stored value, generated and created first when the secret does not exist; the flag is true when this call created it.
 
-        An existing secret with no value is refused: only ``fill_empty`` fills it. After a create collision this call never writes: it reads the
-        winner's value for up to ``wait`` seconds.
+        The create never overwrites: after a collision this call never writes and reads the winner's value for up to ``wait`` seconds.
         """
+        self.check(name, write=True)
         value = self.read(name)
         if value:
             return value, False
-        if value is not None:
-            raise SecretStoreError(f"secret {name} exists but holds no value; fill it by hand or with the one-time secrets move, not with this command")
         made = make()
-        try:
-            self.client.create_secret(Name=name, SecretString=made)
+        if self.send(name, made, overwrite=False):
             return made, True
-        except (ClientError, BotoCoreError) as error:
-            if self.code(error) != "ResourceExistsException":
-                raise self.failure("creating", name, error) from None
         end = time.monotonic() + wait
         while True:
             winner = self.read(name)
             if winner:
                 return winner, False
             if time.monotonic() >= end:
-                raise SecretStoreError(f"secret {name} was created by another caller but holds no value after {wait:g} s")
+                raise SecretStoreError(f"secret {name} was created by another caller but cannot be read after {wait:g} s")
             time.sleep(COLLISION_POLL_SECONDS)
-
-    def fill_empty(self, name: str, value: str) -> bool:
-        """The explicit recovery operation: store ``value`` only in a secret that exists with no value; true when it did."""
-        if self.read(name) != "":
-            return False
-        self.put(name, value)
-        return True
 
 
 def within[T](seconds: float, call: Callable[[], T], what: str) -> T:
@@ -303,8 +301,11 @@ def open_store(root: Path, endpoint: str | None = None) -> SecretStore:
     try:
         if endpoint is None:
             session = boto3.Session(profile_name=settings["aws_profile"], region_name=settings["aws_region"])
-            return SecretStore(session.client("secretsmanager", config=config))
+            return SecretStore(session.client("ssm", config=config), lambda: session.client("secretsmanager", config=config))
         session = boto3.Session(aws_access_key_id=STAND_IN_CREDENTIAL, aws_secret_access_key=STAND_IN_CREDENTIAL, region_name=settings["aws_region"])
-        return SecretStore(session.client("secretsmanager", config=config, endpoint_url=endpoint))
+        return SecretStore(
+            session.client("ssm", config=config, endpoint_url=endpoint),
+            lambda: session.client("secretsmanager", config=config, endpoint_url=endpoint),
+        )
     except (BotoCoreError, ValueError) as error:
-        raise SecretStoreError(f"setting up the Secrets Manager client failed: {type(error).__name__}") from None
+        raise SecretStoreError(f"setting up the Parameter Store client failed: {type(error).__name__}") from None
