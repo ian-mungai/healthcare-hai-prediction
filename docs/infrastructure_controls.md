@@ -1,7 +1,7 @@
 ---
 title: Infrastructure Controls
 description: Environments, the AWS stacks and project policies, bucket lifecycle rules, the lifecycle permission, deferred controls.
-last_updated: 2026-10-22
+last_updated: 2026-10-23
 ---
 
 # Infrastructure Controls
@@ -164,7 +164,7 @@ the first deploy.
 - The project user cannot launch an instance. It has no `ec2:RunInstances`, launch template, host group create, update or
   refresh, network, image or snapshot-copy permission, so it cannot choose what a host boots with. AWS's own scaling service
   launches the host from the template that the IAM stack owns, with the group at a template version that is a number
-  (`tostring(latest_version)`, never `$Latest` or `$Default`), a minimum size of 0 and a maximum size of 1. The project
+  (`tostring(latest_version)`, never `$Latest` or `$Default`), a minimum size of 0 and a maximum size of 1. The group also carries the `AmazonECSManaged` tag that ECS adds when it creates the capacity provider. The IAM stack declares it as ECS sets it, so the IAM plan shows no drift. The project
   user has two Auto Scaling permissions on that one group. `autoscaling:SetDesiredCapacity` turns the host on (1) and off
   (0); the group's maximum size keeps the count at 0 or 1, because Auto Scaling has no capacity condition key.
   `autoscaling:CreateOrUpdateTags` allows the `AmazonECSManaged` key only, which ECS adds with the project user's
