@@ -292,17 +292,18 @@
     },
     {
       "path": "scripts/infrastructure/run_e2e.py",
-      "line": 125,
+      "line": 366,
       "code_sha256": "6528e3517932d758564fcd8f1945878372a41b8c0340ba088741c4e3fefb5996",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "c4f4faa18055a8bdaf417cf76939b87ce6d3eaff71dacba962990200e02ad788",
+      "file_sha256": "e07b10e5ad47f065b19f2a68f6db45fdc5487eaea2dcdb358a731c7450cb53ac",
       "dependencies": {
+        "scripts/infrastructure/systemd_model.py": "sha256:e0824402fae8dce41af8951237254490b35178bd5a42bab3c80e27091de7b40d",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
       "reason": "Evidence.run receives the Python configuration-renderer and Bash-wrapper commands that run_suite builds",
       "lines": [
-        125
+        366
       ]
     },
     {
@@ -314,7 +315,7 @@
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
         "orchestration/launcher.py": "sha256:c31ab5da198cf5b59cef21f21bc6bb6e3bf05d3a40e2921164bb59cfc619d0b7",
-        "scripts/infrastructure/secret_store.py": "sha256:5cf64ce7acacd5a7b318e55a2e7915a7a2065314ec6a53205701211f1d0488b6",
+        "scripts/infrastructure/secret_store.py": "sha256:fafb2548d070f89eb965c325ebf5fc9ccf032254eb2739e27057b6e350f34ab5",
         "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
         "scripts/lakehouse/catalog.py": "sha256:404ed0af66e4264ec4e2e6df9357ece7b41e575d04cfdc9b2a2b87f415dfe6e6",
         "scripts/lakehouse/checksums.py": "sha256:33100f77c34e1196e98ffa8dbf464ddda1819314979ff9a0e9d0c6be618e6df4",
@@ -335,7 +336,7 @@
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
         "orchestration/launcher.py": "sha256:c31ab5da198cf5b59cef21f21bc6bb6e3bf05d3a40e2921164bb59cfc619d0b7",
-        "scripts/infrastructure/secret_store.py": "sha256:5cf64ce7acacd5a7b318e55a2e7915a7a2065314ec6a53205701211f1d0488b6",
+        "scripts/infrastructure/secret_store.py": "sha256:fafb2548d070f89eb965c325ebf5fc9ccf032254eb2739e27057b6e350f34ab5",
         "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
         "scripts/lakehouse/catalog.py": "sha256:404ed0af66e4264ec4e2e6df9357ece7b41e575d04cfdc9b2a2b87f415dfe6e6",
         "scripts/lakehouse/checksums.py": "sha256:33100f77c34e1196e98ffa8dbf464ddda1819314979ff9a0e9d0c6be618e6df4",
@@ -356,7 +357,7 @@
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
         "orchestration/launcher.py": "sha256:c31ab5da198cf5b59cef21f21bc6bb6e3bf05d3a40e2921164bb59cfc619d0b7",
-        "scripts/infrastructure/secret_store.py": "sha256:5cf64ce7acacd5a7b318e55a2e7915a7a2065314ec6a53205701211f1d0488b6",
+        "scripts/infrastructure/secret_store.py": "sha256:fafb2548d070f89eb965c325ebf5fc9ccf032254eb2739e27057b6e350f34ab5",
         "scripts/lakehouse/bronze.py": "sha256:39c83506063b5b3021184991968376d64a55571513d7ee6068a64079337c7886",
         "scripts/lakehouse/catalog.py": "sha256:404ed0af66e4264ec4e2e6df9357ece7b41e575d04cfdc9b2a2b87f415dfe6e6",
         "scripts/lakehouse/checksums.py": "sha256:33100f77c34e1196e98ffa8dbf464ddda1819314979ff9a0e9d0c6be618e6df4",
@@ -379,7 +380,7 @@
         "orchestration/launcher.py": "sha256:c31ab5da198cf5b59cef21f21bc6bb6e3bf05d3a40e2921164bb59cfc619d0b7",
         "orchestration/network_policy.py": "sha256:26862fe808c9758d93e0c592f4eda1113b3b6a3a2921d402f88f7bd45f328400",
         "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
-        "scripts/infrastructure/secret_store.py": "sha256:5cf64ce7acacd5a7b318e55a2e7915a7a2065314ec6a53205701211f1d0488b6",
+        "scripts/infrastructure/secret_store.py": "sha256:fafb2548d070f89eb965c325ebf5fc9ccf032254eb2739e27057b6e350f34ab5",
         "scripts/infrastructure/secret_store_stand_in.py": "sha256:df5fe9499fb37c716ec09ec24e84ca20a62588b0aae8c68fad52db1d171c3246",
         "scripts/infrastructure/sts_stand_in.py": "sha256:bb2056c3f1ae31fe80cf91d1a58e3241e3afdee3bcaf0fd4e3fca19b3e8939cb",
         "scripts/lakehouse/catalog.py": "sha256:404ed0af66e4264ec4e2e6df9357ece7b41e575d04cfdc9b2a2b87f415dfe6e6",
@@ -452,11 +453,11 @@
     },
     {
       "path": "tests/test_project_config.py",
-      "line": 226,
+      "line": 239,
       "code_sha256": "fafe3fdef33731c7736790b263e816db40768e724710f8b527400d4ef3a701c9",
       "problem": "whose program the check cannot prove",
       "occurrences": 3,
-      "file_sha256": "5a3d8354c3025ef0857e163d3a0aef3f0d37867c049d5e1868edae96efeed95d",
+      "file_sha256": "a9d50143e37220a5fc50068ba2d002f4c6b283f3c6cd70793e4b0d93291245f1",
       "dependencies": {
         "scripts/infrastructure/render_project_config.py": "sha256:cfc43a274aa889b19bab4278af0f6db284310c4e0620153088ebaab94be8790f",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
@@ -464,7 +465,7 @@
       },
       "reason": "/bin/bash runs scripts/infrastructure/terraform.sh (checked by the shell rules) with test arguments and synthetic tool commands",
       "lines": [
-        226,
+        239,
         255,
         278
       ]

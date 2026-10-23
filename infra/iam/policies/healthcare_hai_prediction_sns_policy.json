@@ -1,0 +1,97 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CreateTaggedAlertTopic",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic"
+      ],
+      "Resource": "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ManageAlertTopic",
+      "Effect": "Allow",
+      "Action": [
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:ListTagsForResource",
+        "sns:TagResource",
+        "sns:UntagResource"
+      ],
+      "Resource": "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}"
+    },
+    {
+      "Sid": "DenyTopicWithoutProjectTagValue",
+      "Effect": "Deny",
+      "Action": [
+        "sns:CreateTopic"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "DenyTopicWithoutExactProjectKey",
+      "Effect": "Deny",
+      "Action": [
+        "sns:CreateTopic"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ForAllValues:StringNotEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyRemovingProjectTag",
+      "Effect": "Deny",
+      "Action": [
+        "sns:UntagResource"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ForAnyValue:StringEqualsIgnoreCase": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyChangingProjectTag",
+      "Effect": "Deny",
+      "Action": [
+        "sns:TagResource"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ForAnyValue:StringEqualsIgnoreCase": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        },
+        "Null": {
+          "aws:ResourceTag/Project": "false"
+        }
+      }
+    }
+  ]
+}

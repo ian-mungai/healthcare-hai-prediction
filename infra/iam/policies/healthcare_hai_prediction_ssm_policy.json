@@ -1,0 +1,67 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadProjectParameters",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter"
+      ],
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${READ_PARAMETER_NAME}"
+      ]
+    },
+    {
+      "Sid": "WriteManagedProjectParameters",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:PutParameter"
+      ],
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${MANAGED_PARAMETER_NAME}"
+      ]
+    },
+    {
+      "Sid": "ReadPublicEcsParameters",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameters"
+      ],
+      "Resource": "arn:aws:ssm:${AWS_REGION}::parameter/aws/service/ecs/*"
+    },
+    {
+      "Sid": "PortForwardToProjectHost",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:StartSession"
+      ],
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ssm:resourceTag/Project": "${PROJECT_NAME}",
+          "ssm:resourceTag/Name": "${PROJECT_NAME}_host_${ENVIRONMENT}"
+        },
+        "BoolIfExists": {
+          "ssm:SessionDocumentAccessCheck": "true"
+        }
+      }
+    },
+    {
+      "Sid": "PortForwardDocumentOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:StartSession"
+      ],
+      "Resource": "arn:aws:ssm:${AWS_REGION}::document/AWS-StartPortForwardingSession"
+    },
+    {
+      "Sid": "EndOwnSessions",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:ResumeSession",
+        "ssm:TerminateSession"
+      ],
+      "Resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:session/${aws:username}-*"
+    }
+  ]
+}

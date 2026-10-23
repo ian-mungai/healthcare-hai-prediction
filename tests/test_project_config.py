@@ -203,6 +203,19 @@ def test_saved_plan_must_match_current_dotenv(environment: dict[str, Any]) -> No
         verify_plan_variables(plan, {**storage, "data_bucket_name": "different-bucket"})
 
 
+def test_saved_plan_accepts_other_inputs_only_at_their_committed_default(environment: dict[str, Any]) -> None:
+    """The IAM stack declares inputs with defaults (the owner addresses, the budget): a saved plan must keep each default."""
+    storage, _ = build_configuration(environment)
+    variables = {key: {"value": value} for key, value in storage.items()}
+    declared = {"owner_ip_cidrs": {"default": []}, "budget_limit_usd": {"default": 150}, "no_default": {}}
+    base = {"complete": True, "errored": False, "configuration": {"root_module": {"variables": declared}}}
+    verify_plan_variables({**base, "variables": {**variables, "owner_ip_cidrs": {"value": []}, "budget_limit_usd": {"value": 150}}}, storage)
+    for name, value in (("owner_ip_cidrs", ["192.0.2.10/32"]), ("budget_limit_usd", 1000), ("no_default", "x"), ("undeclared", 1)):
+        with pytest.raises(ConfigurationError) as error:
+            verify_plan_variables({**base, "variables": {**variables, name: {"value": value}}}, storage)
+        check(name in str(error.value), f"the refusal must name {name}")
+
+
 @pytest.mark.parametrize("complete,errored", [(False, False), (True, True)])
 def test_incomplete_or_errored_plan_is_rejected(environment: dict[str, Any], complete: bool, errored: bool) -> None:
     storage, _ = build_configuration(environment)

@@ -127,6 +127,7 @@ if [[ "$part" == "launcher" ]]; then
 fi
 
 e2e_output="${E2E_ARTIFACT_DIR:-$repo_root/data/e2e/configuration/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
+policy_output="${POLICY_ARTIFACT_DIR:-$repo_root/data/e2e/policies/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 quality_output="${QUALITY_ARTIFACT_DIR:-$repo_root/data/e2e/quality/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 
 python_lint() {
@@ -201,6 +202,7 @@ repository_code_checks() {
 
 configuration_checks() {
   timed "configuration_checks: infrastructure E2E" "$python_bin" -m scripts.infrastructure.run_e2e --output-directory "$e2e_output"
+  timed "configuration_checks: policy E2E" "$python_bin" -m scripts.infrastructure.run_policy_e2e --output-directory "$policy_output"
   timed "configuration_checks: quality E2E" "$python_bin" -m scripts.quality.run_e2e --output-directory "$quality_output/e2e"
   timed "configuration_checks: secret store E2E" "$python_bin" -m scripts.infrastructure.run_secret_store_e2e
   timed "configuration_checks: pytest with coverage" "$python_bin" -m pytest --cov=scripts.infrastructure --cov-report=term-missing -q
@@ -223,11 +225,11 @@ terraform_checks() {
   export AWS_SHARED_CREDENTIALS_FILE="$scratch/empty_aws_credentials"
   export AWS_EC2_METADATA_DISABLED=true TF_IN_AUTOMATION=1 TF_INPUT=0
   touch "$AWS_CONFIG_FILE" "$AWS_SHARED_CREDENTIALS_FILE"
-  # The two stacks run one after the other: Terraform's provider cache is not safe for concurrent init.
-  for stack in storage iam; do
+  # The stacks run one after the other: Terraform's provider cache is not safe for concurrent init.
+  for stack in storage iam platform; do
     source_dir="$repo_root/infra"
-    if [[ "$stack" == "iam" ]]; then
-      source_dir="$repo_root/infra/iam"
+    if [[ "$stack" != "storage" ]]; then
+      source_dir="$repo_root/infra/$stack"
     fi
     test_dir="$scratch/$stack"
     mkdir -p "$test_dir"
@@ -249,10 +251,10 @@ terraform_checks() {
     timed "terraform_checks: $stack test" terraform -chdir="$test_dir" test -no-color
   done
   static_failed=0
-  for stack in storage iam; do
+  for stack in storage iam platform; do
     source_dir="$repo_root/infra"
-    if [[ "$stack" == "iam" ]]; then
-      source_dir="$repo_root/infra/iam"
+    if [[ "$stack" != "storage" ]]; then
+      source_dir="$repo_root/infra/$stack"
     fi
     if ! timed "terraform_checks: $stack static checks" "$python_bin" -m scripts.quality.static_checks --directory "$source_dir" --output-directory "$quality_output/$stack"; then
       static_failed=1

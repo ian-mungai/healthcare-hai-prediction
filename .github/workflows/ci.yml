@@ -160,16 +160,18 @@ jobs:
           RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
           RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
           E2E_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/configuration
+          POLICY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/policies
           QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
         run: bash scripts/run_ci.sh
 
-      - name: Retain configuration, quality and broker evidence
+      - name: Retain configuration, policy, quality and broker evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: configuration_e2e_${{ github.run_id }}_${{ github.run_attempt }}
           path: |
             data/e2e/configuration/
+            data/e2e/policies/
             data/e2e/quality/
             data/e2e/orchestration_broker/
           if-no-files-found: warn

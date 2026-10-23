@@ -299,6 +299,14 @@ def terraform_names(root: Path) -> dict[str, bool]:
         ),
         "the 14 variable defaults equal the module's managed names in order": declared == list(secret_store.MANAGED),
         "the 14 managed names and the read-only name are all different": len(set(ordered)) == len(ordered) == 15,
+        "the policy files grant the module's names: four shared keys read only, 15 parameters read and the 14 managed ones written": secret_store.policy_names(
+            root / secret_store.VARIABLES
+        )
+        == {
+            "SHARED_SECRET_NAME": sorted(secret_store.SHARED),
+            "READ_PARAMETER_NAME": sorted(ordered),
+            "MANAGED_PARAMETER_NAME": sorted(secret_store.MANAGED),
+        },
         "every name is a slash path under the project prefix with underscores": all(
             re.fullmatch(r"/healthcare_hai_prediction/[a-z0-9_]+", name) for name in ordered
         ),

@@ -40,7 +40,7 @@ variable "data_bucket_name" {
 }
 
 variable "project_name" {
-  description = "Prefix rendered into service policy names from .env."
+  description = "Underscore project identifier from .env; it prefixes every resource name and is the value of the Project tag."
   type        = string
 
   validation {
@@ -310,5 +310,60 @@ variable "lakehouse_session_max_seconds" {
   validation {
     condition     = var.lakehouse_session_max_seconds >= 3600 && var.lakehouse_session_max_seconds <= 43200 && var.lakehouse_session_max_seconds == floor(var.lakehouse_session_max_seconds)
     error_message = "Use a whole number of seconds from 3600 to 43200, the range IAM accepts."
+  }
+}
+
+variable "owner_ip_cidrs" {
+  description = "The owner's public IPv4 addresses, each as a /32; the only sources the host accepts. Empty keeps the host closed."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for cidr in var.owner_ip_cidrs : can(cidrhost(cidr, 0)) && endswith(cidr, "/32") && !strcontains(cidr, ":")])
+    error_message = "Each owner address must be a single IPv4 address written as a /32."
+  }
+}
+
+variable "host_ingress_ports" {
+  description = "TCP ports the host opens to the owner addresses."
+  type        = list(number)
+  default     = []
+
+  validation {
+    condition     = alltrue([for port in var.host_ingress_ports : port >= 1 && port <= 65535 && floor(port) == port])
+    error_message = "Each port must be a whole number from 1 to 65535."
+  }
+}
+
+variable "host_task_ports" {
+  description = "TCP ports on the host that the run tasks reach: the Polaris catalog and Redis."
+  type        = list(number)
+  default     = [6379, 8181]
+
+  validation {
+    condition     = alltrue([for port in var.host_task_ports : port >= 1 && port <= 65535 && floor(port) == port])
+    error_message = "Each port must be a whole number from 1 to 65535."
+  }
+}
+
+variable "budget_limit_usd" {
+  description = "Quarterly amount for the resources that carry the Project tag; the owner tracks it and the alerts only inform."
+  type        = number
+  default     = 150
+
+  validation {
+    condition     = var.budget_limit_usd > 0 && var.budget_limit_usd <= 1000
+    error_message = "Use a budget from 1 to 1000 US dollars."
+  }
+}
+
+variable "budget_alert_percentages" {
+  description = "Actual-spend percentages of the budget that send an alert to the budget topic."
+  type        = set(number)
+  default     = [50, 80]
+
+  validation {
+    condition     = length(var.budget_alert_percentages) > 0 && alltrue([for value in var.budget_alert_percentages : value > 0 && value <= 100])
+    error_message = "Alert percentages must be above 0 and at most 100."
   }
 }

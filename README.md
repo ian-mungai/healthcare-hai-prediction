@@ -30,6 +30,26 @@ user. IAM changes use a separate administrator profile that is never stored in
 `.env`. No secret belongs in `.env` or in any other file on the host: every project secret
 lives in AWS Systems Manager Parameter Store and the four shared API keys in AWS Secrets Manager (`docs/install_details.md`).
 
+The project profile holds only the permissions of the approved list, as one policy file per AWS service in
+`infra/iam/policies/` (`healthcare_hai_prediction_<service>_policy.json`, with `${AWS_REGION}`, `${AWS_ACCOUNT_ID}`,
+`${PROJECT_NAME}`, `${ENVIRONMENT}` and `${DATA_BUCKET_NAME}` placeholders). The owner applies them with the administrator
+profile; the policy scripts read the values from `.env`. The secret and parameter names are not in the files: they are the
+defaults of the secret-name root variables in `infra/iam/variables.tf`, which `render_policy` reads. Render to review, plan
+(changes nothing), then apply with the confirmation word:
+
+```sh
+.venv/bin/python -m infra.iam.scripts.render_policy --output-directory <REVIEW_DIRECTORY>
+.venv/bin/python -m infra.iam.scripts.manage_policies plan --admin-profile <ADMIN_PROFILE>
+CONFIRM_IAM_POLICIES=apply-healthcare-hai-prediction-policies .venv/bin/python -m infra.iam.scripts.manage_policies apply --admin-profile <ADMIN_PROFILE>
+```
+
+The apply creates or updates the policies, attaches them to two groups and adds the project user to both. It also removes
+the earlier grouped policies. `infra.iam.scripts.export_policies` writes the policies in IAM back as templates, to see
+drift. The roles, the network, the host launch template and Auto Scaling group and the cost budget stay in the IAM
+Terraform stack (`scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE>`), which the owner applies
+first; the project profile then applies the platform stack (`--platform`). The order and the checks are in
+`docs/infrastructure_controls.md`.
+
 The services are defined in `docker-compose.yaml`, which the launcher reads as its service model; the launcher, not
 Compose, starts every container:
 
@@ -85,14 +105,15 @@ The E2E runners can also run on their own; each needs a new output directory:
 
 ```sh
 .venv/bin/python -m scripts.infrastructure.run_e2e --output-directory <new_directory>
+.venv/bin/python -m scripts.infrastructure.run_policy_e2e --output-directory <new_directory>
 .venv/bin/python -m scripts.quality.run_e2e --output-directory <new_directory>
 .venv/bin/python -m scripts.quality.run_checks_e2e
 .venv/bin/python -m scripts.quality.run_documentation_review_e2e
 .venv/bin/python -m scripts.infrastructure.run_secret_store_e2e
 ```
 
-Each run writes its report under `data/e2e/` (the configuration E2E under `data/e2e/configuration/`, the quality E2E
-under `data/e2e/quality/`). How the checks run and what each one blocks is in `docs/quality_checks.md`. The lakehouse
+Each run writes its report under `data/e2e/` (the configuration E2E under `data/e2e/configuration/`, the policy E2E under
+`data/e2e/policies/`, the quality E2E under `data/e2e/quality/`). How the checks run and what each one blocks is in `docs/quality_checks.md`. The lakehouse
 commands are in `docs/lakehouse_usage.md`. The resource limits, pinned tools and manual set-up steps behind Install are
-in `docs/install_details.md`. The environments, bucket lifecycle rules and deferred storage controls are in
+in `docs/install_details.md`. The environments, the AWS stacks and project policies, bucket lifecycle rules and deferred controls are in
 `docs/infrastructure_controls.md`. Rendering the architecture diagram is in `docs/architecture_rendering.md`.

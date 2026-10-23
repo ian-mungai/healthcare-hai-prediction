@@ -1,0 +1,120 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SnapshotDataVolume",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSnapshot",
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:volume/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Name": "${PROJECT_NAME}_host_data_${ENVIRONMENT}",
+          "aws:ResourceTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "CreateTaggedSnapshots",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSnapshot",
+      "Resource": "arn:aws:ec2:${AWS_REGION}::snapshot/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "TagSnapshotsWhenCreated",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "arn:aws:ec2:${AWS_REGION}::snapshot/*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": "CreateSnapshot"
+        }
+      }
+    },
+    {
+      "Sid": "DeleteScheduledSnapshots",
+      "Effect": "Allow",
+      "Action": "ec2:DeleteSnapshot",
+      "Resource": "arn:aws:ec2:${AWS_REGION}::snapshot/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Name": "${PROJECT_NAME}_host_data_${ENVIRONMENT}",
+          "aws:ResourceTag/Project": "${PROJECT_NAME}",
+          "aws:ResourceTag/aws:dlm:lifecycle-schedule-name": "daily"
+        }
+      }
+    },
+    {
+      "Sid": "ReadVolumesAndSnapshots",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeVolumes"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "${AWS_REGION}"
+        }
+      }
+    },
+    {
+      "Sid": "DenySnapshotsWithoutProjectTagValue",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:CopySnapshot",
+        "ec2:CreateSnapshot",
+        "ec2:CreateSnapshots"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "DenySnapshotsWithoutExactProjectKey",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:CopySnapshot",
+        "ec2:CreateSnapshot",
+        "ec2:CreateSnapshots"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ForAllValues:StringNotEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyChangingProjectTag",
+      "Effect": "Deny",
+      "Action": "ec2:CreateTags",
+      "Resource": "*",
+      "Condition": {
+        "ForAnyValue:StringEqualsIgnoreCase": {
+          "aws:TagKeys": [
+            "Project"
+          ]
+        },
+        "StringNotEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    }
+  ]
+}
