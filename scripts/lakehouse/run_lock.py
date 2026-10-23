@@ -28,11 +28,12 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -56,6 +57,7 @@ TOKEN_FOLDER = ("Library", "Application Support", "hai-prediction", "run_tokens"
 LOCK_WAIT_SECONDS = 30
 CONTAINER_LABEL = "hai.run_id"
 REFUSED, REGISTRY_ERROR = 3, 4
+PLAIN_SEGMENT = re.compile(r"[A-Za-z0-9_=,@.-]+")
 
 
 class Refused(Exception):
@@ -250,9 +252,32 @@ def owned(state: dict[str, Any], run_id: str) -> dict[str, Any]:
     return entry
 
 
+def prefix_segments(prefix: object) -> tuple[str, ...] | None:
+    """The segments of a storage prefix, or None when it is not one: nonempty plain segments split by ``/`` with one optional final slash."""
+    if not isinstance(prefix, str):
+        return None
+    parts = prefix.removesuffix("/").split("/")
+    return tuple(parts) if all(PLAIN_SEGMENT.fullmatch(part) and part not in (".", "..") for part in parts) else None
+
+
+def covers(parent: object, child: object) -> bool:
+    """Whether ``child`` is ``parent`` or lies below it, compared by whole segments; False when either is not a plain prefix."""
+    above, below = prefix_segments(parent), prefix_segments(child)
+    return above is not None and below is not None and below[: len(above)] == above
+
+
+def check_prefixes(prefixes: Iterable[object], what: str) -> None:
+    """Refuse a declaration that holds a value that is not a plain prefix, naming the values."""
+    bad = [repr(prefix) for prefix in prefixes if prefix_segments(prefix) is None]
+    if bad:
+        raise Refused(f"{what} {', '.join(bad)}: not a plain path (each segment is nonempty, uses letters, digits and _ = , @ . - and is not . or ..)")
+
+
 def overlaps(left: str, right: str) -> bool:
-    """Two S3 key prefixes overlap when one contains the other."""
-    return left.startswith(right) or right.startswith(left)
+    """Two storage prefixes overlap when one contains the other, compared by whole segments; a value that is not a plain prefix overlaps everything."""
+    if prefix_segments(left) is None or prefix_segments(right) is None:
+        return True
+    return covers(left, right) or covers(right, left)
 
 
 def active(state: dict[str, Any], domain: str) -> dict[str, Any] | None:
@@ -281,6 +306,7 @@ def new_run(state: dict[str, Any], domain: str, run_id: str, mode: str, holder: 
         raise Refused(f"domain {domain} is held by {current['run_id']} (state {current['state']})")
     if run_id in state["runs"]:
         raise Refused(f"run ID {run_id} was used before; a retry with new inputs needs a new run ID")
+    check_prefixes(write_prefixes, "declared write prefix")
     check_cross_domain(state, domain, write_prefixes)
     token = secrets.token_urlsafe(32)
     state["runs"][run_id] = {
@@ -332,6 +358,7 @@ def pin_in(state: dict[str, Any], run_id: str, entry: dict[str, Any], prefixes: 
     """Record the bronze prefixes a held transform run reads; refused over an acquisition run's writes [768]."""
     if entry["domain"] != "transform" or entry["state"] != "held":
         raise Refused(f"only a held transform run pins prefixes; {run_id} is {entry['domain']} in state {entry['state']}")
+    check_prefixes(prefixes, "pinned prefix")
     writer = active(state, "acquisition")
     for prefix in prefixes:
         for written in writer["write_prefixes"] if writer is not None else []:

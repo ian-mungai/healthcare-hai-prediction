@@ -90,7 +90,7 @@ def main() -> int:
             finally:
                 connection.close()
             os.replace(temporary, args.folder / "staging.duckdb")
-        target = "pinned_silver" if args.layer == "gold" else "fixture" if args.mode == "publish_fixture" else "lakehouse"
+        target = "pinned_silver" if args.layer == "gold" else "fixture" if args.mode == "publish_fixture" else "lakehouse_session"
         arguments = [
             "build",
             "--target",

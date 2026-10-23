@@ -1,7 +1,7 @@
 # Quality image: Great Expectations 1.23.2 reading the silver build file through DuckDB 1.5.6 (the engine that wrote it)
 # and duckdb-engine. Kept apart from the analytics image so dbt does not carry pandas, SciPy and Altair.
 # The base image is pinned by digest and the wheels by hash; nothing is fetched at validation time.
-FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS deadline
+FROM golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd AS deadline
 # hai is the services/hai named build context passed by docker-compose.yaml additional_contexts.
 # hadolint ignore=DL3022
 COPY --from=hai deadline_run.go /src/deadline_run.go

@@ -11,6 +11,7 @@ import hashlib
 import json
 import time
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -345,6 +346,15 @@ def gold_publish_admission(env: Env) -> dict[str, bool]:
         expect_error(lambda: submit(wrong, "gold_publish", "a", "commit_publish")), "refused", "declares"
     )
     finish("20261014T010203Z-0000000c", wrong)
+    for run_id, label, declared in (
+        ("20261014T010203Z-0000000e", "the whole lakehouse", "lakehouse/"),
+        ("20261014T010203Z-0000000f", "only the text of the test prefix", "lakehouse/gold"),
+    ):
+        outside = publish_run(env, run_id, "publish_fixture", [declared])
+        checks[f"a publish_fixture run that declares {label} is refused"] = refused(
+            expect_error(partial(submit, outside, "gold_publish", "a", "commit_publish")), "refused", f"declares {declared}"
+        )
+        finish(run_id, outside)
     unsealed = publish_run(env, "20261014T010203Z-0000000d", "publish_fixture", ["lakehouse/gold_e2e/"], sealed=False)
     checks["a sealed job on a run with no sealed build is refused"] = refused(
         expect_error(lambda: submit(unsealed, "gold_publish", "a", "commit_publish")), "refused", "not sealed"

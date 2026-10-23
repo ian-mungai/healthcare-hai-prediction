@@ -60,7 +60,7 @@ from typing import Any, Literal, NamedTuple, NoReturn
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from orchestration import dbt_lineage, lineage_services, network_policy, pipeline_protocol, pipeline_render
+from orchestration import dbt_lineage, lineage_services, network_policy, pipeline_protocol, pipeline_render, pipeline_session
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import dbt_package_archive, gold_publish_record, memory_budget, pins, run_lock
 from scripts.lakehouse import provenance as build_provenance
@@ -122,7 +122,8 @@ SKEW_SECONDS = 2
 START_MARGIN_SECONDS = 1
 DIAGNOSTIC_OWNER = "launcher:diagnostic"
 ACTIVE_PHASES = ("creating", "created", "starting", "started", "exiting")
-SECRET_NAME = re.compile(r"(PASSWORD|SECRET|TOKEN)", re.IGNORECASE)
+SECRET_NAME = re.compile(r"(PASSWORD|SECRET|TOKEN|ACCESS_KEY)", re.IGNORECASE)
+Fetched = str | pipeline_session.RoleSession | secret_store.SecretStoreError
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}")
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 MAX_LINE = 1 << 20
@@ -219,6 +220,8 @@ class Config:
     restart_command: tuple[str, ...] = DOCKER_RESTART_COMMAND
     secrets_endpoint: str | None = None
     secret_fetch_seconds: float = secret_store.FETCH_DEADLINE_SECONDS
+    sts_endpoint: str | None = None
+    aws_account_id: str = ""
     aws_profile: str = ""
     aws_region: str = ""
     allowed_roots: tuple[Path, ...] = ()
@@ -251,6 +254,27 @@ class Config:
         except secret_store.SecretStoreError as error:
             raise LauncherError(str(error), "spec") from None
         return {"AWS_PROFILE": settings["aws_profile"], "AWS_REGION": settings["aws_region"]}
+
+    def role_session(self, role: str, deadline_utc: int, session_name: str) -> pipeline_session.RoleSession:
+        """A new session of the role for a job that ends at ``deadline_utc``: from AWS for the real registry, from the stand-in for a test registry."""
+        return pipeline_session.fetch(
+            role,
+            settings=self.session_settings(),
+            endpoint=self.sts_endpoint,
+            test_registry=self.registry.kind == "test",
+            deadline_utc=deadline_utc,
+            session_name=session_name,
+            limit=self.secret_fetch_seconds,
+        )
+
+    def session_settings(self) -> dict[str, str]:
+        """The project AWS profile, region and account for role sessions: a test registry's own values, else the rendered Terraform variables."""
+        if self.registry.kind == "test":
+            return {"aws_profile": self.aws_profile, "aws_region": self.aws_region, "expected_account_id": self.aws_account_id}
+        try:
+            return pipeline_session.deployment_settings(self.catalog_checkout or self.root)
+        except pipeline_session.SessionError as error:
+            raise LauncherError(str(error), "spec") from None
 
     @property
     def socket_path(self) -> Path:
@@ -766,8 +790,6 @@ COMPOSE_ENV_NAMES = (
     "POLARIS_GOLD_WRITER_CLIENT_SECRET",
     "POLARIS_SILVER_WRITER_CLIENT_ID",
     "POLARIS_SILVER_WRITER_CLIENT_SECRET",
-    "PIPELINE_READER_AWS_PROFILE",
-    "PIPELINE_WRITER_AWS_PROFILE",
     "AWS_PROFILE",
     "AWS_REGION",
     "POLARIS_MEMORY_LIMIT",
@@ -1251,7 +1273,7 @@ SPARK_JOBS: dict[str, dict[str, Any]] = {
         "writes": ("data/e2e/bronze_load",),
         "aws": True,
         "deployment": True,
-        "grammar": {"--group": "value", "--tables": "value", "--drop-removed": "flag", "--copies-only": "flag"},
+        "grammar": {"--group": "value", "--tables": "value", "--bootstrap-all": "flag", "--drop-removed": "flag", "--copies-only": "flag"},
     },
     "dictionary": {
         "template": "spark_write",
@@ -1314,6 +1336,10 @@ SEALED_READERS = ("duckdb_helper", "quality_validate")
 MAINTENANCE_FENCE = "gold-maintenance-fence"
 GOLD_WRITE_PREFIX = {"publish_fixture": "lakehouse/gold_e2e/", "real": "lakehouse/gold/"}
 GOLD_CONTRACT = "data_contracts/lakehouse/gold_contract.json"
+SILVER_WRITE_PREFIX = {mode: f"lakehouse/{namespace}/" for mode, namespace in pipeline_protocol.SILVER_NAMESPACE.items()}
+SILVER_CONTRACT = "data_contracts/lakehouse/silver_publish.json"
+LAYER_WRITE_PREFIX = {"silver": SILVER_WRITE_PREFIX, "gold": GOLD_WRITE_PREFIX}
+LAYER_CONTRACT = {"silver": SILVER_CONTRACT, "gold": GOLD_CONTRACT}
 SEALED_FOLDER = "sealed"
 GOLD_WRITER_ENV = ("POLARIS_GOLD_WRITER_CLIENT_ID", "POLARIS_GOLD_WRITER_CLIENT_SECRET")
 READER_ENV = ("POLARIS_READER_CLIENT_ID", "POLARIS_READER_CLIENT_SECRET")
@@ -1524,6 +1550,26 @@ def held_secrets(source: Path) -> Path | None:
     return None
 
 
+def within_prefix(path: str, prefix: str) -> bool:
+    """Whether a storage path lies inside a prefix, matched on whole path segments; a path with an empty, dot or traversal segment never does."""
+    return run_lock.covers(prefix, path)
+
+
+def publish_contract_problem(layer: str, mode: str, checkout: Path) -> str | None:
+    """What refuses a publish render, or None: the checkout's contract for the layer must send the run's mode to that mode's prefix."""
+    wanted = LAYER_WRITE_PREFIX[layer].get(mode)
+    if wanted is None:
+        return f"run mode {mode!r} has no {layer} write prefix"
+    contract = LAYER_CONTRACT[layer]
+    try:
+        namespace = json.loads((checkout / contract).read_text())["publish"]["namespaces"][mode]
+    except (OSError, ValueError, KeyError, TypeError):
+        return f"{contract} names no {layer} namespace for mode {mode}"
+    if f"lakehouse/{namespace}/" != wanted:
+        return f"{contract} sends mode {mode} to lakehouse/{namespace}/; {layer} writes for this mode go only under {wanted}"
+    return None
+
+
 def container_path(text: str, prefix: str) -> str:
     """A container-side path below ``prefix`` with no traversal."""
     parts = text.split("/")
@@ -1569,7 +1615,7 @@ class Renderer:
         self.interpolated: dict[str, str] = {}
         self.fetched: set[str] = set()
         self.recording: set[str] | None = None
-        self.supplied: Mapping[str, str | secret_store.SecretStoreError] | None = None
+        self.supplied: Mapping[str, Fetched] | None = None
         self.builders = {
             "fixture_dbt": self.render_fixture_dbt,
             "fixture_init": self.render_fixture_init,
@@ -1624,6 +1670,7 @@ class Renderer:
         if self.recording is not None:
             self.recording.add(name)
             return "recorded-secret"
+        outcome: Fetched | None
         if self.supplied is None:
             if self.config.secrets_endpoint is None:
                 raise LauncherError(f"secret {name} must be fetched by the fetch worker", "spec")
@@ -1634,6 +1681,33 @@ class Renderer:
             outcome = self.supplied.get(name) or secret_store.SecretStoreError(f"secret {name} was not fetched for this render")
         if isinstance(outcome, secret_store.SecretStoreError):
             raise outcome
+        if not isinstance(outcome, str):
+            raise secret_store.SecretStoreError(f"secret {name} was not fetched for this render")
+        return outcome
+
+    def session_of(self, role: str, deadline_utc: int, label: str) -> pipeline_session.RoleSession:
+        """The role's session for a job that ends at ``deadline_utc``. While recording, a placeholder, and the session's name is noted for the fetch
+        worker. Otherwise the session the worker fetched for this render, or the error that stopped it. A render outside the launcher (a test registry)
+        asks for the session itself. A session that no longer reaches the deadline is refused. The values join the credentials that the container's
+        record commits and its output hides."""
+        name = pipeline_session.name_of(role)
+        if self.recording is not None:
+            self.recording.add(name)
+            return pipeline_session.placeholder(role)
+        outcome: Fetched | None
+        if self.supplied is None:
+            if self.config.sts_endpoint is None:
+                raise pipeline_session.SessionError(f"the {role} role session must be fetched by the fetch worker")
+            outcome = self.config.role_session(role, deadline_utc, pipeline_session.session_name(label))
+        else:
+            outcome = self.supplied.get(name)
+        if isinstance(outcome, secret_store.SecretStoreError):
+            raise outcome
+        if not isinstance(outcome, pipeline_session.RoleSession) or outcome.role != role:
+            raise pipeline_session.SessionError(f"the {role} role session was not fetched for this render")
+        if not outcome.covers(deadline_utc):
+            raise pipeline_session.SessionError(f"the {role} role session no longer reaches the job's deadline")
+        self.fetched.update(outcome.secret_values())
         return outcome
 
     def secret_values(self, names: Sequence[str]) -> dict[str, str]:
@@ -2297,8 +2371,18 @@ class Renderer:
     def render_pipeline(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
         """Render a fixed layer job from authoritative source, pin, seal and export metadata."""
         try:
+            pipeline_render.require_publish_run(inp)
+        except pipeline_protocol.PipelineError as error:
+            raise LauncherError(f"pipeline specification refused: {type(error).__name__}: {error}", "spec") from None
+        if inp.template == "pipeline_publish" and inp.params.get("layer") in LAYER_WRITE_PREFIX:
+            problem = publish_contract_problem(str(inp.params["layer"]), inp.run_mode, self.checkout)
+            if problem:
+                raise LauncherError(problem, "spec")
+        try:
+            role = pipeline_render.session_role(inp.template, dict(inp.params), inp.run_mode)
+            session = self.session_of(role, inp.deadline_utc, name) if role else None
             values = self.compose_values(pipeline_render.needed_values(inp.template, dict(inp.params), inp.run_mode), inp.values)
-            spec = pipeline_render.build(inp, self.checkout, self.config.lakehouse_state / "pipeline_auth", values)
+            spec = pipeline_render.build(inp, self.checkout, values, session)
         except (pipeline_protocol.PipelineError, ValueError, KeyError, OSError) as error:
             raise LauncherError(f"pipeline specification refused: {type(error).__name__}: {error}", "spec") from None
         mounts = [Mount(*parts) for parts in spec.mounts]
@@ -2444,6 +2528,9 @@ class Renderer:
             raise LauncherError(f"gold_publish job {job} takes no arguments: the launcher builds them from the run", "args")
         if inp.run_folder is None or inp.run_mode not in GOLD_WRITE_PREFIX:
             raise LauncherError("gold_publish needs a run in a publish mode", "spec")
+        problem = publish_contract_problem("gold", inp.run_mode, self.checkout)
+        if problem:
+            raise LauncherError(problem, "spec")
         if spec["sealed"] and inp.completion is None:
             raise LauncherError(f"gold_publish job {job} needs the run's sealed-build record", "spec")
         if spec["sealed"]:
@@ -3114,7 +3201,7 @@ class Launcher:
         self.last_stale_check = 0.0
         self.main_checkout = config.root
         self.image_cache: dict[str, tuple[float, dict[str, Any]]] = {}
-        self.secret_results: dict[str, tuple[float, dict[str, str | secret_store.SecretStoreError]]] = {}
+        self.secret_results: dict[str, tuple[float, dict[str, Fetched]]] = {}
         self.networks_seen: list[str] = []
         self.message_handlers: dict[str, Callable[[str, str, Any], None]] = {
             "scan": self.on_scan,
@@ -4003,12 +4090,18 @@ class Launcher:
                 return "an accepted layer seal refuses a further build in this generation"
             if template_name in ("gold_export", "gold_publish"):
                 return Launcher.gold_problem(state, ident, run, template_name, params)
+            if template_name == "pipeline_publish" and params.get("layer") in LAYER_WRITE_PREFIX:
+                return Launcher.publish_prefix_problem(str(params["layer"]), ident, run, template_name)
             if template_name == "spark_write":
                 prefixes = list(run.get("write_prefixes") or [])
                 if not prefixes:
                     return f"template spark_write needs declared write prefixes; run {ident} declares none"
+                try:
+                    run_lock.check_prefixes(prefixes, f"run {ident} declares write prefix")
+                except run_lock.Refused as error:
+                    return f"template spark_write needs plain declared write prefixes; {error}"
                 wanted = job.get("prefix") or ("lakehouse/" if job.get("template") == "spark_write" else None)
-                if wanted and not any(wanted.startswith(p) for p in prefixes):
+                if wanted and not any(run_lock.covers(p, wanted) for p in prefixes):
                     return f"job {params.get('job')} writes under {wanted}; run {ident} declares {', '.join(prefixes)}"
                 if wanted:
                     try:
@@ -4029,7 +4122,7 @@ class Launcher:
             return str(error)
         wanted = GOLD_WRITE_PREFIX[run["mode"]]
         prefixes = list(run.get("write_prefixes") or [])
-        if not any(wanted.startswith(p) for p in prefixes):
+        if not prefixes or not all(within_prefix(str(p), wanted) for p in prefixes):
             return f"template {template_name} writes under {wanted}; run {ident} declares {', '.join(prefixes) or 'no write prefix'}"
         if template_name == "gold_publish" and GOLD_JOBS[str(params["job"])]["sealed"]:
             acceptance = run.get("consumer_acceptance")
@@ -4039,6 +4132,17 @@ class Launcher:
             run_lock.check_cross_domain(dict(state), run["domain"], [wanted])
         except run_lock.Refused as error:
             return str(error)
+        return None
+
+    @staticmethod
+    def publish_prefix_problem(layer: str, ident: str, run: Mapping[str, Any], template_name: str) -> str | None:
+        """What refuses a publish template of a layer for this run, or None: its mode names a prefix and every write prefix it declares lies inside it."""
+        wanted = LAYER_WRITE_PREFIX[layer].get(str(run.get("mode")))
+        if wanted is None:
+            return f"template {template_name} writes {layer}; run {ident} has mode {run.get('mode')!r}, which has no {layer} write prefix"
+        outside = [str(p) for p in run.get("write_prefixes") or [] if not within_prefix(str(p), wanted)]
+        if outside:
+            return f"template {template_name} writes under {wanted}; run {ident} declares {', '.join(outside)}"
         return None
 
     def admissible(self, state: Mapping[str, Any], attempt: Mapping[str, Any]) -> bool:
@@ -4194,7 +4298,7 @@ class Launcher:
         attempt: Mapping[str, Any],
         op_id: str,
         extra: Mapping[str, str] | None,
-        fetched: Mapping[str, str | secret_store.SecretStoreError] | None,
+        fetched: Mapping[str, Fetched] | None,
     ) -> tuple[Rendered, frozenset[str]]:
         """Render an attempt's create specification from its template and recorded values.
 
@@ -4353,7 +4457,8 @@ class Launcher:
             return True
         if fetched is None and wanted:
             names = tuple(sorted(wanted))
-            actions.append(lambda: self.spawn(fetch_key, "secretfetch", self.fetch_secrets, names))
+            deadline, attempt_id = attempt["deadline_utc"], attempt["id"]
+            actions.append(lambda: self.spawn(fetch_key, "secretfetch", self.fetch_secrets, names, deadline, attempt_id))
             return False
         self.secret_results.pop(attempt["id"], None)
         if attempt.get("capture_dbt_artifacts"):
@@ -4401,9 +4506,24 @@ class Launcher:
 
     SECRET_RESULT_TTL = 30.0
 
-    def fetch_secrets(self, names: tuple[str, ...]) -> dict[str, str | secret_store.SecretStoreError]:
-        """Worker: read the named secrets under one absolute deadline; the result stays in memory until the attempt's render uses it."""
-        return secret_store.fetch_all(self.cfg.catalog_checkout or self.cfg.root, self.cfg.secrets_endpoint, names, self.cfg.secret_fetch_seconds)
+    def fetch_secrets(self, names: tuple[str, ...], deadline_utc: int, attempt_id: str) -> dict[str, Fetched]:
+        """Worker: read the named secrets under one absolute deadline and ask for the named role sessions, each for a job that ends at ``deadline_utc``.
+
+        Each session request has its own deadline and a new session every time. The result stays in memory until the attempt's render uses it.
+        """
+        sessions = [name for name in names if name.startswith(pipeline_session.PREFIX)]
+        secrets = [name for name in names if name not in sessions]
+        found: dict[str, Fetched] = {}
+        if secrets:
+            found.update(secret_store.fetch_all(self.cfg.catalog_checkout or self.cfg.root, self.cfg.secrets_endpoint, secrets, self.cfg.secret_fetch_seconds))
+        for name in sessions:
+            try:
+                found[name] = self.cfg.role_session(name.removeprefix(pipeline_session.PREFIX), deadline_utc, pipeline_session.session_name(attempt_id))
+            except LauncherError as error:
+                found[name] = pipeline_session.SessionError(str(error))
+            except pipeline_session.SessionError as error:
+                found[name] = error
+        return found
 
     def on_secretfetch(self, key: str, outcome: str, value: Any) -> None:
         """The fetched secrets of an attempt arrived: the queued attempt renders with them on its next pass."""
@@ -6115,6 +6235,9 @@ class Launcher:
             raise LauncherError(f"timeout_seconds must be between 1 and {template.max_seconds}", "args")
         args = [str(a) for a in params.get("args", [])]
         attempt_params = dict(params.get("params") or {})
+        problem = self.session_problem(ctx.state, owner, template_name, attempt_params, seconds)
+        if problem:
+            raise LauncherError(problem, "args")
         self.dry_render(ctx.state, owner, template_name, args, attempt_params, checkout)
         self.take_guard(ctx.state, template, attempt_params)
         fenced = (template_name == "gold_publish" and attempt_params.get("job") == "gold_maintenance") or (
@@ -6131,6 +6254,19 @@ class Launcher:
         if fenced:
             self.take_maintenance_fence(ctx.state, ident, attempt, protection)
         return {"attempt_id": attempt["id"], "n": attempt["n"], "deadline_utc": attempt["deadline_utc"]}
+
+    @staticmethod
+    def session_problem(state: Mapping[str, Any], owner: str, template_name: str, params: Mapping[str, Any], seconds: int) -> str | None:
+        """What refuses a pipeline job whose timeout a role session cannot cover, or None: the job needs a session when its class needs AWS."""
+        kind, _, ident = owner.partition(":")
+        run = state["runs"].get(ident) if kind == "run" else None
+        if run is None or not template_name.startswith("pipeline_"):
+            return None
+        try:
+            role = pipeline_render.session_role(template_name, dict(params), str(run["mode"]))
+        except pipeline_protocol.PipelineError:
+            return None
+        return pipeline_session.deadline_problem(seconds) if role else None
 
     PLACEHOLDER_ENV = {"JOB_MEMORY_LIMIT": str(4 * 1024**3), "DUCKDB_MEMORY_LIMIT": "3GB", "SPARK_JOB_MEMORY": "3g", "JOB_THREADS": "1"}
 
@@ -6696,9 +6832,13 @@ class Launcher:
             if previous.get("owner_run") != run["run_id"]:
                 raise LauncherError("the reservation belongs to another run", "principal")
             return {"reader": name, "state": previous["state"]}
+        try:
+            namespace = pipeline_protocol.silver_namespace(run["mode"])
+        except pipeline_protocol.PipelineError as error:
+            raise LauncherError(str(error), "refused") from None
         ctx.state["readers"][name] = {
             "owner_run": run["run_id"],
-            "namespace": "silver_e2e" if run["mode"] == "publish_fixture" else "silver",
+            "namespace": namespace,
             "domain": run["domain"],
             "publish_run": "latest",
             "snapshot_set": None,
@@ -8444,6 +8584,8 @@ def resolve_config(test_registry: str | None, cwd: Path | None = None) -> Config
             restart_command=tuple(settings.get("restart_command", DOCKER_RESTART_COMMAND)),
             secrets_endpoint=str(settings["secrets_endpoint"]) if settings.get("secrets_endpoint") else None,
             secret_fetch_seconds=float(settings.get("secret_fetch_seconds", secret_store.FETCH_DEADLINE_SECONDS)),
+            sts_endpoint=str(settings["sts_endpoint"]) if settings.get("sts_endpoint") else None,
+            aws_account_id=str(settings.get("aws_account_id", "")),
             aws_profile=str(settings.get("aws_profile", "")),
             aws_region=str(settings.get("aws_region", "")),
             lakehouse_state=Path(settings.get("lakehouse_state") or folder / "lakehouse"),

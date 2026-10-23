@@ -1,7 +1,7 @@
 # Analytics image: DuckDB 1.5.6 (Python package and CLI) with the Iceberg, S3, AWS and UI extensions installed at build time,
 # and dbt-core 1.11.15 with the dbt-duckdb 1.11.0 adapter for the staging models.
 # The base image is pinned by digest and the wheels by hash; extensions are fetched once here, never at query time.
-FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS deadline
+FROM golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd AS deadline
 # hai is the services/hai named build context passed by docker-compose.yaml additional_contexts.
 # hadolint ignore=DL3022
 COPY --from=hai deadline_run.go /src/deadline_run.go

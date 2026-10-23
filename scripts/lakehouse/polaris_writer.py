@@ -1,8 +1,9 @@
-"""Shared set-up of a Polaris table writer principal: ``gold_writer_setup`` and ``silver_writer_setup`` hold only their names, namespaces and keys.
+"""Shared set-up of a Polaris table writer principal: ``gold_writer_setup`` and ``silver_writer_setup`` hold only their names, namespaces and secret names.
 
 A writer may write the tables of its own namespaces and nothing else: no catalog-wide management, no namespace creation or removal and no table
-removal. The root credentials make the token and the set-up requests only; they are never passed on. The writer's client ID and secret go to the
-owner-only catalog credentials file, the same way the read-only principal's do.
+removal. The root credentials make the token and the set-up requests only; they are never passed on. The writer's client ID and secret go straight
+to AWS Secrets Manager, the same way the read-only principal's do (``principal_credentials``), and reach a job only through the launcher's
+``lakehouse_write`` class, which reads them from Secrets Manager into memory.
 """
 
 from __future__ import annotations
@@ -12,7 +13,11 @@ import json
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from scripts.infrastructure import secret_store
+from scripts.lakehouse import principal_credentials
 
 CATALOG_PRIVILEGES = ("CATALOG_READ_PROPERTIES",)
 NAMESPACE_PRIVILEGES = (
@@ -32,11 +37,11 @@ Request = Callable[..., tuple[int, Any]]
 
 @dataclass(frozen=True)
 class Writer:
-    """One writer principal: its name, the namespaces it may write and the credentials-file keys that hold its client ID and secret."""
+    """One writer principal: its name, the namespaces it may write and the Secrets Manager names that hold its client ID and secret."""
 
     name: str
     namespaces: tuple[str, ...]
-    keys: tuple[str, str]
+    secrets: tuple[str, str]
 
 
 class SetupError(RuntimeError):
@@ -88,10 +93,11 @@ def planned_requests(writer: Writer, catalog: str) -> list[tuple[str, str, dict[
     return steps
 
 
-def ensure_writer(writer: Writer, access: str, catalog: str, known: dict[str, str], request: Request, store: Callable[[dict[str, str]], None]) -> str:
+def ensure_writer(writer: Writer, access: str, catalog: str, vault: secret_store.SecretStore, request: Request, lock_path: Path) -> str:
     """Create the writer principal, its roles, its namespaces and the grants; safe to repeat. Returns how the credentials were obtained.
 
-    ``known`` holds the credentials file's values; ``store`` writes them back with the writer's pair added (owner-only file).
+    ``vault`` holds the writer's client ID and secret in Secrets Manager. A stored pair is kept only when Polaris accepts it; otherwise a new pair
+    is issued and stored. ``lock_path`` serializes updates of the writer principal.
     """
     path = catalog_paths(writer, catalog)
     status, _ = request("POST", path["roles"], access, body={"principalRole": {"name": writer.name}})
@@ -106,28 +112,16 @@ def ensure_writer(writer: Writer, access: str, catalog: str, known: dict[str, st
         check(status, f"granting {grant['grant']['privilege']} to the writer")
     status, _ = request("PUT", path["assign_catalog_role"], access, body={"catalogRole": {"name": writer.name}})
     check(status, "assigning the writer catalog role")
-    status, _ = request("GET", path["principal"], access)
-    if status == 404:
-        status, body = request("POST", path["principals"], access, body={"principal": {"name": writer.name}, "credentialRotationRequired": False})
-        check(status, "creating the writer principal")
-        outcome = "created"
-    elif status == 200 and known.get(writer.keys[1]):
-        body, outcome = None, "already present"
-    else:
-        check(status, "reading the writer principal")
-        status, body = request("POST", path["reset"], access, body={})
-        check(status, "resetting the writer credentials")
-        outcome = "credentials reset"
-    if body is not None:
-        issued = body["credentials"]
-        store({**known, writer.keys[0]: issued["clientId"], writer.keys[1]: issued["clientSecret"]})
+    outcome = principal_credentials.ensure_credentials(
+        principal=writer.name, names=writer.secrets, vault=vault, request=request, access=access, check=check, lock_path=lock_path
+    )
     status, _ = request("PUT", path["principal_roles"], access, body={"principalRole": {"name": writer.name}})
     check(status, "assigning the writer principal role")
     return outcome
 
 
 def main(writer: Writer, description: str, argv: list[str] | None = None) -> int:
-    """Print the plan (``--dry-run``). A real run is refused until this set-up keeps its pair in Secrets Manager."""
+    """Print the plan (``--dry-run``) or run the set-up against the local Polaris, keeping the writer's pair in Secrets Manager."""
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dry-run", action="store_true", help="print the requests and send none")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
@@ -137,7 +131,11 @@ def main(writer: Writer, description: str, argv: list[str] | None = None) -> int
         for method, path, body in planned_requests(writer, catalog.CATALOG):
             sys.stdout.write(f"{method} {path} {json.dumps(body, sort_keys=True) if body else ''}".rstrip() + "\n")
         return 0
-    sys.stderr.write(
-        f"{writer.name.replace('_', ' ')} setup: the credentials file this set-up writes to no longer exists; the set-up moves to Secrets Manager later\n"
-    )
-    return 1
+    try:
+        access = catalog.token(catalog.credentials())
+        outcome = ensure_writer(writer, access, catalog.CATALOG, catalog.vault(), catalog.request, catalog.STATE / "principal_locks" / f"{writer.name}.lock")
+    except (SetupError, catalog.CatalogError, secret_store.SecretStoreError, principal_credentials.CredentialError, OSError, KeyError) as error:
+        sys.stderr.write(f"{writer.name.replace('_', ' ')} setup: {error}\n")
+        return 1
+    sys.stdout.write(f"{writer.name} principal {outcome}; it may write the {' and '.join(writer.namespaces)} namespaces only.\n")
+    return 0

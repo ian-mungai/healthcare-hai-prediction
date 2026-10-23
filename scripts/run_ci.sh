@@ -231,11 +231,18 @@ terraform_checks() {
     fi
     test_dir="$scratch/$stack"
     mkdir -p "$test_dir"
-    cp "$source_dir"/*.tf "$source_dir/.terraform.lock.hcl" "$test_dir/"
-    cp -R "$source_dir/tests" "$test_dir/tests"
-    if [[ "$stack" == "iam" ]]; then
-      cp -R "$source_dir/policies" "$test_dir/policies"
-    fi
+    # Copy every file Git tracks in the stack folder (the nested iam stack left out of storage), so a new template folder is
+    # always tested and local state, variable files and provider folders never are. The listing starts at the repository root
+    # with the folder as a pathspec: inside a commit hook GIT_DIR is set, and git -C <folder> would then list the whole tree.
+    prefix="${source_dir#"$repo_root"/}/"
+    while IFS= read -r -d '' file; do
+      relative="${file#"$prefix"}"
+      if [[ "$stack" == "storage" && "$relative" == iam/* ]]; then
+        continue
+      fi
+      mkdir -p "$test_dir/$(dirname "$relative")"
+      cp "$repo_root/$file" "$test_dir/$relative"
+    done < <(git -C "$repo_root" ls-files -z -- "$prefix")
     printf '\nChecking %s Terraform configuration\n' "$stack"
     timed "terraform_checks: $stack init" terraform -chdir="$test_dir" init -backend=false -input=false -lockfile=readonly -no-color
     timed "terraform_checks: $stack validate" terraform -chdir="$test_dir" validate -no-color

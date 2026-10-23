@@ -41,8 +41,10 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from orchestration import launcher
+from orchestration import launcher, pipeline_session
+from scripts.infrastructure import sts_stand_in
 from scripts.infrastructure.secret_store_stand_in import StandIn, stack_seeds
+from scripts.infrastructure.sts_stand_in import StandInSts
 from scripts.lakehouse import pins as pins_module
 from scripts.lakehouse import run_lock
 from scripts.lakehouse.fake_docker import FakeDocker, Gate
@@ -132,10 +134,14 @@ class Env:
         seeds.update({launcher.STACK_SECRETS[name]: value for name, value in stack_values.items()})
         self.stand_in = StandIn(seeds)
         self.stand_in.__enter__()
+        self.sts = StandInSts(profile=self.secret_values["AWS_PROFILE"], region=self.secret_values["AWS_REGION"])
+        self.sts.__enter__()
         self.settings: dict[str, Any] = {
             "docker_socket": str(self.temp / "d.sock"),
             "timings": {**TIMINGS, **settings.pop("timings", {})},
             "secrets_endpoint": self.stand_in.endpoint,
+            "sts_endpoint": self.sts.endpoint,
+            "aws_account_id": self.sts.account,
             "aws_profile": self.secret_values["AWS_PROFILE"],
             "aws_region": self.secret_values["AWS_REGION"],
             "lakehouse_state": str(self.temp / "lakehouse"),
@@ -398,6 +404,7 @@ class Env:
             shutil.copytree(self.temp / "runs", evidence / "runs")
         self.daemon.close()
         self.stand_in.__exit__()
+        self.sts.__exit__()
         shutil.rmtree(self.temp, ignore_errors=True)
         os.environ["PATH"] = self.saved_path
         return left
@@ -4362,6 +4369,45 @@ def mount_and_argument_refusals(env: Env) -> dict[str, bool]:
     return results
 
 
+@case("bronze_argument_schema")
+def bronze_argument_schema(env: Env) -> dict[str, bool]:
+    """The bronze job's --bootstrap-all flag is in the closed schema as a flag without a value; other jobs still refuse it."""
+    hold_forever(env)
+    catalog_script(env)
+    env.start()
+    client = env.client()
+    catalog_up(env)
+    flag = "--bootstrap-all"
+    run = real_run(env, "run_bootstrap_args", "acquisition", write_prefixes=["lakehouse/bronze/"])
+
+    def submit(launch: str, args: list[str]) -> BaseException | None:
+        return expect_error(lambda: env.submit(run, "spark_write", launch, args, {"job": "bronze"}))
+
+    def owned() -> list[dict[str, Any]]:
+        return [attempt for attempt in env.state()["attempts"].values() if attempt["owner"] == "run:run_bootstrap_args"]
+
+    checks: dict[str, bool] = {}
+    checks["a value after the flag is refused by the closed schema"] = refused(submit("v1", [flag, "yes"]), "args", "not in the closed schema")
+    checks["a value attached to the flag is refused by the closed schema"] = refused(submit("v2", [f"{flag}=1"]), "args", "not in the closed schema")
+    checks["an unknown bronze flag is still refused by the closed schema"] = refused(submit("v3", ["--bootstrap"]), "args", "not in the closed schema")
+    checks["the refused forms start no attempt"] = not owned()
+    other_jobs = [job for job in launcher.SPARK_JOBS if job != "bronze"]
+    errors = [expect_error_of(partial(launcher.validate_spark_args, job, [flag])) for job in other_jobs]
+    checks["the other jobs still refuse the flag"] = all(
+        isinstance(error, launcher.LauncherError) and "not in the closed schema" in str(error) for error in errors
+    )
+    checks["the flag alone is admitted by a real submit"] = submit("ok", [flag]) is None
+    env.wait(lambda: any(attempt["phase"] == "started" for attempt in owned()), 20, "the bootstrap writer starts")
+    commands = [list(body["Cmd"]) for body in env.daemon.create_bodies.values() if body.get("Labels", {}).get("hai.template") == "spark_write"]
+    checks["the flag reaches the job's command"] = any(flag in command for command in commands)
+    for attempt in owned():
+        client.call("cancel", {"attempt_id": attempt["id"]}, run)
+        env.wait_ended(attempt["id"])
+    client.call("finalize", {}, run)
+    client.call("release", {"record": str(record_file(env, "run_bootstrap_args"))}, run, timeout=60)
+    return checks
+
+
 @case("mount_fence_other_checkouts")
 def mount_fence_other_checkouts(env: Env) -> dict[str, bool]:
     """913 and 916 (F4): the secrets of every checkout are protected, also through a link and through the exact credential path (synthetic checkouts)."""
@@ -4453,6 +4499,16 @@ def template_owner_predicates(env: Env) -> dict[str, bool]:
     )
     client.call("finalize", {}, wrong_prefix)
     client.call("release", {"record": str(record_file(env, "run_prefix"))}, wrong_prefix, timeout=60)
+    text_prefix = real_run(env, "run_text_prefix", "acquisition", write_prefixes=["lakehouse/bronz"])
+    checks["a bronze job under a run that declares only the text lakehouse/bronz is refused"] = refused(
+        expect_error(lambda: submit(text_prefix, "spark_write", "b", {"job": "bronze"}, ["--group", "hai"])), "refused", "declares lakehouse/bronz"
+    )
+    client.call("finalize", {}, text_prefix)
+    client.call("release", {"record": str(record_file(env, "run_text_prefix"))}, text_prefix, timeout=60)
+    checks["an acquire that declares an empty write prefix is refused and creates no run"] = (
+        refused(expect_error(lambda: env.acquire_run("run_empty_prefix", "acquisition", "fixture", write_prefixes=[""])), "refused", "not a plain path")
+        and "run_empty_prefix" not in env.state()["runs"]
+    )
     good = real_run(env, "run_good", "acquisition", write_prefixes=["lakehouse/bronze/"])
     accepted = expect_error(lambda: submit(good, "spark_write", "b", {"job": "bronze"}, ["--group", "hai"]))
     checks["spark_write bronze under an acquisition real run that declares its prefix is accepted"] = accepted is None
@@ -4463,7 +4519,28 @@ def template_owner_predicates(env: Env) -> dict[str, bool]:
             env.wait_ended(attempt_id)
     client.call("finalize", {}, good)
     client.call("release", {"record": str(record_file(env, "run_good"))}, good, timeout=60)
+    for layer, layer_run, layer_mode, layer_declared, layer_wanted in (
+        ("silver", "run_silver_real", "real", "lakehouse/silver_e2e/", "lakehouse/silver/"),
+        ("silver", "run_silver_test", "publish_fixture", "lakehouse/silver/", "lakehouse/silver_e2e/"),
+        ("gold", "run_gold_real", "real", "lakehouse/gold_e2e/", "lakehouse/gold/"),
+        ("gold", "run_gold_test", "publish_fixture", "lakehouse/gold/", "lakehouse/gold_e2e/"),
+    ):
+        publisher = (
+            real_run(env, layer_run, "transform", write_prefixes=[layer_declared])
+            if layer_mode == "real"
+            else env.acquire_run(layer_run, "transform", layer_mode, write_prefixes=[layer_declared])
+        )
+        layer_error = expect_error(partial(submit, publisher, "pipeline_publish", "s", {"layer": layer, "step": "candidates"}))
+        checks[f"a {layer} publish step under a {layer_mode} run that declares {layer_declared} is refused"] = refused(
+            layer_error, "refused", f"writes under {layer_wanted}; run {layer_run} declares {layer_declared}"
+        )
+        client.call("finalize", {}, publisher)
+        client.call("release", {"record": str(record_file(env, layer_run))}, publisher, timeout=60)
     real_transform = real_run(env, PINS_RUN, "transform")
+    long_job = expect_error(lambda: env.submit(real_transform, "pipeline_spark", "ls", [], {"job": "pin_silver"}, timeout_seconds=40000))
+    checks["a real pipeline job with an AWS class and a timeout over what a role session can cover is refused at submit"] = refused(
+        long_job, "args", f"may run at most {pipeline_session.MAX_SESSION_SECONDS - pipeline_session.MARGIN_SECONDS} s"
+    )
     checks["fixture_dbt under a real run is refused"] = refused(
         expect_error(lambda: env.submit(real_transform, "fixture_dbt", "f", params=env.fixture_params("f"))), "refused", "mode fixture"
     )
@@ -4674,6 +4751,19 @@ def pipeline_hostname_checks(
                 hashlib.sha256(b"{}\n").hexdigest(),
                 *local_args,
             ]
+    for layer, swapped in (
+        ("silver", {"publish_fixture": "silver", "real": "silver_e2e"}),
+        ("gold", {"publish_fixture": "gold", "real": "gold_e2e"}),
+    ):
+        with tempfile.TemporaryDirectory() as folder:
+            contract_file = Path(folder) / launcher.LAYER_CONTRACT[layer]
+            contract_file.parent.mkdir(parents=True)
+            contract_file.write_text(json.dumps({"publish": {"namespaces": swapped}}))
+            with mock.patch.object(renderer, "checkout", Path(folder)):
+                refusal = expect_error_of(partial(renderer.render, input_for("pipeline_publish", {"layer": layer, "step": "candidates"}), registry_id))
+        checks[f"pipeline hostname/publish/{layer}/a contract that swaps the mode prefixes is refused before any container is built"] = (
+            isinstance(refusal, launcher.LauncherError) and refusal.code == "spec" and f"{layer} writes for this mode go only under" in str(refusal)
+        )
     maintenance = input_for("pipeline_publish", {"layer": "gold", "step": "maintenance"})
     f = observe("maintenance/gold", maintenance, "none", common_mounts | {local_mount}, True)
     checks["pipeline hostname/maintenance/gold/command"] = f["entrypoint"] == [
@@ -4715,10 +4805,10 @@ def pipeline_hostname_checks(
         )
     networked = replace(
         input_for("pipeline_spark", {"job": "pin_silver"}, "real"),
+        deadline_utc=int(time.time()) + 600,
         values={
             **values,
             "AWS_REGION": "synthetic-region",
-            "PIPELINE_READER_AWS_PROFILE": "synthetic-profile",
             "POLARIS_READER_CLIENT_ID": "unused-synthetic-id",
             "POLARIS_READER_CLIENT_SECRET": "unused-synthetic-placeholder",
         },
@@ -4739,7 +4829,6 @@ def pipeline_hostname_checks(
                 values={
                     **values,
                     "AWS_REGION": "synthetic-region",
-                    "PIPELINE_WRITER_AWS_PROFILE": "synthetic-profile",
                     "POLARIS_GOLD_WRITER_CLIENT_ID": "unused-synthetic-id",
                     "POLARIS_GOLD_WRITER_CLIENT_SECRET": "unused-synthetic-placeholder",
                 },
@@ -4767,6 +4856,259 @@ def pipeline_hostname_checks(
             bodies["refusals"][name] = {"code": "not refused", "message": ""}
             checks[f"pipeline hostname/refuses/{name}"] = False
     return checks, bodies
+
+
+def session_pipeline_state(kind: str = "real") -> dict[str, Any]:
+    """The pipeline metadata a real-mode job render needs: the registry kind and the two enforced networks of the classes."""
+    return {"registry_kind": kind, "network": {"phase": "ready", "names": {"lakehouse_read": "net-read", "lakehouse_write": "net-write"}}}
+
+
+@case("role_sessions")
+def role_sessions(env: Env) -> dict[str, bool]:
+    """A real-mode read or write job gets its class's role session as four environment values and no AWS file. Each render asks for a new session,
+    the values stay out of the recorded specification and out of saved output, and a wrong, short, refused or missing session fails the render with
+    a named cause. A job that needs no AWS access asks for none, and a timeout the roles cannot cover is refused at submit. The Terraform defaults match."""
+    config = env.config
+    renderer = launcher.Renderer(config, launcher.ComposeModel(ROOT / "docker-compose.yaml"), ROOT, ROOT, b"k" * 32)
+    registry_id = env.registry_id()
+    run_folder = env.work / "runs" / PINS_RUN
+    run_folder.mkdir(parents=True, exist_ok=True)
+    reader_name, writer_name = pipeline_session.ROLE_NAMES[pipeline_session.READER], pipeline_session.ROLE_NAMES[pipeline_session.WRITER]
+    reader_key = pipeline_session.name_of(pipeline_session.READER)
+    secret_fields = ("AccessKeyId", "SecretAccessKey", "SessionToken")
+
+    def real_input(template: str, params: dict[str, Any], seconds: int = 600, kind: str = "real") -> launcher.RenderInput:
+        return launcher.RenderInput(
+            template,
+            "owner",
+            "sessions",
+            1,
+            1,
+            "op-sessions",
+            launcher.Launcher.PLACEHOLDER_ENV,
+            int(time.time()) + seconds,
+            [],
+            params,
+            {"hai.registry_id": registry_id},
+            run_folder=run_folder,
+            run_mode="real",
+            pipeline=session_pipeline_state(kind),
+        )
+
+    def refusal(inp: launcher.RenderInput) -> str:
+        try:
+            renderer.render(inp, registry_id)
+        except (launcher.LauncherError, pipeline_session.SessionError) as error:
+            return str(error)
+        finally:
+            renderer.fetched.clear()
+            renderer.interpolated.clear()
+        return ""
+
+    read_job = real_input("pipeline_spark", {"job": "pin_silver"})
+    write_job = real_input("pipeline_publish", {"layer": "gold", "step": "maintenance"})
+    out: dict[str, bool] = {}
+    before = len(env.sts.requests())
+    first = renderer.render(read_job, registry_id)
+    f = facts(first)
+    issued = env.sts.issued[-1]
+    asked = env.sts.requests()[before:]
+    out["a read job gets the reader session and the region as four environment values"] = (
+        issued["role"] == reader_name
+        and [f["env"][name] for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")] == [issued[field] for field in secret_fields]
+        and f["env"]["AWS_REGION"] == env.secret_values["AWS_REGION"]
+    )
+    out["the request names the reader role and the project profile and asks for a length that covers the deadline"] = (
+        len(asked) == 1
+        and asked[0]["role"] == reader_name
+        and asked[0]["profile"] == config.aws_profile
+        and 600 + pipeline_session.MARGIN_SECONDS - 5 <= asked[0]["duration"] <= 600 + pipeline_session.MARGIN_SECONDS + 5
+    )
+    out["no AWS profile, AWS file variable or mounted AWS file reaches the job"] = not (
+        {"AWS_PROFILE", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"} & set(f["env"])
+        or any(target.startswith("/run/pipeline") for _, target, _ in f["mounts"])
+    )
+    out["the three values and their environment names are secrets of the specification"] = {
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+    } <= first.secret_env and {issued[field] for field in secret_fields} <= first.secret_values
+    second = facts(renderer.render(read_job, registry_id))
+    out["a second render asks again and gets a new session"] = (
+        len(env.sts.requests()) == before + 2
+        and env.sts.issued[-1]["SessionToken"] != issued["SessionToken"]
+        and second["env"]["AWS_SESSION_TOKEN"] != f["env"]["AWS_SESSION_TOKEN"]
+    )
+    write = facts(renderer.render(write_job, registry_id))
+    out["a write job gets the writer session"] = (
+        env.sts.issued[-1]["role"] == writer_name and write["env"]["AWS_ACCESS_KEY_ID"] == env.sts.issued[-1]["AccessKeyId"]
+    )
+    rendered = renderer.render(write_job, registry_id)
+    planted = env.sts.issued[-1]
+    image = launcher.image_defaults(None)
+    effective = launcher.effective_config(rendered.body, image)["env"]
+    secret_env, secret_cmd, spans = launcher.created_secrets(renderer.key, rendered, effective)
+    recorded = json.dumps(launcher.projection(rendered.body, renderer.key, secret_env, secret_cmd, image), sort_keys=True) + json.dumps(rendered.interpolation)
+    out["the recorded specification holds none of the three values"] = not any(planted[field] in recorded for field in secret_fields)
+    bare = replace(rendered, secret_env=frozenset(), secret_values=frozenset())
+    out["the name of the access key is held as a secret by its name alone"] = "AWS_ACCESS_KEY_ID" in launcher.created_secrets(renderer.key, bare, effective)[0]
+    held = launcher.container_secrets(
+        {"Config": {"Env": rendered.body["Env"], "Cmd": rendered.body["Cmd"]}}, launcher.SecretSources(sorted(secret_env), secret_cmd, spans), renderer.key
+    )
+    hidden = launcher.redact(f"key {planted['AccessKeyId']} secret {planted['SecretAccessKey']} token {planted['SessionToken']} ready", held)
+    out["saved output and logs hide all three values and keep the rest"] = not any(planted[field] in hidden for field in secret_fields) and hidden.endswith(
+        " ready"
+    )
+    env.sts.denied.add(reader_name)
+    denied = refusal(read_job)
+    env.sts.denied.clear()
+    out["a refused role fails the render with the role and the code and none of the answer"] = (
+        "reader role" in denied and "AccessDenied" in denied and "stand-in refuses" not in denied
+    )
+    env.sts.short_by = 3600
+    short = refusal(read_job)
+    env.sts.short_by = 0
+    out["a session that ends before the job's deadline is refused"] = "ends before the job's deadline" in short
+    env.sts.roles[reader_name] = 3600
+    over = refusal(real_input("pipeline_spark", {"job": "pin_silver"}, 3600))
+    env.sts.roles[reader_name] = pipeline_session.MAX_SESSION_SECONDS
+    out["a role that cannot give the length is named"] = "ValidationError" in over and "reader role" in over
+    stale = pipeline_session.RoleSession(pipeline_session.READER, "k", "s", "t", int(time.time()) + 10)
+    other = pipeline_session.RoleSession(pipeline_session.WRITER, "k", "s", "t", 2**40)
+    try:
+        renderer.supplied = {reader_key: stale}
+        stale_text = refusal(read_job)
+        renderer.supplied = {reader_key: other}
+        wrong_text = refusal(read_job)
+        renderer.supplied = {}
+        missing_text = refusal(read_job)
+    finally:
+        renderer.supplied = None
+    out["a session that no longer reaches the deadline is refused"] = "no longer reaches" in stale_text
+    out["a session of another role is refused"] = "was not fetched for this render" in wrong_text
+    out["a render with no fetched session is refused"] = "was not fetched for this render" in missing_text
+    try:
+        replace(config, sts_endpoint=None).role_session(pipeline_session.READER, int(time.time()) + 600, "x")
+        unlisted = ""
+    except pipeline_session.SessionError as error:
+        unlisted = str(error)
+    out["a test registry without a stand-in has no session source"] = "no role session source" in unlisted
+    count = len(env.sts.requests())
+    probe = renderer.render(real_input("pipeline_probe", {"class": "offline", "case": "traffic"}, kind="test"), registry_id)
+    out["a job that needs no AWS access asks for no session"] = len(env.sts.requests()) == count and "AWS_ACCESS_KEY_ID" not in facts(probe)["env"]
+    state = {"runs": {"run_1": {"mode": "real"}, "run_2": {"mode": "publish_fixture"}}}
+    limit = pipeline_session.MAX_SESSION_SECONDS - pipeline_session.MARGIN_SECONDS
+    at_limit = launcher.Launcher.session_problem(state, "run:run_1", "pipeline_spark", {"job": "pin_silver"}, limit)
+    over_limit = launcher.Launcher.session_problem(state, "run:run_1", "pipeline_spark", {"job": "pin_silver"}, limit + 1)
+    fixture_long = launcher.Launcher.session_problem(state, "run:run_2", "pipeline_spark", {"job": "pin_silver"}, 86400)
+    offline_long = launcher.Launcher.session_problem(state, "run:run_1", "pipeline_dbt", {"layer": "gold"}, 86400)
+    out["a real-mode job with an AWS class is refused at submit when its timeout needs a longer session"] = (
+        at_limit is None and over_limit is not None and str(limit) in over_limit
+    )
+    out["a fixture run and a job with no AWS class keep a long timeout"] = fixture_long is None and offline_long is None
+    stub = type("Stub", (), {"cfg": config})()
+    names = (reader_key,)
+    fetched = launcher.Launcher.fetch_secrets(stub, names, int(time.time()) + 600, "attempt-1")
+    env.sts.denied.add(reader_name)
+    refused = launcher.Launcher.fetch_secrets(stub, names, int(time.time()) + 600, "attempt-2")
+    env.sts.denied.clear()
+    count = len(env.sts.requests())
+    too_long = launcher.Launcher.fetch_secrets(stub, names, int(time.time()) + 90000, "attempt-3")
+    out["the fetch worker returns the session, or the error that stopped it, and asks nothing for a deadline the roles cannot cover"] = (
+        isinstance(fetched[reader_key], pipeline_session.RoleSession)
+        and isinstance(refused[reader_key], pipeline_session.SessionError)
+        and isinstance(too_long[reader_key], pipeline_session.SessionError)
+        and len(env.sts.requests()) == count
+        and [entry["session_name"] for entry in env.sts.requests()[-2:]] == ["hai-attempt-1", "hai-attempt-2"]
+    )
+    defaults = pipeline_session.terraform_defaults(ROOT)
+    out["the role names and the longest session in code equal the Terraform defaults"] = (
+        defaults[pipeline_session.ROLE_VARIABLES[pipeline_session.READER]] == reader_name
+        and defaults[pipeline_session.ROLE_VARIABLES[pipeline_session.WRITER]] == writer_name
+        and int(defaults[pipeline_session.SESSION_VARIABLE]) == pipeline_session.MAX_SESSION_SECONDS
+    )
+    values = [value for entry in env.sts.issued for field, value in entry.items() if field in secret_fields]
+    out["no file under the registry or the scratch folder holds a session value"] = bool(values) and not files_holding(values, [env.registry, env.temp], 0)
+    return out
+
+
+@case("role_session_history")
+def role_session_history(env: Env) -> dict[str, bool]:
+    """The AWS command saves the answers of its calls in its history file when the profile enables history, and the role session answer holds the
+    session keys. The real AWS command runs as the session runner's child on a temporary HOME against a loopback stand-in: the ordinary child saves
+    the keys; the runner refuses before any STS request when the profile enables history in the config or the credentials file or sets it as a section, and
+    goes through when history is off. The real ``~/.aws`` is never touched."""
+    settings = {"aws_profile": sts_stand_in.WIRE_PROFILE, "aws_region": sts_stand_in.WIRE_REGION, "expected_account_id": sts_stand_in.ACCOUNT}
+    out: dict[str, bool] = {}
+
+    def attempt(name: str, history: str | None, in_credentials: bool = False, guarded: bool = True) -> tuple[Any, sts_stand_in.WireSts, bytes]:
+        home = env.work / "history" / name
+        home.mkdir(parents=True)
+        sts_stand_in.write_aws_files(home, history, in_credentials=in_credentials)
+        with sts_stand_in.WireSts() as wire:
+
+            def start(_program: str, args: Any, *, env: Any = None, timeout: float = 30.0) -> Any:
+                arguments = list(args)
+                if arguments[0] == "sts":
+                    arguments += ["--endpoint-url", wire.endpoint]
+                    env = {**(env or {}), "NO_PROXY": "127.0.0.1"}
+                return run_command("aws", arguments, env=env, timeout=timeout)
+
+            with mock.patch.dict(os.environ, {"HOME": str(home)}), mock.patch.object(pipeline_session, "run_command", start):
+                try:
+                    if guarded:
+                        result: Any = pipeline_session.fetch(
+                            pipeline_session.READER,
+                            settings=settings,
+                            endpoint=None,
+                            test_registry=False,
+                            deadline_utc=int(time.time()) + 600,
+                            session_name="hai-history",
+                            limit=30.0,
+                        )
+                    else:
+                        client = pipeline_session.SessionCli(
+                            settings, lambda command, *, env=None, timeout=30.0, **_: start("aws", list(command)[1:], env=env, timeout=timeout)
+                        )
+                        result = pipeline_session.assume(client, sts_stand_in.ACCOUNT, pipeline_session.READER, 900, "hai-history")
+                except pipeline_session.SessionError as error:
+                    result = error
+            return result, wire, sts_stand_in.history_bytes(home)
+
+    unguarded, wire, saved = attempt("unguarded", "enabled", guarded=False)
+    out["the ordinary child saves the whole answer, keys included, when the profile enables history"] = bool(wire.issued) and all(
+        value.encode() in saved for entry in wire.issued for field, value in entry.items() if field in ("AccessKeyId", "SecretAccessKey", "SessionToken")
+    )
+    for name, in_credentials in (("config_file", False), ("credentials_file", True)):
+        result, wire, saved = attempt(name, "enabled", in_credentials)
+        out[f"history enabled in the {name.replace('_', ' ')} refuses the request before any STS request"] = (
+            isinstance(result, pipeline_session.SessionError)
+            and sts_stand_in.WIRE_PROFILE in str(result)
+            and "history" in str(result)
+            and wire.requests == []
+            and wire.issued == []
+            and sts_stand_in.WIRE_KEY_VALUE.encode() not in saved
+        )
+    result, wire, saved = attempt("off", None)
+    out["with no history setting the request goes through and nothing is saved"] = (
+        isinstance(result, pipeline_session.RoleSession) and len(wire.requests) == 1 and result.session_token == wire.issued[0]["SessionToken"] and saved == b""
+    )
+    result, wire, saved = attempt("disabled", "disabled")
+    out["with history disabled the request goes through and nothing is saved"] = (
+        isinstance(result, pipeline_session.RoleSession) and len(wire.requests) == 1 and saved == b""
+    )
+    result, wire, saved = attempt("section", "\n    nested = enabled")
+    out["a history setting that is a section, not a value, refuses the request before any STS request, without the command's error text"] = (
+        isinstance(result, pipeline_session.SessionError)
+        and "could not be confirmed off" in str(result)
+        and sts_stand_in.WIRE_PROFILE in str(result)
+        and "section" not in str(result)
+        and wire.requests == []
+        and wire.issued == []
+        and saved == b""
+    )
+    out["the premise held: the unguarded child returned the session it saved"] = isinstance(unguarded, pipeline_session.RoleSession)
+    return out
 
 
 @case("render_templates")
@@ -8624,11 +8966,14 @@ ALL_CASES = (
     replay_and_token_store,
     token_not_disclosed,
     mount_and_argument_refusals,
+    bronze_argument_schema,
     mount_containment_depth_and_case,
     kit_launcher_ownership,
     test_registry_allowed_roots,
     real_dbt_refused_until_provenance,
     render_templates,
+    role_sessions,
+    role_session_history,
     spark_mount_narrowed,
     interactive_sessions,
     package_folder_guard,

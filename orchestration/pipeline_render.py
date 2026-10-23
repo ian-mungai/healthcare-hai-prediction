@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import configparser
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,6 +9,7 @@ from typing import Any, Protocol
 
 from orchestration import network_policy
 from orchestration.pipeline_protocol import PipelineError, accepted_completion, read_record
+from orchestration.pipeline_session import CLASS_ROLE, RoleSession
 from scripts.lakehouse.gold_publish_record import SHA256
 
 
@@ -66,32 +66,22 @@ def job_class(template: str, params: dict[str, Any], mode: str) -> str:
 
 
 def needed_values(template: str, params: dict[str, Any], mode: str) -> tuple[str, ...]:
-    """Name only the credential and region entries the selected class needs."""
+    """Name only the catalog principal and region entries the selected class needs; the AWS access comes from a role session."""
     selected = job_class(template, params, mode)
     if selected == "offline" or template == "pipeline_probe":
         return ()
     principal = READER if selected == "lakehouse_read" else SILVER_WRITER if params.get("layer") == "silver" else GOLD_WRITER
-    profile = "PIPELINE_READER_AWS_PROFILE" if selected == "lakehouse_read" else "PIPELINE_WRITER_AWS_PROFILE"
-    return ("AWS_REGION", profile, *principal)
+    return ("AWS_REGION", *principal)
 
 
-def scoped_credentials(folder: Path, profile: str) -> None:
-    """Require standalone files containing exactly the selected role's static profile."""
-    for basename, section in (("config", f"profile {profile}"), ("credentials", profile)):
-        path = folder / basename
-        if folder.is_symlink() or path.is_symlink() or not path.is_file() or path.stat().st_mode & 0o077:
-            raise PipelineError("the class-scoped AWS files are missing or not private")
-        parser = configparser.RawConfigParser()
-        try:
-            parser.read_string(path.read_text())
-        except (OSError, configparser.Error):
-            raise PipelineError("the class-scoped AWS file is unreadable") from None
-        if parser.defaults() or parser.sections() != [section]:
-            raise PipelineError("a class-scoped AWS file must contain exactly its selected profile")
-        allowed = {"region", "output"} if basename == "config" else {"aws_access_key_id", "aws_secret_access_key", "aws_session_token"}
-        keys = set(parser[section])
-        if not keys <= allowed or (basename == "credentials" and not {"aws_access_key_id", "aws_secret_access_key"} <= keys):
-            raise PipelineError("the selected profile contains an unsupported credential source")
+def session_role(template: str, params: dict[str, Any], mode: str) -> str | None:
+    """The one role whose session the job needs, or None for a job that needs no AWS access. Only a real run gets one."""
+    if mode != "real":
+        return None
+    selected = job_class(template, params, mode)
+    if selected == "offline" or template == "pipeline_probe":
+        return None
+    return CLASS_ROLE[selected]
 
 
 @dataclass
@@ -265,32 +255,19 @@ def probe_spec(context: BuildContext) -> JobSpec:
     return spec
 
 
-def apply_credentials(context: BuildContext, credentials: Path, values: dict[str, str], spec: JobSpec) -> None:
-    """Mount only the selected class profile and inject its catalog principal."""
+def apply_credentials(context: BuildContext, values: dict[str, str], spec: JobSpec, session: RoleSession | None) -> None:
+    """Give the job its role session as environment values and inject its catalog principal. No AWS file is mounted."""
     inp = context.inp
     params = context.params
     selected = context.selected
-    profile_key = "PIPELINE_READER_AWS_PROFILE" if selected == "lakehouse_read" else "PIPELINE_WRITER_AWS_PROFILE"
-    role = "reader" if selected == "lakehouse_read" else "writer"
-    if profile_key not in values:
-        raise PipelineError("the selected AWS profile is missing")
-    scoped_credentials(credentials / role, values[profile_key])
-    for basename in ("config", "credentials"):
-        credential_file = credentials / role / basename
-        if credential_file.is_symlink() or not credential_file.is_file() or credential_file.stat().st_mode & 0o077:
-            raise PipelineError("the class-scoped AWS files are missing or not private")
-        spec.mounts.append((str(credential_file), f"/run/pipeline/aws/{basename}", True))
-    principal = READER if role == "reader" else SILVER_WRITER if params.get("layer") == "silver" else GOLD_WRITER
-    if any(key not in values for key in (*principal, profile_key, "AWS_REGION")):
-        raise PipelineError("the class-scoped catalog principal or AWS profile is missing")
-    spec.environment.update(
-        {
-            "AWS_PROFILE": values[profile_key],
-            "AWS_REGION": values["AWS_REGION"],
-            "AWS_CONFIG_FILE": "/run/pipeline/aws/config",
-            "AWS_SHARED_CREDENTIALS_FILE": "/run/pipeline/aws/credentials",
-        }
-    )
+    if session is None:
+        raise PipelineError("the class needs a role session and none was given")
+    if session.role != CLASS_ROLE[selected]:
+        raise PipelineError("the role session belongs to another class")
+    principal = READER if selected == "lakehouse_read" else SILVER_WRITER if params.get("layer") == "silver" else GOLD_WRITER
+    if any(key not in values for key in (*principal, "AWS_REGION")):
+        raise PipelineError("the class-scoped catalog principal or AWS region is missing")
+    spec.environment.update(session.environment(values["AWS_REGION"]))
     if inp.template == "pipeline_dbt":
         spec.environment.update({"DBT_ENV_SECRET_POLARIS_CLIENT_ID": values[principal[0]], "DBT_ENV_SECRET_POLARIS_CLIENT_SECRET": values[principal[1]]})
     else:
@@ -307,8 +284,8 @@ def apply_credentials(context: BuildContext, credentials: Path, values: dict[str
         )
 
 
-def apply_network(context: BuildContext, credentials: Path, values: dict[str, str], spec: JobSpec) -> None:
-    """Attach the enforced network and class-scoped credentials of this run."""
+def apply_network(context: BuildContext, values: dict[str, str], spec: JobSpec, session: RoleSession | None) -> None:
+    """Attach the enforced network and the class-scoped credentials of this run."""
     inp = context.inp
     selected = context.selected
     state = context.state
@@ -328,19 +305,29 @@ def apply_network(context: BuildContext, credentials: Path, values: dict[str, st
             }
         )
         if inp.template != "pipeline_probe":
-            apply_credentials(context, credentials, values, spec)
+            apply_credentials(context, values, spec, session)
 
 
-def build(inp: PipelineInput, checkout: Path, credentials: Path, values: dict[str, str]) -> JobSpec:
-    """Construct a fixed job from authoritative run metadata; refuse caller arguments and unknown parameters."""
+def require_publish_run(inp: PipelineInput) -> Path:
+    """The run folder of a publish-mode job; refuse any other run or a caller command, before any contract, session or credential step."""
     if inp.run_folder is None or inp.run_mode not in ("publish_fixture", "real") or inp.args:
         raise PipelineError("a pipeline job requires a publish-mode run and no caller command")
+    return inp.run_folder
+
+
+def build(inp: PipelineInput, checkout: Path, values: dict[str, str], session: RoleSession | None) -> JobSpec:
+    """Construct a fixed job from authoritative run metadata; refuse caller arguments and unknown parameters.
+
+    ``session`` is the role session of the job's class. A job that needs no AWS access, and every fixture run, refuses one.
+    """
+    folder = require_publish_run(inp)
     if inp.run_mode == "publish_fixture" and inp.pipeline.get("registry_kind") != "test":
         raise PipelineError("publish_fixture requires a test registry")
-    folder = inp.run_folder
     params = dict(inp.params)
     state = inp.pipeline
     selected = job_class(inp.template, params, inp.run_mode)
+    if session is not None and (selected == "offline" or inp.template == "pipeline_probe" or inp.run_mode == "publish_fixture"):
+        raise PipelineError("a job that needs no AWS access, and a fixture run, never receive a role session")
     environment = {key: str(inp.values[key]) for key in ("JOB_THREADS", "DUCKDB_MEMORY_LIMIT", "SPARK_JOB_MEMORY") if key in inp.values}
     mounts = [
         (str(checkout / "scripts"), "/workspace/scripts", True),
@@ -362,5 +349,5 @@ def build(inp: PipelineInput, checkout: Path, credentials: Path, values: dict[st
         raise PipelineError("the pipeline template is unknown")
     spec = handler(context)
     spec.network_class = selected
-    apply_network(context, credentials, values, spec)
+    apply_network(context, values, spec, session)
     return spec

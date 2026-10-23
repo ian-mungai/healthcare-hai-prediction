@@ -224,7 +224,7 @@ class FolderStore:
 
 @dataclass
 class S3Store:
-    """An S3 prefix under ``lakehouse/`` through a boto3 client the caller built from the mounted AWS profile."""
+    """An S3 prefix under ``lakehouse/`` through a boto3 client the caller built from the job's AWS credentials."""
 
     client: Any
     bucket: str
@@ -681,7 +681,7 @@ def build_store(plan: Plan, local: Path | None) -> BackupStore | None:
     import boto3
 
     deployment = json.loads(Path("/workspace/infra/deployment.auto.tfvars.json").read_text())
-    session = boto3.Session(profile_name=os.environ["AWS_PROFILE"], region_name=os.environ["AWS_REGION"])
+    session = boto3.Session(region_name=os.environ["AWS_REGION"])
     return S3Store(session.client("s3"), str(deployment["data_bucket_name"]), plan.backup_prefix)
 
 

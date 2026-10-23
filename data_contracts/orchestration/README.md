@@ -124,6 +124,22 @@ with its silver model, on the same private copy.
 
 `fixture` runs offline on synthetic data; `pin_bronze` and `verify_bronze` are recorded no-ops in that mode. The split
 DAGs accept `publish_fixture` and `real` only. `publish_fixture` writes only the `silver_e2e` and `gold_e2e`
-namespaces. `real` writes `silver` and `gold`. Each template names the network and secret class of each mode it
-supports (`offline`, `lakehouse_read`, `lakehouse_write`, `collector`, `training`, `serving`). Only the silver and gold
-candidate, backup, commit and maintenance templates write. None of them supports `fixture`.
+namespaces. `real` writes `silver` and `gold`. The write prefix of each layer follows the mode: `publish_fixture` writes
+only under `lakehouse/silver_e2e/` and `lakehouse/gold_e2e/`. `real` writes only under `lakehouse/silver/` and
+`lakehouse/gold/`. The launcher refuses a silver or gold publish step before any container starts when the run's mode
+has no prefix for that layer, when the run declares a write prefix outside the mode's prefix (matched on whole path
+segments, so `lakehouse/gold_e2e_x/` and the whole `lakehouse/` are outside) or when the layer's publish contract
+(`data_contracts/lakehouse/silver_publish.json` or `gold_contract.json`) sends the mode to another namespace. The
+`gold_export` and `gold_publish` templates also need the run to declare at least one write prefix. The gold catalog
+backup goes under `lakehouse/catalog_backups/`, outside the gold prefix. Every comparison of declared write prefixes uses whole path segments.
+One final slash is optional. A `spark_write` job needs a declared prefix at or above its folder, so `lakehouse/bronz` and `lake` do not cover
+`lakehouse/bronze/`. The run lock reports an overlap only for equal prefixes or a parent and its child, so
+`lakehouse/silver` and `lakehouse/silver_e2e/` do not overlap. An acquire or a pin is refused by name when a prefix is
+empty or has an empty, `.` or `..` segment. Each template names the network and secret class
+of each mode it supports (`offline`, `lakehouse_read`, `lakehouse_write`, `collector`, `training`,
+`serving`). Only the silver and gold candidate, backup, commit and maintenance templates write. None of them supports
+`fixture`. A `real` job of class `lakehouse_read` gets the session of the lakehouse reader role and a job of class `lakehouse_write` gets the session
+of the lakehouse writer role, as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and `AWS_REGION` in its environment (see
+`docs/lakehouse_usage.md`, Pipeline AWS access). The launcher asks AWS Security Token Service for a new session when it renders each job. The session
+lasts until the job's deadline plus 300 s. The launcher refuses a submit whose timeout needs more than the roles' 7200 s. No job gets an AWS key
+or file. A fixture run or an offline job gets no session.

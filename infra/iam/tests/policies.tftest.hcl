@@ -14,8 +14,8 @@ run "scoped_project_permissions" {
   command = plan
 
   assert {
-    condition     = toset(keys(aws_iam_policy.service)) == toset(["s3", "secrets", "lakehouse"]) && length(aws_iam_user_policy_attachment.service) == 3
-    error_message = "Only the consolidated S3 policy, the shared-secret read policy and the lakehouse table policy may be attached."
+    condition     = toset(keys(aws_iam_policy.service)) == toset(["s3", "secrets", "lakehouse", "assume_roles"]) && length(aws_iam_user_policy_attachment.service) == 4
+    error_message = "Only the consolidated S3 policy, the shared-secret read policy, the lakehouse table policy and the policy that assumes the two lakehouse roles may be attached."
   }
 
   # Changing a policy description forces replacement, which prevent_destroy blocks; existing descriptions stay fixed.
@@ -319,6 +319,218 @@ run "scoped_project_permissions" {
     ]) == "arn:aws:s3:::${var.data_bucket_name}"
     error_message = "Lifecycle configuration permission must occur once and target only the approved bucket."
   }
+}
+
+run "lakehouse_roles" {
+  command = plan
+
+  assert {
+    condition = toset(flatten([
+      for statement in jsondecode(aws_iam_policy.service["assume_roles"].policy).Statement : flatten([statement.Resource])
+      ])) == toset([
+      "arn:aws:iam::111111111111:role/healthcare_hai_prediction_lakehouse_reader",
+      "arn:aws:iam::111111111111:role/healthcare_hai_prediction_lakehouse_writer",
+    ])
+    error_message = "The project user may assume exactly the lakehouse reader and writer roles."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_policy.service["assume_roles"].policy).Statement :
+      statement.Effect == "Allow" && statement.Action == "sts:AssumeRole" && !can(statement.Condition)
+    ])
+    error_message = "The role policy of the project user holds only unconditional allows of sts:AssumeRole."
+  }
+
+  assert {
+    condition = (
+      aws_iam_policy.service["assume_roles"].name == "${var.project_name}_assume_roles_policy"
+      && aws_iam_policy.service["assume_roles"].description == "Lets the project user assume the two lakehouse roles and no other role."
+    )
+    error_message = "The role policy follows the naming convention and states its limit."
+  }
+
+  assert {
+    condition = alltrue([
+      for role in [aws_iam_role.lakehouse_reader, aws_iam_role.lakehouse_writer] :
+      length(jsondecode(role.assume_role_policy).Statement) == 1
+      && jsondecode(role.assume_role_policy).Statement[0].Effect == "Allow"
+      && jsondecode(role.assume_role_policy).Statement[0].Action == "sts:AssumeRole"
+      && jsondecode(role.assume_role_policy).Statement[0].Principal == { AWS = "arn:aws:iam::111111111111:user/example_project_dev" }
+      && !can(jsondecode(role.assume_role_policy).Statement[0].Condition)
+    ])
+    error_message = "Each lakehouse role trusts only the project's own IAM user."
+  }
+
+  assert {
+    condition     = aws_iam_role.lakehouse_reader.name == "healthcare_hai_prediction_lakehouse_reader" && aws_iam_role.lakehouse_writer.name == "healthcare_hai_prediction_lakehouse_writer"
+    error_message = "The role names default to their real names."
+  }
+
+  assert {
+    condition     = aws_iam_role.lakehouse_reader.max_session_duration == 7200 && aws_iam_role.lakehouse_writer.max_session_duration == 7200
+    error_message = "The longest session is 7200 seconds: the longest pipeline job deadline of 3600 seconds plus the launcher's margin, with room."
+  }
+
+  assert {
+    condition = toset(flatten([
+      for statement in jsondecode(aws_iam_role_policy.lakehouse_reader.policy).Statement : flatten([statement.Action])
+    ])) == toset(["s3:GetObject", "s3:ListBucket", "s3:GetBucketLocation"])
+    error_message = "The reader holds exactly reading an object, listing the bucket by prefix and locating the bucket."
+  }
+
+  assert {
+    condition = one([
+      for statement in jsondecode(aws_iam_role_policy.lakehouse_reader.policy).Statement : toset(flatten([statement.Resource]))
+      if statement.Sid == "ReadTableFiles"
+      ]) == toset([
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*",
+    ])
+    error_message = "The reader reads only the bronze, silver and gold prefixes."
+  }
+
+  assert {
+    condition = one([
+      for statement in jsondecode(aws_iam_role_policy.lakehouse_reader.policy).Statement : toset(flatten([statement.Condition.StringLike["s3:prefix"]]))
+      if statement.Sid == "ListTablePrefixes"
+      ]) == toset([
+      "lakehouse/bronze", "lakehouse/bronze/*", "lakehouse/silver", "lakehouse/silver/*", "lakehouse/gold", "lakehouse/gold/*",
+    ])
+    error_message = "The reader lists only the bronze, silver and gold prefixes."
+  }
+
+  assert {
+    condition = one([
+      for statement in jsondecode(aws_iam_role_policy.lakehouse_writer.policy).Statement : toset(flatten([statement.Action]))
+      if statement.Sid == "ManageWrittenTableFiles"
+    ]) == toset(flatten([for statement in jsondecode(aws_iam_policy.service["lakehouse"].policy).Statement : flatten([statement.Action])]))
+    error_message = "The writer holds exactly the object actions of the current lakehouse policy."
+  }
+
+  assert {
+    condition = one([
+      for statement in jsondecode(aws_iam_role_policy.lakehouse_writer.policy).Statement : toset(flatten([statement.Resource]))
+      if statement.Sid == "ManageWrittenTableFiles"
+      ]) == toset([
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver_e2e/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold_e2e/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/catalog_backups/*",
+    ])
+    error_message = "The writer writes only the silver, silver test, gold, gold test and catalog backup prefixes."
+  }
+
+  assert {
+    condition = one([
+      for statement in jsondecode(aws_iam_role_policy.lakehouse_writer.policy).Statement : toset(flatten([statement.Condition.StringLike["s3:prefix"]]))
+      if statement.Sid == "ListWrittenPrefixes"
+      ]) == toset([
+      "lakehouse/silver", "lakehouse/silver/*", "lakehouse/silver_e2e", "lakehouse/silver_e2e/*", "lakehouse/gold", "lakehouse/gold/*",
+      "lakehouse/gold_e2e", "lakehouse/gold_e2e/*", "lakehouse/catalog_backups", "lakehouse/catalog_backups/*",
+    ])
+    error_message = "The writer lists only its own prefixes."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for policy in [aws_iam_role_policy.lakehouse_reader.policy, aws_iam_role_policy.lakehouse_writer.policy] : [
+        for statement in jsondecode(policy).Statement : [
+          for action in flatten([statement.Action]) : (
+            statement.Effect == "Allow"
+            && startswith(action, "s3:")
+            && !strcontains(action, "*")
+            && contains(flatten([
+              for existing in [aws_iam_policy.service["lakehouse"].policy, aws_iam_policy.service["s3"].policy] : [
+                for known in jsondecode(existing).Statement : flatten([known.Action])
+              ]
+            ]), action)
+          )
+        ]
+      ]
+    ]))
+    error_message = "Each role action is an allowed S3 action that the current project policies already grant, with no wildcard."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_role_policy.lakehouse_writer.policy).Statement :
+      !contains(flatten([statement.Resource]), "arn:aws:s3:::example-project-ci-bucket/lakehouse/*")
+    ])
+    error_message = "The writer never gets the whole lakehouse folder."
+  }
+}
+
+run "reject_equal_lakehouse_role_names" {
+  command = plan
+
+  variables {
+    lakehouse_writer_role_name = "healthcare_hai_prediction_lakehouse_reader"
+  }
+
+  expect_failures = [aws_iam_role.lakehouse_writer]
+}
+
+run "reject_empty_lakehouse_reader_role_name" {
+  command = plan
+
+  variables {
+    lakehouse_reader_role_name = ""
+  }
+
+  expect_failures = [var.lakehouse_reader_role_name]
+}
+
+run "reject_spaced_lakehouse_writer_role_name" {
+  command = plan
+
+  variables {
+    lakehouse_writer_role_name = "lakehouse writer"
+  }
+
+  expect_failures = [var.lakehouse_writer_role_name]
+}
+
+run "reject_overlong_lakehouse_writer_role_name" {
+  command = plan
+
+  variables {
+    lakehouse_writer_role_name = join("", [for index in range(65) : "a"])
+  }
+
+  expect_failures = [var.lakehouse_writer_role_name]
+}
+
+run "reject_short_lakehouse_session" {
+  command = plan
+
+  variables {
+    lakehouse_session_max_seconds = 3599
+  }
+
+  expect_failures = [var.lakehouse_session_max_seconds]
+}
+
+run "reject_long_lakehouse_session" {
+  command = plan
+
+  variables {
+    lakehouse_session_max_seconds = 43201
+  }
+
+  expect_failures = [var.lakehouse_session_max_seconds]
+}
+
+run "reject_fractional_lakehouse_session" {
+  command = plan
+
+  variables {
+    lakehouse_session_max_seconds = 7200.5
+  }
+
+  expect_failures = [var.lakehouse_session_max_seconds]
 }
 
 run "reject_invalid_bucket_scope" {

@@ -27,6 +27,8 @@ import contextlib
 import errno
 import fcntl
 import hashlib
+import http.client
+import io
 import json
 import os
 import runpy
@@ -51,10 +53,11 @@ from urllib.parse import parse_qs
 import scripts.orchestration as orchestration_package
 import scripts.orchestration.airflow_api as airflow_api_module
 from orchestration import launcher
+from scripts.infrastructure import secret_store
 from scripts.infrastructure.secret_store_stand_in import StandIn, stack_seeds
 from scripts.lakehouse import run_lock
 from scripts.orchestration import broker as broker_module
-from scripts.orchestration import run_control, sentinel, transform_fixtures
+from scripts.orchestration import run_control, sentinel, transform_fixtures, trigger_dag
 from scripts.orchestration import supervisor as supervisor_module
 from scripts.orchestration.airflow_api import AirflowApi, AirflowApiError
 from scripts.orchestration.broker import Broker, BrokerPaths, Listener, load_templates
@@ -1667,6 +1670,86 @@ def refused_specifications(stack: Stack) -> dict[str, bool]:
     }
 
 
+def run_trigger_command(stack: Stack, run_id: str, overlay: str) -> dict[str, Any]:
+    """Run ``trigger_dag.main`` against the stack, with the runner's secret-store stand-in and the stack's API port; return its exit code and output.
+
+    The fixture workflow and its mode are added to the command's closed lists for the call; nothing else of the command is replaced."""
+    transform_fixtures.seed_run(stack.seeds, run_id, overlay)
+    real_open = secret_store.open_store
+    reads_before = token_secret_reads(stack)
+    out, err = io.StringIO(), io.StringIO()
+    argv = ["--dag", DAG, "--mode", "fixture", "--run-id", run_id, "--wait-seconds", str(RUN_WAIT_SECONDS)]
+    with (
+        mock.patch.object(trigger_dag, "DAGS", (*trigger_dag.DAGS, DAG)),
+        mock.patch.object(trigger_dag, "MODES", (*trigger_dag.MODES, "fixture")),
+        mock.patch.object(trigger_dag, "api_port", lambda: stack.supervisor.api_port),
+        mock.patch.object(secret_store, "open_store", lambda root, endpoint=None: real_open(root, stack.stand_in.endpoint)),
+        contextlib.redirect_stdout(out),
+        contextlib.redirect_stderr(err),
+    ):
+        code = trigger_dag.main(argv)
+    return {"exit_code": code, "stdout": out.getvalue(), "stderr": err.getvalue(), "token_secret_reads": token_secret_reads(stack) - reads_before}
+
+
+def token_secret_reads(stack: Stack) -> int:
+    return sum(1 for action, name in stack.stand_in.requests() if action == "GetSecretValue" and name == secret_store.AIRFLOW_JWT_SECRET)
+
+
+def printed_result(text: str) -> dict[str, Any]:
+    try:
+        found = json.loads(text)
+    except ValueError:
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def is_paused(stack: Stack) -> bool | None:
+    record = stack.api.dag(DAG)
+    return None if record is None else record.get("is_paused")
+
+
+@case
+def trigger_command(stack: Stack) -> dict[str, bool]:
+    stack.api.request("PATCH", f"/dags/{DAG}", {"is_paused": True})
+    paused_before = is_paused(stack)
+    run_id = new_run_id()
+    started = time.monotonic()
+    success = run_trigger_command(stack, run_id, "good")
+    paused_after = is_paused(stack)
+    observation = stack.remember(stack.observe(DAG, run_id, started))
+    observation["trigger_command"] = success
+    shown = printed_result(success["stdout"])
+    failed_id = new_run_id()
+    failed_started = time.monotonic()
+    failure = run_trigger_command(stack, failed_id, "bad_gold_build")
+    failed_observation = stack.remember(stack.observe(DAG, failed_id, failed_started))
+    failed_observation["trigger_command"] = failure
+    failed_shown = printed_result(failure["stdout"])
+    outputs = "".join(f"{item['stdout']}{item['stderr']}" for item in (success, failure))
+    return {
+        "the workflow was paused before the command ran": paused_before is True,
+        "the command unpaused the workflow": paused_after is False,
+        "the command read the session's token secret from the stand-in and was accepted by the API": success["token_secret_reads"] == 1 and bool(shown),
+        "the submitted configuration is the run ID and the mode": observation["conf"] == {"run_id": run_id, "mode": "fixture"},
+        "a successful run exits 0 and prints its run ID, the state success and the task states": success["exit_code"] == 0
+        and shown.get("run_id") == run_id
+        and shown.get("dag") == DAG
+        and shown.get("state") == "success"
+        and shown.get("tasks") == observation["tasks"] == SUCCESS_TASKS,
+        "a failed run exits 1 and prints the state failed and the task states": failure["exit_code"] == 1
+        and failed_shown.get("run_id") == failed_id
+        and failed_shown.get("state") == "failed"
+        and failed_shown.get("tasks") == failed_observation["tasks"]
+        and failed_observation["tasks"].get("gold_build") == "failed",
+        "the failed run is the one the fixture breaks (the same checks as work_task_fails)": all(
+            failed_run(failed_observation, ("gold_build", "release_run"), "failed_retained", True).values()
+        ),
+        "neither run printed the signing secret or a bearer token": stack.supervisor.jwt_secret not in outputs
+        and "Bearer" not in outputs
+        and "eyJ" not in outputs,
+    }
+
+
 def dump_and_scan(stack: Stack, *, expected_runs: set[str] | None = None) -> dict[str, bool]:
     allocation = stack.client.allocate()
     results: dict[str, Any] = {}
@@ -1736,6 +1819,7 @@ ALL_CASES = (
     nested_manual_launch,
     graph_validator,
     refused_specifications,
+    trigger_command,
 )
 CASE_ORDER = tuple(function.__name__ for function in ALL_CASES)
 
@@ -2712,6 +2796,254 @@ def check_cleanup_verdict() -> int:
     return 0 if status == "pass" else 1
 
 
+OFFLINE_SIGNING_VALUE = "offline-signing-value"
+OFFLINE_PORT = 8080
+OFFLINE_RUN = "20261015T000000Z-0a0a0a0a"
+OFFLINE_OTHER_RUN = "20261015T000001Z-0b0b0b0b"
+OFFLINE_SILVER = ["--dag", "silver_transform_dag", "--mode", "publish_fixture"]
+OFFLINE_GOLD = ["--dag", "gold_transform_dag", "--mode", "publish_fixture"]
+
+
+class FakeClock:
+    """Time that moves only when a stand-in answer or a sleep moves it."""
+
+    def __init__(self) -> None:
+        self.elapsed = 0.0
+
+    def monotonic(self) -> float:
+        return 1000.0 + self.elapsed
+
+    def time(self) -> float:
+        return 1_800_000_000.0 + self.elapsed
+
+    def sleep(self, seconds: float) -> None:
+        if seconds < 0:
+            raise ValueError("sleep length must be non-negative")
+        self.elapsed += seconds
+
+
+class FakeAirflow:
+    """A stand-in for the loopback Airflow API: a workflow that starts paused, a run that ends ``ends_after`` seconds after its start while unpaused,
+    a fixed time per answer and optional rejection (the answer then echoes the Authorization header) or refusal of the connection."""
+
+    def __init__(
+        self,
+        clock: FakeClock,
+        *,
+        ends_after: float | None = 5.0,
+        final: str = "success",
+        reject: int | None = None,
+        refuse: bool = False,
+        status_delay: float = 0.0,
+        ignore_timeout: bool = False,
+    ) -> None:
+        self.clock = clock
+        self.ends_after, self.final, self.reject, self.refuse = ends_after, final, reject, refuse
+        self.status_delay, self.ignore_timeout = status_delay, ignore_timeout
+        self.requests: list[dict[str, Any]] = []
+        self.paused = True
+        self.started_at: float | None = None
+
+    def answer(self, method: str, path: str, body: dict[str, Any] | None, headers: dict[str, str], timeout: float) -> tuple[int, Any]:
+        self.requests.append({"method": method, "path": path, "body": body, "timeout": timeout, "at": self.clock.elapsed})
+        if self.reject is not None:
+            return self.reject, {"detail": f"SECRET-BODY {headers.get('Authorization', '')}"}
+        if method == "PATCH" and body is not None:
+            self.paused = bool(body["is_paused"])
+            return 200, {}
+        if method == "POST":
+            self.started_at = self.clock.elapsed
+            return 200, {}
+        if "taskInstances" in path:
+            return 200, {"task_instances": [{"task_id": "build", "state": self.final}], "total_entries": 1}
+        ended = not self.paused and self.started_at is not None and self.ends_after is not None and self.clock.elapsed - self.started_at >= self.ends_after
+        return 200, {"state": self.final if ended else "queued" if self.paused else "running"}
+
+    def connection(self) -> type[Any]:
+        stand_in = self
+
+        class Connection:
+            def __init__(self, host: str, port: int, timeout: float) -> None:
+                self.timeout = timeout
+                self.sock = None
+                self.pending: tuple[str, str, dict[str, Any] | None, dict[str, str]] | None = None
+
+            def connect(self) -> None:
+                if stand_in.refuse:
+                    raise ConnectionRefusedError
+
+            def request(self, method: str, url: str, body: bytes | None = None, headers: dict[str, str] | None = None) -> None:
+                self.pending = (method, url, None if body is None else json.loads(body), headers or {})
+
+            def getresponse(self) -> Any:
+                if self.pending is None:
+                    raise ValueError("no request was made")
+                method, url, body, headers = self.pending
+                status, document = stand_in.answer(method, url.removeprefix("/api/v2"), body, headers, self.timeout)
+                delay = stand_in.status_delay if method == "GET" and "/dagRuns/" in url else 0.0
+                if delay > self.timeout and not stand_in.ignore_timeout:
+                    stand_in.clock.elapsed += self.timeout
+                    raise TimeoutError("timed out")
+                stand_in.clock.elapsed += delay
+                return types.SimpleNamespace(status=status, read=lambda: json.dumps(document).encode())
+
+            def close(self) -> None:
+                return
+
+        return Connection
+
+
+def drive_trigger(argv: list[str], stand_in: FakeAirflow, secret_delay: float = 0.0) -> dict[str, Any]:
+    """Run the real ``trigger_dag.main`` with the stand-in clock and HTTP transport; only the secret store's client is replaced, so the real bounded
+    read runs. ``secret_delay`` is a real-time delay of the secret read."""
+    store_calls: list[str] = []
+
+    def read(name: str) -> str:
+        time.sleep(secret_delay)
+        return OFFLINE_SIGNING_VALUE
+
+    def open_store(root: Path, endpoint: str | None = None) -> Any:
+        store_calls.append("open_store")
+        return types.SimpleNamespace(get=read)
+
+    out, err = io.StringIO(), io.StringIO()
+    started = time.monotonic()
+    with (
+        mock.patch.object(trigger_dag, "time", stand_in.clock),
+        mock.patch.object(airflow_api_module, "time", stand_in.clock),
+        mock.patch.object(http.client, "HTTPConnection", stand_in.connection()),
+        mock.patch.object(trigger_dag, "api_port", lambda: OFFLINE_PORT),
+        mock.patch.object(secret_store, "open_store", open_store),
+        contextlib.redirect_stdout(out),
+        contextlib.redirect_stderr(err),
+    ):
+        code = trigger_dag.main(argv)
+    return {
+        "real_seconds": time.monotonic() - started,
+        "exit_code": code,
+        "stdout": out.getvalue(),
+        "stderr": err.getvalue(),
+        "store_calls": store_calls,
+        "requests": stand_in.requests,
+        "elapsed": stand_in.clock.elapsed,
+    }
+
+
+def trigger_refusals() -> dict[str, bool]:
+    refused = {
+        "an empty run ID": [*OFFLINE_SILVER, "--run-id", ""],
+        "a run ID with a final newline": [*OFFLINE_SILVER, "--run-id", OFFLINE_RUN + "\n"],
+        "a run ID of the wrong form": [*OFFLINE_SILVER, "--run-id", "run-1"],
+        "an empty silver snapshot run": [*OFFLINE_GOLD, "--silver-snapshot-run", ""],
+        "a silver snapshot run with a final newline": [*OFFLINE_GOLD, "--silver-snapshot-run", OFFLINE_RUN + "\n"],
+        "a silver snapshot run on a silver run": [*OFFLINE_SILVER, "--silver-snapshot-run", OFFLINE_RUN],
+    }
+    checks: dict[str, bool] = {}
+    for name, argv in refused.items():
+        result = drive_trigger([*argv, "--wait-seconds", "60"], FakeAirflow(FakeClock()))
+        checks[f"{name} is refused before the secret is read and before any request"] = (
+            result["exit_code"] == 1 and result["store_calls"] == [] and result["requests"] == [] and result["stderr"].startswith("trigger_dag: refused")
+        )
+    for seconds in ("0", "-1", "nan", str(trigger_dag.MAX_WAIT_SECONDS + 1)):
+        result = drive_trigger([*OFFLINE_SILVER, "--wait-seconds", seconds], FakeAirflow(FakeClock()))
+        checks[f"--wait-seconds {seconds} is refused before the secret is read"] = (
+            result["exit_code"] == 1 and result["store_calls"] == [] and result["requests"] == []
+        )
+    return checks
+
+
+def trigger_runs() -> dict[str, bool]:
+    silver = drive_trigger([*OFFLINE_SILVER, "--wait-seconds", "60"], FakeAirflow(FakeClock()))
+    posted = [item for item in silver["requests"] if item["method"] == "POST"]
+    shown = printed_result(silver["stdout"])
+    gold = drive_trigger([*OFFLINE_GOLD, "--wait-seconds", "60"], FakeAirflow(FakeClock()))
+    pinned = drive_trigger(
+        [*OFFLINE_GOLD, "--silver-snapshot-run", OFFLINE_OTHER_RUN, "--run-id", OFFLINE_RUN, "--wait-seconds", "60"], FakeAirflow(FakeClock())
+    )
+    failed = drive_trigger([*OFFLINE_SILVER, "--run-id", OFFLINE_RUN, "--wait-seconds", "60"], FakeAirflow(FakeClock(), final="failed"))
+    return {
+        "the workflow is unpaused before the run is posted": [(item["method"], item["body"]) for item in silver["requests"][:2]]
+        == [("PATCH", {"is_paused": False}), ("POST", posted[0]["body"])],
+        "a run on a workflow that starts paused ends in success and exits 0": silver["exit_code"] == 0 and shown.get("state") == "success",
+        "the run ID is generated only when none is given": len(posted) == 1
+        and trigger_dag.RUN_ID.fullmatch(posted[0]["body"]["dag_run_id"]) is not None
+        and posted[0]["body"]["conf"] == {"run_id": posted[0]["body"]["dag_run_id"], "mode": "publish_fixture"},
+        "a gold run without a snapshot reads latest": next(item for item in gold["requests"] if item["method"] == "POST")["body"]["conf"]["silver_snapshot_run"]
+        == "latest",
+        "a gold run keeps the pinned snapshot": next(item for item in pinned["requests"] if item["method"] == "POST")["body"]["conf"]["silver_snapshot_run"]
+        == OFFLINE_OTHER_RUN,
+        "a failed run exits 1 and prints the state failed and the task states": failed["exit_code"] == 1
+        and printed_result(failed["stdout"]).get("state") == "failed"
+        and printed_result(failed["stdout"]).get("tasks") == {"build": "failed"},
+    }
+
+
+def trigger_deadlines() -> dict[str, bool]:
+    checks: dict[str, bool] = {}
+    queued = drive_trigger([*OFFLINE_SILVER, "--run-id", OFFLINE_RUN, "--wait-seconds", "1"], FakeAirflow(FakeClock(), ends_after=1.5))
+    checks["a run that would end after the wait exits 1 at the deadline, not after it"] = (
+        queued["exit_code"] == 1 and queued["elapsed"] <= 1.0 and queued["stdout"] == "" and "not ended within 1 s" in queued["stderr"]
+    )
+    checks["the error names the workflow and the run ID"] = "silver_transform_dag" in queued["stderr"] and OFFLINE_RUN in queued["stderr"]
+    checks["every request is limited to the time that remains"] = all(item["timeout"] <= 1.0 - item["at"] + 1e-9 for item in queued["requests"])
+    late = drive_trigger(
+        [*OFFLINE_SILVER, "--run-id", OFFLINE_RUN, "--wait-seconds", "5"],
+        FakeAirflow(FakeClock(), ends_after=0.0, status_delay=10.0, ignore_timeout=True),
+    )
+    checks["a terminal answer that completes after the deadline is not accepted"] = (
+        late["exit_code"] == 1 and late["stdout"] == "" and "wait deadline passed" in late["stderr"]
+    )
+    slow = drive_trigger([*OFFLINE_SILVER, "--run-id", OFFLINE_RUN, "--wait-seconds", "5"], FakeAirflow(FakeClock(), status_delay=10.0))
+    checks["a status answer slower than the remaining time ends the wait at the deadline"] = slow["exit_code"] == 1 and slow["elapsed"] <= 5.0
+    stalled = FakeAirflow(FakeClock())
+    secret = drive_trigger([*OFFLINE_SILVER, "--run-id", OFFLINE_RUN, "--wait-seconds", "0.2"], stalled, secret_delay=1.0)
+    checks["a secret read slower than the wait ends at the deadline with no API request"] = (
+        secret["exit_code"] == 1
+        and secret["real_seconds"] < 0.8
+        and secret["requests"] == []
+        and secret["stdout"] == ""
+        and "did not finish within" in secret["stderr"]
+    )
+    return checks
+
+
+def trigger_error_output() -> dict[str, bool]:
+    checks: dict[str, bool] = {}
+    for status in (401, 500):
+        result = drive_trigger([*OFFLINE_SILVER, "--run-id", OFFLINE_RUN, "--wait-seconds", "60"], FakeAirflow(FakeClock(), reject=status))
+        text = result["stdout"] + result["stderr"]
+        checks[f"a {status} answer prints the workflow, the run ID and the status, and no response body, token or secret"] = (
+            result["exit_code"] == 1
+            and f"HTTP status {status}" in result["stderr"]
+            and "silver_transform_dag" in result["stderr"]
+            and OFFLINE_RUN in result["stderr"]
+            and not any(marker in text for marker in ("SECRET-BODY", "Bearer", "eyJ", OFFLINE_SIGNING_VALUE))
+        )
+    refused = drive_trigger([*OFFLINE_SILVER, "--run-id", OFFLINE_RUN, "--wait-seconds", "60"], FakeAirflow(FakeClock(), refuse=True))
+    checks["a refused connection prints the exception class and nothing more"] = (
+        refused["exit_code"] == 1 and "ConnectionRefusedError" in refused["stderr"] and OFFLINE_SIGNING_VALUE not in refused["stderr"]
+    )
+    return checks
+
+
+def check_trigger_offline() -> dict[str, bool]:
+    return {**trigger_refusals(), **trigger_runs(), **trigger_deadlines(), **trigger_error_output()}
+
+
+def check_trigger_verdict() -> int:
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    checks = check_trigger_offline()
+    folder = OUT / f"trigger_check_{stamp}"
+    folder.mkdir(parents=True)
+    (folder / "report.json").write_text(
+        json.dumps({"command": ".venv/bin/python -m scripts.orchestration.run_transform_e2e --trigger-check", "checks": checks}, indent=2) + "\n"
+    )
+    for name, ok in checks.items():
+        sys.stdout.write(f"{'ok' if ok else 'FAIL':<5} {name}\n")
+    sys.stdout.write(f"{'pass' if all(checks.values()) else 'fail'}: {(folder / 'report.json').relative_to(ROOT)}\n")
+    return 0 if all(checks.values()) else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--case", action="append", default=[], choices=sorted(CASES))
@@ -2723,6 +3055,7 @@ def main() -> int:
     parser.add_argument(
         "--cleanup-check", action="store_true", help="prove that a failed teardown or launcher shutdown fails the session and keeps what finishes it"
     )
+    parser.add_argument("--trigger-check", action="store_true", help="check trigger_dag with a stand-in clock, API and secret store (no Docker, no stack)")
     parser.add_argument("--finish-cleanup", type=Path, metavar="FOLDER", help="finish the cleanup of a session folder that a failed run kept")
     parser.add_argument(
         "--cleanup-mutant", choices=sorted(CLEANUP_MUTANTS), default="", help="with --cleanup-check: run the synthetic checks with an earlier behavior in place"
@@ -2734,6 +3067,8 @@ def main() -> int:
     if args.list:
         sys.stdout.write("\n".join(CASE_ORDER) + "\n")
         return 0
+    if args.trigger_check:
+        return check_trigger_verdict()
     if args.cleanup_check:
         return check_cleanup_mutant(args.cleanup_mutant) if args.cleanup_mutant else check_cleanup_verdict()
     if args.finish_cleanup is not None:
