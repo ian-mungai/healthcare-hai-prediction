@@ -6926,8 +6926,11 @@ def staging_pool_interrupt(env: Env) -> dict[str, bool]:
             )
         finally:
             os.kill(os.getpid(), signal.SIGINT)
-        time.sleep(1.0)
-        observed["persisted_without_fallback"] = all(a["cancel_intent"] for a in env.state()["attempts"].values() if a["owner"].startswith("alloc:"))
+        try:
+            env.wait(lambda: all(a["cancel_intent"] for a in env.state()["attempts"].values() if a["owner"].startswith("alloc:")), 10, "cancel intents")
+            observed["persisted_without_fallback"] = True
+        except CaseFailure:
+            observed["persisted_without_fallback"] = False
         if not observed["persisted_without_fallback"]:
             for a in env.state()["attempts"].values():
                 if a["owner"].startswith("alloc:") and a["phase"] != "ended":
