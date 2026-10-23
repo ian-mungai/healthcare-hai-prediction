@@ -12,6 +12,7 @@ the caller's index, staged diff and working files survive. Failure modes CS1 to 
 data/e2e/ci_groups/<UTC>_<pid>/report.json with the revision, the SHA-256 of the files under test and the tool versions;
 the run fails when a file under test changes while it runs.
 
+``--speed-only`` runs only the cases of the timing, units and gates part as an iteration run and not commit evidence.
 ``--selection-only`` runs the selector and acquisition-hook selection cases as an iteration run and not commit evidence.
 It skips every case that runs scripts/run_ci.sh or this runner. Acquisition selection uses a scratch replacement of the
 heavy gate body and the real hook configuration.
@@ -33,12 +34,14 @@ from typing import Any
 
 from scripts.process import clear_git_environment, find_program, run_command
 from scripts.quality import ci_groups
+from scripts.quality.repo_checks import load_yaml
 from scripts.quality.scratch_worktree import ScratchWorktrees
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = ROOT / ".venv" / "bin" / "python"
 RUNNER = "scripts/quality/run_ci_groups_e2e.py"
 COPIED = (
+    ".env.example",
     ".github/workflows/ci.yml",
     ".markdownlint-cli2.jsonc",
     ".pre-commit-config.yaml",
@@ -100,6 +103,13 @@ COPIED = (
     "scripts/quality/run_documentation_review_e2e.py",
     "scripts/quality/typecheck.py",
     "scripts/run_ci.sh",
+    "scripts/quality/timing.sh",
+    "scripts/quality/ci_reuse.py",
+    "config/quality/ci_jobs.json",
+    "scripts/quality/run_ci_reuse_e2e.py",
+    "scripts/quality/run_model_metadata_e2e.py",
+    "scripts/acquisition/run_checks_shard.sh",
+    "scripts/acquisition/run_checks_combine.sh",
 )
 LAUNCHER_E2E = "scripts/lakehouse/run_launcher_e2e.py"
 DOCS_ONLY = "9c22c1e"
@@ -192,6 +202,10 @@ def install_copies(work: Path) -> None:
             shutil.copy2(ROOT / path, work / path)
     if not (ROOT / "dags/transform_dag.py").exists():
         (work / "dags/transform_dag.py").unlink(missing_ok=True)
+    tracked = set(git(work, "ls-files").splitlines())
+    new_files = [path for path in COPIED if (work / path).exists() and path not in tracked]
+    if new_files:
+        git(work, "add", "--intent-to-add", "--", *new_files)
 
 
 def restore(work: Path) -> None:
@@ -772,9 +786,12 @@ def reader_inputs(modules: tuple[str, ...], tracked: set[str]) -> dict[str, str]
 
 
 def layer_modules(function: str) -> tuple[str, ...]:
-    """The modules the check-group function ``function`` of scripts/run_ci.sh starts with ``-m``."""
-    body = re.search(rf"^{function}\(\) \{{\n(.*?)^\}}", (ROOT / "scripts/run_ci.sh").read_text(encoding="utf-8"), re.DOTALL | re.MULTILINE)
-    return tuple(re.findall(r"-m (scripts\.[\w.]+)", body.group(1))) if body else ()
+    """The modules the check-group function ``function`` of scripts/run_ci.sh starts with ``-m``; a group split into units (``lakehouse_gold_checks``)
+    also counts the functions of its units."""
+    text = (ROOT / "scripts/run_ci.sh").read_text(encoding="utf-8")
+    names = [name for name in re.findall(r"^([a-z_]+)\(\) \{$", text, re.MULTILINE) if name == function or name.startswith(f"{function}_")]
+    bodies = [body for name in names if (body := function_text(text, name))]
+    return tuple(module for body in bodies for module in re.findall(r"-m (scripts\.[\w.]+)", body))
 
 
 SCAN_SAMPLE = """
@@ -820,7 +837,7 @@ HOSTED_ENTRY_POINTS = {
     "configuration_checks": (
         ("scripts.infrastructure.run_secret_store_e2e", ("scripts/infrastructure/run_secret_store_e2e.py", "scripts/infrastructure/secret_store.py")),
     ),
-    "lakehouse_gold": (
+    "lakehouse_gold_writer_setup": (
         (
             "scripts.lakehouse.run_gold_publish_e2e --mode writer_setup",
             ("scripts/lakehouse/run_gold_publish_e2e.py", "scripts/lakehouse/gold_writer_setup.py", "scripts/lakehouse/principal_credentials.py"),
@@ -838,9 +855,10 @@ def entry_point_cases() -> list[dict[str, Any]]:
     for function, entries in HOSTED_ENTRY_POINTS.items():
         body = re.search(rf"^{function}\(\) \{{\n(.*?)^\}}", text, re.DOTALL | re.MULTILINE)
         for command, sources in entries:
-            if not body or not re.search(rf"^\s*\"\$python_bin\" -m {re.escape(command)}$", body.group(1), re.MULTILINE):
+            if not body or not re.search(rf"^\s*timed \"[^\"]+\" \"\$python_bin\" -m {re.escape(command)}$", body.group(1), re.MULTILINE):
                 missing.append(f"{function}: {command}")
-            not_selecting += [path for path in sources if function not in ci_groups.plan("paths", "all", paths=[path])["run"]]
+            group = "lakehouse_gold" if function.startswith("lakehouse_gold") else function
+            not_selecting += [path for path in sources if group not in ci_groups.plan("paths", "all", paths=[path])["run"]]
     return [
         {
             "case": "offline_entry_points_run_in_their_groups",
@@ -1125,13 +1143,510 @@ def real_run_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]
     cases.append(
         markdown_case(work, out, "markdown_config_dependency_only_change_lints", '"MD013": { "line_length": 40 },', want_failure=True, form="dependency")
     )
+    cases += speed_real_cases(work, out)
     cases += inherited_context_cases(work, out, scratch)
+    return cases
+
+
+GOLD_UNIT_FUNCTIONS = ("lakehouse_gold_checks", "lakehouse_gold_writer_setup", "lakehouse_gold_model_metadata_e2e")
+GOLD_UNITS = ("checks", "writer_setup", "model_metadata_e2e")
+OLD_GOLD_COMMANDS = (
+    "scripts.lakehouse.bridge_references --check",
+    "scripts.lakehouse.run_bridge_references_e2e",
+    "scripts.lakehouse.identity_splits --check",
+    "scripts.lakehouse.source_labels --check",
+    "scripts.lakehouse.run_identity_seeds_e2e",
+    "scripts.lakehouse.gold_checks check-suites",
+    "scripts.lakehouse.run_gold_publish_e2e --mode contract",
+    "scripts.lakehouse.run_gold_publish_e2e --mode writer_setup",
+    "scripts.quality.model_metadata",
+    "scripts.quality.run_model_metadata_e2e",
+)
+TIMING = "scripts/quality/timing.sh"
+ACQUISITION_PYTEST_PATHS = "scripts/acquisition/tests tests/test_source_registry.py"
+DURATIONS_HEADING = "## Measured durations"
+
+
+def workflow_document() -> dict[str, Any]:
+    loaded = load_yaml((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise ValueError(".github/workflows/ci.yml is not a mapping")
+    return loaded
+
+
+def ci_script() -> str:
+    return (ROOT / "scripts/run_ci.sh").read_text(encoding="utf-8")
+
+
+def function_text(text: str, name: str) -> str | None:
+    found = re.search(rf"^{name}\(\) \{{\n(.*?)^\}}", text, re.DOTALL | re.MULTILINE)
+    return found.group(1) if found else None
+
+
+def timed_commands(body: str) -> list[str]:
+    """The commands that a function starts through ``timed``, without the label, the python launcher and the worker setting."""
+    commands: list[str] = []
+    for line in re.findall(r'^\s*timed "[^"]+" (.+)$', body, re.MULTILINE):
+        command = re.sub(r'^"\$python_bin" -m ', "", line)
+        commands.append(re.sub(r' --workers "\$\{MODEL_METADATA_WORKERS:-auto\}"', "", command).strip())
+    return commands
+
+
+def single_command_cases() -> list[dict[str, Any]]:
+    """Every function that run_ci.sh wraps in ``timed`` holds one command or one pipeline: a function that holds several runs with set -e ignored."""
+    text = ci_script()
+    wrapped = set(re.findall(r'^\s*timed "[^"]+" ([a-z_]+)$', text, re.MULTILINE))
+    wrapped &= set(re.findall(r"^([a-z_]+)\(\) \{", text, re.MULTILINE))
+    several: dict[str, int] = {}
+    for name in sorted(wrapped):
+        one_liner = re.search(rf"^{name}\(\) \{{ (.*) \}}$", text, re.MULTILINE)
+        body = one_liner.group(1) if one_liner else function_text(text, name) or ""
+        statements = [line for line in re.sub(r"\\\n\s*", " ", body).splitlines() if line.strip() and not line.strip().startswith("#")]
+        parts = [part for line in statements for part in re.split(r"\s*(?:;|&&|\|\|)\s*", line) if part.strip()]
+        if len(statements) != 1 or len(parts) != 1:
+            several[name] = max(len(statements), len(parts))
+    return [
+        {
+            "case": "timed_calls_wrap_single_commands",
+            "passed": not several and len(wrapped) >= 6,
+            "wrapped_functions": sorted(wrapped),
+            "holding_several": several,
+        }
+    ]
+
+
+def timing_function_cases(scratch: Path) -> list[dict[str, Any]]:
+    """The wrapper of scripts/quality/timing.sh, run by a real bash: a failing command keeps its exit code and its row, a bad label is refused, the
+    lines print without a summary file and the rows of several files are listed together."""
+    rows = scratch / "timing_rows.tsv"
+    other = scratch / "timing_rows_two.tsv"
+    other.write_text("second unit\t2026-10-22T10:00:00Z\t2026-10-22T10:00:05Z\t5\t0\n", encoding="utf-8")
+    environment = {
+        **os.environ,
+        "TIMING_SH": str(ROOT / TIMING),
+        "TIMING_ROWS": str(rows),
+        "TIMING_OTHER": str(other),
+        "TIMING_ABSENT": str(scratch / "timing_absent.tsv"),
+    }
+    failing = run_command(
+        "bash",
+        [
+            "-c",
+            'source "$TIMING_SH"; CI_TIMING_FILE="$TIMING_ROWS"; timed "a failing command" bash -c "exit 3"; echo "status=$?"; timed "a passing command" true',
+        ],
+        env=environment,
+        timeout=60,
+    )
+    text = rows.read_text(encoding="utf-8") if rows.exists() else ""
+    refused = run_command("bash", ["-c", 'source "$TIMING_SH"; timed "bad;label" true; echo "status=$?"'], env=environment, timeout=60)
+    bare = run_command("bash", ["-c", 'source "$TIMING_SH"; unset CI_TIMING_FILE; timed "no file" true; echo "status=$?"'], env=environment, timeout=60)
+    table_run = run_command("bash", ["-c", 'source "$TIMING_SH"; timing_table "$TIMING_ROWS" "$TIMING_OTHER" "$TIMING_ABSENT"'], env=environment, timeout=60)
+    table = table_run.stdout
+    return [
+        {
+            "case": "timing_failed_command_keeps_exit_code",
+            "passed": "status=3" in failing.stdout
+            and re.search(r"\[timing\] start a failing command at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", failing.stdout) is not None
+            and re.search(r"\[timing\] end a failing command at \S+: \d+ s, exit 3", failing.stdout) is not None
+            and re.search(r"^a failing command\t\S+\t\S+\t\d+\t3$", text, re.MULTILINE) is not None
+            and re.search(r"^a passing command\t\S+\t\S+\t\d+\t0$", text, re.MULTILINE) is not None,
+            "stdout": failing.stdout[-300:],
+        },
+        {
+            "case": "timing_label_is_validated",
+            "passed": "status=2" in refused.stdout and "holds a character outside" in refused.stderr and "[timing] start" not in refused.stdout,
+            "stderr": refused.stderr[-200:],
+        },
+        {
+            "case": "timing_lines_print_without_a_summary_file",
+            "passed": "[timing] end no file" in bare.stdout and "status=0" in bare.stdout,
+            "stdout": bare.stdout[-200:],
+        },
+        {
+            "case": "timing_rows_of_several_files_are_listed_in_order",
+            "passed": [
+                line.split(" | ")[0].lstrip("| ") for line in table.splitlines() if line.startswith("| ") and "---" not in line and "Command" not in line
+            ]
+            == ["a failing command", "a passing command", "second unit"],
+            "table": table[-500:],
+        },
+        {
+            "case": "timing_clamps_negative_durations",
+            "passed": re.search(r"if \(\(seconds < 0\)\); then\n\s+seconds=0", (ROOT / TIMING).read_text(encoding="utf-8")) is not None,
+        },
+    ]
+
+
+def gold_unit_cases() -> list[dict[str, Any]]:
+    """The gold layer's units hold every gold command once, start no launcher mode, share no report folder or fixed port and are covered by the jobs."""
+    text = ci_script()
+    bodies = {name: function_text(text, name) for name in GOLD_UNIT_FUNCTIONS}
+    found = [command for body in bodies.values() for command in timed_commands(body or "")]
+    modes = re.findall(r"run_gold_publish_e2e --mode (\w+)", " ".join(found))
+    folders = {
+        "scripts/lakehouse/run_bridge_references_e2e.py": "data/e2e/bridge_references",
+        "scripts/lakehouse/run_identity_seeds_e2e.py": "data/e2e/gold_identity_seeds",
+        "scripts/quality/run_model_metadata_e2e.py": "data/e2e/model_metadata",
+        "scripts/lakehouse/run_gold_publish_e2e.py": "data/e2e/gold_publish",
+    }
+    publish = (ROOT / "scripts/lakehouse/run_gold_publish_e2e.py").read_text(encoding="utf-8")
+    missing_folders = [
+        path
+        for path, folder in folders.items()
+        if folder not in (ROOT / path).read_text(encoding="utf-8") and not (path.endswith("gold_publish_e2e.py") and "e2e/gold_publish" in publish)
+    ]
+    stand_in = (ROOT / "scripts/infrastructure/secret_store_stand_in.py").read_text(encoding="utf-8")
+    ports = [
+        path
+        for path in (
+            "scripts/lakehouse/run_gold_publish_e2e.py",
+            "scripts/lakehouse/run_bridge_references_e2e.py",
+            "scripts/lakehouse/run_identity_seeds_e2e.py",
+            "scripts/quality/run_model_metadata_e2e.py",
+        )
+        if re.search(r"\b(?:port|PORT)\s*=\s*\d{2,5}\b|:\d{4,5}['\"/]", (ROOT / path).read_text(encoding="utf-8"))
+    ]
+    workflow = workflow_document()
+    gold_jobs = [entry for entry in workflow["jobs"]["lakehouse"]["strategy"]["matrix"]["include"] if entry["part"] == "gold"]
+    metadata_units = workflow["jobs"]["gold_metadata"]["steps"][-2]["env"]["CI_UNITS"]
+    covered = [*gold_jobs[0]["units"].split(), *metadata_units.split()]
+    unit_line = re.search(r'^gold_units="([^"]+)"$', text, re.MULTILINE)
+    return [
+        {
+            "case": "gold_units_hold_every_gold_command_once",
+            "passed": sorted(found) == sorted(OLD_GOLD_COMMANDS) and all(body is not None for body in bodies.values()),
+            "missing": sorted(set(OLD_GOLD_COMMANDS) - set(found)),
+            "extra_or_repeated": sorted(command for command in found if found.count(command) > 1 or command not in OLD_GOLD_COMMANDS),
+        },
+        {"case": "gold_units_start_no_launcher_modes", "passed": sorted(modes) == ["contract", "writer_setup"], "modes": modes},
+        {
+            "case": "gold_units_write_distinct_report_folders",
+            "passed": not missing_folders
+            and "f\"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{args.mode}\"" in publish
+            and len(set(folders.values())) == len(folders),
+            "missing": missing_folders,
+        },
+        {"case": "gold_units_open_no_fixed_ports", "passed": 'StandInServer(("127.0.0.1", 0)' in stand_in and not ports, "files_with_a_port": ports},
+        {
+            "case": "gold_jobs_cover_every_unit_once",
+            "passed": sorted(covered) == sorted(GOLD_UNITS) and unit_line is not None and unit_line.group(1).split() == list(GOLD_UNITS),
+            "covered": covered,
+        },
+    ]
+
+
+def acquisition_script_cases() -> list[dict[str, Any]]:
+    """The acquisition scripts use the timing wrapper, the unsharded run stays one run with the 90% gate, and the combining job keeps the checks that
+    the single run has beside the merged gate."""
+    names = ("run_checks.sh", "run_checks_shard.sh", "run_checks_combine.sh")
+    texts = {name: (ROOT / "scripts/acquisition" / name).read_text(encoding="utf-8") for name in names}
+    single = texts["run_checks.sh"]
+    combine = texts["run_checks_combine.sh"]
+    shard = texts["run_checks_shard.sh"]
+
+    def commands(text: str) -> set[str]:
+        return set(re.findall(r'timed "acquisition(?: combine)?: [^"]+" (.+?)(?: \\)?$', text, re.MULTILINE))
+
+    prefixes = ('"$python_bin" -m ruff ', '"$python_bin" -m scripts.quality.typecheck ', '"$python_bin" -m scripts.acquisition.source_registry')
+    shared = {command for command in commands(single) if command.startswith(prefixes)}
+    return [
+        {
+            "case": "acquisition_scripts_use_the_timing_wrapper",
+            "passed": all('source "$repo_root/scripts/quality/timing.sh"' in text and "timed " in text and "timing_entry" in text for text in texts.values()),
+        },
+        {
+            "case": "local_acquisition_run_stays_unsharded",
+            "passed": "--shard" not in single.replace("ACQUISITION_SHARD", "")
+            and "--cov-fail-under=90" in single
+            and "--cov-report=term-missing" in single
+            and ACQUISITION_PYTEST_PATHS in single,
+        },
+        {
+            "case": "combine_job_runs_lint_types_and_registry",
+            "passed": len(shared) == 3
+            and shared <= commands(combine)
+            and "shards gate" in combine
+            and "--fail-under 90" in combine
+            and ACQUISITION_PYTEST_PATHS in combine,
+            "single_run_checks": sorted(shared),
+        },
+        {
+            "case": "shard_runs_collect_without_a_target_and_seal",
+            "passed": "coverage/shard${index}.coverage" in shard
+            and "--cov-fail-under=0" in shard
+            and "--cov-report= " in shard
+            and "shards seal" in shard
+            and ACQUISITION_PYTEST_PATHS in shard
+            and "-p scripts.acquisition.shards" in shard,
+        },
+    ]
+
+
+def table_rows(text: str, heading: str) -> list[list[str]]:
+    section = text.split(heading, 1)[1].split("\n## ", 1)[0] if heading in text else ""
+    rows = [[cell.strip() for cell in line.strip().strip("|").split("|")] for line in section.splitlines() if line.startswith("|")]
+    return [row for row in rows[2:] if len(row) >= 3]
+
+
+def fill_matrix(template: str, entry: dict[str, Any]) -> str:
+    return re.sub(r"\$\{\{\s*matrix\.(\w+)\s*\}\}", lambda found: str(entry.get(found.group(1), "")), template)
+
+
+def workflow_timeouts() -> dict[str, int]:
+    """The timeout in minutes of each job of the workflow by its expanded name."""
+    jobs = workflow_document()["jobs"]
+    timeouts: dict[str, int] = {}
+    for name in jobs:
+        definition = jobs[name]
+        for entry in matrix_entries(definition):
+            label = fill_matrix(str(definition["name"]), entry)
+            minutes = int(fill_matrix(str(definition["timeout-minutes"]), entry))
+            timeouts[label] = minutes
+    return timeouts
+
+
+def matrix_entries(definition: dict[str, Any]) -> list[dict[str, Any]]:
+    """The combinations of a job's matrix: its ``include`` list, or one entry for each value of its list-valued key; one empty entry without a matrix."""
+    matrix = definition.get("strategy", {}).get("matrix")
+    if not matrix:
+        return [{}]
+    if "include" in matrix:
+        return list(matrix["include"])
+    entries: list[dict[str, Any]] = []
+    for key in matrix:
+        for choice in matrix[key]:
+            entries.append({key: choice})
+    return entries
+
+
+def timeout_cases() -> list[dict[str, Any]]:
+    """Each job's timeout equals the one in the table of measured durations and is between 1.5 and 2.6 times the measured time (at least 5 minutes)."""
+    rows = table_rows((ROOT / "docs/quality_checks.md").read_text(encoding="utf-8"), DURATIONS_HEADING)
+    recorded = {row[0]: (float(row[1]), int(row[2])) for row in rows}
+    timeouts = workflow_timeouts()
+    off = {name: (recorded[name], timeouts.get(name)) for name in recorded if timeouts.get(name) != recorded[name][1]}
+    ratio = {name: round(timeout / measured, 2) for name, (measured, timeout) in recorded.items() if not (1.5 * measured <= timeout <= max(2.6 * measured, 5))}
+    return [
+        {
+            "case": "job_timeouts_match_the_measured_durations",
+            "passed": set(recorded) == set(timeouts) and not off and not ratio and len(recorded) >= 10,
+            "not_in_the_table": sorted(set(timeouts) - set(recorded)),
+            "not_in_the_workflow": sorted(set(recorded) - set(timeouts)),
+            "different_timeout": off,
+            "outside_the_ratio": ratio,
+        }
+    ]
+
+
+def unit_refusal_case(work: Path, out: Path) -> dict[str, Any]:
+    code, log, _ = run_entry(work, out, "unknown_unit", {"CI_UNITS": "bogus", "CI_SCOPE": "full", "CI_PART": "gold", "CI_LIST_ONLY": "1"})
+    return {
+        "case": "unknown_unit_is_refused",
+        "passed": code == 2 and "CI_UNITS must name units of the gold layer" in log and "run lakehouse_gold" not in log,
+        "exit": code,
+    }
+
+
+def speed_static_cases(scratch: Path) -> list[dict[str, Any]]:
+    return [*single_command_cases(), *timing_function_cases(scratch), *gold_unit_cases(), *acquisition_script_cases(), *timeout_cases()]
+
+
+STUB_UNIT = """#!/usr/bin/env bash
+# Stand-in for a CI command: logs its start and end with the time to a file, and sleeps.
+now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
+printf '%s start %s\\n' "$1" "$(now)" >>"$STUB_LOG"
+sleep "$2"
+printf '%s end %s\\n' "$1" "$(now)" >>"$STUB_LOG"
+"""
+
+
+def replaced_function(text: str, name: str, body: str) -> str:
+    found = re.search(rf"^{name}\(\) \{{\n.*?^\}}", text, re.DOTALL | re.MULTILINE)
+    if not found:
+        raise RuntimeError(f"scripts/run_ci.sh has no function {name}")
+    return text[: found.start()] + f"{name}() {{\n{body}\n}}" + text[found.end() :]
+
+
+def stub_functions(work: Path, bodies: dict[str, str]) -> None:
+    """Replace the bodies of functions of scripts/run_ci.sh in the scratch worktree; everything else in the script stays as it is."""
+    path = work / "scripts/run_ci.sh"
+    text = path.read_text(encoding="utf-8")
+    for name, body in bodies.items():
+        text = replaced_function(text, name, body)
+    path.write_text(text, encoding="utf-8")
+    (work / "stub_unit.sh").write_text(STUB_UNIT, encoding="utf-8")
+
+
+def stub_log(path: Path) -> dict[str, dict[str, float]]:
+    seen: dict[str, dict[str, float]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines() if path.exists() else []:
+        name, kind, stamp = line.split()
+        seen.setdefault(name, {})[kind] = float(stamp)
+    return seen
+
+
+GOLD_STUBS = {
+    "lakehouse_gold_checks": '  timed "stub: checks" bash "$repo_root/stub_unit.sh" checks 2',
+    "lakehouse_gold_writer_setup": '  timed "stub: writer setup" bash "$repo_root/stub_unit.sh" writer 2',
+    "lakehouse_gold_model_metadata_e2e": '  timed "stub: model metadata" bash "$repo_root/stub_unit.sh" metadata 2',
+}
+
+
+def units_run_case(work: Path, out: Path, name: str, units: str, want: set[str]) -> dict[str, Any]:
+    stub_functions(work, GOLD_STUBS)
+    log = work / "data" / "stub_units.log"
+    log.parent.mkdir(exist_ok=True)
+    log.unlink(missing_ok=True)
+    env = {"CI_SCOPE": "full", "CI_PART": "gold", "STUB_LOG": str(log), **({"CI_UNITS": units} if units else {})}
+    try:
+        code, text, summary = run_entry(work, out, name, env)
+    finally:
+        restore(work)
+    seen = stub_log(log)
+    rows = re.findall(r"^\| (stub: [a-z ]+) \| \S+ \| \S+ \| (\d+) \| (\d+) \|$", summary, re.MULTILINE)
+    alone_first = True
+    overlap = True
+    if {"writer", "checks", "metadata"} <= set(seen):
+        alone_first = seen["writer"]["end"] <= seen["checks"]["start"] and seen["writer"]["end"] <= seen["metadata"]["start"]
+        overlap = seen["checks"]["start"] < seen["metadata"]["end"] and seen["metadata"]["start"] < seen["checks"]["end"]
+    labels = {"checks": "stub: checks", "writer": "stub: writer setup", "metadata": "stub: model metadata"}
+    expected = {labels[key] for key in want}
+    checks = {
+        "exit_zero": code == 0 and PASS_LINES["gold"] in text,
+        "only_the_wanted_units_ran": set(seen) == want,
+        "writer_set_up_ended_before_the_others_started": alone_first,
+        "the_other_units_ran_together": overlap,
+        "every_command_has_its_row_in_the_summary": {label for label, _seconds, _status in rows} == expected,
+        "rows_show_seconds_and_exit_zero": bool(rows) and all(int(seconds) >= 2 and status == "0" for _label, seconds, status in rows),
+        "start_and_end_lines_in_the_log": all(f"[timing] start {label} at" in text and f"[timing] end {label} at" in text for label in expected),
+    }
+    return {"case": name, "passed": all(checks.values()), "checks": checks, "exit": code, "seen": seen}
+
+
+def failing_unit_case(work: Path, out: Path) -> dict[str, Any]:
+    stub_functions(work, {**GOLD_STUBS, "lakehouse_gold_checks": '  timed "stub: failing command" bash -c "exit 3"'})
+    log = work / "data" / "stub_units.log"
+    log.parent.mkdir(exist_ok=True)
+    log.unlink(missing_ok=True)
+    try:
+        code, text, summary = run_entry(work, out, "failing_unit", {"CI_SCOPE": "full", "CI_PART": "gold", "STUB_LOG": str(log)})
+    finally:
+        restore(work)
+    checks = {
+        "exit_nonzero": code != 0,
+        "failure_names_the_unit": "Local CI failed in: lakehouse_gold_checks" in text,
+        "log_shows_exit_3": "[timing] end stub: failing command" in text and ", exit 3" in text,
+        "summary_row_shows_exit_3": re.search(r"^\| stub: failing command \| \S+ \| \S+ \| \d+ \| 3 \|$", summary, re.MULTILINE) is not None,
+        "no_pass_line": PASS_LINES["gold"] not in text,
+    }
+    return {"case": "timing_failed_command_keeps_exit_code_in_the_run", "passed": all(checks.values()), "checks": checks, "exit": code}
+
+
+def interrupted_unit_case(work: Path, out: Path) -> dict[str, Any]:
+    stub_functions(work, {**GOLD_STUBS, "lakehouse_gold_checks": '  timed "stub: interrupted" bash -c \'kill -TERM "$0"; sleep 3\' "$$"'})
+    log = work / "data" / "stub_units.log"
+    log.parent.mkdir(exist_ok=True)
+    log.unlink(missing_ok=True)
+    try:
+        code, text, _ = run_entry(work, out, "interrupted_unit", {"CI_SCOPE": "full", "CI_PART": "gold", "STUB_LOG": str(log)})
+    finally:
+        restore(work)
+    checks = {"exit_nonzero": code != 0, "no_pass_line": PASS_LINES["gold"] not in text and "All local CI checks passed" not in text}
+    return {"case": "timing_interrupted_run_fails", "passed": all(checks.values()), "checks": checks, "exit": code}
+
+
+def gates_part_cases(work: Path, out: Path) -> list[dict[str, Any]]:
+    code, log, text = run_entry(work, out, "gates_part", {"CI_SCOPE": "full", "CI_PART": "gates"})
+    folder = break_gate(work)
+    try:
+        failed_code, failed_log, _ = run_entry(work, out, "gates_part_failure", {"CI_SCOPE": "full", "CI_PART": "gates"})
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+        restore(work)
+    return [
+        {
+            "case": "gates_part_runs_gates_only",
+            "passed": code == 0
+            and "The gates part passed." in log
+            and "\n== " not in log
+            and re.search(r"^gates: \d+ s$", log, re.MULTILINE) is not None
+            and "| gates: privacy scan |" in text,
+            "exit": code,
+        },
+        {
+            "case": "gates_part_fails_when_a_gate_fails",
+            "passed": failed_code != 0 and "old dataset folders exist again" in failed_log and "The gates part passed." not in failed_log,
+            "exit": failed_code,
+        },
+    ]
+
+
+MODEL_METADATA_CASES = ("control", "review8_p01_public", "review8_p01_confidential", "review8_p02_public")
+
+
+def model_metadata_cases(work: Path, out: Path) -> list[dict[str, Any]]:
+    """The model metadata E2E with cases at the same time: the outcomes equal the serial outcomes (``--prove-parallel-equal``), and a program that passes its
+    deadline fails the run with the case named."""
+    arguments = [argument for name in MODEL_METADATA_CASES for argument in ("--case", name)]
+    folder = out / "model_metadata"
+    equal = run_command(
+        str(PYTHON),
+        ["-m", "scripts.quality.run_model_metadata_e2e", *arguments, "--workers", "2", "--prove-parallel-equal", "--output-directory", str(folder / "equal")],
+        cwd=work,
+        timeout=600,
+    )
+    slow = run_command(
+        str(PYTHON),
+        [
+            "-m",
+            "scripts.quality.run_model_metadata_e2e",
+            *arguments[:4],
+            "--workers",
+            "2",
+            "--case-seconds",
+            "1",
+            "--output-directory",
+            str(folder / "deadline"),
+        ],
+        cwd=work,
+        timeout=600,
+    )
+    equal_text, slow_text = equal.stdout + equal.stderr, slow.stdout + slow.stderr
+    named = [name for name in MODEL_METADATA_CASES[:2] if re.search(rf"WRONG\s+{name}\b", slow_text)]
+    return [
+        {
+            "case": "model_metadata_workers_match_serial",
+            "passed": equal.returncode == 0 and "serial and 2 workers: 4 cases, 0 different" in equal_text and "4 of 4 cases behaved as expected" in equal_text,
+            "exit": equal.returncode,
+            "output_tail": equal_text[-300:],
+        },
+        {
+            "case": "model_metadata_workers_deadline_names_the_cases",
+            "passed": slow.returncode != 0
+            and named == list(MODEL_METADATA_CASES[:2])
+            and "deadline: a program of this case ran longer than 1 seconds" in slow_text,
+            "exit": slow.returncode,
+            "named": named,
+            "output_tail": slow_text[-300:],
+        },
+    ]
+
+
+def speed_real_cases(work: Path, out: Path) -> list[dict[str, Any]]:
+    cases = [unit_refusal_case(work, out)]
+    cases.append(units_run_case(work, out, "gold_units_run_alone_then_together", "", {"writer", "checks", "metadata"}))
+    cases.append(units_run_case(work, out, "gold_unit_selection_runs_only_the_named_unit", "model_metadata_e2e", {"metadata"}))
+    cases.append(failing_unit_case(work, out))
+    cases.append(interrupted_unit_case(work, out))
+    cases += gates_part_cases(work, out)
+    cases += model_metadata_cases(work, out)
     return cases
 
 
 def main() -> int:
     clear_git_environment()
     selection_only = "--selection-only" in sys.argv[1:]
+    speed_only = "--speed-only" in sys.argv[1:]
     out = ROOT / "data" / "e2e" / "ci_groups" / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{os.getpid()}"
     out.mkdir(parents=True)
     scratch = Path(tempfile.mkdtemp(prefix="ci_groups_e2e."))
@@ -1144,10 +1659,14 @@ def main() -> int:
             (work / name).symlink_to(ROOT / name)
         install_copies(work)
         identity = code_identity(work)
-        results.append(scratch_cleanup_interrupt_case(scratch))
-        results += selection_cases(work)
-        if not selection_only:
-            results += real_run_cases(work, out, scratch)
+        if speed_only:
+            results += speed_static_cases(scratch) + speed_real_cases(work, out)
+        else:
+            results.append(scratch_cleanup_interrupt_case(scratch))
+            results += selection_cases(work)
+            results += speed_static_cases(scratch)
+            if not selection_only:
+                results += real_run_cases(work, out, scratch)
     finally:
         worktrees = trees.close()
         shutil.rmtree(scratch, ignore_errors=True)
@@ -1171,8 +1690,15 @@ def main() -> int:
         "gates_run_before_launcher",
         "markdown_config_*",
         "inherited_index_*",
+        "gold_units_run_alone_then_together",
+        "gold_unit_selection_*",
+        "timing_*_in_the_run",
+        "timing_interrupted_run_fails",
+        "gates_part_*",
+        "model_metadata_workers_*",
+        "unknown_unit_is_refused",
     ]
-    mode = {"mode": "iteration", "skipped": skipped, "note": "not commit evidence"} if selection_only else {"mode": "full"}
+    mode = {"mode": "iteration", "skipped": skipped, "note": "not commit evidence"} if selection_only or speed_only else {"mode": "full"}
     report = {"started": out.name, **mode, "code": identity, "cases": results, "passed": len(results) - len(failed), "total": len(results), "failed": failed}
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     for result in results:

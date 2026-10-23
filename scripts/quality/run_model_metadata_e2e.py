@@ -20,18 +20,22 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.process import clear_git_environment, run_command
+from scripts.process import TimeoutExpired, clear_git_environment, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 PRE_COMMIT = ROOT / ".venv" / "bin" / "pre-commit"
 CHECKER = ROOT / "scripts" / "quality" / "model_metadata.py"
 HOOK = "model-metadata"
+CASE_SECONDS = 180
+MAX_AUTO_WORKERS = 4
 PROJECT = "dbt/dbt_project.yml"
 SOURCES = "dbt/models/silver/staging/_sources.yml"
 STAGING = "dbt/models/silver/staging/_staging__models.yml"
@@ -1271,19 +1275,20 @@ def judge(case: Case, exit_code: int, output: str, exact: bool) -> bool:
     return correct
 
 
-def run_case(case: Case, checker: Path, hook_config: Path) -> dict[str, Any]:
+def run_case(case: Case, checker: Path, hook_config: Path, case_seconds: int = CASE_SECONDS) -> dict[str, Any]:
     """Run a synthetic case through the given hook and checker and return their assertions and diagnostic tails."""
+    began = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="hai_model_metadata_") as scratch:
         repo = scratch_repo(Path(scratch), checker, hook_config)
         apply(repo, case)
         args = ["run", HOOK, "--verbose", *(["--all-files"] if case.scope == ALL_FILES_SCOPE else [])]
         environment = {**os.environ, "PRE_COMMIT_HOME": str(ROOT / ".tools" / "pre_commit_cache")}
-        hook = run_command(str(PRE_COMMIT), args, cwd=repo, env=environment, timeout=180)
+        hook = run_command(str(PRE_COMMIT), args, cwd=repo, env=environment, timeout=case_seconds)
         hook_output = hook.stdout + hook.stderr
         hook_correct = judge(case, hook.returncode, hook_output, exact=False)
         direct_correct, direct_code, direct_tail = True, None, []
         if case.scope == ALL_FILES_SCOPE:
-            direct = run_command(str(repo / ".venv" / "bin" / "python"), ["-m", "scripts.quality.model_metadata"], cwd=repo, timeout=120)
+            direct = run_command(str(repo / ".venv" / "bin" / "python"), ["-m", "scripts.quality.model_metadata"], cwd=repo, timeout=case_seconds)
             direct_code, direct_output = direct.returncode, direct.stdout + direct.stderr
             direct_correct = judge(case, direct.returncode, direct_output, exact=True)
             direct_tail = direct_output.strip().splitlines()[-6:]
@@ -1297,7 +1302,71 @@ def run_case(case: Case, checker: Path, hook_config: Path) -> dict[str, Any]:
             "direct_correct": direct_correct,
             "tail": hook_output.strip().splitlines()[-6:],
             "direct_tail": direct_tail,
+            "seconds": round(time.monotonic() - began, 2),
         }
+
+
+def worker_count(value: str) -> int:
+    """The number of cases that run at the same time: ``auto`` is the CPU count, at most MAX_AUTO_WORKERS; a number is taken as given."""
+    if value == "auto":
+        return max(1, min(MAX_AUTO_WORKERS, os.cpu_count() or 1))
+    count = int(value)
+    if count < 1:
+        raise ValueError(f"--workers must be auto or a number of at least 1, not {value}")
+    return count
+
+
+def outcome(result: dict[str, Any]) -> dict[str, Any]:
+    """What a case showed, without the seconds and the hook's own duration line, which differ between runs."""
+    keys = ("name", "expected", "hook_exit", "direct_exit", "correct", "hook_correct", "direct_correct")
+    tails = {key: [line for line in result[key] if not line.startswith("- duration:")] for key in ("tail", "direct_tail")}
+    return {**{key: result[key] for key in keys}, **tails}
+
+
+def failed_case(case: Case, reason: str) -> dict[str, Any]:
+    return {
+        "name": case.name,
+        "expected": "pass" if case.code == 0 else f"block ({case.marker}), exit {case.code}",
+        "hook_exit": None,
+        "direct_exit": None,
+        "correct": False,
+        "hook_correct": False,
+        "direct_correct": False,
+        "tail": [reason],
+        "direct_tail": [],
+        "seconds": None,
+    }
+
+
+def run_cases(cases: list[Case], checker: Path, hook_config: Path, workers: int, case_seconds: int = CASE_SECONDS) -> list[dict[str, Any]]:
+    """Run the cases and return their results in case order, one after another or with ``workers`` at the same time.
+
+    Each case has its own scratch repository, so parallel cases share only the read-only pre-commit cache. Each case starts at most two programs,
+    each with a deadline of ``case_seconds``; the pool as a whole has a deadline of the cases each worker takes times two such programs, plus
+    one minute. A case that raises or is unfinished at the deadline is reported as wrong with the reason, so a hang or crash fails visibly.
+    """
+    if workers == 1:
+        results: list[dict[str, Any]] = []
+        for case in cases:
+            try:
+                results.append(run_case(case, checker, hook_config, case_seconds))
+            except TimeoutExpired as error:
+                results.append(failed_case(case, f"deadline: a program of this case ran longer than {error.timeout} seconds"))
+        return results
+    deadline = -(-len(cases) // workers) * 2 * case_seconds + 60
+    pool = ThreadPoolExecutor(max_workers=workers)
+    futures = [pool.submit(run_case, case, checker, hook_config, case_seconds) for case in cases]
+    done, unfinished = wait(futures, timeout=deadline)
+    pool.shutdown(wait=False, cancel_futures=True)
+    results = []
+    for case, future in zip(cases, futures, strict=True):
+        if future not in done:
+            results.append(failed_case(case, f"deadline: not finished {deadline} seconds after the start of the pool ({len(unfinished)} cases unfinished)"))
+        elif isinstance(future.exception(), TimeoutExpired):
+            results.append(failed_case(case, f"deadline: a program of this case ran longer than {case_seconds} seconds"))
+        else:
+            results.append(future.result())
+    return results
 
 
 def sha256_of(path: Path) -> str:
@@ -1499,6 +1568,9 @@ def main() -> int:
     parser.add_argument("--hook-config", type=Path, default=ROOT / ".pre-commit-config.yaml", help="hook configuration to run the cases against")
     parser.add_argument("--output-directory", type=Path, default=ROOT / "data" / "e2e" / "model_metadata")
     parser.add_argument("--case", action="append", default=[], help="run only this case (repeatable)")
+    parser.add_argument("--workers", default="1", help="cases that run at the same time: a number, or auto (the CPU count, at most 4); 1 is the serial mode")
+    parser.add_argument("--case-seconds", type=int, default=CASE_SECONDS, help="deadline in seconds of each program a case starts")
+    parser.add_argument("--prove-parallel-equal", action="store_true", help="run the cases serially and with --workers, and fail unless the outcomes are equal")
     args = parser.parse_args()
     clear_git_environment()
     if not PRE_COMMIT.exists():
@@ -1511,7 +1583,14 @@ def main() -> int:
         return 1
     started = datetime.now(UTC)
     checker_before, hook_before, runner_before = sha256_of(args.checker), sha256_of(args.hook_config), sha256_of(Path(__file__))
-    results = [run_case(case, args.checker, args.hook_config) for case in cases]
+    workers = worker_count(args.workers)
+    results = run_cases(cases, args.checker, args.hook_config, workers, args.case_seconds)
+    if args.prove_parallel_equal:
+        serial = run_cases(cases, args.checker, args.hook_config, 1, args.case_seconds)
+        different = [a["name"] for a, b in zip(results, serial, strict=True) if outcome(a) != outcome(b)]
+        sys.stdout.write(f"serial and {workers} workers: {len(results)} cases, {len(different)} different{': ' + ', '.join(different) if different else ''}\n")
+        if different or workers == 1:
+            return 1
     scanner_exit = 0 if args.case else run_personal_scan_e2e(["--output-directory", str(args.output_directory / "scanner")])
     stable = checker_before == sha256_of(args.checker) and hook_before == sha256_of(args.hook_config) and runner_before == sha256_of(Path(__file__))
     for result in results:
@@ -1536,6 +1615,8 @@ def main() -> int:
         "checker_sha256": sha256_of(args.checker),
         "hook_config_sha256": sha256_of(args.hook_config),
         "tools": {"python": sys.version.split()[0], "pre_commit": run_command(str(PRE_COMMIT), ["--version"], check=True).stdout.strip()},
+        "workers": workers,
+        "wall_seconds": round((datetime.now(UTC) - started).total_seconds(), 1),
         "passed": len(results) - failures,
         "total": len(results),
         "cases": results,
