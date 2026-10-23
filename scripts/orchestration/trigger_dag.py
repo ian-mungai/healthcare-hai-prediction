@@ -5,7 +5,7 @@ Usage::
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag silver_transform_dag --mode real --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --mode real --silver-snapshot-run <silver run id> --wait-seconds 7200
 
-The session's Airflow token secret is read from AWS Secrets Manager into memory (the supervisor stores it at ``up``); a short token is signed from it
+The session's Airflow token secret is read from Parameter Store into memory (the supervisor stores it at ``up``); a short token is signed from it
 and sent only to the loopback API port. Nothing is written but one line of JSON on standard output: the run ID, the end state and the task states.
 """
 

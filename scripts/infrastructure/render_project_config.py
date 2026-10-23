@@ -16,7 +16,8 @@ from dotenv import dotenv_values
 from scripts.process import TimeoutExpired, run_command
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SECRET_RESOURCE_TYPE = re.compile(r"^aws_secretsmanager_")
+SECRET_RESOURCE_TYPE = re.compile(r"^aws_(secretsmanager_|ssm_parameter)")
+PUBLIC_PARAMETER_PREFIX = "/aws/service/"
 
 
 class ConfigurationError(ValueError):
@@ -135,12 +136,31 @@ def verify_plan_variables(plan: dict, expected: dict[str, str]) -> None:
             raise ConfigurationError(f"Saved plan input {name} is not its committed default; create and review a fresh plan.")
 
 
+def parameter_name(node: dict) -> str | None:
+    """The parameter name a plan node declares: its read values, its configuration expression or the planned change, whichever the section has."""
+    candidates = (
+        (node.get("values") or {}).get("name"),
+        ((node.get("expressions") or {}).get("name") or {}).get("constant_value"),
+        ((node.get("change") or {}).get("after") or {}).get("name"),
+    )
+    return next((name for name in candidates if isinstance(name, str)), None)
+
+
+def public_parameter(node: dict) -> bool:
+    """True for a data source that reads a public AWS-published parameter (a name under ``/aws/service/``, such as the ECS image id): it holds no secret."""
+    kind, name = node.get("type"), parameter_name(node)
+    return node.get("mode") == "data" and kind == "aws_ssm_parameter" and isinstance(name, str) and name.startswith(PUBLIC_PARAMETER_PREFIX)
+
+
 def secret_resources(node: object) -> list[str]:
-    """The address of every Secrets Manager secret resource, data source or ephemeral resource anywhere in a saved plan's JSON."""
+    """The address of every Secrets Manager or Parameter Store resource, data source or ephemeral resource anywhere in a saved plan's JSON.
+
+    A data source of a public AWS parameter (``/aws/service/...``) is not listed.
+    """
     found: list[str] = []
     if isinstance(node, dict):
         kind = node.get("type")
-        if isinstance(kind, str) and SECRET_RESOURCE_TYPE.match(kind) and ("mode" in node or "address" in node):
+        if isinstance(kind, str) and SECRET_RESOURCE_TYPE.match(kind) and ("mode" in node or "address" in node) and not public_parameter(node):
             found.append(str(node.get("address") or kind))
         for child in node.values():
             found += secret_resources(child)
@@ -151,11 +171,11 @@ def secret_resources(node: object) -> list[str]:
 
 
 def verify_plan_resources(plan: dict) -> None:
-    """Reject a saved plan that creates, changes, reads or only declares a Secrets Manager secret: no secret value may enter Terraform or its state."""
+    """Reject a saved plan that creates, reads or declares a Secrets Manager secret or a Parameter Store parameter: no secret value enters Terraform."""
     found = sorted(set(secret_resources(plan)))
     if found:
         raise ConfigurationError(
-            f"Saved plan declares a Secrets Manager secret resource or data source ({', '.join(found)}); no secret may be managed by Terraform."
+            f"Saved plan declares a secret or parameter resource or data source ({', '.join(found)}); no secret may be managed by Terraform."
         )
 
 

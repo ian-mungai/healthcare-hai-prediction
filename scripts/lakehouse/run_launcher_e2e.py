@@ -3712,7 +3712,7 @@ def secret_fetch_stall(env: Env) -> dict[str, bool]:
     run = env.acquire_run("run_a", "transform")
     other = env.submit(run, launch="r1", params=env.fixture_params("r1"))["attempt_id"]
     env.wait_phase(other, ("started",))
-    env.stand_in.stalled.add("GetSecretValue")
+    env.stand_in.stalled.add("GetParameter")
     env.client().call("catalog_up")
     time.sleep(1.5)
 
@@ -6508,8 +6508,8 @@ def files_holding(values: Iterable[str], roots: Iterable[Path], since: float) ->
 
 @case("catalog_client")
 def catalog_client(env: Env) -> dict[str, bool]:
-    """919: scripts/lakehouse/catalog.py starts, reports, runs jobs and stops the catalog through the launcher; the Polaris API and Secrets Manager are
-    stand-ins. The first start generates the catalog secrets in Secrets Manager, a rerun changes nothing, a missing permission fails and names the secret,
+    """919: scripts/lakehouse/catalog.py starts, reports, runs jobs and stops the catalog through the launcher; the Polaris API and Parameter Store are
+    stand-ins. The first start generates the catalog secrets in Parameter Store, a rerun changes nothing, a missing permission fails and names the secret,
     the launcher refuses to start a service whose secret is missing, and no file holds a secret value."""
     from scripts.infrastructure import secret_store
     from scripts.lakehouse import catalog
@@ -6575,7 +6575,7 @@ def catalog_client(env: Env) -> dict[str, bool]:
         created_at_start = set(env.daemon.create_bodies)
 
         def create_denied() -> None:
-            env.stand_in.denied.add("CreateSecret")
+            env.stand_in.denied.add("CreateParameter")
             catalog.credentials()
 
         def stale_reader_id() -> None:
@@ -6633,9 +6633,9 @@ def catalog_client(env: Env) -> dict[str, bool]:
     values = [*env.stand_in.values.values(), *issued.values()]
     return {
         "up started Polaris through the launcher and reported it": "Polaris is running on 127.0.0.1:8181" in outputs["up"],
-        "the first start generated the catalog secrets in Secrets Manager": all(stored.values())
+        "the first start generated the catalog secrets in Parameter Store": all(stored.values())
         and stored[secret_store.POLARIS_READER_CLIENT_SECRET] == issued["clientSecret"],
-        "a second start changed nothing in Secrets Manager": writes["up_again"] == writes["up"],
+        "a second start changed nothing in Parameter Store": writes["up_again"] == writes["up"],
         "a stored pair that Polaris refuses was reset and stored again": "credentials reset" in outputs["up_stale"]
         and env.stand_in.values.get(secret_store.POLARIS_READER_CLIENT_ID) == issued["clientId"],
         "a lost reader secret was reset and stored again, never created twice": "credentials reset" in outputs["up_reset"]

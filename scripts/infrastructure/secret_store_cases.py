@@ -1,4 +1,4 @@
-"""Offline cases for the Secrets Manager module and the Terraform names, against a loopback stand-in; no AWS service is contacted.
+"""Offline cases for the Parameter Store module and the Terraform names, against a loopback stand-in; no AWS service is contacted.
 
 Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.secret_store_cases [--root <folder>]``. The cases are
 one process, take seconds and start no container. ``scripts/infrastructure/run_secret_store_e2e.py`` runs them and keeps the report.
@@ -20,11 +20,13 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
+from botocore.exceptions import ClientError
+
 from scripts.infrastructure import render_project_config, secret_store
 from scripts.infrastructure.secret_store_stand_in import StandIn
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SECRET_RESOURCE = re.compile(r'^\s*(resource|data|ephemeral)\s+"aws_secretsmanager_[a-z_]*"', re.MULTILINE)
+SECRET_RESOURCE = re.compile(r'^\s*(resource|data|ephemeral)\s+"(aws_secretsmanager_[a-z_]*|aws_ssm_parameter[a-z_]*)"', re.MULTILINE)
 NAME = secret_store.POSTGRES_PASSWORD
 
 Case = Callable[[Path], dict[str, bool]]
@@ -60,66 +62,105 @@ def refusal(call: Callable[[], Any]) -> str | None:
 
 
 def store_behaviour(root: Path) -> dict[str, bool]:
-    """First use creates, a rerun changes nothing, an empty value is filled, a missing permission names the secret and no value is in any message."""
+    """First use creates, a rerun changes nothing, each write is read back, a missing permission names the secret and no value is in any message."""
     began = time.time() - 1
     sentinel = "sentinel-" + os.urandom(8).hex()
+    shared_name = secret_store.SHARED[0]
     printed = io.StringIO()
-    with StandIn() as stand_in, contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
+    with StandIn(shared={shared_name: sentinel + "-shared"}) as stand_in, contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
         store = secret_store.open_store(root, stand_in.endpoint)
         value, created = store.ensure(NAME, lambda: sentinel)
         writes_first = stand_in.writes()
         again, created_again = store.ensure(NAME, lambda: "must-not-be-used")
         writes_rerun = stand_in.writes()
-        stand_in.values[secret_store.AIRFLOW_FERNET_KEY] = ""
-        writes_before_empty = stand_in.writes()
-        empty_refusal = refusal(lambda: store.ensure(secret_store.AIRFLOW_FERNET_KEY, lambda: sentinel + "-refused"))
-        empty_unchanged = stand_in.writes() == writes_before_empty and stand_in.values[secret_store.AIRFLOW_FERNET_KEY] == ""
-        filled_now = store.fill_empty(secret_store.AIRFLOW_FERNET_KEY, sentinel + "-filled")
-        filled_again = store.fill_empty(secret_store.AIRFLOW_FERNET_KEY, sentinel + "-must-not-replace")
-        filled = stand_in.values[secret_store.AIRFLOW_FERNET_KEY]
+        plain_read = store.get(NAME)
         store.put(secret_store.AIRFLOW_JWT_SECRET, sentinel + "-one")
         store.put(secret_store.AIRFLOW_JWT_SECRET, sentinel + "-two")
         missing = refusal(lambda: store.get(secret_store.MARQUEZ_DB_PASSWORD))
         before_wrong = len(stand_in.log)
         wrong = refusal(lambda: store.put("other/name", sentinel))
-        wrong_read = refusal(lambda: store.find("healthcare-hai-prediction/airflow-admin"))
+        wrong_read = refusal(lambda: store.find("other/name"))
+        dash_name = refusal(lambda: store.find("healthcare-hai-prediction/postgres-password"))
+        no_slash = refusal(lambda: store.find(secret_store.PREFIX.strip("/") + "/postgres_password"))
+        read_only_write = refusal(lambda: store.put(secret_store.AIRFLOW_ADMIN, sentinel))
+        shared_write = refusal(lambda: store.put(shared_name, sentinel))
+        empty_value = refusal(lambda: store.put(NAME, ""))
+        oversize_value = refusal(lambda: store.put(NAME, "x" * (secret_store.MAX_VALUE_BYTES + 1)))
         requests_for_wrong = len(stand_in.log) - before_wrong
-        stand_in.denied.add("CreateSecret")
+        stand_in.values[secret_store.AIRFLOW_ADMIN] = sentinel + "-admin"
+        admin_read = store.get(secret_store.AIRFLOW_ADMIN)
+        before_shared = len(stand_in.log)
+        shared_value = store.get(shared_name)
+        shared_requests = [action for action, _ in stand_in.log[before_shared:]]
+        stand_in.denied.add("CreateParameter")
         denied_create = refusal(lambda: store.ensure(secret_store.POLARIS_ROOT_SECRET, lambda: sentinel + "-denied"))
         stand_in.denied.clear()
-        stand_in.denied.add("GetSecretValue")
+        stand_in.denied.add("GetParameter")
         denied_read = refusal(lambda: store.get(NAME))
         stand_in.denied.clear()
-        real_create = store.client.create_secret
+        real_put = store.parameters.put_parameter
 
         def racing(**arguments: Any) -> Any:
             stand_in.values[arguments["Name"]] = "winner-" + sentinel
-            return real_create(**arguments)
+            return real_put(**arguments)
 
-        store.client.create_secret = racing
+        store.parameters.put_parameter = racing
         raced, raced_created = store.ensure(secret_store.POLARIS_READER_CLIENT_ID, lambda: "loser-" + sentinel)
-        store.client.create_secret = real_create
+
+        def altering(**arguments: Any) -> Any:
+            return real_put(**{**arguments, "Value": arguments["Value"] + "-altered"})
+
+        store.parameters.put_parameter = altering
+        readback = refusal(lambda: store.put(secret_store.POLARIS_GOLD_CLIENT_ID, sentinel + "-readback"))
+        store.parameters.put_parameter = real_put
+        written_types = {(item["type"], item["tier"]) for item in stand_in.writes_seen}
         stored_names = set(stand_in.values)
         refused_endpoint = refusal(lambda: secret_store.open_store(root, "http://example.org:4566"))
         ignores_endpoint_settings = secret_store.CLIENT_OPTIONS.get("ignore_configured_endpoint_urls") is True and secret_store.client_config() is not None
-        messages = [str(text) for text in (missing, wrong, wrong_read, denied_create, denied_read, refused_endpoint, empty_refusal)]
+        messages = [
+            str(text)
+            for text in (
+                missing,
+                wrong,
+                wrong_read,
+                denied_create,
+                denied_read,
+                refused_endpoint,
+                read_only_write,
+                shared_write,
+                empty_value,
+                oversize_value,
+                readback,
+            )
+        ]
     return {
         "first use creates the secret with the generated value": created and value == sentinel and writes_first == 1,
         "a rerun reads the stored value and changes nothing": not created_again and again == sentinel and writes_rerun == writes_first,
-        "ensure refuses an existing empty secret and writes nothing": empty_refusal is not None
-        and secret_store.AIRFLOW_FERNET_KEY in empty_refusal
-        and empty_unchanged,
-        "the recovery operation fills an empty secret once and never replaces a value": filled_now and not filled_again and filled == sentinel + "-filled",
+        "a read asks for decryption and returns the plain value": plain_read == sentinel and not plain_read.startswith("AQECAH"),
         "a new value replaces the old one": stand_in.values[secret_store.AIRFLOW_JWT_SECRET] == sentinel + "-two",
         "a missing secret fails and names it": missing is not None and secret_store.MARQUEZ_DB_PASSWORD in missing,
-        "a name outside the 13 managed names is refused before any request": wrong is not None and wrong_read is not None and requests_for_wrong == 0,
+        "a name outside the managed names, a dash name and a name without the leading slash are refused before any request": wrong is not None
+        and wrong_read is not None
+        and dash_name is not None
+        and no_slash is not None
+        and requests_for_wrong == 0,
+        "the Airflow administrator password is read and never written": admin_read == sentinel + "-admin" and read_only_write is not None,
+        "a shared key is read from Secrets Manager and never written": shared_value == sentinel + "-shared"
+        and shared_requests == ["GetSecretValue"]
+        and shared_write is not None
+        and shared_name not in stand_in.values,
+        "an empty or oversized value is refused before any request": empty_value is not None and oversize_value is not None and requests_for_wrong == 0,
         "a missing create permission fails visibly and names the secret and the action": denied_create is not None
         and secret_store.POLARIS_ROOT_SECRET in denied_create
         and "creating" in denied_create,
         "a missing read permission fails visibly and names the secret": denied_read is not None and NAME in denied_read,
         "a concurrent create leaves the winner's value": not raced_created and raced == "winner-" + sentinel,
+        "a write that the service stores differently is caught by the readback": readback is not None
+        and secret_store.POLARIS_GOLD_CLIENT_ID in readback
+        and "readback" in readback,
+        "every write is a SecureString on the standard tier": written_types == {("SecureString", "Standard")},
         "the client allows two requests in all, not two retries": secret_store.CLIENT_OPTIONS["retries"] == {"total_max_attempts": 2, "mode": "standard"},
-        "only managed names reach the stand-in": stored_names <= set(secret_store.MANAGED),
+        "only managed names reach the stand-in": stored_names <= set(secret_store.MANAGED) | set(secret_store.READ_ONLY),
         "an endpoint off the loopback address is refused": refused_endpoint is not None,
         "the client ignores endpoint URLs from the environment and the AWS files": ignores_endpoint_settings,
         "no message holds a secret value": not any(sentinel in message for message in messages),
@@ -131,20 +172,20 @@ def store_behaviour(root: Path) -> dict[str, bool]:
 
 
 def store_races(root: Path) -> dict[str, bool]:
-    """Two initializers get one value; a loser waits for the winner and never writes; an empty secret is never filled by ensure."""
+    """Two initializers get one value; a loser waits for the winner and never writes; a winner that never shows its value ends the wait at the deadline."""
     sentinel = "race-" + os.urandom(8).hex()
     with StandIn() as stand_in:
         store = secret_store.open_store(root, stand_in.endpoint)
         barrier = threading.Barrier(2)
         returned: dict[str, tuple[str, bool]] = {}
-        real_create = store.client.create_secret
+        real_put = store.parameters.put_parameter
 
         def meet(**arguments: Any) -> Any:
             with contextlib.suppress(threading.BrokenBarrierError):
                 barrier.wait(timeout=5)
-            return real_create(**arguments)
+            return real_put(**arguments)
 
-        store.client.create_secret = meet
+        store.parameters.put_parameter = meet
 
         def initialize(label: str) -> None:
             returned[label] = store.ensure(NAME, lambda: f"{sentinel}-{label}")
@@ -154,27 +195,20 @@ def store_races(root: Path) -> dict[str, bool]:
             thread.start()
         for thread in threads:
             thread.join(timeout=30)
-        store.client.create_secret = real_create
         stored = stand_in.values.get(NAME)
         creates = [entry for entry in stand_in.changed() if entry[1] == NAME]
         values = {value for value, _ in returned.values()}
         created_flags = sorted(flag for _, flag in returned.values())
 
-        valueless = secret_store.AIRFLOW_JWT_SECRET
-        stand_in.valueless.add(valueless)
-        valueless_refusal = refusal(lambda: store.ensure(valueless, lambda: sentinel + "-valueless"))
-        valueless_unchanged = stand_in.changed() == creates
-
         slow = secret_store.POLARIS_ROOT_SECRET
         timers: list[threading.Timer] = []
 
         def collide_late(**arguments: Any) -> Any:
-            stand_in.values[arguments["Name"]] = ""
             timers.append(threading.Timer(0.6, lambda: stand_in.values.__setitem__(slow, "late-" + sentinel)))
             timers[0].start()
-            return real_create(**arguments)
+            raise ClientError({"Error": {"Code": "ParameterAlreadyExists", "Message": "exists"}}, "PutParameter")
 
-        store.client.create_secret = collide_late
+        store.parameters.put_parameter = collide_late
         began = time.monotonic()
         waited, waited_created = store.ensure(slow, lambda: "must-not-be-used", wait=5)
         waited_seconds = time.monotonic() - began
@@ -184,24 +218,22 @@ def store_races(root: Path) -> dict[str, bool]:
         stuck = secret_store.POLARIS_READER_CLIENT_ID
 
         def collide(**arguments: Any) -> Any:
-            stand_in.values[arguments["Name"]] = ""
-            return real_create(**arguments)
+            raise ClientError({"Error": {"Code": "ParameterAlreadyExists", "Message": "exists"}}, "PutParameter")
 
-        store.client.create_secret = collide
+        store.parameters.put_parameter = collide
         changes_before = len(stand_in.changed())
         began = time.monotonic()
         never = refusal(lambda: store.ensure(stuck, lambda: sentinel + "-never", wait=0.6))
         never_seconds = time.monotonic() - began
-        store.client.create_secret = real_create
-        never_wrote = len(stand_in.changed()) == changes_before and stand_in.values[stuck] == ""
+        store.parameters.put_parameter = real_put
+        never_wrote = len(stand_in.changed()) == changes_before and stuck not in stand_in.values
     return {
         "two initializers return one value": len(values) == 1 and stored in values,
         "exactly one initializer created the secret and the stored value is the one returned": created_flags == [False, True] and len(creates) == 1,
-        "an existing secret without a value is refused by ensure and left unchanged": valueless_refusal is not None and valueless_unchanged,
         "a loser waits for the winner's value and returns it without writing": waited == "late-" + sentinel
         and not waited_created
         and 0.5 <= waited_seconds < 4,
-        "a winner that never writes a value ends the wait at the deadline and nothing is written": never is not None
+        "a winner that never shows a value ends the wait at the deadline and nothing is written": never is not None
         and secret_store.POLARIS_READER_CLIENT_ID in never
         and 0.5 <= never_seconds < 4
         and never_wrote,
@@ -214,7 +246,7 @@ def store_deadline(root: Path) -> dict[str, bool]:
     names = [secret_store.POSTGRES_PASSWORD, secret_store.POLARIS_ROOT_SECRET, secret_store.MARQUEZ_DB_PASSWORD]
     with StandIn({names[0]: sentinel + "-a", names[1]: sentinel + "-b"}) as stand_in:
         healthy = secret_store.fetch_all(root, stand_in.endpoint, names, 10)
-        stand_in.stalled.add("GetSecretValue")
+        stand_in.stalled.add("GetParameter")
         began = time.monotonic()
         stalled = secret_store.fetch_all(root, stand_in.endpoint, names, 1.0)
         stalled_seconds = time.monotonic() - began
@@ -232,23 +264,47 @@ def store_deadline(root: Path) -> dict[str, bool]:
     }
 
 
+def source_offenders(root: Path) -> list[str]:
+    """The Terraform files that declare a secret or a parameter; a data source of a public AWS parameter (``/aws/service/...``) is no offender."""
+    found = []
+    for path in sorted((root / "infra").rglob("*.tf")):
+        if ".terraform" in path.parts:
+            continue
+        text = path.read_text()
+        for match in SECRET_RESOURCE.finditer(text):
+            body = text[match.end() : text.find("\n}", match.end())]
+            if match.group(2) == "aws_ssm_parameter" and match.group(1) == "data" and re.search(r'^\s*name\s*=\s*"/aws/service/', body, re.MULTILINE):
+                continue
+            found.append(str(path.relative_to(root)))
+    return found
+
+
+def variable_defaults(root: Path, names: Iterable[str]) -> list[str | None]:
+    """The default of each named variable in ``infra/iam/variables.tf``, or ``None`` when it has none."""
+    text = (root / secret_store.VARIABLES).read_text()
+    return [(found.group(1) if (found := re.search(rf'variable "{name}" \{{[^}}]*?default\s*=\s*"([^"]*)"', text, re.DOTALL)) else None) for name in names]
+
+
 def terraform_names(root: Path) -> dict[str, bool]:
-    """The module's names equal the Terraform defaults, and no Terraform file declares a secret or a secret version."""
+    """The module's names equal the Terraform defaults, every name is a slash path with underscores, and no Terraform file declares a secret or a parameter."""
     declared = secret_store.terraform_defaults(root)
-    offenders = [
-        str(path.relative_to(root))
-        for path in sorted((root / "infra").rglob("*.tf"))
-        if ".terraform" not in path.parts and SECRET_RESOURCE.search(path.read_text())
-    ]
+    offenders = source_offenders(root)
     family = ("aws_secretsmanager_secret", "aws_secretsmanager_secret_version", "aws_secretsmanager_random_password", "aws_secretsmanager_secrets")
+    parameters = ("aws_ssm_parameter", "aws_ssm_parameters_by_path")
+    shared_defaults = variable_defaults(root, ("census_secret_name", "bls_secret_name", "hud_secret_name", "jev_secret_name"))
+    ordered = (*secret_store.MANAGED, *secret_store.READ_ONLY)
     return {
-        "the source check matches every kind of block of the Secrets Manager types": all(
-            SECRET_RESOURCE.search(f'{kind} "{name}" "x" {{}}') for kind in ("resource", "data", "ephemeral") for name in family
+        "the source check matches every kind of block of the Secrets Manager and Parameter Store types": all(
+            SECRET_RESOURCE.search(f'{kind} "{name}" "x" {{}}') for kind in ("resource", "data", "ephemeral") for name in (*family, *parameters)
         ),
-        "the 13 variable defaults equal the module's names in order": declared == list(secret_store.MANAGED),
-        "the 13 names are different": len(set(secret_store.MANAGED)) == 13,
-        "every name sits under the project prefix": all(name.startswith(secret_store.PREFIX) for name in secret_store.MANAGED),
-        "no Terraform file declares a secret, a secret version or a secret data source": not offenders,
+        "the 14 variable defaults equal the module's managed names in order": declared == list(secret_store.MANAGED),
+        "the 14 managed names and the read-only name are all different": len(set(ordered)) == len(ordered) == 15,
+        "every name is a slash path under the project prefix with underscores": all(
+            re.fullmatch(r"/healthcare_hai_prediction/[a-z0-9_]+", name) for name in ordered
+        ),
+        "the shared keys keep their Secrets Manager names and are not parameters": sorted(name or "" for name in shared_defaults) == sorted(secret_store.SHARED)
+        and not any(name.startswith("/") for name in secret_store.SHARED),
+        "no Terraform file declares a secret, a secret version, a parameter or a secret data source": not offenders,
     }
 
 
@@ -276,7 +332,7 @@ def plan_refusal(plan: dict[str, Any]) -> str | None:
 
 
 def saved_plan(root: Path) -> dict[str, bool]:
-    """The saved-plan check accepts a plan without Secrets Manager objects and rejects every type of that family it meets."""
+    """The saved-plan check accepts a plan without Secrets Manager or Parameter Store objects and rejects every type of those families it meets."""
     secret = {"address": "aws_secretsmanager_secret.planted", "mode": "managed", "type": "aws_secretsmanager_secret", "name": "planted"}
     version = {"address": "aws_secretsmanager_secret_version.planted", "mode": "managed", "type": "aws_secretsmanager_secret_version", "name": "planted"}
     reading = {"address": "data.aws_secretsmanager_secret_version.planted", "mode": "data", "type": "aws_secretsmanager_secret_version", "name": "planted"}
@@ -291,9 +347,41 @@ def saved_plan(root: Path) -> dict[str, bool]:
     password = {"address": "data.aws_secretsmanager_random_password.planted", "mode": "data", "type": "aws_secretsmanager_random_password", "name": "planted"}
     with_password = clean_plan()
     with_password["configuration"]["root_module"]["resources"].append(password)
+    private = f"{secret_store.PREFIX}postgres_password"
+    parameter = {"address": "aws_ssm_parameter.planted", "mode": "managed", "type": "aws_ssm_parameter", "name": "planted"}
+    with_parameter = clean_plan()
+    with_parameter["resource_changes"].append({**parameter, "change": {"actions": ["create"], "after": {"name": private}}})
+    with_value = clean_plan()
+    with_value["planned_values"]["root_module"]["resources"].append({**parameter, "values": {"name": private, "type": "SecureString"}})
+    parameter_read = {"address": "data.aws_ssm_parameter.planted", "mode": "data", "type": "aws_ssm_parameter", "name": "planted"}
+    read_private = clean_plan()
+    read_private["configuration"]["root_module"]["resources"].append({**parameter_read, "expressions": {"name": {"constant_value": private}}})
+    read_state = clean_plan()
+    read_state["prior_state"]["values"]["root_module"]["resources"].append({**parameter_read, "values": {"name": private}})
+    read_unnamed = clean_plan()
+    read_unnamed["configuration"]["root_module"]["resources"].append({**parameter_read, "expressions": {"name": {"references": ["var.name"]}}})
+    by_path = clean_plan()
+    by_path["configuration"]["root_module"]["resources"].append(
+        {"address": "data.aws_ssm_parameters_by_path.planted", "mode": "data", "type": "aws_ssm_parameters_by_path", "name": "planted"}
+    )
+    ephemeral = clean_plan()
+    ephemeral["configuration"]["root_module"]["resources"].append(
+        {"address": "ephemeral.aws_ssm_parameter.planted", "mode": "ephemeral", "type": "aws_ssm_parameter", "name": "planted"}
+    )
+    public = {"address": "data.aws_ssm_parameter.ecs_ami", "mode": "data", "type": "aws_ssm_parameter", "name": "ecs_ami"}
+    public_name = "/aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id"
+    with_public = clean_plan()
+    with_public["configuration"]["root_module"]["resources"].append({**public, "expressions": {"name": {"constant_value": public_name}}})
+    with_public["prior_state"]["values"]["root_module"]["resources"].append({**public, "values": {"name": public_name}})
+    with_public["resource_changes"].append({**public, "change": {"actions": ["read"], "after": {"name": public_name}}})
+    public_managed = clean_plan()
+    public_managed["resource_changes"].append({**parameter, "change": {"actions": ["create"], "after": {"name": public_name}}})
     refusals = [plan_refusal(plan) for plan in (with_resource, with_version, with_data, with_data_state, with_password)]
+    parameter_refusals = [
+        plan_refusal(plan) for plan in (with_parameter, with_value, read_private, read_state, read_unnamed, by_path, ephemeral, public_managed)
+    ]
     return {
-        "a plan without Secrets Manager objects is accepted": plan_refusal(clean_plan()) is None,
+        "a plan without Secrets Manager or Parameter Store objects is accepted": plan_refusal(clean_plan()) is None,
         "a plan that adds a secret resource is refused and names it": refusals[0] is not None and "aws_secretsmanager_secret.planted" in refusals[0],
         "a plan that adds a secret version inside a module is refused": refusals[1] is not None and "aws_secretsmanager_secret_version.planted" in refusals[1],
         "a plan that reads a secret through a data source is refused": refusals[2] is not None
@@ -301,6 +389,15 @@ def saved_plan(root: Path) -> dict[str, bool]:
         "a data source only in the prior state is refused": refusals[3] is not None,
         "a plan with the random password data source is refused and names it": refusals[4] is not None
         and "data.aws_secretsmanager_random_password.planted" in refusals[4],
+        "a plan that adds a parameter resource is refused and names it": parameter_refusals[0] is not None
+        and "aws_ssm_parameter.planted" in parameter_refusals[0],
+        "a parameter value held in the planned values is refused": parameter_refusals[1] is not None,
+        "a plan that reads a project parameter through a data source is refused, in the configuration and in the prior state": parameter_refusals[2] is not None
+        and parameter_refusals[3] is not None,
+        "a parameter data source whose name is not a literal is refused": parameter_refusals[4] is not None,
+        "a parameters-by-path data source and an ephemeral parameter are refused": parameter_refusals[5] is not None and parameter_refusals[6] is not None,
+        "a public AWS parameter data source in every section is accepted": plan_refusal(with_public) is None,
+        "a managed parameter under the public AWS path is refused": parameter_refusals[7] is not None,
     }
 
 

@@ -2,8 +2,8 @@
 
 A writer may write the tables of its own namespaces and nothing else: no catalog-wide management, no namespace creation or removal and no table
 removal. The root credentials make the token and the set-up requests only; they are never passed on. The writer's client ID and secret go straight
-to AWS Secrets Manager, the same way the read-only principal's do (``principal_credentials``), and reach a job only through the launcher's
-``lakehouse_write`` class, which reads them from Secrets Manager into memory.
+to Parameter Store, the same way the read-only principal's do (``principal_credentials``), and reach a job only through the launcher's
+``lakehouse_write`` class, which reads them from Parameter Store into memory.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ Request = Callable[..., tuple[int, Any]]
 
 @dataclass(frozen=True)
 class Writer:
-    """One writer principal: its name, the namespaces it may write and the Secrets Manager names that hold its client ID and secret."""
+    """One writer principal: its name, the namespaces it may write and the Parameter Store names that hold its client ID and secret."""
 
     name: str
     namespaces: tuple[str, ...]
@@ -96,7 +96,7 @@ def planned_requests(writer: Writer, catalog: str) -> list[tuple[str, str, dict[
 def ensure_writer(writer: Writer, access: str, catalog: str, vault: secret_store.SecretStore, request: Request, lock_path: Path) -> str:
     """Create the writer principal, its roles, its namespaces and the grants; safe to repeat. Returns how the credentials were obtained.
 
-    ``vault`` holds the writer's client ID and secret in Secrets Manager. A stored pair is kept only when Polaris accepts it; otherwise a new pair
+    ``vault`` holds the writer's client ID and secret in Parameter Store. A stored pair is kept only when Polaris accepts it; otherwise a new pair
     is issued and stored. ``lock_path`` serializes updates of the writer principal.
     """
     path = catalog_paths(writer, catalog)
@@ -121,7 +121,7 @@ def ensure_writer(writer: Writer, access: str, catalog: str, vault: secret_store
 
 
 def main(writer: Writer, description: str, argv: list[str] | None = None) -> int:
-    """Print the plan (``--dry-run``) or run the set-up against the local Polaris, keeping the writer's pair in Secrets Manager."""
+    """Print the plan (``--dry-run``) or run the set-up against the local Polaris, keeping the writer's pair in Parameter Store."""
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dry-run", action="store_true", help="print the requests and send none")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)

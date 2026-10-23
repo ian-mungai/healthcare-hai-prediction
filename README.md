@@ -27,8 +27,8 @@ cp .env.example .env
 Fill every value in `.env`; the file stays out of Git. `AWS_PROFILE` is the
 project profile, named `<PROJECT_NAME>_<ENVIRONMENT>` after its same-named IAM
 user. IAM changes use a separate administrator profile that is never stored in
-`.env`. No secret belongs in `.env` or in any other file on the host: every secret
-lives in AWS Secrets Manager (`docs/install_details.md`).
+`.env`. No secret belongs in `.env` or in any other file on the host: every project secret
+lives in AWS Systems Manager Parameter Store and the four shared API keys in AWS Secrets Manager (`docs/install_details.md`).
 
 The services are defined in `docker-compose.yaml`, which the launcher reads as its service model; the launcher, not
 Compose, starts every container:
@@ -55,7 +55,7 @@ Then start the catalog from the main checkout (a launcher running in another che
 .venv/bin/python -m scripts.lakehouse.catalog up
 ```
 
-`up` is idempotent. On first use it generates the catalog credentials straight into AWS Secrets Manager (no file on the
+`up` is idempotent. On first use it generates the catalog credentials straight into AWS Parameter Store (no file on the
 host holds them) and never prints them. It creates the `hai_lakehouse` catalog, limited to `lakehouse/` in the
 project bucket. `down` stops the containers and keeps the catalog database.
 

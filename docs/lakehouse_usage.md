@@ -1,7 +1,7 @@
 ---
 title: Lakehouse usage
 description: Commands and checks for the launcher, bronze, staging, gold, silver validation, the run lock and the fixture kit.
-last_updated: 2026-10-20
+last_updated: 2026-10-22
 ---
 
 # Lakehouse usage
@@ -35,7 +35,7 @@ refusal and deadline checks run with `--trigger-check`.
 ## Secrets
 
 No secret is saved in a file on the host. The catalog database password, the root client secret and each principal's client
-ID and secret live in AWS Secrets Manager under `healthcare-hai-prediction/` (the names are in `docs/install_details.md`). The
+ID and secret live in AWS Systems Manager Parameter Store as SecureString parameters under `/healthcare_hai_prediction/` (the names are in `docs/install_details.md`). The
 catalog commands and the writer principal setup generate or store them there, the launcher reads them into memory when it
 creates a container and sets them in that container's environment. The workflow supervisor stores its session secrets
 the same way. Reading or storing a secret needs the IAM grant of the project profile; a missing grant fails and names the secret.
@@ -60,15 +60,15 @@ publish. `--dry-run` prints the requests and sends none. A rerun changes nothing
 
 ```sh
 .venv/bin/python -m scripts.lakehouse.gold_writer_setup --dry-run     # plan of the gold_writer principal (gold and gold_e2e)
-.venv/bin/python -m scripts.lakehouse.gold_writer_setup               # create it; credentials go to AWS Secrets Manager
+.venv/bin/python -m scripts.lakehouse.gold_writer_setup               # create it; credentials go to AWS Parameter Store
 .venv/bin/python -m scripts.lakehouse.silver_writer_setup --dry-run   # plan of the silver_writer principal (silver and silver_e2e)
-.venv/bin/python -m scripts.lakehouse.silver_writer_setup             # create it; credentials go to AWS Secrets Manager
+.venv/bin/python -m scripts.lakehouse.silver_writer_setup             # create it; credentials go to AWS Parameter Store
 .venv/bin/python -m scripts.lakehouse.run_gold_publish_e2e --mode writer_setup   # both set-ups against a stand-in Polaris; no Docker
 ```
 
 A writer may create, read and write the tables of its own two namespaces and read the catalog's properties. It cannot touch the other
 layer's namespaces or bronze, manage the catalog, create or drop a namespace or drop a table. The root credentials make the set-up
-requests only. Each writer's client ID and secret are stored in AWS Secrets Manager (see Secrets) and never printed. A job receives them
+requests only. Each writer's client ID and secret are stored in AWS Parameter Store (see Secrets) and never printed. A job receives them
 only from the launcher (`POLARIS_GOLD_WRITER_CLIENT_ID` and `_SECRET`, `POLARIS_SILVER_WRITER_CLIENT_ID` and `_SECRET`). The shared
 requests and the Secrets Manager steps are in `scripts/lakehouse/polaris_writer.py`.
 

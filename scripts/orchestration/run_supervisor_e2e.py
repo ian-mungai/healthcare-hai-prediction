@@ -153,7 +153,7 @@ def port_open(port: int) -> bool:
 
 @case("supervisor_full_session")
 def supervisor_full_session(env: SessionEnv) -> dict[str, bool]:
-    """933: a full session through the launcher: images checked, the token file owner-only, the metadata secrets in Secrets Manager and in no file,
+    """933: a full session through the launcher: images checked, the token file owner-only, the metadata secrets in Parameter Store and in no file,
     the listener serving, the stack up and healthy, the lineage worker finishing a pass and failing none, then a teardown that leaves nothing."""
     services_script(env)
     env.start()
@@ -172,7 +172,7 @@ def supervisor_full_session(env: SessionEnv) -> dict[str, bool]:
         "the token is 32 random bytes in hex": len(token) == 64 and all(c in "0123456789abcdef" for c in token),
         "the token and every session file are owner-only": all(mode == 0o600 for mode in modes.values()) and stat.S_IMODE(session.stat().st_mode) == 0o700,
         "no metadata file or folder exists": not (env.airflow / "metadata").exists(),
-        "the rotated secrets are in Secrets Manager and the session holds the token secret in memory": bool(supervisor.jwt_secret)
+        "the rotated secrets are in Parameter Store and the session holds the token secret in memory": bool(supervisor.jwt_secret)
         and stored[secret_store.AIRFLOW_JWT_SECRET] == supervisor.jwt_secret
         and bool(stored[secret_store.AIRFLOW_API_SECRET_KEY]),
         "the client file names the listener's port": client_url == f"http://host.docker.internal:{port}" and port > 0,

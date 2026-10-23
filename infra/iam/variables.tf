@@ -116,156 +116,167 @@ variable "jev_secret_name" {
 }
 
 variable "airflow_admin_secret_name" {
-  description = "Secrets Manager name of the Airflow administrator password; the project may read it."
+  description = "Parameter Store SecureString name of the Airflow administrator password; the project may read it."
   type        = string
-  default     = "healthcare-hai-prediction/airflow-admin"
+  default     = "/healthcare_hai_prediction/airflow_admin"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.airflow_admin_secret_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.airflow_admin_secret_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.airflow_admin_secret_name)) && !can(regex("^/(?i:aws|ssm)", var.airflow_admin_secret_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 
 variable "postgres_password_name" {
-  description = "Secrets Manager name of the local catalog database password; the project may read, describe, create and put it."
+  description = "Parameter Store SecureString name of the local catalog database password; the project may read, create and put it."
   type        = string
-  default     = "healthcare-hai-prediction/postgres-password"
+  default     = "/healthcare_hai_prediction/postgres_password"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.postgres_password_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.postgres_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.postgres_password_name)) && !can(regex("^/(?i:aws|ssm)", var.postgres_password_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 
 variable "polaris_root_secret_name" {
-  description = "Secrets Manager name of the catalog root client secret; the project may read, describe, create and put it."
+  description = "Parameter Store SecureString name of the catalog root client secret; the project may read, create and put it."
   type        = string
-  default     = "healthcare-hai-prediction/polaris-root-secret"
+  default     = "/healthcare_hai_prediction/polaris_root_secret"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.polaris_root_secret_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.polaris_root_secret_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.polaris_root_secret_name)) && !can(regex("^/(?i:aws|ssm)", var.polaris_root_secret_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 
 variable "polaris_reader_client_id_name" {
-  description = "Secrets Manager name of the read-only catalog principal's client ID; the project may read, describe, create and put it."
+  description = "Parameter Store SecureString name of the read-only catalog principal's client ID; the project may read, create and put it."
   type        = string
-  default     = "healthcare-hai-prediction/polaris-reader-client-id"
+  default     = "/healthcare_hai_prediction/polaris_reader_client_id"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.polaris_reader_client_id_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.polaris_reader_client_id_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.polaris_reader_client_id_name)) && !can(regex("^/(?i:aws|ssm)", var.polaris_reader_client_id_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 
 variable "polaris_reader_client_secret_name" {
-  description = "Secrets Manager name of the read-only catalog principal's client secret; the project may read, describe, create and put it."
+  description = "Parameter Store SecureString name of the read-only catalog principal's client secret; the project may read, create and put it."
   type        = string
-  default     = "healthcare-hai-prediction/polaris-reader-client-secret"
+  default     = "/healthcare_hai_prediction/polaris_reader_client_secret"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.polaris_reader_client_secret_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.polaris_reader_client_secret_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.polaris_reader_client_secret_name)) && !can(regex("^/(?i:aws|ssm)", var.polaris_reader_client_secret_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 
 variable "polaris_gold_client_id_name" {
-  description = "Secrets Manager name of the gold writer principal's client ID; the project may read, describe, create and put it."
+  description = "Parameter Store SecureString name of the gold writer principal's client ID; the project may read, create and put it."
   type        = string
-  default     = "healthcare-hai-prediction/polaris-gold-client-id"
+  default     = "/healthcare_hai_prediction/polaris_gold_client_id"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.polaris_gold_client_id_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.polaris_gold_client_id_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.polaris_gold_client_id_name)) && !can(regex("^/(?i:aws|ssm)", var.polaris_gold_client_id_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 
 variable "polaris_gold_client_secret_name" {
-  description = "Secrets Manager name of the gold writer principal's client secret; the project may read, describe, create and put it."
+  description = "Parameter Store SecureString name of the gold writer principal's client secret; the project may read, create and put it."
   type        = string
-  default     = "healthcare-hai-prediction/polaris-gold-client-secret"
+  default     = "/healthcare_hai_prediction/polaris_gold_client_secret"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.polaris_gold_client_secret_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.polaris_gold_client_secret_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.polaris_gold_client_secret_name)) && !can(regex("^/(?i:aws|ssm)", var.polaris_gold_client_secret_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 
 variable "polaris_silver_client_id_name" {
-  description = "Secrets Manager name of the silver writer principal's client ID; the project may read, describe, create and put it."
+  description = "Parameter Store SecureString name of the silver writer principal's client ID; the project may read, create and put it."
   type        = string
-  default     = "healthcare-hai-prediction/polaris-silver-client-id"
+  default     = "/healthcare_hai_prediction/polaris_silver_client_id"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.polaris_silver_client_id_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.polaris_silver_client_id_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.polaris_silver_client_id_name)) && !can(regex("^/(?i:aws|ssm)", var.polaris_silver_client_id_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 
 variable "polaris_silver_client_secret_name" {
-  description = "Secrets Manager name of the silver writer principal's client secret; the project may read, describe, create and put it."
+  description = "Parameter Store SecureString name of the silver writer principal's client secret; the project may read, create and put it."
   type        = string
-  default     = "healthcare-hai-prediction/polaris-silver-client-secret"
+  default     = "/healthcare_hai_prediction/polaris_silver_client_secret"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.polaris_silver_client_secret_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.polaris_silver_client_secret_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.polaris_silver_client_secret_name)) && !can(regex("^/(?i:aws|ssm)", var.polaris_silver_client_secret_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 
 variable "airflow_db_password_name" {
-  description = "Secrets Manager name of the Airflow metadata database password; the project may read, describe, create and put it."
+  description = "Parameter Store SecureString name of the Airflow metadata database password; the project may read, create and put it."
   type        = string
-  default     = "healthcare-hai-prediction/airflow-db-password"
+  default     = "/healthcare_hai_prediction/airflow_db_password"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.airflow_db_password_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.airflow_db_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.airflow_db_password_name)) && !can(regex("^/(?i:aws|ssm)", var.airflow_db_password_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 
 variable "airflow_fernet_key_name" {
-  description = "Secrets Manager name of the Airflow Fernet key; the project may read, describe, create and put it."
+  description = "Parameter Store SecureString name of the Airflow Fernet key; the project may read, create and put it."
   type        = string
-  default     = "healthcare-hai-prediction/airflow-fernet-key"
+  default     = "/healthcare_hai_prediction/airflow_fernet_key"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.airflow_fernet_key_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.airflow_fernet_key_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.airflow_fernet_key_name)) && !can(regex("^/(?i:aws|ssm)", var.airflow_fernet_key_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 
 variable "airflow_jwt_secret_name" {
-  description = "Secrets Manager name of the Airflow JSON Web Token secret; the project may read, describe, create and put it."
+  description = "Parameter Store SecureString name of the Airflow JSON Web Token secret; the project may read, create and put it."
   type        = string
-  default     = "healthcare-hai-prediction/airflow-jwt-secret"
+  default     = "/healthcare_hai_prediction/airflow_jwt_secret"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.airflow_jwt_secret_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.airflow_jwt_secret_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.airflow_jwt_secret_name)) && !can(regex("^/(?i:aws|ssm)", var.airflow_jwt_secret_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 
 variable "airflow_api_secret_key_name" {
-  description = "Secrets Manager name of the Airflow API server secret key; the project may read, describe, create and put it."
+  description = "Parameter Store SecureString name of the Airflow API server secret key; the project may read, create and put it."
   type        = string
-  default     = "healthcare-hai-prediction/airflow-api-secret-key"
+  default     = "/healthcare_hai_prediction/airflow_api_secret_key"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.airflow_api_secret_key_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.airflow_api_secret_key_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.airflow_api_secret_key_name)) && !can(regex("^/(?i:aws|ssm)", var.airflow_api_secret_key_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 
 variable "marquez_db_password_name" {
-  description = "Secrets Manager name of the lineage database password; the project may read, describe, create and put it."
+  description = "Parameter Store SecureString name of the lineage database password; the project may read, create and put it."
   type        = string
-  default     = "healthcare-hai-prediction/marquez-db-password"
+  default     = "/healthcare_hai_prediction/marquez_db_password"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9/_+=.@-]{1,512}$", var.marquez_db_password_name))
-    error_message = "Use 1-512 characters from letters, digits and /_+=.@-; wildcards are not allowed."
+    condition     = length(var.marquez_db_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.marquez_db_password_name)) && !can(regex("^/(?i:aws|ssm)", var.marquez_db_password_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
+variable "redis_password_name" {
+  description = "Parameter Store SecureString name of the Redis password; the project may read, create and put it."
+  type        = string
+  default     = "/healthcare_hai_prediction/redis_password"
+
+  validation {
+    condition     = length(var.redis_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.redis_password_name)) && !can(regex("^/(?i:aws|ssm)", var.redis_password_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
 

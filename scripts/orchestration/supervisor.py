@@ -9,7 +9,7 @@ Run from the main checkout with the launcher's Docker running:
 
 ``up`` pulls PostgreSQL by its digest through the launcher when it is absent and requires the Airflow image that
 ``services/orchestration/Dockerfile`` builds. It writes this session's broker token (32 random bytes, owner-only, never an environment variable)
-under the ignored ``data/orchestration/airflow/`` and stores the metadata secrets in AWS Secrets Manager (the database password and the Fernet key once,
+under the ignored ``data/orchestration/airflow/`` and stores the metadata secrets in AWS Parameter Store (the database password and the Fernet key once,
 the JSON Web Token secret and the API secret key anew each session), starts the broker and its loopback listener, then asks the launcher for
 ``orchestration_up``: the launcher sizes every service from the memory free at that moment, starts PostgreSQL, runs the migration as a finite
 service under the deadline entrypoint and starts the four Airflow services, each after the one before is healthy. The supervisor then waits until
@@ -149,7 +149,7 @@ class Supervisor:
         return {"postgres": pulled, "airflow": {"image": self.platform["airflow"]["image"], "id": airflow["id"]}}
 
     def store_metadata_secrets(self) -> None:
-        """Keep the database password and the Fernet key in Secrets Manager (generated there once) and store this session's rotated secrets.
+        """Keep the database password and the Fernet key in Parameter Store (generated there once) and store this session's rotated secrets.
 
         A database that already holds data keeps working only with the password it was created with, so a missing secret next to an initialized database
         is refused instead of generated."""
@@ -169,7 +169,7 @@ class Supervisor:
             raise SupervisorError(str(error)) from None
 
     def prepare_state(self, token: str, broker_port: int) -> None:
-        """Folders, the metadata secrets in Secrets Manager and this session's token and broker URL."""
+        """Folders, the metadata secrets in Parameter Store and this session's token and broker URL."""
         for folder in ("postgres", "logs", "session", "lineage_provider"):
             (self.state / folder).mkdir(parents=True, exist_ok=True, mode=0o700)
         self.store_metadata_secrets()

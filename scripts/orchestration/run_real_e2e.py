@@ -238,7 +238,7 @@ def task_log(logs: Path, task_id: str) -> str:
 
 
 def run(checks: Checks, work: Path) -> dict[str, Any]:
-    """The whole scenario against a stand-in Secrets Manager; the caller removes the folder and stops what is left."""
+    """The whole scenario against a stand-in Parameter Store; the caller removes the folder and stops what is left."""
     with StandIn(stack_seeds()) as stand_in:
         return run_session(checks, work, stand_in.endpoint)
 

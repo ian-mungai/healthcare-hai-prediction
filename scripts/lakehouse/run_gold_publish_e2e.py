@@ -606,8 +606,8 @@ class WriterRun:
 Drive = Callable[[Callable[..., tuple[int, Any]], str, str, dict[str, Any], list[tuple[str, str, Any, str | None]]], WriterRun]
 
 
-def drive_secrets_manager(report: Path, setup: Any, expected: polaris_writer.Writer) -> Drive:
-    """Run a writer's set-up against the Secrets Manager stand-in: one pair stored once, a half-written pair repaired and one update at a time."""
+def drive_secret_store(report: Path, setup: Any, expected: polaris_writer.Writer) -> Drive:
+    """Run a writer's set-up against the Parameter Store stand-in: one pair stored once, a half-written pair repaired and one update at a time."""
     id_name, secret_name = expected.secrets
     lock = report / "locks" / f"{expected.name}.lock"
 
@@ -676,7 +676,10 @@ def drive_secrets_manager(report: Path, setup: Any, expected: polaris_writer.Wri
                 and unchanged,
             ),
         ]
-        first_stored = stored == {id_name: "writer-id", secret_name: secret} and changes_first == [("CreateSecret", id_name), ("CreateSecret", secret_name)]
+        first_stored = stored == {id_name: "writer-id", secret_name: secret} and changes_first == [
+            ("OverwriteParameter", id_name),
+            ("OverwriteParameter", secret_name),
+        ]
         return WriterRun(first, second, count_first, count_second, first_stored, changes_second == changes_first, refuse, extra)
 
     return drive
@@ -814,14 +817,14 @@ def writer_setup(report: Path) -> list[dict[str, Any]]:
     """The gold and silver writer set-ups against the recording stand-in; the two principals hold disjoint namespaces and secret names."""
     gold = writer_steps(
         EXPECTED_GOLD,
-        drive_secrets_manager(report, gold_writer_setup, EXPECTED_GOLD),
+        drive_secret_store(report, gold_writer_setup, EXPECTED_GOLD),
         gold_writer_setup.planned_requests,
         gold_writer_setup.main,
         ("silver", "silver_e2e", "bronze"),
     )
     silver = writer_steps(
         EXPECTED_SILVER,
-        drive_secrets_manager(report, silver_writer_setup, EXPECTED_SILVER),
+        drive_secret_store(report, silver_writer_setup, EXPECTED_SILVER),
         silver_writer_setup.planned_requests,
         silver_writer_setup.main,
         ("gold", "gold_e2e", "bronze"),

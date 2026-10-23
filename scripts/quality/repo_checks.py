@@ -208,7 +208,7 @@ def credential_files(paths: list[str]) -> list[Finding]:
         name = Path(path).name
         is_env = (name == ".env" or name.startswith(".env.")) and name != ".env.example"
         if is_env or any(fnmatch.fnmatch(name, pattern) for pattern in CREDENTIAL_NAMES):
-            fix = "remove it from the commit (git rm --cached) and ignore it; keep secrets in AWS Secrets Manager"
+            fix = "remove it from the commit (git rm --cached) and ignore it; keep secrets in the secret store (Parameter Store or Secrets Manager)"
             findings.append(Finding(path, "credential, state or saved-plan file staged", f"{POLICY}: secrets and credential files", fix))
     return findings
 

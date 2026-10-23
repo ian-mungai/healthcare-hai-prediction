@@ -1,7 +1,7 @@
 ---
 title: Install Details
 description: Resource limits, pinned tools, the native installer and the manual setup steps behind the README's Install.
-last_updated: 2026-10-13
+last_updated: 2026-10-22
 ---
 
 # Install Details
@@ -81,45 +81,84 @@ the shared system tools to satisfy this project.
 Named manual steps. These are the only setup steps no script performs:
 
 1. **Secrets.** Request the Census and BLS API keys from their publishers.
-   Store every secret in AWS Secrets Manager, in the configured region, under
-   the name that its variable in `infra/iam/variables.tf` holds as default:
-   `census_api_key` (`census_secret_name`, the Census API key), `bls_api_key`
-   (`bls_secret_name`, the BLS API key), `hud_api_key` (`hud_secret_name`, the
-   HUD USPS crosswalk token), `jev_api_key` (`jev_secret_name`, the TypeSafe Jev
-   API key) and `healthcare-hai-prediction/airflow-admin`
-   (`airflow_admin_secret_name`, the Airflow administrator password; the
-   username is `admin`). Every secret holds its value as plain text, with no
-   JSON; the HUD secret holds the token alone, with no `Bearer` prefix (the
-   collector adds the header). The BLS, Census and HUD collectors read the
-   plain-text value with boto3. The keys are shared by several projects, so they are
-   created by hand outside Terraform. The IAM configuration grants read access
-   to exactly these five names and never reads a value; each permission update
-   requires a reviewed saved plan before apply. The saved-plan check accepts
-   only these committed names. To add a secret, add one more variable with its
-   name as default to `infra/iam/variables.tf` and add it to the `secret_names`
-   list in `infra/iam/main.tf`; every name must differ.
+   The four shared API keys live in AWS Secrets Manager, in the configured
+   region, under the name that its variable in `infra/iam/variables.tf` holds as
+   default: `census_api_key` (`census_secret_name`, the Census API key),
+   `bls_api_key` (`bls_secret_name`, the BLS API key), `hud_api_key`
+   (`hud_secret_name`, the HUD USPS crosswalk token) and `jev_api_key`
+   (`jev_secret_name`, the TypeSafe Jev API key). Every secret holds its value
+   as plain text, with no JSON; the HUD secret holds the token alone, with no
+   `Bearer` prefix (the collector adds the header). The BLS, Census and HUD
+   collectors read the plain-text value with boto3. The keys are shared by several
+   projects, so they are created by hand outside Terraform. The IAM
+   configuration grants read and describe on exactly these four names and never
+   reads a value; each permission update requires a reviewed saved plan before
+   apply.
 
-   The project profile also manages 13 secrets that no person creates by hand.
-   They hold the local catalog, workflow and lineage credentials, each as plain
-   text under `healthcare-hai-prediction/`: `postgres-password`,
-   `polaris-root-secret`, `polaris-reader-client-id`,
-   `polaris-reader-client-secret`, `polaris-gold-client-id`,
-   `polaris-gold-client-secret`, `polaris-silver-client-id`,
-   `polaris-silver-client-secret`, `airflow-db-password`, `airflow-fernet-key`,
-   `airflow-jwt-secret`, `airflow-api-secret-key` and `marquez-db-password`.
-   Each name is a root variable in `infra/iam/variables.tf` (the secret's last
-   path part with `_name`, for example `postgres_password_name`) with its name as
-   default. The IAM configuration grants the project profile read, describe,
-   create and put on exactly these names. Terraform never creates a secret or a
-   secret version, so no value enters a plan or the state; the saved-plan check
-   (`render_project_config.py --check-plan`) refuses any plan that holds a secret
-   resource or data source. The setup code
+   Every project secret is an AWS Systems Manager Parameter Store SecureString
+   parameter in the configured region, named
+   `/healthcare_hai_prediction/<name_with_underscores>`, on the standard tier
+   (no charge; a value holds at most 4 KB) and encrypted with the AWS managed
+   key `aws/ssm`. Each holds its value as plain text. The Airflow administrator
+   password is `/healthcare_hai_prediction/airflow_admin`
+   (`airflow_admin_secret_name`; the username is `admin`): a person creates it,
+   and the project profile may read it and may not write it. The other 14 are
+   managed: no person creates them by hand. They hold the local catalog,
+   workflow, lineage and feature store credentials, each as plain text:
+   `postgres_password`, `polaris_root_secret`, `polaris_reader_client_id`,
+   `polaris_reader_client_secret`, `polaris_gold_client_id`,
+   `polaris_gold_client_secret`, `polaris_silver_client_id`,
+   `polaris_silver_client_secret`, `airflow_db_password`, `airflow_fernet_key`,
+   `airflow_jwt_secret`, `airflow_api_secret_key`, `marquez_db_password` and
+   `redis_password`. Each name is a root variable in `infra/iam/variables.tf`
+   (the secret's last path part with `_name`, for example
+   `postgres_password_name`) with its full name as default. A name starts with a
+   slash and has up to 15 parts of letters, digits and underscores. It never
+   starts with `aws` or `ssm` (the AWS naming rules for a hierarchy). The IAM
+   configuration grants the project profile `ssm:GetParameter` on the 15 parameter
+   ARNs and `ssm:PutParameter` on the 14 managed ones. It grants nothing else: no
+   `kms` action (the key policy of the AWS managed key admits the account's
+   principals through Parameter Store), no `DescribeParameters`, no
+   `GetParametersByPath` and no wildcard. A parameter ARN is
+   `arn:aws:ssm:<region>:<account>:parameter/<name without its leading slash>`.
+   Terraform never creates or reads a secret, a secret version or a parameter,
+   so no value enters a plan or the state; the saved-plan check
+   (`render_project_config.py --check-plan`) refuses any plan that holds a
+   Secrets Manager or Parameter Store resource or data source (the one exception
+   is a data source of a public AWS parameter under `/aws/service/`). The saved-plan check accepts only the committed names. To add a secret, add one more variable with its
+   name as default to `infra/iam/variables.tf` and add it to the matching list
+   in `infra/iam/main.tf`; every name must differ. The setup code
    (`scripts.lakehouse.catalog up`, the writer principal setup, the orchestration
-   supervisor and the launcher) generates or reads each value in memory, stores
-   it in Secrets Manager and passes it to a container through its environment.
-   No file on the host holds a secret. State that already exists keeps the value
-   it was created with: the code refuses to generate a replacement next to an
-   existing database or catalog realm, so copy the current value to the same
-   secret name first.
+   supervisor and the launcher) generates or reads each value in memory through
+   `scripts/infrastructure/secret_store.py`, stores it in Parameter Store (a
+   create never overwrites; every write is read back) and passes it to a
+   container through its environment. No file on the host holds a secret. State
+   that already exists keeps the value it was created with: the code refuses to
+   generate a replacement next to an existing database or catalog realm, so copy
+   the current value to the same parameter name first.
+
+   **Clone the Airflow administrator password to Parameter Store (the owner, once).**
+   If `healthcare-hai-prediction/airflow-admin` was created by hand in Secrets
+   Manager, copy it with one command; run it only after the IAM apply and
+   only when the owner says so, with an administrator profile that may read that
+   secret and write that parameter. The value stays in a shell variable and goes to
+   the AWS CLI on standard input (`file://` prefix: [loading a parameter from a
+   file](https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-parameters-file.html)),
+   so it is in no file and in no process argument. The subshell stops at the
+   first failure and the write never overwrites. The command ends with a
+   comparison of the readback:
+
+   ```sh
+   ( set -eu; P=<ADMIN_PROFILE>; R=<REGION>; OLD=healthcare-hai-prediction/airflow-admin; NEW=/healthcare_hai_prediction/airflow_admin
+     v=$(aws secretsmanager get-secret-value --profile "$P" --region "$R" --secret-id "$OLD" --query SecretString --output text)
+     printf %s "$v" | aws ssm put-parameter --profile "$P" --region "$R" --name "$NEW" --type SecureString --tier Standard --value file:///dev/stdin >/dev/null
+     [ "$(aws ssm get-parameter --profile "$P" --region "$R" --name "$NEW" --with-decryption --query Parameter.Value --output text)" = "$v" ] && echo "cloned and verified" )
+   ```
+
+   Without `--overwrite` the command refuses an existing parameter, so a rerun
+   changes nothing. After the check the owner may delete the old secret by hand.
+   First read after the IAM apply: if reading a parameter fails with
+   `AccessDeniedException` on `kms:Decrypt`, the key policy of `aws/ssm` does not
+   admit the profile; report it instead of widening the grant.
 2. **Administrator profile.** Configure an AWS CLI profile with IAM permissions
    for the IAM stack. It is passed on the command line, never stored in `.env`.
