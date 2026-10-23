@@ -54,6 +54,8 @@ VOLUME = arn("ec2", "volume/vol-0123456789abcdef0")
 ADDRESS = arn("ec2", "elastic-ip/eipalloc-0123456789abcdef0")
 INSTANCE = arn("ec2", "instance/i-0123456789abcdef0")
 GROUP = arn("autoscaling", f"autoScalingGroup:00000000-0000-0000-0000-000000000000:autoScalingGroupName/{P}_host_{E}")
+# ECS adds this tag to the host group when it creates the capacity provider; the call is checked against the project user's policy.
+ECS_GROUP_TAG = {"AmazonECSManaged": ""}
 BUDGET = f"arn:aws:budgets::{A}:budget/{P}_platform_{E}"
 DOCUMENT = f"arn:aws:ssm:{R}::document/AWS-StartPortForwardingSession"
 SESSION = arn("ssm", f"session/{USER}-0123456789abcdef")
@@ -130,6 +132,7 @@ def approved_requests() -> dict[str, list[Request]]:
     for action in ("DescribeAutoScalingGroups", "DescribeAutoScalingInstances", "DescribeScalingActivities"):
         add("autoscaling", action, "*")
     add("autoscaling", "SetDesiredCapacity", GROUP, region=None)
+    add("autoscaling", "CreateOrUpdateTags", GROUP, region=None, tags=ECS_GROUP_TAG)
     add("cloudwatch", "PutMetricAlarm", ALARM, **tagged)
     for action in ("DeleteAlarms", "ListTagsForResource", "TagResource", "UntagResource"):
         add("cloudwatch", action, ALARM, region=None, tags={"DataClassification": "Confidential"} if action.endswith("agResource") else None)
@@ -491,7 +494,8 @@ def tag_cases() -> Iterator[Case]:
                 False,
                 "DenyChangingProjectTag",
             )
-        yield Case(f"{service}:TagResource sets Project on creation", request(f"{service}:TagResource", resource, tags=TAG, region=None), True)
+        # On tag-on-create AWS already sees the new resource's Project tag as aws:ResourceTag/Project (first deploy, Oct 23 2026).
+        yield Case(f"{service}:TagResource sets Project on creation", request(f"{service}:TagResource", resource, tags=TAG, extra=owned, region=None), True)
         yield Case(
             f"{service}:TagResource changes another tag",
             request(f"{service}:TagResource", resource, tags={"DataClassification": "x"}, extra=owned, region=None),
@@ -502,6 +506,12 @@ def tag_cases() -> Iterator[Case]:
             request(f"{service}:UntagResource", resource, tags={"DataClassification": ""}, extra=owned, region=None),
             True,
         )
+    # DLM grants management by the Project tag, so relabelling another project's schedule would hand it over.
+    yield Case(
+        "dlm:TagResource sets Project on another project's schedule",
+        request("dlm:TagResource", SCHEDULE, tags=TAG, extra={"aws:ResourceTag/Project": "other_project"}, region=None),
+        False,
+    )
     ecs_resources = (CLUSTER, CAPACITY_PROVIDER, SERVICE, TASK_DEFINITION, TASK)
     for resource in ecs_resources:
         name = resource.split(":", 5)[-1].split("/")[0]
@@ -1011,6 +1021,22 @@ def forbidden_cases() -> Iterator[Case]:
         False,
     )
     yield Case("project group SetDesiredCapacity is allowed", request("autoscaling:SetDesiredCapacity", GROUP, region=None), True)
+    yield Case(
+        "ECS tags the project group while creating the capacity provider",
+        request("autoscaling:CreateOrUpdateTags", GROUP, tags=ECS_GROUP_TAG, region=None),
+        True,
+    )
+    yield Case(
+        "forbidden autoscaling:CreateOrUpdateTags with the ECS tag and another tag",
+        request("autoscaling:CreateOrUpdateTags", GROUP, tags={**ECS_GROUP_TAG, "Owner": "x"}, region=None),
+        False,
+    )
+    yield Case("forbidden autoscaling:CreateOrUpdateTags without tags", request("autoscaling:CreateOrUpdateTags", GROUP, region=None), False)
+    yield Case(
+        "forbidden autoscaling:CreateOrUpdateTags with the ECS tag on another group",
+        request("autoscaling:CreateOrUpdateTags", GROUP.replace("host_dev", "other_dev"), tags=ECS_GROUP_TAG, region=None),
+        False,
+    )
     yield Case(
         "forbidden ec2:CreateVolume from a snapshot",
         request("ec2:CreateVolume", arn("ec2", "snapshot/snap-0123456789abcdef0", account=False), tags=TAG, extra=rich, region=None),

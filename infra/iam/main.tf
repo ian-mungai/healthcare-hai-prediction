@@ -13,24 +13,7 @@ provider "aws" {
 }
 
 # The project user's permissions are one policy file per service in policies/, rendered and applied by the owner with
-# scripts/manage_policies.py (README, Install). An earlier version of this stack created and attached them, so Terraform
-# now forgets those resources without deleting them: the script updates the policies in place, moves the grants to two
-# groups and then removes the old grouped policies. Remove these blocks after the first policy apply.
-removed {
-  from = aws_iam_user_policy_attachment.service
-
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = aws_iam_policy.service
-
-  lifecycle {
-    destroy = false
-  }
-}
+# scripts/manage_policies.py (README, Install); this stack does not manage them.
 
 # The secret and parameter names are root variables whose defaults are the real names; the policy files take them from those
 # defaults (scripts/infrastructure/secret_store.py reads variables.tf), so this file holds no second list of values, only the

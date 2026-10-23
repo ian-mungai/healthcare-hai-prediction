@@ -120,8 +120,8 @@
             "Project"
           ]
         },
-        "Null": {
-          "aws:ResourceTag/Project": "false"
+        "StringNotEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
         }
       }
     }

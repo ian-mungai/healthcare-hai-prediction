@@ -49,6 +49,9 @@
         "StringEquals": {
           "aws:RequestTag/Project": "${PROJECT_NAME}"
         },
+        "StringEqualsIfExists": {
+          "aws:ResourceTag/Project": "${PROJECT_NAME}"
+        },
         "ForAnyValue:StringEquals": {
           "aws:TagKeys": [
             "Project"
@@ -125,8 +128,8 @@
             "Project"
           ]
         },
-        "Null": {
-          "aws:ResourceTag/Project": "false"
+        "StringNotEquals": {
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
         }
       }
     }
