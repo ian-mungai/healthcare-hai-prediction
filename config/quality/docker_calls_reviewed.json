@@ -370,11 +370,11 @@
     },
     {
       "path": "scripts/lakehouse/run_launcher_e2e.py",
-      "line": 2519,
+      "line": 2535,
       "code_sha256": "31df13bbd38b806ec10b83328e469066a44abb27722e6e02f3effa919c07c797",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "75fcd2f44aa9711906b5a9c3b8482f45a33f448a3c3b6f646e027fd66ac51934",
+      "file_sha256": "2cccdd85a5bc4f33d0625e54848e8ecbd5eab8aee02d5398789fa4b05f788a02",
       "dependencies": {
         "orchestration/launcher.py": "sha256:2ee8f3d9138470a3846a68aec0e5b8d524d77c4cc50278afb8d056db9f5de44c",
         "orchestration/network_policy.py": "sha256:26862fe808c9758d93e0c592f4eda1113b3b6a3a2921d402f88f7bd45f328400",
@@ -397,7 +397,7 @@
       },
       "reason": "detached_python runs a Python snippet given by a launcher E2E case (sys.executable -c); both callers' snippets call orchestration.launcher client methods only",
       "lines": [
-        2519
+        2535
       ],
       "ast_sha256": "c9b44d5510e8d42f5a2a4882202dc303b63fb3c56372194ef50f3dfba9b166e6"
     },
@@ -410,7 +410,7 @@
       "file_sha256": "5924bdf54a728adfe6e15b9809aef38c32d32090d1a7b8d74a66db8c90c89923",
       "dependencies": {
         "orchestration/launcher.py": "sha256:2ee8f3d9138470a3846a68aec0e5b8d524d77c4cc50278afb8d056db9f5de44c",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:75fcd2f44aa9711906b5a9c3b8482f45a33f448a3c3b6f646e027fd66ac51934",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:2cccdd85a5bc4f33d0625e54848e8ecbd5eab8aee02d5398789fa4b05f788a02",
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },

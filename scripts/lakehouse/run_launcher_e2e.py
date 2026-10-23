@@ -20,7 +20,9 @@ import io
 import json
 import logging
 import os
+import queue
 import re
+import select
 import shlex
 import shutil
 import signal
@@ -34,6 +36,7 @@ import time
 import traceback
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -249,6 +252,8 @@ class Env:
                     client.call("release_allocation", {}, self.alloc_principal(allocation_id))
             if (self.state()["launcher"].get("catalog") or {}).get("phase") in ("up", "starting"):
                 self.wait(lambda: self.state()["launcher"]["catalog"]["phase"] != "starting", 40, "the catalog start ends")
+            if (self.state()["launcher"].get("catalog") or {}).get("phase") == "tearing_down":
+                self.wait(lambda: self.state()["launcher"]["catalog"]["phase"] != "tearing_down", 40, "the catalog teardown ends")
             if (self.state()["launcher"].get("catalog") or {}).get("phase") == "up":
                 client.call("catalog_down")
                 self.wait(lambda: self.state()["launcher"]["catalog"]["phase"] == "down", 40, "the catalog is down")
@@ -1317,6 +1322,17 @@ def compaction_barrier(env: Env, client: launcher.LauncherClient, principal: dic
     marker = sorted(set(env.state()["requests"]) - before)
     age_records(env, requests=marker)
     env.wait(lambda: not set(marker) & set(env.state()["requests"]), 30, "a compaction archives the marker request")
+
+
+def launcher_state(instance: launcher.Launcher, conn: launcher.Conn) -> dict[str, str]:
+    """What a request could leave for later processing: each attribute of the launcher and the connection (a queue by its length) and the wake pipe."""
+    state = {
+        f"{owner} {name}": f"queue of {value.qsize()}" if isinstance(value, queue.Queue) else repr(value)
+        for owner, held in (("launcher", instance), ("connection", conn))
+        for name, value in vars(held).items()
+    }
+    state["wake pipe"] = str(bool(select.select([instance.wake_read], [], [], 0)[0]))
+    return state
 
 
 @contextlib.contextmanager
@@ -7302,7 +7318,9 @@ def client_fail_fast_gone(env: Env) -> dict[str, bool]:
 def client_fail_fast_alive(env: Env) -> dict[str, bool]:
     """A161 fix 2 (failure modes TO3 to TO5 and TO7): a launcher that is alive but slow on every request (longer than the old one-second
     exchange budget) keeps the client waiting until the attempt result arrives; a launcher that is alive but blocked fails the client after
-    the progress limit, at the first submit and later while it waits; the liveness request reads no registry."""
+    the progress limit, at the first submit and later while it waits; the liveness request reads no registry. The liveness check covers the
+    handling thread's registry transactions and the recorded hand-off channels (pools, threads, timers, selector, message queue, launcher state,
+    connection buffer); other crafted deferrals are out of scope (owner decision, Oct 23)."""
     with served_here(env) as hook:
         client = env.client(start=False)
         allocation = client.allocate()
@@ -7336,23 +7354,62 @@ def client_fail_fast_alive(env: Env) -> dict[str, bool]:
             left, right = socket.socketpair()
             conn = launcher.Conn(left, launcher.Peer(os.getuid(), os.getpid(), None))
             real = run_lock.transaction
+            real_submit, real_start = ThreadPoolExecutor.submit, threading.Thread.start
+            real_register, real_put = instance.selector.register, instance.messages.put
+            mine = threading.local()
             opened: list[str] = []
+            handoffs: list[str] = []
 
             @contextlib.contextmanager
             def counted(*args: Any, **keywords: Any) -> Iterator[dict[str, Any]]:
-                opened.append("transaction")
+                if getattr(mine, "handling", False):
+                    opened.append("transaction")
                 with real(*args, **keywords) as state:
                     yield state
 
+            def note(kind: str) -> None:
+                if getattr(mine, "handling", False):
+                    handoffs.append(kind)
+
+            def submit(pool: ThreadPoolExecutor, *args: Any, **keywords: Any) -> Any:
+                note("executor task")
+                return real_submit(pool, *args, **keywords)
+
+            def start(thread: threading.Thread) -> None:
+                note("thread start")
+                real_start(thread)
+
+            def register(*args: Any, **keywords: Any) -> Any:
+                note("selector registration")
+                return real_register(*args, **keywords)
+
+            def put(*args: Any, **keywords: Any) -> Any:
+                note("launcher message")
+                return real_put(*args, **keywords)
+
             replies: dict[str, dict[str, Any]] = {}
             transactions: dict[str, int] = {}
-            with mock.patch.object(launcher.run_lock, "transaction", counted):
+            handed_off: dict[str, list[str]] = {}
+            with (
+                mock.patch.object(launcher.run_lock, "transaction", counted),
+                mock.patch.object(ThreadPoolExecutor, "submit", submit),
+                mock.patch.object(threading.Thread, "start", start),
+                mock.patch.object(instance.selector, "register", register),
+                mock.patch.object(instance.messages, "put", put),
+            ):
                 for method in ("live", "ping"):
                     opened.clear()
-                    instance.handle_line(
-                        conn, json.dumps({"v": launcher.PROTOCOL, "id": f"r-{method}", "method": method, "params": {}, "principal": {"kind": "any"}}).encode()
-                    )
+                    handoffs.clear()
+                    before = launcher_state(instance, conn)
+                    request = json.dumps({"v": launcher.PROTOCOL, "id": f"r-{method}", "method": method, "params": {}, "principal": {"kind": "any"}})
+                    mine.handling = True
+                    try:
+                        instance.handle_line(conn, request.encode())
+                    finally:
+                        mine.handling = False
                     transactions[method] = len(opened)
+                    after = launcher_state(instance, conn)
+                    handed_off[method] = [*handoffs, *(f"state {name}" for name in after if after[name] != before[name])]
                     right.settimeout(5)
                     replies[method] = json.loads(right.recv(65536).split(b"\n", 1)[0])
             left.close()
@@ -7374,7 +7431,8 @@ def client_fail_fast_alive(env: Env) -> dict[str, bool]:
         "the blocked requests reached the launcher": hook.seen["submit"] >= 1 and hook.seen["status"] >= 1,
         "the liveness request is answered": bool(replies.get("live", {}).get("ok")),
         "the liveness request opens no registry transaction": bool(replies.get("live", {}).get("ok")) and transactions.get("live") == 0,
-        "control: a ping opens registry transactions": transactions.get("ping", 0) >= 1,
+        "the liveness request hands off no work to another thread": not handed_off.get("live", ["missing"]),
+        "control: a ping opens registry transactions on the handling thread": transactions.get("ping", 0) >= 1,
     }
 
 
