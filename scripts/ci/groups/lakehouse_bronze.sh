@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# The lakehouse_bronze check group of scripts/run_ci.sh. The dispatcher runs the group in its own shell process (run_group), which loads only
+# scripts/quality/timing.sh (timed) and this file, and then calls the entry function. It gets python_bin, repo_root, scratch, quality_output, e2e_output and
+# CI_TIMING_FILE from the dispatcher beside the exported environment. This file defines functions only: the guard scripts/quality/ci_group_files.py checks it.
+# shellcheck disable=SC2154,SC2329
+
+lakehouse_bronze() {
+  timed "lakehouse_bronze: resource checks" "$python_bin" -m scripts.lakehouse.run_resource_checks
+  timed "lakehouse_bronze: run lock E2E" "$python_bin" -m scripts.lakehouse.run_lock_e2e
+  timed "lakehouse_bronze: provenance E2E" "$python_bin" -m scripts.lakehouse.run_provenance_e2e
+  timed "lakehouse_bronze: storage single copy E2E" "$python_bin" -m scripts.lakehouse.run_storage_single_copy_e2e --report "$quality_output/storage_single_copy.json"
+  timed "lakehouse_bronze: contracts E2E" "$python_bin" -m scripts.orchestration.run_contracts_e2e
+}

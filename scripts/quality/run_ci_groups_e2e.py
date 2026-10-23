@@ -6,7 +6,12 @@ of known content, unusable ranges, staged changes (a deletion and a rename inclu
 invalid input. Real runs of the CI entry check that the unconditional gates run in every part (also with an empty selection)
 and before the launcher E2E, that a failing gate fails every part, that the full Markdown lint runs as a gate in every scope
 and that the entry plan alone (``CI_LIST_ONLY=1``) runs nothing.
-A static case requires the group functions of scripts/run_ci.sh to start the secret store E2E and the gold writer set-up mode.
+A static case requires the group functions in scripts/ci/groups/ to start the secret store E2E and the gold writer set-up mode.
+Body-file cases: a staged edit to each body file selects its group (and the layers downstream of it) and the repository group, never another group;
+the pull request template selects none and the dispatcher, the workflow and the setup action select every group; planted drift for each rule of the guard
+scripts/quality/ci_group_files.py fails with the file and group named. Dry-run cases run the dispatcher with a stand-in ``timed`` that only prints the
+command: a missing or unreadable body file stops the run with its name, the full local run names the same groups, gold units and acquisition shards as
+the GitHub jobs (a planted workflow with three shards differs), a failed shard stops the run before the combining step and a missing shard fails it.
 One case runs this runner under a real pre-commit hook that inherits an alternate ``GIT_INDEX_FILE``, ``GIT_DIR`` and ``GIT_WORK_TREE`` and checks that
 the caller's index, staged diff and working files survive. Failure modes CS1 to CS31 (plans, local). The report goes to
 data/e2e/ci_groups/<UTC>_<pid>/report.json with the revision, the SHA-256 of the files under test and the tool versions;
@@ -21,6 +26,7 @@ heavy gate body and the real hook configuration.
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import json
 import os
@@ -28,6 +34,7 @@ import re
 import shutil
 import sys
 import tempfile
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,6 +47,8 @@ from scripts.quality.scratch_worktree import ScratchWorktrees
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = ROOT / ".venv" / "bin" / "python"
 RUNNER = "scripts/quality/run_ci_groups_e2e.py"
+GROUP_FILES = "scripts/ci/groups"
+BODY_FILES = tuple(sorted(path.relative_to(ROOT).as_posix() for path in (ROOT / GROUP_FILES).glob("*.sh")))
 COPIED = (
     ".env.example",
     ".github/workflows/ci.yml",
@@ -103,6 +112,8 @@ COPIED = (
     "scripts/quality/run_documentation_review_e2e.py",
     "scripts/quality/typecheck.py",
     "scripts/run_ci.sh",
+    *BODY_FILES,
+    "scripts/quality/ci_group_files.py",
     "scripts/quality/timing.sh",
     "scripts/quality/ci_reuse.py",
     "config/quality/ci_jobs.json",
@@ -549,6 +560,7 @@ def code_identity(work: Path) -> dict[str, Any]:
         "git": run_command("git", ["--version"], timeout=60).stdout.strip(),
         "pre-commit": run_command(str(ROOT / ".venv" / "bin" / "pre-commit"), ["--version"], timeout=60).stdout.strip(),
         "markdownlint-cli2": "installed" if MARKDOWNLINT.exists() else "missing",
+        "bash (the group-file guard)": run_command("/bin/bash", ["--version"], timeout=60).stdout.splitlines()[0],
     }
     return {
         "revision": git(work, "rev-parse", "HEAD").strip(),
@@ -786,9 +798,9 @@ def reader_inputs(modules: tuple[str, ...], tracked: set[str]) -> dict[str, str]
 
 
 def layer_modules(function: str) -> tuple[str, ...]:
-    """The modules the check-group function ``function`` of scripts/run_ci.sh starts with ``-m``; a group split into units (``lakehouse_gold_checks``)
-    also counts the functions of its units."""
-    text = (ROOT / "scripts/run_ci.sh").read_text(encoding="utf-8")
+    """The modules the check-group function ``function`` (in its body file of scripts/ci/groups/) starts with ``-m``; a group split into units
+    (``lakehouse_gold_checks``) also counts the functions of its units."""
+    text = ci_script()
     names = [name for name in re.findall(r"^([a-z_]+)\(\) \{$", text, re.MULTILINE) if name == function or name.startswith(f"{function}_")]
     bodies = [body for name in names if (body := function_text(text, name))]
     return tuple(module for body in bodies for module in re.findall(r"-m (scripts\.[\w.]+)", body))
@@ -847,9 +859,9 @@ HOSTED_ENTRY_POINTS = {
 
 
 def entry_point_cases() -> list[dict[str, Any]]:
-    """The offline entry points that only a check-group function runs: each is started by its group function in scripts/run_ci.sh and a change to its
-    sources selects that group, so a hosted run cannot pass without it."""
-    text = (ROOT / "scripts/run_ci.sh").read_text(encoding="utf-8")
+    """The offline entry points that only a check-group function runs: each is started by its group function in its body file of scripts/ci/groups/ and
+    a change to its sources selects that group, so a hosted run cannot pass without it."""
+    text = ci_script()
     missing: list[str] = []
     not_selecting: list[str] = []
     for function, entries in HOSTED_ENTRY_POINTS.items():
@@ -1111,6 +1123,8 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         )
     ]
     cases += layer_cases(work)
+    cases += body_file_cases(work)
+    cases += guard_cases()
     code, _, _ = select(work, "--scope", "bogus")
     cases.append({"case": "invalid_scope_refused", "passed": code == 2, "exit": code})
     code, _, _ = select(work, "--scope", "full", "--part", "bogus")
@@ -1175,7 +1189,8 @@ def workflow_document() -> dict[str, Any]:
 
 
 def ci_script() -> str:
-    return (ROOT / "scripts/run_ci.sh").read_text(encoding="utf-8")
+    """The dispatcher and every body file as one text, so a function is found wherever it is defined."""
+    return "\n".join((ROOT / path).read_text(encoding="utf-8") for path in ("scripts/run_ci.sh", *BODY_FILES))
 
 
 def function_text(text: str, name: str) -> str | None:
@@ -1193,7 +1208,7 @@ def timed_commands(body: str) -> list[str]:
 
 
 def single_command_cases() -> list[dict[str, Any]]:
-    """Every function that run_ci.sh wraps in ``timed`` holds one command or one pipeline: a function that holds several runs with set -e ignored."""
+    """Every function that the dispatcher or a body file wraps in ``timed`` holds one command or one pipeline (several would run with set -e ignored)."""
     text = ci_script()
     wrapped = set(re.findall(r'^\s*timed "[^"]+" ([a-z_]+)$', text, re.MULTILINE))
     wrapped &= set(re.findall(r"^([a-z_]+)\(\) \{", text, re.MULTILINE))
@@ -1463,17 +1478,17 @@ printf '%s end %s\\n' "$1" "$(now)" >>"$STUB_LOG"
 def replaced_function(text: str, name: str, body: str) -> str:
     found = re.search(rf"^{name}\(\) \{{\n.*?^\}}", text, re.DOTALL | re.MULTILINE)
     if not found:
-        raise RuntimeError(f"scripts/run_ci.sh has no function {name}")
+        raise RuntimeError(f"no function {name} in the text")
     return text[: found.start()] + f"{name}() {{\n{body}\n}}" + text[found.end() :]
 
 
 def stub_functions(work: Path, bodies: dict[str, str]) -> None:
-    """Replace the bodies of functions of scripts/run_ci.sh in the scratch worktree; everything else in the script stays as it is."""
-    path = work / "scripts/run_ci.sh"
-    text = path.read_text(encoding="utf-8")
+    """Replace the bodies of functions of the dispatcher or of a body file in the scratch worktree; everything else stays as it is."""
     for name, body in bodies.items():
-        text = replaced_function(text, name, body)
-    path.write_text(text, encoding="utf-8")
+        path = next(
+            path for path in (work / "scripts/run_ci.sh", *sorted((work / GROUP_FILES).glob("*.sh"))) if function_text(path.read_text(encoding="utf-8"), name)
+        )
+        path.write_text(replaced_function(path.read_text(encoding="utf-8"), name, body), encoding="utf-8")
     (work / "stub_unit.sh").write_text(STUB_UNIT, encoding="utf-8")
 
 
@@ -1639,7 +1654,592 @@ def speed_real_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     cases.append(failing_unit_case(work, out))
     cases.append(interrupted_unit_case(work, out))
     cases += gates_part_cases(work, out)
+    cases += mirror_cases(work, out)
+    cases += variable_cases(work, out)
     cases += model_metadata_cases(work, out)
+    return cases
+
+
+BODY_SELECTION = {
+    "python_lint": ["python_lint", "repository_code_checks"],
+    "lakehouse_bronze": [*LAYERS, "repository_code_checks"],
+    "lakehouse_silver": [*LAYERS[1:], "repository_code_checks"],
+    "lakehouse_gold": ["lakehouse_gold", "repository_code_checks"],
+    "orchestration_checks": ["orchestration_checks", "repository_code_checks"],
+    "repository_code_checks": ["repository_code_checks"],
+    "configuration_checks": ["configuration_checks", "repository_code_checks"],
+    "sql_style": ["repository_code_checks", "sql_style"],
+    "terraform_checks": ["repository_code_checks", "terraform_checks"],
+    "launcher": ["repository_code_checks", "launcher"],
+}
+
+
+def staged_edit_case(work: Path, name: str, path: str, want_run: list[str], part: str = "core+layers", want_reason: str = "") -> dict[str, Any]:
+    """Stage a one-line edit of ``path`` and check which groups the staged scope selects."""
+    target = work / path
+    try:
+        target.write_text(target.read_text(encoding="utf-8") + "\n# staged edit\n", encoding="utf-8")
+        git(work, "add", path)
+        return selection_case(work, name, ["--scope", "staged", "--part", part], want_run, want_reason)
+    finally:
+        restore(work)
+
+
+def body_file_cases(work: Path) -> list[dict[str, Any]]:
+    """An edit to a body file selects its own group (and the layers downstream of a lakehouse layer) and the repository group, which runs the guard, and no
+    other group. The pull request template is a document; the dispatcher, the workflow and the setup action select every group."""
+    cases = [
+        {
+            "case": "every_body_file_has_an_expected_selection",
+            "passed": sorted(BODY_SELECTION) == sorted(Path(path).stem for path in BODY_FILES),
+            "body_files": [Path(path).stem for path in BODY_FILES],
+        }
+    ]
+    for group, wanted in BODY_SELECTION.items():
+        part = "all" if group == "launcher" else "core+layers"
+        cases.append(staged_edit_case(work, f"body_file_edit_selects_{group}", f"{GROUP_FILES}/{group}.sh", wanted, part))
+    cases.append(staged_edit_case(work, "pull_request_template_selects_no_group", ".github/pull_request_template.md", []))
+    cases.append(staged_edit_case(work, "pull_request_template_selects_no_group_in_part_all", ".github/pull_request_template.md", [], "all"))
+    cases.append(staged_edit_case(work, "dispatcher_edit_selects_every_group", "scripts/run_ci.sh", WITH_LAYERS, want_reason="selects every group"))
+    cases.append(
+        staged_edit_case(work, "dispatcher_edit_selects_every_group_in_part_all", "scripts/run_ci.sh", [*WITH_LAYERS, "launcher"], "all", "selects every group")
+    )
+    cases.append(
+        selection_case(
+            work,
+            "timing_wrapper_selects_every_group",
+            ["--scope", "paths", "--path", "scripts/quality/timing.sh", "--part", "core+layers"],
+            WITH_LAYERS,
+            "selects every group",
+        )
+    )
+    cases += [
+        selection_case(
+            work,
+            f"{Path(path).parent.name}_file_selects_every_group",
+            ["--scope", "paths", "--path", path, "--part", "core+layers"],
+            WITH_LAYERS,
+            "selects every group",
+        )
+        for path in (".github/workflows/ci.yml", ".github/actions/setup/action.yml")
+    ]
+    cases.append(
+        selection_case(
+            work, "pull_request_template_path_selects_no_group", ["--scope", "paths", "--path", ".github/pull_request_template.md", "--part", "all"], []
+        )
+    )
+    return cases
+
+
+GUARD_FILES = ("config/quality/ci_groups.json", "scripts/run_ci.sh")
+# Text that runs a command (or a compound statement that runs one) when the file is sourced: the guard stops it before any side effect.
+COMMAND_FORMS = {
+    "echo": "echo SIDE >> side_effect_marker",
+    "after_a_separator": "true; sql_style() { :; }",
+    "assignment_with_command_substitution": "x=$(touch side_effect_marker)",
+    "trap": "trap 'touch side_effect_marker' EXIT",
+    "touch": "touch side_effect_marker",
+    "exit": "exit 0",
+    "if_block_around_a_declaration": "if true; then function sql_style { :; }; fi",
+    "top_level_printf_with_ansi_quote": "printf '%s\\n' $'it\\'s'",
+    "top_level_heredoc": "cat <<EOF-TAG\nsafe\nEOF-TAG",
+    "arithmetic_assignment": "mask=$((1 << bits))",
+    "source_of_another_file": "source ./other_group.sh",
+    "trap_that_removes_the_guard": "trap - DEBUG",
+}
+# Declarations of a group function in the dispatcher text, in the spellings Bash accepts as the plain name.
+DISPATCHER_FORMS = {
+    "plain": "sql_style() { :; }",
+    "escaped_identifier": "sql_sty\\le() { :; }",
+    "escaped_keyword_identifier": "function sql_sty\\le { :; }",
+    "ansi_encoded_identifier": "function $'sql_\\x73tyle' { :; }",
+    "comment_after_the_keyword": "function # harmless comment\nsql_style { :; }",
+    "split_name_continuation": "sql_\\\nstyle() { :; }",
+    "quoted_name": 'function "sql_style" { :; }',
+    "name_made_of_quote_parts": "sql_'style'() { :; }",
+}
+# Quoted function names: Bash 3.2 and 5.2 refuse them with a message, and a body file must cause none.
+QUOTED_FORMS = {
+    "quoted_keyword_name": 'function "sql_style" { :; }',
+    "ansi_quoted_keyword_name": "function $'sql_style' { :; }",
+    "locale_quoted_keyword_name": 'function $"sql_style" { :; }',
+    "quoted_name_with_parentheses": '"sql_style"() { :; }',
+}
+# What a hostile group file can write. The guard accepts these (it checks the shape of a file, not its effect) and the dispatcher runs each group in its own
+# process, so none of them changes the shell state of another group: the isolation cases below run two or more groups with each one in python_lint.sh.
+HOSTILE_FORMS = {
+    "foreign_function_keyword": "function sql_style { :; }",
+    "foreign_function_spaced": "function sql_style ( ) { :; }",
+    "foreign_function_continued_name": "sql_\\\nstyle() { :; }",
+    "foreign_function_after_a_heredoc": "helper_h() {\ncat <<EOF-TAG\nsafe\nEOF-TAG\n}\nfunction sql_style { :; }",
+    "foreign_function_after_an_ansi_quote": "helper_q() { printf '%s\\n' $'it\\'s'; }\nfunction sql_style { :; }",
+    "nested_after_and": "helper_outer() { : && sql_style() { :; }; }",
+    "nested_after_not": "helper_outer() { ! sql_style() { :; }; }",
+    "loader_override_that_replaces_sql_style": 'source() {\n  builtin source "$@" && sql_style() { printf "WRONG_SQL\\n"; };\n}',
+    "shadowed_trap_then_foreign_function": (
+        "printf(){ :; }; exit(){ :; }\ntrap - DEBUG\nunset -f printf exit\nif [[ $- != *r* ]]; then\n  sql_style(){ printf 'WRONG_SQL\\n'; }\nfi"
+    ),
+    "timed_override": "timed() { :; }",
+    "dispatcher_helper_overrides": (
+        "record() { :; }\nis_selected() { return 0; }\nrun_group() { :; }\nrun_item() { :; }\nfinish() { :; }\nrequire_group_file() { :; }\n"
+        "run_items() { :; }\nacquisition_shard() { :; }\ntiming_table() { :; }"
+    ),
+    "builtin_overrides": (
+        "source() { :; }\nbuiltin() { :; }\neval() { :; }\nexec() { :; }\ncommand() { :; }\nset() { :; }\ndeclare() { :; }\nprintf() { :; }\necho() { :; }"
+    ),
+    "top_level_exit": "exit 0",
+    "environment_poisoned": "export python_bin=/nonexistent PATH=/nonexistent scratch=/nonexistent repo_root=/nonexistent CI_TIMING_FILE=/nonexistent",
+    "exit_trap_that_prints": "trap 'echo WRONG_SQL' EXIT",
+}
+
+
+def guard_case(name: str, mutate: Callable[[Path], None], named: list[str]) -> dict[str, Any]:
+    """Copy the files the guard reads into a scratch folder, plant drift, run the guard and require a failure that names every string of ``named``.
+    No planted drift (``named`` empty) must pass."""
+    with tempfile.TemporaryDirectory(prefix="ci_group_files.") as folder:
+        tree = Path(folder)
+        for path in (*GUARD_FILES, *BODY_FILES):
+            (tree / path).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / path, tree / path)
+        mutate(tree)
+        result = run_command(str(PYTHON), ["-m", "scripts.quality.ci_group_files", "--root", str(tree)], cwd=ROOT, timeout=120)
+        leaked = [path.name for path in tree.rglob("side_effect_marker")]
+    missing = [text for text in named if text not in result.stderr]
+    passed = (result.returncode == 0 if not named else result.returncode == 1 and not missing) and not leaked
+    return {"case": name, "passed": passed, "exit": result.returncode, "not_named": missing, "side_effect_leaked": leaked, "stderr": result.stderr[-400:]}
+
+
+def append(path: str, text: str) -> Callable[[Path], None]:
+    def mutate(tree: Path) -> None:
+        with (tree / path).open("a", encoding="utf-8") as stream:
+            stream.write(text)
+
+    return mutate
+
+
+def replace_file(path: str, text: str) -> Callable[[Path], None]:
+    def mutate(tree: Path) -> None:
+        (tree / path).write_text(text, encoding="utf-8")
+
+    return mutate
+
+
+def change_config(change: Callable[[dict[str, Any]], None]) -> Callable[[Path], None]:
+    def mutate(tree: Path) -> None:
+        path = tree / "config/quality/ci_groups.json"
+        config = json.loads(path.read_text(encoding="utf-8"))
+        change(config)
+        path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+    return mutate
+
+
+def guard_cases() -> list[dict[str, Any]]:
+    """Planted drift for each rule of scripts/quality/ci_group_files.py."""
+    sql, python_lint, terraform = (f"{GROUP_FILES}/{name}.sh" for name in ("sql_style", "python_lint", "terraform_checks"))
+
+    def second_list(config: dict[str, Any]) -> None:
+        config["groups"]["sql_style"].append(f"^{python_lint.replace('.', chr(92) + '.')}$")
+
+    def drop_own_pattern(config: dict[str, Any]) -> None:
+        config["groups"]["terraform_checks"] = [pattern for pattern in config["groups"]["terraform_checks"] if "ci/groups" not in pattern]
+
+    def global_pattern(config: dict[str, Any]) -> None:
+        config["global"].append("^scripts/ci/")
+
+    def broad_launcher(config: dict[str, Any]) -> None:
+        config["groups"]["launcher"] = ["^scripts/" if pattern.startswith("^scripts/(?!") else pattern for pattern in config["groups"]["launcher"]]
+
+    def remove_sql_file(tree: Path) -> None:
+        (tree / sql).unlink()
+
+    def stray(tree: Path) -> None:
+        (tree / GROUP_FILES / "stray.sh").write_text("#!/usr/bin/env bash\nstray() { :; }\n", encoding="utf-8")
+
+    def empty_body(tree: Path) -> None:
+        (tree / python_lint).write_text("#!/usr/bin/env bash\n# no function\n", encoding="utf-8")
+
+    def prefix_only(tree: Path) -> None:
+        (tree / python_lint).write_text("#!/usr/bin/env bash\npython_lint_extra() { :; }\n", encoding="utf-8")
+
+    def drop_gold_unit(tree: Path) -> None:
+        path = tree / GROUP_FILES / "lakehouse_gold.sh"
+        path.write_text(path.read_text(encoding="utf-8").replace("lakehouse_gold_writer_setup()", "lakehouse_gold_renamed()"), encoding="utf-8")
+
+    def rename_launcher(tree: Path) -> None:
+        path = tree / GROUP_FILES / "launcher.sh"
+        path.write_text(path.read_text(encoding="utf-8").replace("launcher_e2e()", "launcher_unit()"), encoding="utf-8")
+
+    def duplicate(tree: Path) -> None:
+        for path in (sql, terraform):
+            append(path, "\nshared_helper() { :; }\n")(tree)
+
+    return [
+        guard_case("guard_passes_without_drift", lambda tree: None, []),
+        guard_case(
+            "guard_fails_a_group_function_left_in_the_dispatcher", append("scripts/run_ci.sh", "\nsql_style() { :; }\n"), ["scripts/run_ci.sh", "sql_style"]
+        ),
+        guard_case("guard_fails_a_body_file_listed_in_two_groups", change_config(second_list), [python_lint, "group sql_style lists it too"]),
+        guard_case("guard_fails_a_body_file_missing_from_its_group", change_config(drop_own_pattern), [terraform, "terraform_checks"]),
+        guard_case("guard_fails_a_global_pattern_that_matches_a_body_file", change_config(global_pattern), [sql, "global list"]),
+        guard_case("guard_fails_a_launcher_pattern_that_matches_a_body_file", change_config(broad_launcher), [python_lint, "group launcher lists it too"]),
+        guard_case("guard_fails_a_group_without_a_body_file", remove_sql_file, [sql, "group sql_style has no body file"]),
+        guard_case("guard_fails_a_body_file_of_no_group", stray, [f"{GROUP_FILES}/stray.sh", "belongs to no group"]),
+        guard_case(
+            "guard_fails_a_body_file_without_its_entry_function", empty_body, [python_lint, "does not define python_lint, the function the dispatcher calls"]
+        ),
+        guard_case("guard_fails_a_prefix_only_function_instead_of_the_entry_function", prefix_only, [python_lint, "does not define python_lint"]),
+        guard_case(
+            "guard_fails_a_gold_body_file_without_a_unit_function", drop_gold_unit, ["lakehouse_gold.sh", "does not define lakehouse_gold_writer_setup"]
+        ),
+        guard_case("guard_fails_a_launcher_body_file_without_its_entry_function", rename_launcher, ["launcher.sh", "does not define launcher_e2e"]),
+        guard_case("guard_passes_a_helper_defined_in_two_body_files", duplicate, []),
+        guard_case("guard_passes_another_groups_function_name_in_a_body_file", append(python_lint, "\nsql_style() { :; }\n"), []),
+        *(
+            guard_case(f"guard_stops_a_command_at_the_top_level_{label}", append(terraform, "\n" + text + "\n"), [terraform, "runs a command when sourced"])
+            for label, text in COMMAND_FORMS.items()
+        ),
+        *(guard_case(f"guard_fails_{label}", append(terraform, "\n" + text + "\n"), [terraform, "sql_style"]) for label, text in QUOTED_FORMS.items()),
+        *(
+            guard_case(f"guard_fails_a_dispatcher_declaration_{label}", append("scripts/run_ci.sh", "\n" + text + "\n"), ["scripts/run_ci.sh", "sql_style"])
+            for label, text in DISPATCHER_FORMS.items()
+        ),
+        *(
+            guard_case(f"guard_passes_own_entry_{label}", replace_file(python_lint, f"#!/usr/bin/env bash\n{text} {{ :; }}\n"), [])
+            for label, text in {
+                "keyword_and_parentheses": "function python_lint()",
+                "keyword_and_spaced_parentheses": "function python_lint ( )",
+                "keyword_only": "function python_lint",
+                "plain_spaced_parentheses": "python_lint ( )",
+            }.items()
+        ),
+        *(
+            guard_case(f"guard_passes_the_hostile_form_{label}", append(python_lint, "\n" + text + "\n"), [])
+            for label, text in HOSTILE_FORMS.items()
+            if not any(word in text for word in ("exit 0", "trap", "export", "unset", "if [[", "side_effect", "declare() "))
+        ),
+    ]
+
+
+DRY_TIMING = """#!/usr/bin/env bash
+timed() { printf 'TIMED %s\\n' "$*"; }
+timing_table() { :; }
+timing_entry() { :; }
+"""
+DRY_ACQUISITION = """#!/usr/bin/env bash
+set -euo pipefail
+shard="${ACQUISITION_SHARD:-}"
+index="${shard%%/*}"
+if [[ "${ACQUISITION_PART:-}" == "shard" ]]; then
+  if [[ "$index" == "@FAIL@" ]]; then
+    printf 'stand-in shard %s fails\\n' "$shard" >&2
+    exit 1
+  fi
+  if [[ "$index" != "@SKIP@" ]]; then
+    mkdir -p "$ACQUISITION_SHARD_DIR"
+    touch "$ACQUISITION_SHARD_DIR/shard_${index}.marker"
+  fi
+fi
+printf 'ACQ part=%s shard=%s count=%s dir=%s\\n' "${ACQUISITION_PART:-}" "$shard" "${ACQUISITION_SHARD_COUNT:-}" "${ACQUISITION_SHARD_DIR:-}"
+"""
+
+
+def dry_run(
+    work: Path, out: Path, name: str, env: dict[str, str], fail_shard: str = "", skip_shard: str = "", prepare: Callable[[Path], None] | None = None
+) -> tuple[int, str]:
+    """Run the dispatcher with a ``timed`` that only prints the command and a stand-in acquisition entry: the order, grouping and arguments of a full run
+    without running any check. ``fail_shard`` makes that shard fail and ``skip_shard`` makes it leave no folder."""
+    (work / TIMING).write_text(DRY_TIMING, encoding="utf-8")
+    (work / "scripts/acquisition/run_checks.sh").write_text(DRY_ACQUISITION.replace("@FAIL@", fail_shard).replace("@SKIP@", skip_shard), encoding="utf-8")
+    try:
+        if prepare:
+            prepare(work)
+        code, log, _ = run_entry(work, out, name, env)
+    finally:
+        for path in (work / GROUP_FILES).glob("*.sh"):
+            path.chmod(0o644)
+        restore(work)
+    return code, log
+
+
+def local_plan_of(log: str) -> dict[str, Any]:
+    """The groups, gold units, acquisition shards and combining steps that a dry run of the dispatcher started."""
+    items = re.findall(r"^== (\w+) ==$", log, re.MULTILINE)
+    groups: set[str] = {"launcher"} if "TIMED launcher E2E" in log else set()
+    units: set[str] = set()
+    for item in items:
+        if item.startswith("lakehouse_gold_"):
+            groups.add("lakehouse_gold")
+            units.add(item.removeprefix("lakehouse_gold_"))
+        elif not item.startswith("acquisition_"):
+            groups.add(item)
+    shards = re.findall(r"^ACQ part=shard shard=(\d+/\d+) ", log, re.MULTILINE)
+    combines = re.findall(r"^ACQ part=combine shard= count=(\d+) ", log, re.MULTILINE)
+    if shards or combines:
+        groups.add("acquisition")
+    return {
+        "items": items,
+        "groups": groups,
+        "units": units,
+        "shards": set(shards),
+        "shard_runs": len(shards),
+        "combine_counts": set(combines),
+        "combine_runs": len(combines),
+        "folders": re.findall(r"^ACQ part=shard .* dir=(\S+)$", log, re.MULTILINE),
+    }
+
+
+def github_plan_of(workflow: dict[str, Any]) -> dict[str, Any]:
+    """The groups, gold units, acquisition shards and combining steps that the jobs of the workflow run, in the full range."""
+    config = ci_groups.load()
+    groups: set[str] = set()
+    units: set[str] = set()
+    shards: set[str] = set()
+    combine_counts: set[str] = set()
+    for definition in workflow["jobs"].values():
+        for entry in matrix_entries(definition):
+            for step in definition.get("steps", []):
+                env = {key: fill_matrix(str(value), entry) for key, value in step.get("env", {}).items()}
+                if step.get("run") == "bash scripts/run_ci.sh" and env.get("CI_PART") not in {None, "gates"}:
+                    part = env["CI_PART"]
+                    groups |= set(ci_groups.groups_of(part, config)) - {"acquisition"}
+                    if part == "gold":
+                        units |= set((env.get("CI_UNITS") or " ".join(GOLD_UNITS)).split())
+                elif step.get("run") == "bash scripts/acquisition/run_checks_ci.sh" and env.get("ACQUISITION_PART") == "shard":
+                    groups.add("acquisition")
+                    shards.add(env["ACQUISITION_SHARD"])
+                elif step.get("run") == "bash scripts/acquisition/run_checks_ci.sh" and env.get("ACQUISITION_PART") == "combine":
+                    combine_counts.add(env["ACQUISITION_SHARD_COUNT"])
+    return {"groups": groups, "units": units, "shards": shards, "combine_counts": combine_counts}
+
+
+def mirror_differences(github: dict[str, Any], local: dict[str, Any]) -> dict[str, Any]:
+    """What differs between the GitHub jobs and the full local run; empty when the local run mirrors GitHub."""
+    differences = {
+        name: {"github": sorted(github[name]), "local": sorted(local[name])}
+        for name in ("groups", "units", "shards", "combine_counts")
+        if github[name] != local[name]
+    }
+    if local["shard_runs"] != len(local["shards"]) or local["combine_runs"] != 1:
+        differences["runs"] = {"shard_runs": local["shard_runs"], "combine_runs": local["combine_runs"]}
+    return differences
+
+
+def planted_workflows() -> dict[str, dict[str, Any]]:
+    """Copies of the workflow that drift from the local run in one way each: a shard fewer, another shard count in the combining job, a gold unit fewer."""
+    drifts = {}
+    shards = copy.deepcopy(workflow_document())
+    shards["jobs"]["acquisition_shard"]["strategy"]["matrix"]["shard"] = [1, 2, 3]
+    drifts["three_shards"] = shards
+    count = copy.deepcopy(workflow_document())
+    count["jobs"]["acquisition"]["steps"][-1]["env"]["ACQUISITION_SHARD_COUNT"] = "3"
+    drifts["combine_count"] = count
+    unit = copy.deepcopy(workflow_document())
+    unit["jobs"]["lakehouse"]["strategy"]["matrix"]["include"][2]["units"] = "checks"
+    drifts["gold_unit"] = unit
+    return drifts
+
+
+def mirror_cases(work: Path, out: Path) -> list[dict[str, Any]]:
+    code, log = dry_run(work, out, "local_full_dry_run", {"CI_SCOPE": "full", "CI_PART": "all"})
+    local = local_plan_of(log)
+    github = github_plan_of(workflow_document())
+    differences = mirror_differences(github, local)
+    items = local["items"]
+    shard_items = [item for item in items if item.startswith("acquisition_shard_")]
+    checks = {
+        "exit_zero": code == 0 and PASS_LINES["all"] in log,
+        "same_groups_units_shards_and_combine_as_the_github_jobs": not differences,
+        "launcher_ran_before_every_item": "TIMED launcher E2E" in log and log.index("TIMED launcher E2E") < log.index("\n== "),
+        "writer_set_up_ran_alone_first": items[:1] == ["lakehouse_gold_writer_setup"],
+        "shards_ran_with_the_groups": len(shard_items) == 4 and all(item in items[1:-1] for item in shard_items),
+        "combine_ran_last_after_every_shard": items[-1:] == ["acquisition_combine"] and local["combine_counts"] == {"4"},
+        "every_shard_has_its_own_folder": len(set(local["folders"])) == 4,
+        "combine_used_the_merged_folder": re.search(r"^ACQ part=combine .* dir=\S+/acquisition_shards/merged$", log, re.MULTILINE) is not None,
+    }
+    cases = [{"case": "local_full_plan_matches_the_github_jobs", "passed": all(checks.values()), "checks": checks, "differences": differences, "exit": code}]
+    planted = {name: mirror_differences(github_plan_of(workflow), local) for name, workflow in planted_workflows().items()}
+    cases.append({"case": "local_plan_drift_from_the_github_jobs_is_reported", "passed": all(planted.values()), "differences": planted})
+    return [*cases, *dry_run_cases(work, out), *isolation_cases(work, out)]
+
+
+def dry_run_cases(work: Path, out: Path) -> list[dict[str, Any]]:
+    cases = []
+    code, log = dry_run(work, out, "local_shard_fails", {"CI_SCOPE": "full", "CI_PART": "all"}, fail_shard="2")
+    checks = {
+        "exit_nonzero": code != 0,
+        "names_the_shard": "Local CI failed in: acquisition_shard_2" in log,
+        "no_combine_step": "acquisition_combine" not in log and "part=combine" not in log,
+        "no_pass_line": PASS_LINES["all"] not in log,
+    }
+    cases.append({"case": "local_shard_failure_stops_the_run_before_the_combine_step", "passed": all(checks.values()), "checks": checks, "exit": code})
+    code, log = dry_run(work, out, "local_shard_missing", {"CI_SCOPE": "full", "CI_PART": "all"}, skip_shard="3")
+    checks = {
+        "exit_nonzero": code != 0,
+        "names_the_combine_step": "Local CI failed in: acquisition_combine" in log,
+        "names_the_missing_folder": "shard_3" in log,
+        "no_pass_line": PASS_LINES["all"] not in log,
+    }
+    cases.append({"case": "local_missing_shard_fails_the_combine_step", "passed": all(checks.values()), "checks": checks, "exit": code})
+
+    def remove_silver(tree: Path) -> None:
+        (tree / GROUP_FILES / "lakehouse_silver.sh").unlink()
+
+    def lock_silver(tree: Path) -> None:
+        (tree / GROUP_FILES / "lakehouse_silver.sh").chmod(0)
+
+    for label, prepare in (("missing", remove_silver), ("unreadable", lock_silver)):
+        code, log = dry_run(work, out, f"local_body_file_{label}", {"CI_SCOPE": "full", "CI_PART": "silver"}, prepare=prepare)
+        checks = {
+            "exit_nonzero": code != 0,
+            "names_the_file_and_group": f"{GROUP_FILES}/lakehouse_silver.sh of the check group lakehouse_silver" in log,
+            "the_group_never_ran": "TIMED lakehouse_silver" not in log and PASS_LINES["silver"] not in log,
+        }
+        cases.append({"case": f"body_file_{label}_at_run_time_fails_with_its_name", "passed": all(checks.values()), "checks": checks, "exit": code})
+
+    def stage_sql_body(tree: Path) -> None:
+        path = tree / GROUP_FILES / "sql_style.sh"
+        path.write_text(path.read_text(encoding="utf-8") + "\n# staged edit\n", encoding="utf-8")
+        git(tree, "add", f"{GROUP_FILES}/sql_style.sh")
+
+    code, log = dry_run(work, out, "local_staged_body_edit", {"CI_SCOPE": "staged", "CI_PART": "all"}, prepare=stage_sql_body)
+    local = local_plan_of(log)
+    checks = {
+        "exit_zero": code == 0 and PASS_LINES["all"] in log,
+        "only_its_group_and_the_repository_group_ran": sorted(local["items"]) == ["repository_code_checks", "sql_style"],
+        "no_acquisition_shard_ran": not local["shards"] and not local["combine_runs"] and "ACQ " not in log,
+    }
+    cases.append({"case": "staged_body_edit_runs_only_its_group_items", "passed": all(checks.values()), "checks": checks, "exit": code})
+    return cases
+
+
+# Hostile forms whose effect is visible in the output of python_lint itself: they prove that the hostile text really ran in that group's process.
+OWN_GROUP_CHANGES = {"timed_override", "top_level_exit", "environment_poisoned", "exit_trap_that_prints"}
+
+
+def item_blocks(log: str) -> tuple[str, dict[str, str]]:
+    """The text before the first item of a dry run and the text of each item (its log and its seconds row), with seconds, stamps and scratch names replaced."""
+    log = re.sub(r"\d{8}T\d{6}Z_\d+", "<stamp>", re.sub(r"hai_ci\.\w+", "hai_ci.X", re.sub(r"^(.*): \d+ s$", r"\1: N s", log, flags=re.MULTILINE)))
+    head, *parts = re.split(r"^== (\w+) ==$", log, flags=re.MULTILINE)
+    blocks = {name: re.split(r"\n(?:All local CI checks passed|Local CI failed)", body)[0] for name, body in zip(parts[::2], parts[1::2], strict=True)}
+    return head, blocks
+
+
+def isolation_cases(work: Path, out: Path) -> list[dict[str, Any]]:
+    """Each group runs in its own shell process, so a hostile group file leaves the shell state of the other groups and of the dispatcher unchanged: with
+    each form of HOSTILE_FORMS appended to python_lint.sh, every other group of a full core run prints exactly what it printed without it, the part
+    before the groups is the same and only python_lint may fail."""
+    env = {"CI_SCOPE": "full", "CI_PART": "core"}
+    base_head, base = item_blocks(dry_run(work, out, "hostile_baseline", env)[1])
+    cases = []
+    for label, text in HOSTILE_FORMS.items():
+
+        def hostile(tree: Path, text: str = text) -> None:
+            path = tree / GROUP_FILES / "python_lint.sh"
+            path.write_text(path.read_text(encoding="utf-8") + "\n" + text + "\n", encoding="utf-8")
+
+        code, log = dry_run(work, out, f"hostile_{label}", env, prepare=hostile)
+        head, blocks = item_blocks(log)
+        failed = " ".join(re.findall(r"^Local CI failed in: (.*)$", log, flags=re.MULTILINE)).split()
+        checks = {
+            "the_other_groups_print_what_they_printed_without_it": {k: v for k, v in blocks.items() if k != "python_lint"}
+            == {k: v for k, v in base.items() if k != "python_lint"},
+            "every_group_still_ran": sorted(blocks) == sorted(base),
+            "the_part_before_the_groups_is_unchanged": head == base_head,
+            "only_python_lint_may_fail": set(failed) <= {"python_lint"},
+            "nothing_wrong_outside_python_lint": "WRONG_SQL" not in "".join(v for k, v in blocks.items() if k != "python_lint") + head,
+        }
+        if label in OWN_GROUP_CHANGES:
+            checks["the_hostile_file_did_change_its_own_group"] = blocks.get("python_lint") != base["python_lint"]
+        cases.append({"case": f"hostile_group_file_{label}_changes_only_its_own_group", "passed": all(checks.values()), "checks": checks, "exit": code})
+    return cases
+
+
+STAND_IN_ENTRIES = {
+    "lakehouse_gold": ["lakehouse_gold_checks", "lakehouse_gold_writer_setup", "lakehouse_gold_model_metadata_e2e"],
+    "launcher": ["launcher_e2e"],
+}
+# A stand-in group file reads every variable that run_group passes to a group, so an unbound variable stops the run, and runs one real timed command.
+STAND_IN_BODY = """#!/usr/bin/env bash
+{name}() {{
+  : "$python_bin" "$repo_root" "$scratch" "$quality_output" "$e2e_output" "$CI_TIMING_FILE"
+  timed "stand-in: {name}" true
+}}
+"""
+PYTHON_FILTER = """#!/usr/bin/env bash
+# Stand-in for the interpreter of the gates: only the group selection runs for real.
+if [[ "$*" == *scripts.quality.ci_groups* ]]; then
+  exec {python} "$@"
+fi
+exit 0
+"""
+HOSTED_FOLDERS = ("quality_output", "e2e_output", "QUALITY_ARTIFACT_DIR", "E2E_ARTIFACT_DIR")
+
+
+def stand_in_run(work: Path, out: Path, name: str, extra: dict[str, str], expected: list[str], staged: bool = False) -> dict[str, Any]:
+    """Run the real dispatcher with the real timing wrapper and stand-in group files, in the environment of a hosted job: neither artifact folder is set
+    (the gates run through a filter that only lets the group selection run). An unbound variable in the dispatcher or in a group process fails the run."""
+    for group in BODY_SELECTION:
+        entries = STAND_IN_ENTRIES.get(group, [group])
+        (work / GROUP_FILES / f"{group}.sh").write_text(
+            "#!/usr/bin/env bash\n" + "".join(STAND_IN_BODY.format(name=entry).split("\n", 1)[1] for entry in entries), encoding="utf-8"
+        )
+    (work / "scripts/acquisition/run_checks.sh").write_text(DRY_ACQUISITION.replace("@FAIL@", "").replace("@SKIP@", ""), encoding="utf-8")
+    filter_path = work / "python_filter.sh"
+    filter_path.write_text(PYTHON_FILTER.format(python=PYTHON), encoding="utf-8")
+    filter_path.chmod(0o755)
+    copy = stage_launcher_path(work) if staged else None
+    environment = {key: value for key, value in os.environ.items() if key not in HOSTED_FOLDERS}
+    try:
+        result = run_command(
+            "bash",
+            ["scripts/run_ci.sh"],
+            cwd=work,
+            env={**environment, "GITHUB_STEP_SUMMARY": str(out / f"{name}_summary.md"), "PYTHON_BIN": str(filter_path), **extra},
+            timeout=600,
+        )
+    finally:
+        if copy:
+            copy.unlink(missing_ok=True)
+        restore(work)
+        filter_path.unlink(missing_ok=True)
+    log = result.stdout + result.stderr
+    (out / f"{name}.log").write_text(log, encoding="utf-8")
+    checks = {
+        "exit_zero": result.returncode == 0,
+        "no_unbound_variable": "unbound variable" not in log,
+        "reached_the_end": PASS_LINES[extra["CI_PART"]] in log,
+        "every_expected_stand_in_ran": all(f"[timing] end stand-in: {entry} at" in log for entry in expected),
+    }
+    return {"case": f"real_run_{name}_sets_every_variable_a_group_receives", "passed": all(checks.values()), "checks": checks, "exit": result.returncode}
+
+
+def variable_cases(work: Path, out: Path) -> list[dict[str, Any]]:
+    everything = [entry for group in BODY_SELECTION for entry in STAND_IN_ENTRIES.get(group, [group])]
+    core = [entry for entry in everything if entry not in {"launcher_e2e", *STAND_IN_ENTRIES["lakehouse_gold"], "lakehouse_bronze", "lakehouse_silver"}]
+    layers = {
+        "bronze": ["lakehouse_bronze"],
+        "silver": ["lakehouse_silver"],
+        "gold": ["lakehouse_gold_checks", "lakehouse_gold_writer_setup", "lakehouse_gold_model_metadata_e2e"],
+    }
+    cases = [
+        stand_in_run(work, out, "full_all", {"CI_SCOPE": "full", "CI_PART": "all"}, everything),
+        stand_in_run(work, out, "full_core", {"CI_SCOPE": "full", "CI_PART": "core"}, core),
+        stand_in_run(work, out, "full_launcher", {"CI_SCOPE": "full", "CI_PART": "launcher"}, ["launcher_e2e"]),
+        *(stand_in_run(work, out, f"full_{part}", {"CI_SCOPE": "full", "CI_PART": part}, entries) for part, entries in layers.items()),
+        stand_in_run(
+            work,
+            out,
+            "range_unusable_all",
+            {"CI_SCOPE": "range", "CI_PART": "all", "RANGE_START": ZERO, "RANGE_END": INFRA_ONLY},
+            everything,
+        ),
+        stand_in_run(
+            work, out, "range_unusable_launcher", {"CI_SCOPE": "range", "CI_PART": "launcher", "RANGE_START": ZERO, "RANGE_END": INFRA_ONLY}, ["launcher_e2e"]
+        ),
+        stand_in_run(work, out, "staged_launcher_launcher", {"CI_SCOPE": "staged", "CI_PART": "launcher"}, ["launcher_e2e"], staged=True),
+        stand_in_run(work, out, "staged_launcher_all", {"CI_SCOPE": "staged", "CI_PART": "all"}, ["launcher_e2e", "python_lint"], staged=True),
+    ]
     return cases
 
 
@@ -1697,10 +2297,16 @@ def main() -> int:
         "gates_part_*",
         "model_metadata_workers_*",
         "unknown_unit_is_refused",
+        "local_*",
+        "body_file_missing_*",
+        "body_file_unreadable_*",
+        "staged_body_edit_runs_only_its_group_items",
+        "real_run_*",
     ]
     mode = {"mode": "iteration", "skipped": skipped, "note": "not commit evidence"} if selection_only or speed_only else {"mode": "full"}
     report = {"started": out.name, **mode, "code": identity, "cases": results, "passed": len(results) - len(failed), "total": len(results), "failed": failed}
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    sys.stdout.write(f"Bash used by the group-file guard cases: {identity.get('tools', {}).get('bash (the group-file guard)', 'unknown')}\n")
     for result in results:
         sys.stdout.write(("PASS " if result["passed"] else "FAIL ") + result["case"] + "\n")
     sys.stdout.write(f"{report['passed']}/{report['total']} passed; report {out / 'report.json'}\n")

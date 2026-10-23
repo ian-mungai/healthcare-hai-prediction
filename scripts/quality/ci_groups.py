@@ -42,30 +42,22 @@ CONFIG = Path("config/quality/ci_groups.json")
 SCOPES = ("full", "staged", "range", "paths")
 LAYER_PARTS = {"bronze": "lakehouse_bronze", "silver": "lakehouse_silver", "gold": "lakehouse_gold"}
 PARTS = {"all", "core", "launcher", "gates", *LAYER_PARTS}
-ORDER = (
-    "python_lint",
-    "lakehouse_bronze",
-    "lakehouse_silver",
-    "lakehouse_gold",
-    "orchestration_checks",
-    "repository_code_checks",
-    "configuration_checks",
-    "sql_style",
-    "terraform_checks",
-    "launcher",
-    "acquisition",
-)
+
+
+def order(config: dict[str, Any]) -> list[str]:
+    """The groups in run order: those of ``groups`` in the order of the file, then those of ``full_only``. A new group is one entry in the configuration."""
+    return [*config["groups"], *config["full_only"]]
 
 
 def load() -> dict[str, Any]:
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
-    unknown = (set(config["groups"]) | set(config["full_only"]) | set(config.get("always", [])) | set(config.get("always_except_commits", []))) - set(ORDER)
+    unknown = (set(config.get("always", [])) | set(config.get("always_except_commits", [])) | set(config["layers"])) - set(order(config))
     if unknown:
         raise ValueError(f"unknown groups in {CONFIG}: {', '.join(sorted(unknown))}")
     if set(config.setdefault("upstream_inputs", {})) - set(config["layers"]):
         raise ValueError(f"upstream_inputs in {CONFIG} may name only layers: {', '.join(sorted(set(config['upstream_inputs']) - set(config['layers'])))}")
-    if [layer for layer in ORDER if layer in config["layers"]] != config["layers"] or set(config["layers"]) - set(config["groups"]):
-        raise ValueError(f"layers in {CONFIG} must be groups listed from upstream to downstream in the order of ci_groups.ORDER")
+    if [layer for layer in order(config) if layer in config["layers"]] != config["layers"] or set(config["layers"]) - set(config["groups"]):
+        raise ValueError(f"layers in {CONFIG} must be groups listed from upstream to downstream in the order of the groups in the file")
     return config
 
 
@@ -79,7 +71,7 @@ def groups_of(part: str, config: dict[str, Any]) -> list[str]:
         wanted = {LAYER_PARTS[part]}
     else:
         wanted = known - ({"launcher", "acquisition", *LAYER_PARTS.values()} if part == "core" else set())
-    return [group for group in ORDER if group in wanted]
+    return [group for group in order(config) if group in wanted]
 
 
 def selected_layers(changed: list[str], config: dict[str, Any]) -> set[str]:
