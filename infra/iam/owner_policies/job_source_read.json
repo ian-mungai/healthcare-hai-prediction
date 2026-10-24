@@ -1,0 +1,26 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadSources",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:GetObjectVersion"],
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/bronze/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/silver/*",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/gold/*"
+      ]
+    },
+    {
+      "Sid": "ListSources",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ["lakehouse/bronze/", "lakehouse/bronze/*", "lakehouse/silver/", "lakehouse/silver/*", "lakehouse/gold/", "lakehouse/gold/*"]
+        }
+      }
+    }
+  ]
+}
