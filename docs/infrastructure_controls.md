@@ -1,7 +1,7 @@
 ---
 title: Infrastructure Controls
 description: Environments, the AWS stacks and project policies, bucket lifecycle rules, the lifecycle permission, deferred controls.
-last_updated: 2026-10-23
+last_updated: 2026-10-24
 ---
 
 # Infrastructure Controls
@@ -46,6 +46,9 @@ The project profile runs the third.
    fails until the IAM stack is applied. The wrapper renders only the inputs the stack declares
    (`scripts/infrastructure/render_platform_config.py`). Before an apply, the saved plan's `.env` inputs must match
    and every other variable must keep its committed default.
+
+The control-plane services stack (`infra/services/`) runs on the platform's container host after these three; its inputs,
+secrets, images and the Mac launcher changes are in `docs/aws_control_plane.md`.
 
 The order is: the IAM stack, the policy scripts (`plan`, then `apply`), the platform stack, then the project user turns
 the host on with `aws autoscaling set-desired-capacity --auto-scaling-group-name <PROJECT_NAME>_host_<ENVIRONMENT>

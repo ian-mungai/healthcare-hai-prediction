@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "platform": "linux/arm64",
+  "images": {
+    "postgres": {
+      "kind": "mirror",
+      "source": "postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f",
+      "tag": "17-arm64",
+      "arm64": "the pinned index lists linux/arm64 (registry read, Oct 22 2026)",
+      "runs_as": "ECS service on the host (P7d)"
+    },
+    "redis": {
+      "kind": "mirror",
+      "source": "redis:7.2-bookworm@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3",
+      "tag": "7.2-bookworm-arm64",
+      "local_reference": false,
+      "arm64": "the pinned index lists linux/arm64 (registry read, Oct 22 2026); new pin, not used by the local stack",
+      "runs_as": "ECS service on the host (P7d)"
+    },
+    "polaris": {
+      "kind": "mirror",
+      "source": "apache/polaris:1.8.0@sha256:347615e736cab2c9be0d8c464552ac930be4755302bb0aeb745216bbae99ba5b",
+      "tag": "1.8.0-arm64",
+      "arm64": "the pinned index lists linux/arm64 (registry read, Oct 22 2026)",
+      "runs_as": "ECS service on the host (P7d)"
+    },
+    "airflow": {
+      "kind": "build",
+      "context": "services/orchestration",
+      "build_contexts": {
+        "hai": "services/hai"
+      },
+      "local_tag": "hai-airflow:3.3.2-python3.12",
+      "tag": "3.3.2-python3.12-arm64",
+      "arm64": "base and builder pins list linux/arm64; built on Apple silicon, so the local image is arm64 until docker image inspect says otherwise",
+      "runs_as": "ECS services on the host (P7d)"
+    },
+    "polaris_admin": {
+      "kind": "build",
+      "context": "services/lakehouse/polaris_admin",
+      "build_contexts": {
+        "hai": "services/hai"
+      },
+      "local_tag": "hai-polaris-admin:1.8.0",
+      "tag": "1.8.0-arm64",
+      "arm64": "base and builder pins list linux/arm64",
+      "runs_as": "one-shot Polaris bootstrap task on the host (P7d)"
+    },
+    "spark": {
+      "kind": "build",
+      "context": "services/lakehouse/spark",
+      "build_contexts": {
+        "hai": "services/hai"
+      },
+      "local_tag": "hai-lakehouse-spark:4.1.2-iceberg1.11.0",
+      "tag": "4.1.2-iceberg1.11.0-arm64",
+      "arm64": "base and builder pins list linux/arm64",
+      "runs_as": "job task (P7b)"
+    },
+    "analytics": {
+      "kind": "build",
+      "context": "services/analytics",
+      "build_contexts": {
+        "hai": "services/hai"
+      },
+      "local_tag": "hai-analytics:duckdb1.5.6-dbt1.11.15",
+      "tag": "duckdb1.5.6-dbt1.11.15-arm64",
+      "arm64": "base and builder pins list linux/arm64",
+      "runs_as": "job task (P7b)"
+    },
+    "quality": {
+      "kind": "build",
+      "context": "services/quality",
+      "build_contexts": {
+        "hai": "services/hai"
+      },
+      "local_tag": "hai-quality:gx1.23.2-duckdb1.5.6",
+      "tag": "gx1.23.2-duckdb1.5.6-arm64",
+      "arm64": "base and builder pins list linux/arm64",
+      "runs_as": "job task (P7b)"
+    },
+    "egress_proxy": {
+      "kind": "mirror",
+      "source": "ubuntu/squid@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c",
+      "tag": "squid-arm64",
+      "arm64": "the pinned index lists linux/arm64 (registry read, Oct 22 2026)",
+      "runs_as": "job network class with closed egress (P7b)"
+    },
+    "marquez": {
+      "kind": "source",
+      "repository": "https://github.com/MarquezProject/marquez",
+      "commit": "27a4a1357d9078bc4e6738524dfe5ba9d77aa2df",
+      "source_tag": "0.51.1",
+      "context": ".",
+      "base_pins": {
+        "eclipse-temurin:17": "sha256:fe947d993c32dd9cf651a4353a6ed723c2370b3a9d034ea4cab4775404ea531a"
+      },
+      "edits": [],
+      "local_tag": "hai-marquez:0.51.1-arm64",
+      "tag": "0.51.1-arm64-r1",
+      "arm64": "no arm64 image exists (the pinned image and the 0.51.1 tag are linux/amd64 only, registry read, Oct 22 2026); built from the 0.51.1 source commit, whose base image index lists linux/arm64 (registry read, Oct 22 2026)",
+      "runs_as": "ECS service on the host (P7d) when marquez_enabled is true",
+      "from_lines": 2
+    },
+    "marquez_web": {
+      "kind": "source",
+      "repository": "https://github.com/MarquezProject/marquez",
+      "commit": "27a4a1357d9078bc4e6738524dfe5ba9d77aa2df",
+      "source_tag": "0.51.1",
+      "context": "web",
+      "base_pins": {
+        "node:18-alpine": "sha256:8d6421d663b4c28fd3ebc498332f249011d118945588d0a35cb9bc4b8ca09d9e"
+      },
+      "build_args": {
+        "REACT_APP_ADVANCED_SEARCH": "false"
+      },
+      "edits": [
+        {
+          "file": "web/setupProxy.js",
+          "expression": "s#app\\.listen\\(port, function\\(\\) \\{#app.listen(port, process.env.WEB_HOST || '127.0.0.1', function() {#",
+          "expect": "process.env.WEB_HOST"
+        }
+      ],
+      "local_tag": "hai-marquez-web:0.51.1-arm64",
+      "tag": "0.51.1-arm64-r1",
+      "arm64": "no arm64 image exists (registry read, Oct 22 2026); built from the 0.51.1 source commit, whose base image index lists linux/arm64 (registry read, Oct 22 2026); the edit makes the web server listen on WEB_HOST, 127.0.0.1 by default, because upstream listens on every interface",
+      "runs_as": "ECS service on the host (P7d) when marquez_enabled is true",
+      "from_lines": 1
+    }
+  }
+}
