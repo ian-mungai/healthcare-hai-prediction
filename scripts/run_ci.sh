@@ -13,9 +13,14 @@ set -euo pipefail
 # writing, Markdown lint and documentation gates run in every scope and in every part, also when no group is selected.
 # CI_LIST_ONLY=1 prints the plan and runs nothing. Each group's seconds and each command's start, end and seconds (scripts/quality/timing.sh)
 # are printed and added to the job summary (GITHUB_STEP_SUMMARY).
+# The check groups' functions are not in this file: scripts/ci/groups/<group>.sh holds the functions of one group of config/quality/ci_groups.json. Each group
+# runs in its own shell process (run_group) that loads only scripts/quality/timing.sh and that one file, so the shell state of a group (functions, variables, options,
+# working directory) cannot reach another group or this file. Files and signals are shared (docs/quality_checks.md, Check group files). A missing file fails the run with its name (require_group_file). Only this file, the selector and the shared workflow parts select every group; a
+# body file selects its own group. In the full scope of part "all" the acquisition gate runs as GitHub CI runs it: four
+# shards in the parallel set (each with its own folder, ACQUISITION_PART=shard) and then the combining step (ACQUISITION_PART=combine) with the 90% gate.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
-bash -n scripts/run_ci.sh scripts/infrastructure/*.sh
+bash -n scripts/run_ci.sh scripts/infrastructure/*.sh scripts/ci/groups/*.sh
 # ShellCheck runs without -x here and checks timing.sh as its own input.
 # shellcheck source=/dev/null
 source "$repo_root/scripts/quality/timing.sh"
@@ -60,10 +65,11 @@ if [[ "$scope" == "range" ]]; then
 fi
 plan="$("$python_bin" -m scripts.quality.ci_groups plan "${plan_args[@]}")"
 selected=" "
+run_groups=()
 while read -r kind group rest; do
   case "$kind" in
     reason) printf 'Check groups (scope %s, part %s): %s %s\n' "$scope" "$part" "$group" "$rest" | tee -a "$summary" ;;
-    run) selected+="$group "; printf 'run %s\n' "$group" ;;
+    run) selected+="$group "; run_groups+=("$group"); printf 'run %s\n' "$group" ;;
     skip) printf 'skipped %s: %s\n' "$group" "$rest" | tee -a "$summary" ;;
   esac
 done <<<"$plan"
@@ -72,6 +78,32 @@ if [[ "${CI_LIST_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 is_selected() { [[ "$selected" == *" $1 "* ]]; }
+# require_group_file <group>: a missing or unreadable body file of a check group fails the run with its name.
+require_group_file() {
+  local file="scripts/ci/groups/$1.sh"
+  if [[ ! -f "$repo_root/$file" || ! -r "$repo_root/$file" ]]; then
+    printf 'The body file %s of the check group %s is missing or not readable.\n' "$file" "$1" >&2
+    exit 1
+  fi
+}
+# run_group <group> <entry>: run the entry function of a check group in its own shell process. The process starts clean (no BASH_ENV, no profile) and gets
+# exactly these variables beside the exported environment of this run: python_bin, repo_root, scratch, quality_output, e2e_output and CI_TIMING_FILE. It loads
+# only scripts/quality/timing.sh (timed) and the body file of the group, and runs with the same options as every item (set -euo pipefail).
+# shellcheck disable=SC2016
+run_group() {
+  env -u BASH_ENV -u ENV python_bin="$python_bin" repo_root="$repo_root" scratch="$scratch" quality_output="$quality_output" e2e_output="$e2e_output" \
+    CI_TIMING_FILE="$CI_TIMING_FILE" "$BASH" --noprofile --norc -c \
+    'set -euo pipefail; source "$repo_root/scripts/quality/timing.sh"; source "$repo_root/scripts/ci/groups/$1.sh"; "$2"' check_group "$1" "$2"
+}
+# run_item <item>: a check group's entry function runs through run_group, anything else is a function of this file.
+run_item() {
+  local group_variable="item_group_$1"
+  if [[ -n "${!group_variable:-}" ]]; then
+    run_group "${!group_variable}" "$1"
+  else
+    "$1"
+  fi
+}
 printf '\n| Step | Seconds |\n| --- | ---: |\n' >>"$summary"
 record() { printf '%s: %s s\n' "$1" "$2"; printf '| %s | %s |\n' "$1" "$2" >>"$summary"; }
 
@@ -111,13 +143,14 @@ if [[ "$part" == "gates" ]]; then
   exit 0
 fi
 
-launcher_e2e() {
-  "$python_bin" -m scripts.lakehouse.run_launcher_e2e ${LAUNCHER_SHARD:+--shard "$LAUNCHER_SHARD"}
-}
+# Every variable that run_group passes to a group is set here, before the first group runs, in every part and scope (the hosted launcher job exports neither folder).
+e2e_output="${E2E_ARTIFACT_DIR:-$repo_root/data/e2e/configuration/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
+quality_output="${QUALITY_ARTIFACT_DIR:-$repo_root/data/e2e/quality/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 
 if [[ "$part" != "core" ]] && is_selected launcher; then
+  require_group_file launcher
   started=$SECONDS
-  timed "launcher E2E${LAUNCHER_SHARD:+ shard $LAUNCHER_SHARD}" launcher_e2e
+  timed "launcher E2E${LAUNCHER_SHARD:+ shard $LAUNCHER_SHARD}" run_group launcher launcher_e2e
   record "launcher${LAUNCHER_SHARD:+ shard $LAUNCHER_SHARD}" $((SECONDS - started))
 fi
 if [[ "$part" == "launcher" ]]; then
@@ -126,161 +159,43 @@ if [[ "$part" == "launcher" ]]; then
   exit 0
 fi
 
-e2e_output="${E2E_ARTIFACT_DIR:-$repo_root/data/e2e/configuration/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
-policy_output="${POLICY_ARTIFACT_DIR:-$repo_root/data/e2e/policies/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
-quality_output="${QUALITY_ARTIFACT_DIR:-$repo_root/data/e2e/quality/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
-
-python_lint() {
-  timed "python_lint: typecheck" "$python_bin" -m scripts.quality.typecheck --check-untyped-defs --disallow-untyped-defs
-}
-
-lakehouse_bronze() {
-  timed "lakehouse_bronze: resource checks" "$python_bin" -m scripts.lakehouse.run_resource_checks
-  timed "lakehouse_bronze: run lock E2E" "$python_bin" -m scripts.lakehouse.run_lock_e2e
-  timed "lakehouse_bronze: provenance E2E" "$python_bin" -m scripts.lakehouse.run_provenance_e2e
-  timed "lakehouse_bronze: storage single copy E2E" "$python_bin" -m scripts.lakehouse.run_storage_single_copy_e2e --report "$quality_output/storage_single_copy.json"
-  timed "lakehouse_bronze: contracts E2E" "$python_bin" -m scripts.orchestration.run_contracts_e2e
-}
-
-lakehouse_silver() {
-  # The silver suites must match the kept-model contract, the moved checks and the baselines they are generated from.
-  timed "lakehouse_silver: suite check" "$python_bin" -m scripts.lakehouse.run_silver_e2e --check-suites
-}
-
-# The gold layer is three units (CI_UNITS) that share no folder, port or process: GitHub CI runs the model metadata E2E, the longest command, in
-# its own job, and locally the units run together except writer_setup, which has timing assertions and runs alone before them.
-lakehouse_gold_checks() {
-  # Reference seeds of the gold control bridge, the formula recipes and the repeatable negative cases of their check.
-  timed "lakehouse_gold: bridge references check" "$python_bin" -m scripts.lakehouse.bridge_references --check
-  timed "lakehouse_gold: bridge references E2E" "$python_bin" -m scripts.lakehouse.run_bridge_references_e2e
-  timed "lakehouse_gold: identity splits check" "$python_bin" -m scripts.lakehouse.identity_splits --check
-  timed "lakehouse_gold: source labels check" "$python_bin" -m scripts.lakehouse.source_labels --check
-  timed "lakehouse_gold: identity seeds E2E" "$python_bin" -m scripts.lakehouse.run_identity_seeds_e2e
-  # The gold Great Expectations suites must match the gold contract they are generated from.
-  timed "lakehouse_gold: suites check" "$python_bin" -m scripts.lakehouse.gold_checks check-suites
-  timed "lakehouse_gold: publish contract E2E" "$python_bin" -m scripts.lakehouse.run_gold_publish_e2e --mode contract
-  timed "lakehouse_gold: model metadata check" "$python_bin" -m scripts.quality.model_metadata
-}
-
-lakehouse_gold_writer_setup() {
-  timed "lakehouse_gold: writer set-up E2E" "$python_bin" -m scripts.lakehouse.run_gold_publish_e2e --mode writer_setup
-}
-
-lakehouse_gold_model_metadata_e2e() {
-  timed "lakehouse_gold: model metadata E2E" "$python_bin" -m scripts.quality.run_model_metadata_e2e --workers "${MODEL_METADATA_WORKERS:-auto}"
-}
-
-orchestration_checks() {
-  timed "orchestration_checks: lineage E2E" "$python_bin" -m scripts.orchestration.run_lineage_e2e
-  timed "orchestration_checks: lineage completion E2E" "$python_bin" -m scripts.orchestration.run_lineage_completion_e2e
-  timed "orchestration_checks: lineage amendment E2E" "$python_bin" -m scripts.orchestration.run_lineage_amendment_e2e
-  timed "orchestration_checks: publish contracts" "$python_bin" -m scripts.orchestration.run_publish_contracts
-  timed "orchestration_checks: light pipeline" "$python_bin" -m scripts.orchestration.run_pipeline_light
-  timed "orchestration_checks: stack E2E" "$python_bin" -m scripts.orchestration.run_stack_e2e
-  timed "orchestration_checks: broker E2E" "$python_bin" -m scripts.orchestration.run_broker_e2e
-  timed "orchestration_checks: supervisor E2E" "$python_bin" -m scripts.orchestration.run_supervisor_e2e
-  timed "orchestration_checks: transform broker E2E" "$python_bin" -m scripts.orchestration.run_transform_broker_e2e
-  # The offline checks skip the built Airflow image, which a CI runner does not have.
-  timed "orchestration_checks: offline checks" "$python_bin" -m scripts.orchestration.offline_checks --no-image
-  timed "orchestration_checks: failing first check" "$python_bin" -m scripts.orchestration.run_failing_first --check
-}
-
-python_suppressions() { git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks suppressions; }
-python_subprocess_imports() { git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks subprocess-imports; }
-# Only orchestration/launcher.py may call Docker (D1 section 2 item 4).
-process_start_guard() { git ls-files -z --cached --others --exclude-standard -- '*.py' '*.sh' | xargs -0 "$python_bin" -m scripts.quality.docker_calls; }
-
-repository_code_checks() {
-  timed "repository_code_checks: suppressions" python_suppressions
-  timed "repository_code_checks: subprocess imports" python_subprocess_imports
-  timed "repository_code_checks: process start guard" process_start_guard
-  timed "repository_code_checks: check samples E2E" "$python_bin" -m scripts.quality.run_checks_e2e
-  timed "repository_code_checks: documentation review E2E" "$python_bin" -m scripts.quality.run_documentation_review_e2e
-  timed "repository_code_checks: CI groups selection E2E" "$python_bin" -m scripts.quality.run_ci_groups_e2e --selection-only
-  timed "repository_code_checks: CI reuse E2E" "$python_bin" -m scripts.quality.run_ci_reuse_e2e
-}
-
-configuration_checks() {
-  timed "configuration_checks: infrastructure E2E" "$python_bin" -m scripts.infrastructure.run_e2e --output-directory "$e2e_output"
-  timed "configuration_checks: policy E2E" "$python_bin" -m scripts.infrastructure.run_policy_e2e --output-directory "$policy_output"
-  timed "configuration_checks: quality E2E" "$python_bin" -m scripts.quality.run_e2e --output-directory "$quality_output/e2e"
-  timed "configuration_checks: secret store E2E" "$python_bin" -m scripts.infrastructure.run_secret_store_e2e
-  timed "configuration_checks: pytest with coverage" "$python_bin" -m pytest --cov=scripts.infrastructure --cov-report=term-missing -q
-}
-
-sql_style() {
-  timed "sql_style: SQL style" "$python_bin" -m scripts.quality.lint_sources sql
-}
-
-terraform_checks() {
-  timed "terraform_checks: format" terraform fmt -check -recursive infra
-  export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-$scratch/provider_cache}"
-  mkdir -p "$TF_PLUGIN_CACHE_DIR"
-  # Isolate tests from local credentials, deployment inputs and real Terraform state (this group runs in its own
-  # subshell, so the other groups keep their environment).
-  unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
-  unset AWS_WEB_IDENTITY_TOKEN_FILE AWS_ROLE_ARN AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
-  unset AWS_CONTAINER_AUTHORIZATION_TOKEN AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE
-  export AWS_CONFIG_FILE="$scratch/empty_aws_config"
-  export AWS_SHARED_CREDENTIALS_FILE="$scratch/empty_aws_credentials"
-  export AWS_EC2_METADATA_DISABLED=true TF_IN_AUTOMATION=1 TF_INPUT=0
-  touch "$AWS_CONFIG_FILE" "$AWS_SHARED_CREDENTIALS_FILE"
-  # The stacks run one after the other: Terraform's provider cache is not safe for concurrent init.
-  for stack in storage iam platform; do
-    source_dir="$repo_root/infra"
-    if [[ "$stack" != "storage" ]]; then
-      source_dir="$repo_root/infra/$stack"
-    fi
-    test_dir="$scratch/$stack"
-    mkdir -p "$test_dir"
-    # Copy every file Git tracks in the stack folder (the nested iam stack left out of storage), so a new template folder is
-    # always tested and local state, variable files and provider folders never are. The listing starts at the repository root
-    # with the folder as a pathspec: inside a commit hook GIT_DIR is set, and git -C <folder> would then list the whole tree.
-    prefix="${source_dir#"$repo_root"/}/"
-    while IFS= read -r -d '' file; do
-      relative="${file#"$prefix"}"
-      if [[ "$stack" == "storage" && "$relative" == iam/* ]]; then
-        continue
-      fi
-      mkdir -p "$test_dir/$(dirname "$relative")"
-      cp "$repo_root/$file" "$test_dir/$relative"
-    done < <(git -C "$repo_root" ls-files -z -- "$prefix")
-    printf '\nChecking %s Terraform configuration\n' "$stack"
-    timed "terraform_checks: $stack init" terraform -chdir="$test_dir" init -backend=false -input=false -lockfile=readonly -no-color
-    timed "terraform_checks: $stack validate" terraform -chdir="$test_dir" validate -no-color
-    timed "terraform_checks: $stack test" terraform -chdir="$test_dir" test -no-color
+# The acquisition gate in the full scope of part all: four shards (the parallel set) and the combining step, as the GitHub jobs run them. Each shard has
+# its own folder; the combining step merges the four folders, as the artifact download of GitHub CI does, and enforces the 90% coverage gate.
+acquisition_shards=4
+acquisition_dir="$quality_output/acquisition_shards"
+acquisition_shard() { ACQUISITION_PART=shard ACQUISITION_SHARD="$1/$acquisition_shards" ACQUISITION_SHARD_DIR="$acquisition_dir/shard_$1" bash scripts/acquisition/run_checks.sh; }
+acquisition_shard_1() { acquisition_shard 1; }
+acquisition_shard_2() { acquisition_shard 2; }
+acquisition_shard_3() { acquisition_shard 3; }
+acquisition_shard_4() { acquisition_shard 4; }
+acquisition_combine() {
+  local merged="$acquisition_dir/merged" index
+  rm -rf "$merged"
+  mkdir -p "$merged"
+  for ((index = 1; index <= acquisition_shards; index++)); do
+    cp -R "$acquisition_dir/shard_$index/." "$merged/"
   done
-  static_failed=0
-  for stack in storage iam platform; do
-    source_dir="$repo_root/infra"
-    if [[ "$stack" != "storage" ]]; then
-      source_dir="$repo_root/infra/$stack"
-    fi
-    if ! timed "terraform_checks: $stack static checks" "$python_bin" -m scripts.quality.static_checks --directory "$source_dir" --output-directory "$quality_output/$stack"; then
-      static_failed=1
-    fi
-  done
-  if [[ "$static_failed" != 0 ]]; then
-    printf '\nTerraform static checks failed; review the retained quality evidence.\n' >&2
-    return 1
-  fi
+  ACQUISITION_PART=combine ACQUISITION_SHARD_COUNT="$acquisition_shards" ACQUISITION_SHARD_DIR="$merged" bash scripts/acquisition/run_checks.sh
 }
 
 # The work items: one per group, and for the gold layer one per selected unit. An alone item runs by itself, before the others.
 alone_items=" lakehouse_gold_writer_setup "
 alone=()
 shared=()
-for group in python_lint lakehouse_bronze lakehouse_silver lakehouse_gold orchestration_checks repository_code_checks configuration_checks sql_style terraform_checks; do
-  if ! is_selected "$group"; then
+for group in ${run_groups[@]+"${run_groups[@]}"}; do
+  if [[ "$group" == "launcher" || "$group" == "acquisition" ]]; then
     continue
   fi
+  require_group_file "$group"
   if [[ "$group" != "lakehouse_gold" ]]; then
+    printf -v "item_group_$group" '%s' "$group"
     shared+=("$group")
     continue
   fi
   for unit in $gold_units; do
     case " $units " in
       *" $unit "*)
+        printf -v "item_group_lakehouse_gold_$unit" '%s' "$group"
         if [[ "$alone_items" == *" lakehouse_gold_$unit "* ]]; then
           alone+=("lakehouse_gold_$unit")
         else
@@ -290,6 +205,9 @@ for group in python_lint lakehouse_bronze lakehouse_silver lakehouse_gold orches
     esac
   done
 done
+if [[ "$part" == "all" ]] && is_selected acquisition; then
+  shared+=(acquisition_shard_1 acquisition_shard_2 acquisition_shard_3 acquisition_shard_4)
+fi
 
 failed=()
 # run_items <item>...: start the items at the same time, wait for all, then print each log and its seconds in the given order.
@@ -300,7 +218,7 @@ run_items() {
       set -euo pipefail
       export CI_TIMING_FILE="$scratch/$item.timing"
       item_started=$SECONDS
-      "$item"
+      run_item "$item"
       printf '%s\n' $((SECONDS - item_started)) >"$scratch/$item.seconds"
     ) >"$scratch/$item.log" 2>&1 &
     pids+=("$!")
@@ -333,9 +251,11 @@ if ((${#failed[@]})); then
 fi
 
 if [[ "$part" == "all" ]] && is_selected acquisition; then
-  started=$SECONDS
-  bash scripts/acquisition/run_checks.sh
-  record acquisition $((SECONDS - started))
+  run_items acquisition_combine
+  if ((${#failed[@]})); then
+    printf '\nLocal CI failed in: %s\n' "${failed[*]}" >&2
+    exit 1
+  fi
 fi
 
 printf '\nAll local CI checks passed without AWS credentials.\n'
