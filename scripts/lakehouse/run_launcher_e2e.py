@@ -3111,6 +3111,8 @@ import sys
 import time
 
 config = json.load(open(sys.argv[1]))
+startup_began = time.monotonic()
+time.sleep(config.get("startup_delay", 0))
 # Output goes to a file so that a process left alive by a denied signal cannot hold the harness's pipes open.
 log = os.open(config["output"], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
 os.dup2(log, 1)
@@ -3119,9 +3121,11 @@ spec = importlib.util.spec_from_file_location("deadline_run", config["module"])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 real_time, real_mono = time.time, time.monotonic
-calls = {"mono": 0}
+calls = {"mono": 0, "wall": 0}
 signals = []
+startup_seconds = real_mono() - startup_began
 deadline = real_time() + config["deadline_in"]
+sample_mono, sample_wall = real_mono(), real_time() + config["wall_offset"]
 
 
 def stall():
@@ -3133,8 +3137,17 @@ def stall():
     os.kill(pid, signal.SIGSTOP)
 
 
+def wall():
+    calls["wall"] += 1
+    if config.get("bracket_delay"):
+        time.sleep(config["bracket_delay"])
+    return sample_wall if config.get("valid_sample") else real_time() + config["wall_offset"]
+
+
 def mono():
     calls["mono"] += 1
+    if config.get("valid_sample") and calls["mono"] <= 2:
+        return sample_mono
     if config.get("stall_at") == calls["mono"]:
         stall()
     return real_mono()
@@ -3169,8 +3182,12 @@ def delayed_spawn(*args, **kwargs):
 
 os.posix_spawnp = delayed_spawn
 time.sleep(config.get("start_delay", 0))
-code = module.run(config["command"], deadline, wall=lambda: real_time() + config["wall_offset"], mono=mono)
-json.dump({"exit": code, "deadline": deadline, "signals": signals, "mono_calls": calls["mono"], "ended": real_time()}, open(config["result"], "w"))
+code = module.run(config["command"], deadline, wall=wall, mono=mono)
+json.dump(
+    {"exit": code, "deadline": deadline, "signals": signals, "mono_calls": calls["mono"], "wall_calls": calls["wall"],
+     "ended": real_time(), "startup_seconds": startup_seconds},
+    open(config["result"], "w"),
+)
 sys.exit(code)
 """
 STUBBORN = """
@@ -3204,6 +3221,9 @@ def run_deadline_case(
     deny_signals: list[int] | None = None,
     transient_eperm_probes: int = 0,
     spawn_delay: float = 0.0,
+    startup_delay: float = 0.0,
+    bracket_delay: float = 0.0,
+    valid_sample: bool = False,
 ) -> dict[str, Any]:
     """One acceptance run of the real entrypoint code with a TERM-ignoring command that has a child process; returns the host-time stamps."""
     folder = env.work / f"deadline_{name}"
@@ -3221,6 +3241,9 @@ def run_deadline_case(
         "deny_signals": [int(n) for n in deny_signals or []],
         "transient_eperm_probes": transient_eperm_probes,
         "spawn_delay": spawn_delay,
+        "startup_delay": startup_delay,
+        "bracket_delay": bracket_delay,
+        "valid_sample": valid_sample,
         "command": command or stubborn_command(folder, record, bool(deny_signals)),
         "result": str(folder / "result.json"),
         "output": str(folder / "wrapper_stderr.txt"),
@@ -3267,6 +3290,8 @@ def run_deadline_case(
         "wall_offset": wall_offset,
         "mono_calls": result.get("mono_calls"),
         "ended": result.get("ended"),
+        "startup_seconds": result.get("startup_seconds"),
+        "wall_calls": result.get("wall_calls"),
         "leftover_before_cleanup": leftover_before_cleanup,
         "stderr_tail": output[-300:],
     }
@@ -3276,6 +3301,46 @@ def run_deadline_case(
     stamps["requirement_met"] = (started is None or group_empty is not None and group_empty <= deadline + 60) and (started is None or started["exec"] <= cutoff)
     (folder / "stamps.json").write_text(json.dumps(stamps, indent=1))
     return stamps
+
+
+def run_normal_deadline_case(env: Env, startup_delay: float = 0.0, bracket_delay: float = 0.0) -> dict[str, Any]:
+    """Run the exit-code probe with a valid clock sample, then real admission, watchdog and cleanup clocks."""
+    return run_deadline_case(
+        env, "normal_exit", deadline_in=30, command=["sh", "-c", "exit 7"], startup_delay=startup_delay, bracket_delay=bracket_delay, valid_sample=True
+    )
+
+
+@case("deadline_startup_delay")
+def deadline_startup_delay(env: Env) -> dict[str, bool]:
+    """Separate command status from startup delay, missed cutoffs and clock-sampling refusal."""
+    normal = run_normal_deadline_case(env, startup_delay=26, bracket_delay=0.060)
+    marker = env.work / "late_command"
+    expired = run_deadline_case(
+        env,
+        "startup_after_cutoff",
+        deadline_in=9,
+        start_delay=6,
+        valid_sample=True,
+        command=[sys.executable, "-c", "import pathlib, sys; pathlib.Path(sys.argv[1]).touch(); sys.exit(7)", str(marker)],
+    )
+    sample_marker = env.work / "unsampled_command"
+    unsampled = run_deadline_case(
+        env,
+        "wide_clock_brackets",
+        deadline_in=30,
+        bracket_delay=0.060,
+        command=[sys.executable, "-c", "import pathlib, sys; pathlib.Path(sys.argv[1]).touch()", str(sample_marker)],
+    )
+    (env.work / "startup_delay.json").write_text(json.dumps({"result": normal, "expired": expired, "unsampled": unsampled}, indent=1))
+    return {
+        "the normal-exit wrapper is delayed before fixing its command deadline": normal["startup_seconds"] >= 26,
+        "a normal exit with a valid clock sample returns the command's code despite startup and sampling delays": normal["exit"] == 7
+        and normal["wall_calls"] == 1,
+        "ten wide real clock brackets refuse the command without starting it": unsampled["exit"] == 124
+        and unsampled["wall_calls"] == 10
+        and not sample_marker.exists(),
+        "a delay after the deadline is fixed still refuses the command at the original cutoff": expired["exit"] == 124 and not marker.exists(),
+    }
 
 
 @case("deadline_acceptance")
@@ -3329,12 +3394,7 @@ def deadline_acceptance(env: Env) -> dict[str, bool]:
         timeout=30,
         env={"PATH": os.environ["PATH"], "PYTHONDONTWRITEBYTECODE": "1"},
     )
-    normal = run_command(
-        sys.executable,
-        ["-B", str(ROOT / "services/hai/deadline_run.py"), "sh", "-c", "exit 7"],
-        timeout=30,
-        env={"PATH": os.environ["PATH"], "HAI_DEADLINE_UTC": str(time.time() + 30), "PYTHONDONTWRITEBYTECODE": "1"},
-    )
+    normal = run_normal_deadline_case(env)
     (env.work / "deadline_stamps.json").write_text(json.dumps(stamps, indent=1))
     return {
         "start after the cutoff exits 124 and starts nothing": stamps["start_after_cutoff"]["exit"] == 124 and stamps["start_after_cutoff"]["exec"] is None,
@@ -3378,7 +3438,7 @@ def deadline_acceptance(env: Env) -> dict[str, bool]:
         ),
         "a skew beyond S is detected by the acceptance test": not stamps["skew_beyond_s"]["requirement_met"],
         "a missing deadline variable exits 125 and starts nothing": missing.returncode == 125,
-        "a normal exit returns the command's code": normal.returncode == 7,
+        "a normal exit returns the command's code": normal["exit"] == 7,
         "every TERM-ignoring group was killed": all(s["group_empty"] is not None for s in stamps.values() if s["exec"] is not None),
     }
 
@@ -9017,6 +9077,7 @@ ALL_CASES = (
     secret_commitment,
     effective_spec_digest,
     deadline_acceptance,
+    deadline_startup_delay,
     deadline_spec,
     start_after_deadline_refused,
     launcher_enforces_deadline,
