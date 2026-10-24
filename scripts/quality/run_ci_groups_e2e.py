@@ -670,7 +670,14 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
         path_case("layer_gold_suite_is_read_by_bronze_first", "data_contracts/great_expectations/gold/gold_keys.json", [*LAYERS, "orchestration_checks"]),
         path_case("layer_saved_silver_suite_selects_silver_and_gold", "features/great_expectations/suites/silver_spatial.json", silver_gold),
         path_case("layer_suite_baselines_are_read_by_bronze_first", "data_contracts/great_expectations/baselines.json", [*LAYERS, "orchestration_checks"]),
-        path_case("layer_archived_model_is_read_by_gold_only", "features/models/int_spine_county_context.sql", ["lakehouse_gold", "sql_style"]),
+        path_case(
+            "layer_feature_model_is_read_by_gold_only",
+            "dbt/models/features/int_spine_county_context.sql",
+            ["lakehouse_gold", "orchestration_checks", "sql_style"],
+        ),
+        path_case(
+            "layer_feature_recipe_seed_selects_gold_only", "dbt/seeds/features/mup_measures_recipe.csv", ["lakehouse_gold", "orchestration_checks", "sql_style"]
+        ),
         path_case("layer_silver_columns_select_silver_and_gold", "data_contracts/lakehouse/silver_columns.json", [*silver_gold, "orchestration_checks"]),
         path_case("layer_bronze_table_map_selects_every_layer", "config/lakehouse/bronze_tables.json", [*LAYERS, "configuration_checks"]),
         staged_case(
@@ -1086,8 +1093,9 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         selection_case(
             work,
             "feature_sql_selects_inventory",
-            ["--scope", "paths", "--path", "features/macros/hospital_alignment.sql", "--part", "core+layers"],
-            ["lakehouse_gold", "sql_style"],
+            ["--scope", "paths", "--path", "dbt/macros/features/hospital_alignment.sql", "--part", "core+layers"],
+            # The bronze provenance runner seals every dbt macro, so a feature macro also runs bronze and the layers below it.
+            ["lakehouse_bronze", "lakehouse_silver", "lakehouse_gold", "orchestration_checks", "sql_style"],
         ),
         selection_case(
             work,
@@ -1170,6 +1178,10 @@ OLD_GOLD_COMMANDS = (
     "scripts.lakehouse.identity_splits --check",
     "scripts.lakehouse.source_labels --check",
     "scripts.lakehouse.run_identity_seeds_e2e",
+    "scripts.lakehouse.feature_sources --check",
+    "scripts.lakehouse.run_feature_sources_e2e",
+    "scripts.lakehouse.feature_columns --check",
+    "scripts.lakehouse.run_feature_columns_e2e",
     "scripts.lakehouse.gold_checks check-suites",
     "scripts.lakehouse.run_gold_publish_e2e --mode contract",
     "scripts.lakehouse.run_gold_publish_e2e --mode writer_setup",
@@ -1301,6 +1313,8 @@ def gold_unit_cases() -> list[dict[str, Any]]:
     folders = {
         "scripts/lakehouse/run_bridge_references_e2e.py": "data/e2e/bridge_references",
         "scripts/lakehouse/run_identity_seeds_e2e.py": "data/e2e/gold_identity_seeds",
+        "scripts/lakehouse/run_feature_sources_e2e.py": "data/e2e/feature_sources",
+        "scripts/lakehouse/run_feature_columns_e2e.py": "data/e2e/feature_columns",
         "scripts/quality/run_model_metadata_e2e.py": "data/e2e/model_metadata",
         "scripts/lakehouse/run_gold_publish_e2e.py": "data/e2e/gold_publish",
     }

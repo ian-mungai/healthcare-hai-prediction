@@ -456,210 +456,252 @@
     },
     "features/macros/care_compare_alignment.sql": {
       "blob": "72a23d43898289143e2fcdf6ea2cc4cf0d754801",
+      "moved_to": "dbt/macros/features/care_compare_alignment.sql",
       "sha256": "c61f315b0f15b7e879019b54e591bef0f1f74301bd5ae392c3a27412f93fdf3a",
       "source": "dbt/macros/care_compare_alignment.sql"
     },
     "features/macros/cmi_years.sql": {
       "blob": "48412a4330c9825392b1da1875a0269f6190cdc8",
+      "moved_to": "dbt/macros/features/cmi_years.sql",
       "sha256": "0ee5f3b54da9617cdd8c5cdbb50c6f7e3846e9fa0d5ba7efe2c67aa7c13d1d6e",
       "source": "dbt/macros/cmi_years.sql"
     },
     "features/macros/hai_outcome_columns.sql": {
       "blob": "1bed20d23b53de5d81199f2f0c4e7a80d4597f35",
+      "moved_to": "dbt/macros/features/hai_outcome_columns.sql",
       "sha256": "2aad53152776bc3f88fade838a3a14c1834cde16d8ee44e3b0cf777a94fd00fb",
       "source": "dbt/macros/hai_outcome_columns.sql"
     },
     "features/macros/hospital_alignment.sql": {
       "blob": "a2d97f89ee4682e6f692241492517ac25bb74355",
+      "moved_to": "dbt/macros/features/hospital_alignment.sql",
       "sha256": "0282229464327303957563ee44eb6dce80f8273eea73fd5336891c0e4aac247a",
       "source": "dbt/macros/hospital_alignment.sql"
     },
     "features/macros/scd2.sql": {
       "blob": "55b888b818f2bea0ac7ea56aaed1ef48ecae8591",
+      "moved_to": "dbt/macros/features/scd2.sql",
       "sha256": "e90f0b633e32760e5c937674acacbb5d1b6dfa7e0a9c5f31f77d8de6d840e793",
       "source": "dbt/macros/scd2.sql"
     },
     "features/models/_archived_models.yml": {
+      "moved_to": "dbt/models/features/_features__models.yml",
       "sha256": "e7ac7cad20893c394d9cb44743dda6189bfb7f0b33edd28f9629fbe13c0f0905",
       "source": "dbt/models/silver/intermediate/_intermediate__models.yml (entries)"
     },
     "features/models/int_cmi_holds.sql": {
       "blob": "cec43f078e320b3088d247c5ccb8518f477271a7",
+      "moved_to": "dbt/models/features/int_cmi_holds.sql",
       "sha256": "5a38fe28456ee8adc0688edbdc5727fe88add308228f0325bcd3ac31b3bf0c14",
       "source": "dbt/models/silver/intermediate/int_cmi_holds.sql"
     },
     "features/models/int_cmi_hospital_data_years.sql": {
       "blob": "91a4b4d7b23ae96d28be7068283b933c28f0c7ac",
+      "moved_to": "dbt/models/features/int_cmi_hospital_data_years.sql",
       "sha256": "ee91cde7a3e00fe41e8c2bbecf332df2152339db38574659f76093643b771f2e",
       "source": "dbt/models/silver/intermediate/int_cmi_hospital_data_years.sql"
     },
     "features/models/int_cmi_hospital_years.sql": {
       "blob": "57bfd31115ac4e74ffb19ad70187717d5bbf7354",
+      "moved_to": "dbt/models/features/int_cmi_hospital_years.sql",
       "sha256": "9d5c26303153545bb5d866016e1676260fa634cdd198c1c6d0df101764f240e2",
       "source": "dbt/models/silver/intermediate/int_cmi_hospital_years.sql"
     },
     "features/models/int_cost_report_measures.sql": {
       "blob": "0110cac5773c7f74f86d4b2fde7a83dbf3a77ff5",
+      "moved_to": "dbt/models/features/int_cost_report_measures.sql",
       "sha256": "b282e0530e498f2137f7b8cd977b3fae7863fc56a3df1fed2c4523aec4d2dff0",
       "source": "dbt/models/silver/intermediate/int_cost_report_measures.sql"
     },
     "features/models/int_hai_outcome_values.sql": {
       "blob": "974219fe40533e588599bf4149f7060e850787a3",
+      "moved_to": "dbt/models/features/int_hai_outcome_values.sql",
       "sha256": "765f24221dc4bfa2b735369e3c563172b3515aea4a6e5d6b0ecef15fbc8268a1",
       "source": "dbt/models/silver/intermediate/int_hai_outcome_values.sql"
     },
     "features/models/int_hospital_hgi_history.sql": {
       "blob": "c7ee988bad86323c70eb19abede644d02914d245",
+      "moved_to": "dbt/models/features/int_hospital_hgi_history.sql",
       "sha256": "091e19da177bcd1d94678792640f024ec0f5d817e0e402b153ed201ea4284df4",
       "source": "dbt/models/silver/intermediate/int_hospital_hgi_history.sql"
     },
     "features/models/int_hospital_ownership_history.sql": {
       "blob": "a3b22f5f5ef812a90eff5bb9aad6185163669c7e",
+      "moved_to": "dbt/models/features/int_hospital_ownership_history.sql",
       "sha256": "ab718c638cb3cbe0481c04fca0be7abb4081a4a805acb7ac55dfd81294c3c81a",
       "source": "dbt/models/silver/intermediate/int_hospital_ownership_history.sql"
     },
     "features/models/int_hospital_pos_history.sql": {
       "blob": "2b2a5c8a934b5e90f0a4fe3f9ba7678771a66576",
+      "moved_to": "dbt/models/features/int_hospital_pos_history.sql",
       "sha256": "6509a4670a755941e90136fdbad02311270864c97b73905bbc583ebc9e018173",
       "source": "dbt/models/silver/intermediate/int_hospital_pos_history.sql"
     },
     "features/models/int_hospital_spine.sql": {
       "blob": "6fc675b9507c9e381d61de88a48669865a12b222",
+      "moved_to": "dbt/models/features/int_hospital_spine.sql",
       "sha256": "32b994838bfcb34971fe01a0af43557d2e328fb7410d6ea93fafe31fc9fe0a2e",
       "source": "dbt/models/silver/intermediate/int_hospital_spine.sql"
     },
     "features/models/int_impact_measures.sql": {
       "blob": "3c77ece4c12f1ee0db3bfdcf42d4d528391c5a6e",
+      "moved_to": "dbt/models/features/int_impact_measures.sql",
       "sha256": "4ea1cd871fa19fdb8a266a7008c2d98742e475be98cf5529bcf5083c905db836",
       "source": "dbt/models/silver/intermediate/int_impact_measures.sql"
     },
     "features/models/int_mup_measures.sql": {
       "blob": "975bc1a59f492549580ab2944842d949d0674b12",
+      "moved_to": "dbt/models/features/int_mup_measures.sql",
       "sha256": "24d2760b619ad58c474a1ea224f7461fa848e10e0c0f9e0a961e8f4de4ce387a",
       "source": "dbt/models/silver/intermediate/int_mup_measures.sql"
     },
     "features/models/int_occmix_measures.sql": {
       "blob": "034cadf01f820f03864e42159f6ce4fbe14fe8ec",
+      "moved_to": "dbt/models/features/int_occmix_measures.sql",
       "sha256": "deec7c9b39d0fc2c3e260fae5aaab4c6b19c62f0d4b57d4d253cf6e9a5e1aa86",
       "source": "dbt/models/silver/intermediate/int_occmix_measures.sql"
     },
     "features/models/int_registry_measure_windows.sql": {
       "blob": "4f17dcf05cbf16e4163aedbeac7a1db5fd979603",
+      "moved_to": "dbt/models/features/int_registry_measure_windows.sql",
       "sha256": "e6109d8ce29f93c1aa10dd74ab6e043e0b4ffa791ed3a1561203329489a5dac0",
       "source": "dbt/models/silver/intermediate/int_registry_measure_windows.sql"
     },
     "features/models/int_spine_care_compare_measures.sql": {
       "blob": "19cce8ed609f338e2f5e8ae513a21fd97d65890b",
+      "moved_to": "dbt/models/features/int_spine_care_compare_measures.sql",
       "sha256": "7dda4283787f83d92bf0142bb93482caf183ec975eee7d6c5d28183ba06b9883",
       "source": "dbt/models/silver/intermediate/int_spine_care_compare_measures.sql"
     },
     "features/models/int_spine_county_context.sql": {
       "blob": "bc3a07f89fe43efbb383ba9771ddd2e39f5728e6",
+      "moved_to": "dbt/models/features/int_spine_county_context.sql",
       "sha256": "d3d28d6ea7b159fdfda6edef47d4e982d5adbba3790db1a3df19fea25bf041cd",
       "source": "dbt/models/silver/intermediate/int_spine_county_context.sql"
     },
     "features/models/int_spine_county_measures.sql": {
       "blob": "306eb5d26b1bffb54139f6819ab30a244ff4dcfa",
+      "moved_to": "dbt/models/features/int_spine_county_measures.sql",
       "sha256": "3611a5cb8e1fb6b5f4fbe4076fb65ef4eec4b848e24f9667599933b8800f2148",
       "source": "dbt/models/silver/intermediate/int_spine_county_measures.sql"
     },
     "features/models/int_spine_hai_outcomes.sql": {
       "blob": "e3fb69bb71d66aa43c8a48a36ded121314a7c94a",
+      "moved_to": "dbt/models/features/int_spine_hai_outcomes.sql",
       "sha256": "319f17a01c32a592964540f086b1fc28b922487f99573a1abc07e3b505bf507d",
       "source": "dbt/models/silver/intermediate/int_spine_hai_outcomes.sql"
     },
     "features/models/int_spine_hospital_measures.sql": {
       "blob": "71311cc78ceecd469014252232f1c307197a6457",
+      "moved_to": "dbt/models/features/int_spine_hospital_measures.sql",
       "sha256": "ed2cb049caceb44f231e2b8c70709817dac482e5131f0c900ab736ba66ff2d08",
       "source": "dbt/models/silver/intermediate/int_spine_hospital_measures.sql"
     },
     "features/models/int_spine_linkage.sql": {
       "blob": "6a1b5ffeb438e63e472b9511dfcf0ac58911c0fd",
+      "moved_to": "dbt/models/features/int_spine_linkage.sql",
       "sha256": "8604fa22f70b15f1f6ff67dcdaa625c4069224e8848c2c2fbd3ec19661ebb9bb",
       "source": "dbt/models/silver/intermediate/int_spine_linkage.sql"
     },
     "features/models/int_spine_operations_measures.sql": {
       "blob": "5a501b007ce01aed48d118983a482c8d5bb01b42",
+      "moved_to": "dbt/models/features/int_spine_operations_measures.sql",
       "sha256": "19867e66a0bb30cbcb99c55b1d54c622216a3b8473f59b6f586a8fe858dcf203",
       "source": "dbt/models/silver/intermediate/int_spine_operations_measures.sql"
     },
     "features/models/int_spine_validation_measures.sql": {
       "blob": "9c65ecc5893bf96b5b4305a4b696882b9e47cb40",
+      "moved_to": "dbt/models/features/int_spine_validation_measures.sql",
       "sha256": "9cb47a23c740e110ae60dde31edb6c4f98e6d3e52dac8d5a973b6d9030018212",
       "source": "dbt/models/silver/intermediate/int_spine_validation_measures.sql"
     },
     "features/models/int_validation_measure_windows.sql": {
       "blob": "9b5a504846a26b4871d2a0002cf9be8c947370d5",
+      "moved_to": "dbt/models/features/int_validation_measure_windows.sql",
       "sha256": "718f763cffe0bf76e43a8fa60c0d6ebc6a94ef16039e25abe0bb576c4d90f9a2",
       "source": "dbt/models/silver/intermediate/int_validation_measure_windows.sql"
     },
     "features/models/int_validation_program_values.sql": {
       "blob": "266b70ff9517c768242864d69fe5b638d1299115",
+      "moved_to": "dbt/models/features/int_validation_program_values.sql",
       "sha256": "6cbdb55e86c5d7342fb189ed7ce8e8360081961af6c33250575284f0526e5b4c",
       "source": "dbt/models/silver/intermediate/int_validation_program_values.sql"
     },
     "features/tests/assert_care_compare_as_of_start.sql": {
       "blob": "12b3e572456935c5968732620d6b1200c894a322",
+      "moved_to": "dbt/tests/features/assert_care_compare_as_of_start.sql",
       "sha256": "cbcee7c91985b7d823539c40f9b6fe9126cf6c1821c2ef0633f90bf8bd11463e",
       "source": "dbt/tests/assert_care_compare_as_of_start.sql"
     },
     "features/tests/assert_care_compare_edv_known.sql": {
       "blob": "7b369de0c79449e2c0cefee65094209d2cb51786",
+      "moved_to": "dbt/tests/features/assert_care_compare_edv_known.sql",
       "sha256": "2ac6d612ee1e41516177bdaefca375a294c9bf786a8c4fc048c704c7035de10d",
       "source": "dbt/tests/assert_care_compare_edv_known.sql"
     },
     "features/tests/assert_county_context_as_of_start.sql": {
       "blob": "141362a614eb17c0970b8ff7ac9bf267b9a22358",
+      "moved_to": "dbt/tests/features/assert_county_context_as_of_start.sql",
       "sha256": "f792d6d31f24623693239a70317ce5e51d6df88cb5d60d53bbbbcacfddf2ea9c",
       "source": "dbt/tests/assert_county_context_as_of_start.sql"
     },
     "features/tests/assert_county_measures_as_of_start.sql": {
       "blob": "b6e45790fb3b00642b1d6568dedc5a4308c49000",
+      "moved_to": "dbt/tests/features/assert_county_measures_as_of_start.sql",
       "sha256": "f34a5e252fe663fce87344ffead0dd8f2af48702385c5e56bfc90a0895351070",
       "source": "dbt/tests/assert_county_measures_as_of_start.sql"
     },
     "features/tests/assert_hai_outcome_consistent.sql": {
       "blob": "5ac792748b01f1c79567f9bdf330d35b90d7bf65",
+      "moved_to": "dbt/tests/features/assert_hai_outcome_consistent.sql",
       "sha256": "89e9f9db786279b30c92508c9050aa0a3d05733ef7c0550e12d6786299056d73",
       "source": "dbt/tests/assert_hai_outcome_consistent.sql"
     },
     "features/tests/assert_hai_outcome_values_cast.sql": {
       "blob": "0103ca7f96cd7ae70091e46d2f72d9c0ff064c75",
+      "moved_to": "dbt/tests/features/assert_hai_outcome_values_cast.sql",
       "sha256": "dc28922fd9906ed8be2784eff483e1b8f8d083b5ae1ee14fb9e05b6026c4c2db",
       "source": "dbt/tests/assert_hai_outcome_values_cast.sql"
     },
     "features/tests/assert_history_versions_valid.sql": {
       "blob": "916a3ffd9d2cf5c87a82428d9956fc2d386a879f",
+      "moved_to": "dbt/tests/features/assert_history_versions_valid.sql",
       "sha256": "d9da91ae5442c1dbd3ce63e4a06627e1fb859bb58105a428316f47c73996ed60",
       "source": "dbt/tests/assert_history_versions_valid.sql"
     },
     "features/tests/assert_hospital_measures_as_of_start.sql": {
       "blob": "d85685f713fb2b6c3134b5025c2e809bc75bd4ed",
+      "moved_to": "dbt/tests/features/assert_hospital_measures_as_of_start.sql",
       "sha256": "ae99328734a36213f40d2fd6584cfd518abac2f3451323b86fba176a7f5f5014",
       "source": "dbt/tests/assert_hospital_measures_as_of_start.sql"
     },
     "features/tests/assert_occmix_holds_exclude_values.sql": {
       "blob": "642af90b9d19db9a841b669b4a0bca9b5f23f14a",
+      "moved_to": "dbt/tests/features/assert_occmix_holds_exclude_values.sql",
       "sha256": "a6a4a3175ec947d35381424a7b488b22de398d80c3192e02697c8e294889f9d1",
       "source": "dbt/tests/assert_occmix_holds_exclude_values.sql"
     },
     "features/tests/assert_occmix_measure_scope.sql": {
       "blob": "eb5dc2208270d7eba74efa79505405e5248ebde4",
+      "moved_to": "dbt/tests/features/assert_occmix_measure_scope.sql",
       "sha256": "2390778a80f75d40b5e146c1d3b80f7e76a58b21f5f869ba8730fa66b4fdaaed",
       "source": "dbt/tests/assert_occmix_measure_scope.sql"
     },
     "features/tests/assert_operations_measures_as_of_start.sql": {
       "blob": "1d114d565f5543c6728f58df817b23cf2b9379d2",
+      "moved_to": "dbt/tests/features/assert_operations_measures_as_of_start.sql",
       "sha256": "18b02df42d939ea7b734298bf76ede7332eac6134d7b160b745f8e63811d7b0f",
       "source": "dbt/tests/assert_operations_measures_as_of_start.sql"
     },
     "features/tests/assert_spine_as_of_window_start.sql": {
       "blob": "aaff6b1a4317eb2b2ba6afcd3586890a67ed632e",
+      "moved_to": "dbt/tests/features/assert_spine_as_of_window_start.sql",
       "sha256": "b978ae1fb9bc1290cff0ac5e1ad277c8ddbdec324c7d048083a4a8ee28066fd8",
       "source": "dbt/tests/assert_spine_as_of_window_start.sql"
     },
     "features/tests/assert_validation_measures_overlap.sql": {
       "blob": "acf80ac19669481bc622db792283ed2d41f6786d",
+      "moved_to": "dbt/tests/features/assert_validation_measures_overlap.sql",
       "sha256": "601e54f298739822f5c6b15e5cb6426b2ae28f6431a153c8b12fb63418372d2b",
       "source": "dbt/tests/assert_validation_measures_overlap.sql"
     }
@@ -674,7 +716,7 @@
     "int_validation_program_values"
   ],
   "image_id": "sha256:dc4942af06c093e044606553a647fc1551c3ec8e8f91fabb40cce18e25e9b217",
-  "recover": "git show <commit>:<source> restores any file; the runners' symbols are at the recorded lines of their blob.",
+  "recover": "git show <commit>:<source> restores any file; the runners' symbols are at the recorded lines of their blob. Files with moved_to were moved into the dbt project by the feature phase and rewritten on gold: their sha256 and blob describe the archived copy at the commit, not the file now at moved_to.",
   "references": {
     "fixture": {
       "build_file": "data/analytics/dbt/e2e/base/staging.duckdb",

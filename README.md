@@ -86,7 +86,7 @@ project bucket. `down` stops the containers and keeps the catalog database.
 | Bronze | Source tables in Iceberg | Acquisition jobs load the approved source files. |
 | Silver | Validated atomic tables in Iceberg namespace `silver`, under `lakehouse/silver/` | Trigger `silver_transform_dag` by hand (`scripts.orchestration.trigger_dag`) to pin bronze, build and validate silver, then publish a snapshot set. |
 | Gold | Atomic facts, dimensions and bridges in Iceberg | Trigger `gold_transform_dag` by hand (`scripts.orchestration.trigger_dag`) to select a committed silver snapshot set, build and validate gold, then publish it. |
-| Features | Definitions under `features/` | Generate research joins, alignments and derived ratios when the feature phase needs them. |
+| Features | Models in `dbt/models/features/` and formula recipes in `dbt/seeds/features/` | Build research joins, alignments and derived ratios from gold as views when the feature phase needs them. |
 
 Publication verification is pending. Fixture runs use a test registry and local Iceberg catalog. Silver and gold writes follow the run mode. `publish_fixture` runs write only under `lakehouse/silver_e2e/` and `lakehouse/gold_e2e/`. `real` runs write only under `lakehouse/silver/` and `lakehouse/gold/`. The launcher refuses any other silver or gold write. Local builds use DuckDB; Athena access through an AWS Glue catalog mirror belongs to the final AWS migration stage. Asset scheduling stays disabled. `gold_maintenance_dag` retains registered snapshot sets when maintaining gold.
 

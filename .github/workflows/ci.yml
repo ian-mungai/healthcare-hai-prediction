@@ -198,7 +198,7 @@ jobs:
           - layer: Gold
             part: gold
             units: checks writer_setup
-            timeout: 15
+            timeout: 60
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
