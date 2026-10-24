@@ -218,11 +218,11 @@ run "host_auto_scaling_group" {
   assert {
     condition = (
       toset([for tag in aws_autoscaling_group.host.tag : "${tag.key}=${tag.value}"]) ==
-      toset(["Project=example_project", "Environment=dev", "ManagedBy=Terraform", "Name=example_project_host_dev"]) &&
-      !anytrue([for tag in aws_autoscaling_group.host.tag : tag.propagate_at_launch]) &&
+      toset(["Project=example_project", "Environment=dev", "ManagedBy=Terraform", "Name=example_project_host_dev", "AmazonECSManaged="]) &&
+      toset([for tag in aws_autoscaling_group.host.tag : tag.key if tag.propagate_at_launch]) == toset(["AmazonECSManaged"]) &&
       output.host_launch_template.version == "1" && output.host_autoscaling_group_name == "example_project_host_dev"
     )
-    error_message = "The group carries the project tags; the launch template's tag specifications tag the instance, and the group hands nothing else to it."
+    error_message = "The group carries the project tags and the AmazonECSManaged tag that ECS adds; the launch template tags the instance, and the group propagates only the ECS tag."
   }
 }
 

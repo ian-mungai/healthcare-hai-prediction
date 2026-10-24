@@ -160,6 +160,13 @@ resource "aws_autoscaling_group" "host" {
     }
   }
 
+  # ECS adds this tag when it creates the capacity provider; declaring it as ECS sets it keeps the IAM plan free of drift.
+  tag {
+    key                 = "AmazonECSManaged"
+    value               = ""
+    propagate_at_launch = true
+  }
+
   lifecycle {
     ignore_changes = [desired_capacity]
   }
