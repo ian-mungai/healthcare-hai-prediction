@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "NoTreeInput",
+      "Effect": "Deny",
+      "Action": ["s3:GetObject", "s3:GetObjectVersion"],
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/*/inputs/trees/*"
+    }
+  ]
+}
