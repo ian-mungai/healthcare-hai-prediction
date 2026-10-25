@@ -94,6 +94,9 @@
     ],
     "repository_code_checks": [
       "\\.(py|sh)$",
+      "(^|/)Dockerfile$",
+      "^[^/]*compose[^/]*\\.ya?ml$",
+      "^(orchestration|services|config)/.*compose[^/]*\\.ya?ml$",
       "^scripts/quality/",
       "^config/quality/",
       "^\\.env\\.example$",

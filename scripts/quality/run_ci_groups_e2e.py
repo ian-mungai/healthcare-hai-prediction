@@ -161,7 +161,7 @@ ORCHESTRATION_SHARED = {
     "scripts/lakehouse/memory_budget.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/dbt_package_archive.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/__init__.py": LAKEHOUSE_SCRIPT,
-    "docker-compose.yaml": [*LAYERS, "orchestration_checks"],
+    "docker-compose.yaml": [*LAYERS, "orchestration_checks", "repository_code_checks"],
     "scripts/quality/typecheck.py": QUALITY_SCRIPT,
     "scripts/quality/docker_calls.py": QUALITY_SCRIPT,
     "scripts/quality/repo_checks.py": QUALITY_SCRIPT,
