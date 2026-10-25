@@ -10,7 +10,7 @@ locals {
     AWS_POLARIS_READER_CLIENT_SECRET_NAME = var.aws_polaris_reader_client_secret_name
   })
   job_policy_documents = {
-    for name in ["job_stage_read", "job_source_read", "job_seal_deny", "job_try_writer", "job_execution", "job_project_delta", "job_try_trust"] :
+    for name in ["job_stage_read", "job_source_read", "job_seal_deny", "job_try_writer", "job_execution", "job_try_trust"] :
     name => templatefile("${path.module}/owner_policies/${name}.json", local.job_policy_inputs)
   }
 }

@@ -121,6 +121,8 @@ def secret_arn(name: str) -> str:
 
 ROLE_PLACEHOLDERS = ("LAKEHOUSE_READER_ROLE_NAME", "LAKEHOUSE_WRITER_ROLE_NAME")
 EXECUTION_PLACEHOLDERS = tuple(f"{name.upper()}_NAME" for name in policy_cases.EXECUTION_PARAMETERS)
+AWS_READER_PLACEHOLDERS = tuple(f"{name.upper()}_NAME" for name in policy_cases.AWS_READER_PARAMETERS)
+AWS_READER = ("ssm", "ReadAwsReaderPair")
 TASK_EXECUTION = "owner_task_execution"
 STS = ("sts", "AssumeLakehouseRolesOnly")
 INJECT = (TASK_EXECUTION, "InjectNamedParameters")
@@ -138,6 +140,7 @@ def expected_grants(names: dict[str, Any]) -> dict[tuple[str, str], set[str]]:
         ("ssm", "WriteManagedProjectParameters"): {parameter_arn(name) for name in names["MANAGED_PARAMETER_NAME"]},
         STS: {role_arn(names[key]) for key in ROLE_PLACEHOLDERS},
         INJECT: {parameter_arn(names[key]) for key in EXECUTION_PLACEHOLDERS},
+        AWS_READER: {parameter_arn(names[key]) for key in AWS_READER_PLACEHOLDERS},
     }
 
 
@@ -184,6 +187,8 @@ def check_names(documents: dict[str, dict[str, Any]], variables: Path = VARIABLE
         approved[placeholder] = {f"{policy_cases.PARAMETER_FOLDER}_lakehouse_{name}"}
     for placeholder, name in zip(EXECUTION_PLACEHOLDERS, policy_cases.EXECUTION_PARAMETERS, strict=True):
         approved[placeholder] = {folder + name}
+    for placeholder, name in zip(AWS_READER_PLACEHOLDERS, policy_cases.AWS_READER_PARAMETERS, strict=True):
+        approved[placeholder] = {folder + name}
     for placeholder, expected_names in approved.items():
         problems += difference(
             f"{placeholder} variable defaults against the approved list", {str(item) for item in as_list(names[placeholder])}, expected_names
@@ -219,7 +224,7 @@ def check_name_source(directory: Path = POLICY_DIRECTORY, owner_directory: Path 
         for resource in as_list(statement["Resource"])
         if ":parameter" in resource
     } - {public}
-    allowed = expected[("ssm", "ReadProjectParameters")] | expected[("ssm", "WriteManagedProjectParameters")] | expected[INJECT]
+    allowed = expected[("ssm", "ReadProjectParameters")] | expected[("ssm", "WriteManagedProjectParameters")] | expected[INJECT] | expected[AWS_READER]
     problems += difference("parameter resources of all policies against the injected names", granted, allowed)
     named_secrets = {
         resource
@@ -422,6 +427,7 @@ def run_suite(output: Path) -> dict[str, Any]:
                 "cases_failed": len(caught),
                 "inventory_problems": len(inventory),
                 "caught_by_intended_case": bool(intended),
+                "intended_failing_cases": intended,
                 "first_failing_cases": [item["label"] for item in caught[:3]],
                 "caught": bool(intended),
             }

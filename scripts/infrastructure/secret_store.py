@@ -59,6 +59,7 @@ READ_ONLY = (AIRFLOW_ADMIN,)
 SHARED = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")
 SHARED_VARIABLES = ("census_secret_name", "bls_secret_name", "hud_secret_name", "jev_secret_name")
 READ_ONLY_VARIABLES = ("airflow_admin_secret_name",)
+JOB_READER_VARIABLES = ("aws_polaris_reader_client_id_name", "aws_polaris_reader_client_secret_name")
 ROLE_VARIABLES = ("lakehouse_reader_role_name", "lakehouse_writer_role_name")
 DEPLOYMENT = "infra/deployment.auto.tfvars.json"
 VARIABLES = "infra/iam/variables.tf"
@@ -120,21 +121,26 @@ def terraform_variables(variables: Path) -> dict[str, str]:
 
 def terraform_defaults(root: Path) -> list[str]:
     """The default of every secret variable in ``infra/iam/variables.tf`` that is under the project prefix, in file order, without the
-    shared administrator password, which the project only reads."""
-    return [value for name, value in terraform_variables(root / VARIABLES).items() if value.startswith(PREFIX) and name not in READ_ONLY_VARIABLES]
+    shared administrator password and the AWS reader pair, which the project only reads."""
+    return [
+        value
+        for name, value in terraform_variables(root / VARIABLES).items()
+        if value.startswith(PREFIX) and name not in (*READ_ONLY_VARIABLES, *JOB_READER_VARIABLES)
+    ]
 
 
 def policy_names(variables: Path) -> dict[str, list[str]]:
     """The names the project user's policy files grant, read from the variable defaults and sorted: the placeholder name of each list.
 
     ``SHARED_SECRET_NAME`` is the four Secrets Manager keys (read only), ``READ_PARAMETER_NAME`` the 15 parameters the user may read and
-    ``MANAGED_PARAMETER_NAME`` the 14 it may also put. These variable defaults are the only source of the names: no policy file lists one.
+    ``MANAGED_PARAMETER_NAME`` the 14 it may also put. The AWS reader pair has its own read-only statement and single-name placeholders.
+    These variable defaults are the only source of the names: no policy file lists one.
     """
     defaults = terraform_variables(variables)
     missing = [name for name in (*SHARED_VARIABLES, *READ_ONLY_VARIABLES) if name not in defaults]
     if missing:
         raise SecretStoreError(f"{variables.name} has no default for: {', '.join(missing)}")
-    managed = [value for name, value in defaults.items() if value.startswith(PREFIX) and name not in READ_ONLY_VARIABLES]
+    managed = [value for name, value in defaults.items() if value.startswith(PREFIX) and name not in (*READ_ONLY_VARIABLES, *JOB_READER_VARIABLES)]
     names = {
         "SHARED_SECRET_NAME": sorted(defaults[name] for name in SHARED_VARIABLES),
         "READ_PARAMETER_NAME": sorted([*(defaults[name] for name in READ_ONLY_VARIABLES), *managed]),
@@ -153,10 +159,10 @@ def variable_names(variables: Path) -> dict[str, str]:
     stack passes the same variables to its own policy templates, so the Python checks and Terraform read one default per name.
     """
     defaults = terraform_variables(variables)
-    missing = [name for name in ROLE_VARIABLES if name not in defaults]
+    missing = [name for name in (*ROLE_VARIABLES, *JOB_READER_VARIABLES) if name not in defaults]
     if missing:
         raise SecretStoreError(f"{variables.name} has no default for: {', '.join(missing)}")
-    wanted = [name for name, value in defaults.items() if name in ROLE_VARIABLES or value.startswith(PREFIX)]
+    wanted = [name for name, value in defaults.items() if name in (*ROLE_VARIABLES, *JOB_READER_VARIABLES) or value.startswith(PREFIX)]
     return {name.upper(): defaults[name] for name in wanted}
 
 

@@ -216,11 +216,9 @@ run "read_roles_without_writers" {
   assert {
     condition = (
       toset(keys(output.job_roles)) == toset(keys(aws_iam_role.job)) &&
-      alltrue([for key, role in output.job_roles : role.unique_id == aws_iam_role.job[key].unique_id]) &&
-      length(output.job_project_policy_delta.Statement[0].Resource) == 4 &&
-      output.job_project_policy_delta.Statement[0].Condition.StringEquals["iam:PassedToService"] == "ecs-tasks.amazonaws.com"
+      alltrue([for key, role in output.job_roles : role.unique_id == aws_iam_role.job[key].unique_id])
     )
-    error_message = "Role IDs are exported instead of queried at runtime; the unattached project-policy proposal passes exactly four ECS roles."
+    error_message = "Role IDs are exported instead of queried at runtime. The owner manages project-user grants through the service policies."
   }
 }
 
@@ -295,5 +293,26 @@ run "endpoints_disabled" {
       length(aws_vpc_security_group_ingress_rule.job_ssm) == 0 && length(aws_iam_role.job) == 5
     )
     error_message = "Disabling the optional endpoints removes their resources and routes while retaining the five role definitions."
+  }
+}
+
+run "reader_pair_name_overrides" {
+  command = plan
+
+  variables {
+    aws_polaris_reader_client_id_name     = "/custom_catalog/reader_id"
+    aws_polaris_reader_client_secret_name = "/custom_catalog/reader_secret"
+  }
+
+  assert {
+    condition = (
+      toset(jsondecode(aws_iam_role_policy.job_execution.policy).Statement[3].Resource) == toset([
+        "arn:aws:ssm:eu-west-1:111111111111:parameter/custom_catalog/reader_id",
+        "arn:aws:ssm:eu-west-1:111111111111:parameter/custom_catalog/reader_secret"
+      ]) &&
+      !contains(local.managed_parameter_names, var.aws_polaris_reader_client_id_name) &&
+      !contains(local.managed_parameter_names, var.aws_polaris_reader_client_secret_name)
+    )
+    error_message = "Job execution reads the configured reader pair without adding either name to the managed parameter write set."
   }
 }
