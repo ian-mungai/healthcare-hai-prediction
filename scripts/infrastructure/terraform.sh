@@ -9,8 +9,8 @@ admin_profile=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --iam | --platform)
-      [[ "$stack" == storage ]] || { printf 'Choose one stack: --iam or --platform.\n' >&2; exit 2; }
+    --iam | --platform | --services)
+      [[ "$stack" == storage ]] || { printf 'Choose one stack: --iam, --platform or --services.\n' >&2; exit 2; }
       stack="${1#--}"
       shift
       ;;
@@ -45,11 +45,11 @@ done
 directory="$repo_root/infra"
 renderer=scripts.infrastructure.render_project_config
 render_args=(--stack "$stack")
-if [[ "$stack" == platform ]]; then
-  # The platform stack has its own renderer, which writes only the inputs that stack declares.
-  directory="$directory/platform"
+if [[ "$stack" == platform || "$stack" == services ]]; then
+  # The shared renderer writes only the inputs the selected stack declares.
+  directory="$directory/$stack"
   renderer=scripts.infrastructure.render_platform_config
-  render_args=()
+  render_args=(--stack "$stack")
 fi
 if [[ "$stack" == iam ]]; then
   [[ -n "$admin_profile" ]] || { printf 'IAM updates require --admin-profile.\n' >&2; exit 2; }
@@ -73,7 +73,10 @@ if [[ "$action" != validate ]]; then
   render_args+=(--verify-identity)
 fi
 unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
-"$python_bin" -m "$renderer" ${render_args[@]+"${render_args[@]}"}
+# Services validation needs no rendered inputs or applied platform stack.
+if [[ "$stack" != services || "$action" != validate ]]; then
+  "$python_bin" -m "$renderer" ${render_args[@]+"${render_args[@]}"}
+fi
 if [[ "$action" == validate ]]; then
   exec terraform -chdir="$directory" validate "$@"
 fi

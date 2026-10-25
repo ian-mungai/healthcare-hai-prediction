@@ -1,11 +1,11 @@
 ---
-title: AWS Control Plane
+title: AWS control plane
 description: Control-plane services on the AWS container host, with inputs, secrets, images and the Mac launcher changes.
-last_updated: 2026-10-22
+last_updated: 2026-10-24
 audience: [developer]
 ---
 
-# AWS Control Plane
+# AWS control plane
 
 The always-on control plane runs as ECS services on the single `r7g.large` container host, defined in `infra/services/`. The AWS foundation supplies the cluster, the host and its roles through input variables. Nothing here is applied: the owner approves each apply.
 
@@ -125,7 +125,24 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
 
 1. The owner applies the foundation. The lead runs the printed `push_images plan` commands and records the digests.
 2. Place a checkout of the repository at `dag_code_path` (default `<data>/repo`). Airflow mounts the DAGs, the broker client and the lineage configuration from it read-only.
-3. The owner applies `infra/services/`. Run the `host_prepare` task once to create the data directories with the right owners.
+3. From the repository root, create a services plan with the project profile:
+
+   ```sh
+   bash scripts/infrastructure/terraform.sh --services plan -out=services.tfplan
+   ```
+
+   The wrapper reads the project inputs from `.env` and the nine foundation outputs from `infra/platform/`. It writes
+   the ignored `infra/services/deployment.auto.tfvars.json` without printing values. Image digests stay in the separate
+   `infra/services/images.auto.tfvars.json` written by `push_images record`. A missing platform output stops rendering.
+   Relative plan paths are inside `infra/services/`. The owner reviews the saved plan before applying it:
+
+   ```sh
+   bash scripts/infrastructure/terraform.sh --services apply services.tfplan
+   ```
+
+   Before apply, the wrapper verifies the project identity and refuses a saved plan whose project inputs, foundation
+   outputs, image digests or other variables differ from the current sources or committed defaults. Run `host_prepare`
+   once to create the data directories with the right owners.
 4. Start order is automatic: Airflow services retry until Postgres has created the databases and the migration has finished.
 5. Run the `polaris_bootstrap` task once (not restarted on failure: a second run reports that the realm exists), then create the catalog and principals (see the next section).
 

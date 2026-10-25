@@ -68,6 +68,67 @@ OWNER_RESOURCE_TYPES = {
 }
 OUTPUT_NAMES = ("infra/deployment.auto.tfvars.json", "infra/iam/deployment.auto.tfvars.json")
 PLATFORM_OUTPUT = "infra/platform/deployment.auto.tfvars.json"
+SERVICES_OUTPUT = "infra/services/deployment.auto.tfvars.json"
+SERVICES_FOUNDATION = {
+    "project_tag": "example_tag_from_platform",
+    "cluster_name": "example_cluster_from_platform",
+    "ec2_capacity_provider_name": "example_capacity_from_platform",
+    "execution_role_arn": "arn:aws:iam::111111111111:role/example_execution",
+    "polaris_task_role_arn": "arn:aws:iam::111111111111:role/example_polaris",
+    "control_plane_task_role_arn": "arn:aws:iam::111111111111:role/example_control_plane",
+    "log_group_names": {name: f"/example_platform/{name}" for name in ("postgres", "redis", "polaris", "airflow", "marquez")},
+    "ecr_repository_urls": {
+        name: f"111111111111.dkr.ecr.eu-west-1.amazonaws.com/example_platform/{name}" for name in ("postgres", "redis", "polaris", "polaris_admin", "airflow")
+    },
+    "data_mount_path": "/example_platform_data",
+}
+SERVICES_DIGESTS = {name: "sha256:" + digit * 64 for name, digit in zip(("postgres", "redis", "polaris", "polaris_admin", "airflow"), "12345", strict=True)}
+# The Terraform stand-in records which profile and credentials reach terraform output.
+SERVICES_TERRAFORM = r"""
+import json, os, sys
+from pathlib import Path
+root = Path(__file__).resolve().parent.parent
+arguments = sys.argv[1:]
+with (root / "terraform_calls.jsonl").open("a", encoding="utf-8") as log:
+    credentials = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")
+    log.write(json.dumps({"arguments": arguments, "profile": os.environ.get("AWS_PROFILE"),
+                         "static_credentials": any(os.environ.get(name) for name in credentials)}) + "\n")
+if arguments[1:] == ["output", "-json"] and arguments[0] == "-chdir=" + str(root / "infra/platform"):
+    if (root / "output_error").is_file():
+        sys.exit("example_e2e_value_do_not_print")
+    sys.stdout.write((root / "platform_outputs.json").read_text(encoding="utf-8"))
+elif arguments[1:3] == ["show", "-json"] and arguments[0] == "-chdir=" + str(root / "infra/services"):
+    sys.stdout.write(Path(arguments[3]).read_text(encoding="utf-8"))
+elif arguments[0] == "-chdir=" + str(root / "infra/services") and arguments[1] in ("plan", "apply", "validate"):
+    pass
+else:
+    sys.exit("Unsupported services Terraform stand-in call")
+"""
+SERVICES_AWS = """
+import json, sys
+from pathlib import Path
+arguments = sys.argv[1:]
+if arguments != ["sts", "get-caller-identity", "--profile", "example_project_dev", "--region", "eu-west-1", "--output", "json", "--no-cli-pager"]:
+    sys.exit("Unsupported services identity stand-in call")
+root = Path(__file__).resolve().parent.parent
+(root / "identity_called").write_text("verified", encoding="utf-8")
+identity_marker = root / "identity"
+identity = identity_marker.read_text(encoding="utf-8") if identity_marker.is_file() else "example_project_dev"
+sys.stdout.write(json.dumps({"Account": "111111111111", "Arn": "arn:aws:iam::111111111111:user/" + identity}))
+"""
+PLATFORM_TERRAFORM = """
+import json, os, sys
+from pathlib import Path
+root = Path(__file__).resolve().parent
+observed = {name: value for name, value in os.environ.items() if name.startswith("AWS_")}
+(root / "environment.json").write_text(json.dumps(observed), encoding="utf-8")
+if sys.argv[2:] == ["validate"]:
+    calls = root / "validate_calls.json"
+    recorded = json.loads(calls.read_text(encoding="utf-8")) if calls.exists() else []
+    calls.write_text(json.dumps([*recorded, sys.argv[1:]]), encoding="utf-8")
+else:
+    sys.stdout.write(Path(sys.argv[4]).read_text(encoding="utf-8"))
+"""
 BOOT_TEMPLATE = "infra/iam/host_boot.sh.tftpl"
 # The host paths the boot script names in its first lines, moved under a temporary root for each run.
 BOOT_PATHS = {
@@ -536,12 +597,13 @@ def check_saved_plans(evidence: Evidence, sources: dict[str, bytes], renderer: l
     evidence.check(step, "value_not_echoed", "example_value" not in result.stdout + result.stderr)
 
 
-def platform_plan(values: dict[str, Any], **changes: Any) -> dict[str, Any]:
-    """Build a synthetic saved-plan document with the platform stack's declared variables and committed defaults."""
+def platform_plan(values: dict[str, Any], defaults: dict[str, Any] | None = None, **changes: Any) -> dict[str, Any]:
+    """Build a synthetic saved-plan document with the selected stack's declared variables and committed defaults."""
     declared: dict[str, dict[str, Any]] = {name: {} for name in values}
-    declared |= {"data_volume_gb": {"default": 60}, "snapshot_retain_count": {"default": 7}}
+    defaults = {"data_volume_gb": 60, "snapshot_retain_count": 7} if defaults is None else defaults
+    declared |= {name: {"default": value} for name, value in defaults.items()}
     variables = {name: {"value": value} for name, value in values.items()}
-    variables |= {"data_volume_gb": {"value": 60}, "snapshot_retain_count": {"value": 7}}
+    variables |= {name: {"value": value} for name, value in defaults.items()}
     plan = {"complete": True, "errored": False, "variables": variables, "configuration": {"root_module": {"variables": declared}}}
     for key, value in changes.items():
         if key == "variables":
@@ -581,9 +643,18 @@ def run_platform_cases(evidence: Evidence, sources: dict[str, bytes]) -> None:
     # that only these runs put on the PATH, because the IAM saved-plan cases need the real terraform in the shared tools folder.
     stand_in = evidence.temporary / "platform_tools"
     stand_in.mkdir(exist_ok=True)
-    (stand_in / "terraform").write_text('#!/bin/sh\nexec /bin/cat "$4"\n', encoding="utf-8")
+    (stand_in / "terraform").write_text(f"#!{sys.executable}\n" + PLATFORM_TERRAFORM, encoding="utf-8")
     (stand_in / "terraform").chmod(0o700)
+    (stand_in / "dirname").symlink_to("/usr/bin/dirname")
+    required_plan = platform_plan(expected)
+    required_plan["configuration"]["root_module"]["variables"]["example_required"] = {}
+    required_plan["variables"]["example_required"] = {"value": DISCLOSURE_SENTINEL}
     cases = {
+        "reject_platform_required_variable": (
+            required_plan,
+            2,
+            "A platform variable without a default is not rendered from .env; create and review a fresh plan.",
+        ),
         "accept_matching_platform_plan": (platform_plan(expected), 0, "Rendered private platform inputs"),
         "reject_changed_default": (
             platform_plan(expected, variables={"data_volume_gb": {"value": 200}}),
@@ -603,6 +674,35 @@ def run_platform_cases(evidence: Evidence, sources: dict[str, bytes]) -> None:
         plan_path.write_text(json.dumps(plan), encoding="utf-8")
         step, result = evidence.run(name, [*renderer, "--check-plan", str(plan_path)], workspace, {"PATH": str(stand_in)})
         evidence.check(step, "expected_outcome", result.returncode == returncode and message in result.stdout + result.stderr)
+        inherited = {name: value for name, value in evidence.environment.items() if name.startswith("AWS_")}
+        evidence.check(step, "platform_inspection_environment_unchanged", json.loads((stand_in / "environment.json").read_bytes()) == inherited)
+    step, result = evidence.run(
+        "reject_unreadable_platform_plan", [*renderer, "--check-plan", str(workspace / "absent.tfplan")], workspace, {"PATH": str(stand_in)}
+    )
+    evidence.check(step, "original_inspection_error", result.returncode == 2 and "The saved plan could not be inspected; no apply was run." in result.stderr)
+    path.unlink()
+    step, result = evidence.run(
+        "wrapper_platform_validate_renders", ["/bin/bash", "scripts/infrastructure/terraform.sh", "--platform", "validate"], workspace, {"PATH": str(stand_in)}
+    )
+    evidence.check(step, "platform_inputs_rendered", path.is_file() and json.loads(path.read_bytes()) == expected)
+    calls = json.loads((stand_in / "validate_calls.json").read_bytes())
+    evidence.check(step, "one_platform_validate_call", result.returncode == 0 and calls == [[f"-chdir={(workspace / 'infra/platform').resolve()}", "validate"]])
+    iam_path = workspace / OUTPUT_NAMES[1]
+    iam_path.unlink(missing_ok=True)
+    before_calls = calls
+    step, result = evidence.run(
+        "wrapper_iam_validate_renders",
+        ["/bin/bash", "scripts/infrastructure/terraform.sh", "--iam", "--admin-profile", ADMIN, "validate"],
+        workspace,
+        {"PATH": str(stand_in)},
+    )
+    evidence.check(
+        step, "iam_inputs_rendered", iam_path.is_file() and json.loads(iam_path.read_bytes()) == {**expected, "data_bucket_name": FIXTURE["S3_BUCKET"]}
+    )
+    calls = json.loads((stand_in / "validate_calls.json").read_bytes())
+    evidence.check(
+        step, "one_iam_validate_call", result.returncode == 0 and calls == [*before_calls, [f"-chdir={(workspace / 'infra/iam').resolve()}", "validate"]]
+    )
 
     # The project user must not own anything a launch or the cost budget is built from: the network, the launch template, the host
     # group, the budget and every role belong to the administrator-applied IAM stack. The platform stack may declare only what
@@ -624,6 +724,202 @@ def run_platform_cases(evidence: Evidence, sources: dict[str, bytes]) -> None:
         "iam_stack_attaches_nothing_to_users_or_groups",
         not {name for name in iam_types if re.search(r"(user|group)_?(policy|membership|attachment)|policy_attachment", name)},
     )
+
+
+def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str) -> None:
+    """Exercise services rendering and the actual wrapper with synthetic platform outputs and command stand-ins."""
+    workspace = copied_workspace(evidence.temporary, "services", sources, FIXTURE).resolve()
+    tools = workspace / "tools"
+    tools.mkdir()
+    for name, body in {"terraform": SERVICES_TERRAFORM, "aws": SERVICES_AWS}.items():
+        (tools / name).write_text(f"#!{sys.executable}\n" + body, encoding="utf-8")
+        (tools / name).chmod(0o700)
+    (tools / "dirname").symlink_to("/usr/bin/dirname")
+    environment = {
+        "PATH": str(tools),
+        "AWS_ACCESS_KEY_ID": DISCLOSURE_SENTINEL,
+        "AWS_SECRET_ACCESS_KEY": DISCLOSURE_SENTINEL,
+    }
+    outputs = {name: {"value": value} for name, value in SERVICES_FOUNDATION.items()}
+    outputs["aws_region"] = {"value": "us-east-2"}
+    call_path = workspace / "terraform_calls.jsonl"
+    output_path = workspace / "platform_outputs.json"
+    output_path.write_text(json.dumps(outputs), encoding="utf-8")
+    expected = {
+        "aws_profile": PROFILE,
+        "aws_region": "eu-west-1",
+        "environment": "dev",
+        "expected_account_id": "111111111111",
+        "project_name": "example_project",
+        **SERVICES_FOUNDATION,
+    }
+    renderer = [sys.executable, "-m", "scripts.infrastructure.render_platform_config", "--stack", "services"]
+    wrapper = [bash, "scripts/infrastructure/terraform.sh", "--services"]
+    path = workspace / SERVICES_OUTPUT
+    step, result = evidence.run("render_services", renderer, workspace, environment)
+    evidence.check(step, "render_succeeded", result.returncode == 0 and "Rendered private services inputs" in result.stdout)
+    evidence.check(step, "exact_services_inputs_from_env_and_platform", path.is_file() and json.loads(path.read_bytes()) == expected)
+    evidence.check(step, "owner_only_permissions", stat.S_IMODE(path.stat().st_mode) == 0o600)
+    evidence.check(step, "only_services_output", not any((workspace / name).exists() for name in (*OUTPUT_NAMES, PLATFORM_OUTPUT)))
+    evidence.check(step, "values_not_printed", all(value not in result.stdout + result.stderr for value in string_values(expected)))
+    original = sha256(path.read_bytes())
+    step, result = evidence.run("rerender_services", renderer, workspace, environment)
+    evidence.check(step, "stable_bytes", result.returncode == 0 and sha256(path.read_bytes()) == original)
+    step, result = evidence.run("check_services", [*renderer, "--check"], workspace, environment)
+    evidence.check(step, "matching_inputs_accepted", result.returncode == 0)
+    output_path.write_text(json.dumps({**outputs, "cluster_name": {"value": "example_changed_cluster"}}), encoding="utf-8")
+    step, result = evidence.run("reject_stale_services", [*renderer, "--check"], workspace, environment)
+    evidence.check(step, "stale_inputs_rejected", result.returncode == 2 and "Generated configuration is stale" in result.stderr)
+    evidence.check(step, "output_unchanged", sha256(path.read_bytes()) == original)
+    for missing in SERVICES_FOUNDATION:
+        output_path.write_text(json.dumps({name: item for name, item in outputs.items() if name != missing}), encoding="utf-8")
+        step, result = evidence.run(f"reject_missing_services_{missing}", renderer, workspace, environment)
+        evidence.check(step, "missing_output_named", result.returncode == 2 and f"Missing platform output: {missing}" in result.stderr)
+        evidence.check(step, "output_unchanged", sha256(path.read_bytes()) == original)
+    for name, broken in {"null": {"value": None}, "no_value": {}, "wrong_shape": DISCLOSURE_SENTINEL}.items():
+        output_path.write_text(json.dumps({**outputs, "cluster_name": broken}), encoding="utf-8")
+        step, result = evidence.run(f"reject_invalid_services_output_{name}", renderer, workspace, environment)
+        evidence.check(step, "missing_output_named", result.returncode == 2 and "Missing platform output: cluster_name" in result.stderr)
+    output_path.write_text(json.dumps(outputs), encoding="utf-8")
+    error_marker = workspace / "output_error"
+    error_marker.touch()
+    step, result = evidence.run("reject_failed_services_output", renderer, workspace, environment)
+    evidence.check(step, "read_failed_without_values", result.returncode == 2 and "platform outputs could not be read" in result.stderr)
+    for name, missing_env in (("validate_services_without_platform", False), ("validate_services_without_env", True)):
+        if missing_env:
+            (workspace / ".env").rename(workspace / "unused.env")
+        before_calls = len(call_path.read_text(encoding="utf-8").splitlines())
+        step, result = evidence.run(name, [*wrapper, "validate"], workspace, environment)
+        calls = [json.loads(line) for line in call_path.read_text(encoding="utf-8").splitlines()][before_calls:]
+        evidence.check(step, "validation_ignores_render_inputs", result.returncode == 0 and [call["arguments"][1] for call in calls] == ["validate"])
+        evidence.check(step, "services_validation_directory", calls[-1]["arguments"] == [f"-chdir={workspace / 'infra/services'}", "validate"])
+        evidence.check(step, "generated_inputs_unchanged", sha256(path.read_bytes()) == original)
+        if missing_env:
+            (workspace / "unused.env").rename(workspace / ".env")
+    error_marker.unlink()
+    for name, foundation_value in SERVICES_FOUNDATION.items():
+        bad_values = (
+            {"type": DISCLOSURE_SENTINEL, "member": {"component": 7}}
+            if isinstance(foundation_value, dict)
+            else {"type": {"bad": DISCLOSURE_SENTINEL}, "empty": ""}
+        )
+        for kind, bad in bad_values.items():
+            output_path.write_text(json.dumps({**outputs, name: {"value": bad}}), encoding="utf-8")
+            step, result = evidence.run(f"reject_services_output_{kind}_{name}", renderer, workspace, environment)
+            evidence.check(step, "output_type_named", result.returncode == 2 and f"Invalid platform output type: {name}" in result.stderr)
+            evidence.check(step, "output_unchanged", sha256(path.read_bytes()) == original)
+    output_path.write_text("[]", encoding="utf-8")
+    step, result = evidence.run("reject_nonobject_services_outputs", renderer, workspace, environment)
+    evidence.check(step, "object_required", result.returncode == 2 and "Terraform must return a JSON object" in result.stderr)
+    output_path.write_text(DISCLOSURE_SENTINEL, encoding="utf-8")
+    step, result = evidence.run("reject_malformed_services_output", renderer, workspace, environment)
+    evidence.check(step, "invalid_response_rejected", result.returncode == 2 and "platform outputs" in result.stderr)
+    output_path.write_text(json.dumps(outputs), encoding="utf-8")
+    images = workspace / "infra/services/images.auto.tfvars.json"
+    images.write_text(json.dumps({"image_digests": SERVICES_DIGESTS}), encoding="utf-8")
+    images_before = sha256(images.read_bytes())
+    plan_values = {**expected, "image_digests": SERVICES_DIGESTS}
+    plan = platform_plan(plan_values, defaults={"host_memory_mib": 16384})
+    plan_path = workspace / "infra/services/reviewed.tfplan"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    step, result = evidence.run("accept_matching_services_plan", [*renderer, "--check-plan", str(plan_path)], workspace, environment)
+    evidence.check(step, "matching_plan_accepted", result.returncode == 0)
+    images_content = images.read_bytes()
+    for label, contents, message in (
+        ("missing", None, "Record pushed image digests"),
+        ("malformed", DISCLOSURE_SENTINEL, "Record pushed image digests"),
+        ("wrong_shape", "[]", "must contain the image_digests map"),
+        ("wrong_map", json.dumps({"image_digests": "invalid"}), "must contain the image_digests map"),
+    ):
+        if contents is None:
+            images.unlink()
+        else:
+            images.write_text(contents, encoding="utf-8")
+        step, result = evidence.run(f"reject_services_images_{label}", [*renderer, "--check-plan", str(plan_path)], workspace, environment)
+        evidence.check(step, "image_record_rejected", result.returncode == 2 and message in result.stderr)
+        images.write_bytes(images_content)
+    for label, contents, message in (
+        ("missing", None, "The saved plan could not be inspected"),
+        ("malformed", DISCLOSURE_SENTINEL, "Terraform returned invalid JSON"),
+        ("nonobject", "[]", "Terraform must return a JSON object"),
+    ):
+        if contents is None:
+            plan_path.unlink()
+        else:
+            plan_path.write_text(contents, encoding="utf-8")
+        step, result = evidence.run(f"reject_services_plan_document_{label}", [*renderer, "--check-plan", str(plan_path)], workspace, environment)
+        evidence.check(step, "plan_document_rejected", result.returncode == 2 and message in result.stderr)
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    changed_inputs = {**expected, "image_digests": {"postgres": "sha256:" + "f" * 64}, "host_memory_mib": 32768}
+    for name, value in changed_inputs.items():
+        changed = "example_plan_override" if isinstance(value, str) else {"example_override": "example_value"} if isinstance(value, dict) else value
+        plan_path.write_text(
+            json.dumps(platform_plan(plan_values, defaults={"host_memory_mib": 16384}, variables={name: {"value": changed}})), encoding="utf-8"
+        )
+        before_calls = len(call_path.read_text(encoding="utf-8").splitlines())
+        step, result = evidence.run(f"reject_services_plan_{name}", [*wrapper, "apply", "reviewed.tfplan"], workspace, environment)
+        calls = [json.loads(line) for line in call_path.read_text(encoding="utf-8").splitlines()][before_calls:]
+        evidence.check(step, "apply_not_started", not any(call["arguments"][1] == "apply" for call in calls))
+        evidence.check(step, "changed_input_refused_before_apply", result.returncode == 2 and "Saved plan inputs differ" in result.stderr)
+        evidence.check(step, "output_unchanged", sha256(path.read_bytes()) == original)
+        evidence.check(step, "values_not_printed", "example_plan_override" not in result.stdout + result.stderr)
+    required_plan = platform_plan(plan_values, defaults={"host_memory_mib": 16384})
+    required_plan["configuration"]["root_module"]["variables"]["example_required"] = {}
+    required_plan["variables"]["example_required"] = {"value": DISCLOSURE_SENTINEL}
+    missing_input = platform_plan(plan_values, defaults={"host_memory_mib": 16384})
+    for section in (missing_input["variables"], missing_input["configuration"]["root_module"]["variables"]):
+        section.pop("cluster_name")
+    for name, broken_plan, message in (
+        ("required_variable", required_plan, "A services variable without a default is not rendered from its input sources"),
+        ("missing_input", missing_input, "declared variables"),
+        ("errored", platform_plan(plan_values, defaults={"host_memory_mib": 16384}, errored=True), "Only a complete, successful saved plan"),
+        ("incomplete", platform_plan(plan_values, defaults={"host_memory_mib": 16384}, complete=False), "Only a complete, successful saved plan"),
+        (
+            "undeclared",
+            platform_plan(plan_values, defaults={"host_memory_mib": 16384}, variables={"example_extra": {"value": "example_value"}}),
+            "declared variables",
+        ),
+    ):
+        plan_path.write_text(json.dumps(broken_plan), encoding="utf-8")
+        step, result = evidence.run(f"reject_services_plan_{name}", [*renderer, "--check-plan", str(plan_path)], workspace, environment)
+        evidence.check(step, "invalid_plan_refused", result.returncode == 2 and message in result.stderr)
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    call_path.write_text("", encoding="utf-8")
+    step, result = evidence.run("wrapper_services_plan", [*wrapper, "plan", "-out=services.tfplan"], workspace, environment)
+    calls = [json.loads(line) for line in call_path.read_text(encoding="utf-8").splitlines()]
+    evidence.check(
+        step,
+        "services_stack_selected",
+        result.returncode == 0 and calls[-1]["arguments"] == [f"-chdir={workspace / 'infra/services'}", "plan", "-input=false", "-out=services.tfplan"],
+    )
+    evidence.check(step, "identity_verified", (workspace / "identity_called").exists())
+    evidence.check(step, "platform_output_uses_project_profile", calls[0]["profile"] == PROFILE and all(not call["static_credentials"] for call in calls))
+    evidence.check(step, "values_not_printed", all(value not in result.stdout + result.stderr for value in string_values(expected)))
+    (workspace / "identity_called").unlink()
+    step, result = evidence.run("wrapper_services_apply", [*wrapper, "apply", "reviewed.tfplan"], workspace, environment)
+    calls = [json.loads(line) for line in call_path.read_text(encoding="utf-8").splitlines()]
+    evidence.check(
+        step,
+        "saved_services_plan_applied",
+        result.returncode == 0 and calls[-1]["arguments"] == [f"-chdir={workspace / 'infra/services'}", "apply", "-input=false", "reviewed.tfplan"],
+    )
+    evidence.check(step, "apply_identity_verified", (workspace / "identity_called").is_file())
+    evidence.check(step, "image_record_unchanged", sha256(images.read_bytes()) == images_before)
+    (workspace / "identity").write_text("example_other_user", encoding="utf-8")
+    step, result = evidence.run("reject_services_identity", [*wrapper, "plan"], workspace, environment)
+    evidence.check(step, "wrong_identity_refused", result.returncode == 2 and "same-named IAM user" in result.stderr)
+    before_calls = len(call_path.read_text(encoding="utf-8").splitlines())
+    step, result = evidence.run("reject_services_apply_identity", [*wrapper, "apply", "reviewed.tfplan"], workspace, environment)
+    calls = [json.loads(line) for line in call_path.read_text(encoding="utf-8").splitlines()][before_calls:]
+    evidence.check(step, "wrong_apply_identity_refused", result.returncode == 2 and "same-named IAM user" in result.stderr)
+    evidence.check(step, "apply_not_started", not any(call["arguments"][1] == "apply" for call in calls))
+
+
+def string_values(value: Any) -> list[str]:
+    """List every string leaf so process diagnostics can be checked for input disclosure."""
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in string_values(item)]
+    return [value] if isinstance(value, str) else []
 
 
 def render_host_boot(template: str, root: Path) -> str:
@@ -1048,6 +1344,7 @@ def run_suite(evidence: Evidence) -> None:
     step, result = evidence.run("check_refreshed", [*renderer, "--check"], workspace)
     evidence.check(step, "refreshed_inputs_accepted", result.returncode == 0 and "Verified .env-derived" in result.stdout)
     run_platform_cases(evidence, sources)
+    run_services_cases(evidence, sources, bash)
     run_host_boot_cases(evidence, bash)
 
     alternate = copied_workspace(
@@ -1106,8 +1403,13 @@ def run_suite(evidence: Evidence) -> None:
         (["--iam", "plan"], {}, "IAM updates require --admin-profile."),
         (["--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
         (["--platform", "--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
-        (["--iam", "--platform", "plan"], {}, "Choose one stack: --iam or --platform."),
-        (["--platform", "--platform", "plan"], {}, "Choose one stack: --iam or --platform."),
+        (["--iam", "--platform", "plan"], {}, "Choose one stack: --iam, --platform or --services."),
+        (["--platform", "--platform", "plan"], {}, "Choose one stack: --iam, --platform or --services."),
+        (["--services", "--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
+        (["--services", "--platform", "plan"], {}, "Choose one stack: --iam, --platform or --services."),
+        (["--platform", "--services", "plan"], {}, "Choose one stack: --iam, --platform or --services."),
+        (["--services", "--services", "plan"], {}, "Choose one stack: --iam, --platform or --services."),
+        (["--services", "apply"], {}, "Apply requires one reviewed saved-plan path."),
         (["--platform", "apply"], {}, "Apply requires one reviewed saved-plan path."),
         (["apply"], {}, "Apply requires one reviewed saved-plan path."),
         (["plan", "-var=aws_profile=example_unapproved"], {}, "Set project inputs only in .env."),
