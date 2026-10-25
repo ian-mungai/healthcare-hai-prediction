@@ -116,4 +116,5 @@ Each run writes its report under `data/e2e/` (the configuration E2E under `data/
 `data/e2e/policies/`, the quality E2E under `data/e2e/quality/`). How the checks run and what each one blocks is in `docs/quality_checks.md`. The lakehouse
 commands are in `docs/lakehouse_usage.md`. The resource limits, pinned tools and manual set-up steps behind Install are
 in `docs/install_details.md`. The environments, the AWS stacks and project policies, bucket lifecycle rules and deferred controls are in
-`docs/infrastructure_controls.md`. Rendering the architecture diagram is in `docs/architecture_rendering.md`.
+`docs/infrastructure_controls.md`. Rendering the architecture diagram is in `docs/architecture_rendering.md`. The proposed
+ECS read target contract is in `docs/ecs_target_contract.md` and the proposed real AWS read checks are in `docs/ecs_real_runs.md`.

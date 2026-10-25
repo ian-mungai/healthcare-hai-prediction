@@ -9,8 +9,8 @@ admin_profile=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --iam | --platform)
-      [[ "$stack" == storage ]] || { printf 'Choose one stack: --iam or --platform.\n' >&2; exit 2; }
+    --iam | --platform | --jobs)
+      [[ "$stack" == storage ]] || { printf 'Choose one stack: --iam, --platform or --jobs.\n' >&2; exit 2; }
       stack="${1#--}"
       shift
       ;;
@@ -45,10 +45,16 @@ done
 directory="$repo_root/infra"
 renderer=scripts.infrastructure.render_project_config
 render_args=(--stack "$stack")
+# The platform stack has its own renderer, which writes only the inputs that stack declares.
 if [[ "$stack" == platform ]]; then
-  # The platform stack has its own renderer, which writes only the inputs that stack declares.
   directory="$directory/platform"
   renderer=scripts.infrastructure.render_platform_config
+  render_args=()
+fi
+# The jobs stack has its own renderer, which writes only the inputs that stack declares.
+if [[ "$stack" == jobs ]]; then
+  directory="$directory/jobs"
+  renderer=scripts.infrastructure.render_jobs_config
   render_args=()
 fi
 if [[ "$stack" == iam ]]; then
