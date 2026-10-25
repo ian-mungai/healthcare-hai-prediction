@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # CI_PART selects what runs: "all" (the default, every part), "core" (everything except the launcher E2E, the
-# acquisition gate and the three lakehouse layers), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
-# if set), "bronze", "silver" or "gold" (the gates and that lakehouse layer's checks) or "gates" (the gates only). GitHub CI runs
-# "core", the launcher shards and the three layers as parallel jobs; "gates" is the quick part of a reused pull request result.
+# acquisition gate and the four lakehouse layers), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
+# if set), "bronze", "silver", "gold" or "features" (the gates and that lakehouse layer's checks) or "gates" (the gates only). GitHub CI runs
+# "core", the launcher shards and the four layers as parallel jobs; "gates" is the quick part of a reused pull request result.
 # CI_UNITS selects the units of the gold layer (checks, writer_setup, model_metadata_e2e; default all three). GitHub CI runs the model
 # metadata E2E in its own job. A unit marked alone below (writer_setup: it has timing assertions) runs by itself, before the others.
 # CI_SCOPE selects the check groups (scripts/quality/ci_groups.py, config/quality/ci_groups.json): "full" (the default,
@@ -27,8 +27,8 @@ source "$repo_root/scripts/quality/timing.sh"
 python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 part="${CI_PART:-all}"
 case "$part" in
-  all | core | launcher | bronze | silver | gold | gates) ;;
-  *) printf 'CI_PART must be all, core, launcher, bronze, silver, gold or gates, not %s\n' "$part" >&2; exit 2 ;;
+  all | core | launcher | bronze | silver | gold | features | gates) ;;
+  *) printf 'CI_PART must be all, core, launcher, bronze, silver, gold, features or gates, not %s\n' "$part" >&2; exit 2 ;;
 esac
 gold_units="checks writer_setup model_metadata_e2e"
 units="${CI_UNITS:-$gold_units}"

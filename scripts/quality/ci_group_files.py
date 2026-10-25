@@ -12,6 +12,7 @@ for the launcher and ``lakehouse_gold_<unit>`` for each gold unit). No function 
 declaration of any function that a group owns (continued lines, quotes, backslashes and ``$'...'`` escapes in names removed first). A body file is
 listed in its own group's path list and matches no other group's list, ``global``, ``passive`` or ``upstream_inputs`` (the broad ``\\.(py|sh)$``
 pattern of ``repository_code_checks`` may match it, so that the guards run when a body file changes). Groups in ``full_only`` have no body file. The
+guard also requires every configured group to have a hosted job that runs its part through scripts/run_ci.sh. The
 guard needs Bash 3.2 or later (macOS ``/bin/bash`` and GitHub's Bash 5).
 
     .venv/bin/python -m scripts.quality.ci_group_files [--root <repository folder>]
@@ -30,10 +31,13 @@ from pathlib import Path
 from typing import Any
 
 from scripts.process import TimeoutExpired, run_command
+from scripts.quality import ci_groups
+from scripts.quality.repo_checks import load_yaml
 
 GROUPS_DIRECTORY = "scripts/ci/groups"
 DISPATCHER = "scripts/run_ci.sh"
 CONFIG = "config/quality/ci_groups.json"
+WORKFLOW = ".github/workflows/ci.yml"
 BROAD_GROUP = "repository_code_checks"
 ENVIRONMENT = {"PATH": "/usr/bin:/bin"}
 SECONDS_PER_FILE = 30
@@ -128,6 +132,31 @@ def list_findings(group: str, config: dict[str, Any]) -> list[str]:
     return findings
 
 
+def hosted_findings(root: Path, config: dict[str, Any]) -> list[str]:
+    workflow = load_yaml((root / WORKFLOW).read_text(encoding="utf-8"))
+    if not isinstance(workflow, dict) or not isinstance(workflow.get("jobs"), dict):
+        return [f"{WORKFLOW}: no jobs mapping (define the jobs that run the check groups)"]
+    covered: set[str] = set()
+    findings = []
+    for job, definition in workflow["jobs"].items():
+        entries = definition.get("strategy", {}).get("matrix", {}).get("include", [{}])
+        for step in definition.get("steps", []):
+            if step.get("run") != "bash scripts/run_ci.sh":
+                continue
+            value = step.get("env", {}).get("CI_PART", "all")
+            parts = {entry.get("part", "") for entry in entries} if value == "${{ matrix.part }}" else {value}
+            for part in sorted(parts):
+                if part not in ci_groups.PARTS:
+                    findings.append(f"{WORKFLOW}: job {job} has unknown CI_PART={part} (use a part of {DISPATCHER})")
+                else:
+                    covered.update(ci_groups.groups_of(part, config))
+    for group in config["groups"]:
+        if group not in covered:
+            part = next((part for part, layer in ci_groups.LAYER_PARTS.items() if layer == group), "launcher" if group == "launcher" else "core")
+            findings.append(f"{WORKFLOW}: group {group} has no hosted job (add a bash {DISPATCHER} step with CI_PART={part})")
+    return findings
+
+
 def check(root: Path) -> list[str]:
     config = json.loads((root / CONFIG).read_text(encoding="utf-8"))
     groups: list[str] = list(config["groups"])
@@ -152,6 +181,7 @@ def check(root: Path) -> list[str]:
                 if entry not in names
             ]
         findings += list_findings(group, config)
+    findings += hosted_findings(root, config)
     return findings
 
 
