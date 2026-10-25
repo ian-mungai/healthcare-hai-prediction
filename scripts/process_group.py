@@ -254,11 +254,48 @@ def stop_owned(handle: OwnedProcess, deadline: float) -> StopResult:
             with handle.lock:
                 if handle.state == "read_only":
                     return StopResult("refused_reaped", handle.pid, handle.pgid, handle.confirmed)
-                if handle.state == "reap_only":
+                if time.monotonic() >= deadline:
+                    handle.last_stop = "worker_unproven" if handle.state == "reap_only" else "survivor"
+                    return StopResult(handle.last_stop, handle.pid, handle.pgid, False)
+                if handle.state == "signalling":
+                    snapshot = process_snapshot(deadline, handle.witness)
+                    members = snapshot.group(handle.pgid)
+                    live = tuple(member for member in members if not member.state.startswith("Z"))
+                    leader = next((member for member in members if member.pid == handle.pid), None)
+                    if snapshot.status != "seen" or leader is None or (live and not any(member.witness for member in members)):
+                        handle.state = "reap_only"
+                    elif live:
+                        if _portable.signal_group(handle.pgid, signal.SIGSTOP) == "gone":
+                            handle.state = "read_only"
+                            handle.last_stop = "worker_unproven"
+                            _close_pipes(handle)
+                            return StopResult(handle.last_stop, handle.pid, handle.pgid, False)
+                        rescanned = process_snapshot(deadline, handle.witness)
+                        if rescanned.status != "seen" or not any(member.witness for member in rescanned.group(handle.pgid)):
+                            _portable.signal_group(handle.pgid, signal.SIGCONT)
+                            handle.state = "reap_only"
+                ready_to_reap = handle.state == "reap_only"
+                while not ready_to_reap and time.monotonic() < deadline:
                     snapshot = process_snapshot(deadline)
-                    leader = next((member for member in snapshot.group(handle.pgid) if member.pid == handle.pid), None)
-                    if not handle.exit_observed and (leader is None or not leader.state.startswith("Z")):
-                        return StopResult("refused_unproven", handle.pid, handle.pgid, False)
+                    if snapshot.status != "seen":
+                        break
+                    members = snapshot.group(handle.pgid)
+                    leader = next((member for member in members if member.pid == handle.pid), None)
+                    if leader is None:
+                        handle.state = "reap_only"
+                        ready_to_reap = True
+                        break
+                    live = tuple(member for member in members if not member.state.startswith("Z"))
+                    if not live and (handle.exit_observed or leader.state.startswith("Z")):
+                        ready_to_reap = True
+                        break
+                    if _portable.signal_group(handle.pgid, signal.SIGKILL) == "gone":
+                        handle.state = "read_only"
+                        handle.last_stop = "worker_unproven"
+                        _close_pipes(handle)
+                        return StopResult(handle.last_stop, handle.pid, handle.pgid, False)
+                    time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+                if ready_to_reap and time.monotonic() < deadline:
                     try:
                         reaped, _ = os.waitpid(handle.pid, os.WNOHANG)
                     except ChildProcessError:
@@ -267,61 +304,11 @@ def stop_owned(handle: OwnedProcess, deadline: float) -> StopResult:
                         handle.state = "read_only"
                         _close_pipes(handle)
                         handle.confirmed = _portable.wait_group_gone(handle.pgid, deadline, time.monotonic, time.sleep)
-                    handle.last_stop = "confirmed" if handle.confirmed else "worker_unproven"
-                    return StopResult(handle.last_stop, handle.pid, handle.pgid, handle.confirmed)
-                snapshot = process_snapshot(deadline, handle.witness)
-                members = snapshot.group(handle.pgid)
-                live = tuple(member for member in members if not member.state.startswith("Z"))
-                leader = next((member for member in members if member.pid == handle.pid), None)
-                if leader is None and snapshot.status == "seen":
-                    handle.state = "read_only"
-                    handle.last_stop = "worker_unproven"
-                    _close_pipes(handle)
-                    return StopResult(handle.last_stop, handle.pid, handle.pgid, False)
-                if snapshot.status != "seen" or (live and not any(member.witness for member in members)):
-                    handle.state = "reap_only"
-                elif live:
-                    outcome = _portable.signal_group(handle.pgid, signal.SIGSTOP)
-                    if outcome == "gone":
-                        handle.state = "read_only"
-                        handle.last_stop = "worker_unproven"
-                        _close_pipes(handle)
-                        return StopResult(handle.last_stop, handle.pid, handle.pgid, False)
-                    rescanned = process_snapshot(deadline, handle.witness)
-                    if rescanned.status != "seen" or not any(member.witness for member in rescanned.group(handle.pgid)):
-                        _portable.signal_group(handle.pgid, signal.SIGCONT)
-                        handle.state = "reap_only"
-                while time.monotonic() < deadline:
-                    snapshot = process_snapshot(deadline)
-                    members = snapshot.group(handle.pgid)
-                    leader = next((member for member in members if member.pid == handle.pid), None)
-                    live = tuple(member for member in members if not member.state.startswith("Z"))
-                    exited = handle.exit_observed or (leader is not None and leader.state.startswith("Z"))
-                    if (handle.state == "reap_only" and exited) or (snapshot.status == "seen" and not live and exited):
-                        _close_pipes(handle)
-                        try:
-                            reaped, _ = os.waitpid(handle.pid, os.WNOHANG)
-                        except ChildProcessError:
-                            reaped = handle.pid
-                        if reaped:
-                            handle.state = "read_only"
-                            handle.confirmed = _portable.wait_group_gone(handle.pgid, deadline, time.monotonic, time.sleep)
-                            handle.last_stop = "confirmed" if handle.confirmed else "worker_unproven"
-                            return StopResult(handle.last_stop, handle.pid, handle.pgid, handle.confirmed)
-                    if handle.state == "reap_only":
-                        handle.last_stop = "worker_unproven"
-                        return StopResult("refused_unproven", handle.pid, handle.pgid, False)
-                    if snapshot.status != "seen":
-                        break
-                    outcome = _portable.signal_group(handle.pgid, signal.SIGKILL)
-                    if outcome == "gone":
-                        handle.state = "read_only"
-                        handle.last_stop = "worker_unproven"
-                        _close_pipes(handle)
-                        return StopResult(handle.last_stop, handle.pid, handle.pgid, False)
-                    time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+                        handle.last_stop = "confirmed" if handle.confirmed else "worker_unproven"
+                        return StopResult(handle.last_stop, handle.pid, handle.pgid, handle.confirmed)
                 handle.last_stop = "worker_unproven" if handle.state == "reap_only" else "survivor"
-                return StopResult(handle.last_stop, handle.pid, handle.pgid, False)
+                status = "refused_unproven" if handle.state == "reap_only" else "survivor"
+                return StopResult(status, handle.pid, handle.pgid, False)
         finally:
             handle.lock.release()
     finally:
