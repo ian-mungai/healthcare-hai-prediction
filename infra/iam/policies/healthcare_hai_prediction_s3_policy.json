@@ -156,6 +156,12 @@
         "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_objects/sha256/*%*",
         "arn:aws:s3:::${DATA_BUCKET_NAME}/bronze_evidence/sha256/*%*"
       ]
+    },
+    {
+      "Sid": "ReadStageVersions",
+      "Effect": "Allow",
+      "Action": "s3:GetObjectVersion",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/*"
     }
   ]
 }

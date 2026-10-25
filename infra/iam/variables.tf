@@ -367,3 +367,27 @@ variable "budget_alert_percentages" {
     error_message = "Alert percentages must be above 0 and at most 100."
   }
 }
+
+variable "aws_polaris_reader_client_id_name" {
+  description = "Name of the AWS catalog reader client ID parameter. No parameter value enters Terraform."
+  type        = string
+  default     = "/healthcare_hai_prediction/aws_polaris_reader_client_id"
+  nullable    = false
+
+  validation {
+    condition     = length(var.aws_polaris_reader_client_id_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.aws_polaris_reader_client_id_name)) && !can(regex("^/(?i:aws|ssm)", var.aws_polaris_reader_client_id_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
+variable "aws_polaris_reader_client_secret_name" {
+  description = "Name of the AWS catalog reader client secret parameter. No parameter value enters Terraform."
+  type        = string
+  default     = "/healthcare_hai_prediction/aws_polaris_reader_client_secret"
+  nullable    = false
+
+  validation {
+    condition     = length(var.aws_polaris_reader_client_secret_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.aws_polaris_reader_client_secret_name)) && !can(regex("^/(?i:aws|ssm)", var.aws_polaris_reader_client_secret_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}

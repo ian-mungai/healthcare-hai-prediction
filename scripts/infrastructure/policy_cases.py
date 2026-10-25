@@ -94,6 +94,8 @@ EXECUTION_PARAMETERS = (
     "polaris_root_secret",
 )
 SHARED_KEYS = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")
+AWS_READER_PARAMETERS = ("aws_polaris_reader_client_id", "aws_polaris_reader_client_secret")
+JOB_TASK_ROLES = ("job_execution", "job_offline_task", "job_seal_task", "job_read_task")
 
 
 # The project user's parameter names are the defaults of the Terraform root variables, whatever PROJECT_NAME is, so the oracle names them outright.
@@ -200,6 +202,8 @@ def approved_requests() -> dict[str, list[Request]]:
     add("ecs", "TagResource", SERVICE, region=None, tags=TAG, extra={"ecs:CreateAction": "CreateService"})
     add("iam", "PassRole", role("task_execution"), region=None, extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"})
     add("iam", "PassRole", role("snapshots"), region=None, extra={"iam:PassedToService": "dlm.amazonaws.com"})
+    for name in JOB_TASK_ROLES:
+        add("iam", "PassRole", role(name), region=None, extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"})
     add("logs", "CreateLogGroup", LOG_GROUP, region=None, **tagged)
     for action in (
         "DeleteLogGroup",
@@ -223,6 +227,8 @@ def approved_requests() -> dict[str, list[Request]]:
         add("ssm", "GetParameter", parameter(name), region=None)
     for name in PARAMETERS:
         add("ssm", "PutParameter", parameter(name), region=None)
+    for name in AWS_READER_PARAMETERS:
+        add("ssm", "GetParameter", parameter(name), region=None)
     add("ssm", "GetParameters", PUBLIC_PARAMETER, region=None)
     add(
         "ssm",
@@ -236,6 +242,8 @@ def approved_requests() -> dict[str, list[Request]]:
         add("ssm", action, SESSION, region=None, extra={"aws:username": USER})
     for target in (READER, WRITER):
         add("sts", "AssumeRole", target, region=None)
+    add("sts", "AssumeRole", role("job_try_writer"), region=None, extra={"sts:RoleSessionName": "hai_try_example"})
+    add("s3", "GetObjectVersion", f"{BUCKET}/lakehouse/run_stage/run/inputs/pins.json", region=None)
     return ops
 
 
@@ -729,6 +737,60 @@ def pass_role_cases() -> Iterator[Case]:
         yield Case(f"sts: no {action}", request(f"sts:{action}", READER, region=None), False)
 
 
+def job_project_cases() -> Iterator[Case]:
+    """The four job grants and their resource, condition and action boundaries for the project user."""
+    for name in JOB_TASK_ROLES:
+        yield Case(
+            f"job pass: {name} to ECS tasks",
+            request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
+            True,
+            "PassReadJobRoles",
+        )
+        for service in ("ec2.amazonaws.com", "ecs.amazonaws.com", "dlm.amazonaws.com"):
+            yield Case(f"job pass: {name} to {service}", request("iam:PassRole", role(name), extra={"iam:PassedToService": service}, region=None), False)
+        yield Case(f"job pass: {name} without a service", request("iam:PassRole", role(name), region=None), False)
+    for name in ("job_try_writer", "job_write_silver_task", "job_other_task"):
+        yield Case(
+            f"job pass: refuse {name}",
+            request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
+            False,
+        )
+    for session in ("hai_try_example", "hai_try_", "unrelated", "hai_try", "other_hai_try_example", None):
+        allowed = session in ("hai_try_example", "hai_try_")
+        yield Case(
+            f"job assume: session {session!r}",
+            request("sts:AssumeRole", role("job_try_writer"), extra={"sts:RoleSessionName": session} if session is not None else None, region=None),
+            allowed,
+            "AssumeTryOutputRole" if allowed else None,
+        )
+    for name in (*JOB_TASK_ROLES, "job_other_writer"):
+        yield Case(
+            f"job assume: refuse {name}",
+            request("sts:AssumeRole", role(name), extra={"sts:RoleSessionName": "hai_try_example"}, region=None),
+            False,
+        )
+    yield Case(
+        "job stage: versioned input",
+        request("s3:GetObjectVersion", f"{BUCKET}/lakehouse/run_stage/run/inputs/code.tar", region=None),
+        True,
+        "ReadStageVersions",
+    )
+    for key in ("lakehouse/silver/table/metadata.json", "lakehouse/run_stage_extra/run/input", "lakehouse/run_stage", "unlisted/x"):
+        yield Case(f"job stage: refuse {key}", request("s3:GetObjectVersion", f"{BUCKET}/{key}", region=None), False)
+    yield Case(
+        "job stage: refuse another bucket",
+        request("s3:GetObjectVersion", "arn:aws:s3:::other-bucket/lakehouse/run_stage/run/inputs/code.tar", region=None),
+        False,
+    )
+    for name in AWS_READER_PARAMETERS:
+        yield Case(f"job reader: read {name}", request("ssm:GetParameter", parameter(name), region=None), True, "ReadAwsReaderPair")
+        for action in ("GetParameters", "GetParametersByPath", "PutParameter", "GetParameterHistory"):
+            yield Case(f"job reader: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
+        for suffix in ("_extra", "/child"):
+            yield Case(f"job reader: refuse {name}{suffix}", request("ssm:GetParameter", parameter(name + suffix), region=None), False)
+    yield Case("job reader: refuse writer parameter", request("ssm:GetParameter", parameter("aws_polaris_writer_client_secret"), region=None), False)
+
+
 FORBIDDEN = {
     "ec2": (
         "RunInstances",
@@ -1182,6 +1244,7 @@ def all_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     yield from session_cases()
     yield from parameter_cases()
     yield from pass_role_cases()
+    yield from job_project_cases()
     yield from forbidden_cases()
     yield from snapshot_cases()
     yield from execution_cases()
@@ -1382,7 +1445,55 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def own_project_tag_refused(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "ecs", "DenyAnotherProjectTagOnRunTaskServicesAndTags")["Condition"] = {"Null": {"aws:RequestTag/Project": "false"}}
 
+    def job_resource(service: str, sid: str, index: int, resource: str) -> Mutation:
+        def mutate(documents: dict[str, dict[str, Any]]) -> None:
+            statement = by_sid(documents, service, sid)
+            resources = list(as_list(statement["Resource"]))
+            resources[index] = resource
+            statement["Resource"] = resources
+
+        return mutate
+
+    def job_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "iam", "PassReadJobRoles")["Condition"]
+
+    def job_pass_to_ecs_service(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "iam", "PassReadJobRoles")["Condition"]["StringEquals"]["iam:PassedToService"] = "ecs.amazonaws.com"
+
+    def job_assume_without_session_condition(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "sts", "AssumeTryOutputRole")["Condition"]
+
+    def job_reader_batch_allowed(documents: dict[str, dict[str, Any]]) -> None:
+        add_action(documents, "ssm", "ReadAwsReaderPair", "ssm:GetParameters")
+
+    job_defects: dict[str, tuple[str, Mutation]] = {
+        f"job PassRole resource {name} widened": (
+            "job pass: refuse job_try_writer",
+            job_resource("iam", "PassReadJobRoles", index, f"arn:aws:iam::{A}:role/{P}_job_*_{E}"),
+        )
+        for index, name in enumerate(JOB_TASK_ROLES)
+    }
+    job_defects.update(
+        {
+            f"job reader resource {name} widened": (f"job reader: refuse {name}_extra", job_resource("ssm", "ReadAwsReaderPair", index, parameter(name) + "*"))
+            for index, name in enumerate(AWS_READER_PARAMETERS)
+        }
+    )
+    job_defects.update(
+        {
+            "job try-writer resource widened": (
+                "job assume: refuse job_execution",
+                job_resource("sts", "AssumeTryOutputRole", 0, f"arn:aws:iam::{A}:role/{P}_job_*_{E}"),
+            ),
+            "job stage version resource widened": ("job stage: refuse lakehouse/silver", job_resource("s3", "ReadStageVersions", 0, f"{BUCKET}/lakehouse/*")),
+            "job PassRole service condition removed": ("job pass: job_execution without a service", job_pass_without_service_condition),
+            "job PassRole service changed to ECS": ("job pass: job_execution to ecs.amazonaws.com", job_pass_to_ecs_service),
+            "job try-writer session condition removed": ("job assume: session 'unrelated'", job_assume_without_session_condition),
+            "job reader batch action added": ("job reader: refuse GetParameters ", job_reader_batch_allowed),
+        }
+    )
     return {
+        **job_defects,
         "DescribeContainerInstances is granted on the cluster ARN instead of the container-instance ARN (review round 5 finding 6)": (
             "ecs:DescribeContainerInstances on container-instance",
             container_instance_on_cluster,

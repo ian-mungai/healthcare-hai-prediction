@@ -62,8 +62,8 @@ Scaling and ECS. The account may already hold them: `aws iam get-role --role-nam
 | Service | What the project profile can do | Scope |
 | --- | --- | --- |
 | `s3` | Read and write the bucket settings Terraform manages; read, write and delete objects; multipart uploads | The project bucket only; the write-prefix denies and the conditional single-copy create stay; delete only under `lakehouse/` |
-| `sts` | `AssumeRole` | The lakehouse reader and writer roles only |
-| `ssm` | Read the 15 project parameters, write the 14 managed ones (not the Airflow administrator password), read AWS's public `/aws/service/ecs/*` parameters, start a Session Manager port-forwarding session to the project host, resume and end its own sessions | Exact parameter ARNs, taken from the defaults of the secret-name variables in `infra/iam/variables.tf` (the file lists none); no `DescribeParameters`, no path read |
+| `sts` | `AssumeRole` | The lakehouse reader and writer roles, plus the job try-writer role only with a `hai_try_*` session name |
+| `ssm` | Read the 15 control-plane parameters and the AWS Polaris reader pair, write the 14 managed ones (not the Airflow administrator password or the AWS reader pair), read AWS's public `/aws/service/ecs/*` parameters, start a Session Manager port-forwarding session to the project host, resume and end its own sessions | Exact parameter ARNs, taken from the defaults of the secret-name variables in `infra/iam/variables.tf` (the file lists none); no `DescribeParameters`, no path read |
 | `secretsmanager` | `GetSecretValue` and `DescribeSecret` | The four shared API keys only, named by the defaults of their variables in `infra/iam/variables.tf` |
 | `ecr` | Log in, push and pull images, create, delete, describe and set the lifecycle of repositories | `<PROJECT_NAME>_*_<ENVIRONMENT>` repositories |
 | `ecs` | Create, update, delete and describe the cluster, the capacity provider and services; register and describe task definitions; run, stop, describe and list tasks; describe container instances | The project cluster, services, task definition families, tasks and container instances (`container-instance/<cluster>/*`); no deregistering of task definitions |
@@ -73,7 +73,7 @@ Scaling and ECS. The account may already hold them: `aws iam get-role --role-nam
 | `logs` | Create, delete and set the retention of log groups; read log events | `<PROJECT_NAME>_*_<ENVIRONMENT>` log groups |
 | `cloudwatch` | Put, delete and describe alarms | `<PROJECT_NAME>_*_<ENVIRONMENT>` alarms |
 | `sns` | Create, delete and set the attributes of the topic | The topic `<PROJECT_NAME>_alerts_<ENVIRONMENT>` only, not the budget's topic |
-| `iam` | `PassRole` | The task execution and the two task roles to `ecs-tasks.amazonaws.com`; the snapshot role to `dlm.amazonaws.com` |
+| `iam` | `PassRole` | The task execution and two control-plane task roles, plus the four read-job roles, to `ecs-tasks.amazonaws.com` only; the snapshot role to `dlm.amazonaws.com` |
 
 The profile has no instance launch, launch template, host group create, update or refresh, network, image, snapshot-copy or
 budget permission. A load balancer policy waits for the demo package. `*` stays only for describe and list calls and
@@ -103,7 +103,7 @@ The policy evaluator (`scripts/infrastructure/policy_evaluator.py`, cases in `sc
 inventory compares each policy's allowed actions with the approved list, the cases cover every approved action in its scope
 and in another region, account and project, every creating action with seven wrong tag forms, every tag change and
 removal and each forbidden action. The policies stay under the 6,144 character limit with the longest values. The run also
-plants 39 defects in the policies (one per review finding and per rule above) and 22 in the policy scripts. Each must be
+plants 51 defects in the policies (one per review finding and per rule above) and 28 in the policy scripts. Each must be
 caught. The scripts have their own tests (`tests/test_iam_policy_scripts.py`, in-memory IAM, no AWS call). The report
 is written to `data/e2e/policies/` by the local CI. No AWS evaluation and no call that Terraform sends is exercised until
 the first deploy.
@@ -259,10 +259,12 @@ verification evidence remain untracked under
 `data/infrastructure/lifecycle_deployment/`.
 
 **Pipeline roles.** `infra/iam/` also defines two IAM roles for pipeline jobs, a lakehouse reader and a lakehouse writer. Only the project's
-own IAM user can assume them, through a policy that allows `sts:AssumeRole` on exactly these two roles. The reader reads the bronze, silver and gold
+own IAM user can assume both through `sts:AssumeRole`. The reader reads the bronze, silver and gold
 prefixes of `lakehouse/`. The writer holds the object actions of the lakehouse policy on `lakehouse/silver/`, `lakehouse/silver_e2e/`,
 `lakehouse/gold/`, `lakehouse/gold_e2e/` and `lakehouse/catalog_backups/` only. A session lasts at most 7200 seconds. The launcher asks for a
 session per job (`docs/lakehouse_usage.md`, Pipeline AWS access), so no long-lived key reaches a container.
+
+**Read jobs.** The project user's four service policy files carry the grants used to prepare and run read jobs. The IAM policy passes only `<PROJECT_NAME>_job_execution_<ENVIRONMENT>`, `<PROJECT_NAME>_job_offline_task_<ENVIRONMENT>`, `<PROJECT_NAME>_job_seal_task_<ENVIRONMENT>` and `<PROJECT_NAME>_job_read_task_<ENVIRONMENT>` to `ecs-tasks.amazonaws.com`. The STS policy allows the job try-writer role only with a session name matching `hai_try_*`. The S3 policy adds `s3:GetObjectVersion` only under `lakehouse/run_stage/`. Existing acquisition version reads retain their own scopes. The SSM policy reads the AWS Polaris reader client ID and secret with `ssm:GetParameter`, using the two name variables in `infra/iam/variables.tf`. It grants neither `ssm:GetParameters` nor writes on that pair. The jobs execution role separately injects the same pair with `ssm:GetParameters`. The owner renders and applies these service policies with `infra.iam.scripts.manage_policies`. The IAM stack manages the job roles and their own policies without attaching a policy to the project user.
 
 **Single-copy content folders.** The project's S3 policy has four statements for `bronze_objects/sha256/` and
 `bronze_evidence/sha256/`, the folders that single-copy storage uses. One reads current objects and exact versions

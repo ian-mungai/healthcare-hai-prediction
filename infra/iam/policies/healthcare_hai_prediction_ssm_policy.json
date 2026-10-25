@@ -62,6 +62,15 @@
         "ssm:TerminateSession"
       ],
       "Resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:session/${aws:username}-*"
+    },
+    {
+      "Sid": "ReadAwsReaderPair",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameter",
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_READER_CLIENT_ID_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_READER_CLIENT_SECRET_NAME}"
+      ]
     }
   ]
 }
