@@ -1172,6 +1172,7 @@ OLD_GOLD_COMMANDS = (
     "scripts.lakehouse.run_identity_seeds_e2e",
     "scripts.lakehouse.gold_checks check-suites",
     "scripts.lakehouse.run_gold_publish_e2e --mode contract",
+    'scripts.lakehouse.run_catalog_registration_e2e --out "$quality_output/catalog_registration" --mutations',
     "scripts.lakehouse.run_gold_publish_e2e --mode writer_setup",
     "scripts.quality.model_metadata",
     "scripts.quality.run_model_metadata_e2e",
