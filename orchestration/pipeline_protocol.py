@@ -10,18 +10,57 @@ import stat
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from scripts.lakehouse.gold_publish_record import IDENT_MAX, RUN_ID, SHA256, PublishError, accept_consumer
 
 LAYERS = ("silver", "gold")
 SILVER_NAMESPACE = {"publish_fixture": "silver_e2e", "real": "silver"}
-MAX_RECORD = 8 << 20
+MAX_RECORD = 32 << 20
+MATERIALIZATION_GATE = ".runstore_pending.json"
 COPY_SECONDS = 600.0
 
 
 class PipelineError(RuntimeError):
     """A pipeline operation cannot prove the required input, ownership or completion."""
+
+
+class RunStore(Protocol):
+    """The storage operations used by shared pipeline acceptance and lifecycle code."""
+
+    def seal(self, layer: str, expected: str) -> dict[str, str]: ...
+
+    def sealed_digest(self, layer: str, expected: str, *, state: Mapping[str, Any] | None = None) -> bool: ...
+
+    def clear_build_artifacts(self, run: Mapping[str, Any]) -> None: ...
+
+
+class LocalRunStore:
+    """Preserve the existing descriptor-held local seals and artifact cleanup."""
+
+    def __init__(self, folder: Path) -> None:
+        self.folder = folder
+
+    def seal(self, layer: str, expected: str) -> dict[str, str]:
+        """Publish the existing hash-checked, write-once local copy."""
+        return seal_copy(self.folder, layer, expected)
+
+    def sealed_digest(self, layer: str, expected: str, *, state: Mapping[str, Any] | None = None) -> bool:
+        """Compare the existing sealed file with the validated build digest."""
+        return digest_file(self.folder / f"layer_sealed/{layer}/{expected}.duckdb") == expected
+
+    def clear_build_artifacts(self, run: Mapping[str, Any]) -> None:
+        """Use the existing local build-artifact cleanup without changing its paths."""
+        from scripts.lakehouse.provenance import clear_build_artifacts
+
+        clear_build_artifacts(run)
+
+
+def require_materialized(root: Path) -> None:
+    """Refuse reads while a durable remote materialization is incomplete."""
+    gate = root / MATERIALIZATION_GATE
+    if gate.exists() or gate.is_symlink():
+        raise PipelineError("remote materialization is pending recovery")
 
 
 def silver_namespace(mode: str) -> str:
@@ -34,6 +73,7 @@ def silver_namespace(mode: str) -> str:
 
 def read_bytes(root: Path, relative: str, limit: int = MAX_RECORD) -> bytes:
     """Read a bounded regular file through directory descriptors without following symlinks."""
+    require_materialized(root)
     parts = relative.split("/")
     if not parts or any(part in ("", ".", "..") for part in parts):
         raise PipelineError("the record path is not relative and plain")
@@ -153,7 +193,7 @@ def output_record(attempt: Mapping[str, Any]) -> dict[str, Any]:
     return dict(document)
 
 
-def accept_validation(state: Mapping[str, Any], run_id: str, layer: str, attempt_id: str, folder: Path) -> dict[str, Any]:
+def accept_validation(state: Mapping[str, Any], run_id: str, layer: str, attempt_id: str, folder: Path, *, store: RunStore | None = None) -> dict[str, Any]:
     """Bind a layer seal to a successful quality attempt owned by this run and generation."""
     fixed_layer(layer)
     run = state["runs"][run_id]
@@ -183,7 +223,7 @@ def accept_validation(state: Mapping[str, Any], run_id: str, layer: str, attempt
     if result.get("counts", {}).get("fail") != 0 or result.get("counts", {}).get("warn") != 0:
         raise PipelineError("the quality result does not pass every expectation")
     expected = str(result.get("build_file_sha256", ""))
-    if not SHA256.fullmatch(expected) or digest_file(folder / f"layer_sealed/{layer}/{expected}.duckdb") != expected:
+    if not SHA256.fullmatch(expected) or not (store if store is not None else LocalRunStore(folder)).sealed_digest(layer, expected, state=state):
         raise PipelineError("the sealed bytes are not the quality attempt's validated bytes")
     return {
         "run_id": run_id,
