@@ -183,15 +183,31 @@ models:
     # Gold stores atomic facts, dimensions and bridges as tables.
     gold:
       +materialized: table
+    # The feature phase: research joins built from gold, never stored beside it (docs/feature_phase_saved.md). The gold selections
+    # exclude this tag, and the tag also reaches the folder's singular tests (data_tests below).
+    features:
+      +materialized: view
+      +tags: ['features']
+      # Every output column is documented with its data type in _features__models.yml; a column or type change fails the build
+      # before it reaches the feature store (scripts/lakehouse/feature_columns.py checks the same list on its own).
+      +contract:
+        enforced: true
   # dbt-project-evaluator runs only on request (--vars '{run_project_evaluator: true}'); its findings are warnings.
   dbt_project_evaluator:
     +enabled: "{{ var('run_project_evaluator', false) }}"
 
 seeds:
+  hai:
+    # The formula recipes are configuration of the feature phase, not gold: the gold selections exclude this tag.
+    features:
+      +tags: ['features']
   dbt_project_evaluator:
     +enabled: "{{ var('run_project_evaluator', false) }}"
 
 data_tests:
+  hai:
+    features:
+      +tags: ['features']
   dbt_project_evaluator:
     +enabled: "{{ var('run_project_evaluator', false) }}"
     +severity: warn

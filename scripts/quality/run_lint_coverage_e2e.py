@@ -245,7 +245,7 @@ SAMPLES = (
         "select 1 as id\n",
         "select 1 as id\n",
         "SQL has no declared runtime and dialect",
-        good_path="features/macros/scd2.sql",
+        good_path="dbt/macros/features/scd2.sql",
     ),
     Sample(
         "sql_unclassified_path",

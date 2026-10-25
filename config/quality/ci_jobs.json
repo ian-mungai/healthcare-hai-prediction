@@ -7,6 +7,7 @@
     "Lakehouse Bronze Checks",
     "Lakehouse Silver Checks",
     "Lakehouse Gold Checks",
+    "Lakehouse Features Checks",
     "Lakehouse Gold Model Metadata E2E",
     "Launcher E2E (Shard 1 of 2)",
     "Launcher E2E (Shard 2 of 2)",

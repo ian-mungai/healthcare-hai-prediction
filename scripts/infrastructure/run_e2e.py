@@ -1174,7 +1174,8 @@ def boot_host(
     environment = {
         "PATH": f"{root / 'tools'}:/usr/bin:/bin",
         "BOOT_TIMEOUT_LOG": str(root / "deadlines.log"),
-        "BOOT_TIMEOUT_CAP": "2",
+        # Five seconds, not two: a stand-in step that is not stalled can take over two seconds when the full local CI loads the Mac.
+        "BOOT_TIMEOUT_CAP": "5",
         "BOOT_GRACE_CAP": "1",
         "BOOT_GNU_TIMEOUT": gnu_timeout,
         "BOOT_STATE": str(root / "state"),
