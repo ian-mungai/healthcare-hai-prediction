@@ -45,7 +45,16 @@ from orchestration import launcher
 from orchestration.pipeline_protocol import PipelineError, safe_name
 from scripts.infrastructure import secret_store
 from scripts.infrastructure.secret_store_stand_in import StandIn
-from scripts.lakehouse import gold_export, gold_publish, gold_writer_setup, polaris_writer, principal_credentials, run_lock, silver_writer_setup
+from scripts.lakehouse import (
+    gold_export,
+    gold_publish,
+    gold_writer_setup,
+    launcher_cleanup,
+    polaris_writer,
+    principal_credentials,
+    run_lock,
+    silver_writer_setup,
+)
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -311,30 +320,33 @@ class Session:
         Returns the clean-up report. The folder, which holds the registry the launcher needs to finish its work, stays whenever anything is unresolved: a
         failed release, containers that cannot be read or are left, a launcher that cannot be stopped or is not proven gone.
         """
-        self.cleanup_errors = []
-        containers: list[str] = []
-        if self.client is not None:
-            if self.allocation:
+        with launcher_cleanup.defer_termination() as interrupted:
+            self.cleanup_errors = []
+            containers: list[str] = []
+            if self.client is not None:
+                if self.allocation:
+                    try:
+                        self.client.release_allocation(self.allocation)
+                    except Exception as error:
+                        self.cleanup_errors.append(f"release of the allocation: {type(error).__name__}")
                 try:
-                    self.client.release_allocation(self.allocation)
+                    self.wait(lambda: not self.labelled(), CONTAINER_SECONDS, "the launcher removes the containers of the run")
+                except RuntimeError as error:
+                    self.cleanup_errors.append(str(error))
                 except Exception as error:
-                    self.cleanup_errors.append(f"release of the allocation: {type(error).__name__}")
-            try:
-                self.wait(lambda: not self.labelled(), CONTAINER_SECONDS, "the launcher removes the containers of the run")
-            except RuntimeError as error:
-                self.cleanup_errors.append(str(error))
-            except Exception as error:
-                self.cleanup_errors.append(f"the containers cannot be read: {type(error).__name__}")
-            try:
-                containers = self.labelled()
-            except Exception as error:
-                self.cleanup_errors.append(f"the containers cannot be listed: {type(error).__name__}")
-        gone = self.stop_launcher()
-        if hasattr(self, "stand_in"):
-            self.stand_in.__exit__()
-        resolved = gone and not containers and not self.cleanup_errors
-        if resolved:
-            shutil.rmtree(self.temp, ignore_errors=True)
+                    self.cleanup_errors.append(f"the containers cannot be read: {type(error).__name__}")
+                try:
+                    containers = self.labelled()
+                except Exception as error:
+                    self.cleanup_errors.append(f"the containers cannot be listed: {type(error).__name__}")
+            gone = self.stop_launcher()
+            if hasattr(self, "stand_in"):
+                self.stand_in.__exit__()
+            if interrupted:
+                self.cleanup_errors.append(f"termination signal {interrupted[0]} received during cleanup")
+            resolved = gone and not containers and not self.cleanup_errors
+            if resolved:
+                shutil.rmtree(self.temp, ignore_errors=True)
         return {
             "launcher_left": not gone,
             "containers_left": containers,
@@ -1133,6 +1145,7 @@ def main() -> int:
     args = parser.parse_args()
     if args.case and args.mode not in ("suite", "launcher"):
         parser.error("--case applies to the suite and launcher modes only")
+    launcher_cleanup.exit_on_termination()
     report = OUT / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{args.mode}"
     report.mkdir(parents=True)
     needs_session = args.mode in ("local_iceberg", "suite", "publish_offline")
@@ -1153,7 +1166,7 @@ def main() -> int:
             steps = {"local_iceberg": local_iceberg, "publish_offline": publish_offline}[args.mode](session, report)
             if args.mode == "publish_offline":
                 steps += sentinel_scan(session, report)
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()[-1500:]}"
     finally:
         if session is not None:

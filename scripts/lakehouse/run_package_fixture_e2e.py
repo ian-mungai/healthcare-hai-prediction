@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
+from scripts.lakehouse import launcher_cleanup
 from scripts.process import CompletedProcess, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -225,6 +226,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--test-registry", help="a test registry folder; it never touches the real registry")
     args = parser.parse_args()
+    launcher_cleanup.exit_on_termination()
     OPTIONS.update({"registry": args.test_registry})
     HELD.clear()
     # Only a launcher this run starts on a test registry is stopped at the end; the real registry's launcher is never stopped here. A free
@@ -239,13 +241,16 @@ def main() -> int:
         HELD["allocation"] = hold_machine()
         return scenarios()
     finally:
-        try:
-            if "allocation" in HELD:
-                # Never start a launcher to release: a gone launcher makes the release fail visibly instead.
-                launcher.load_client(OPTIONS["registry"], start=False).release_allocation(HELD["allocation"])
-        finally:
-            if started_own:
-                stop_owned_launcher(owned, nonce)
+        with launcher_cleanup.defer_termination() as interrupted:
+            try:
+                if "allocation" in HELD:
+                    # Never start a launcher to release: a gone launcher makes the release fail visibly instead.
+                    launcher.load_client(OPTIONS["registry"], start=False).release_allocation(HELD["allocation"])
+            finally:
+                if started_own:
+                    stop_owned_launcher(owned, nonce)
+        if interrupted:
+            raise SystemExit(128 + interrupted[0])
 
 
 def scenarios() -> int:

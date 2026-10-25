@@ -371,11 +371,11 @@
     },
     {
       "path": "scripts/lakehouse/run_launcher_e2e.py",
-      "line": 2535,
+      "line": 2611,
       "code_sha256": "31df13bbd38b806ec10b83328e469066a44abb27722e6e02f3effa919c07c797",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "0ee3cfad34a52f2d2c346afed92f438ec561c5d280c887922fd35e29086c70c2",
+      "file_sha256": "824ed815ed80fa09bfaadd1a0c3126f70e622be751a83450b9dc89901d25c622",
       "dependencies": {
         "orchestration/launcher.py": "sha256:c3e0bdb8b9b3b184e2b10df020dfd6b2b86a8315670039e44a63ddeaac83ce35",
         "orchestration/network_policy.py": "sha256:26862fe808c9758d93e0c592f4eda1113b3b6a3a2921d402f88f7bd45f328400",
@@ -386,10 +386,11 @@
         "scripts/lakehouse/catalog.py": "sha256:404ed0af66e4264ec4e2e6df9357ece7b41e575d04cfdc9b2a2b87f415dfe6e6",
         "scripts/lakehouse/dbt_package_archive.py": "sha256:a508b5d491d2b50fe617c587650285bf697d66563cd898430f738820ba0fed71",
         "scripts/lakehouse/fake_docker.py": "sha256:b95369685a76595acdd238e35a13d1a13e602bb740eeab6bf5d5c7d4c00d2d9f",
+        "scripts/lakehouse/launcher_cleanup.py": "sha256:5e402751472d278ff202841d8c7ee3cf410f1d478dc7f40a1f9c5195a81f7edb",
         "scripts/lakehouse/package_fixture.py": "sha256:f3e8ba4a715ff09f1ac58bf787e9e25ff3e0a2cdd49f51c5d16694304022d2cf",
         "scripts/lakehouse/pins.py": "sha256:4df2cf98b0386515394b0406244cab2ccac5677b1a6b159c2ecac7f2c5f5b17f",
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
-        "scripts/lakehouse/run_package_fixture_e2e.py": "sha256:b1f1dd9c87fe2f12fda0cc56b891c6484707696e9c6e26c3b7ce706dbc9938f5",
+        "scripts/lakehouse/run_package_fixture_e2e.py": "sha256:6a84c3114ae00474955712af5821fdf32aae972a6b1671e7033fc9e2992a59f2",
         "scripts/lakehouse/run_silver_e2e.py": "sha256:42b24cb4912f8b9b83e0a218822b93f67ac244ee4bb17732ed0a2b4d485ebbf4",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:482c5d8c3c24774812215b4044139946cc9bd825472af2b2889c5e2ba6a2391b",
         "scripts/lakehouse/silver.py": "sha256:bc4240ba4aa26c8e679d4a76d280ccfb7df63490e4207d3562d851acbcd1f563",
@@ -411,7 +412,7 @@
       "file_sha256": "5924bdf54a728adfe6e15b9809aef38c32d32090d1a7b8d74a66db8c90c89923",
       "dependencies": {
         "orchestration/launcher.py": "sha256:c3e0bdb8b9b3b184e2b10df020dfd6b2b86a8315670039e44a63ddeaac83ce35",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:0ee3cfad34a52f2d2c346afed92f438ec561c5d280c887922fd35e29086c70c2",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:824ed815ed80fa09bfaadd1a0c3126f70e622be751a83450b9dc89901d25c622",
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
       },
