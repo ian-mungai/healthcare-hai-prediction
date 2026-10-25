@@ -50,6 +50,23 @@ Terraform stack (`bash scripts/infrastructure/terraform.sh --iam --admin-profile
 first; the project profile then applies the platform stack (`--platform`). The order and the checks are in
 `docs/infrastructure_controls.md`.
 
+After the foundation is applied and the image digests are recorded, create a services plan with the project profile.
+The wrapper renders `infra/services/deployment.auto.tfvars.json` from `.env` and the platform outputs without printing
+values. The image digests stay in the separate `infra/services/images.auto.tfvars.json` written by `push_images record`.
+Run from the repository root. Relative plan paths are inside `infra/services/`:
+
+```sh
+bash scripts/infrastructure/terraform.sh --services plan -out=services.tfplan
+```
+
+The owner reviews the saved plan before applying it. The wrapper refuses changed inputs, image digests or defaults:
+
+```sh
+bash scripts/infrastructure/terraform.sh --services apply services.tfplan
+```
+
+The first-start order and one-shot tasks are in `docs/aws_control_plane.md`.
+
 The services are defined in `docker-compose.yaml`, which the launcher reads as its service model; the launcher, not
 Compose, starts every container:
 
