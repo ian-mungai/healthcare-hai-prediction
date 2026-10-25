@@ -36,7 +36,7 @@ Medicare inpatient provider and DRG summaries are typed per file, with the data 
 control bridge seeds `dbt/seeds/gold/<name>_bridge.csv`: the registry-map seeds that sat beside the staging seeds in
 `dbt/seeds/` are retired. Each bridge keeps the stem of its retired seed plus `_bridge`.
 `scripts/lakehouse/bridge_references.py --check` checks the bridges against `data_contracts/lakehouse/gold_contract.json`. The
-formula rules are in `features/recipes/<name>_recipe.csv`, for the cost report, IPPS impact, Medicare inpatient provider,
+formula rules are in `dbt/seeds/features/<name>_recipe.csv`, for the cost report, IPPS impact, Medicare inpatient provider,
 occupational-mix, HHS and ONC, MMD and shortage families; the other families have no recipe. The Care Compare measures
 of the window models above map by exact measure ID in `registry_measure_sources_bridge.csv` and the registry's HAI controls
 (C269 to C283 and C283's children) map to the published HAI parts in `hai_outcome_measures_bridge.csv`. The cost-report
@@ -56,7 +56,7 @@ hospital capacity rows are typed per hospital and week (`int_hhs_capacity_weeks`
 The ONC Promoting Interoperability to certified-product linkage and
 the older 2011 to 2017 EHR incentive attestations are typed apart (`int_onc_chpl_linkage_rows`,
 `int_onc_attestation_rows`). `dbt/seeds/gold/hhs_onc_measures_bridge.csv` maps the registry controls, with the formula rules in
-`features/recipes/hhs_onc_measures_recipe.csv`; the HHS field names the
+`dbt/seeds/features/hhs_onc_measures_recipe.csv`; the HHS field names the
 source truncates are resolved through the stored `columns.json`.
 
 Occupational-mix surveys are typed per file, sheet and source row (`int_occmix_survey_rows`). Exact headers distinguish
@@ -64,7 +64,7 @@ survey records from CBSA and S-3 tables; the layout inventory retains every sele
 from FROM and TO, including workbook ISO dates. Payment-rule years stay separate. Deleted records, invalid
 identifiers or periods and duplicate provider-period rows remain visible with a hold and no derived values.
 `dbt/seeds/gold/occmix_measures_bridge.csv` maps all six S03 registry controls (rules in
-`features/recipes/occmix_measures_recipe.csv`): RN paid hours, the RN, combined LPN/LVN plus
+`dbt/seeds/features/occmix_measures_recipe.csv`): RN paid hours, the RN, combined LPN/LVN plus
 surgical-technologist and NAORAT paid-hour shares and RN salary per paid hour. Missing values and nonpositive
 denominators give null. C043 stays unavailable: paid hours cannot substitute for direct-care worked hours per patient-day;
 registry revision 3 closes it as unavailable from public sources.
@@ -124,7 +124,7 @@ when that ZIP lies in one county only (`county_source`).
 The period seed dates each MMD file by the year in its name and the HPSA and MUA files by their capture date, which the
 models carry as `capture_date`. The Federal Register HPSA workbooks stay in bronze. `dbt/seeds/gold/shortage_measures_bridge.csv`
 maps the HPSA and MUA controls (C249 to C251) and the MMD bridge the 82 MMD controls, 85 registry controls in all
-(rules in `features/recipes/shortage_measures_recipe.csv`).
+(rules in `dbt/seeds/features/shortage_measures_recipe.csv`).
 
 Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
 visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the

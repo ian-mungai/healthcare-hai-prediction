@@ -198,7 +198,10 @@ jobs:
           - layer: Gold
             part: gold
             units: checks writer_setup
-            timeout: 15
+            timeout: 60
+          - layer: Features
+            part: features
+            timeout: 260
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -226,7 +229,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: lakehouse_${{ matrix.part }}_${{ github.run_id }}_${{ github.run_attempt }}
-          path: data/e2e/quality/
+          path: |
+            data/e2e/quality/
+            data/e2e/feature_sources/
+            data/e2e/feature_columns/
           if-no-files-found: ignore
           retention-days: 14
 

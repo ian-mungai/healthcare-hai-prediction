@@ -130,7 +130,7 @@ REQUIREMENTS = "7a967b2"
 ZERO = "0" * 40
 MISSING = "0123456789abcdef0123456789abcdef01234567"
 MARKDOWN_PROBES = ("ci_groups_probe.MD", "ci_groups_probe_two.Markdown")
-LAYERS = ["lakehouse_bronze", "lakehouse_silver", "lakehouse_gold"]
+LAYERS = ["lakehouse_bronze", "lakehouse_silver", "lakehouse_gold", "lakehouse_features"]
 CORE = ["python_lint", "orchestration_checks", "repository_code_checks", "configuration_checks", "sql_style", "terraform_checks"]
 WITH_LAYERS = [CORE[0], *LAYERS, *CORE[1:]]
 PART_GROUPS = {
@@ -138,7 +138,8 @@ PART_GROUPS = {
     "launcher": ["launcher"],
     "bronze": LAYERS[:1],
     "silver": LAYERS[1:2],
-    "gold": LAYERS[2:],
+    "gold": LAYERS[2:3],
+    "features": LAYERS[3:],
     "core+layers": WITH_LAYERS,
     "all": [*WITH_LAYERS, "launcher", "acquisition"],
 }
@@ -152,7 +153,7 @@ ORCHESTRATION_SHARED = {
     "scripts/lakehouse/pipeline_build.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/silver_input.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/silver_publish.py": LAKEHOUSE_SCRIPT,
-    "scripts/lakehouse/gold_maintenance.py": ["python_lint", "lakehouse_gold", "orchestration_checks", "repository_code_checks"],
+    "scripts/lakehouse/gold_maintenance.py": ["python_lint", *LAYERS[2:], "orchestration_checks", "repository_code_checks"],
     "scripts/lakehouse/run_lock.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/fake_docker.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/run_launcher_e2e.py": LAKEHOUSE_SCRIPT,
@@ -426,9 +427,13 @@ def list_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
         code, log, _ = run_entry(work, out, f"list_only_{part}", extra)
     finally:
         restore(work)
-    wanted = {"core": "run sql_style", "bronze": "run lakehouse_bronze", "silver": "run lakehouse_silver", "gold": "run lakehouse_gold"}.get(
-        part, "run launcher"
-    )
+    wanted = {
+        "core": "run sql_style",
+        "bronze": "run lakehouse_bronze",
+        "silver": "run lakehouse_silver",
+        "gold": "run lakehouse_gold",
+        "features": "run lakehouse_features",
+    }.get(part, "run launcher")
     checks = {
         "exit_zero": code == 0,
         "plan_printed": wanted in log,
@@ -591,18 +596,18 @@ def acquisition_selection_case(work: Path, path: str, wanted: bool) -> dict[str,
 
 
 def layer_cases(work: Path) -> list[dict[str, Any]]:
-    """The lakehouse layers: a change selects its layer and every layer downstream; shared code selects all three."""
+    """The lakehouse layers: a change selects its layer and every layer downstream; shared code selects every layer."""
 
     def path_case(name: str, path: str, groups: list[str]) -> dict[str, Any]:
         return selection_case(work, name, ["--scope", "paths", "--path", path, "--part", "core+layers"], groups)
 
     blob = git(work, "rev-parse", "HEAD:dbt/dbt_project.yml").strip()
-    silver_gold = ["lakehouse_silver", "lakehouse_gold"]
+    silver_downstream = LAYERS[1:]
     cases = [
         selection_case(work, "core_part_excludes_the_layers", ["--scope", "full", "--part", "core"], CORE, "full scope"),
         *(
             selection_case(work, f"{part}_part_is_its_layer_only", ["--scope", "full", "--part", part], groups, "full scope")
-            for part, groups in (("bronze", LAYERS[:1]), ("silver", LAYERS[1:2]), ("gold", LAYERS[2:]))
+            for part, groups in (("bronze", LAYERS[:1]), ("silver", LAYERS[1:2]), ("gold", LAYERS[2:3]), ("features", LAYERS[3:]))
         ),
         path_case(
             "layer_bronze_only_change_selects_every_layer",
@@ -610,14 +615,14 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks"],
         ),
         path_case(
-            "layer_silver_only_change_selects_silver_and_gold",
+            "layer_silver_only_change_selects_silver_gold_and_features",
             "scripts/lakehouse/silver.py",
-            ["python_lint", *silver_gold, "orchestration_checks", "repository_code_checks"],
+            ["python_lint", *silver_downstream, "orchestration_checks", "repository_code_checks"],
         ),
         path_case(
-            "layer_gold_only_change_selects_gold_only",
+            "layer_gold_only_change_selects_gold_and_features",
             "scripts/lakehouse/gold_publish.py",
-            ["python_lint", "lakehouse_gold", "orchestration_checks", "repository_code_checks"],
+            ["python_lint", *LAYERS[2:], "orchestration_checks", "repository_code_checks"],
         ),
         path_case(
             "layer_shared_change_selects_every_layer",
@@ -630,12 +635,16 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks"],
         ),
         path_case(
-            "layer_gold_model_selects_gold_only", "dbt/models/gold/dimensions/_dimensions__models.yml", ["lakehouse_gold", "orchestration_checks", "sql_style"]
+            "layer_gold_model_selects_gold_and_features",
+            "dbt/models/gold/dimensions/_dimensions__models.yml",
+            [*LAYERS[2:], "orchestration_checks", "sql_style"],
         ),
         path_case(
-            "layer_silver_model_selects_silver_and_gold", "dbt/models/silver/staging/_staging__models.yml", [*silver_gold, "orchestration_checks", "sql_style"]
+            "layer_silver_model_selects_silver_gold_and_features",
+            "dbt/models/silver/staging/_staging__models.yml",
+            [*silver_downstream, "orchestration_checks", "sql_style"],
         ),
-        path_case("layer_gold_seed_selects_gold_only", "dbt/seeds/gold/identity_splits.csv", ["lakehouse_gold", "orchestration_checks", "sql_style"]),
+        path_case("layer_gold_seed_selects_gold_and_features", "dbt/seeds/gold/identity_splits.csv", [*LAYERS[2:], "orchestration_checks", "sql_style"]),
         path_case("layer_gold_macro_read_by_bronze_selects_every_layer", "dbt/macros/gold_facts.sql", [*LAYERS, "orchestration_checks", "sql_style"]),
         path_case(
             "layer_gold_identity_macro_read_by_bronze_selects_every_layer", "dbt/macros/gold_identity.sql", [*LAYERS, "orchestration_checks", "sql_style"]
@@ -646,9 +655,9 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [*LAYERS, "orchestration_checks", "sql_style"],
         ),
         path_case(
-            "layer_gold_dimension_no_layer_above_reads_selects_gold_only",
+            "layer_gold_dimension_no_layer_above_reads_selects_gold_and_features",
             "dbt/models/gold/dimensions/dim_county.sql",
-            ["lakehouse_gold", "orchestration_checks", "sql_style"],
+            [*LAYERS[2:], "orchestration_checks", "sql_style"],
         ),
         path_case(
             "layer_staging_model_read_by_bronze_selects_every_layer",
@@ -661,29 +670,38 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [*LAYERS, "orchestration_checks", "sql_style"],
         ),
         path_case(
-            "layer_staging_model_nothing_upstream_reads_selects_silver_and_gold",
+            "layer_staging_model_nothing_upstream_reads_selects_silver_gold_and_features",
             "dbt/models/silver/staging/stg_acs_dp02.sql",
-            [*silver_gold, "orchestration_checks", "sql_style"],
+            [*silver_downstream, "orchestration_checks", "sql_style"],
         ),
         path_case("layer_shared_macro_selects_every_layer", "dbt/macros/file_metadata.sql", [*LAYERS, "orchestration_checks", "sql_style"]),
-        path_case("layer_gold_contract_is_read_by_silver_first", "data_contracts/lakehouse/gold_contract.json", [*silver_gold, "orchestration_checks"]),
+        path_case("layer_gold_contract_is_read_by_silver_first", "data_contracts/lakehouse/gold_contract.json", [*silver_downstream, "orchestration_checks"]),
         path_case("layer_gold_suite_is_read_by_bronze_first", "data_contracts/great_expectations/gold/gold_keys.json", [*LAYERS, "orchestration_checks"]),
-        path_case("layer_saved_silver_suite_selects_silver_and_gold", "features/great_expectations/suites/silver_spatial.json", silver_gold),
+        path_case("layer_saved_silver_suite_selects_silver_gold_and_features", "features/great_expectations/suites/silver_spatial.json", silver_downstream),
         path_case("layer_suite_baselines_are_read_by_bronze_first", "data_contracts/great_expectations/baselines.json", [*LAYERS, "orchestration_checks"]),
-        path_case("layer_archived_model_is_read_by_gold_only", "features/models/int_spine_county_context.sql", ["lakehouse_gold", "sql_style"]),
-        path_case("layer_silver_columns_select_silver_and_gold", "data_contracts/lakehouse/silver_columns.json", [*silver_gold, "orchestration_checks"]),
+        path_case(
+            "layer_feature_model_is_read_by_gold_and_features",
+            "dbt/models/features/int_spine_county_context.sql",
+            [*LAYERS[2:], "orchestration_checks", "sql_style"],
+        ),
+        path_case(
+            "layer_feature_recipe_seed_selects_gold_and_features",
+            "dbt/seeds/features/mup_measures_recipe.csv",
+            [*LAYERS[2:], "orchestration_checks", "sql_style"],
+        ),
+        path_case("layer_silver_columns_select_silver_and_gold", "data_contracts/lakehouse/silver_columns.json", [*silver_downstream, "orchestration_checks"]),
         path_case("layer_bronze_table_map_selects_every_layer", "config/lakehouse/bronze_tables.json", [*LAYERS, "configuration_checks"]),
         staged_case(
             work,
-            "layer_staged_gold_model_selects_gold_only",
+            "layer_staged_gold_model_selects_gold_and_features",
             [["update-index", "--add", "--cacheinfo", f"100644,{blob},dbt/models/gold/staged_copy.yml"]],
-            ["lakehouse_gold", "orchestration_checks", "sql_style"],
+            [*LAYERS[2:], "orchestration_checks", "sql_style"],
         ),
         staged_case(
             work,
-            "layer_staged_silver_model_selects_silver_and_gold",
+            "layer_staged_silver_model_selects_silver_gold_and_features",
             [["update-index", "--add", "--cacheinfo", f"100644,{blob},dbt/models/silver/staged_copy.yml"]],
-            [*silver_gold, "orchestration_checks", "sql_style"],
+            [*silver_downstream, "orchestration_checks", "sql_style"],
         ),
     ]
     return [*cases, *reader_coverage_cases(work), *entry_point_cases()]
@@ -892,6 +910,7 @@ def reader_coverage_cases(work: Path) -> list[dict[str, Any]]:
         "lakehouse_bronze": (*layer_modules("lakehouse_bronze"), "scripts.lakehouse.storage_metadata_comparison"),
         "lakehouse_silver": (*layer_modules("lakehouse_silver"), "scripts.lakehouse.gold_checks"),
         "lakehouse_gold": layer_modules("lakehouse_gold"),
+        "lakehouse_features": (*layer_modules("lakehouse_features"), "scripts.lakehouse.feature_allowlist"),
     }
     missed: dict[str, list[str]] = {}
     counted: dict[str, int] = {}
@@ -906,7 +925,7 @@ def reader_coverage_cases(work: Path) -> list[dict[str, Any]]:
         reader_scan_case(tracked),
         {
             "case": "layer_readers_are_selected_by_their_inputs",
-            "passed": not missed and all(counted[group] for group in ("lakehouse_silver", "lakehouse_gold")),
+            "passed": not missed and all(counted[group] for group in ("lakehouse_silver", "lakehouse_gold", "lakehouse_features")),
             "inputs_checked": counted,
             "missed": {group: items[:6] for group, items in missed.items()},
         },
@@ -1042,7 +1061,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
                 ("README.md", ["repository_code_checks"]),
                 (
                     "dbt/models/silver/intermediate/_intermediate__models.yml",
-                    ["lakehouse_silver", "lakehouse_gold", "orchestration_checks", "repository_code_checks", "sql_style"],
+                    [*LAYERS[1:], "orchestration_checks", "repository_code_checks", "sql_style"],
                 ),
                 ("docs/quality_checks.md", ["repository_code_checks"]),
             )
@@ -1086,8 +1105,9 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         selection_case(
             work,
             "feature_sql_selects_inventory",
-            ["--scope", "paths", "--path", "features/macros/hospital_alignment.sql", "--part", "core+layers"],
-            ["lakehouse_gold", "sql_style"],
+            ["--scope", "paths", "--path", "dbt/macros/features/hospital_alignment.sql", "--part", "core+layers"],
+            # The bronze provenance runner seals every dbt macro, so a feature macro also runs bronze and the layers below it.
+            [*LAYERS, "orchestration_checks", "sql_style"],
         ),
         selection_case(
             work,
@@ -1140,11 +1160,11 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
 
 def real_run_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
-    for part in ("all", "core", "launcher", "bronze", "silver", "gold"):
+    for part in ("all", "core", "launcher", "bronze", "silver", "gold", "features"):
         cases.append(list_only_case(work, out, part))
-    for part in ("core", "all", "launcher", "gold"):
+    for part in ("core", "all", "launcher", "gold", "features"):
         cases.append(docs_only_case(work, out, part))
-    for part in ("core", "all", "launcher", "silver"):
+    for part in ("core", "all", "launcher", "silver", "features"):
         cases.append(gate_failure_case(work, out, part))
     cases.append(layer_skip_case(work, out))
     cases.append(gates_before_launcher_case(work, out, "launcher", gate_fails=False))
@@ -1164,12 +1184,22 @@ def real_run_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]
 
 GOLD_UNIT_FUNCTIONS = ("lakehouse_gold_checks", "lakehouse_gold_writer_setup", "lakehouse_gold_model_metadata_e2e")
 GOLD_UNITS = ("checks", "writer_setup", "model_metadata_e2e")
+FEATURE_COMMANDS = (
+    "scripts.lakehouse.feature_sources --check",
+    "scripts.lakehouse.run_feature_sources_e2e",
+    "scripts.lakehouse.feature_columns --check",
+    "scripts.lakehouse.run_feature_columns_e2e",
+)
 OLD_GOLD_COMMANDS = (
     "scripts.lakehouse.bridge_references --check",
     "scripts.lakehouse.run_bridge_references_e2e",
     "scripts.lakehouse.identity_splits --check",
     "scripts.lakehouse.source_labels --check",
     "scripts.lakehouse.run_identity_seeds_e2e",
+    "scripts.lakehouse.feature_sources --check",
+    "scripts.lakehouse.run_feature_sources_e2e",
+    "scripts.lakehouse.feature_columns --check",
+    "scripts.lakehouse.run_feature_columns_e2e",
     "scripts.lakehouse.gold_checks check-suites",
     "scripts.lakehouse.run_gold_publish_e2e --mode contract",
     "scripts.lakehouse.run_gold_publish_e2e --mode writer_setup",
@@ -1301,6 +1331,8 @@ def gold_unit_cases() -> list[dict[str, Any]]:
     folders = {
         "scripts/lakehouse/run_bridge_references_e2e.py": "data/e2e/bridge_references",
         "scripts/lakehouse/run_identity_seeds_e2e.py": "data/e2e/gold_identity_seeds",
+        "scripts/lakehouse/run_feature_sources_e2e.py": "data/e2e/feature_sources",
+        "scripts/lakehouse/run_feature_columns_e2e.py": "data/e2e/feature_columns",
         "scripts/quality/run_model_metadata_e2e.py": "data/e2e/model_metadata",
         "scripts/lakehouse/run_gold_publish_e2e.py": "data/e2e/gold_publish",
     }
@@ -1329,13 +1361,16 @@ def gold_unit_cases() -> list[dict[str, Any]]:
     return [
         {
             "case": "gold_units_hold_every_gold_command_once",
-            "passed": sorted(found) == sorted(OLD_GOLD_COMMANDS) and all(body is not None for body in bodies.values()),
-            "missing": sorted(set(OLD_GOLD_COMMANDS) - set(found)),
-            "extra_or_repeated": sorted(command for command in found if found.count(command) > 1 or command not in OLD_GOLD_COMMANDS),
+            "passed": sorted(found) == sorted(command for command in OLD_GOLD_COMMANDS if command not in FEATURE_COMMANDS)
+            and all(body is not None for body in bodies.values()),
+            "missing": sorted(set(OLD_GOLD_COMMANDS) - set(FEATURE_COMMANDS) - set(found)),
+            "extra_or_repeated": sorted(
+                command for command in found if found.count(command) > 1 or command not in OLD_GOLD_COMMANDS or command in FEATURE_COMMANDS
+            ),
         },
         {"case": "gold_units_start_no_launcher_modes", "passed": sorted(modes) == ["contract", "writer_setup"], "modes": modes},
         {
-            "case": "gold_units_write_distinct_report_folders",
+            "case": "gold_and_feature_checks_write_distinct_report_folders",
             "passed": not missing_folders
             and "f\"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{args.mode}\"" in publish
             and len(set(folders.values())) == len(folders),
@@ -1348,6 +1383,62 @@ def gold_unit_cases() -> list[dict[str, Any]]:
             "covered": covered,
         },
     ]
+
+
+def feature_split_cases() -> list[dict[str, Any]]:
+    text = ci_script()
+    feature_commands = timed_commands(function_text(text, "lakehouse_features") or "")
+    gold_commands = [command for name in GOLD_UNIT_FUNCTIONS for command in timed_commands(function_text(text, name) or "")]
+    sources = (
+        "scripts/lakehouse/feature_allowlist.py",
+        "scripts/lakehouse/feature_sources.py",
+        "scripts/lakehouse/run_feature_sources_e2e.py",
+        "scripts/lakehouse/feature_columns.py",
+        "scripts/lakehouse/run_feature_columns_e2e.py",
+    )
+    cases = [
+        {
+            "case": "feature_group_holds_every_feature_command_once",
+            "passed": sorted(feature_commands) == sorted(FEATURE_COMMANDS),
+            "found": feature_commands,
+            "expected": list(FEATURE_COMMANDS),
+        },
+        {
+            "case": "gold_and_feature_groups_preserve_every_original_command_once",
+            "passed": sorted([*gold_commands, *feature_commands]) == sorted(OLD_GOLD_COMMANDS),
+            "found": [*gold_commands, *feature_commands],
+        },
+    ]
+    for scope, path in [("full", ""), *(("paths", path) for path in sources)]:
+        arguments = ["--scope", scope, "--part", "features", *(["--path", path] if path else [])]
+        code, plan, error = select(ROOT, *arguments)
+        cases.append(
+            {
+                "case": f"feature_part_selects_its_group_{Path(path).stem if path else 'full'}",
+                "passed": code == 0 and plan is not None and plan["run"] == ["lakehouse_features"],
+                "exit": code,
+                "plan": plan,
+                "error": error,
+            }
+        )
+    definition = workflow_document()["jobs"]["lakehouse"]
+    entries = [entry for entry in matrix_entries(definition) if entry.get("part") == "features"]
+    steps = [step for step in definition["steps"] if step.get("run") == "bash scripts/run_ci.sh"]
+    cases.append(
+        {
+            "case": "feature_job_uses_range_selection_and_the_plan_reuse_condition",
+            "passed": len(entries) == 1
+            and definition.get("needs") == "plan"
+            and definition.get("if") == "${{ needs.plan.outputs.reuse != 'true' }}"
+            and len(steps) == 1
+            and steps[0].get("env", {}).get("CI_PART") == "${{ matrix.part }}"
+            and steps[0].get("env", {}).get("CI_SCOPE") == "range"
+            and steps[0].get("env", {}).get("RANGE_START") == "${{ github.event.pull_request.base.sha || github.event.before }}"
+            and steps[0].get("env", {}).get("RANGE_END") == "${{ github.event.pull_request.head.sha || github.sha }}",
+            "feature_matrix_entries": entries,
+        }
+    )
+    return cases
 
 
 def acquisition_script_cases() -> list[dict[str, Any]]:
@@ -1463,7 +1554,7 @@ def unit_refusal_case(work: Path, out: Path) -> dict[str, Any]:
 
 
 def speed_static_cases(scratch: Path) -> list[dict[str, Any]]:
-    return [*single_command_cases(), *timing_function_cases(scratch), *gold_unit_cases(), *acquisition_script_cases(), *timeout_cases()]
+    return [*single_command_cases(), *timing_function_cases(scratch), *gold_unit_cases(), *feature_split_cases(), *acquisition_script_cases(), *timeout_cases()]
 
 
 STUB_UNIT = """#!/usr/bin/env bash
@@ -1664,7 +1755,8 @@ BODY_SELECTION = {
     "python_lint": ["python_lint", "repository_code_checks"],
     "lakehouse_bronze": [*LAYERS, "repository_code_checks"],
     "lakehouse_silver": [*LAYERS[1:], "repository_code_checks"],
-    "lakehouse_gold": ["lakehouse_gold", "repository_code_checks"],
+    "lakehouse_gold": [*LAYERS[2:], "repository_code_checks"],
+    "lakehouse_features": ["lakehouse_features", "repository_code_checks"],
     "orchestration_checks": ["orchestration_checks", "repository_code_checks"],
     "repository_code_checks": ["repository_code_checks"],
     "configuration_checks": ["configuration_checks", "repository_code_checks"],
@@ -1731,7 +1823,7 @@ def body_file_cases(work: Path) -> list[dict[str, Any]]:
     return cases
 
 
-GUARD_FILES = ("config/quality/ci_groups.json", "scripts/run_ci.sh")
+GUARD_FILES = ("config/quality/ci_groups.json", "scripts/run_ci.sh", ".github/workflows/ci.yml")
 # Text that runs a command (or a compound statement that runs one) when the file is sourced: the guard stops it before any side effect.
 COMMAND_FORMS = {
     "echo": "echo SIDE >> side_effect_marker",
@@ -1866,6 +1958,12 @@ def guard_cases() -> list[dict[str, Any]]:
         path = tree / GROUP_FILES / "lakehouse_gold.sh"
         path.write_text(path.read_text(encoding="utf-8").replace("lakehouse_gold_writer_setup()", "lakehouse_gold_renamed()"), encoding="utf-8")
 
+    def drop_feature_job(tree: Path) -> None:
+        path = tree / ".github/workflows/ci.yml"
+        source = path.read_text(encoding="utf-8")
+        source = re.sub(r"          - layer: Features\n(?:            [^\n]*\n)+", "", source)
+        path.write_text(source, encoding="utf-8")
+
     def rename_launcher(tree: Path) -> None:
         path = tree / GROUP_FILES / "launcher.sh"
         path.write_text(path.read_text(encoding="utf-8").replace("launcher_e2e()", "launcher_unit()"), encoding="utf-8")
@@ -1876,6 +1974,7 @@ def guard_cases() -> list[dict[str, Any]]:
 
     return [
         guard_case("guard_passes_without_drift", lambda tree: None, []),
+        guard_case("guard_fails_a_feature_group_without_a_hosted_job", drop_feature_job, [".github/workflows/ci.yml", "lakehouse_features", "no hosted job"]),
         guard_case(
             "guard_fails_a_group_function_left_in_the_dispatcher", append("scripts/run_ci.sh", "\nsql_style() { :; }\n"), ["scripts/run_ci.sh", "sql_style"]
         ),
@@ -2026,7 +2125,7 @@ def mirror_differences(github: dict[str, Any], local: dict[str, Any]) -> dict[st
 
 
 def planted_workflows() -> dict[str, dict[str, Any]]:
-    """Copies of the workflow that drift from the local run in one way each: a shard fewer, another shard count in the combining job, a gold unit fewer."""
+    """Copies of the workflow with one missing shard, a different combining count, a missing gold unit or a missing feature job."""
     drifts = {}
     shards = copy.deepcopy(workflow_document())
     shards["jobs"]["acquisition_shard"]["strategy"]["matrix"]["shard"] = [1, 2, 3]
@@ -2037,6 +2136,10 @@ def planted_workflows() -> dict[str, dict[str, Any]]:
     unit = copy.deepcopy(workflow_document())
     unit["jobs"]["lakehouse"]["strategy"]["matrix"]["include"][2]["units"] = "checks"
     drifts["gold_unit"] = unit
+    feature = copy.deepcopy(workflow_document())
+    entries = feature["jobs"]["lakehouse"]["strategy"]["matrix"]["include"]
+    feature["jobs"]["lakehouse"]["strategy"]["matrix"]["include"] = [entry for entry in entries if entry["part"] != "features"]
+    drifts["feature_job"] = feature
     return drifts
 
 
@@ -2216,11 +2319,12 @@ def stand_in_run(work: Path, out: Path, name: str, extra: dict[str, str], expect
 
 def variable_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     everything = [entry for group in BODY_SELECTION for entry in STAND_IN_ENTRIES.get(group, [group])]
-    core = [entry for entry in everything if entry not in {"launcher_e2e", *STAND_IN_ENTRIES["lakehouse_gold"], "lakehouse_bronze", "lakehouse_silver"}]
+    core = [entry for entry in everything if entry not in {"launcher_e2e", *STAND_IN_ENTRIES["lakehouse_gold"], *LAYERS}]
     layers = {
         "bronze": ["lakehouse_bronze"],
         "silver": ["lakehouse_silver"],
         "gold": ["lakehouse_gold_checks", "lakehouse_gold_writer_setup", "lakehouse_gold_model_metadata_e2e"],
+        "features": ["lakehouse_features"],
     }
     cases = [
         stand_in_run(work, out, "full_all", {"CI_SCOPE": "full", "CI_PART": "all"}, everything),

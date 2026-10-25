@@ -1,7 +1,7 @@
 ---
 title: Quality checks
 description: Every repository check the pre-commit hooks and CI run, what each blocks and how to run it on its own.
-last_updated: 2026-10-22
+last_updated: 2026-10-25
 ---
 
 # Quality checks
@@ -43,9 +43,9 @@ last_updated: 2026-10-22
   init script whose LOAD, CREATE SECRET and ATTACH statements are outside the pinned grammar. Its source stays unchanged.
   The 6 SQL files of `tests/orchestration/fixtures/tiny` are listed as excluded too: they form the synthetic dbt project of
   the transform scheduler E2E, which builds and checks them.
-  The 41 listed `features/` SQL files are deferred: they are saved for the feature phase
-  and are not built by dbt, as described in `docs/feature_phase_saved.md`. They must be linted when that phase brings
-  them into a dbt project. A tracked SQL file outside the active paths and explicit deferred or excluded lists fails.
+  The feature-phase SQL in `dbt/models/features/`, `dbt/macros/features/` and `dbt/tests/features/` is linted with the other dbt SQL
+  (see `docs/feature_phase_saved.md`).
+  A tracked SQL file outside the active paths and the explicit excluded list fails.
   `.venv/bin/python -m scripts.quality.lint_sources sql` runs these profiles without executing SQL. dbt packages are
   a compilation prerequisite. Macro bodies are style-checked only through the models and tests that use them.
   A fresh local dbt parse supplies the macro call graph. Each project macro must have a caller recorded in the manifest:
@@ -65,7 +65,7 @@ last_updated: 2026-10-22
   `.ndjson`, `.avro`, `.db` and `.sqlite` files are allowed only in
   `tests/fixtures/` for synthetic samples, in `dbt/seeds/` for the reviewed
   dbt seeds (file labels and checksums from the S3 manifests, no source values),
-  in `features/recipes/` for the formula recipes and as the one named file
+  and as the one named file
   `config/lakehouse/identity_classification.csv` (codes, classes and public
   source citations; a path that only starts with that name is blocked). Any file over 5 MB is blocked
   unless Git LFS stores it. Acquired data stays in S3 and ignored local folders.
@@ -249,6 +249,7 @@ checks blocked only after their findings were deleted or listed with a reason.
 The installed `.tools/sqlfluff` environment compiles models through its dbt templater with a private in-memory `lint` profile. SQLFluff parses the compiled SQL.
 Compilation uses the installed dbt packages, writes temporary artifacts and starts no build or container. It needs no catalog, credentials or network.
 The `model-metadata` hook runs when a dbt YAML or SQL file, a macro, the contract, the table map or the check itself changes.
+A model whose SQL starts a `config(enabled=false)` is disabled for dbt and for this check. The check does not compile it and does not require its YAML entry.
 
 Run `.venv/bin/python -m scripts.quality.model_metadata`. It exits 0 when the project is clean, 1 for a problem and 2 when it cannot read the project,
 for example after a malformed YAML, JSON or Jinja file. A cannot-run report names the file, line, cause, repair and who to ask. It prints no traceback.
@@ -349,7 +350,7 @@ set (`.venv/bin/pre-commit run --all-files --hook-stage manual`, whose
 GitHub CI runs the manual stage on every pull request and push to `main` as parallel
 jobs after a quick plan job (see Main-run reuse below): the hooks without `local_ci` (file-based hooks check the changed files of
 the range), then `scripts/run_ci.sh` as `CI_PART=core`, one job for each lakehouse
-layer (`CI_PART=bronze`, `silver` or `gold`, see Lakehouse layers below), a job for the
+layer (`CI_PART=bronze`, `silver`, `gold` or `features`, see Lakehouse layers below), a job for the
 gold model metadata E2E (`CI_PART=gold` with `CI_UNITS=model_metadata_e2e`), the launcher E2E in two shards
 (`CI_PART=launcher`, `LAUNCHER_SHARD=K/2`) and the acquisition shards with their combining job, each for the groups the range
 touches (`CI_SCOPE=range`). Every checkout of a pull request run is the head commit of the pull request, not GitHub's merge of the
@@ -361,12 +362,9 @@ the dbt package archive and the SQLFluff packages); the Python environment is
 built fresh from `requirements.txt` without a pip cache. Each job's timeout is about
 twice its measured time (see Measured durations below). Locally `scripts/run_ci.sh` runs every part the way the GitHub jobs do: the gates
 first, then the launcher E2E, then the units that run alone (the gold writer set-up) and then the independent check groups and units, which run
-concurrently: Local CI Core, the three lakehouse layers, the gold model metadata E2E with its workers and the four acquisition shards. After them the
-combining step of the acquisition gate merges the four shard folders and enforces the 90% coverage gate. The full local CI is expected to take about 32 minutes (the
-launcher E2E about 13 minutes, then the parallel set whose longest part is the acquisition shards at about 17 minutes). This is an estimate until the
-first full local run on this layout measures it. A separate measured trial runs the
-launcher E2E in the parallel set five times on this Mac (16 cores, 48 GiB). Only if all five runs pass does the launcher join the parallel set, which should
-take about 20 minutes. The exception to the run alone rule is recorded with the evidence. Until then the launcher stays alone, first. The commit hook
+concurrently: Local CI Core, the four lakehouse layers, the gold model metadata E2E with its workers and the four acquisition shards. After them the
+combining step of the acquisition gate merges the four shard folders and enforces the 90% coverage gate. The full local CI is expected to take about 60 minutes. The launcher E2E takes about 13 minutes and the feature checks take about 40 minutes, with gates and setup added. This is an estimate until the first full local run on this layout measures it. A separate measured trial runs the
+launcher E2E in the parallel set five times on this Mac (16 cores, 48 GiB). Only if all five runs pass does the launcher join the parallel set, which would remove the launcher time from the serial path. The exception to the run alone rule is recorded with the evidence. Until then the launcher stays alone, first. The commit hook
 (`CI_SCOPE=staged`) always runs the groups the staged paths select and reuses no earlier result. The run prints each group's seconds and each command's
 start, end and seconds (GitHub CI adds both to the job summary). In the full set gitleaks scans every outgoing source file instead of
 the staged index. The acquisition checks
@@ -375,7 +373,7 @@ change. The full local CI runs them as the same four shards and combining step a
 under the quality evidence folder of the run. The hook and `bash scripts/acquisition/run_checks.sh` run them unsharded. Run
 them directly before a release with that command.
 
-The checks cover secrets and credential files, data files (allowed only in `tests/fixtures/`, `dbt/seeds/`, `features/recipes/` and the one file `config/lakehouse/identity_classification.csv`), a
+The checks cover secrets and credential files, data files (allowed only in `tests/fixtures/`, `dbt/seeds/` and the one file `config/lakehouse/identity_classification.csv`), a
 privacy scan of every non-ignored file, prose style, Markdown syntax, front matter, commit messages, documentation that
 matches the code, removed names, unused code, dependencies and files, lint settings and Docker calls outside the
 launcher. Each has a failing and a passing sample run in local CI. Local commits need an ignored
@@ -392,7 +390,7 @@ no group lists and that is not passive selects every applicable group. Markdown 
 `.gitignore` and `.gitattributes` are passive: they do not select every group, but a group whose list matches one still
 runs. A change of passive paths that no group lists selects no conditional group. The `sql_style` group runs in every
 full and range run (the run before a push and GitHub CI). On commits it runs when a listed SQL input changes:
-`dbt/`, `.sqlfluff`, `features/` and `services/` SQL, the dbt package archive configuration and the SQLFluff pins and
+`dbt/`, `.sqlfluff` and `services/` SQL, the dbt package archive configuration and the SQLFluff pins and
 installer.
 The source, privacy, secret, credential, data-file, writing, Markdown lint and documentation gates always run.
 They run in every scope and every part, also when no conditional group
@@ -407,7 +405,7 @@ Each CI run retains configuration evidence under `data/e2e/configuration/` and
 quality evidence under `data/e2e/quality/`. The secret store E2E writes its report under `data/e2e/secret_store/` and the gold writer set-up
 check under `data/e2e/gold_publish/`. E2E reports include source hashes,
 expected and observed process outcomes, repeat commands and tested limits.
-GitHub Actions uploads the configuration, quality and broker evidence and retains it for 14 days. The secret store and gold set-up reports stay on the runner and are not uploaded. Local TFLint
+GitHub Actions uploads the configuration, quality, broker and feature evidence and retains it for 14 days. The feature job retains `data/e2e/feature_sources/` and `data/e2e/feature_columns/`. The secret store and gold set-up reports stay on the runner and are not uploaded. Local TFLint
 needs permission to start its bundled plugin; a sandbox denial is a blocked
 check, not a passing result.
 
@@ -434,13 +432,13 @@ launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no fi
   checks the shape of the files and does not defend against these effects. Operating-system isolation (separate users, containers or read-only mounts) would be
   needed for that and is not part of this change.
 - A body file is listed in its own group's path list and in no other list. An edit to it selects that group, the lakehouse layers downstream of it (a bronze file
-  selects the three layers and a silver file selects silver and gold) and `repository_code_checks`, which matches every `.sh` file and runs the guard. It selects no
+  selects all four layers, a silver file selects silver, gold and features and a gold file selects gold and features) and `repository_code_checks`, which matches every `.sh` file and runs the guard. It selects no
   other group. The launcher list leaves the folder out of its `scripts/` pattern for this reason.
 - The dispatcher, the timing wrapper, the selector, `config/quality/ci_groups.json`, `.github/workflows/`, `.github/actions/`, `.pre-commit-config.yaml`, the
   requirements files and `pyproject.toml` still select every group. Other files under `.github/` (the pull request template) are documents and select no group.
 - The guard `scripts/quality/ci_group_files.py` runs in `repository_code_checks`. It fails with the file and the group named when a group has no body file or
   a body file belongs to no group, when a file lacks its entry function, when the dispatcher text declares a function of a group (continued lines, quotes,
-  backslashes and `$'...'` escapes in names are removed first), when a body file is missing from its group's list or another list also matches it. Bash lists the
+  backslashes and `$'...'` escapes in names are removed first), when a body file is missing from its group's list or another list also matches it. It also requires every configured group to have a hosted job that runs its part through `scripts/run_ci.sh`. A missing feature matrix entry names the workflow and the uncovered feature group. Bash lists the
   functions: the guard sources each file alone in a clean shell (`env -i`, `--noprofile --norc`, an empty temporary folder, 30 seconds at most) and prints
   `declare -F`. A DEBUG trap stops that shell at the first command the file would run, so a body file holds function definitions and comments only and listing it
   runs none of its commands. The trap keeps the listing free of side effects. It is not a security boundary, because a file can shadow the commands of the trap. The guard no longer checks function names across files, builtin names, nested definitions or
@@ -459,20 +457,22 @@ launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no fi
 
 ## Lakehouse layers
 
-The lakehouse checks are three groups in `config/quality/ci_groups.json`: `lakehouse_bronze`, `lakehouse_silver` and `lakehouse_gold`, listed in
-`layers` from upstream to downstream. Each group has its own path list and its own GitHub job (`CI_PART=bronze`, `silver` or `gold`). The bronze list is the
+The lakehouse checks are four groups in `config/quality/ci_groups.json`: `lakehouse_bronze`, `lakehouse_silver`, `lakehouse_gold` and `lakehouse_features`, listed in
+`layers` from upstream to downstream. Each group has its own path list and its own GitHub job (`CI_PART=bronze`, `silver`, `gold` or `features`). The bronze list is the
 broad lakehouse list. It holds the code every layer shares: the launcher, memory plan, provenance, lock and compose file, the dbt project, macros and tests.
-The silver and gold lists name only the files that belong to that layer. Each file is listed for the layer that reads it first. No later layer's pattern
+The silver, gold and feature lists name only the files that belong to that layer. Each file is listed for the layer that reads it first. No later layer's pattern
 may match it. A file that an upstream layer's checks read although a later layer's list also matches it is named in `upstream_inputs` for the
 earliest layer that reads it and belongs to that layer. The bronze entries are the gold macros and dimension models, the bronze staging models, the
 silver build marker model and the saved suites that the bronze storage and provenance runners read. The silver suite check reads the saved suites in `features/great_expectations`, the suites and baselines in `data_contracts/great_expectations`
-(the gold suite folder included) and the gold contract, so those select silver and gold. A path that several lists match belongs to the most downstream
-of them. A changed path selects its layer and every layer downstream of it. A bronze or shared change selects all three. A silver change selects
-silver and gold. A gold change selects gold. A job whose layer the range does not reach exits 0 and writes `skipped <group>: <reason>` to the job summary. The
+(the gold suite folder included) and the gold contract, so those select silver, gold and features. A path that several lists match belongs to the most downstream
+of them. A changed path selects its layer and every layer downstream of it. A bronze or shared change selects all four. A silver change selects silver, gold and features. A gold change selects gold and features. A change to a feature check module selects features. Feature models, tests and recipe seeds still select gold and features because the gold model metadata and bridge checks read them. A job whose layer the range does not reach exits 0 and writes `skipped <group>: <reason>` to the job summary. The
 gates never skip. `lakehouse_bronze` runs the platform checks (resource limits, run lock, provenance, storage single copy and contracts), `lakehouse_silver` runs the silver
-suite check and `lakehouse_gold` runs the gold reference seeds, identity and label checks, gold suites, the gold publish contract check, the gold and silver writer set-up check against a stand-in Polaris, the model metadata check and the model metadata E2E, as three units (see Gold units below). The
-`orchestration_checks` group also lists `scripts/lakehouse/`, `dbt/`, `data_contracts/lakehouse/` and `data_contracts/great_expectations/`, because its publish contract and pipeline
-checks read them, so a change to those paths runs it beside the layers. Put a new check in the most downstream layer whose files it reads. `.venv/bin/python -m scripts.quality.run_ci_groups_e2e` checks the selection for bronze-only, silver-only, gold-only and shared changes
+suite check and `lakehouse_gold` runs the gold reference seeds, identity and label checks, gold suites, the gold publish contract check, the gold and silver writer set-up check against a stand-in Polaris, the model metadata check and the model metadata E2E, as three units (see Gold units below).
+
+`lakehouse_features` runs the feature-phase source check (`feature_sources --check` and its E2E `run_feature_sources_e2e`: a text pass, then a build and a bind of every feature model and test on a DuckDB file that holds only the gold tables of the contract (without the raw bridge), the feature seeds, the live seeds and the filter results, so a read of silver, bronze or a retired seed fails however it is spelled; the bridge is read in two stages: the check builds 15 filter tables itself in DuckDB, each `bridge_measure_control` filtered to one `source_seed` (the 15 filter models, pinned to one template, must compile to that query); every other feature model and test is built and bound on a database that holds the filter tables and no `bridge_measure_control`, so any other read of it fails; every selected node is bound or rejected by name; a hook, a macro that overrides dbt and a relation added or rewritten by the run fail (rows compared by digest); an enforced column contract on every feature model; before anything builds (the check stops at the first admission problem, with E2E cases that record the process starts to prove that rejected code never ran), a closed allow list of the Jinja constructs and calls, the dbt macros, the config keys and values, the YAML Jinja strings, the hooks, the `dbt_project.yml` keys that the feature build may use and the `ref()` targets that `dbt/models/features/_feature_inputs.json` pins for each model and test (a direct read is bound on the pinned relations only), plus the pinned SHA-256 of the two run-hook macros and the project macros they reach, so SQL outside the compiled query of a node fails by content: `run_query`, `statement`, `adapter.execute`, `sql_header`, `persist_docs`, a changed hook body), the feature column check (`feature_columns --check` and its E2E `run_feature_columns_e2e`: every output column of a feature model documented with its data type and description, compared on empty gold tables without the dbt contract).
+
+The `orchestration_checks` group also lists `scripts/lakehouse/`, `dbt/`, `data_contracts/lakehouse/` and `data_contracts/great_expectations/`, because its publish contract and pipeline
+checks read them, so a change to those paths runs it beside the layers. Put a new check in the most downstream layer whose files it reads. `.venv/bin/python -m scripts.quality.run_ci_groups_e2e` checks selection for each layer and shared changes
 and the real inputs. It also requires `configuration_checks` to start `scripts.infrastructure.run_secret_store_e2e` and `lakehouse_gold` to start
 `scripts.lakehouse.run_gold_publish_e2e --mode writer_setup`. The sources of those two offline checks must select their group. It reads the source of the modules each layer's function starts (and of the gold checks the silver suite check calls and of the storage
 metadata comparison the bronze storage runner calls) and requires every tracked file they name to select that layer. A name is a module-level
@@ -506,7 +506,8 @@ metadata E2E (about 39 minutes one after another) and the 38 offline workflow te
 | Local CI Core | 14.1 | 30 | hosted |
 | Lakehouse Bronze Checks | 8.9 | 20 | hosted |
 | Lakehouse Silver Checks | 2.4 | 5 | hosted |
-| Lakehouse Gold Checks | 7 | 15 | estimate |
+| Lakehouse Gold Checks | 30 | 60 | estimate |
+| Lakehouse Features Checks | 130 | 260 | estimate, three times local command time plus setup and gates |
 | Lakehouse Gold Model Metadata E2E | 14 | 30 | estimate |
 | Launcher E2E (Shard 1 of 2) | 8.4 | 20 | hosted |
 | Launcher E2E (Shard 2 of 2) | 9 | 20 | hosted |
@@ -516,13 +517,15 @@ metadata E2E (about 39 minutes one after another) and the 38 offline workflow te
 | Acquisition Checks (Shard 4 of 4) | 13 | 30 | estimate |
 | Acquisition Checks | 4 | 10 | estimate |
 
+The four feature commands took 2,402 seconds on the Mac. The feature estimate assumes hosted execution is three times slower. It adds 10 minutes for checkout, setup and shared gates, giving about 130 minutes. The 260-minute limit is about twice that estimate. Resize it from the first complete hosted run. The gold job keeps its 60-minute limit.
+
 ## Gold units
 
 The gold layer runs as three units that share no scratch folder, report folder, port or process (each writes `data/e2e/<its own name>/<UTC
 second>` and the gold publish modes add the mode to the folder name). `CI_UNITS` selects units; the default is all three.
 
-- `checks`: the reference seeds, identity splits and source labels checks, their E2E suites, the gold suites check, the gold publish contract E2E and the model
-  metadata check. About 3 minutes.
+- `checks`: the reference seeds, identity splits and source labels checks, the gold suites
+  check, the gold publish contract E2E and the model metadata check. The job summary of each run gives each command's time.
 - `writer_setup`: the gold and silver writer set-up E2E against a stand-in secret store. It has timing assertions (a lock wait of 0.3 seconds), so it
   runs alone: in the gold job before the other unit of that job and in a local run after the launcher E2E and before the concurrent units.
 - `model_metadata_e2e`: the 258 cases of the model metadata E2E, each with a scratch repository and a pre-commit hook run. Run one after another they take about 39 minutes,
@@ -531,7 +534,7 @@ second>` and the gold publish modes add the mode to the folder name). `CI_UNITS`
   Each hook or checker run has a deadline of `--case-seconds` (180 by default) and the pool has a total deadline that names the unfinished cases.
   GitHub CI runs it as its own job ("Lakehouse Gold Model Metadata E2E").
 
-The jobs together take as long as the longest unit instead of the sum. The CI-groups E2E requires the units to hold the ten gold commands once each, to start no
+The jobs together take as long as the longest unit instead of the sum. The CI-groups E2E requires the gold units to hold their ten commands and the feature group to hold its four commands once each, to start no
 launcher mode, to be covered once by the gold jobs and to run the alone unit before the others.
 
 ## Sharded acquisition tests

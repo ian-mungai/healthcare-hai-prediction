@@ -794,7 +794,7 @@ PUNCTUATION_PROSE = (
 )
 CLEAN_PUNCTUATION = f"---\ntitle: Notes\nnote: a {EM_DASH} b; c/d\n---\n\n# Notes\n\n{PUNCTUATION_PROSE}\n```text\n{ALL_KINDS}```\n"
 BLOCK_ALL = ("--block", "dash", "--block", "semicolon", "--block", "slash")
-KIND_FOLDERS = ("tests/fixtures/", "dbt/seeds/", "features/recipes/")
+KIND_FOLDERS = ("tests/fixtures/", "dbt/seeds/")
 WRITING_KIND_SAMPLES = [
     ("em dash warns", {"notes.md": DASH_LINE}, (), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
     ("en dash warns", {"notes.md": EN_DASH_LINE}, (), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
