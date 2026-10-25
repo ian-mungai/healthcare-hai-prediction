@@ -439,6 +439,9 @@ class Broker:
 
     def token_absent(self, run_id: str) -> bool:
         """True only when the store answers that the run's token file does not exist; a store that cannot be searched answers nothing."""
+        if self.client.config.local_backend == "disabled":
+            provider = self.client.config.token_provider
+            return provider is not None and provider.absent(run_id)
         try:
             (self.client.config.token_root / f"{run_id}.token").lstat()
         except FileNotFoundError:
@@ -722,13 +725,20 @@ class Broker:
             raise SubmissionRefused(f"ledger: {error}") from None
         return handle
 
-    def require_serving(self, *, allow_cloud: bool = False) -> bool:
+    def require_serving(self, *, allow_cloud: bool = False, forwarded: bool = False) -> bool:
         """The launcher must be serving: while it is degraded (Docker or its event stream is down) the broker states that instead of the last
-        phase the launcher recorded, which can be stale until the launcher has looked at Docker again. Return whether only cloud execution is available."""
+        phase the launcher recorded, which can be stale until the launcher has looked at Docker again. Return whether only cloud execution is available.
+        Existing forwards in disabled mode do not require dispatch readiness.
+        """
         deadline = time.monotonic() + START_WAIT_SECONDS
         while True:
             view = self.call("status", {"what": "launcher"})
-            if view.get("status") == "serving" or allow_cloud and view.get("ecs_ready") is True:
+            if view.get("local_backend") == "disabled":
+                if not forwarded and (not view.get("storage_ready") or not view.get("ecs_ready")):
+                    raise LauncherUnavailable("AWS controller dispatch prerequisites are unavailable")
+                if view.get("controller_ready") is True:
+                    return True
+            elif view.get("status") == "serving" or allow_cloud and view.get("ecs_ready") is True:
                 return view.get("status") != "serving"
             if view.get("status") != "starting" or time.monotonic() > deadline:
                 raise LauncherUnavailable(f"the launcher is {view.get('status')}: {view.get('degraded_reason') or 'not serving'}")
@@ -744,8 +754,8 @@ class Broker:
         if self.recorded_as_control(lines[0]):
             self.complete_control(request, lines[0])
             return
-        cloud_only = self.require_serving(allow_cloud=request.target != "docker")
         forward = self.read_forward(request)
+        cloud_only = self.require_serving(allow_cloud=request.target != "docker", forwarded=forward is not None)
         if forward is None:
             forward = self.forward_locked(request, lines[0])
             if forward is None:
@@ -902,9 +912,9 @@ class Broker:
         """Write the ledger lines the launcher's attempt has reached: ``started`` once it has a container, then ``finished`` or ``failed_closed``."""
         attempt = self.attempt_of(request, forward)
         if "execution" in attempt:
-            self.require_serving(allow_cloud=attempt["execution"]["requested_target"] != "docker")
+            self.require_serving(allow_cloud=attempt["execution"]["requested_target"] != "docker", forwarded=True)
         elif cloud_only:
-            self.require_serving()
+            self.require_serving(forwarded=True)
         lines = self.lines_of(request)
         events = [line["event"] for line in lines]
         container_id = attempt.get("container_id")
@@ -1104,8 +1114,10 @@ class Broker:
                     elif self.recorded_as_control(lines[0]):
                         self.complete_control(request, lines[0])
                     else:
-                        self.require_serving(allow_cloud=request.target != "docker")
-                        forward = self.read_forward(request) or self.forward_locked(request, lines[0])
+                        forward = self.read_forward(request)
+                        self.require_serving(allow_cloud=request.target != "docker", forwarded=forward is not None)
+                        if forward is None:
+                            forward = self.forward_locked(request, lines[0])
                         if forward is not None:
                             self.call("cancel", {"attempt_id": forward["attempt_id"]}, self.principal(request.run_id))
         except LedgerError as error:
@@ -1285,7 +1297,13 @@ class Listener:
 def dispatch(broker: Broker, operation: str, payload: dict[str, Any]) -> dict[str, Any]:
     """One interface operation from a request body."""
     if operation == "health":
-        return {"broker": "ok"}
+        if broker.client.config.local_backend != "disabled":
+            return {"broker": "ok"}
+        try:
+            view = broker.call("status", {"what": "launcher"}, timeout=2)
+        except LauncherUnavailable:
+            view = {"local_backend": "disabled", "controller_ready": False, "ecs_ready": False, "storage_ready": False}
+        return {"broker": "ok", **{name: view.get(name) for name in ("local_backend", "controller_ready", "ecs_ready", "storage_ready")}}
     if operation == "submit":
         errors = sorted(broker.requests_schema.iter_errors(payload), key=str)
         if errors:
