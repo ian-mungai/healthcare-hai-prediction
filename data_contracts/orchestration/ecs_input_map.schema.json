@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthcare-hai-prediction.invalid/orchestration/ecs_input_map.schema.json",
+  "title": "Version-pinned task input map",
+  "description": "Proposed task file identities. Consumers must also enforce unique logical paths, sorted canonical bytes, authorized keys and verified content.",
+  "type": "array",
+  "uniqueItems": true,
+  "items": {"$ref": "#/$defs/file"},
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"},
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$(?![\\s\\S])"
+    },
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A checked logical S3 key. The consumer must bind its run, generation and source permissions separately.",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_.:-]+(?:/[A-Za-z0-9_.:-]+)*$(?![\\s\\S])"
+    },
+    "version_id": {"type": "string", "minLength": 1, "not": {"const": "null"}, "pattern": "^[^\\x00-\\x20\\x7f]+$(?![\\s\\S])"},
+    "identifier": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$(?![\\s\\S])"},
+    "try_id": {"type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+    "run_id": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$(?![\\s\\S])"},
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "key", "version_id", "sha256", "size"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "key": {"$ref": "#/$defs/key"},
+        "version_id": {"$ref": "#/$defs/version_id"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

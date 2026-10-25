@@ -14,3 +14,4 @@ home-path docker-compose.yaml -- the analytics container service user home direc
 home-path services/analytics/Dockerfile -- the analytics container service user home directory, not a person
 home-path scripts/lakehouse/run_duckdb_view_e2e.py -- the analytics container service user home directory, not a person
 email scripts/acquisition/one_off/privacy_review/run_redaction_e2e.py -- a synthetic role address on a reserved-style example domain in the redaction E2E fixture; not a person
+aws-account data_contracts/orchestration/examples/ecs_outputs.json -- synthetic all-zero account ID in the output schema example, not a deployment identity

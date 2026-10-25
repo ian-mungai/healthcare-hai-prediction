@@ -3,11 +3,11 @@
 hai:
   target: lakehouse
   outputs:
-    pinned_silver:
+    pinned_silver: &pinned_silver
       type: duckdb
       path: /workspace/out/staging.duckdb
       threads: "{{ env_var('JOB_THREADS') | int }}"
-      settings:
+      settings: &pinned_silver_settings
         memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT') }}"
         threads: "{{ env_var('JOB_THREADS') | int }}"
     lakehouse:
@@ -43,12 +43,12 @@ hai:
             endpoint: http://polaris:8181/api/catalog
             secret: lakehouse_catalog
             access_delegation_mode: none
-    lakehouse_session:
+    lakehouse_session: &lakehouse_session
       type: duckdb
       path: /workspace/out/staging.duckdb
       threads: "{{ env_var('JOB_THREADS') | int }}"
       extensions: [iceberg, httpfs, aws]
-      settings:
+      settings: &session_settings
         autoinstall_known_extensions: false
         memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT') }}"
         threads: "{{ env_var('JOB_THREADS') | int }}"
@@ -57,11 +57,12 @@ hai:
           provider: credential_chain
           chain: env
           region: "{{ env_var('AWS_REGION') }}"
-        - type: iceberg
+        - &reader_catalog_secret
+          type: iceberg
           name: lakehouse_catalog
           client_id: "{{ env_var('DBT_ENV_SECRET_POLARIS_CLIENT_ID') }}"
           client_secret: "{{ env_var('DBT_ENV_SECRET_POLARIS_CLIENT_SECRET') }}"
-          oauth2_server_uri: http://polaris:8181/api/catalog/v1/oauth/tokens
+          oauth2_server_uri: "{{ env_var('POLARIS_URI', 'http://polaris:8181/api/catalog') }}/v1/oauth/tokens"
           oauth2_scope: PRINCIPAL_ROLE:ALL
       attach:
         - path: hai_lakehouse
@@ -69,21 +70,47 @@ hai:
           type: iceberg
           read_only: true
           options:
-            endpoint: http://polaris:8181/api/catalog
+            endpoint: "{{ env_var('POLARIS_URI', 'http://polaris:8181/api/catalog') }}"
             secret: lakehouse_catalog
             access_delegation_mode: none
     # The staging E2E (scripts/lakehouse/run_staging_e2e.py): a fixture bronze database in place of the catalog.
-    fixture:
+    fixture: &fixture
       type: duckdb
       path: "{{ env_var('STAGING_E2E_CASE') }}/staging.duckdb"
       threads: 1
-      settings:
+      settings: &fixture_settings
         memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT') }}"
         threads: "{{ env_var('JOB_THREADS') | int }}"
       attach:
         - path: "{{ env_var('STAGING_E2E_CASE') }}/fixture_lakehouse.duckdb"
           alias: lakehouse
           read_only: true
+    pinned_silver_bounded:
+      <<: *pinned_silver
+      settings:
+        <<: *pinned_silver_settings
+        temp_directory: "{{ env_var('HAI_DUCKDB_TEMP_DIRECTORY') }}"
+        max_temp_directory_size: "{{ env_var('HAI_DUCKDB_MAX_TEMP_BYTES') }}B"
+    lakehouse_session_bounded: &lakehouse_session_bounded
+      <<: *lakehouse_session
+      settings:
+        <<: *session_settings
+        temp_directory: "{{ env_var('HAI_DUCKDB_TEMP_DIRECTORY') }}"
+        max_temp_directory_size: "{{ env_var('HAI_DUCKDB_MAX_TEMP_BYTES') }}B"
+    lakehouse_task:
+      <<: *lakehouse_session_bounded
+      secrets:
+        - type: s3
+          provider: credential_chain
+          refresh: auto
+          region: "{{ env_var('AWS_REGION') }}"
+        - *reader_catalog_secret
+    fixture_bounded:
+      <<: *fixture
+      settings:
+        <<: *fixture_settings
+        temp_directory: "{{ env_var('HAI_DUCKDB_TEMP_DIRECTORY') }}"
+        max_temp_directory_size: "{{ env_var('HAI_DUCKDB_MAX_TEMP_BYTES') }}B"
     # SQLFluff's dbt templater (.sqlfluff): compiles the models without the catalog or any credentials.
     lint:
       type: duckdb

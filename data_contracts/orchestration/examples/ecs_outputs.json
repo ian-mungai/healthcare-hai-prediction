@@ -1,0 +1,52 @@
+{
+  "attempt_id": "synthetic_attempt",
+  "bytes": 10,
+  "discarded_scratch": [],
+  "exit_code": 0,
+  "generation": 1,
+  "input_map_sha256": "e4357f23ffbbced9331d27eedaab04abe01202ef247f240f9f9e537f42aefa2d",
+  "job_spec_sha256": "bab47ac149581ff03b0c761f4227a52cd6a7a73ffde13eadbdfb007a9fb00fcb",
+  "minimum_free_disk_bytes": 1024,
+  "objects": [
+    {
+      "key": "lakehouse/run_stage/20261024T000000Z-a1b2c3d4/g1/tries/hai_synthetic_attempt_1_0123456789abcdef/out/target/manifest.json",
+      "kind": "controller_record",
+      "name": "target/manifest.json",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "size": 2,
+      "version_id": "synthetic-version-2"
+    },
+    {
+      "key": "lakehouse/run_stage/20261024T000000Z-a1b2c3d4/g1/tries/hai_synthetic_attempt_1_0123456789abcdef/out/staging.duckdb",
+      "kind": "data",
+      "name": "staging.duckdb",
+      "sha256": "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7",
+      "size": 4,
+      "version_id": "synthetic-version-3"
+    },
+    {
+      "key": "lakehouse/run_stage/20261024T000000Z-a1b2c3d4/g1/tries/hai_synthetic_attempt_1_0123456789abcdef/out/target/run_results.json",
+      "kind": "controller_record",
+      "name": "target/run_results.json",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "size": 2,
+      "version_id": "synthetic-version-4"
+    },
+    {
+      "key": "lakehouse/run_stage/20261024T000000Z-a1b2c3d4/g1/tries/hai_synthetic_attempt_1_0123456789abcdef/out/build_receipt.json",
+      "kind": "controller_record",
+      "name": "build_receipt.json",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "size": 2,
+      "version_id": "synthetic-version-6"
+    }
+  ],
+  "run_id": "20261024T000000Z-a1b2c3d4",
+  "schema_version": 1,
+  "task_arn": "arn:aws:ecs:us-west-2:000000000000:task/synthetic/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "template": "pipeline_dbt",
+  "timings": {
+    "execute_seconds": 1.0
+  },
+  "try_id": "hai_synthetic_attempt_1_0123456789abcdef"
+}
