@@ -19,6 +19,28 @@
       "dag_id": "lineage_fixture",
       "task_id": "silver_build",
       "dag_run_id": "manual__fixture"
+    },
+    {
+      "template": "silver_build",
+      "run_id": "20261011T090000Z-0a1b2c3d",
+      "mode": "fixture",
+      "attempt": 1,
+      "request_version": 2,
+      "dag_id": "lineage_fixture",
+      "task_id": "silver_build",
+      "dag_run_id": "manual__fixture",
+      "target": "ecs"
+    },
+    {
+      "template": "silver_build",
+      "run_id": "20261011T090000Z-0a1b2c3d",
+      "mode": "fixture",
+      "attempt": 1,
+      "request_version": 2,
+      "dag_id": "lineage_fixture",
+      "task_id": "silver_build",
+      "dag_run_id": "manual__fixture",
+      "target": "docker"
     }
   ],
   "refused": [
@@ -197,6 +219,20 @@
         "dag_id": "lineage_fixture",
         "task_id": "silver_build",
         "dag_run_id": "manual__fixture"
+      }
+    },
+    {
+      "case": "unknown execution target",
+      "request": {
+        "template": "silver_build",
+        "run_id": "20261011T090000Z-0a1b2c3d",
+        "mode": "fixture",
+        "attempt": 1,
+        "request_version": 2,
+        "dag_id": "lineage_fixture",
+        "task_id": "silver_build",
+        "dag_run_id": "manual__fixture",
+        "target": "unapproved"
       }
     }
   ]

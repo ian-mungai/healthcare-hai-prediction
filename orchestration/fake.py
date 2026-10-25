@@ -71,8 +71,11 @@ class FakeSubmissions:
             raise SubmissionRefused(f"template {request.template} does not support mode {request.mode}")
         if request.submission_id in self._handles:
             handle = self._handles[request.submission_id]
-            if SubmissionRequest.from_record(self._lines_of(handle)[0]).identity() != request.identity():
+            persisted = SubmissionRequest.from_record(self._lines_of(handle)[0])
+            if persisted.identity() != request.identity():
                 raise SubmissionRefused("caller identity differs from the persisted submission identity")
+            if (persisted.target or "auto") != (request.target or "auto"):
+                raise SubmissionRefused("target differs from the persisted submission target")
             return handle
         handle = Handle(request.submission_id, request.container_name)
         self._handles[request.submission_id] = handle

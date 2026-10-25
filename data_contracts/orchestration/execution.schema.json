@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Per-job placement history",
+  "description": "One live target per attempt. Task identities stay separate from Docker container identities.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "requested_target", "queued_at", "deadline_utc", "catalog_epoch", "live_try", "placements"],
+  "properties": {
+    "version": {"const": 1},
+    "requested_target": {"enum": ["auto", "ecs", "docker"]},
+    "queued_at": {"type": "number", "minimum": 0},
+    "deadline_utc": {"type": "integer", "minimum": 1},
+    "catalog_epoch": {"type": ["integer", "null"], "minimum": 1},
+    "live_try": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+    "placements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["try_id", "target", "capacity_provider", "state", "reason", "created_at", "deadline_utc", "cpu", "memory_mib", "storage_gib", "task_arn", "started"],
+        "properties": {
+          "try_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+          "target": {"enum": ["ecs", "docker"]},
+          "capacity_provider": {"enum": ["FARGATE_SPOT", "FARGATE", null]},
+          "state": {"enum": ["intent", "pending", "running", "unknown", "stopping", "fenced", "complete"]},
+          "reason": {"enum": ["aws_first", "spot_capacity_unavailable", "capacity", "patience", "cloud_cap", "breaker"]},
+          "created_at": {"type": "number", "minimum": 0},
+          "deadline_utc": {"type": "integer", "minimum": 1},
+          "cpu": {"type": "integer", "minimum": 1024, "maximum": 16384},
+          "memory_mib": {"type": "integer", "minimum": 2048, "maximum": 122880},
+          "storage_gib": {"type": "integer", "minimum": 21, "maximum": 200},
+          "task_arn": {"type": ["string", "null"], "pattern": "^arn:aws:ecs:[a-z0-9-]+:[0-9]{12}:task/[A-Za-z0-9_/-]+$(?![\\s\\S])"},
+          "started": {"type": "boolean"},
+          "fenced_at": {"type": "number", "minimum": 0},
+          "no_start": {"type": "boolean"},
+          "cap_before": {
+            "type": "object", "additionalProperties": false, "required": ["tasks", "cpu", "memory_mib"],
+            "properties": {"tasks": {"type": "integer", "minimum": 0}, "cpu": {"type": "integer", "minimum": 0}, "memory_mib": {"type": "integer", "minimum": 0}}
+          }
+        },
+        "allOf": [
+          {"if": {"properties": {"target": {"const": "ecs"}}}, "then": {"properties": {"capacity_provider": {"enum": ["FARGATE_SPOT", "FARGATE"]}}}},
+          {"if": {"properties": {"target": {"const": "docker"}}}, "then": {"properties": {"capacity_provider": {"type": "null"}, "task_arn": {"type": "null"}}}},
+          {"if": {"properties": {"state": {"const": "fenced"}}}, "then": {"required": ["fenced_at", "no_start"]}}
+        ]
+      }
+    }
+  }
+}
