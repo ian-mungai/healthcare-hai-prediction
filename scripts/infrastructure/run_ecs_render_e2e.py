@@ -365,7 +365,12 @@ def wrapper_cases(root: Path, folder: Path) -> dict[str, bool]:
 def jobs_config_cases(root: Path, folder: Path) -> dict[str, bool]:
     """Run jobs input rendering and saved-plan refusals against an inert plan reader."""
     workspace = folder / "jobs_config"
-    for name in ("scripts/process.py", "scripts/infrastructure/render_project_config.py", "scripts/infrastructure/render_jobs_config.py"):
+    for name in (
+        "scripts/process.py",
+        "scripts/infrastructure/render_project_config.py",
+        "scripts/infrastructure/render_ecs_target.py",
+        "scripts/infrastructure/render_jobs_config.py",
+    ):
         source = root / name
         if not source.is_file():
             return {"jobs_renderer_present": False}

@@ -1,7 +1,7 @@
 ---
 title: ECS read target contract
 description: Proposed deployment captures, private target fields and jobs-wrapper interface for read tasks.
-last_updated: 2026-10-23
+last_updated: 2026-10-25
 audience: [developer, operator]
 status: Proposed
 ---
@@ -76,14 +76,34 @@ bash scripts/infrastructure/terraform.sh --jobs apply review.tfplan
 bash scripts/infrastructure/terraform.sh --jobs validate
 ```
 
-An apply still requires approval for that exact saved plan. The renderer supplies six environment-derived base inputs: `aws_profile`, `aws_region`, `data_bucket_name`, `environment`, `expected_account_id` and `project_name`. Other declared variables must retain their committed defaults. A nondefault image or deployment input needs an explicit reviewed extension to this renderer before apply. Arbitrary variable injection remains refused.
+An apply requires approval for that exact saved plan. The renderer supplies six environment-derived base inputs: `aws_profile`, `aws_region`, `data_bucket_name`, `environment`, `expected_account_id` and `project_name`.
 
-`validate` renders local base inputs without an identity call. `plan` verifies the project identity. `apply` also inspects the saved plan and rejects secret resources, incomplete variable sets and mismatched inputs. The saved-plan inspection has a 120-second limit.
+The `infra/jobs/` root registers the five read definitions. Its default plan creates no resources. Registration requires `jobs_enabled = true`, selected `enabled_definitions`, digest-pinned images, merged job role ARNs, reviewed task resources, the existing jobs log group and the fixed cloud cap. The root creates no services or running tasks. Its dispatch output requires private class networks and hard stops. The dispatcher must enforce admission and confirm task stops.
+
+Prepare a nonsecret JSON file that follows the [preparation schema](../data_contracts/infrastructure/jobs_preparation.schema.json). Its envelope contains `schema_version: 1`, `root: "jobs"` and `variables`. The schema lists the allowed prepared variables. Base identity settings cannot appear in that map. Read registration accepts only `execution`, `offline_task`, `seal_task` and `read_task` under `job_role_arns`. The IAM capture retains `try_writer` for the runtime grant contract, but registration inputs refuse that unused key. Record the file's SHA-256 during review. Supply the same path and reviewed digest for planning and saved-plan inspection:
+
+```bash
+bash scripts/infrastructure/terraform.sh --jobs \
+  --preparation-inputs <REVIEWED_JSON_PATH> \
+  --preparation-sha256 <REVIEWED_SHA256> plan -out=review.tfplan
+bash scripts/infrastructure/terraform.sh --jobs \
+  --preparation-inputs <REVIEWED_JSON_PATH> \
+  --preparation-sha256 <REVIEWED_SHA256> apply review.tfplan
+```
+
+The renderer checks the file bytes before writing private generated inputs. It refuses duplicate JSON fields, unknown variables, the wrong root and a changed digest. The renderer sorts selected definition names to match Terraform set ordering. Apply compares every prepared value with the saved plan. Remaining variables must retain their committed defaults. Direct `-var` arguments, `-var-file` arguments, `TF_VAR_*` settings and injected Terraform CLI arguments remain refused. The environment-variable refusal applies to the storage, IAM, platform and jobs stacks, including the separate probe root.
+
+The separate `infra/jobs/identity_probe/` root creates nothing by default. Select it with `--jobs --identity-probe`. Its preparation envelope uses `root: "identity_probe"`. It needs only the approved existing Spark seed digest, merged execution and offline role identities, the jobs log group and the reviewed foundation network. It has no dependency on application definitions or rebuilt worker images.
+
+The fixed probe command uses a 60-second timeout. It compares task metadata with one regional STS identity call and exports only hashed identifiers. Its launch contract permits a public IP on the foundation network within a 30-minute outer slot. This exception belongs only to the separately approved diagnostic task. Registration does not launch it or establish the task-session premise.
+
+`validate` renders selected base and preparation inputs without an identity call. `plan` verifies the project identity. `apply` also inspects the saved plan and rejects secret resources, incomplete variable sets and mismatched inputs. The saved-plan inspection has a 120-second limit.
 
 ## Local verification
 
 ```bash
 .venv/bin/python -m scripts.infrastructure.run_ecs_render_e2e
+.venv/bin/python -m scripts.infrastructure.run_jobs_preparation_e2e --output <NEW_DIRECTORY>
 ```
 
 The artifact under `data/e2e/ecs_target/` records source hashes and every command case. The suite runs the native renderer commands. Its wrapper and plan-reader executables are inert captures. It contacts no cloud service. AWS authorization, Terraform plans, images, catalog readiness and integrated launcher behavior require their separate lead-run checks.
