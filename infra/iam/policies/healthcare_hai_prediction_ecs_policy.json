@@ -151,7 +151,7 @@
       }
     },
     {
-      "Sid": "RunTasksThatPropagateTags",
+      "Sid": "RunTaggedProjectTasks",
       "Effect": "Allow",
       "Action": [
         "ecs:RunTask"
@@ -162,7 +162,12 @@
           "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
         },
         "StringEquals": {
-          "ecs:propagate-tags": "TASK_DEFINITION"
+          "aws:RequestTag/Project": "${PROJECT_NAME}"
+        },
+        "ForAnyValue:StringEquals": {
+          "aws:TagKeys": [
+            "Project"
+          ]
         }
       }
     },
@@ -207,7 +212,8 @@
         "ecs:CreateCluster",
         "ecs:CreateCapacityProvider",
         "ecs:CreateService",
-        "ecs:RegisterTaskDefinition"
+        "ecs:RegisterTaskDefinition",
+        "ecs:RunTask"
       ],
       "Resource": "*",
       "Condition": {
@@ -223,7 +229,8 @@
         "ecs:CreateCluster",
         "ecs:CreateCapacityProvider",
         "ecs:CreateService",
-        "ecs:RegisterTaskDefinition"
+        "ecs:RegisterTaskDefinition",
+        "ecs:RunTask"
       ],
       "Resource": "*",
       "Condition": {
@@ -247,19 +254,6 @@
             "SERVICE",
             "TASK_DEFINITION"
           ]
-        }
-      }
-    },
-    {
-      "Sid": "DenyRunTaskThatDoesNotPropagateTags",
-      "Effect": "Deny",
-      "Action": [
-        "ecs:RunTask"
-      ],
-      "Resource": "*",
-      "Condition": {
-        "StringNotEquals": {
-          "ecs:propagate-tags": "TASK_DEFINITION"
         }
       }
     },

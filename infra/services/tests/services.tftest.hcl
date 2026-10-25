@@ -730,9 +730,13 @@ run "one_shot_launch_propagates_the_task_definition_tags" {
   assert {
     condition = (
       toset(keys(output.one_shot_run_task)) == toset(keys(aws_ecs_task_definition.one_shot))
-      && alltrue([for launch in values(output.one_shot_run_task) : launch.propagate_tags == "TASK_DEFINITION" && launch.enable_ecs_managed_tags])
+      && alltrue([
+        for launch in values(output.one_shot_run_task) :
+        launch.propagate_tags == "TASK_DEFINITION" && launch.enable_ecs_managed_tags
+        && try(launch.tags["Project"] == "example_project" && length(launch.tags) == 1, false)
+      ])
     )
-    error_message = "Every one-shot task must be launched with --propagate-tags TASK_DEFINITION and --enable-ecs-managed-tags."
+    error_message = "Every one-shot task needs --tags key=Project,value=<project_tag>, --propagate-tags TASK_DEFINITION and --enable-ecs-managed-tags."
   }
 }
 

@@ -1,10 +1,10 @@
 ---
-title: Infrastructure Controls
+title: Infrastructure controls
 description: Environments, the AWS stacks and project policies, bucket lifecycle rules, the lifecycle permission, deferred controls.
-last_updated: 2026-10-24
+last_updated: 2026-10-25
 ---
 
-# Infrastructure Controls
+# Infrastructure controls
 
 **Environments.** All three stacks tag resources with `Environment = dev`. A `prod`
 environment and an `infra/modules/` layout are deferred; the platform stack keeps
@@ -91,11 +91,9 @@ a request that names `Project` (in any letter case) when it removes the tag or s
 name. A Deny that keys on an existing `Project` tag also refuses the tag step of a create for image repositories, the alert
 topic and the snapshot schedule, because AWS treats the new tags as `aws:ResourceTag` there. Log groups and alarms need the
 same tag permission when they are created with tags. DLM grants management by the `Project` tag, so its tag statement also requires the resource's
-`Project` tag, when present, to be the project name. These services allow other tags. An ECS service must carry `ecs:propagate-tags` of `SERVICE` or `TASK_DEFINITION`, a run task
-`TASK_DEFINITION`. A service update must not set `NONE`. A run task, a service create or an ECS tag request that sets its own
-`Project` tag to any other value is refused (a Deny on `aws:RequestTag/Project` that applies only when the tag is present).
-The policy does not restrict which definition a service propagates from. That open item is in `plans/full_scope_20261022/iam_least_privilege/hardening_backlog.md` (local record, not in the repository). The tasks then carry the tag of the service or the task
-definition, which carries it as well, so Fargate tasks reach the budget.
+`Project` tag, when present, to be the project name. These services allow other tags. An ECS service must carry `ecs:propagate-tags` of `SERVICE` or `TASK_DEFINITION`. A service update must not set `NONE`. RunTask requires the exact Project key and project value in explicit request tags, within the project cluster and task definition families. RunTask does not support the `ecs:propagate-tags` condition key, so IAM cannot require propagation ([ECS authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#amazonecs-RunTask)). The launch commands retain `--propagate-tags TASK_DEFINITION` and `--enable-ecs-managed-tags`, with an explicit `--tags key=Project,value=<PROJECT_TAG>` ([one-shot launch](aws_control_plane.md#launching-a-one-shot-task)). A correctly tagged RunTask request without propagation is also authorized. A run task, a service create or an ECS tag request that sets its own `Project` tag to any other value is refused (a Deny on `aws:RequestTag/Project` that applies only when the tag is present).
+
+The policy does not restrict which definition a service propagates from. That open item is in `plans/full_scope_20261022/iam_least_privilege/hardening_backlog.md` (local record, not in the repository). Service tasks carry the tags of the service or task definition, which carries the tag as well. Standalone tasks carry the explicit Project tag even when propagation is omitted. So Fargate tasks reach the budget.
 
 The policy evaluator (`scripts/infrastructure/policy_evaluator.py`, cases in `scripts/infrastructure/policy_cases.py`, run by
 `scripts.infrastructure.run_policy_e2e`) tests all of it offline: it renders the 13 files and the two policies of
@@ -103,10 +101,9 @@ The policy evaluator (`scripts/infrastructure/policy_evaluator.py`, cases in `sc
 inventory compares each policy's allowed actions with the approved list, the cases cover every approved action in its scope
 and in another region, account and project, every creating action with seven wrong tag forms, every tag change and
 removal and each forbidden action. The policies stay under the 6,144 character limit with the longest values. The run also
-plants 51 defects in the policies (one per review finding and per rule above) and 28 in the policy scripts. Each must be
+plants 58 defects in the policies (one per review finding and per rule above) and 28 in the policy scripts. Each must be
 caught. The scripts have their own tests (`tests/test_iam_policy_scripts.py`, in-memory IAM, no AWS call). The report
-is written to `data/e2e/policies/` by the local CI. No AWS evaluation and no call that Terraform sends is exercised until
-the first deploy.
+is written to `data/e2e/policies/` by the local CI. Five request-context cases check the documented RunTask and service keys. Offline checks do not exercise AWS authorization or the requests Terraform sends.
 
 - The host accepts inbound traffic from the run-task group on the Polaris and
   Redis ports (`host_task_ports`, 8181 and 6379). It also accepts traffic from

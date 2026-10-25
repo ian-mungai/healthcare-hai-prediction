@@ -1,13 +1,13 @@
 ---
 title: AWS control plane
 description: Control-plane services on the AWS container host, with inputs, secrets, images and the Mac launcher changes.
-last_updated: 2026-10-24
+last_updated: 2026-10-25
 audience: [developer]
 ---
 
 # AWS control plane
 
-The always-on control plane runs as ECS services on the single `r7g.large` container host, defined in `infra/services/`. The AWS foundation supplies the cluster, the host and its roles through input variables. Nothing here is applied: the owner approves each apply.
+The always-on control plane runs as ECS services on the single `r7g.large` container host, defined in `infra/services/`. The AWS foundation supplies the cluster, the host and its roles through input variables. The owner approves each apply.
 
 ## What runs
 
@@ -125,7 +125,16 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
 
 1. The owner applies the foundation. The lead runs the printed `push_images plan` commands and records the digests.
 2. Place a checkout of the repository at `dag_code_path` (default `<data>/repo`). Airflow mounts the DAGs, the broker client and the lineage configuration from it read-only.
-3. From the repository root, create a services plan with the project profile:
+3. Turn the host on before the first services apply. Use the project profile and the foundation's host group name:
+
+   ```sh
+   aws autoscaling set-desired-capacity --profile <PROJECT_PROFILE> --region <REGION> --auto-scaling-group-name <HOST_GROUP_NAME> --desired-capacity 1
+   aws ecs list-container-instances --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME>
+   aws ecs describe-container-instances --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --container-instances <CONTAINER_INSTANCE_ARN> --query 'containerInstances[].{status:status,agentConnected:agentConnected}'
+   ```
+
+   Check registration for up to 10 minutes. Continue only when the instance is `ACTIVE` and `agentConnected` is true. If the deadline expires, inspect the host boot failure before applying services.
+4. From the repository root, create a services plan with the project profile:
 
    ```sh
    bash scripts/infrastructure/terraform.sh --services plan -out=services.tfplan
@@ -141,10 +150,29 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
    ```
 
    Before apply, the wrapper verifies the project identity and refuses a saved plan whose project inputs, foundation
-   outputs, image digests or other variables differ from the current sources or committed defaults. Run `host_prepare`
-   once to create the data directories with the right owners.
-4. Start order is automatic: Airflow services retry until Postgres has created the databases and the migration has finished.
-5. Run the `polaris_bootstrap` task once (not restarted on failure: a second run reports that the realm exists), then create the catalog and principals (see the next section).
+   outputs, image digests or other variables differ from the current sources or committed defaults.
+5. Run `host_prepare` with the explicit Project tag shown under "Launching a one-shot task". Require an empty `failures` list from RunTask. Save its task ARN, wait for it to stop and inspect its exit status:
+
+   ```sh
+   aws ecs wait tasks-stopped --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --tasks <TASK_ARN>
+   aws ecs describe-tasks --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --tasks <TASK_ARN> --query '{failures:failures,tasks:tasks[].{stopCode:stopCode,stoppedReason:stoppedReason,containers:containers[].{name:name,exitCode:exitCode,reason:reason}}}'
+   ```
+
+   The waiter checks every 6 seconds, for at most 100 attempts ([tasks-stopped](https://docs.aws.amazon.com/cli/latest/reference/ecs/wait/tasks-stopped.html)). If it times out, inspect the task before starting another attempt. Continue only with no failures, one stopped task and `host_prepare` exit code 0. The task creates the data directories with the right owners.
+
+   Airflow services retry until Postgres has created the databases and the migration has finished. An initial deployment can reach `FAILED` before the host or directories are ready. With no completed deployment to roll back to, the circuit breaker stops launching tasks ([deployment circuit breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html)). Turning the host on does not restart that failed deployment.
+
+   After host preparation succeeds, restart each failed service deployment. Use each name in the services stack's `service_names` output, including Marquez when enabled. A service needs the restart when `describe-services` shows its latest deployment with `rolloutState` `FAILED` and no running task. A service whose deployment is `COMPLETED` needs none:
+
+   ```sh
+   aws ecs update-service --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --service <SERVICE_NAME> --force-new-deployment
+   aws ecs wait services-stable --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --services <SERVICE_NAME>
+   aws ecs describe-services --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --services <SERVICE_NAME> --query '{failures:failures,services:services[].{serviceName:serviceName,desired:desiredCount,running:runningCount,pending:pendingCount,deployments:deployments[].{state:rolloutState,reason:rolloutStateReason}}}'
+   ```
+
+   The stable waiter checks every 15 seconds, for at most 40 attempts ([services-stable](https://docs.aws.amazon.com/cli/latest/reference/ecs/wait/services-stable.html)). If it times out, inspect the deployment reason before another update. Require no failures, the desired running count, zero pending tasks and a `COMPLETED` deployment. The existing `ManageProjectServices` grant allows this update only for project service ARNs. Keep the circuit breaker and tag propagation enabled.
+
+   Run `polaris_bootstrap` once after Postgres is ready: its service passes the stable waiter above with a `COMPLETED` deployment and one running task. Use the same tagged launch, `tasks-stopped` waiter and exit-code checks. It is not restarted on failure: a second run reports that the realm exists. Then create the catalog and principals (see the next section).
 
 ## How the workflows run on the host
 
@@ -170,12 +198,19 @@ The silver, gold and maintenance DAGs only call the job broker over HTTP (`orche
 
 ## Launching a one-shot task
 
-Both the services and the one-shot tasks must start with the `Project` tag, which only the launch call can pass on: IAM has no condition key that requires it. Every `aws_ecs_service` sets `propagate_tags = "TASK_DEFINITION"` and `enable_ecs_managed_tags = true`. Every `run-task` call passes both options ([RunTask: propagateTags and enableECSManagedTags](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_RunTask.html)). The output `one_shot_run_task` lists the arguments per task; a plan test fails when a service lacks the option or the output does.
+Services and one-shot tasks must start with the exact `Project` tag and the project value. For RunTask, IAM requires an explicit `--tags key=Project,value=<PROJECT_TAG>` request tag. Tags propagated from a task definition do not supply this request tag ([request tags](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requesttag)). The `project_tag` foundation output supplies `<PROJECT_TAG>`.
+
+RunTask has no `ecs:propagate-tags` condition key in its [authorization row](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#amazonecs-RunTask). IAM therefore checks the explicit tag, the project cluster and the task definition ARN. A correctly tagged request without propagation is also authorized. Keep `--propagate-tags TASK_DEFINITION` to copy the remaining task definition tags and `--enable-ecs-managed-tags` for ECS-managed tags ([RunTask options](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_RunTask.html)).
+
+Every `aws_ecs_service` sets `propagate_tags = "TASK_DEFINITION"` and `enable_ecs_managed_tags = true`. The `one_shot_run_task` output includes the explicit Project tag and both options. Plan tests check those arguments and the service settings.
 
 ```sh
 aws ecs run-task --profile <PROJECT_PROFILE> --region <REGION> --cluster <cluster_name> --task-definition <task_definition> \
-  --capacity-provider-strategy capacityProvider=<capacity_provider>,weight=1 --propagate-tags TASK_DEFINITION --enable-ecs-managed-tags
+  --capacity-provider-strategy capacityProvider=<capacity_provider>,weight=1 --propagate-tags TASK_DEFINITION --enable-ecs-managed-tags --tags key=Project,value=<PROJECT_TAG> \
+  --query '{taskArn:tasks[0].taskArn,failures:failures}'
 ```
+
+Save the task ARN for the waiter and continue only with an empty `failures` list. The explicit tag and the propagated task definition tag use the same `Project` key. If RunTask rejects the request for a repeated tag key, run it again without `--propagate-tags`: the explicit tag still satisfies IAM and still tags the task.
 
 ## Teardown
 

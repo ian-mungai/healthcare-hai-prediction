@@ -411,6 +411,10 @@ def run_suite(output: Path) -> dict[str, Any]:
     cases = list(policy_cases.all_cases(operations))
     documents = load_all()
     failures = evaluate_cases(documents, cases)
+    context_checks = [
+        {"label": label, "passed": dict(item.context) == expected, "expected": expected, "observed": dict(item.context)}
+        for label, item, expected in policy_cases.request_context_cases()
+    ]
     problems = check_inventory(documents, operations) + check_sizes() + check_names(documents) + check_name_source() + check_roles()
     name_checks = name_defects(documents)
     defects = []
@@ -441,7 +445,10 @@ def run_suite(output: Path) -> dict[str, Any]:
         and item.get("caught_by_the_name_source_check", True)
         for item in name_checks
     )
-    status = "passed" if not failures and not problems and all(item["caught"] for item in defects) and names_ok and scripts_ok else "failed"
+    passed = (
+        not failures and not problems and all(item["caught"] for item in defects) and names_ok and scripts_ok and all(item["passed"] for item in context_checks)
+    )
+    status = "passed" if passed else "failed"
     report = {
         "schema_version": 1,
         "scope": "per_service_iam_policies_offline",
@@ -459,12 +466,16 @@ def run_suite(output: Path) -> dict[str, Any]:
         },
         "cases": {"total": len(cases), "allowed_expected": sum(case.allowed for case in cases), "refused_expected": sum(not case.allowed for case in cases)},
         "failures": failures,
+        "request_context_checks": context_checks,
         "inventory_and_size_problems": problems,
         "planted_defects": defects,
         "planted_name_defects": name_checks,
         "script_tests": script_report,
         "seconds": round(time.perf_counter() - started, 2),
-        "limits": "Policy evaluation is modeled offline; real AWS evaluation, the tag keys Terraform sends and the condition keys of each API are untested.",
+        "limits": (
+            "Policy evaluation is modeled offline. RunTask context keys follow AWS documentation. "
+            "Real AWS authorization, propagated-tag behavior and Terraform's requests are untested."
+        ),
     }
     (output / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
@@ -494,6 +505,9 @@ def main() -> None:
     )
     for item in report["failures"][:20]:
         logger.error("failed case: %s -> %s %s", item["label"], item["effect"], item["statements"])
+    for item in report["request_context_checks"]:
+        if not item["passed"]:
+            logger.error("request context differs from AWS documentation: %s", item["label"])
     for problem in report["inventory_and_size_problems"][:20]:
         logger.error("problem: %s", problem)
     for item in report["planted_defects"]:

@@ -48,7 +48,10 @@ class Decision:
 def build_request(
     action: str, resource: str, *, region: str | None = None, tags: Mapping[str, str] | None = None, extra: Mapping[str, str | tuple[str, ...]] | None = None
 ) -> Request:
-    """Build a request. ``tags`` are the exact tag keys and values in the call; they become ``aws:RequestTag/<key>`` and ``aws:TagKeys``."""
+    """Build IAM context from explicit tags and context keys, excluding RunTask's unsupported propagation and managed-tag keys.
+
+    ``tags`` contains only tags passed in the request, not tags propagated from a task definition.
+    """
     values: dict[str, tuple[str, ...]] = {}
     if region is not None:
         values["aws:RequestedRegion"] = (region,)
@@ -57,6 +60,9 @@ def build_request(
             values[f"aws:RequestTag/{key}"] = (value,)
         values["aws:TagKeys"] = tuple(tags)
     for key, item in (extra or {}).items():
+        # RunTask omits these IAM keys: https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#amazonecs-RunTask
+        if action.lower() == "ecs:runtask" and key.lower() in {"ecs:propagate-tags", "ecs:enable-ecs-managed-tags"}:
+            continue
         values[key] = (item,) if isinstance(item, str) else tuple(item)
     return Request(action, resource, values)
 
