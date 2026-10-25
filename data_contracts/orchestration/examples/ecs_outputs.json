@@ -5,7 +5,7 @@
   "exit_code": 0,
   "generation": 1,
   "input_map_sha256": "e4357f23ffbbced9331d27eedaab04abe01202ef247f240f9f9e537f42aefa2d",
-  "job_spec_sha256": "bab47ac149581ff03b0c761f4227a52cd6a7a73ffde13eadbdfb007a9fb00fcb",
+  "job_spec_sha256": "bc83f8db29fe04f8383f3c5410fc0c98c00d6174edb8ba06611e737930d1fa92",
   "minimum_free_disk_bytes": 1024,
   "objects": [
     {

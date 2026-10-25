@@ -60,7 +60,18 @@ from typing import Any, Literal, NamedTuple, NoReturn
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from orchestration import controller_backend, dbt_lineage, ecs_target, lineage_services, network_policy, pipeline_protocol, pipeline_render, pipeline_session
+from orchestration import (
+    controller_authority,
+    controller_backend,
+    dbt_lineage,
+    ecs_target,
+    lineage_services,
+    network_policy,
+    pipeline_protocol,
+    pipeline_render,
+    pipeline_session,
+)
+from orchestration.controller_latch import DispatchLatch
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import dbt_package_archive, gold_publish_record, memory_budget, pins, run_lock
 from scripts.lakehouse import provenance as build_provenance
@@ -235,6 +246,7 @@ class Config:
     artifacts_root: Path | None = None
     token_provider: controller_backend.TokenProvider | None = None
     ecs_run_clear: Callable[[Mapping[str, Any], str], bool] | None = None
+    controller_latch: DispatchLatch | None = None
 
     def __post_init__(self) -> None:
         if self.local_backend not in ("docker", "disabled"):
@@ -3044,6 +3056,7 @@ METHODS: dict[str, MethodSpec] = {
     "image": MethodSpec(("any",), mutating=False),
     "acquire": MethodSpec(("any",)),
     "token_recover": MethodSpec(("any",), owner_flag=True),
+    "controller_authority": MethodSpec(("any",), owner_flag=True),
     "allocate": MethodSpec(("any",)),
     "release_allocation": MethodSpec(("alloc",)),
     "submit": MethodSpec(("run", "alloc")),
@@ -3228,7 +3241,12 @@ class Launcher:
         self.image_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self.secret_results: dict[str, tuple[float, dict[str, Fetched]]] = {}
         self.networks_seen: list[str] = []
+        self.controller_latch_verified: dict[str, Any] | None = None
+        self.controller_latch_attempted: set[str] = set()
+        self.controller_latch_job: dict[str, Any] | None = None
         self.message_handlers: dict[str, Callable[[str, str, Any], None]] = {
+            "controller_latch": self.on_controller_latch,
+            "controller_owner": self.on_controller_owner,
             "scan": self.on_scan,
             "prepare": self.on_prepare,
             "capacity": self.on_capacity,
@@ -3281,6 +3299,7 @@ class Launcher:
             "image": self.m_image,
             "acquire": self.m_acquire,
             "token_recover": self.m_token_recover,
+            "controller_authority": self.m_controller_authority,
             "allocate": self.m_allocate,
             "release_allocation": self.m_release_allocation,
             "submit": self.m_submit,
@@ -3480,6 +3499,9 @@ class Launcher:
                 if record["state"] == "pending" and record.get("method") in ("release", "release_allocation", "pull"):
                     # The record and its payload hash stay: the same request ID with the same payload runs again, a changed payload is refused.
                     record["state"] = "interrupted"
+            pending_owner = state["launcher"].get("controller_owner_pending", {})
+            if pending_owner.get("status") == "pending":
+                pending_owner["attempted"] = False
             for allocation in state["allocations"].values():
                 if allocation["state"] == "releasing":
                     allocation["state"] = "held"
@@ -3582,12 +3604,18 @@ class Launcher:
             with contextlib.suppress(OSError):
                 self.listener.close()
         self.cfg.socket_path.unlink(missing_ok=True)
-        token_cleanup_error: TimeoutError | None = None
+        credential_deadline = time.monotonic() + 20
+        cleanup_error: TimeoutError | None = None
         if self.cfg.local_backend == "disabled" and self.cfg.token_provider is not None:
             try:
-                self.cfg.token_provider.close(deadline=time.monotonic() + 20)
+                self.cfg.token_provider.close(deadline=credential_deadline)
             except TimeoutError as error:
-                token_cleanup_error = error
+                cleanup_error = error
+        if self.cfg.controller_latch is not None:
+            try:
+                self.cfg.controller_latch.close(deadline=credential_deadline)
+            except TimeoutError as error:
+                cleanup_error = cleanup_error or error
         self.drain_seals()
         self.pool.shutdown(wait=False, cancel_futures=True)
         try:
@@ -3598,8 +3626,8 @@ class Launcher:
             pass
         if self.lock_handle is not None:
             self.lock_handle.close()
-        if token_cleanup_error is not None:
-            raise token_cleanup_error
+        if cleanup_error is not None:
+            raise cleanup_error
 
     # -- the loop --------------------------------------------------------------------------------------------------
 
@@ -3816,7 +3844,12 @@ class Launcher:
             raise Degraded(f"degraded: {self.degraded_reason}")
         if principal.get("kind") not in spec.kinds:
             raise LauncherError(f"{method} is not callable by principal {principal.get('kind')!r}", "principal")
-        if spec.owner_flag and method in ("docker_restart", "shutdown", "recover", "token_recover") and not principal.get("owner") and not params.get("owner"):
+        if (
+            spec.owner_flag
+            and method in ("docker_restart", "shutdown", "recover", "token_recover", "controller_authority")
+            and not principal.get("owner")
+            and not params.get("owner")
+        ):
             raise LauncherError(f"{method} needs --owner", "principal")
         with self.tx(write=spec.mutating) as state:
             key = self.authenticate(conn, principal, request_id, method, state)
@@ -4121,6 +4154,7 @@ class Launcher:
                 self.finish_wait(waiter, timed_out=True)
         if self.cfg.local_backend == "disabled" and self.cfg.token_provider is not None:
             self.cfg.token_provider.tick(self)
+        self.controller_timers()
         self.session_timers(now)
         self.maintenance(now)
 
@@ -4764,8 +4798,21 @@ class Launcher:
         if execution and execution["live_try"]:
             live = next(item for item in execution["placements"] if item["try_id"] == execution["live_try"])
             if live["target"] == "ecs":
-                if not self.admissible(state, a) or not self.catalog_epoch_matches(state, a):
+                if (
+                    not self.admissible(state, a)
+                    or not self.catalog_epoch_matches(state, a)
+                    or live["state"] == "intent"
+                    and not self.controller_matches(state, a)
+                ):
                     a["cancel_intent"] = a.get("cancel_intent") or {"reason": "fenced", "at": utc_now()}
+                if live["state"] == "intent":
+                    if a.get("cancel_intent") or time.time() >= a["deadline_utc"]:
+                        ecs_target.fenced(a, str(live["try_id"]), time.time(), no_start=True)
+                        self.finish_attempt(state, a, "fenced", "dispatch authority ended before submission")
+                    else:
+                        attempt_id, try_id = str(a["id"]), str(live["try_id"])
+                        actions.append(lambda: self.dispatch_ecs(attempt_id, try_id))
+                    return
                 if self.ecs_runtime is not None:
                     self.ecs_runtime.advance(state, a, time.time())
                     if a["phase"] == "ended":
@@ -4892,8 +4939,8 @@ class Launcher:
         owner = str(attempt["owner"]).partition(":")[2]
         run = state["runs"].get(owner, {})
         job_class = pipeline_render.job_class(attempt["template"], attempt["params"], str(run.get("mode", "real")))
-        if not self.catalog_epoch_matches(state, attempt):
-            self.finish_attempt(state, attempt, "create_failed", "catalog authority changed or is frozen")
+        if not self.catalog_epoch_matches(state, attempt) or not self.controller_matches(state, attempt):
+            self.finish_attempt(state, attempt, "create_failed", "catalog or controller authority changed or is frozen")
             return True
         size = self.ecs_runtime.size(attempt)
         usage = ecs_target.active_usage(state["attempts"].values())
@@ -4929,7 +4976,30 @@ class Launcher:
         authority = state["launcher"].get("catalog_authority") or {}
         return epoch is None or authority.get("epoch") == epoch and authority.get("frozen") is False and authority.get("target") == "aws"
 
+    def controller_binding(self, state: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Require real controller ownership while preserving explicit test-registry fixtures without authority."""
+        if self.registry.kind == "test" and "controller_authority" not in state["launcher"]:
+            return None
+        try:
+            return controller_authority.dispatch_binding(state, owner="aws" if self.cfg.local_backend == "disabled" else "mac")
+        except controller_authority.ControllerError as error:
+            raise LauncherError(str(error), error.code) from None
+
+    def controller_matches(self, state: Mapping[str, Any], attempt: Mapping[str, Any]) -> bool:
+        """Compare current controller authority with the immutable attempt and placement bindings."""
+        try:
+            binding = self.controller_binding(state)
+            if binding != attempt["execution"].get("controller_binding"):
+                return False
+            return all(row.get("controller_binding") == binding for row in attempt["execution"]["placements"]) if binding is not None else True
+        except LauncherError:
+            return False
+
     def dispatch_ecs(self, attempt_id: str, try_id: str) -> None:
+        """Commit dispatch intent, confirm the first-dispatch latch off-loop and recheck authority before submission."""
+        latch_work: tuple[dict[str, Any], float] | None = None
+        saved_attempt: dict[str, Any] | None = None
+        saved_placement: dict[str, Any] = {}
         with self.tx() as state:
             attempt = state["attempts"][attempt_id]
             if attempt["execution"]["live_try"] != try_id:
@@ -4942,13 +5012,41 @@ class Launcher:
                 or time.time() >= attempt["deadline_utc"]
                 or not self.admissible(state, attempt)
                 or not self.catalog_epoch_matches(state, attempt)
+                or not self.controller_matches(state, attempt)
             ):
                 ecs_target.fenced(attempt, try_id, time.time(), no_start=True)
                 self.finish_attempt(state, attempt, "fenced", "dispatch authority ended before submission")
                 return
-            placement["state"] = "unknown"
-            saved_attempt, saved_placement = json.loads(canonical(attempt)), dict(placement)
-        if self.ecs_runtime is not None:
+            binding = attempt["execution"].get("controller_binding")
+            if binding is not None and binding["controller_owner"] == "aws" and self.controller_latch_verified != binding:
+                if self.cfg.controller_latch is None:
+                    attempt["waiting_on"] = "controller_latch_unavailable"
+                    return
+                gate = state["launcher"].get("controller_dispatch_latch", {})
+                identity = sha256_text(canonical(binding))
+                retry_after = gate.get("retry_after_utc", 0) if gate.get("binding") == binding else 0
+                if "controller-latch" in self.inflight or identity in self.controller_latch_attempted or time.time() < retry_after:
+                    attempt["waiting_on"] = gate.get("last_error") or "controller latch confirmation"
+                    return
+                seconds = min(self.cfg.controller_latch.seconds, attempt["deadline_utc"] - time.time())
+                gate = {
+                    "status": "pending",
+                    "binding": dict(binding),
+                    "deadline_utc": time.time() + seconds,
+                    "operation": int(gate.get("operation", 0)) + 1,
+                    "last_error": None,
+                }
+                state["launcher"]["controller_dispatch_latch"] = gate
+                self.controller_latch_job = dict(gate)
+                self.controller_latch_attempted.add(identity)
+                latch_work = (dict(binding), time.monotonic() + seconds)
+                attempt["waiting_on"] = "controller latch confirmation"
+            else:
+                placement["state"] = "unknown"
+                saved_attempt, saved_placement = json.loads(canonical(attempt)), dict(placement)
+        if latch_work is not None and self.cfg.controller_latch is not None:
+            self.spawn("controller-latch", "controller_latch", self.cfg.controller_latch.confirm, *latch_work)
+        if saved_attempt is not None and self.ecs_runtime is not None:
             try:
                 self.ecs_runtime.dispatch(saved_attempt, saved_placement)
             except (ecs_target.PlacementError, OSError):
@@ -4958,6 +5056,156 @@ class Launcher:
                         placement = next(item for item in attempt["execution"]["placements"] if item["try_id"] == try_id)
                         placement["state"] = "unknown"
                         attempt["waiting_on"] = "cloud dispatch requires reconciliation"
+
+    def on_controller_latch(self, key: str, outcome: str, value: Any) -> None:
+        """Publish only a matching readback receipt. Late or unconfirmed outcomes retain the dispatch hold."""
+        job, self.controller_latch_job = self.controller_latch_job, None
+        with self.tx() as state:
+            gate = state["launcher"].get("controller_dispatch_latch", {})
+            if job is None or gate.get("operation") != job["operation"] or gate.get("binding") != job["binding"] or gate.get("status") != "pending":
+                return
+            if outcome == "ok" and value.get("binding") == job["binding"] and time.time() < job["deadline_utc"]:
+                gate.update(status="confirmed", receipt=dict(value), last_error=None)
+                self.controller_latch_verified = dict(job["binding"])
+            else:
+                self.fail_controller_latch(gate, getattr(value, "code", "controller_latch_unconfirmed"))
+
+    def fail_controller_latch(self, gate: dict[str, Any], code: str) -> None:
+        """Re-arm transient latch failures after a short backoff within each waiting attempt's unchanged deadline."""
+        gate.update(status="unconfirmed", last_error=code)
+        if code in ("controller_latch_unconfirmed", "controller_latch_deadline"):
+            self.controller_latch_attempted.discard(sha256_text(canonical(gate["binding"])))
+            gate["retry_after_utc"] = time.time() + 0.25
+
+    def controller_timers(self) -> None:
+        """Expire latch and owner checks independently of worker return and schedule only committed owner work."""
+        service = self.cfg.controller_latch
+        owner_work: dict[str, Any] | None = None
+        expired: list[str] = []
+        with self.tx() as state:
+            gate = state["launcher"].get("controller_dispatch_latch", {})
+            if gate.get("status") == "pending" and time.time() >= gate["deadline_utc"]:
+                self.fail_controller_latch(gate, "controller_latch_deadline")
+            pending = state["launcher"].get("controller_owner_pending", {})
+            if pending.get("status") == "pending":
+                if time.time() >= pending["deadline_utc"]:
+                    pending.update(status="unconfirmed", last_error="controller_owner_deadline")
+                    expired = list(pending["requests"])
+                elif service is not None and "controller-owner" not in self.inflight and not pending.get("attempted"):
+                    pending["attempted"] = True
+                    owner_work = dict(pending)
+        for request in expired:
+            self.complete_request(request, {}, LauncherError("controller_owner_deadline", "controller_owner_deadline"))
+        if owner_work is not None and service is not None:
+            deadline = time.monotonic() + min(service.seconds, owner_work["deadline_utc"] - time.time())
+            self.spawn("controller-owner", "controller_owner", service.absence, owner_work["command"]["transfer_id"], deadline)
+
+    def m_controller_authority(self, ctx: Ctx) -> Any:
+        """Apply an owner-confirmed command. Simple rollback first confirms remote absence while admission remains closed."""
+        request, proof = ctx.params.get("command"), ctx.params.get("evidence")
+        if not isinstance(request, dict) or not isinstance(proof, dict):
+            raise LauncherError("controller command and evidence must be objects", "args")
+        if (
+            ctx.params.get("owner") is not True
+            or ctx.params.get("tty") is not True
+            or ctx.params.get("confirmation") != controller_authority.confirmation_text(request)
+        ):
+            raise LauncherError("owner_confirmation", "owner_confirmation")
+        try:
+            receipts = ctx.state["launcher"].get("controller_transfer_commands", {})
+            if request.get("command_id") in receipts:
+                return controller_authority.owner_command(
+                    ctx.state,
+                    request,
+                    intent_directory=self.registry.path / "controller_commands",
+                    owner=True,
+                    tty=True,
+                    confirmation=ctx.params["confirmation"],
+                    evidence=proof,
+                )
+            current = ctx.state["launcher"].get("controller_authority")
+            if request.get("action") == "rollback":
+                if current is None or current.get("controller_owner") != "none" or current.get("controller_phase") != "recovering":
+                    raise controller_authority.ControllerError("controller_transition")
+                if current.get("controller_epoch") != request.get("expected_epoch"):
+                    raise controller_authority.ControllerError("stale_controller_epoch")
+                if ctx.state["launcher"].get("controller_dispatch_latch", {}).get("status") in ("pending", "confirmed"):
+                    raise controller_authority.ControllerError("controller_latch_exists")
+                if self.cfg.controller_latch is None or "controller-latch" in self.inflight:
+                    raise controller_authority.ControllerError("controller_latch_unconfirmed")
+                pending = ctx.state["launcher"].get("controller_owner_pending", {})
+                if pending.get("status") == "pending":
+                    if pending["command"] != request or pending["evidence"] != proof:
+                        raise controller_authority.ControllerError("controller_command_pending")
+                    pending["requests"].append(ctx.key)
+                else:
+                    ctx.state["launcher"]["controller_owner_pending"] = {
+                        "status": "pending",
+                        "command": dict(request),
+                        "evidence": dict(proof),
+                        "confirmation": ctx.params["confirmation"],
+                        "requests": [ctx.key],
+                        "deadline_utc": time.time() + self.cfg.controller_latch.seconds,
+                        "attempted": False,
+                    }
+                return PENDING
+            if ctx.state["launcher"].get("controller_owner_pending", {}).get("status") == "pending":
+                raise controller_authority.ControllerError("controller_command_pending")
+            proof = {key: value for key, value in proof.items() if key != "latch_absent"}
+            self.controller_transfer_clear(ctx.state, request)
+            return controller_authority.owner_command(
+                ctx.state,
+                request,
+                intent_directory=self.registry.path / "controller_commands",
+                owner=True,
+                tty=True,
+                confirmation=ctx.params["confirmation"],
+                evidence=proof,
+            )
+        except controller_authority.ControllerError as error:
+            raise LauncherError(str(error), error.code) from None
+
+    def controller_transfer_clear(self, state: Mapping[str, Any], request: Mapping[str, Any]) -> None:
+        """Require the actual task facade and recorded work to agree with transfer evidence."""
+        if request.get("action") not in ("prepare", "activate", "rollback", "resume_mac"):
+            return
+        if self.cfg.ecs_run_clear is None or any(self.cfg.ecs_run_clear(state, run_id) is not True for run_id in state["runs"]):
+            raise controller_authority.ControllerError("controller_evidence")
+        if request.get("action") in ("prepare", "rollback", "resume_mac") and any(is_open(attempt) for attempt in state["attempts"].values()):
+            raise controller_authority.ControllerError("controller_evidence")
+
+    def on_controller_owner(self, key: str, outcome: str, value: Any) -> None:
+        """Commit rollback only after confirmed current-key absence and a fresh reconciliation check."""
+        requests: list[str] = []
+        result: dict[str, Any] = {}
+        error: LauncherError | None = None
+        with self.tx() as state:
+            pending = state["launcher"].get("controller_owner_pending", {})
+            if pending.get("status") != "pending":
+                return
+            requests = list(pending["requests"])
+            try:
+                if outcome != "ok" or value.get("latch_absent") is not True or time.time() >= pending["deadline_utc"]:
+                    raise controller_authority.ControllerError(getattr(value, "code", "controller_latch_unconfirmed"))
+                self.controller_transfer_clear(state, pending["command"])
+                gate = state["launcher"].get("controller_dispatch_latch")
+                result = controller_authority.owner_command(
+                    state,
+                    pending["command"],
+                    intent_directory=self.registry.path / "controller_commands",
+                    owner=True,
+                    tty=True,
+                    confirmation=pending["confirmation"],
+                    evidence={**pending["evidence"], "latch_absent": True},
+                )
+                if gate is not None:
+                    gate["status"] = "absent"
+                pending.update(status="done", last_error=None)
+            except controller_authority.ControllerError as refusal:
+                pending.update(status="unconfirmed", last_error=refusal.code)
+                error = LauncherError(str(refusal), refusal.code)
+        for request in requests:
+            self.complete_request(request, result, error)
 
     CAPACITY_VALID = 10.0
     CAPACITY_RETRY = 2.0
@@ -5921,6 +6169,8 @@ class Launcher:
                 "docker_ok": self.docker_ok,
                 "local_backend": self.cfg.local_backend,
                 "controller_ready": self.status == "serving",
+                "controller_authority": state["launcher"].get("controller_authority"),
+                "controller_latch": state["launcher"].get("controller_dispatch_latch"),
                 "storage_ready": self.cfg.local_backend == "docker" or self.cfg.token_provider is not None,
                 "ecs_ready": self.ecs_ready(),
                 "stream_epoch": self.epoch,
@@ -6504,6 +6754,9 @@ class Launcher:
         if self.ecs_jobs["enabled"] and template_name == "pipeline_publish" and job_class == "lakehouse_write":
             raise LauncherError("AWS writers are not enabled in the read increment", "refused")
         authority = ctx.state["launcher"].get("catalog_authority") or {}
+        controller_binding = self.controller_binding(ctx.state) if cloud_managed else None
+        if controller_binding is not None and controller_binding["controller_owner"] == "aws" and self.cfg.controller_latch is None:
+            raise LauncherError("controller_latch_unavailable", "controller_latch_unavailable")
         if (
             cloud_managed
             and job_class.startswith("lakehouse_")
@@ -6582,7 +6835,9 @@ class Launcher:
         protection = self.maintenance_protection(ctx.state) if fenced else []
         attempt = self.new_attempt(ctx.state, owner, template_name, launch_id, args, attempt_params, request=ctx.key, checkout=str(checkout), seconds=seconds)
         if cloud_managed:
-            ecs_target.initialize(attempt, requested_target, time.time(), authority.get("epoch") if job_class.startswith("lakehouse_") else None)
+            ecs_target.initialize(
+                attempt, requested_target, time.time(), authority.get("epoch") if job_class.startswith("lakehouse_") else None, controller_binding
+            )
         if identity is not None:
             attempt["caller_identity"] = dict(identity)
         capture = params.get("capture_dbt_artifacts", False)

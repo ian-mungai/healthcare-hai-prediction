@@ -38,8 +38,9 @@ def prepare(job_path: Path, expected_sha256: str, inputs: Path, workspace: Path,
     if len(raw) > integrity.MAX_RECORD or hashlib.sha256(raw).hexdigest() != expected_sha256:
         raise integrity.StageError("job_digest", 71)
     job = integrity.parse_json(raw)
-    if not isinstance(job, dict) or any(job.get(key) != value for key, value in expected.items()):
+    if not isinstance(job, dict) or any(job.get(key) != value for key, value in expected.items() if key not in ("controller_binding", "catalog_epoch")):
         raise integrity.StageError("job_identity", 71)
+    integrity.check_job_binding(job, expected)
     transfer = importlib.import_module("hai_bootstrap.transfer")
     references = [transfer.FileRef(**item) for item in job["inputs"]]
     logical_paths = [reference.path for reference in references]
@@ -100,6 +101,12 @@ def main() -> int:
     parser.add_argument("--attempt-id")
     parser.add_argument("--try-id")
     parser.add_argument("--template")
+    parser.add_argument("--controller-registry-id")
+    parser.add_argument("--controller-owner", choices=("mac", "aws"))
+    parser.add_argument("--controller-epoch", type=int)
+    parser.add_argument("--controller-transfer-id")
+    parser.add_argument("--controller-state-digest")
+    parser.add_argument("--catalog-epoch", type=int)
     parser.add_argument("--timeout-seconds", type=float, default=120.0)
     args = parser.parse_args()
     try:
@@ -107,6 +114,14 @@ def main() -> int:
         if args.self_check:
             sys.stdout.write('{"status":"verified_dependencies","scope":"archive_verification_only"}\n')
             return 0
+        binding = {
+            "registry_id": args.controller_registry_id,
+            "controller_owner": args.controller_owner,
+            "controller_epoch": args.controller_epoch,
+            "controller_transfer_id": args.controller_transfer_id,
+            "controller_state_digest": args.controller_state_digest,
+        }
+        integrity.controller_binding(binding)
         if (
             any(
                 value is None
@@ -115,7 +130,15 @@ def main() -> int:
             or args.timeout_seconds <= 0
         ):
             parser.error("a job digest, inputs, fresh workspace and every external identity are required")
-        expected = {"run_id": args.run_id, "generation": args.generation, "attempt_id": args.attempt_id, "try_id": args.try_id, "template": args.template}
+        expected = {
+            "run_id": args.run_id,
+            "generation": args.generation,
+            "attempt_id": args.attempt_id,
+            "try_id": args.try_id,
+            "template": args.template,
+            "controller_binding": binding,
+            "catalog_epoch": args.catalog_epoch,
+        }
         result = prepare(args.job, args.job_sha256, args.inputs, args.workspace, expected, time.monotonic() + args.timeout_seconds, integrity)
         sys.stdout.write(integrity.canonical(result).decode() + "\n")
         return 0

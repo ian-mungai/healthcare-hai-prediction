@@ -12,7 +12,7 @@ import pwd
 import sys
 from pathlib import Path
 
-from orchestration import launcher
+from orchestration import controller_authority, launcher
 from scripts.lakehouse import run_lock
 from scripts.orchestration.controller_runtime import load_config
 
@@ -47,6 +47,8 @@ def drop_identity(config: launcher.Config) -> None:
 
 def execute(config: launcher.Config, arguments: list[str]) -> int:
     """Confirm and execute one existing owner CLI command with the same explicit controller roots."""
+    if arguments and arguments[0] == "controller-authority":
+        return authority_command(config, arguments[1:])
     args = run_lock.parser().parse_args(arguments)
     if args.command not in COMMANDS or args.test_registry is not None:
         raise launcher.LauncherError("owner wrapper accepts only status, protected-sets, recover, release and deregister-reader", "args")
@@ -72,6 +74,46 @@ def execute(config: launcher.Config, arguments: list[str]) -> int:
     return 0
 
 
+def authority_command(config: launcher.Config, arguments: list[str]) -> int:
+    """Confirm one nonsecret transfer command before sending it through the authenticated owner socket."""
+    from services.hai.bootstrap.integrity import MAX_RECORD, held_file
+
+    parser = argparse.ArgumentParser(prog="controller-owner controller-authority")
+    parser.add_argument("--request", type=Path, required=True)
+    args = parser.parse_args(arguments)
+    drop_identity(config)
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise launcher.LauncherError("owner mutation requires an interactive terminal", "owner_confirmation")
+    with held_file(args.request.absolute().parent, args.request.name) as descriptor:
+        raw = os.pread(descriptor, MAX_RECORD + 1, 0)
+    if len(raw) > MAX_RECORD:
+        raise launcher.LauncherError("controller owner request exceeds its bound", "args")
+    request = json.loads(raw)
+    if (
+        not isinstance(request, dict)
+        or set(request) != {"command", "evidence"}
+        or not isinstance(request["command"], dict)
+        or not isinstance(request["evidence"], dict)
+    ):
+        raise launcher.LauncherError("controller owner request needs a command and evidence", "args")
+    expected = controller_authority.confirmation_text(request["command"])
+    try:
+        answer = input(f"Type {expected!r} to confirm: ")
+    except EOFError:
+        raise launcher.LauncherError("owner confirmation was not received", "owner_confirmation") from None
+    if answer != expected:
+        raise launcher.LauncherError("owner confirmation does not match", "owner_confirmation")
+    client = launcher.LauncherClient(config, start=False)
+    result = client.call(
+        "controller_authority",
+        {**request, "owner": True, "tty": True, "confirmation": answer},
+        request_id=str(request["command"].get("command_id", "")),
+        timeout=35,
+    )
+    sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Read nonsecret controller roots, drop identity and run one closed owner command."""
     cli = argparse.ArgumentParser(description=__doc__)
@@ -80,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     args = cli.parse_args(argv)
     try:
         return execute(load_config(args.config), args.command)
-    except (launcher.LauncherError, launcher.ClientError, run_lock.Refused, run_lock.RegistryError, OSError) as error:
+    except (launcher.LauncherError, launcher.ClientError, run_lock.Refused, run_lock.RegistryError, OSError, ValueError, RuntimeError) as error:
         sys.stderr.write(f"controller_owner: {error}\n")
         return launcher.REFUSED_EXIT
 
