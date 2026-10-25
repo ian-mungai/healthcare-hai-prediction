@@ -1283,6 +1283,39 @@
       "path": "scripts/lakehouse/storage_metadata_comparison.py",
       "problem": "whose program the check cannot prove",
       "reason": "duckdb_binary() resolves only ROOT/.tools/bin/duckdb and checks the committed 1.5.6 pin. This call uses -readonly on the retained local database, -json, -init /dev/null and metadata-only SQL. Timeout is 60 seconds. No shell, Docker command, socket or Engine API is used."
+    },
+    {
+      "path": "orchestration/catalog_transport_child.py",
+      "line": 152,
+      "code_sha256": "47861b0f735f8e953ee990ada1d8240c9ced44fe88468cfd6c59a73eb9312480",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "5f5f43336646f9a6d53c358f672250408a613ee72a3c3e6358dec71b4829748c",
+      "dependencies": {},
+      "reason": "the catalog tunnel child starts only the AWS CLI: it refuses any executable that is not absolute or does not resolve to the aws on PATH, then runs fixed ssm start-session AWS-StartPortForwardingSession arguments; reviewed by the lead on Oct 24 2026; never Docker"
+    },
+    {
+      "path": "scripts/process_group.py",
+      "line": 202,
+      "code_sha256": "47861b0f735f8e953ee990ada1d8240c9ced44fe88468cfd6c59a73eb9312480",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "4b38004e3db28e03e20602694d73be2085e53ecfb9f428839af330721b711609",
+      "dependencies": {
+        "orchestration/worker_stderr.py": "sha256:b789fbb6d329adf6e571344079066028bb80b9a78be9e9f0700dbdac855898d1",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "reason": "spawn_owned refuses any program that does not resolve to the running Python or the project .venv Python, so it starts only Python with the caller's script (WorkerPool and CatalogTransport); reviewed by the lead on Oct 24 2026; never Docker"
+    },
+    {
+      "path": "services/hai/bootstrap/supervisor.py",
+      "line": 190,
+      "code_sha256": "e04455b966ee42c025febd778484dd49f717f35b4a6c634d5fe6ca84d406d795",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "3bb6e7e0b2e654579d45d57f37973f0233d1efaabb674d0cab26439116e1bae9",
+      "dependencies": {},
+      "reason": "the in-image supervisor starts sys.executable -I -B with its own sdk_worker.py (or the worker its caller passes in the source smoke), never another program; never Docker"
     }
   ]
 }

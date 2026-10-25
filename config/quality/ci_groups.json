@@ -88,7 +88,9 @@
       "^dbt/",
       "^data_contracts/lakehouse/",
       "^data_contracts/great_expectations/",
-      "^scripts/ci/groups/orchestration_checks\\.sh$"
+      "^scripts/ci/groups/orchestration_checks\\.sh$",
+      "^scripts/process_group\\.py$",
+      "^services/hai/(deadline_run\\.py$|bootstrap/)"
     ],
     "repository_code_checks": [
       "\\.(py|sh)$",
