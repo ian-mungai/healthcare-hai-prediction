@@ -11,8 +11,3 @@ output "job_network" {
     endpoints_enabled  = var.job_endpoints_enabled
   }
 }
-
-output "job_project_policy_delta" {
-  description = "Unattached proposal for the lead to integrate into the existing IAM, STS, S3 and SSM service policies before the owner applies them."
-  value       = jsondecode(local.job_policy_documents.job_project_delta)
-}

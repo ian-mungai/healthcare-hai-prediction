@@ -1,4 +1,4 @@
-"""Render the early job policy proposal and exercise its requests without credentials or cloud calls."""
+"""Render the job role and project service policies and exercise their requests without credentials or cloud calls."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from infra.iam.scripts.render_policy import non_whitespace_length, render_template
+from infra.iam.scripts.render_policy import load_documents, non_whitespace_length, render_template, terraform_names
 from scripts.infrastructure.policy_evaluator import Request, decide
 from scripts.infrastructure.secret_store import terraform_variables
 
@@ -27,7 +27,7 @@ ROLE = "AROEXAMPLEREADER:task_one"
 S3 = "arn:aws:s3:::example-project-ci-bucket"
 IAM = "arn:aws:iam::111111111111:role/example_project_"
 PARAMETER = "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/"
-POLICIES = ("job_stage_read", "job_source_read", "job_seal_deny", "job_try_writer", "job_execution", "job_project_delta", "job_try_trust")
+POLICIES = ("job_stage_read", "job_source_read", "job_seal_deny", "job_try_writer", "job_execution", "job_try_trust")
 Case = tuple[str, str, str, str, bool, dict[str, tuple[str, ...]]]
 
 
@@ -127,7 +127,7 @@ def evaluate(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         "read": [documents["job_stage_read"], documents["job_source_read"]],
         "execution": [documents["job_execution"]],
         "try_writer": [documents["job_try_writer"]],
-        "project": [documents["job_project_delta"]],
+        "project": [document for name, document in documents.items() if name.startswith("project_")],
     }
     observations = []
     for label, actor, action, resource, expected, context in cases():
@@ -155,7 +155,8 @@ def main() -> int:
     directory = REPO / "infra/iam/owner_policies"
     paths = [
         *(directory / f"{name}.json" for name in POLICIES),
-        REPO / "infra/iam/job_variables.tf",
+        REPO / "infra/iam/variables.tf",
+        *sorted((REPO / "infra/iam/policies").glob("*_policy.json")),
         Path(__file__),
         REPO / "infra/iam/scripts/render_policy.py",
         REPO / "scripts/infrastructure/policy_evaluator.py",
@@ -171,20 +172,22 @@ def main() -> int:
         "cleanup": "done: no child processes or cloud calls",
     }
     try:
-        defaults = terraform_variables(REPO / "infra/iam/job_variables.tf")
+        defaults = terraform_variables(REPO / "infra/iam/variables.tf")
         expected_defaults = {
             "aws_polaris_reader_client_id_name": "/healthcare_hai_prediction/aws_polaris_reader_client_id",
             "aws_polaris_reader_client_secret_name": "/healthcare_hai_prediction/aws_polaris_reader_client_secret",
         }
-        if defaults != expected_defaults:
+        if {name: defaults.get(name) for name in expected_defaults} != expected_defaults:
             raise ValueError("reader parameter defaults differ from the early read contract")
         names = {
+            **terraform_names(),
             "TASK_USER_ID": "${aws:userid}",
             "PROJECT_USER": "example_project_dev",
             "AWS_POLARIS_READER_CLIENT_ID_NAME": "/example_project/aws_reader_id",
             "AWS_POLARIS_READER_CLIENT_SECRET_NAME": "/example_project/aws_reader_secret",
         }
         documents = {name: render_template((directory / f"{name}.json").read_text(), VALUES, names) for name in POLICIES}
+        documents.update({f"project_{service}": document for service, document in load_documents(VALUES, names=names).items()})
         checks = evaluate(documents)
         trust = documents["job_try_trust"]["Statement"]
         expected_trust = [
@@ -214,7 +217,7 @@ def main() -> int:
                 "Resource",
                 [PARAMETER + "aws_reader_id", PARAMETER + "aws_reader_secret", PARAMETER + "aws_writer_secret"],
             ),
-            "pass_any_role": ("job_project_delta", "PassReadJobRoles", "Resource", "arn:aws:iam::111111111111:role/*"),
+            "pass_any_role": ("project_iam", "PassReadJobRoles", "Resource", "arn:aws:iam::111111111111:role/*"),
             "seal_reads_tree": ("job_seal_deny", "NoTreeInput", "Resource", f"{S3}/unused/*"),
         }
         for label, (policy, sid, field, value) in mutations.items():

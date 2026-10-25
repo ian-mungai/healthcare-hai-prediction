@@ -215,7 +215,7 @@ DEFECTS = (
     ScriptDefect(
         "the read-only Airflow administrator password is also written",
         SECRET_STORE,
-        "    managed = [value for name, value in defaults.items() if value.startswith(PREFIX) and name not in READ_ONLY_VARIABLES]",
+        "    managed = [value for name, value in defaults.items() if value.startswith(PREFIX) and name not in (*READ_ONLY_VARIABLES, *JOB_READER_VARIABLES)]",
         "    managed = [value for name, value in defaults.items() if value.startswith(PREFIX)]",
         NAME_SOURCE,
     ),
@@ -229,7 +229,7 @@ DEFECTS = (
     ScriptDefect(
         "the lakehouse role names are not read from the variables",
         SECRET_STORE,
-        "if name in ROLE_VARIABLES or value.startswith(PREFIX)]",
+        "if name in (*ROLE_VARIABLES, *JOB_READER_VARIABLES) or value.startswith(PREFIX)]",
         "if value.startswith(PREFIX)]",
         NAME_SOURCE,
     ),
