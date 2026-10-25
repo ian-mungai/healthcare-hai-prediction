@@ -19,10 +19,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from scripts.process import clear_git_environment, run_command
+from scripts.quality.repo_checks import load_yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 PRE_COMMIT = ROOT / ".venv" / "bin" / "pre-commit"
 COPIED = [
+    ".github/workflows/ci.yml",
+    "config/quality/ci_groups.json",
     ".pre-commit-config.yaml",
     "pyproject.toml",
     ".env.example",
@@ -688,6 +691,134 @@ def run_range_case() -> tuple[bool, str]:
         return ok, f"clean range exit={good.returncode}; attributed range exit={bad.returncode}; missing revision exit={invalid.returncode}\n" + bad.stderr
 
 
+def workflow_value(value: str, context: dict[str, str]) -> str:
+    """Resolve the workflow's range expressions from a synthetic event and the real plan step's output."""
+    if not value.startswith("${{"):
+        return value
+    names = value.removeprefix("${{").removesuffix("}}").strip().split("||")
+    return next((context[name.strip()] for name in names if context[name.strip()]), "")
+
+
+def workflow_range_case(repo: Path, label: str, event: str, base: str, head: str, want_start: str, want_exit: int, want_marker: str = "") -> dict[str, object]:
+    workflow = load_yaml((repo / ".github/workflows/ci.yml").read_text())
+    if not isinstance(workflow, dict):
+        raise ValueError(".github/workflows/ci.yml is not a mapping")
+    context = {
+        "github.event_name": event,
+        "github.event.pull_request.base.sha": base if event == "pull_request" else "",
+        "github.event.pull_request.head.sha": head if event == "pull_request" else "",
+        "github.event.before": base if event == "push" else "",
+        "github.sha": head,
+    }
+    output = repo / ".git" / f"{label}_output"
+    environment = {**os.environ, "GITHUB_OUTPUT": str(output), "RUNNER_TEMP": str(repo / ".git")}
+    steps = workflow["jobs"]["plan"]["steps"]
+    resolution = next((step for step in steps if step.get("id") == "range"), None)
+    plan_exit = 0
+    log = ""
+    if resolution:
+        env = {name: workflow_value(value, context) for name, value in resolution.get("env", {}).items()}
+        script = repo / ".git" / "range_plan.sh"
+        script.write_text("set -eo pipefail\n" + resolution["run"])
+        result = run_command("bash", [str(script)], cwd=repo, env={**environment, **env}, timeout=120)
+        plan_exit, log = result.returncode, result.stdout + result.stderr
+        if output.exists():
+            context.update({f"steps.range.outputs.{key}": value for line in output.read_text().splitlines() for key, value in [line.split("=", 1)]})
+    if plan_exit != 0:
+        return {"case": label, "passed": False, "checks": {"plan_passes": False}, "plan_exit": plan_exit, "log": log}
+    for name, value in workflow["jobs"]["plan"].get("outputs", {}).items():
+        if "steps.range.outputs." in value:
+            context[f"needs.plan.outputs.{name}"] = workflow_value(value, context)
+    consumers = {
+        f"{job}.{index}": {name: workflow_value(step["env"][name], context) for name in ("RANGE_START", "RANGE_END")}
+        for job, definition in workflow["jobs"].items()
+        if job != "plan"
+        for index, step in enumerate(definition.get("steps", []))
+        if "RANGE_START" in step.get("env", {})
+    }
+    message_step = next(step for step in workflow["jobs"]["hooks"]["steps"] if step["name"] == "Check commit messages")
+    check_env = {name: workflow_value(value, context) for name, value in message_step["env"].items()}
+    check_exit = 0
+    if event != "workflow_dispatch":
+        script = repo / ".git" / "range_check.sh"
+        script.write_text("set -eo pipefail\n" + message_step["run"])
+        result = run_command("bash", [str(script)], cwd=repo, env={**environment, **check_env}, timeout=120)
+        check_exit = result.returncode
+        log += result.stdout + result.stderr
+    result = run_command(
+        str(ROOT / ".venv/bin/python"),
+        ["-m", "scripts.quality.ci_groups", "plan", "--scope", "range", "--part", "core", "--from", check_env["RANGE_START"], "--to", head],
+        cwd=repo,
+        timeout=120,
+    )
+    selected = json.loads(result.stdout) if result.returncode == 0 else {}
+    checks = {
+        "plan_passes": plan_exit == 0,
+        "all_consumers_use_the_expected_range": bool(consumers) and all(env == {"RANGE_START": want_start, "RANGE_END": head} for env in consumers.values()),
+        "check_has_the_expected_result": check_exit == want_exit and want_marker in log,
+        "selector_passes": result.returncode == 0,
+    }
+    if label == "branch_behind_main":
+        checks["main_only_paths_do_not_select_groups"] = selected.get("changed") == 1 and selected.get("run") == ["repository_code_checks", "sql_style"]
+        checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
+        checks["plan_fetches_full_history"] = checkout.get("with", {}).get("fetch-depth") == 0
+    if not want_start or want_start == "missing-ref":
+        checks["unusable_range_selects_all_groups"] = selected.get("changed") is None and selected.get("run") == selected.get("groups")
+    return {
+        "case": label,
+        "passed": all(checks.values()),
+        "checks": checks,
+        "check_exit": check_exit,
+        "consumers": consumers,
+        "selection": selected,
+        "log": log,
+    }
+
+
+def run_workflow_range_case() -> tuple[bool, str]:
+    """Run the actual workflow shell and selector on divergent branches, pushes and missing history."""
+    with tempfile.TemporaryDirectory(prefix="hai_workflow_range_") as scratch:
+        function = "upstream" + "_added_value"
+        removed = "branch" + "_removed_value"
+        api = "scripts/acquisition/range_sample.py"
+        original = f"def {removed}():\n    return 1\n"
+        repo = scratch_repo(Path(scratch), Case("workflow range setup", "commit-msg", True, committed={api: original, "caller.py": f"{removed}()\n"}))
+        ancestor = git(repo, "rev-parse", "HEAD").strip()
+        git(repo, "checkout", "-qb", "topic")
+        write(repo, {"README.md": f"# Example\n\n`{function}()` is named in this branch.\n"})
+        git(repo, "add", "--", "README.md")
+        git(repo, "commit", "-qm", "docs: describe the branch")
+        head = git(repo, "rev-parse", "HEAD").strip()
+        git(repo, "checkout", "-q", "main")
+        write(repo, {api: original + f"\ndef {function}():\n    return 2\n"})
+        git(repo, "add", "--", api)
+        git(repo, "commit", "-qm", "feat: add a name on main")
+        base = git(repo, "rev-parse", "HEAD").strip()
+        git(repo, "checkout", "-q", "topic")
+        results = [
+            workflow_range_case(repo, "branch_behind_main", "pull_request", base, head, ancestor, 0),
+            workflow_range_case(repo, "push_keeps_divergent_before", "push", base, head, base, 1, f"{function} was removed"),
+            workflow_range_case(repo, "manual_run_keeps_full_selection", "workflow_dispatch", "", head, "", 0),
+            workflow_range_case(repo, "missing_start_keeps_history_fallback", "pull_request", "missing-ref", head, "missing-ref", 0),
+        ]
+        write(repo, {api: "VALUE = 1\n"})
+        git(repo, "add", "--", api)
+        git(repo, "commit", "-qm", "refactor: remove a branch function")
+        deleted = git(repo, "rev-parse", "HEAD").strip()
+        results.append(workflow_range_case(repo, "real_branch_removal_is_rejected", "pull_request", base, deleted, ancestor, 1, f"{removed} was removed"))
+        git(repo, "reset", "--hard", head)
+        git(repo, "commit", "--allow-empty", "-qm", "Invalid subject")
+        invalid = git(repo, "rev-parse", "HEAD").strip()
+        results.append(workflow_range_case(repo, "branch_commit_message_is_rejected", "pull_request", base, invalid, ancestor, 1, "not a Conventional Commit"))
+        git(repo, "checkout", "-q", "--detach", ancestor)
+        git(repo, "commit", "--amend", "-qm", "Invalid root subject")
+        root = git(repo, "rev-parse", "HEAD").strip()
+        results.append(
+            workflow_range_case(repo, "missing_start_checks_the_root_message", "push", "missing-ref", root, "missing-ref", 1, "not a Conventional Commit")
+        )
+        return all(result["passed"] for result in results), json.dumps(results, indent=2) + "\n"
+
+
 def run_verbose_case() -> tuple[bool, str]:
     """Use an installed commit-msg hook to distinguish verbose patch context from actual message text."""
     with tempfile.TemporaryDirectory(prefix="hai_verbose_commit_") as scratch:
@@ -1033,6 +1164,7 @@ def main() -> int:
     if not args.hook_probe:
         for label, runner in (
             ("commit-range", run_range_case),
+            ("workflow ranges", run_workflow_range_case),
             ("verbose commit", run_verbose_case),
             ("privacy scope", run_privacy_scope_case),
             ("writing samples", run_writing_case),
