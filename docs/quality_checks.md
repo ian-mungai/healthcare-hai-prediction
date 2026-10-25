@@ -659,8 +659,12 @@ in every scope, so each edit runs all the checks. Put a check command in the bod
 
 These runners add a scratch Git worktree of HEAD: `run_ci_groups_e2e` and `run_checks_ci_e2e.sh`. Each removes it on every exit path: a pass or a failed case, an exception, an interrupt or a deadline.
 The Python runner adds the worktree through `scripts/quality/scratch_worktree.py`, which turns SIGTERM, SIGHUP and SIGALRM (the deadline wrapper's signal) into an exit that runs the removal.
-The removal runs `git worktree remove --force` and `git worktree prune`. If the removal fails, the folder is deleted instead. The report notes it.
-While the removal and the check of the registered worktrees run, the helper and the shell runner hold SIGINT (Ctrl-C) and those three signals, also for the Git processes they start;
+The removal runs `git worktree remove --force` and `git worktree prune`. If the removal fails, the folder is deleted anyway and the run fails.
+While the removal and its checks run, the helper and the shell runner hold SIGINT (Ctrl-C) and those three signals, also for the Git processes they start;
 one that arrives then takes effect when the cleanup is done. The case `scratch_worktree_cleanup_holds_an_interrupt_until_it_is_done` of `run_ci_groups_e2e` checks it.
-Each run lists the registered worktrees (`git worktree list --porcelain`) before and after. A difference fails the run with the paths named. The report keeps both lists.
+Only Git's own answers about the run's worktrees decide: `git worktree remove` failing for one of them, `git worktree prune` failing or the folder of one of
+them still existing fails the run with the path named. The run resolves each path before adding the worktree, so a symbolic link in the path that
+disappears later does not matter. It never reads Git's registry to decide, because several agents add and remove their own worktrees in the same
+repository at once. The registered worktrees before and after are kept in the report only: a difference or a failed listing is a note.
+`run_scratch_worktree_e2e` checks these rules for both runners with real worktrees of a throwaway repository, run by the repository checks group.
 A SIGKILL cannot be handled. A worktree left by one shows in the next run's list as the starting state. Clear it with `git worktree remove --force` and `git worktree prune`.
