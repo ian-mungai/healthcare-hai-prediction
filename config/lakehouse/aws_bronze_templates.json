@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "production_identity": {
+    "principal": "bronze_writer",
+    "task_role": "job_write_bronze_task",
+    "definition": "bronze_writer",
+    "pair": "bronze"
+  },
+  "qualification_identity": {
+    "principal": "e2e_writer",
+    "task_role": "job_write_e2e_task",
+    "definition": "test_writer",
+    "pair": "e2e"
+  },
+  "reader_identity": {
+    "principal": "lakehouse_reader",
+    "task_role": "job_read_task",
+    "definition": "spark_read",
+    "pair": "reader"
+  },
+  "templates": {
+    "bronze": {"module": "scripts.lakehouse.bronze", "class": "lakehouse_write"},
+    "dictionary": {"module": "scripts.lakehouse.dictionary", "class": "lakehouse_write"},
+    "smoke": {"module": "scripts.lakehouse.smoke", "class": "lakehouse_write"},
+    "checksum_fixture": {"module": "scripts.lakehouse.checksums", "class": "lakehouse_write"},
+    "removal": {"module": "scripts.lakehouse.bronze", "class": "lakehouse_write"},
+    "checksums": {"module": "scripts.lakehouse.checksums", "class": "lakehouse_read"}
+  },
+  "capacity_provider": "FARGATE",
+  "retry_after_start": false,
+  "production_layer_default": "off",
+  "journal_owner": "launcher",
+  "stage_files": [
+    "config/lakehouse/aws_bronze_templates.json",
+    "config/lakehouse/bronze_tables.json",
+    "config/lakehouse/removed_tables.json",
+    "config/lakehouse/retired_objects.json",
+    "scripts/acquisition/redownload_controls.py",
+    "scripts/acquisition/single_copy.py",
+    "scripts/acquisition/source_registry.py",
+    "scripts/acquisition/transport.py",
+    "scripts/lakehouse/__init__.py",
+    "scripts/lakehouse/aws_bronze.py",
+    "scripts/lakehouse/bronze.py",
+    "scripts/lakehouse/bronze_metadata.py",
+    "scripts/lakehouse/bronze_writer.py",
+    "scripts/lakehouse/checksums.py",
+    "scripts/lakehouse/dictionary.py",
+    "scripts/lakehouse/file_readers.py",
+    "scripts/lakehouse/namespace_binding.py",
+    "scripts/lakehouse/session.py",
+    "scripts/lakehouse/smoke.py"
+  ]
+}

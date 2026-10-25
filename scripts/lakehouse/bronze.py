@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from scripts.lakehouse.file_readers import UTF16_MARKS, ReaderError, parse_line
+from scripts.lakehouse.namespace_binding import DICTIONARY_NAMESPACE, namespace_name
 
 TABLE_MAP = Path("config/lakehouse/bronze_tables.json")
 # Objects the privacy deletion removed from S3 that manifests still list: skipped by exact key, version and SHA-256 [146].
@@ -670,7 +671,7 @@ def sha256_file(path: Path) -> tuple[str, int]:
 
 def ensure_table(spark: Any, namespace: str, table: str, file_format: str = "csv") -> None:
     """Create the namespace, the bronze table (with the format's fixed columns) and the column map if missing."""
-    if not re.fullmatch(r"[a-z_]+", namespace) or not re.fullmatch(r"[a-z][a-z0-9_]*", table):
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", namespace) or not re.fullmatch(r"[a-z][a-z0-9_]*", table):
         raise BronzeError("namespace and table names are lowercase identifiers")
     spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {namespace}")
     lineage = ", ".join(f"{name} {'BIGINT' if name == '_row_number' else 'STRING'}" for name in LINEAGE)
@@ -990,13 +991,14 @@ def load_removed(path: Path, config: dict[str, Any]) -> list[str]:
     return names
 
 
-def drop_removed(spark: Any, names: list[str], namespace: str) -> dict[str, str]:
-    """Drop each removed table with its files, its dictionary and its side rows; report dropped or absent [257] [259]."""
-    from scripts.lakehouse import dictionary
+def drop_removed(spark: Any, names: list[str], namespace: str, dictionary_namespace: str = DICTIONARY_NAMESPACE) -> dict[str, str]:
+    """Purge removed tables, their bound dictionaries and side rows, then report dropped or absent."""
+    namespace_name(namespace)
+    namespace_name(dictionary_namespace)
 
     outcome: dict[str, str] = {}
     for name in names:
-        found = spark.catalog.tableExists(f"{namespace}.{name}") or spark.catalog.tableExists(f"{dictionary.NAMESPACE}.{name}")
+        found = spark.catalog.tableExists(f"{namespace}.{name}") or spark.catalog.tableExists(f"{dictionary_namespace}.{name}")
         outcome[name] = "dropped" if found else "absent"
     if not names:
         return outcome
@@ -1012,17 +1014,22 @@ def drop_removed(spark: Any, names: list[str], namespace: str) -> dict[str, str]
             spark.catalog.setCurrentDatabase(previous)
     for name in names:
         spark.sql(f"DROP TABLE IF EXISTS {namespace}.{name} PURGE")
-        spark.sql(f"DROP TABLE IF EXISTS {dictionary.NAMESPACE}.{name} PURGE")
+        spark.sql(f"DROP TABLE IF EXISTS {dictionary_namespace}.{name} PURGE")
     return outcome
 
 
 class S3Storage:
-    """Read-only S3 access with the project's AWS profile."""
+    """Read versioned source objects with the local project profile or the AWS task identity."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, task_role: bool = False) -> None:
         import boto3
 
-        self.client = boto3.Session(profile_name=os.environ["AWS_PROFILE"], region_name=os.environ["AWS_REGION"]).client("s3")
+        session = (
+            boto3.Session(region_name=os.environ["AWS_REGION"])
+            if task_role
+            else boto3.Session(profile_name=os.environ["AWS_PROFILE"], region_name=os.environ["AWS_REGION"])
+        )
+        self.client = session.client("s3")
 
     def list_keys(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
         """Return each current manifest key with its version ID from one paginated version listing."""
@@ -1047,18 +1054,25 @@ class S3Storage:
         self.client.download_file(bucket, key, str(path), ExtraArgs={"VersionId": version_id})
 
 
-def drop_removed_job(config: dict[str, Any]) -> int:
+def drop_removed_job(config: dict[str, Any], dictionary_namespace: str = DICTIONARY_NAMESPACE, *, qualification_tables: list[str] | None = None) -> int:
     """Drop the listed removed tables and write a counts-only report."""
     from scripts.lakehouse.session import job_memory, spark_session
 
     try:
-        names = load_removed(REMOVED, config)
+        if qualification_tables is None:
+            names = load_removed(REMOVED, config)
+        else:
+            if config["namespace"] != "bronze_e2e" or dictionary_namespace != "bronze_dictionary_e2e":
+                raise BronzeError("qualification removal requires both test twin namespaces")
+            names = qualification_tables
+            if not names or len(set(names)) != len(names) or any(name not in {table["table"] for table in config["tables"]} for name in names):
+                raise BronzeError("qualification removal requires unique loaded table-map names")
     except BronzeError as error:
         sys.stderr.write(f"bronze: {error}\n")
         return 1
     spark = spark_session("bronze", memory=job_memory())
     try:
-        outcome = drop_removed(spark, names, config["namespace"])
+        outcome = drop_removed(spark, names, config["namespace"], dictionary_namespace=dictionary_namespace)
     finally:
         spark.stop()
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -1069,7 +1083,7 @@ def drop_removed_job(config: dict[str, Any]) -> int:
     return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Load the chosen group or tables into the Polaris catalog and write a counts-only report."""
     from scripts.lakehouse.session import job_memory, spark_session
 
@@ -1082,10 +1096,25 @@ def main() -> int:
     # Moving to one copy per file: tables whose kept copy is already loaded only need their copies listed and the other
     # copies pruned; verification still compares every table with its inputs, so a missing copy fails the run [211].
     parser.add_argument("--copies-only", action="store_true", help="list copies, prune and verify without loading objects")
-    args = parser.parse_args()
+    parser.add_argument("--namespace", type=namespace_name)
+    parser.add_argument("--dictionary-namespace", type=namespace_name, default=DICTIONARY_NAMESPACE)
+    parser.add_argument("--bucket", help="source bucket supplied by the AWS run binding")
+    parser.add_argument("--task-role", action="store_true", help="use the AWS task identity without a local profile")
+    parser.add_argument("--qualification-tables", help="comma-separated loaded tables for removal on the two test twins only")
+    args = parser.parse_args(argv)
     config = load_table_map()
+    if args.namespace is not None:
+        config["namespace"] = args.namespace
     if args.drop_removed:
-        return drop_removed_job(config)
+        return drop_removed_job(
+            config,
+            dictionary_namespace=args.dictionary_namespace,
+            qualification_tables=None if args.qualification_tables is None else args.qualification_tables.split(","),
+        )
+    if args.qualification_tables is not None:
+        parser.error("qualification table selection is valid only with --drop-removed")
+    if args.task_role and not args.bucket:
+        parser.error("task-role loads require the source bucket from the run binding")
     names = (
         [table["table"] for table in config["tables"]]
         if args.bootstrap_all
@@ -1096,8 +1125,8 @@ def main() -> int:
     if not names or any(name not in {table["table"] for table in config["tables"]} for name in names):
         sys.stderr.write("bronze: unknown group or table\n")
         return 1
-    bucket = str(json.loads(DEPLOYMENT.read_text())["data_bucket_name"])
-    storage = S3Storage()
+    bucket = args.bucket if args.bucket is not None else str(json.loads(DEPLOYMENT.read_text())["data_bucket_name"])
+    storage = S3Storage(task_role=args.task_role)
     from scripts.lakehouse import bronze_metadata, dictionary
 
     spark = spark_session("bronze", memory=job_memory())
@@ -1119,7 +1148,11 @@ def main() -> int:
         checks = verify(spark, config, inputs, config["namespace"])
         # Dictionaries follow every passing load, so they never describe an older bronze table [91].
         if all(check["passed"] for check in checks.values()):
-            dictionaries = {} if args.bootstrap_all else dictionary.build(spark, config, sorted(checks), config["namespace"])
+            dictionaries = (
+                {}
+                if args.bootstrap_all
+                else dictionary.build(spark, config, sorted(checks), config["namespace"], dictionary_namespace=args.dictionary_namespace)
+            )
             generation = bronze_metadata.publish(spark, config["namespace"], metadata)
             index_path = REPORT_ROOT / "object_index" / f"{generation}.json"
             index_sha256 = bronze_metadata.write_bootstrap(metadata, index_path)

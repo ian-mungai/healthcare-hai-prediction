@@ -18,7 +18,7 @@ terraform_checks() {
   export AWS_EC2_METADATA_DISABLED=true TF_IN_AUTOMATION=1 TF_INPUT=0
   touch "$AWS_CONFIG_FILE" "$AWS_SHARED_CREDENTIALS_FILE"
   # The stacks run one after the other: Terraform's provider cache is not safe for concurrent init.
-  for stack in storage iam platform services; do
+  for stack in storage iam platform services modules/bronze_writer_job; do
     source_dir="$repo_root/infra"
     if [[ "$stack" != "storage" ]]; then
       source_dir="$repo_root/infra/$stack"
@@ -43,7 +43,7 @@ terraform_checks() {
     timed "terraform_checks: $stack test" terraform -chdir="$test_dir" test -no-color
   done
   static_failed=0
-  for stack in storage iam platform services; do
+  for stack in storage iam platform services modules/bronze_writer_job; do
     source_dir="$repo_root/infra"
     if [[ "$stack" != "storage" ]]; then
       source_dir="$repo_root/infra/$stack"

@@ -26,8 +26,9 @@ import unicodedata
 from typing import Any
 
 from scripts.lakehouse import bronze
+from scripts.lakehouse.namespace_binding import DICTIONARY_NAMESPACE, namespace_name
 
-NAMESPACE = "bronze_dictionary"
+NAMESPACE = DICTIONARY_NAMESPACE
 # Columns counted per Spark aggregation; the SAS table alone has 5,583 [94].
 BATCH = 400
 SCHEMA = (
@@ -317,8 +318,10 @@ def describe(spark: Any, namespace: str, table: str, config: dict[str, Any], bat
     return rows
 
 
-def build(spark: Any, config: dict[str, Any], names: list[str], namespace: str, batch: int = BATCH) -> dict[str, int]:
-    """Rebuild the named tables' dictionaries, each in one commit; refuse every bad name before writing any [92] [93]."""
+def build(spark: Any, config: dict[str, Any], names: list[str], namespace: str, batch: int = BATCH, *, dictionary_namespace: str = NAMESPACE) -> dict[str, int]:
+    """Replace each selected dictionary in the bound namespace after validating every table name."""
+    namespace_name(namespace)
+    namespace_name(dictionary_namespace)
     tables = {table["table"]: table for table in config["tables"]}
     loaded = {row["tableName"] for row in spark.sql(f"SHOW TABLES IN {namespace}").collect()}
     for name in names:
@@ -328,16 +331,18 @@ def build(spark: Any, config: dict[str, Any], names: list[str], namespace: str, 
         for table in needed:
             if table not in loaded:
                 raise bronze.BronzeError(f"{table}: not loaded in {namespace}")
-    spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {NAMESPACE}")
+    spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {dictionary_namespace}")
     written = {}
     for name in names:
         rows = describe(spark, namespace, name, tables[name], batch)
-        spark.createDataFrame(rows, SCHEMA).coalesce(1).writeTo(f"{NAMESPACE}.{name}").using("iceberg").tableProperty("format-version", "2").createOrReplace()
+        spark.createDataFrame(rows, SCHEMA).coalesce(1).writeTo(f"{dictionary_namespace}.{name}").using("iceberg").tableProperty(
+            "format-version", "2"
+        ).createOrReplace()
         written[name] = len(rows)
     return written
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Rebuild the chosen dictionaries in the Polaris catalog and print the column counts."""
     from scripts.lakehouse.session import job_memory, spark_session
 
@@ -345,12 +350,14 @@ def main() -> int:
     choice = parser.add_mutually_exclusive_group(required=True)
     choice.add_argument("--all", action="store_true")
     choice.add_argument("--tables", help="comma-separated table names")
-    args = parser.parse_args()
+    parser.add_argument("--namespace", type=namespace_name)
+    parser.add_argument("--dictionary-namespace", type=namespace_name, default=NAMESPACE)
+    args = parser.parse_args(argv)
     config = bronze.load_table_map()
     names = [table["table"] for table in config["tables"]] if args.all else args.tables.split(",")
     spark = spark_session("bronze-dictionary", memory=job_memory())
     try:
-        written = build(spark, config, names, config["namespace"])
+        written = build(spark, config, names, args.namespace or config["namespace"], dictionary_namespace=args.dictionary_namespace)
     except bronze.BronzeError as error:
         sys.stderr.write(f"dictionary: {error}\n")
         return 1
