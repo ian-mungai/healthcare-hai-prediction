@@ -57,6 +57,26 @@ class TokenProvider(Protocol):
         """Record or reconcile secure publication without blocking the loop or changing request identity."""
         ...
 
+    def start(self, server: Launcher) -> None:
+        """Reconcile recorded token work without blocking the launcher loop."""
+        ...
+
+    def tick(self, server: Launcher) -> None:
+        """Schedule committed token intents and apply their deadlines outside request transactions."""
+        ...
+
+    def release(self, server: Launcher, ctx: Ctx) -> None:
+        """Record retirement together with terminal run state and invalidate token caches."""
+        ...
+
+    def recover(self, server: Launcher, ctx: Ctx) -> dict[str, Any]:
+        """Abort or retry a recorded token operation after explicit owner authorization."""
+        ...
+
+    def close(self, *, deadline: float) -> None:
+        """Confirm owned token workers stopped within the aggregate cleanup deadline."""
+        ...
+
 
 def local_work_blockers(state: Mapping[str, Any]) -> list[str]:
     """Name recorded local work that must be drained before a disabled backend can serve."""

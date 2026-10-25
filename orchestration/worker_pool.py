@@ -39,10 +39,13 @@ class WorkerConfig:
     pooled: bool = True
     test_endpoint: str | None = None
     test_control_endpoint: str | None = None
+    container_credentials: bool = False
 
     def __post_init__(self) -> None:
         if not self.region or not Path(self.python).is_absolute() or not self.worker.is_absolute():
             raise ValueError("worker_requires_region_and_absolute_paths")
+        if self.container_credentials and self.profile is not None:
+            raise ValueError("container_credentials_refuse_profile")
         for value in (self.test_endpoint, self.test_control_endpoint):
             if value is None:
                 continue
@@ -105,6 +108,10 @@ class WorkerPool:
         environment.update(PYTHONDONTWRITEBYTECODE="1", HAI_WORKER_WITNESS=witness, AWS_REGION=self.config.region)
         if self.config.profile:
             environment["AWS_PROFILE"] = self.config.profile
+        if self.config.container_credentials:
+            environment.update(AWS_CONFIG_FILE=os.devnull, AWS_SHARED_CREDENTIALS_FILE=os.devnull, AWS_EC2_METADATA_DISABLED="true")
+            if "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" in os.environ:
+                environment["AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"] = os.environ["AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"]
         if self.config.test_endpoint:
             environment.update(AWS_CONFIG_FILE=os.devnull, AWS_SHARED_CREDENTIALS_FILE=os.devnull, AWS_EC2_METADATA_DISABLED="true")
         return environment
@@ -120,6 +127,8 @@ class WorkerPool:
         ):
             if value is not None:
                 command.extend((flag, value))
+        if self.config.container_credentials:
+            command.append("--container-credentials")
         if one_shot:
             command.append("--one-shot")
         previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})

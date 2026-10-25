@@ -92,6 +92,21 @@ class MemoryTokens:
         self.values[str(params["run_id"])] = token
         return {"run_id": params["run_id"], "token_file": None}
 
+    def start(self, server: launcher.Launcher) -> None:
+        pass
+
+    def tick(self, server: launcher.Launcher) -> None:
+        pass
+
+    def release(self, server: launcher.Launcher, ctx: launcher.Ctx) -> None:
+        self.values.pop(str(ctx.principal["run_id"]), None)
+
+    def recover(self, server: launcher.Launcher, ctx: launcher.Ctx) -> dict[str, Any]:
+        raise launcher.LauncherError("synthetic provider has no durable token recovery", "refused")
+
+    def close(self, *, deadline: float) -> None:
+        self.values.clear()
+
 
 class CompleteEcs(FakeEcs):
     """Synthetic complete-listing witness and terminal application through the existing runtime seam."""

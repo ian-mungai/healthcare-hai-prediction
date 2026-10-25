@@ -17,10 +17,36 @@ from typing import Any
 MAX_FRAME = 16 * 1024 * 1024
 MAX_RECORD = 32 * 1024 * 1024
 MUTATING = frozenset(
-    {"run_task", "stop_task", "assume_role", "s3_put_small", "s3_upload_part", "s3_mpu_create", "s3_mpu_complete", "s3_mpu_abort", "s3_delete"}
+    {
+        "run_task",
+        "stop_task",
+        "assume_role",
+        "s3_put_small",
+        "s3_upload_part",
+        "s3_mpu_create",
+        "s3_mpu_complete",
+        "s3_mpu_abort",
+        "s3_delete",
+        "controller_put_parameter",
+        "controller_delete_parameter",
+    }
 )
-SECRET_OPERATIONS = frozenset({"assume_role", "get_parameter"})
-CONTROL_OPERATIONS = frozenset({"run_task", "stop_task", "describe_tasks", "list_tasks", "assume_role", "caller_identity", "logs_get_events", "get_parameter"})
+SECRET_OPERATIONS = frozenset({"assume_role", "get_parameter", "controller_get_parameter", "controller_put_parameter"})
+CONTROL_OPERATIONS = frozenset(
+    {
+        "run_task",
+        "stop_task",
+        "describe_tasks",
+        "list_tasks",
+        "assume_role",
+        "caller_identity",
+        "logs_get_events",
+        "get_parameter",
+        "controller_get_parameter",
+        "controller_put_parameter",
+        "controller_delete_parameter",
+    }
+)
 KEYWORDS = frozenset(
     {
         "$defs",
