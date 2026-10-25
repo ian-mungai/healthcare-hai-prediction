@@ -1,0 +1,513 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthcare-hai-prediction.invalid/orchestration/ecs_target.schema.json",
+  "title": "Private ECS read target",
+  "description": "Proposed read target contract. Deployment captures and image measurements require integration review before activation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "enabled",
+    "account_id",
+    "region",
+    "project_tag",
+    "bucket_name",
+    "cluster_arn",
+    "log_group_name",
+    "job_roles",
+    "job_network",
+    "class_networks",
+    "definitions",
+    "catalog",
+    "mac_preparation",
+    "cloud_limits",
+    "deadlines",
+    "max_record_bytes"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "account_id": {
+      "type": "string",
+      "pattern": "^(?:[0-9]{12})$(?![\\s\\S])"
+    },
+    "region": {
+      "type": "string",
+      "pattern": "^(?:[a-z]{2}(?:-[a-z]+)+-[0-9]+)$(?![\\s\\S])"
+    },
+    "project_tag": {
+      "type": "string",
+      "pattern": "^(?:[a-z][a-z0-9_]{2,79})$(?![\\s\\S])"
+    },
+    "bucket_name": {
+      "type": "string",
+      "pattern": "^(?:[a-z0-9][a-z0-9-]{1,61}[a-z0-9])$(?![\\s\\S])"
+    },
+    "cluster_arn": {
+      "type": "string",
+      "pattern": "^(?:arn:aws:ecs:[a-z]{2}(?:-[a-z]+)+-[0-9]+:[0-9]{12}:cluster/[A-Za-z0-9_-]+)$(?![\\s\\S])"
+    },
+    "log_group_name": {
+      "type": "string",
+      "pattern": "^(?:[A-Za-z0-9_./#-]{1,512})$(?![\\s\\S])"
+    },
+    "job_roles": {
+      "$ref": "#/$defs/job_roles"
+    },
+    "job_network": {
+      "$ref": "#/$defs/job_network"
+    },
+    "class_networks": {
+      "const": {
+        "offline": "offline",
+        "seal": "offline",
+        "lakehouse_read": "lakehouse"
+      }
+    },
+    "definitions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "analytics_offline",
+        "quality_offline",
+        "seal",
+        "analytics_read",
+        "spark_read"
+      ],
+      "properties": {
+        "analytics_offline": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/definition"
+            },
+            {
+              "properties": {
+                "job_class": {
+                  "const": "offline"
+                },
+                "task_role_key": {
+                  "const": "offline_task"
+                }
+              }
+            }
+          ]
+        },
+        "quality_offline": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/definition"
+            },
+            {
+              "properties": {
+                "job_class": {
+                  "const": "offline"
+                },
+                "task_role_key": {
+                  "const": "offline_task"
+                }
+              }
+            }
+          ]
+        },
+        "seal": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/definition"
+            },
+            {
+              "properties": {
+                "job_class": {
+                  "const": "seal"
+                },
+                "task_role_key": {
+                  "const": "seal_task"
+                }
+              }
+            }
+          ]
+        },
+        "analytics_read": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/definition"
+            },
+            {
+              "properties": {
+                "job_class": {
+                  "const": "lakehouse_read"
+                },
+                "task_role_key": {
+                  "const": "read_task"
+                }
+              }
+            }
+          ]
+        },
+        "spark_read": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/definition"
+            },
+            {
+              "properties": {
+                "job_class": {
+                  "const": "lakehouse_read"
+                },
+                "task_role_key": {
+                  "const": "read_task"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "catalog": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/catalog"
+        }
+      ]
+    },
+    "mac_preparation": {
+      "const": {
+        "enabled": false,
+        "transport": "session_manager_owned_relay"
+      }
+    },
+    "cloud_limits": {
+      "const": {
+        "max_tasks": 3,
+        "max_vcpu": 16,
+        "max_memory_gib": 120
+      }
+    },
+    "deadlines": {
+      "const": {
+        "hard_stop_required": true,
+        "pending_seconds": 600,
+        "stop_grace_seconds": 90,
+        "cleanup_seconds": 120,
+        "budget_alert_is_spend_stop": false
+      }
+    },
+    "max_record_bytes": {
+      "const": 33554432
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^(?:[a-f0-9]{64})$(?![\\s\\S])"
+    },
+    "image": {
+      "type": "string",
+      "pattern": "^(?:[0-9]{12}\\.dkr\\.ecr\\.[a-z]{2}(?:-[a-z]+)+-[0-9]+\\.amazonaws\\.com/[a-z0-9_./-]+@sha256:[a-f0-9]{64})$(?![\\s\\S])"
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "arn",
+        "unique_id"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^(?:[A-Za-z0-9_+=,.@-]{1,64})$(?![\\s\\S])"
+        },
+        "arn": {
+          "type": "string",
+          "pattern": "^(?:arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9_+=,.@/-]+)$(?![\\s\\S])"
+        },
+        "unique_id": {
+          "type": "string",
+          "pattern": "^(?:AROA[A-Z0-9]{17})$(?![\\s\\S])"
+        }
+      }
+    },
+    "job_roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution",
+        "offline_task",
+        "seal_task",
+        "read_task",
+        "try_writer"
+      ],
+      "properties": {
+        "execution": {
+          "$ref": "#/$defs/role"
+        },
+        "offline_task": {
+          "$ref": "#/$defs/role"
+        },
+        "seal_task": {
+          "$ref": "#/$defs/role"
+        },
+        "read_task": {
+          "$ref": "#/$defs/role"
+        },
+        "try_writer": {
+          "$ref": "#/$defs/role"
+        }
+      }
+    },
+    "job_network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subnet_id",
+        "security_group_ids",
+        "endpoints_enabled"
+      ],
+      "properties": {
+        "subnet_id": {
+          "type": "string",
+          "pattern": "^(?:subnet-(?:[a-f0-9]{8}|[a-f0-9]{17}))$(?![\\s\\S])"
+        },
+        "security_group_ids": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "offline",
+            "lakehouse"
+          ],
+          "properties": {
+            "offline": {
+              "type": "string",
+              "pattern": "^(?:sg-(?:[a-f0-9]{8}|[a-f0-9]{17}))$(?![\\s\\S])"
+            },
+            "lakehouse": {
+              "type": "string",
+              "pattern": "^(?:sg-(?:[a-f0-9]{8}|[a-f0-9]{17}))$(?![\\s\\S])"
+            }
+          }
+        },
+        "endpoints_enabled": {
+          "const": true
+        }
+      }
+    },
+    "reader_parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "POLARIS_CLIENT_ID",
+        "POLARIS_CLIENT_SECRET"
+      ],
+      "properties": {
+        "POLARIS_CLIENT_ID": {
+          "type": "string",
+          "pattern": "^(?:arn:aws:ssm:[a-z]{2}(?:-[a-z]+)+-[0-9]+:[0-9]{12}:parameter/[A-Za-z0-9_/]+)$(?![\\s\\S])"
+        },
+        "POLARIS_CLIENT_SECRET": {
+          "type": "string",
+          "pattern": "^(?:arn:aws:ssm:[a-z]{2}(?:-[a-z]+)+-[0-9]+:[0-9]{12}:parameter/[A-Za-z0-9_/]+)$(?![\\s\\S])"
+        }
+      }
+    },
+    "catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "private_ip",
+        "endpoint",
+        "realm",
+        "authority_epoch",
+        "source_inventory_sha256",
+        "readiness_sha256",
+        "reader_parameters"
+      ],
+      "properties": {
+        "instance_id": {
+          "type": "string",
+          "pattern": "^(?:i-(?:[a-f0-9]{8}|[a-f0-9]{17}))$(?![\\s\\S])"
+        },
+        "private_ip": {
+          "type": "string",
+          "format": "ipv4"
+        },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^(?:http://[0-9.]+:8181/api/catalog)$(?![\\s\\S])"
+        },
+        "realm": {
+          "type": "string",
+          "pattern": "^(?:[A-Za-z0-9_]{1,64})$(?![\\s\\S])"
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source_inventory_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "readiness_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "reader_parameters": {
+          "$ref": "#/$defs/reader_parameters"
+        }
+      }
+    },
+    "definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_definition_arn",
+        "container_name",
+        "job_class",
+        "image",
+        "task_role_key",
+        "execution_sha256",
+        "image_compressed_gib",
+        "image_uncompressed_gib"
+      ],
+      "properties": {
+        "task_definition_arn": {
+          "type": "string",
+          "pattern": "^(?:arn:aws:ecs:[a-z]{2}(?:-[a-z]+)+-[0-9]+:[0-9]{12}:task-definition/[A-Za-z0-9_-]{1,255}:[1-9][0-9]*)$(?![\\s\\S])"
+        },
+        "container_name": {
+          "type": "string",
+          "pattern": "^(?:[A-Za-z0-9_-]{1,255})$(?![\\s\\S])"
+        },
+        "job_class": {
+          "enum": [
+            "offline",
+            "seal",
+            "lakehouse_read"
+          ]
+        },
+        "image": {
+          "$ref": "#/$defs/image"
+        },
+        "task_role_key": {
+          "enum": [
+            "offline_task",
+            "seal_task",
+            "read_task"
+          ]
+        },
+        "execution_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "image_compressed_gib": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "image_uncompressed_gib": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      }
+    },
+    "image_measurements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "platform",
+        "images"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "platform": {
+          "const": "linux/arm64"
+        },
+        "images": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "analytics",
+            "quality",
+            "spark"
+          ],
+          "properties": {
+            "analytics": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "image",
+                "compressed_bytes",
+                "uncompressed_bytes"
+              ],
+              "properties": {
+                "image": {
+                  "$ref": "#/$defs/image"
+                },
+                "compressed_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "uncompressed_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "quality": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "image",
+                "compressed_bytes",
+                "uncompressed_bytes"
+              ],
+              "properties": {
+                "image": {
+                  "$ref": "#/$defs/image"
+                },
+                "compressed_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "uncompressed_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "spark": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "image",
+                "compressed_bytes",
+                "uncompressed_bytes"
+              ],
+              "properties": {
+                "image": {
+                  "$ref": "#/$defs/image"
+                },
+                "compressed_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "uncompressed_bytes": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
