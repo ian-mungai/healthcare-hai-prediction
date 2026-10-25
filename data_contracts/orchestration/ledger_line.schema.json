@@ -500,6 +500,91 @@
                     "minimum": 0
                   }
                 }
+              },
+              "catalog_authority": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "writer_authorization": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "qualification",
+                  "layer_activation",
+                  "publish_approval"
+                ],
+                "properties": {
+                  "qualification": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "layer_activation": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 1
+                  },
+                  "publish_approval": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "job_class": {
+                "enum": [
+                  "offline",
+                  "seal",
+                  "lakehouse_read",
+                  "lakehouse_write"
+                ]
+              },
+              "dispatch_attempted": {
+                "type": "boolean"
+              },
+              "dispatch": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "request",
+                  "request_sha256",
+                  "job_reference",
+                  "definition",
+                  "project_tag",
+                  "clock_observation",
+                  "sent"
+                ],
+                "properties": {
+                  "request": {
+                    "type": "object"
+                  },
+                  "request_sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "job_reference": {
+                    "type": "object"
+                  },
+                  "definition": {
+                    "type": "object"
+                  },
+                  "project_tag": {
+                    "type": "string"
+                  },
+                  "clock_observation": {
+                    "type": "object"
+                  },
+                  "sent": {
+                    "const": true
+                  }
+                }
               }
             },
             "allOf": [
@@ -557,6 +642,96 @@
                 }
               }
             ]
+          }
+        },
+        "catalog_authority": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "writer_authorization": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "qualification",
+            "layer_activation",
+            "publish_approval"
+          ],
+          "properties": {
+            "qualification": {
+              "type": "string",
+              "minLength": 1
+            },
+            "layer_activation": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            },
+            "publish_approval": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          }
+        },
+        "admission": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "job_class",
+            "registry_kind",
+            "run_id",
+            "mode",
+            "layer",
+            "namespaces"
+          ],
+          "properties": {
+            "job_class": {
+              "enum": [
+                "offline",
+                "seal",
+                "lakehouse_read",
+                "lakehouse_write"
+              ]
+            },
+            "registry_kind": {
+              "enum": [
+                "real",
+                "rehearsal",
+                "test"
+              ]
+            },
+            "run_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "layer": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "namespaces": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           }
         }
       }

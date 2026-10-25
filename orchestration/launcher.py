@@ -60,7 +60,7 @@ from typing import Any, Literal, NamedTuple, NoReturn
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from orchestration import dbt_lineage, ecs_target, lineage_services, network_policy, pipeline_protocol, pipeline_render, pipeline_session
+from orchestration import dbt_lineage, ecs_admission, ecs_target, lineage_services, network_policy, pipeline_protocol, pipeline_render, pipeline_session
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import dbt_package_archive, gold_publish_record, memory_budget, pins, run_lock
 from scripts.lakehouse import provenance as build_provenance
@@ -4799,9 +4799,7 @@ class Launcher:
 
     @staticmethod
     def catalog_epoch_matches(state: Mapping[str, Any], attempt: Mapping[str, Any]) -> bool:
-        epoch = attempt["execution"]["catalog_epoch"]
-        authority = state["launcher"].get("catalog_authority") or {}
-        return epoch is None or authority.get("epoch") == epoch and authority.get("frozen") is False and authority.get("target") == "aws"
+        return ecs_admission.matches(state, attempt)
 
     def dispatch_ecs(self, attempt_id: str, try_id: str) -> None:
         with self.tx() as state:
@@ -6416,6 +6414,10 @@ class Launcher:
         attempt = self.new_attempt(ctx.state, owner, template_name, launch_id, args, attempt_params, request=ctx.key, checkout=str(checkout), seconds=seconds)
         if cloud_managed:
             ecs_target.initialize(attempt, requested_target, time.time(), authority.get("epoch") if job_class.startswith("lakehouse_") else None)
+            try:
+                ecs_admission.bind(ctx.state, attempt, job_class=job_class, registry_kind=self.cfg.registry.kind, run={"id": ident, "mode": run_mode})
+            except ecs_target.PlacementError as error:
+                raise LauncherError(str(error), "refused") from None
         if identity is not None:
             attempt["caller_identity"] = dict(identity)
         capture = params.get("capture_dbt_artifacts", False)

@@ -421,7 +421,21 @@ def authority_and_cap_cases(root: Path, folder: Path) -> dict[str, bool]:
                 attempt = next(iter(state["attempts"].values()))
                 attempt["template"], attempt["params"] = "pipeline_spark", {"layer": "silver", "job": "pins"}
                 attempt["execution"]["catalog_epoch"] = 7
-                state["launcher"]["catalog_authority"] = {"epoch": 7, "target": "aws", "frozen": False}
+                state["launcher"]["catalog_authority"] = {
+                    "version": 1,
+                    "state": "aws_writer",
+                    "epoch": 7,
+                    "phase": "P4",
+                    "production_layers": dict.fromkeys(("bronze", "silver", "gold", "features"), "off"),
+                    "cutover_id": "synthetic_cutover",
+                    "command_id": "synthetic_command",
+                    "reason": "synthetic acceptance",
+                    "time": "2026-10-23T00:00:00+00:00",
+                    "target": "aws",
+                    "frozen": False,
+                }
+                attempt["execution"].pop("admission")
+                launcher.ecs_admission.bind(state, attempt, job_class="lakehouse_read", registry_kind="rehearsal", run={"id": request.run_id, "mode": "real"})
                 server.advance_target(state, attempt, actions)
             with server.tx() as state:
                 attempt = next(iter(state["attempts"].values()))
