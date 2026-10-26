@@ -195,7 +195,7 @@ def approved_requests() -> dict[str, list[Request]]:
     add("ecs", "ListServices", "*", region=None, extra=only_cluster)
     add("ecs", "ListServices", SERVICE, region=None)
     add("ecs", "RegisterTaskDefinition", TASK_DEFINITION, region=None, **tagged)
-    add("ecs", "RunTask", TASK_DEFINITION, region=None, extra={**only_cluster, "ecs:propagate-tags": "TASK_DEFINITION"})
+    add("ecs", "RunTask", TASK_DEFINITION, region=None, extra=only_cluster, **tagged)
     for action in ("StopTask", "DescribeTasks"):
         add("ecs", action, TASK, region=None)
     add("ecs", "ListTasks", "*", region=None, extra=only_cluster)
@@ -400,6 +400,7 @@ CREATES: tuple[tuple[str, str, dict[str, Any]], ...] = (
     ("ecs:CreateCapacityProvider", CAPACITY_PROVIDER, {}),
     ("ecs:CreateService", SERVICE, {"ecs:propagate-tags": "TASK_DEFINITION"}),
     ("ecs:RegisterTaskDefinition", TASK_DEFINITION, {}),
+    ("ecs:RunTask", TASK_DEFINITION, {"ecs:cluster": CLUSTER}),
     ("ec2:CreateVolume", VOLUME, {}),
     ("ec2:AllocateAddress", ADDRESS, {}),
     ("logs:CreateLogGroup", LOG_GROUP, {}),
@@ -422,22 +423,27 @@ def container_instance_cases() -> Iterator[Case]:
 def conflicting_project_tag_cases() -> Iterator[Case]:
     """A task, service or tag request that sets its own Project tag is refused when the value is not the project's."""
     sid = "DenyAnotherProjectTagOnRunTaskServicesAndTags"
-    run = {"ecs:cluster": CLUSTER, "ecs:propagate-tags": "TASK_DEFINITION"}
+    run = {"ecs:cluster": CLUSTER}
     yield Case("ecs:RunTask with the project's own Project tag", request("ecs:RunTask", TASK_DEFINITION, tags=TAG, extra=run, region=None), True)
     yield Case(
         "ecs:RunTask with the project tag and another tag",
         request("ecs:RunTask", TASK_DEFINITION, tags={**TAG, "Environment": E}, extra=run, region=None),
         True,
     )
-    yield Case("ecs:RunTask with another tag only", request("ecs:RunTask", TASK_DEFINITION, tags={"Environment": E}, extra=run, region=None), True)
+    yield Case("ecs:RunTask with another tag only", request("ecs:RunTask", TASK_DEFINITION, tags={"Environment": E}, extra=run, region=None), False)
     for key in ("Project", "project", "PROJECT"):
         yield Case(
             f"ecs:RunTask sets {key} to another project",
             request("ecs:RunTask", TASK_DEFINITION, tags={key: "other_project"}, extra=run, region=None),
             False,
-            sid,
+            "DenyCreatesWithoutProjectTagValue",
         )
-        yield Case(f"ecs:RunTask sets {key} to an empty value", request("ecs:RunTask", TASK_DEFINITION, tags={key: ""}, extra=run, region=None), False, sid)
+        yield Case(
+            f"ecs:RunTask sets {key} to an empty value",
+            request("ecs:RunTask", TASK_DEFINITION, tags={key: ""}, extra=run, region=None),
+            False,
+            "DenyCreatesWithoutProjectTagValue",
+        )
         yield Case(
             f"ecs:TagResource sets {key} to another project while RunTask",
             request("ecs:TagResource", TASK, tags={key: "other_project"}, extra={"ecs:CreateAction": "RunTask"}, region=None),
@@ -587,29 +593,58 @@ def tag_cases() -> Iterator[Case]:
     )
     yield Case("ecs:UpdateService keeps propagation", request("ecs:UpdateService", SERVICE, extra={"ecs:propagate-tags": "SERVICE"}, region=None), True)
     yield Case("ecs:UpdateService leaves propagation as it is", request("ecs:UpdateService", SERVICE, region=None), True)
-    for value in ("NONE", "SERVICE", ""):
+    yield from run_task_cases()
+
+
+def run_task_cases() -> Iterator[Case]:
+    """RunTask must carry an explicit exact Project tag. Its propagation option is not an IAM condition key."""
+    cluster = {"ecs:cluster": CLUSTER}
+    for propagation in (None, "NONE", "TASK_DEFINITION"):
+        options = {} if propagation is None else {"ecs:propagate-tags": propagation}
+        for tags, allowed, label in ((None, False, "without request tags"), (TAG, True, "with explicit Project")):
+            yield Case(
+                f"ecs:RunTask {label}, propagation={propagation!r}",
+                request("ecs:RunTask", TASK_DEFINITION, tags=tags, extra={**cluster, **options}, region=None),
+                allowed,
+            )
+    for resource, context, label in (
+        (TASK_DEFINITION, {}, "without a cluster"),
+        (TASK_DEFINITION, {"ecs:cluster": CLUSTER.replace("cluster_dev", "cluster_prod")}, "in another cluster"),
+        (TASK_DEFINITION.replace(P, "other_project"), cluster, "with another project's task definition"),
+    ):
+        yield Case(f"ecs:RunTask {label}", request("ecs:RunTask", resource, tags=TAG, extra=context, region=None), False)
+    for resource, label in ((SERVICE, "project service"), (SERVICE.replace(P, "other_project"), "another project's service")):
         yield Case(
-            f"ecs:RunTask propagates {value!r}",
-            request("ecs:RunTask", TASK_DEFINITION, extra={"ecs:cluster": CLUSTER, "ecs:propagate-tags": value}, region=None),
-            False,
-            "DenyRunTaskThatDoesNotPropagateTags",
+            f"ecs:UpdateService force deployment on {label}",
+            request("ecs:UpdateService", resource, extra=cluster, region=None),
+            resource == SERVICE,
         )
-    yield Case(
-        "ecs:RunTask omits propagation",
-        request("ecs:RunTask", TASK_DEFINITION, extra={"ecs:cluster": CLUSTER}, region=None),
-        False,
-        "DenyRunTaskThatDoesNotPropagateTags",
+
+
+def request_context_cases() -> Iterator[tuple[str, Request, dict[str, tuple[str, ...]]]]:
+    """AWS request-context projections, with expectations independent of the policy templates."""
+    options = {"ecs:cluster": CLUSTER, "ecs:propagate-tags": "TASK_DEFINITION", "ecs:enable-ecs-managed-tags": "true"}
+    yield (
+        "RunTask propagation does not supply IAM option keys or request tags",
+        request("ecs:RunTask", TASK_DEFINITION, extra=options, region=None),
+        {"ecs:cluster": (CLUSTER,)},
     )
-    yield Case(
-        "ecs:RunTask in another cluster",
-        request(
-            "ecs:RunTask",
-            TASK_DEFINITION,
-            extra={"ecs:cluster": CLUSTER.replace("cluster_dev", "cluster_prod"), "ecs:propagate-tags": "TASK_DEFINITION"},
-            region=None,
-        ),
-        False,
+    yield (
+        "RunTask explicit tags supply the exact tag key and value",
+        request("ecs:RunTask", TASK_DEFINITION, tags=TAG, extra=options, region=None),
+        {"ecs:cluster": (CLUSTER,), "aws:RequestTag/Project": (P,), "aws:TagKeys": ("Project",)},
     )
+    yield (
+        "RunTask option-key filtering is case insensitive",
+        request("ECS:RUNTASK", TASK_DEFINITION, extra={"ECS:PROPAGATE-TAGS": "TASK_DEFINITION"}, region=None),
+        {},
+    )
+    for action in ("ecs:CreateService", "ecs:UpdateService"):
+        yield (
+            f"{action} supports the propagation and managed-tag condition keys",
+            request(action, SERVICE, extra=options, region=None),
+            {"ecs:cluster": (CLUSTER,), "ecs:propagate-tags": ("TASK_DEFINITION",), "ecs:enable-ecs-managed-tags": ("true",)},
+        )
 
 
 def session_cases() -> Iterator[Case]:
@@ -1329,9 +1364,47 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         drop(documents, "ecs", "DenyServicesAndTasksThatDoNotPropagateTags")
         del by_sid(documents, "ecs", "CreateTaggedServicesThatPropagateTags")["Condition"]["StringEquals"]["ecs:propagate-tags"]
 
-    def task_without_propagation(documents: dict[str, dict[str, Any]]) -> None:
-        drop(documents, "ecs", "DenyRunTaskThatDoesNotPropagateTags")
-        del by_sid(documents, "ecs", "RunTasksThatPropagateTags")["Condition"]["StringEquals"]
+    def remove_run_task_from_deny(documents: dict[str, dict[str, Any]], sid: str) -> None:
+        statement = by_sid(documents, "ecs", sid)
+        statement["Action"] = [action for action in as_list(statement["Action"]) if action != "ecs:RunTask"]
+
+    def task_without_project_tag(documents: dict[str, dict[str, Any]]) -> None:
+        for sid in ("DenyCreatesWithoutProjectTagValue", "DenyCreatesWithoutExactProjectKey"):
+            remove_run_task_from_deny(documents, sid)
+        condition = by_sid(documents, "ecs", "RunTaggedProjectTasks")["Condition"]
+        del condition["StringEquals"]
+        del condition["ForAnyValue:StringEquals"]
+
+    def task_without_exact_project_key(documents: dict[str, dict[str, Any]]) -> None:
+        remove_run_task_from_deny(documents, "DenyCreatesWithoutExactProjectKey")
+        del by_sid(documents, "ecs", "RunTaggedProjectTasks")["Condition"]["ForAnyValue:StringEquals"]
+
+    def task_requires_unsupported_propagation_key(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "ecs", "RunTaggedProjectTasks")["Condition"]["StringEquals"]["ecs:propagate-tags"] = "TASK_DEFINITION"
+
+    def task_denies_missing_unsupported_propagation_key(documents: dict[str, dict[str, Any]]) -> None:
+        documents["healthcare_hai_prediction_ecs_policy"]["Statement"].append(
+            {
+                "Sid": "DenyMissingUnsupportedPropagation",
+                "Effect": "Deny",
+                "Action": "ecs:RunTask",
+                "Resource": "*",
+                "Condition": {"StringNotEquals": {"ecs:propagate-tags": "TASK_DEFINITION"}},
+            }
+        )
+
+    def task_in_any_cluster(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "ecs", "RunTaggedProjectTasks")["Condition"]["ArnEquals"]
+
+    def task_from_any_definition(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "ecs", "RunTaggedProjectTasks")["Resource"] = "*"
+
+    def service_recovery_refused(documents: dict[str, dict[str, Any]]) -> None:
+        statement = by_sid(documents, "ecs", "ManageProjectServices")
+        statement["Action"] = [action for action in statement["Action"] if action != "ecs:UpdateService"]
+
+    def service_recovery_in_any_project(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "ecs", "ManageProjectServices")["Resource"] = f"arn:aws:ecs:{R}:{A}:service/*"
 
     def update_turns_propagation_off(documents: dict[str, dict[str, Any]]) -> None:
         drop(documents, "ecs", "DenyUpdatesThatStopTagPropagation")
@@ -1433,11 +1506,14 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def container_instance_in_any_cluster(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "ecs", "DescribeProjectContainerInstances")["Resource"] = f"arn:aws:ecs:{R}:{A}:container-instance/*"
 
-    def another_project_tag_allowed(documents: dict[str, dict[str, Any]]) -> None:
-        drop(documents, "ecs", "DenyAnotherProjectTagOnRunTaskServicesAndTags")
-
     def another_project_tag_on_run_task_only(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "ecs", "DenyAnotherProjectTagOnRunTaskServicesAndTags")["Action"] = ["ecs:CreateService", "ecs:TagResource"]
+        remove_run_task_from_deny(documents, "DenyCreatesWithoutProjectTagValue")
+        del by_sid(documents, "ecs", "RunTaggedProjectTasks")["Condition"]["StringEquals"]
+
+    def another_project_tag_allowed(documents: dict[str, dict[str, Any]]) -> None:
+        another_project_tag_on_run_task_only(documents)
+        drop(documents, "ecs", "DenyAnotherProjectTagOnRunTaskServicesAndTags")
 
     def another_project_tag_on_tagging_only(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "ecs", "DenyAnotherProjectTagOnRunTaskServicesAndTags")["Action"] = ["ecs:RunTask", "ecs:CreateService"]
@@ -1522,7 +1598,20 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "ec2 volume and address creates accept a lowercase project key": ("create ec2:CreateVolume: lowercase key", lowercase_key_volume),
         "log group create without the Project tag": ("create logs:CreateLogGroup: no tags", untagged_create_logs),
         "service created without tag propagation (finding 3)": ("ecs:CreateService propagates 'NONE'", service_without_propagation),
-        "run task without tag propagation (finding 3)": ("ecs:RunTask propagates 'NONE'", task_without_propagation),
+        "run task without an explicit Project tag": ("ecs:RunTask without request tags, propagation='NONE'", task_without_project_tag),
+        "run task accepts a lowercase Project key": ("create ecs:RunTask: lowercase key", task_without_exact_project_key),
+        "run task requires the unsupported propagation condition key": (
+            "ecs:RunTask with explicit Project, propagation='TASK_DEFINITION'",
+            task_requires_unsupported_propagation_key,
+        ),
+        "run task denied because the unsupported propagation condition key is absent": (
+            "ecs:RunTask with explicit Project, propagation='TASK_DEFINITION'",
+            task_denies_missing_unsupported_propagation_key,
+        ),
+        "run task in a different cluster": ("ecs:RunTask in another cluster", task_in_any_cluster),
+        "run task from another project's definition": ("ecs:RunTask with another project's task definition", task_from_any_definition),
+        "forced service recovery loses UpdateService": ("ecs:UpdateService force deployment on project service", service_recovery_refused),
+        "forced service recovery reaches other projects": ("ecs:UpdateService force deployment on another project's service", service_recovery_in_any_project),
         "service update turns propagation off (finding 3)": ("ecs:UpdateService turns propagation off", update_turns_propagation_off),
         "the project user can launch instances (finding 2)": ("forbidden ec2:RunInstances", instance_launch),
         "the project user can update the host group or its template version (finding 4)": ("forbidden autoscaling:UpdateAutoScalingGroup", group_update),

@@ -19,7 +19,7 @@ output "parameter_arns_used" {
 }
 
 output "one_shot_run_task" {
-  description = "The arguments of the manual `aws ecs run-task` call for each one-shot task. Both tag arguments are required: without them the task starts without the Project tag."
+  description = "Arguments for each manual aws ecs run-task call. IAM requires the explicit Project request tag. Propagation also copies the task definition tags."
   value = {
     for key, definition in aws_ecs_task_definition.one_shot : key => {
       cluster                 = var.cluster_name
@@ -27,6 +27,7 @@ output "one_shot_run_task" {
       capacity_provider       = var.ec2_capacity_provider_name
       propagate_tags          = local.task_tag_source
       enable_ecs_managed_tags = true
+      tags                    = { Project = var.project_tag }
     }
   }
 }
