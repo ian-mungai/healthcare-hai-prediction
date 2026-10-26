@@ -7,6 +7,7 @@ Run from the repository root:
     .venv/bin/python -m scripts.lakehouse.catalog job smoke
     .venv/bin/python -m scripts.lakehouse.catalog job bronze_e2e
     .venv/bin/python -m scripts.lakehouse.catalog job bronze -- --group hai
+    .venv/bin/python -m scripts.lakehouse.catalog job bronze -- --bootstrap-all --diagnose
     .venv/bin/python -m scripts.lakehouse.catalog job pins -- pin --run <run_id>
     .venv/bin/python -m scripts.lakehouse.catalog down
     .venv/bin/python -m scripts.lakehouse.catalog release   # after a heavy run: stop, restart Docker Desktop
@@ -245,9 +246,12 @@ def job(name: str, job_args: list[str]) -> None:
     if name not in JOBS:
         raise CatalogError(f"unknown job {name!r}; choose one of {', '.join(sorted(JOBS))}")
     template = JOBS[name]
-    if template != "spark_e2e":
+    diagnostic = name == "bronze" and "--diagnose" in job_args
+    if template != "spark_e2e" and not diagnostic:
         up()
     link = client()
+    if diagnostic and (link.call("status", {"what": "catalog"}) or {}).get("phase") != "up":
+        raise CatalogError("bootstrap diagnostics require an already running catalog; no setup was performed")
     kind = link.config.registry.kind
     try:
         plan = link.call("plan")
@@ -292,7 +296,7 @@ def run_job(link: launcher.LauncherClient, kind: str, name: str, template: str, 
     )
     principal = link.principal_run(run_id)
     try:
-        return link.run_attempt(principal, template, launch, job_args, {"job": name})
+        return link.run_attempt(principal, template, launch, job_args, {"job": name}, seconds=1200 if name == "bronze" and "--diagnose" in job_args else None)
     finally:
         record = link.config.runs_root / run_id / "job_record.json"
         record.parent.mkdir(parents=True, exist_ok=True)
