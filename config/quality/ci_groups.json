@@ -28,6 +28,7 @@
       "^dbt/macros/gold_(facts|identity)\\.sql$", "^dbt/macros/features/",
       "^dbt/models/gold/dimensions/dim_(release|source)\\.sql$",
       "^dbt/models/silver/staging/stg_bronze__",
+      "^dbt/models/silver/staging/_bronze__sources\\.yml$",
       "^dbt/models/silver/intermediate/int_silver_build_marker\\.sql$",
       "^data_contracts/great_expectations/"
     ]

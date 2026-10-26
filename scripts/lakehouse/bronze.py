@@ -1082,7 +1082,10 @@ def main() -> int:
     # Moving to one copy per file: tables whose kept copy is already loaded only need their copies listed and the other
     # copies pruned; verification still compares every table with its inputs, so a missing copy fails the run [211].
     parser.add_argument("--copies-only", action="store_true", help="list copies, prune and verify without loading objects")
+    parser.add_argument("--diagnose", action="store_true", help="report bootstrap metadata conflicts without writing to the catalog or S3")
     args = parser.parse_args()
+    if args.diagnose and (not args.bootstrap_all or args.copies_only):
+        parser.error("--diagnose requires --bootstrap-all and excludes --copies-only")
     config = load_table_map()
     if args.drop_removed:
         return drop_removed_job(config)
@@ -1111,6 +1114,15 @@ def main() -> int:
         canonical_observations = {(row["table_name"], row["sha256"]): row["observation_id"] for row in previous if row["kind"] == "object"}
         published_observations = {row["observation_id"] for row in previous if row["kind"] == "observation"}
         inputs, unselected = discover(storage, bucket, config, names, load_retired(), canonical_keys, canonical_observations, published_observations)
+        if args.diagnose:
+            diagnostic = bronze_metadata.diagnose(names, inputs, unselected, previous, [table["table"] for table in config["tables"]])
+            path = REPORT_ROOT / "diagnostic.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(diagnostic, indent=2, sort_keys=True) + "\n")
+            sys.stdout.write(
+                json.dumps({"report": str(path), "passed": diagnostic["passed"], "failing_checksum_count": diagnostic["failing_checksum_count"]}) + "\n"
+            )
+            return 0 if diagnostic["passed"] else 1
         metadata = bronze_metadata.build(names, inputs, unselected, previous, [table["table"] for table in config["tables"]])
         bronze_metadata.validate_successor(previous, metadata)
         summary = {} if args.copies_only or args.bootstrap_all else load_objects(spark, inputs, storage, config["namespace"])

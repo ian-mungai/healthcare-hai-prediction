@@ -1,0 +1,1843 @@
+{
+  "schema_version": 1,
+  "groups": [
+    {
+      "sha256": "04dd0390d8af7a57f0814fa3be800992ba3335643a8bbf50bb32d9a9769aa136",
+      "owner_table": "cms_cc_asc_state",
+      "canonical_observation_id": "50b05d1c23060ad5057df99ac58c2abae414482c34043bd0c11896c8bf3b21c2",
+      "observations": [
+        {
+          "table_name": "cms_cc_asc_state",
+          "observation_id": "50b05d1c23060ad5057df99ac58c2abae414482c34043bd0c11896c8bf3b21c2",
+          "logical_id": "cb651ac7882844a97d03ced56651f759",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_asc_state/release_date=2020-05-01/04dd0390d8af7a57f0814fa3be800992ba3335643a8bbf50bb32d9a9769aa136/ASC_State.csv",
+          "s3_version_id": "K25Uy6EEBuxJ_E._60k1cS4bBWc1E5_N",
+          "byte_count": 5690,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/688d6daedbc90059bf12dec0e383f2b50e4ca577d28cebea15bc437b1b7a5c05/manifest.json",
+          "manifest_version_id": "dCnIEuankVdPeqYstaVxR19DtK8pj8ou"
+        },
+        {
+          "table_name": "cms_cc_asc_state",
+          "observation_id": "562f3319d0772dd167ab2d052007b44b7730da66c9698d52c79d588998588ed9",
+          "logical_id": "f32152ec1df87cebdb8e3982020995f4",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_asc_state/release_date=2020-01-04/04dd0390d8af7a57f0814fa3be800992ba3335643a8bbf50bb32d9a9769aa136/ASC_State.csv",
+          "s3_version_id": "fDQYrMJotipFB5dfYBaK4ag1wxathJRo",
+          "byte_count": 5690,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/d5ec67ca5adb6518c7482c7fbe4fe10792185f21b08f7e6bd72130c5ead09e5a/manifest.json",
+          "manifest_version_id": "9lzt6_9UCUtSX6ShEvaweFLuMQXIa8cT"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_axe7_s95e",
+          "observation_id": "7349f61463fd15976749255fed0d09429ae03d95c8263529e917d1f7afb0200f",
+          "logical_id": "e87bf158bf8f1321871c75898eaf74c6",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_axe7_s95e/release_date=2020-07-04/04dd0390d8af7a57f0814fa3be800992ba3335643a8bbf50bb32d9a9769aa136/pdc_s3_hos_data_axe7_s95e.csv",
+          "s3_version_id": "xE31K_AGmCfD8mNPlESyatLxbb5cFMjM",
+          "byte_count": 5690,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/3a0c98276607215911439c93acea13456f6845efa3e0e5f93f7fa0b9844cac8c/manifest.json",
+          "manifest_version_id": "Yt3hdGS7z7vQaWg_zEUF1xgP0GZdRV7M"
+        }
+      ]
+    },
+    {
+      "sha256": "0984d203014192576b2380acd81b990cc7d2c47e06b005fccbe69dd20066c842",
+      "owner_table": "cms_cc_medicare_hospital_spending_per_patient_national",
+      "canonical_observation_id": "a1ffe5f28ab1aef45978cf68d52e77920ac02a425b6f57721b7fedae438c8632",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_3n5g_6b7f",
+          "observation_id": "7554612d48dca2b587f6715bb8a70d66bbb7056fcbb88ed7a99b2e96bd944282",
+          "logical_id": "5798c0ecf7f13934c7ae8cb3a650c767",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_3n5g_6b7f/release_date=2020-07-04/0984d203014192576b2380acd81b990cc7d2c47e06b005fccbe69dd20066c842/pdc_s3_hos_data_3n5g_6b7f.csv",
+          "s3_version_id": "mdbKp6Hg9oR185Pnql7Cv8lGstFZgMa.",
+          "byte_count": 252,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/d515122d58ef0a5ece362967f3837d14ad9bd049e9c9c51e732064ebb523dae1/manifest.json",
+          "manifest_version_id": "fEPHyYd85W_JNY0giBjC0qUavUf.H23p"
+        },
+        {
+          "table_name": "cms_cc_medicare_hospital_spending_per_patient_national",
+          "observation_id": "a1ffe5f28ab1aef45978cf68d52e77920ac02a425b6f57721b7fedae438c8632",
+          "logical_id": "22a8bec55b968c06e332209d640950ad",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_3n5g_6b7f/release_date=2020-10-16/0984d203014192576b2380acd81b990cc7d2c47e06b005fccbe69dd20066c842/3n5g-6b7f.csv",
+          "s3_version_id": "1OzWezmEffi9LIbfRZ4A17bNNmGNRBF3",
+          "byte_count": 252,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/b592d5f6bd31db7eda381586bad4661d04c7f69870c02a617d769a0de2c072cd/manifest.json",
+          "manifest_version_id": "_fkaK2Xhry2_bx83FnRwNsZNV_OBiG9Q"
+        },
+        {
+          "table_name": "cms_cc_medicare_hospital_spending_per_patient_national",
+          "observation_id": "bf868ec0e8a324ec15c46e3696b20113ddd89fe7c772e657c054f35011b045ec",
+          "logical_id": "c199312fc95239772295c8ddf84f5dca",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_medicare_hospital_spending_per_patient_national/release_date=2020-05-01/0984d203014192576b2380acd81b990cc7d2c47e06b005fccbe69dd20066c842/Medicare_Hospital_Spending_Per_Patient_-_National.csv",
+          "s3_version_id": "8dz2w0.DAVTTvnpka5hpv0lo6.dzxu93",
+          "byte_count": 252,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/b22cc11788abd88168a10b8a9bde1ddb5fea5eda00db45127af428e8e075f084/manifest.json",
+          "manifest_version_id": "6uP9DXc8UWW9wIfunZoqvVOQeu3CyInU"
+        },
+        {
+          "table_name": "cms_cc_medicare_hospital_spending_per_patient_national",
+          "observation_id": "dba286cb9c9d1594f98bd04bd3102c5354ffa3b3d347469e7bf311ad3467e3af",
+          "logical_id": "f04dc877d5ca616af79090b06df0fc2f",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_medicare_hospital_spending_per_patient_national/release_date=2020-01-04/0984d203014192576b2380acd81b990cc7d2c47e06b005fccbe69dd20066c842/Medicare_Hospital_Spending_Per_Patient_-_National.csv",
+          "s3_version_id": "h7GwRCrZUzka9CnqiDRAXpXk4mNBMkrf",
+          "byte_count": 252,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/5d5b21c67d7356eac163426fb009870f94125c589bfeabbd8b827fe34db1298e/manifest.json",
+          "manifest_version_id": "AgFI9_PpHPpK9upMSgQ8EcwFRLwMTGDy"
+        }
+      ]
+    },
+    {
+      "sha256": "0a06ba838b5683edc9af46d347cd01df0f0944252892da38098a8bc2408b7f0c",
+      "owner_table": "cms_cc_hvbp_efficiency_and_cost_reduction",
+      "canonical_observation_id": "b6147da9d4d394a37e8e9930e46587f48a41f2acb2c9a96df8f74cd8ccea4fc1",
+      "observations": [
+        {
+          "table_name": "cms_cc_hvbp_efficiency",
+          "observation_id": "2fa496d7ea0000e67e4685b9d6293379d111035cfd37ae49fa0456001cd20613",
+          "logical_id": "190ae16527309ffa60a83e80f85d7233",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hvbp_efficiency_12_09_2019/release_date=2020-05-01/0a06ba838b5683edc9af46d347cd01df0f0944252892da38098a8bc2408b7f0c/hvbp_efficiency_12_09_2019.csv",
+          "s3_version_id": "6zb6Ynppk.pKbIGuPEUJDTDFG1v4Tvle",
+          "byte_count": 426536,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/94c4968b8ee50568c2512887a83e2289659e5949b4b1e7fa9343ca51715f858b/manifest.json",
+          "manifest_version_id": "zljW6YfSF5HY2ajjZp4NQMUK_SXIdpBx"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_su9h_3pvj",
+          "observation_id": "9091f7eca684d6d54a4c80349ec7edc66c7c4e08027fc109df19c143c5397f1b",
+          "logical_id": "0c8265ce6549aeb4ad70b00821dc41ff",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_su9h_3pvj/release_date=2020-07-04/0a06ba838b5683edc9af46d347cd01df0f0944252892da38098a8bc2408b7f0c/pdc_s3_hos_data_su9h_3pvj.csv",
+          "s3_version_id": "xQy18omWV08GSEfkCLiUf3_oWPwJi7oG",
+          "byte_count": 426536,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/a27d232c9ad4c576df0e433973fbc235c19bdbea274713dcc67a57a941b5051c/manifest.json",
+          "manifest_version_id": "E3fTAKTea9t1MJ2XFGtVSv.VHtB0OW1_"
+        },
+        {
+          "table_name": "cms_cc_hvbp_efficiency_and_cost_reduction",
+          "observation_id": "b6147da9d4d394a37e8e9930e46587f48a41f2acb2c9a96df8f74cd8ccea4fc1",
+          "logical_id": "c1d00d679b3f5dd980a1ca917327bee5",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_su9h_3pvj/release_date=2020-10-16/0a06ba838b5683edc9af46d347cd01df0f0944252892da38098a8bc2408b7f0c/su9h-3pvj.csv",
+          "s3_version_id": "DQB9Bz7erPapTAWdjoffkShifMptsCXX",
+          "byte_count": 426536,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/4653d09b85797d48181e8cb468baebf5c60d62d33585ac4e6239ecb60351a40d/manifest.json",
+          "manifest_version_id": "N2wRnqzqFzwn0KQETGjKjcSY66WU9_wM"
+        },
+        {
+          "table_name": "cms_cc_hvbp_efficiency",
+          "observation_id": "f9e68db2c5da8b8e816955ad6c23795fd3005db1c9925c249debd85d4d006996",
+          "logical_id": "955ecd501409577f2076166a32b3e5e7",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hvbp_efficiency_12_09_2019/release_date=2020-01-04/0a06ba838b5683edc9af46d347cd01df0f0944252892da38098a8bc2408b7f0c/hvbp_efficiency_12_09_2019.csv",
+          "s3_version_id": "dXvwdkCobbUr.iVxQP1n8ixtMJe4ibPL",
+          "byte_count": 426536,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/17b6952ec6e0f3623ea9eb7f726f2b72be2bc02e0e5fe6acdfe07b991f0371f5/manifest.json",
+          "manifest_version_id": "_8eqc9V0.Zr_RCcsl5Rj_zeXu60arz7J"
+        }
+      ]
+    },
+    {
+      "sha256": "0c0e4674b53489fd439da66084e76dfce41df1c9fc32dd36dc9383c153cdf65d",
+      "owner_table": "cms_cc_va_ipf",
+      "canonical_observation_id": "b3d6ddecb7199900f802a4e15fa81179d0c5504f8338bb5630af68e11e1f659d",
+      "observations": [
+        {
+          "table_name": "cms_cc_va_ipf",
+          "observation_id": "32d3d8549f7e917ec56cdd301755b9502cbbe5e1e884e9076b7d65af0dce684d",
+          "logical_id": "ac7a53e6d54b655d12bb688d4c9e06e5",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_va_ipf/release_date=2020-01-04/0c0e4674b53489fd439da66084e76dfce41df1c9fc32dd36dc9383c153cdf65d/VA_IPF.csv",
+          "s3_version_id": "0xoByN418iD_mocqquGzxYS96.Rr1puI",
+          "byte_count": 199255,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/8c46947eaa1d8fe3a77927de79bb99cfb2d60f1d162b38ef4b1de36dad85b000/manifest.json",
+          "manifest_version_id": "6q9.aDx0Qe2UORmFs.Cgc_O0LvoJGPD8"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_6qxe_iqz8",
+          "observation_id": "8ad42f55664b7349043fde78f0edd1e19bd269bf4cb478b1464033933eb3adc7",
+          "logical_id": "145df74cd67146908bcce05164583371",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_6qxe_iqz8/release_date=2020-07-04/0c0e4674b53489fd439da66084e76dfce41df1c9fc32dd36dc9383c153cdf65d/pdc_s3_hos_data_6qxe_iqz8.csv",
+          "s3_version_id": "v4k57YqeIlsFLV2PWePi.yX_YOKHOavd",
+          "byte_count": 199255,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/3d62a167c4fa9026e9fe1aabc6b61be4f7f3b2b45cfc654505efe474425d374f/manifest.json",
+          "manifest_version_id": "w7yW2EelJL4w642.zfC1yOeIDlgwe7rl"
+        },
+        {
+          "table_name": "cms_cc_va_ipf",
+          "observation_id": "b3d6ddecb7199900f802a4e15fa81179d0c5504f8338bb5630af68e11e1f659d",
+          "logical_id": "a660a624d30298ad352c920d50064f00",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_va_ipf/release_date=2020-05-01/0c0e4674b53489fd439da66084e76dfce41df1c9fc32dd36dc9383c153cdf65d/VA_IPF.csv",
+          "s3_version_id": "nF1l2nH1hUTSd6f0OGZ7kUlm_N_ESVdM",
+          "byte_count": 199255,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/c76109f5dc5480f66bbb20bb752b2a3bb676bdaf93d10751fc8851b36697225b/manifest.json",
+          "manifest_version_id": "WdscAVcIJLmlLFH9NACrK2XVL45DyQV3"
+        }
+      ]
+    },
+    {
+      "sha256": "135a77a1d36fb4588a227d72e1a88bf99b04ad36b7a95c74b60ea1fd30104215",
+      "owner_table": "cms_cc_distribution_of_net_change_in_base_op_drg_payment_amt",
+      "canonical_observation_id": "daecda81d1ca32961c957dd3744cd56292ce8fb99b81f8c75ffe670c372f3d9c",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_xrgf_x36b",
+          "observation_id": "0470ba6d1050265e4aa605f344ffd02b457a9be7a2a5cf6858844b3392811a47",
+          "logical_id": "9991c0a095741f0b00e82de5d838bdab",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_xrgf_x36b/release_date=2020-07-04/135a77a1d36fb4588a227d72e1a88bf99b04ad36b7a95c74b60ea1fd30104215/pdc_s3_hos_data_xrgf_x36b.csv",
+          "s3_version_id": "itY5ETqjOVwG0XCfo38yob46WcIlobWv",
+          "byte_count": 294,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/b6effee7ef913dba2d0cdb463fb2bb78c9f3d65aab12bc5fcd8bc95c63265c04/manifest.json",
+          "manifest_version_id": "of8x7vr2MJfcMANTrSyJzBib.ksju68T"
+        },
+        {
+          "table_name": "cms_cc_distribution_of_net_change_in_base_op_drg_payment_amt",
+          "observation_id": "157c790b9caf9b44606ed159d57073038362b37902dc00abd56746cd76098002",
+          "logical_id": "eb1a9671e9abcd40b801aae60e39c56a",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_xrgf_x36b/release_date=2020-10-16/135a77a1d36fb4588a227d72e1a88bf99b04ad36b7a95c74b60ea1fd30104215/xrgf-x36b.csv",
+          "s3_version_id": "PzhQXWJZ7KKSP8CpclZ3Q5U2YEiPMkCD",
+          "byte_count": 294,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/72bdf78ed98fbf5a2fd667ff522f782e0b76679614a51b772b435387687132ad/manifest.json",
+          "manifest_version_id": "NxCJZOFRRZLn4Ms2Xk8ldbj9e1aFnPqM"
+        },
+        {
+          "table_name": "cms_cc_distribution_of_net_change_in_base_op_drg_payment_amt",
+          "observation_id": "c3616bcbe77c45e0c8abd25efb89fce70b4229766a8819ca6d65ddae8d9c3943",
+          "logical_id": "b9cf1083649194d44380c2db53882064",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_fy2018_distribution_of_net_change_in_base_op_drg_payment_amt_2019_11_22/release_date=2020-05-01/135a77a1d36fb4588a227d72e1a88bf99b04ad36b7a95c74b60ea1fd30104215/FY2018_Distribution_of_Net_Change_in_Base_Op_DRG_Payment_Amt_2019-11-22.csv",
+          "s3_version_id": "imG3xz5N5NxQwImEBbIxBWcRBhFUc6Zi",
+          "byte_count": 294,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/42a1d2cc70036c258e820226974c6ecf86cc71f5b6981097761bac1bf1093bf1/manifest.json",
+          "manifest_version_id": "ANKQdIJpzbJyuImxJ4d4J2Es8IcpT82B"
+        },
+        {
+          "table_name": "cms_cc_distribution_of_net_change_in_base_op_drg_payment_amt",
+          "observation_id": "daecda81d1ca32961c957dd3744cd56292ce8fb99b81f8c75ffe670c372f3d9c",
+          "logical_id": "18ee3a4a6c430e48fe71253bc5c252a9",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_fy2018_distribution_of_net_change_in_base_op_drg_payment_amt_2019_11_22/release_date=2020-01-04/135a77a1d36fb4588a227d72e1a88bf99b04ad36b7a95c74b60ea1fd30104215/FY2018_Distribution_of_Net_Change_in_Base_Op_DRG_Payment_Amt_2019-11-22.csv",
+          "s3_version_id": "jkttYlnq_2N2kqKIOkXT8EyvT5Pk_bfi",
+          "byte_count": 294,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/6f806e0d2c962837c3faac72b0cc65f6e455039e40642add4b89075fd148938c/manifest.json",
+          "manifest_version_id": "r3Lyn436vDOypBcRyoqOWzXJvqFa0_2D"
+        }
+      ]
+    },
+    {
+      "sha256": "18da3120e803a8737efbcf814dab96141dba386b270f138f4c0cae712fa7cdde",
+      "owner_table": "cms_cc_medicare_hospital_spending_by_claim",
+      "canonical_observation_id": "ed9df5745b6b0b716ffd2024a8ec4123e45731edfa52386857981adfdee8fb4f",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_nrth_mfg3",
+          "observation_id": "4c5629d682f2224975de58f1da8970446e682c5234184b6a4508ab54143833b4",
+          "logical_id": "ae84751c1f4e88182df45656c3bf8257",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_nrth_mfg3/release_date=2020-07-04/18da3120e803a8737efbcf814dab96141dba386b270f138f4c0cae712fa7cdde/pdc_s3_hos_data_nrth_mfg3.csv",
+          "s3_version_id": "ZJsH_I4_bSqfElDe6skr4YMooox_PCrn",
+          "byte_count": 10336638,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/970340703c6395a93bcc741c25f8a56a2197604e8c29912e38211ded9a103dd6/manifest.json",
+          "manifest_version_id": "a2uG159gQHxfeNNuMpdn0_Be.5724dZD"
+        },
+        {
+          "table_name": "cms_cc_medicare_hospital_spending_by_claim",
+          "observation_id": "73622da57162572d9ac445fb2de2ba0e67dd0c471fc01a693c8a09194526c77f",
+          "logical_id": "86fbbfc585f3373202ea936e1df76537",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_medicare_hospital_spending_by_claim/release_date=2020-05-01/18da3120e803a8737efbcf814dab96141dba386b270f138f4c0cae712fa7cdde/Medicare_Hospital_Spending_by_Claim.csv",
+          "s3_version_id": "NgAPyYTYCBt0nlxhrZ.u0X62IH69PBT5",
+          "byte_count": 10336638,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/af842e43a493605c1052dbf5a4eebe4beec1c1c57ba17a8cabdada12dcb2094b/manifest.json",
+          "manifest_version_id": "3qCwLDe21DaRz5SenG6RWtIQ87EIJRc5"
+        },
+        {
+          "table_name": "cms_cc_medicare_hospital_spending_by_claim",
+          "observation_id": "ed9df5745b6b0b716ffd2024a8ec4123e45731edfa52386857981adfdee8fb4f",
+          "logical_id": "78a9836139284ea260889639b1fb5fba",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_nrth_mfg3/release_date=2020-10-16/18da3120e803a8737efbcf814dab96141dba386b270f138f4c0cae712fa7cdde/nrth-mfg3.csv",
+          "s3_version_id": "kfHGgHBWzHCiR4jILgivFlWyXZcHBUzQ",
+          "byte_count": 10336638,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/97951fc7ed7ce26ac49958446684f16d6a49ff179b1bd27ddec6b1e69517840f/manifest.json",
+          "manifest_version_id": "T7cGqd88EqsaO38MJvy.UjhcWWwYdpY9"
+        },
+        {
+          "table_name": "cms_cc_medicare_hospital_spending_by_claim",
+          "observation_id": "f8238ca872f1501e5924891ed22f09caf460e3043b66aa2e32abf035c4e6a281",
+          "logical_id": "a395e81ac81fc7102d0cd8efca4d0bca",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_medicare_hospital_spending_by_claim/release_date=2020-01-04/18da3120e803a8737efbcf814dab96141dba386b270f138f4c0cae712fa7cdde/Medicare_Hospital_Spending_by_Claim.csv",
+          "s3_version_id": "8ZubcJMPTNWWz9QGGFTxuae6Ti1K6h12",
+          "byte_count": 10336638,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/25718dcd21f68bdeccaabd0dbfef121e66ffbd134820732db69973784e9bba2f/manifest.json",
+          "manifest_version_id": "PK36dTyN5cfUqK_M60KK7OOWArkNhwbW"
+        }
+      ]
+    },
+    {
+      "sha256": "1a07b7cdb8c0133ed1da52915f8fd47c25fe9741673919c5ffe77151d8db0d5d",
+      "owner_table": "cms_cc_hvbp_person_and_community_engagement",
+      "canonical_observation_id": "a20da6eb7056b688b551f591fec3b60c233e455d7f611e778012ea53866cf5e5",
+      "observations": [
+        {
+          "table_name": "cms_cc_hvbp_hcahps",
+          "observation_id": "1cf4b30e195a9e432c80bde575f866e74a5c3f11facc66ad8f630addb498129c",
+          "logical_id": "aa48c6a0c18af5b461360818befaf373",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hvbp_hcahps_12_09_2019/release_date=2020-01-04/1a07b7cdb8c0133ed1da52915f8fd47c25fe9741673919c5ffe77151d8db0d5d/hvbp_hcahps_12_09_2019.csv",
+          "s3_version_id": "RzWgNUZO8gl0uvj2e8mxFKd3XyCLl0BJ",
+          "byte_count": 1674816,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/0da35b8ec60e90a3d3ac5e5dc684dbf0fa4b7f76567f041a554eb77daffb9ad9/manifest.json",
+          "manifest_version_id": ".5b43WbDrOlKyq4T_YOZEyLiDxeaToxF"
+        },
+        {
+          "table_name": "cms_cc_hvbp_hcahps",
+          "observation_id": "6ce0c16498b5c30ffc83e637f5b3aa5e5ba4c5ef2ae8811f88e7fddcce03f6fd",
+          "logical_id": "9772cf55f9a0ca50a119e78fe18faebb",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hvbp_hcahps_12_09_2019/release_date=2020-05-01/1a07b7cdb8c0133ed1da52915f8fd47c25fe9741673919c5ffe77151d8db0d5d/hvbp_hcahps_12_09_2019.csv",
+          "s3_version_id": "3CykQz1NbyWfdKefBLsTvVbFZDd30cfp",
+          "byte_count": 1674816,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/93535c40b97662c7ca9c96d00a3886295b50c11314484d1eabf3e074138de0a6/manifest.json",
+          "manifest_version_id": "b1EpVW5l47vb0TIeQx4NZA_Z8Akarmu6"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_avtz_f2ge",
+          "observation_id": "9e5d124e8f9872e6a7727797474f300b2fac5b09328424e2c82f87eeb860db2a",
+          "logical_id": "91f3447158736bb6913ac9aff0ca840d",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_avtz_f2ge/release_date=2020-07-04/1a07b7cdb8c0133ed1da52915f8fd47c25fe9741673919c5ffe77151d8db0d5d/pdc_s3_hos_data_avtz_f2ge.csv",
+          "s3_version_id": "VtgUnZFdyd8GMwzVGM43eMADzqGkzv40",
+          "byte_count": 1674816,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/02d4954eea01fe3b77d3362c6dd3fa3997b1091e6c0dcfeae1bfaf6f30e148d2/manifest.json",
+          "manifest_version_id": "xDdWf4.uXomuoyGxhB1tSzKKQCXTVBiS"
+        },
+        {
+          "table_name": "cms_cc_hvbp_person_and_community_engagement",
+          "observation_id": "a20da6eb7056b688b551f591fec3b60c233e455d7f611e778012ea53866cf5e5",
+          "logical_id": "1164d304567df9a4266c6059fec6df04",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_avtz_f2ge/release_date=2020-10-16/1a07b7cdb8c0133ed1da52915f8fd47c25fe9741673919c5ffe77151d8db0d5d/avtz-f2ge.csv",
+          "s3_version_id": "gTiGheGsWqstTmmI8boZAqDwtdn4.6Dn",
+          "byte_count": 1674816,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/e07d9ea8a608bd5d67efed3fb2f5c79e9da52954a09aeceed7b8061cc9fdaa1b/manifest.json",
+          "manifest_version_id": "Ba4wD0VOpUnhgK7eyJG8pn_NFhoUjkr0"
+        }
+      ]
+    },
+    {
+      "sha256": "1d6207ef552bb3fbaceb4bb14a691f8d782393d6d4102dae0d91dc402f51bf53",
+      "owner_table": "cms_cc_veterans_health_administration_provider_level_data",
+      "canonical_observation_id": "54fe16ae8c2ab1c7b7511c575054443400a4f2c64e883a27f0878daf5def0ff7",
+      "observations": [
+        {
+          "table_name": "cms_cc_veterans_health_administration_provider_level_data",
+          "observation_id": "54fe16ae8c2ab1c7b7511c575054443400a4f2c64e883a27f0878daf5def0ff7",
+          "logical_id": "4264ac4adacff47309b6067993e63097",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_veterans_health_administration_provider_level_data/release_date=2020-05-01/1d6207ef552bb3fbaceb4bb14a691f8d782393d6d4102dae0d91dc402f51bf53/Veterans_Health_Administration_Provider_Level_Data.csv",
+          "s3_version_id": "UAmsX0PTNcZrDiJebRVqQTerfW7SjcFb",
+          "byte_count": 26970,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/36e11ac07d73a4f62ff2bb436f22c070ad7d3a21997f2c181438a6061487789a/manifest.json",
+          "manifest_version_id": "5_XLbwII1hMZbMdq4K9ZU1Zx_0UiPSr0"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_uyx4_5s7f",
+          "observation_id": "63daf6a7809fa8ae0c7b68753a7ff4b52779eedd8739aa4cbcd62f6386d9e90c",
+          "logical_id": "6b449b3f7d858cc8ac452e7c4b8287d2",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_uyx4_5s7f/release_date=2020-07-04/1d6207ef552bb3fbaceb4bb14a691f8d782393d6d4102dae0d91dc402f51bf53/pdc_s3_hos_data_uyx4_5s7f.csv",
+          "s3_version_id": "SKQvKcTTbW5xdeQhWxaGH2RBBFNF_Ggm",
+          "byte_count": 26970,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/5b8378a54d4f405a3bd6eabc6bd8e4ce31fcb7168717c3466400728314740784/manifest.json",
+          "manifest_version_id": "Llj3wvVfX0S7h_ZlvEnQhdB.vMFkcwnA"
+        }
+      ]
+    },
+    {
+      "sha256": "308907754bb128c048005dc70bb3eaa82233e193049b8cab6f604006568ff590",
+      "owner_table": "cms_cc_hospital_quarterly_mspb_6_decimals",
+      "canonical_observation_id": "ae76964e6eb13f27a3448d8eaa79b51a9ec05d1b970d032a6698bd1cb1fb2362",
+      "observations": [
+        {
+          "table_name": "cms_cc_hospital_quarterly_mspb_6_decimals",
+          "observation_id": "1b2516f6687f74e16676bdba4bed72bc550be3d5a78356849d5f4c5baf29d7e4",
+          "logical_id": "b2bfa147fb63e66965e013f4adf5dcb1",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hospital_quarterly_mspb_6_decimals/release_date=2020-01-04/308907754bb128c048005dc70bb3eaa82233e193049b8cab6f604006568ff590/HOSPITAL_QUARTERLY_MSPB_6_DECIMALS.csv",
+          "s3_version_id": "ZTbfnhMfLXb4Y__IgHssAIGl6NOTruS5",
+          "byte_count": 147552,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/aec0ecc56496a10ff877dccdfe6e90dbaa576281e632fc236339f75f2e29c875/manifest.json",
+          "manifest_version_id": "TV1v5b4esQEz6hG6TJigIjMQZ.OPfEhM"
+        },
+        {
+          "table_name": "cms_cc_hospital_quarterly_mspb_6_decimals",
+          "observation_id": "49c64a8cb3cb76e6246c4d9d6251241efff6bf6d14c38acad7c9ea9d2c6e0af2",
+          "logical_id": "6d0ac7c3d6469639e0457808fc63619e",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hospital_quarterly_mspb_6_decimals/release_date=2020-05-01/308907754bb128c048005dc70bb3eaa82233e193049b8cab6f604006568ff590/HOSPITAL_QUARTERLY_MSPB_6_DECIMALS.csv",
+          "s3_version_id": "fnKfZd7LgdeZA_IlVzcsgVBnIK0j.J0z",
+          "byte_count": 147552,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/236cdffc5846e72d9138f1400bb34a7b1ddf6487a068a5451b9c2d1f1384673b/manifest.json",
+          "manifest_version_id": "FDFYjGn3nmRUtJjsP2.FRNEgX2W4A1m6"
+        },
+        {
+          "table_name": "cms_cc_hospital_quarterly_mspb_6_decimals",
+          "observation_id": "ae76964e6eb13f27a3448d8eaa79b51a9ec05d1b970d032a6698bd1cb1fb2362",
+          "logical_id": "55783666d46fcaa4c20407ca8ad25a17",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_5hk7_b79m/release_date=2020-10-16/308907754bb128c048005dc70bb3eaa82233e193049b8cab6f604006568ff590/5hk7-b79m.csv",
+          "s3_version_id": "npFPPj3O5RvOoRg2w3z3Nce1eMdVsMRv",
+          "byte_count": 147552,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/41cf3104981f48fb9f1795450e0aa9744abb73c99ea5ac356eb249435fc8fc47/manifest.json",
+          "manifest_version_id": "AgpI_wBCgLtfEvjWoonetr8Ga5Cplcb1"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_5hk7_b79m",
+          "observation_id": "f0429fffd124e68952faffc8b9209354009f49b184d369f0931f7febf758919d",
+          "logical_id": "6e3203497f96ddb9d3f491d3db2aa28e",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_5hk7_b79m/release_date=2020-07-04/308907754bb128c048005dc70bb3eaa82233e193049b8cab6f604006568ff590/pdc_s3_hos_data_5hk7_b79m.csv",
+          "s3_version_id": "jEnHB5.aBCIEcBwwivDbgWS.pBWR9T4a",
+          "byte_count": 147552,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/362993be2da0039571a82a09ad6d32adcc2d984cf69fdcca5d528c74f6e62b47/manifest.json",
+          "manifest_version_id": "SG1DQTohTNOVT491z_PlOM9GQjZ4tfRc"
+        }
+      ]
+    },
+    {
+      "sha256": "33d2967857613d7c77cd9fbe8bd77342c5d4cb9d4ed8793413ae02a2de1d09a6",
+      "owner_table": "cms_cc_medicare_hospital_spending_per_patient_state",
+      "canonical_observation_id": "823147ddf6cc1c4ed09a429b8746099b4b3af10a2cbcec75b91ea17045532122",
+      "observations": [
+        {
+          "table_name": "cms_cc_medicare_hospital_spending_per_patient_state",
+          "observation_id": "5b18ec85a1015d286ed6313e5454e1ee1dcdba7d45580fc7de93ce171ced4fc7",
+          "logical_id": "b7e89f0fa008483b1e11ce146ec3ab12",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_rs6n_9qwg/release_date=2020-10-16/33d2967857613d7c77cd9fbe8bd77342c5d4cb9d4ed8793413ae02a2de1d09a6/rs6n-9qwg.csv",
+          "s3_version_id": "idtHinQCzHSTaDevROHDtjIoZO95DV6x",
+          "byte_count": 6540,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/1d39e9879064803acb1e3c06c8526ab4ff6402fe5edb15ea3f912c4dbd1a5798/manifest.json",
+          "manifest_version_id": "fRDf3MazdAY4eV8aJZL3XlLAHgTy5nCi"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_rs6n_9qwg",
+          "observation_id": "81e75cf17dd141d3d48969fa2ca15d222ea87b559fa509edabdd7fd10c568d46",
+          "logical_id": "958dfcd3eadfee97667bdc91c4b59c8f",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_rs6n_9qwg/release_date=2020-07-04/33d2967857613d7c77cd9fbe8bd77342c5d4cb9d4ed8793413ae02a2de1d09a6/pdc_s3_hos_data_rs6n_9qwg.csv",
+          "s3_version_id": "2CrdY9NMGEhJ6REete6_bkoJVlwLHjnK",
+          "byte_count": 6540,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/fb087c00b3cdb3a6c05974e8bdde7bd47bb435f4d49a643716199f8ad519e197/manifest.json",
+          "manifest_version_id": "p8dV3bubHOd9.8JGy1GAFrskiSfZcMYL"
+        },
+        {
+          "table_name": "cms_cc_medicare_hospital_spending_per_patient_state",
+          "observation_id": "823147ddf6cc1c4ed09a429b8746099b4b3af10a2cbcec75b91ea17045532122",
+          "logical_id": "77b46889bf82666251eb8c01c1d135a8",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_medicare_hospital_spending_per_patient_state/release_date=2020-01-04/33d2967857613d7c77cd9fbe8bd77342c5d4cb9d4ed8793413ae02a2de1d09a6/Medicare_Hospital_Spending_Per_Patient_-_State.csv",
+          "s3_version_id": "wrGRkdDsBfpQBYGAFHOf3klxXqZkkTuR",
+          "byte_count": 6540,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/7e192215ba6d60c2bbe0ff5a972c5b8c55a9be3f53e21c92ab17ba8e50a87f87/manifest.json",
+          "manifest_version_id": "Hvp073WXC_R_LxYF2cCqBqsMEEwKTnOm"
+        },
+        {
+          "table_name": "cms_cc_medicare_hospital_spending_per_patient_state",
+          "observation_id": "851cec524e2cab401e6d6df1fa245ec1bd5d48078f052a109dd27561c0c6144b",
+          "logical_id": "f6976a3131d3ab457c80bde6763e80fd",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_medicare_hospital_spending_per_patient_state/release_date=2020-05-01/33d2967857613d7c77cd9fbe8bd77342c5d4cb9d4ed8793413ae02a2de1d09a6/Medicare_Hospital_Spending_Per_Patient_-_State.csv",
+          "s3_version_id": "b5SZLiBbIIhMaa3p1DnSM1bEgmJnwD4v",
+          "byte_count": 6540,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/2825a3af2229a9fa0f6203b78fd072dfea46a2b4fa9c6e32fe6547881e44cb1a/manifest.json",
+          "manifest_version_id": "9f2FNgwZy4R6bNZ2GSHPcwvUxLkiAMOn"
+        }
+      ]
+    },
+    {
+      "sha256": "49948632942a84a3e77f3060c7cf9f550c2285ca736a427a46bb1f5bb7bf7c30",
+      "owner_table": "cms_cc_hvbp_clinical_outcomes",
+      "canonical_observation_id": "a95b815303d00d41786c2cbec8033eb64ef91070110e19379e75a9c30f396e18",
+      "observations": [
+        {
+          "table_name": "cms_cc_hvbp_clinical_outcomes",
+          "observation_id": "8e4b47631e3ea117ed31be7daef064b82c244f9cd55a08b380087f0c73aeebab",
+          "logical_id": "b0a3d16a520ecb73a6703f2021f0f002",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hvbp_clinical_outcomes_12_09_2019/release_date=2020-05-01/49948632942a84a3e77f3060c7cf9f550c2285ca736a427a46bb1f5bb7bf7c30/hvbp_clinical_outcomes_12_09_2019.csv",
+          "s3_version_id": "qLFJZ3XahmWvvMktFRQyBc8zXAsjwihU",
+          "byte_count": 1034813,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/8c32b428b7a944b31c0c8648af4297e67c1109aee7f6b98c23ee50dfd1995522/manifest.json",
+          "manifest_version_id": "l0UntjQZU6.1S0auJ0RDVZoSB2GBRb35"
+        },
+        {
+          "table_name": "cms_cc_hvbp_clinical_outcomes",
+          "observation_id": "a95b815303d00d41786c2cbec8033eb64ef91070110e19379e75a9c30f396e18",
+          "logical_id": "45d14a5b88c913e519e3c90b57571c1a",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pudb_wetr/release_date=2020-10-16/49948632942a84a3e77f3060c7cf9f550c2285ca736a427a46bb1f5bb7bf7c30/pudb-wetr.csv",
+          "s3_version_id": "J4oSWpqU0tGPGZZ2hE8lyUzryzVctDIQ",
+          "byte_count": 1034813,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/0cd79fb81e2c031f4cbe0fca9b1a4074fb842f88f6afe8c32612c4d293d55cde/manifest.json",
+          "manifest_version_id": "OyPHzGmbibMOSmWMKIPXxAHlz89NKaW4"
+        },
+        {
+          "table_name": "cms_cc_hvbp_clinical_outcomes",
+          "observation_id": "ba2b36864c705ee79677afcb1c74882b1a1dd349c5d7f89a20db0dbf231962ef",
+          "logical_id": "ec227eaecd211f5e23d5240ee90c0f64",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hvbp_clinical_outcomes_12_09_2019/release_date=2020-01-04/49948632942a84a3e77f3060c7cf9f550c2285ca736a427a46bb1f5bb7bf7c30/hvbp_clinical_outcomes_12_09_2019.csv",
+          "s3_version_id": "h.JN6vUJq0ccxBhQqbKRJbwcrzhjgSv5",
+          "byte_count": 1034813,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/bfb55f40fbdde13562a23fa7b75e3ef7241a152acd9b4ef5c4bc9f9269d3671d/manifest.json",
+          "manifest_version_id": "jc60Tf55r8CMMudqvaf3dySqUllTULsW"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_pudb_wetr",
+          "observation_id": "f52835ae284c04704cd2aa01b06c2cd8481f93bcedd260f1dfa338d2051d7ce5",
+          "logical_id": "72ff89ef27aed38e33b54ce372bdfda9",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_pudb_wetr/release_date=2020-07-04/49948632942a84a3e77f3060c7cf9f550c2285ca736a427a46bb1f5bb7bf7c30/pdc_s3_hos_data_pudb_wetr.csv",
+          "s3_version_id": "E__Aw3wbWin.NY7Hk9CqDK6x00eDmEMe",
+          "byte_count": 1034813,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/ecdbeb9b3c630c0879042bd941b6adb043fa576ad6cf4f6d67fa8777c9c1b569/manifest.json",
+          "manifest_version_id": "Z_c7VBzyKwdkrkJKOXYPl254FMIsbMWt"
+        }
+      ]
+    },
+    {
+      "sha256": "556e227f2c171e3c1830688f3c9a08d8f2125a19007397d67e51ecfcef043380",
+      "owner_table": "cms_cc_oqr_oas_cahps_state",
+      "canonical_observation_id": "7a8d9682da2d1c2a7cfa433e0f86e8c8ed69a8bae61e3c50c6f1366108219ff5",
+      "observations": [
+        {
+          "table_name": "cms_cc_oqr_oas_cahps_state",
+          "observation_id": "7a8d9682da2d1c2a7cfa433e0f86e8c8ed69a8bae61e3c50c6f1366108219ff5",
+          "logical_id": "3457b6766982a88bc257aa1515e541c9",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_6pfg_whmx/release_date=2020-10-16/556e227f2c171e3c1830688f3c9a08d8f2125a19007397d67e51ecfcef043380/6pfg-whmx.csv",
+          "s3_version_id": "nTpKtBAatYLjwv3YlMgSYWfYyOqox0r9",
+          "byte_count": 6284,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/6ddb82460d69b852fc93548aba329505b7e5860b99b429e917db3e17f45efc77/manifest.json",
+          "manifest_version_id": "x6EX7ThOm6ZANi6aOf0s5OVEPwn.xu4z"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_6pfg_whmx",
+          "observation_id": "f436fc31ae6bb86101524c8a5213aa121372f618b0d8e8b658612298672a0aaf",
+          "logical_id": "8e69c38efbc987de0a31ea5da2fbd8e0",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_6pfg_whmx/release_date=2020-07-04/556e227f2c171e3c1830688f3c9a08d8f2125a19007397d67e51ecfcef043380/pdc_s3_hos_data_6pfg_whmx.csv",
+          "s3_version_id": "XK97IP1E7xCYlE_n0zouPYoPZlrqzL1E",
+          "byte_count": 6284,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/7326b6da2a1dcb1e5d493542466935fb31ba8ee063a9666ec11ad46cfe6c7b52/manifest.json",
+          "manifest_version_id": "vdYXp2EUQhuhoP3QxmATLIFxlR6C1S9y"
+        }
+      ]
+    },
+    {
+      "sha256": "5cb2e68475f07c74906fda2dcf7b0fae629aac43845c0b89d115ec2c15aa456a",
+      "owner_table": "cms_cc_oqr_oas_cahps_by_hospital",
+      "canonical_observation_id": "ab1999de4cf0a83be64f2e4ba647a9d4537d1075bb6d7df66a5e5814cc38ea95",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_yizn_abxn",
+          "observation_id": "7d1ae5dd47e9602f1f575d60ce451664cd7921bd10f5af6d9207f574b20c6c62",
+          "logical_id": "0066a30f5d63d599303670c5be42097f",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_yizn_abxn/release_date=2020-07-04/5cb2e68475f07c74906fda2dcf7b0fae629aac43845c0b89d115ec2c15aa456a/pdc_s3_hos_data_yizn_abxn.csv",
+          "s3_version_id": "xl9Pw5uvOzeRUjzWPPmnJDX60.6Xesjs",
+          "byte_count": 209462,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/e69ff5fcb30bbcea27f6f58560ee7a14a83ef9057ac3ec40d4dd8dcf152386e2/manifest.json",
+          "manifest_version_id": "6IZqaHNbXfy7kVkldQU3nYNgP2CENl4O"
+        },
+        {
+          "table_name": "cms_cc_oqr_oas_cahps_by_hospital",
+          "observation_id": "ab1999de4cf0a83be64f2e4ba647a9d4537d1075bb6d7df66a5e5814cc38ea95",
+          "logical_id": "a4187507522cbe48e94295cf5949b3d6",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_yizn_abxn/release_date=2020-10-16/5cb2e68475f07c74906fda2dcf7b0fae629aac43845c0b89d115ec2c15aa456a/yizn-abxn.csv",
+          "s3_version_id": "g2fMO0HmRkeFtG_PmxAmU7_79V_rcoBs",
+          "byte_count": 209462,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/e37e1e5fcfaffe9b36728c767ebcf800b29e013b169d7c84a9d107bc469f92a3/manifest.json",
+          "manifest_version_id": "CG4xiUtButq3hDTCfxxIEvom6TEcZRJ7"
+        }
+      ]
+    },
+    {
+      "sha256": "6358b58f5e08ac60ffdd6c197b98b23a9150fc49ad42365235a8abd41f73dd28",
+      "owner_table": "cms_cc_complications_and_deaths_state",
+      "canonical_observation_id": "cf7e6b90e09e85e8147d416d604eeab4c28cb8b209e375f9ba5b03fbca1931ce",
+      "observations": [
+        {
+          "table_name": "cms_cc_complications_and_deaths_state",
+          "observation_id": "25136bdb621b5e9a549eca29d885c177ced3524df0e32bb524f65a6c9346e4c7",
+          "logical_id": "e06eba149c06eea2c00857e66b86f104",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_complications_and_deaths_state/release_date=2021-04-28/6358b58f5e08ac60ffdd6c197b98b23a9150fc49ad42365235a8abd41f73dd28/Complications_and_Deaths-State.csv",
+          "s3_version_id": "SIiElFrsMnEed3NvmmI4nJSsGK3x2lL6",
+          "byte_count": 103017,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-04-28/main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f/6a1095ed721a7a45f03b38e2d76b54729cb688f23d5dbea187728de3a84f3ae5/manifest.json",
+          "manifest_version_id": "g7xL3bTsQYZdypnhz2Q.p7KMc.W.pRYF"
+        },
+        {
+          "table_name": "cms_cc_complications_and_deaths_state",
+          "observation_id": "5f449baed83350ce7b2806960d5e425c6e44fc423d7296fad9121733cbe20cb0",
+          "logical_id": "5dcace445842374079d075bfd66947cd",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_bs2r_24vh/release_date=2020-10-16/6358b58f5e08ac60ffdd6c197b98b23a9150fc49ad42365235a8abd41f73dd28/bs2r-24vh.csv",
+          "s3_version_id": "2V70apUJH4Q1h61dFKv9KGP8bgJKVKsE",
+          "byte_count": 103017,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/6614ce5d5f6d096a0020c4405cd79e7962557b99035ace4f9cba25c0e4c8e516/manifest.json",
+          "manifest_version_id": "zY.Cl0k2Z16tm_dM4Fw_J_oBHy6At4rS"
+        },
+        {
+          "table_name": "cms_cc_complications_and_deaths_state",
+          "observation_id": "cf3c5aaa28bbec6b188eced209dc4bd758ef8f0b0da7ab6a9767709a531f1509",
+          "logical_id": "db1159cab10d007730547c8ce6a2f0ae",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_complications_and_deaths_state/release_date=2021-01-27/6358b58f5e08ac60ffdd6c197b98b23a9150fc49ad42365235a8abd41f73dd28/Complications_and_Deaths-State.csv",
+          "s3_version_id": "YARa3lix0523u2WABhz_vNTwS5zniI2M",
+          "byte_count": 103017,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-01-27/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/7f161ea0634aeeb4e9c3751d02f4ea689862e2d1784da44d1fd3f2766cc8d70f/manifest.json",
+          "manifest_version_id": "jt2dHPlmwDQr0EOGjCOh3bBM.hSfIcxJ"
+        },
+        {
+          "table_name": "cms_cc_complications_and_deaths_state",
+          "observation_id": "cf7e6b90e09e85e8147d416d604eeab4c28cb8b209e375f9ba5b03fbca1931ce",
+          "logical_id": "3b4ab1eae6373875853bbbf1e3ac42e5",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_complications_and_deaths_state/release_date=2021-03-31/6358b58f5e08ac60ffdd6c197b98b23a9150fc49ad42365235a8abd41f73dd28/Complications_and_Deaths-State.csv",
+          "s3_version_id": "eo4BzCE6DaSGK1qRAYcqpxjqkXd_61Xy",
+          "byte_count": 103017,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-03-31/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/0e5a6241a56003c9c5a0482c20acb114f747365ae4202004152e5ea219ec805b/manifest.json",
+          "manifest_version_id": "5xUBIW1D0E.f_f0DFsG.rJ7U_D67VHE9"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_bs2r_24vh",
+          "observation_id": "e6f66efc0ee4261be3571212548463d783cc960cb9a1eaa377627d54817e81a8",
+          "logical_id": "2451f217bc3138d3dc7bbdad58cc8963",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_bs2r_24vh/release_date=2020-07-04/6358b58f5e08ac60ffdd6c197b98b23a9150fc49ad42365235a8abd41f73dd28/pdc_s3_hos_data_bs2r_24vh.csv",
+          "s3_version_id": "SpFDQwC0LuPf.otn0PuxJ0g53JVnPwPK",
+          "byte_count": 103017,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/e35e8bbc89096912efd7c03d38c45f50834dbedd1ce4b316806d04d1d9c125bd/manifest.json",
+          "manifest_version_id": "_tEtv2VomZ8vGuPGGieL_8b.owp8TALe"
+        }
+      ]
+    },
+    {
+      "sha256": "697c02f9b362c55adc11b5c160410e6d1f7cdde8b9088ae7519a7864bc52d95d",
+      "owner_table": "cms_cc_acs_nsqip_data_file",
+      "canonical_observation_id": "e6afebdeb149a7c08466a116b145cbffc4f40047cca45fffb7a6d75ec6afe564",
+      "observations": [
+        {
+          "table_name": "cms_cc_acs_nsqip_data_file",
+          "observation_id": "34223e258f5dd42ab7af5b463f1dfacc5faee8a69f1f20a9bf0d632af5b9ed0a",
+          "logical_id": "ac27c5bfb88a25797509026b19806c61",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_acs_nsqip_data_file_oct_2020/release_date=2021-04-28/697c02f9b362c55adc11b5c160410e6d1f7cdde8b9088ae7519a7864bc52d95d/ACS_NSQIP_Data_File-Oct_2020.csv",
+          "s3_version_id": "T6bWAetiySEyPKPHSCjvanWkvxv.Ckuk",
+          "byte_count": 33896,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-04-28/main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f/efafb4787acc8a79eb21e6fd7678b89c9dfe2efc8d3a80fdea3d76766842cda2/manifest.json",
+          "manifest_version_id": "dRYgHq1dD.oDHaz1Mlsx8i6plGDd3qyd"
+        },
+        {
+          "table_name": "cms_cc_akfs_5dgr",
+          "observation_id": "c12018e436287a9c8e1b0aae487a20f5f420dab355c09e89b606f2511314ed70",
+          "logical_id": "472b37fdf6684cf6c3de11d598965e61",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_akfs_5dgr/release_date=2020-10-16/697c02f9b362c55adc11b5c160410e6d1f7cdde8b9088ae7519a7864bc52d95d/akfs-5dgr.csv",
+          "s3_version_id": "aometKNcwiIcTnMafkBNNbCTe9jpeFPi",
+          "byte_count": 33896,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/b2ab0a9a8378c98e7d4985e48a5d132460fc51474dfca398ccf4c39c75d5d76d/manifest.json",
+          "manifest_version_id": "GFaStgmR9oDscNcNioPwUcIBnNlAkY2S"
+        },
+        {
+          "table_name": "cms_cc_acs_nsqip_data_file",
+          "observation_id": "d278664d7a92e966fa09b3ae78b91d5a71267aee02f449b5351a7fc0fb3c0c3a",
+          "logical_id": "aa04dbb5e20ffe5f24ddd94a46e702f9",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_acs_nsqip_data_file_oct_2020/release_date=2021-03-31/697c02f9b362c55adc11b5c160410e6d1f7cdde8b9088ae7519a7864bc52d95d/ACS_NSQIP_Data_File-Oct_2020.csv",
+          "s3_version_id": "Y4y9Z4MnBYXAkK59EDtXK5XqEw_A_4bP",
+          "byte_count": 33896,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-03-31/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/7370c313d735f8dc1f6efb0aa15900640bcc3e08f928a00bebe60482a00ca1f4/manifest.json",
+          "manifest_version_id": "mzvNY1ouW39Md6hlkXmhwNBn78m6wcen"
+        },
+        {
+          "table_name": "cms_cc_acs_nsqip_data_file",
+          "observation_id": "e6afebdeb149a7c08466a116b145cbffc4f40047cca45fffb7a6d75ec6afe564",
+          "logical_id": "11b4d1313bd79cee04db1bb191e9fe0a",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_acs_nsqip_data_file_oct_2020/release_date=2021-01-27/697c02f9b362c55adc11b5c160410e6d1f7cdde8b9088ae7519a7864bc52d95d/ACS_NSQIP_Data_File-Oct_2020.csv",
+          "s3_version_id": "pVZ2Yv2IF6.IzmsM4W3mqUiw68Va41ro",
+          "byte_count": 33896,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-01-27/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/01fc5ef3dbc8b5fd268c043c649fbe64cc98af81330039f13843f2c1e4f21d14/manifest.json",
+          "manifest_version_id": "slClzb86xO.VhHoIHUz2TeoJ0USQGxOi"
+        }
+      ]
+    },
+    {
+      "sha256": "6ce0ef500e935767b15ddbc0ab82fae59c299632ad1bec3a61a1e41b2bb355e7",
+      "owner_table": "cms_cc_asc_facility",
+      "canonical_observation_id": "7cd926ce82c1d6caca8277eb44d5f5e15f6df3c8e780fa009f7851ccc70f0cce",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_4jcv_atw7",
+          "observation_id": "355bce8329a9bb41f599daff035d3b1b5b06ef54f50f7d76762235be795cbd0d",
+          "logical_id": "c9f3f8d54044fe004dd989e5931caa7e",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_4jcv_atw7/release_date=2020-07-04/6ce0ef500e935767b15ddbc0ab82fae59c299632ad1bec3a61a1e41b2bb355e7/pdc_s3_hos_data_4jcv_atw7.csv",
+          "s3_version_id": "K6pEmK5NOc38BQcLjC8N9I4ZeEWy6LE3",
+          "byte_count": 827732,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/2cff2bbcc40568c2e2fb93c3ae0e1da504b74861091682d252242fceca6609c9/manifest.json",
+          "manifest_version_id": "A2vfPqGl_rqj9y6B2X06T.Iu8x24t_ja"
+        },
+        {
+          "table_name": "cms_cc_asc_facility",
+          "observation_id": "7cd926ce82c1d6caca8277eb44d5f5e15f6df3c8e780fa009f7851ccc70f0cce",
+          "logical_id": "df7b0356cae2b2fce0d4df85431fd89a",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_asc_facility/release_date=2020-05-01/6ce0ef500e935767b15ddbc0ab82fae59c299632ad1bec3a61a1e41b2bb355e7/ASC_Facility.csv",
+          "s3_version_id": "ztrV6YzPtfRoevr0iCm7g05n_9Nm_CY1",
+          "byte_count": 827732,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/01bf1a1bd21e8cae683fdbc4eea4f32bcfedcd13ae0851a23fd5dc350ad23324/manifest.json",
+          "manifest_version_id": "2zhZ5xXA2.tusNTptWbdUkhBezEoO6oH"
+        }
+      ]
+    },
+    {
+      "sha256": "6d5529cadd2d613d4dc0882322f18b827f7a855cc8d7f0bf649322d615dc0f21",
+      "owner_table": "cms_cc_ascqr_oas_cahps_by_asc",
+      "canonical_observation_id": "3df4642eb1c6e64993ab466ef18b9d971ec6b45f68c109d1f41eaedae793ce46",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_48nr_hqxx",
+          "observation_id": "3491a6f5fdbe6f9b216b32b2ee207feb2aef37487471a570bc01d7ee50d3fbd0",
+          "logical_id": "13e707555c5a849911c19e0940786e0b",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_48nr_hqxx/release_date=2020-07-04/6d5529cadd2d613d4dc0882322f18b827f7a855cc8d7f0bf649322d615dc0f21/pdc_s3_hos_data_48nr_hqxx.csv",
+          "s3_version_id": "9gwMPjx3x.eX4oA7rTOM_FrqAg_vwhDi",
+          "byte_count": 74387,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/d07a84e7ce98a478f264a5252e959a1942b3d032ed339fdfcdccf7092cbc9a36/manifest.json",
+          "manifest_version_id": "jtyluBhU6wYY573hmsvJ89PrSwjme_9p"
+        },
+        {
+          "table_name": "cms_cc_ascqr_oas_cahps_by_asc",
+          "observation_id": "3df4642eb1c6e64993ab466ef18b9d971ec6b45f68c109d1f41eaedae793ce46",
+          "logical_id": "03e77b1847edfbc678b1b3e82d07f338",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_48nr_hqxx/release_date=2020-10-16/6d5529cadd2d613d4dc0882322f18b827f7a855cc8d7f0bf649322d615dc0f21/48nr-hqxx.csv",
+          "s3_version_id": "m0lfDuN.g7Rc.LMB0bAyEM4cR_k41riy",
+          "byte_count": 74387,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/2bf91391d2c86c13c60c13a5d6636d2be8b082aa73b050445690c2804dd8da37/manifest.json",
+          "manifest_version_id": "skCISOHktNp1pZMbZn3YG3sPUU6.O9KL"
+        }
+      ]
+    },
+    {
+      "sha256": "6e34a1e23166047b1b73fe926a5a0c01ad64c52ea31962bbc2592dd8acc95cc6",
+      "owner_table": "cms_cc_unplanned_hospital_visits_state",
+      "canonical_observation_id": "e6b55a3879c57845d606239bc74dcca56a3e92250b70a3f592ea8b89d51479d1",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_4gkm_5ypv",
+          "observation_id": "87bd66fcc347823e1fc055088708cb631ac64d3daad2ac303ac64ae54d2d66f1",
+          "logical_id": "c50774b75fd5aceb5b2167287ed2826e",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_4gkm_5ypv/release_date=2020-07-04/6e34a1e23166047b1b73fe926a5a0c01ad64c52ea31962bbc2592dd8acc95cc6/pdc_s3_hos_data_4gkm_5ypv.csv",
+          "s3_version_id": "G9H7Jl3fxlEJ22YiAUfBc69mN1dDfeb4",
+          "byte_count": 133613,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/2bd1f62a62be1452ce9f12bb64bf4308991ff6345a584c77f4f0bb7ea9e5bfc8/manifest.json",
+          "manifest_version_id": "bwBcuKQ3fZWl43f2zoKI5m_8gUYeQqkQ"
+        },
+        {
+          "table_name": "cms_cc_unplanned_hospital_visits_state",
+          "observation_id": "e6b55a3879c57845d606239bc74dcca56a3e92250b70a3f592ea8b89d51479d1",
+          "logical_id": "1ef985d87fe882889eb3e1084b27becd",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_4gkm_5ypv/release_date=2020-10-16/6e34a1e23166047b1b73fe926a5a0c01ad64c52ea31962bbc2592dd8acc95cc6/4gkm-5ypv.csv",
+          "s3_version_id": "etaEY9BVx9gVX1naxe1mksVTQ6tqYqJ4",
+          "byte_count": 133613,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/6d4c56ab3c231090e164c2399c6aa912e1e1fb7878256ba5418dd655220970cd/manifest.json",
+          "manifest_version_id": "m6RvqUZSTiCBJ4cGYt.iHFRqnQEvBgHa"
+        }
+      ]
+    },
+    {
+      "sha256": "6e4f559443516fb4f7e3fc3770caf5b99cccffa769e223f883350cfc1d9c2bd0",
+      "owner_table": "cms_cc_payment_state",
+      "canonical_observation_id": "fbbce23b057371fa7b878ff147e67ac77f1b986764a122b4fad227660b2c258a",
+      "observations": [
+        {
+          "table_name": "cms_cc_payment_state",
+          "observation_id": "18229caec649ebf92b076191b6585dc8fd384067363e8efeb60639bddc1510be",
+          "logical_id": "da86619979776a8b1a1f1c090546c881",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_payment_state/release_date=2021-04-28/6e4f559443516fb4f7e3fc3770caf5b99cccffa769e223f883350cfc1d9c2bd0/Payment-State.csv",
+          "s3_version_id": "FYYPEMxFGIKmCOXOz4sOg0jf97KA7gpm",
+          "byte_count": 20093,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-04-28/main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f/37ad8389e151985e905c83471440b3a06fac1eecc168bb78ba9b48c06081ca8e/manifest.json",
+          "manifest_version_id": "e7fVdT7aJ6w7mi1WZs4YUXuCK49vudKv"
+        },
+        {
+          "table_name": "cms_cc_98ix_2iqy",
+          "observation_id": "463f17b765383fc5fe9548af0abdadae0626f24af6e53715ff31a30bbeca517b",
+          "logical_id": "fff273f0b7836f0fc9d305ebc0ac7094",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_98ix_2iqy/release_date=2020-10-16/6e4f559443516fb4f7e3fc3770caf5b99cccffa769e223f883350cfc1d9c2bd0/98ix-2iqy.csv",
+          "s3_version_id": "tiJ05ZeDa0o.vtYypW3vqRbtudNyPsO3",
+          "byte_count": 20093,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/e4f77bfeaf40c4f8beddd8412bfeb0b7b635aa9864b35270debe7695dc1f4a65/manifest.json",
+          "manifest_version_id": "1ZRu7HAuWwWTbxScCgANEzm0BBQzOtLQ"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_98ix_2iqy",
+          "observation_id": "4b2b3e37ee8529f5a63ab27f5375b31ec9b03479e93133058394c459c2421e6c",
+          "logical_id": "02c22291092fddb6cb63c2b6de9db0d5",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_98ix_2iqy/release_date=2020-07-04/6e4f559443516fb4f7e3fc3770caf5b99cccffa769e223f883350cfc1d9c2bd0/pdc_s3_hos_data_98ix_2iqy.csv",
+          "s3_version_id": "lylq8Tmy3e4d1mzjSijsHEg17X0urNsF",
+          "byte_count": 20093,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/744f26eaaf98433bcc98e3ba8aba7b7b088780b28dbd5f79395bf4a217502858/manifest.json",
+          "manifest_version_id": "vyDcIGi8_j4AaJ762vqNUmmJKfpEzjwg"
+        },
+        {
+          "table_name": "cms_cc_payment_state",
+          "observation_id": "c3cfd98c3d4578f41ba46d7e49869f132259c27e737233195c99603d02233d23",
+          "logical_id": "6cfa42d41e73b406750a683a38d826b2",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_payment_state/release_date=2021-01-27/6e4f559443516fb4f7e3fc3770caf5b99cccffa769e223f883350cfc1d9c2bd0/Payment-State.csv",
+          "s3_version_id": "x38hrZEEhcaY2CzKCMfvRz.Vg_fjjmrh",
+          "byte_count": 20093,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-01-27/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/7e9404c3c8ebc446fc58cd03a05dbe17c229dbe0153ad4694e1684ff37adbdd8/manifest.json",
+          "manifest_version_id": "rd2.Ze.Pse4QOsrOygN3q4VzkRkgqCez"
+        },
+        {
+          "table_name": "cms_cc_payment_state",
+          "observation_id": "fbbce23b057371fa7b878ff147e67ac77f1b986764a122b4fad227660b2c258a",
+          "logical_id": "6a583437490b8f861a9ad4ce03a7e8d8",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_payment_state/release_date=2021-03-31/6e4f559443516fb4f7e3fc3770caf5b99cccffa769e223f883350cfc1d9c2bd0/Payment-State.csv",
+          "s3_version_id": "t9rV16yPa3eaWxY9X2tiJUqRZ3Rq_l8B",
+          "byte_count": 20093,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-03-31/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/3211f3a6628f57c504bc75f31fce857cd99558eba0fcb3b19a40c64f80ca0b9f/manifest.json",
+          "manifest_version_id": "_a2RBUcDoOWDteemcWJP_Gns4S3FXPDA"
+        }
+      ]
+    },
+    {
+      "sha256": "793af7440b2448e5a078efa6662c5922adc19a0f69a31c803aa8812cae3c65f4",
+      "owner_table": "cms_cc_payment_national",
+      "canonical_observation_id": "f3df81ac9b32b4d4e3b837177d8a8eea287eda8e83d130547a5bf15d0b1821e4",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_ygty_mm5a",
+          "observation_id": "0e12c87b4c3d8b6aafaaad535d17ad029d86fa94f21bba9b01a7b0b7d918864d",
+          "logical_id": "c71c175c52ae3321f63bc10368e976b3",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_ygty_mm5a/release_date=2020-07-04/793af7440b2448e5a078efa6662c5922adc19a0f69a31c803aa8812cae3c65f4/pdc_s3_hos_data_ygty_mm5a.csv",
+          "s3_version_id": "BAOxBQmF4gKktX8906bTgcX04FyaJBrZ",
+          "byte_count": 622,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/1822430fecffde5fce2058915d0b3df772cb16f3966e5f73f4f7b704dc30d08e/manifest.json",
+          "manifest_version_id": "DuJnuTO9LA5A_BOPZN2H49p2m7AiGyUX"
+        },
+        {
+          "table_name": "cms_cc_payment_national",
+          "observation_id": "1a4f23e6d30d40fe9af33d0922e1b44fd0934383bb35f06edf9ec27144d62b1b",
+          "logical_id": "dc7fb5af3bb746dd9e9779e99d608989",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_payment_national/release_date=2021-01-27/793af7440b2448e5a078efa6662c5922adc19a0f69a31c803aa8812cae3c65f4/Payment-National.csv",
+          "s3_version_id": "KCvUATM37KYARLt4IwRXuM5HyumSyZZb",
+          "byte_count": 622,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-01-27/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/33878a5d498dbec4bb7c2f27ee16d6b68ec77d4939bbf5a00888888d8a7e789f/manifest.json",
+          "manifest_version_id": "lzwULBPYO_vUmlSwGDwOM67BublzJeZO"
+        },
+        {
+          "table_name": "cms_cc_payment_national",
+          "observation_id": "3be496ba4b32c0be5eddc692ad5ac0864a8ad309241cdc8fbca7ceb6d4540030",
+          "logical_id": "7c8aa6ccd45f9b011f69ac379c2ee9f3",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_payment_national/release_date=2021-03-31/793af7440b2448e5a078efa6662c5922adc19a0f69a31c803aa8812cae3c65f4/Payment-National.csv",
+          "s3_version_id": "yyod3Mc1cPwnYTUTGDPQTKBR6vY_iehY",
+          "byte_count": 622,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-03-31/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/de1b0e685500537a7c08e33a8583f37c7c76c38a15d793eee5dd30efe966f91b/manifest.json",
+          "manifest_version_id": "5RJ3hOWsB6pOuvoDEU_NeAWlJmPPPM4g"
+        },
+        {
+          "table_name": "cms_cc_ygty_mm5a",
+          "observation_id": "4d1ad393ab3a5bcc26631a4929113b7a53b4b63215275eea64d032f3dbc79892",
+          "logical_id": "79ed757368be2b61635f9ef40aef913f",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_ygty_mm5a/release_date=2020-10-16/793af7440b2448e5a078efa6662c5922adc19a0f69a31c803aa8812cae3c65f4/ygty-mm5a.csv",
+          "s3_version_id": "Stg8M5pa.M5Whz5CGVpQtC3_V4RNyjCs",
+          "byte_count": 622,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/e70b0279b211639e3fcb2520a6242b27fe34a27a89f3bb7526ee33c380825bd5/manifest.json",
+          "manifest_version_id": "pYF1tLv3MnJ77tAXqFT5vSXxOCbA_A_v"
+        },
+        {
+          "table_name": "cms_cc_payment_national",
+          "observation_id": "f3df81ac9b32b4d4e3b837177d8a8eea287eda8e83d130547a5bf15d0b1821e4",
+          "logical_id": "382dc57eaebeb1f6bfdce5bd4cd93561",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_payment_national/release_date=2021-04-28/793af7440b2448e5a078efa6662c5922adc19a0f69a31c803aa8812cae3c65f4/Payment-National.csv",
+          "s3_version_id": "zoznfYK5CFoXQ79EsOMuJovsNCxl8dlF",
+          "byte_count": 622,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-04-28/main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f/c067c62899a1ee3b54d95f3a9056a9fed2d9bb51db95759676ca65df47172006/manifest.json",
+          "manifest_version_id": "Va66zBwxN9X.pDExgpu1qP3_zrA3prDq"
+        }
+      ]
+    },
+    {
+      "sha256": "81851ff69ab5c5e3eaa0ea24124a259b5e0e54ace0489e4ec354a2aeefc94af3",
+      "owner_table": "cms_cc_y9us_9xdf",
+      "canonical_observation_id": "de96ab72be8fd9814be87a3c6e1356aa5a978687b79cc62166e283fee41fae03",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_y9us_9xdf",
+          "observation_id": "67a56e8bcebb7d76dbd180ff802f67ec7ee8a1e1dda5afef99e81ffed0f71e1c",
+          "logical_id": "38e3b98a24ff74e8b2afeb0f8be25666",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_y9us_9xdf/release_date=2020-07-04/81851ff69ab5c5e3eaa0ea24124a259b5e0e54ace0489e4ec354a2aeefc94af3/pdc_s3_hos_data_y9us_9xdf.csv",
+          "s3_version_id": "4ukEL4XuZrxZJIITWgPWwqVVfvk2GCC9",
+          "byte_count": 3349,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/2177ff1a2034357e6ea4188da895cdb0b079fadf802d9e7397406052f040891a/manifest.json",
+          "manifest_version_id": "ty1wCck35EgldbUlyJnlKny7kiTgh0im"
+        },
+        {
+          "table_name": "cms_cc_y9us_9xdf",
+          "observation_id": "de96ab72be8fd9814be87a3c6e1356aa5a978687b79cc62166e283fee41fae03",
+          "logical_id": "aa5a01407b34b5e712b4ff7d0972b5ac",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_y9us_9xdf/release_date=2020-10-16/81851ff69ab5c5e3eaa0ea24124a259b5e0e54ace0489e4ec354a2aeefc94af3/y9us-9xdf.csv",
+          "s3_version_id": "mKAT8B3b7mKUXMxqbpD9TC5JmArlEViD",
+          "byte_count": 3349,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/f3908f3e308e3cfa89011a84d35b2f1a0a838ce35e3b87fc474289e8014d8c07/manifest.json",
+          "manifest_version_id": "ZarVUwyiE8X0MEGWGmFAZpq7_KB08en3"
+        }
+      ]
+    },
+    {
+      "sha256": "8359dc35ad9a5e7597b5c9fea43af7ca435d5fb01dd3018bb9b95c13cab08bbc",
+      "owner_table": "cms_cc_outpatient_imaging_efficiency_national",
+      "canonical_observation_id": "14153e7bb17858843042502d0e86db56103f118ebc47825a89c388649516939f",
+      "observations": [
+        {
+          "table_name": "cms_cc_outpatient_imaging_efficiency_national",
+          "observation_id": "14153e7bb17858843042502d0e86db56103f118ebc47825a89c388649516939f",
+          "logical_id": "205ee1988a67bd6208a4aa4aa70c8ff9",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_outpatient_imaging_efficiency_national/release_date=2021-04-28/8359dc35ad9a5e7597b5c9fea43af7ca435d5fb01dd3018bb9b95c13cab08bbc/Outpatient_Imaging_Efficiency-National.csv",
+          "s3_version_id": "2LQlTnVxD7WQ7RpzCbFg5IcbH67C1I1.",
+          "byte_count": 327,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-04-28/main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f/37f837b3729b6ddeb13bc2d2c5e35c88700ed006025962b3e6cafcc58a8898df/manifest.json",
+          "manifest_version_id": "BWgEM1ncLLEkIDSDKZ3XrJNsdbhRW0.S"
+        },
+        {
+          "table_name": "cms_cc_outpatient_imaging_efficiency_national",
+          "observation_id": "5737b19f4816aa78ffae4034cfae977326a862daf8b9a0adcf3fc96e9b55bd41",
+          "logical_id": "2dfedc7d6b9b02eac077b89e4d7ea33b",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_outpatient_imaging_efficiency_national/release_date=2021-01-27/8359dc35ad9a5e7597b5c9fea43af7ca435d5fb01dd3018bb9b95c13cab08bbc/Outpatient_Imaging_Efficiency-National.csv",
+          "s3_version_id": "2E0hXWAGi7UaYfefliwhC129.wsqFqY2",
+          "byte_count": 327,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-01-27/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/71a95fcf3b7dee11f88a0c0be30961defaa617a2ab478a8d5ff04447e3206e26/manifest.json",
+          "manifest_version_id": "9eaWY4a0IRMT2aqw1BvcptE7Vh58Se4f"
+        },
+        {
+          "table_name": "cms_cc_outpatient_imaging_efficiency_national",
+          "observation_id": "5c7014e1d766d5dbf7e3ce36961b27050f48c75ffdf50168db3fbc7e7bf17f27",
+          "logical_id": "eabedec12c6c229485ad6b8363e46b95",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_outpatient_imaging_efficiency_national/release_date=2021-03-31/8359dc35ad9a5e7597b5c9fea43af7ca435d5fb01dd3018bb9b95c13cab08bbc/Outpatient_Imaging_Efficiency-National.csv",
+          "s3_version_id": "TSqTF1n_FZub80qKDQwwQXlFBGyqBUvG",
+          "byte_count": 327,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-03-31/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/5405369b993483a0c546f7e11e1c0cfefcc159eb888b965b1d5482c2627fab71/manifest.json",
+          "manifest_version_id": "pgbYe7_Y5hjI36i8a.eltPmcgq.QwLwW"
+        },
+        {
+          "table_name": "cms_cc_outpatient_imaging_efficiency_national",
+          "observation_id": "77a17e010000b9d541bda9a4e226b001dee5ffe42dea66cc792a7bae2fa6ccd6",
+          "logical_id": "4bf049af14e123b8231bd17085c4fdf2",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_di9i_zzrc/release_date=2020-10-16/8359dc35ad9a5e7597b5c9fea43af7ca435d5fb01dd3018bb9b95c13cab08bbc/di9i-zzrc.csv",
+          "s3_version_id": ".iml_HQUHdC0nc3BlROtDSL5ILonKZkg",
+          "byte_count": 327,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/f1baa27fe63a5a9f20f9ebbd023c19194c9b994e432b82416497d09180e4f939/manifest.json",
+          "manifest_version_id": "GP3C12GvwH4HoNYsjLe7TKZ66ltO8Tjt"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_di9i_zzrc",
+          "observation_id": "ab980dc236612b5a953f8640b7c2bad2cb33fac09edd2a7b6f76f04ab3489c01",
+          "logical_id": "8210ea8c3c6a86570d1836b5a0736de7",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_di9i_zzrc/release_date=2020-07-04/8359dc35ad9a5e7597b5c9fea43af7ca435d5fb01dd3018bb9b95c13cab08bbc/pdc_s3_hos_data_di9i_zzrc.csv",
+          "s3_version_id": "okjXCz8TaN20WfkzVIEDIfLiX3SsRlsx",
+          "byte_count": 327,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/a193646cabafb8ddaf0f8bf13d12010971cd2805c35190fa78e9b2f47fc46a02/manifest.json",
+          "manifest_version_id": "ANdVsuh5xq.W9_3X14efuJqH6JM4fyfs"
+        }
+      ]
+    },
+    {
+      "sha256": "95a566cd1e9b370e96d34b61e17978f9769b91159b51e361b56555dbb52dc18e",
+      "owner_table": "cms_cc_unplanned_hospital_visits_national",
+      "canonical_observation_id": "300c29d7828deaba2d760554c0f7ba79f7fc6be5edab3187b4a685826934c565",
+      "observations": [
+        {
+          "table_name": "cms_cc_unplanned_hospital_visits_national",
+          "observation_id": "300c29d7828deaba2d760554c0f7ba79f7fc6be5edab3187b4a685826934c565",
+          "logical_id": "e11a0289d696d9d2be8f74bf398d3f74",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_cvcs_xecj/release_date=2020-10-16/95a566cd1e9b370e96d34b61e17978f9769b91159b51e361b56555dbb52dc18e/cvcs-xecj.csv",
+          "s3_version_id": "Ui9jcJJbGvsBD6.mQT7HmAnDquI.ZymO",
+          "byte_count": 2795,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/454da556e83f28346da47a71c588a87dcbdc15e8685ee519412d5ed24a6b27a8/manifest.json",
+          "manifest_version_id": "G2YrlV0k7gKSd8WbtXtMypxO0n3OxJGd"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_cvcs_xecj",
+          "observation_id": "dc9254cf1be2fee78972c042ced1aa6b29f1e9779a56b88cc40cae6f27e85dfc",
+          "logical_id": "4011801370c01863ecfa96c49028980b",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_cvcs_xecj/release_date=2020-07-04/95a566cd1e9b370e96d34b61e17978f9769b91159b51e361b56555dbb52dc18e/pdc_s3_hos_data_cvcs_xecj.csv",
+          "s3_version_id": "rPfTfJzG0HcgeblhAr5EoPBcMmzsXs.f",
+          "byte_count": 2795,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/318aba88df54419ab552d3b4972a448a1f2c016b014dcf0e4a95359a1eac5d93/manifest.json",
+          "manifest_version_id": "xuW37H1yLehVXyrvM6Wuu3UWTJTAGnyh"
+        }
+      ]
+    },
+    {
+      "sha256": "9f9b437c5f437e650d282e6876c9f1e168d27a4c880cc36c18ff1deb6387b0fc",
+      "owner_table": "cms_cc_pch_outcomes_national",
+      "canonical_observation_id": "cfb30b4f81c284c1efd2ffab126ce7c27763365c20694c90bf2d3c56f8278c20",
+      "observations": [
+        {
+          "table_name": "cms_cc_pch_outcomes_national",
+          "observation_id": "3aa919f0f491baa701f2b4f3734159e950d0108aed0385b997cb081841a2625d",
+          "logical_id": "75562e748c736ee0ac3df7bd7f03c1ee",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pch_outcomes_national/release_date=2021-01-27/9f9b437c5f437e650d282e6876c9f1e168d27a4c880cc36c18ff1deb6387b0fc/PCH_OUTCOMES_NATIONAL.csv",
+          "s3_version_id": "ShayNUpvkUPNCHGIHm0.4r_o4VjTLrhA",
+          "byte_count": 344,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-01-27/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/f7931e9d243eec80e3c35b131d632623484198db9d0b8ed700789bd286063bb1/manifest.json",
+          "manifest_version_id": "FcH6VvpwVRZ6bY_33HvBJ4bnrR4XauhI"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_jfnd_nl7s",
+          "observation_id": "650b9952aa5669e8b715ef74c05ae1a2e5498c582a35eba0ea295da65e1a4c12",
+          "logical_id": "678eb0f0d3d0b012ef023bc4138bcf1d",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_jfnd_nl7s/release_date=2020-07-04/9f9b437c5f437e650d282e6876c9f1e168d27a4c880cc36c18ff1deb6387b0fc/pdc_s3_hos_data_jfnd_nl7s.csv",
+          "s3_version_id": "JfexAz56WCz6xfqCdAxmRJeQh1YiWOUi",
+          "byte_count": 344,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/021afd4e9a539109e193c803d4835d37d90c7211b70f7ddb620d675f097ced11/manifest.json",
+          "manifest_version_id": "4E.41askGVeaNgAaKV4W2ByMgLn2fsvY"
+        },
+        {
+          "table_name": "cms_cc_pch_outcomes_national",
+          "observation_id": "71a4477f8d455c93165898401b7d9c3e9c3d57a14de40728d9cca7ac703e87d6",
+          "logical_id": "be35d2bd8e4771d656c79bef51682785",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pch_outcomes_national/release_date=2021-04-28/9f9b437c5f437e650d282e6876c9f1e168d27a4c880cc36c18ff1deb6387b0fc/PCH_OUTCOMES_NATIONAL.csv",
+          "s3_version_id": "Cxmu..GELLKVPdJKKp2BFaK1RuskdQ3g",
+          "byte_count": 344,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-04-28/main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f/0f7f8a1c6bfbaec5aabb097e10bf4501e4eaf75992c850aa5b84bb8f3441e203/manifest.json",
+          "manifest_version_id": "NqWjmzNmUmsV.Gl9ETlBX6qaSm6IzEza"
+        },
+        {
+          "table_name": "cms_cc_pch_outcomes_national",
+          "observation_id": "cfb30b4f81c284c1efd2ffab126ce7c27763365c20694c90bf2d3c56f8278c20",
+          "logical_id": "29f48ccdebca7293e4344df928eaf584",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pch_outcomes_national/release_date=2021-03-31/9f9b437c5f437e650d282e6876c9f1e168d27a4c880cc36c18ff1deb6387b0fc/PCH_OUTCOMES_NATIONAL.csv",
+          "s3_version_id": "O0spOskN91aGCE1BYB_.ON5Hh37cgxTd",
+          "byte_count": 344,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-03-31/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/b49f0748964b4c649528f2a2800237abef457f28a9d43acb48d130b4a1ad124d/manifest.json",
+          "manifest_version_id": "IcEFerbQQy_7aRFK2qiLVQJYUwYe7ORD"
+        },
+        {
+          "table_name": "cms_cc_pch_complications_unplanned_hospital_visits_national",
+          "observation_id": "d794534a817751406cbdea755a503f2ebdda41f0c30d03b14bfaa1e96676d2f2",
+          "logical_id": "6ba40e78562cc6c8ceae6150a72e9e8e",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_jfnd_nl7s/release_date=2020-10-16/9f9b437c5f437e650d282e6876c9f1e168d27a4c880cc36c18ff1deb6387b0fc/jfnd-nl7s.csv",
+          "s3_version_id": "t5AmcNgOYs7HOFr4Vi0iWOQkxLTwlImh",
+          "byte_count": 344,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/793aa14d24d1361eaf714ad3d3223310678f574ae51ea4c26d3ef6b32a4b4e3f/manifest.json",
+          "manifest_version_id": "bvzPXoHmBF__4MA6._SyT.vkIxa.eGMn"
+        }
+      ]
+    },
+    {
+      "sha256": "a45788ca8b9f088a2689fc3d7e0396f864a7e8378acfd6fd99b7b89147c3570c",
+      "owner_table": "cms_cc_ascqr_oas_cahps_national",
+      "canonical_observation_id": "debadd878edbb8a0b8c0061ffbb0c995e9e88a4b4ffbabd0866d36dd9ce269a3",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_tf3h_mrrs",
+          "observation_id": "74e17744fabedff4834a1c03bf00539ed0cdcccadfe8ef36f77e84b7936cd835",
+          "logical_id": "a2f26ffdba9edae457328a74a11585ff",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_tf3h_mrrs/release_date=2020-07-04/a45788ca8b9f088a2689fc3d7e0396f864a7e8378acfd6fd99b7b89147c3570c/pdc_s3_hos_data_tf3h_mrrs.csv",
+          "s3_version_id": "vxQbHN0ZnylXJsV91acvbMIXD7ip_DjY",
+          "byte_count": 1610,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/1d3b55141645eb79e200374fcb95438205a41775ed88a81ab2fdc7690e72668c/manifest.json",
+          "manifest_version_id": "q78y6R0iRvGdRQ2Ws5zZMLvHo45C7gMp"
+        },
+        {
+          "table_name": "cms_cc_ascqr_oas_cahps_national",
+          "observation_id": "debadd878edbb8a0b8c0061ffbb0c995e9e88a4b4ffbabd0866d36dd9ce269a3",
+          "logical_id": "f7aadfbc7add653b70297ff49250684e",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_tf3h_mrrs/release_date=2020-10-16/a45788ca8b9f088a2689fc3d7e0396f864a7e8378acfd6fd99b7b89147c3570c/tf3h-mrrs.csv",
+          "s3_version_id": "kH0.VWHzh21KRU.8Bf0Ksw5PeaUltnHb",
+          "byte_count": 1610,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/033aaead48a3917e398b8f852cf1917df78c030717c737b7944233334ab0f45a/manifest.json",
+          "manifest_version_id": "3rn1igdDCLx4uaBl7XpGUBIpeJYhwtRT"
+        }
+      ]
+    },
+    {
+      "sha256": "a61c2886ca3c9c41cd4ebc23e1ee5fef66457597031e581e7ab7cddb9ee97d45",
+      "owner_table": "cms_cc_outpatient_imaging_efficiency_state",
+      "canonical_observation_id": "623f1528e31341412c93a4ad79b534bd4690b0247689e8d7244ed84196ef3248",
+      "observations": [
+        {
+          "table_name": "cms_cc_outpatient_imaging_efficiency_state",
+          "observation_id": "2db69f2ba86f5364035d4cc665cb65f92b40d30e3f72546dae901e47587702c2",
+          "logical_id": "317b40e20437f901d2549e82abb6a9d9",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_outpatient_imaging_efficiency_state/release_date=2021-04-28/a61c2886ca3c9c41cd4ebc23e1ee5fef66457597031e581e7ab7cddb9ee97d45/Outpatient_Imaging_Efficiency-State.csv",
+          "s3_version_id": "bVydLQ2u5oDFzg55vx1Jsd1fLDcwFSpO",
+          "byte_count": 15081,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-04-28/main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f/1f28fae3ab457b541ecaaaa425bab5a0d27e4ed6fd11339816b0d63c748bc7b3/manifest.json",
+          "manifest_version_id": "rAoybQN8luwiWwi5C3GoIfYQzes0HrnE"
+        },
+        {
+          "table_name": "cms_cc_outpatient_imaging_efficiency_state",
+          "observation_id": "48d795c157486be7f656415dae4e9e74b04b060e89e1c4f5caabdaa65b16e9c0",
+          "logical_id": "ac9687443d10a25df4662e43d528dccf",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_outpatient_imaging_efficiency_state/release_date=2021-01-27/a61c2886ca3c9c41cd4ebc23e1ee5fef66457597031e581e7ab7cddb9ee97d45/Outpatient_Imaging_Efficiency-State.csv",
+          "s3_version_id": "uWY6TyuV_g_NSVMeoLxvlXJQtJyDusQe",
+          "byte_count": 15081,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-01-27/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/da606fe8d7ce1c7426d7cb7f1e3cfd66fe3d5033d4140131674dc4917084c275/manifest.json",
+          "manifest_version_id": "hJ3Yl7nSg8iSmwCOyAC9YoNqztYA94gr"
+        },
+        {
+          "table_name": "cms_cc_outpatient_imaging_efficiency_state",
+          "observation_id": "590ae8fb10394057d1d9c52e5fb2832b058861624a46897bf136069ce1ae9079",
+          "logical_id": "7713095c7fd256d454dc138cf6ca98d3",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_if5v_4x48/release_date=2020-10-16/a61c2886ca3c9c41cd4ebc23e1ee5fef66457597031e581e7ab7cddb9ee97d45/if5v-4x48.csv",
+          "s3_version_id": "AtXjQtQ3.toL4Lw.K7eOg_VDPcb4HmbK",
+          "byte_count": 15081,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/234b0d89ca82614399d5733abcb109be459fd04ff3f7871a2a0d47b2ff057dda/manifest.json",
+          "manifest_version_id": "mlI8alYmDL2.A1wyS10laegFveGbz6WK"
+        },
+        {
+          "table_name": "cms_cc_outpatient_imaging_efficiency_state",
+          "observation_id": "623f1528e31341412c93a4ad79b534bd4690b0247689e8d7244ed84196ef3248",
+          "logical_id": "31592fbc4951050278e3615be50bfc14",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_outpatient_imaging_efficiency_state/release_date=2021-03-31/a61c2886ca3c9c41cd4ebc23e1ee5fef66457597031e581e7ab7cddb9ee97d45/Outpatient_Imaging_Efficiency-State.csv",
+          "s3_version_id": "ZNweElayUmApeqj9FhVeXiqbsNVIx20r",
+          "byte_count": 15081,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-03-31/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/b97e0e9b523ba1f6d67783aac608eade98ae1baa03d025a742977a45eb234878/manifest.json",
+          "manifest_version_id": "dI2uN5lmtZEarkBXvPjQGwycpoKzh8tB"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_if5v_4x48",
+          "observation_id": "ac83143c0ad131cd86f6247c42e1f4f55aa6b297332bb2324bfe91f1b1e9d5f4",
+          "logical_id": "22f94914053f1aae0f326e38d345526c",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_if5v_4x48/release_date=2020-07-04/a61c2886ca3c9c41cd4ebc23e1ee5fef66457597031e581e7ab7cddb9ee97d45/pdc_s3_hos_data_if5v_4x48.csv",
+          "s3_version_id": ".Jg4.3fy.EqFfkGblOR8Fx_8b6.APjG_",
+          "byte_count": 15081,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/9e1cd5bb03f44d0b0b82dbc7ee8241092e01236cb8e247a02e90994dba7ee991/manifest.json",
+          "manifest_version_id": "dQoZotaMiB4LzFEDuH3SIxOADF7J.IhX"
+        }
+      ]
+    },
+    {
+      "sha256": "b1fd6157074a7e7600f64daf14497f75614255d83d921c7bcf1500e52d53936a",
+      "owner_table": "cms_cc_hac_reduction_program_hospital",
+      "canonical_observation_id": "c329cbf22e1a56da20e3fd9d62782c912fe668af843b9191713d5035be435cb2",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_yq43_i98g",
+          "observation_id": "7b0039bd7a484c84473b5137ceca2059b36e6a324effce504004ff2037c379d2",
+          "logical_id": "8af2ca26997ab5d6bb01b0dad426066e",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_yq43_i98g/release_date=2020-07-04/b1fd6157074a7e7600f64daf14497f75614255d83d921c7bcf1500e52d53936a/pdc_s3_hos_data_yq43_i98g.csv",
+          "s3_version_id": "E4ofed0AUaJHGLr4vXCHB2mt5Axxr5Hf",
+          "byte_count": 486579,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/b8076c2ab9f2d69d7aae7fe66659307e3b16d8792d4d587ee5d9eb0b601ed7ce/manifest.json",
+          "manifest_version_id": "BbZERh5XeTq55HplQReIxGGvyOjgfOnt"
+        },
+        {
+          "table_name": "cms_cc_hospital_quarterly_hac_domain_hospital",
+          "observation_id": "8e9113f47dc406633ffe2b1827bdd69671999d2695e9db5b4cd4da5a63dcfc40",
+          "logical_id": "2d50c7391f466c8ea151a7210e528804",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hospital_quarterly_hac_domain_hospital/release_date=2020-01-04/b1fd6157074a7e7600f64daf14497f75614255d83d921c7bcf1500e52d53936a/HOSPITAL_QUARTERLY_HAC_DOMAIN_HOSPITAL.csv",
+          "s3_version_id": "yc1bMvAKKwFoBvhRrXt6vnK_k1EIMhI8",
+          "byte_count": 486579,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/252ec1f6726b0deac5935474ede2a0698abf2166cd82c7be6740010e6c20c3c2/manifest.json",
+          "manifest_version_id": "cnfCD6nwYg.8jDpyC3FgkPQZDJ6dwkhn"
+        },
+        {
+          "table_name": "cms_cc_hac_reduction_program_hospital",
+          "observation_id": "c329cbf22e1a56da20e3fd9d62782c912fe668af843b9191713d5035be435cb2",
+          "logical_id": "4bd6d1eed75fbca18d4f7c54417d18fb",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_yq43_i98g/release_date=2020-10-16/b1fd6157074a7e7600f64daf14497f75614255d83d921c7bcf1500e52d53936a/yq43-i98g.csv",
+          "s3_version_id": "H0OZbmHhRTV_HK2hdJXL0sqUq2J9oRuW",
+          "byte_count": 486579,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/678973cf332180d34e01730d23641b5e8f9ab2352df3e7f180a734162b06d1e1/manifest.json",
+          "manifest_version_id": "u3kObS8ZkurHA_sVSJpTLO9Abcta.GGO"
+        },
+        {
+          "table_name": "cms_cc_hospital_quarterly_hac_domain_hospital",
+          "observation_id": "c8ab3e87d44a88e73eb669ec82cb4e4a1635e6a8ec0f48db15565a25460386e7",
+          "logical_id": "7295c9480f657a55442e6ec917007b95",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hospital_quarterly_hac_domain_hospital/release_date=2020-05-01/b1fd6157074a7e7600f64daf14497f75614255d83d921c7bcf1500e52d53936a/HOSPITAL_QUARTERLY_HAC_DOMAIN_HOSPITAL.csv",
+          "s3_version_id": "yVma.ZTfyO1mLyhusk68WTEvfgr.UsRR",
+          "byte_count": 486579,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/dcce1f41a4c4a2a8fe36829988f2b424605e52c3b71396304ff587e0cfda11d9/manifest.json",
+          "manifest_version_id": "8L2aef.DVgRA0PuWSXXCVfX8pKyDXZkW"
+        }
+      ]
+    },
+    {
+      "sha256": "b391d6df4dd4c5dae7d6768a9ec6969f283b771b338e41367cf2da0351c2daab",
+      "owner_table": "cms_cc_complications_and_deaths_national",
+      "canonical_observation_id": "4ffc77949148640f8e81269559891c477f26525641e7510e4d28bf44fe008b1a",
+      "observations": [
+        {
+          "table_name": "cms_cc_complications_and_deaths_national",
+          "observation_id": "4ffc77949148640f8e81269559891c477f26525641e7510e4d28bf44fe008b1a",
+          "logical_id": "295be61edae4223d1fb0f0c14433342f",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_complications_and_deaths_national/release_date=2021-01-27/b391d6df4dd4c5dae7d6768a9ec6969f283b771b338e41367cf2da0351c2daab/Complications_and_Deaths-National.csv",
+          "s3_version_id": "8Mla_C576QGvqnv87VjMlDILL4d3.CTt",
+          "byte_count": 2095,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-01-27/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/37e20d670a7683eaed9e60e5cfbc61542d5b796da6e041bbe063c46a12db017c/manifest.json",
+          "manifest_version_id": "eg7ckxjebhuIUmJC5e9x1dhR2tYw6iWm"
+        },
+        {
+          "table_name": "cms_cc_complications_and_deaths_national",
+          "observation_id": "95a37d025d54f175cef38147ed1b7700b79def3cdf22e99224e2c7fbf10b4fb1",
+          "logical_id": "a21f241565c831e396a2ef154eb60f54",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_qqw3_t4ie/release_date=2020-10-16/b391d6df4dd4c5dae7d6768a9ec6969f283b771b338e41367cf2da0351c2daab/qqw3-t4ie.csv",
+          "s3_version_id": "YB4OMzDY2WmiDvVVPo6yo0jITqtFLJD1",
+          "byte_count": 2095,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/bd0c4d812360bc5c4f3daabf8fa61b12332b61a0a114681a2d8e359c5d62b336/manifest.json",
+          "manifest_version_id": "TRzalQeGs2PxgNBs3N8an3NTJMj0O8cx"
+        },
+        {
+          "table_name": "cms_cc_complications_and_deaths_national",
+          "observation_id": "a1c6c3ea954c8f9fb0e9de317c7c4451716686457b77d504b386960fb900a030",
+          "logical_id": "a5a61c97ebac12b0a8dde35a8b3b0a65",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_complications_and_deaths_national/release_date=2021-04-28/b391d6df4dd4c5dae7d6768a9ec6969f283b771b338e41367cf2da0351c2daab/Complications_and_Deaths-National.csv",
+          "s3_version_id": "DSD.ujHNtKb_gyjXTrH4XTDWonlTvrHX",
+          "byte_count": 2095,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-04-28/main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f/2152f2869185085646885b92c1f36248225deb3e8d05bd74600977e9ce228883/manifest.json",
+          "manifest_version_id": "ArYcLvtcfUKfrH0_b7keFXf4WqcJoz14"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_qqw3_t4ie",
+          "observation_id": "cc5916c06c20ea49eba1d44280cefdd23080c6b17684e1c2ce2c0d2b661e6158",
+          "logical_id": "e3d92c4321b191bad8a6e7221b6e4952",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_qqw3_t4ie/release_date=2020-07-04/b391d6df4dd4c5dae7d6768a9ec6969f283b771b338e41367cf2da0351c2daab/pdc_s3_hos_data_qqw3_t4ie.csv",
+          "s3_version_id": "0ESbkfhEoU3MxO.CdlWjfCl7f24Rs1Yk",
+          "byte_count": 2095,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/d6da0d8a3dfa5cc0a8f101de1c3e04e1dfbd369cd42d5500300f9b2af954e664/manifest.json",
+          "manifest_version_id": "NNGPBzh7q9z.ue8QRksXUiZIySGMov_V"
+        },
+        {
+          "table_name": "cms_cc_complications_and_deaths_national",
+          "observation_id": "f71aa660ff3e86384eb4f6a4efa50cd803ce8061f6024b6fe1ee25485f6fc6e3",
+          "logical_id": "e2ff6f9fe3d6153a25e3bc7eb2c61c7d",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_complications_and_deaths_national/release_date=2021-03-31/b391d6df4dd4c5dae7d6768a9ec6969f283b771b338e41367cf2da0351c2daab/Complications_and_Deaths-National.csv",
+          "s3_version_id": "SXDPksHZdpjVwOcNV3WjZrhuBrUebVv4",
+          "byte_count": 2095,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-03-31/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/0499f276ea746768b473c6140598db7dc9defa72a6911de75d9b2852a1534460/manifest.json",
+          "manifest_version_id": "Jz2GSZRHJt4Tsiqzr_MBfnXg1Zu0YT.1"
+        }
+      ]
+    },
+    {
+      "sha256": "b50aedc30ebbebe72a5a6d8a73785639eced13ae072009179e73d8d25c0cc725",
+      "owner_table": "cms_cc_cjr_quality_reporting",
+      "canonical_observation_id": "0c607c1abfc51da82ff9abc29a18bcc53a67ec1a02ae20ecf62aa598b7453210",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_tqkv_mgxq",
+          "observation_id": "047d838c8b13c9e30ec971fbd6e91fdbb9860c548b139767b8d17132b8b0a45b",
+          "logical_id": "f5a0c96440806cedd17d3d751f96dd9a",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_tqkv_mgxq/release_date=2020-07-04/b50aedc30ebbebe72a5a6d8a73785639eced13ae072009179e73d8d25c0cc725/pdc_s3_hos_data_tqkv_mgxq.csv",
+          "s3_version_id": "fuPfqI74ojInnxq6JDteP1.OxbjLhhRN",
+          "byte_count": 80061,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/23922510f9c2f3dade883c6723c102451dbf279d5eb9eac9d6c091c3b9a5498e/manifest.json",
+          "manifest_version_id": "kBXpPQLjfzcJ01p6LyRcb5CRgNYwWu4y"
+        },
+        {
+          "table_name": "cms_cc_cjr_quality_reporting",
+          "observation_id": "06215ded75ae60e7d5ff7d3e98412f73ab2227567da9f0ccb8eb95f693d9c95c",
+          "logical_id": "74b699ed2dd969ee37fc409f1ea64deb",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_tqkv_mgxq/release_date=2020-10-16/b50aedc30ebbebe72a5a6d8a73785639eced13ae072009179e73d8d25c0cc725/tqkv-mgxq.csv",
+          "s3_version_id": "uXnbdPQSsDbYHa_M4cnKnENLDhXtePAW",
+          "byte_count": 80061,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/ec09234acd2095ce604f218c32efd4bbc7d6daa1735415960d72405d59a21c56/manifest.json",
+          "manifest_version_id": "nHJN5JPMebXhI4yfGFhUV34_hI1xhDuL"
+        },
+        {
+          "table_name": "cms_cc_cjr_quality_reporting",
+          "observation_id": "0c607c1abfc51da82ff9abc29a18bcc53a67ec1a02ae20ecf62aa598b7453210",
+          "logical_id": "5e4ccc8e6ecdbd7e83a3a466eea01f0f",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_cjr_py4_quality_reporting_july_2020_production_file/release_date=2021-03-31/b50aedc30ebbebe72a5a6d8a73785639eced13ae072009179e73d8d25c0cc725/CJR_PY4_Quality_Reporting_July_2020_Production_File.csv",
+          "s3_version_id": "jdIUYk5YFOPL9Onv4qnBm1R8X66wF94L",
+          "byte_count": 80061,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-03-31/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/85f556f1d22423903c7dc9de9f0596d2341a3abae08f5ab56fe94e7ec1ea1c53/manifest.json",
+          "manifest_version_id": "NjeYETapsKtT7Y_v3AOJLklw95mKVruE"
+        },
+        {
+          "table_name": "cms_cc_cjr_quality_reporting",
+          "observation_id": "47ae5bd201773cfd14e8f1b15b3c05c3a8a5d117ca1f5b2c75ac6822d00753cf",
+          "logical_id": "602a05d955170fd201729025c6ea5838",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_cjr_py4_quality_reporting_july_2020_production_file/release_date=2021-04-28/b50aedc30ebbebe72a5a6d8a73785639eced13ae072009179e73d8d25c0cc725/CJR_PY4_Quality_Reporting_July_2020_Production_File.csv",
+          "s3_version_id": "uasEoQMhfg3LUIAD9BASUQL47KkLFZEu",
+          "byte_count": 80061,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-04-28/main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f/6912626d98acd75a1de1720dfdbff99ea4cce5ce288c2e346352be0a78771d7a/manifest.json",
+          "manifest_version_id": ".7.LgH.s0IAHhZ4Wompym2mHqiFq57PW"
+        },
+        {
+          "table_name": "cms_cc_cjr_quality_reporting",
+          "observation_id": "515641f759b829a7e78eb589b241f078b2b7ac3a5c5dbe224788cf179ecf4491",
+          "logical_id": "f36b149063b2a3177bfe2f6b433f45c2",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_cjr_py4_quality_reporting_july_2020_production_file/release_date=2021-01-27/b50aedc30ebbebe72a5a6d8a73785639eced13ae072009179e73d8d25c0cc725/CJR_PY4_Quality_Reporting_July_2020_Production_File.csv",
+          "s3_version_id": "FWyJJBDivcBZ9CGIFxTyirc5LlxnkGUM",
+          "byte_count": 80061,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-01-27/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/b11dda3b966439fac32a3a82926a53173cb48830e79d2b3f51fd2601b62c8396/manifest.json",
+          "manifest_version_id": "KwGksDXK1gx6plRDW8qq84OaX2thmMpr"
+        }
+      ]
+    },
+    {
+      "sha256": "b7f5b2efb0147b34cda2b3793fba8ba47449ff6618d93691d71296c501a5fb05",
+      "owner_table": "cms_cc_hospital_readmissions_reduction_program_hospital",
+      "canonical_observation_id": "82b5e8c7617d81221650a520263519768d278dd9350919881c6f95d659fee87a",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_9n3s_kdb3",
+          "observation_id": "6caec0775cd3bb3ce2131151f3959a51529d4c3bfe7787780fb2280affba965d",
+          "logical_id": "c7a3e1cd01541d02374e529d1e1e68b1",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_9n3s_kdb3/release_date=2020-07-04/b7f5b2efb0147b34cda2b3793fba8ba47449ff6618d93691d71296c501a5fb05/pdc_s3_hos_data_9n3s_kdb3.csv",
+          "s3_version_id": "RbfwQbv66mXV1gh7MpHwZiTxh0D42fPe",
+          "byte_count": 2167348,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/e3359711958350209b95be9d76dadd46b54f7a17d4fdbd7b76ae433f4cf51600/manifest.json",
+          "manifest_version_id": "6JimRq4ToKy2rZ2LBbwuR_Bob46kzMip"
+        },
+        {
+          "table_name": "cms_cc_hospital_quarterly_qualitymeasure_rrp_hospital",
+          "observation_id": "753d96b252f9293bedaa1892d623211b2f58dc02c6f70d71b314f38aea01c564",
+          "logical_id": "4fe7a2e62dd080e19881fb0c222dfabb",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hospital_quarterly_qualitymeasure_rrp_hospital/release_date=2020-01-04/b7f5b2efb0147b34cda2b3793fba8ba47449ff6618d93691d71296c501a5fb05/HOSPITAL_QUARTERLY_QUALITYMEASURE_RRP_HOSPITAL.csv",
+          "s3_version_id": "0gS_miyzryjasV.QuI1YToasoJWWCrlB",
+          "byte_count": 2167348,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/bdb72ab9e30f826792e90cf16ecb3b03b050f67163d314f633158de9ca5914c7/manifest.json",
+          "manifest_version_id": "uTkhh99xr0_wD4ZLhQ1XZRe5rxm7BVWx"
+        },
+        {
+          "table_name": "cms_cc_hospital_readmissions_reduction_program_hospital",
+          "observation_id": "82b5e8c7617d81221650a520263519768d278dd9350919881c6f95d659fee87a",
+          "logical_id": "2f8c0e94e3cc1791b9f0c121cc8eb502",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_9n3s_kdb3/release_date=2020-10-16/b7f5b2efb0147b34cda2b3793fba8ba47449ff6618d93691d71296c501a5fb05/9n3s-kdb3.csv",
+          "s3_version_id": "pdPLwQRWYI25OyBrx.7.fvOKb7yN7Nga",
+          "byte_count": 2167348,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/78c8dab3a05b086b657ade8f776298409fa21284ab5fc13e7e7dc935dc04a5f6/manifest.json",
+          "manifest_version_id": "RjTp0YBbgbZqqKLQNLGr_tm7as4Pimge"
+        },
+        {
+          "table_name": "cms_cc_hospital_quarterly_qualitymeasure_rrp_hospital",
+          "observation_id": "ef81c5838c246252e21c8dccf76a8e7ecf80daca9ae2bfcfe75105672847851a",
+          "logical_id": "5f146f3bbea75188122deb878e628a4d",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hospital_quarterly_qualitymeasure_rrp_hospital/release_date=2020-05-01/b7f5b2efb0147b34cda2b3793fba8ba47449ff6618d93691d71296c501a5fb05/HOSPITAL_QUARTERLY_QUALITYMEASURE_RRP_HOSPITAL.csv",
+          "s3_version_id": "EcEbZj_sDj.GZOJwJkJaASM3.67T47Uw",
+          "byte_count": 2167348,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/3a1dc129bb563ef6d30a1e4b1ab82388f093786548abeac2bdee79b6b3b0bc4c/manifest.json",
+          "manifest_version_id": "x3m5WrJJg79R.E4FRvRwt.Sn2Wn00jkh"
+        }
+      ]
+    },
+    {
+      "sha256": "b9dfe198a5568d6e30613f3b5e3177bf21182da2e4333db9ec8c868ce4e73db6",
+      "owner_table": "cms_cc_net_change_in_base_op_drg_payment_amt",
+      "canonical_observation_id": "f92fddb448c1d8eb5002828f3cc4bb496b2346a89e405b8e962ebdcf3e5016fe",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_5gv4_jwyv",
+          "observation_id": "07cb40b9b31514c27d7ffa5b6b482d66d65eb30e22f7cc30532858db7a154f6d",
+          "logical_id": "49e9dc45b3342cd02e937e7a2fd6e5f9",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_5gv4_jwyv/release_date=2020-07-04/b9dfe198a5568d6e30613f3b5e3177bf21182da2e4333db9ec8c868ce4e73db6/pdc_s3_hos_data_5gv4_jwyv.csv",
+          "s3_version_id": "BHYuO9GdX2fO3Tr6cYT9s2yo1ejkwSHr",
+          "byte_count": 938,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/d6a55502871b03cac090dc37fa99c6f84bce160bf01cc286391e14bcb857880c/manifest.json",
+          "manifest_version_id": "YfvHByTxJVpQXm8aklHWU33N6m35Czqz"
+        },
+        {
+          "table_name": "cms_cc_net_change_in_base_op_drg_payment_amt",
+          "observation_id": "1910d223f4d230faa5ffdd5a2bbdec2c21bba8dc095fe2cac407de13833e5db1",
+          "logical_id": "bb16f10832aae0092a4f2ef82521e991",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_5gv4_jwyv/release_date=2020-10-16/b9dfe198a5568d6e30613f3b5e3177bf21182da2e4333db9ec8c868ce4e73db6/5gv4-jwyv.csv",
+          "s3_version_id": "f3E0NxNDfsLjUHxdgfi41priJsEctg1i",
+          "byte_count": 938,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/f98087e26983b8b67cea54e1ddadc9051583d8ae781b18832f32c92af9787e2e/manifest.json",
+          "manifest_version_id": "JwShK0fY5kJ_ibetkMXVGJGuuCOyvuJQ"
+        },
+        {
+          "table_name": "cms_cc_net_change_in_base_op_drg_payment_amt",
+          "observation_id": "ef7e168ae5f559ea26cb2b4c9417921f03b73b2d87e025507173ae42d03febf4",
+          "logical_id": "cb15b68be647453629ed522bb7f62331",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_fy2018_net_change_in_base_op_drg_payment_amt_2019_11_22/release_date=2020-01-04/b9dfe198a5568d6e30613f3b5e3177bf21182da2e4333db9ec8c868ce4e73db6/FY2018_Net_Change_in_Base_Op_DRG_Payment_Amt_2019-11-22.csv",
+          "s3_version_id": "bXW_IAnTkdcvgRmPITHPXZMKERGsRBpm",
+          "byte_count": 938,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/8b80326152e401415bc98fc293183ef6aebfe2d065ca6a75306bad6da36f6caa/manifest.json",
+          "manifest_version_id": "Gb5gcadG3mThfhPb1E8q_YaBaM69mHfP"
+        },
+        {
+          "table_name": "cms_cc_net_change_in_base_op_drg_payment_amt",
+          "observation_id": "f92fddb448c1d8eb5002828f3cc4bb496b2346a89e405b8e962ebdcf3e5016fe",
+          "logical_id": "a00cd7f7e45f5aea74d054d254bb8dc9",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_fy2018_net_change_in_base_op_drg_payment_amt_2019_11_22/release_date=2020-05-01/b9dfe198a5568d6e30613f3b5e3177bf21182da2e4333db9ec8c868ce4e73db6/FY2018_Net_Change_in_Base_Op_DRG_Payment_Amt_2019-11-22.csv",
+          "s3_version_id": "9ra6e.X.Vk12bItZ91Iv0YVTZwFs50MS",
+          "byte_count": 938,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/0d90dcd3131b99f3f31bdbc22330e7df5001c8b9048d38f4a79307ffc40e4162/manifest.json",
+          "manifest_version_id": "xSFFZnuZb7hl7DPhjnH.L4qrd1RjaEqU"
+        }
+      ]
+    },
+    {
+      "sha256": "c21b72ebaf53c11a67490e9b03d0141c67349d8c58123c6e798169c823c5d470",
+      "owner_table": "cms_cc_hospital_quarterly_hac_domain_hospital",
+      "canonical_observation_id": "bb402bb3a7bf6f4cf9f56aee8f85432bbb69b0459b99a6466bde019b2c8564a8",
+      "observations": [
+        {
+          "table_name": "cms_cc_hospital_quarterly_hac_domain_hospital",
+          "observation_id": "aae016018bcc78f9b8fc4b4803240fbe3f693e6b8483241c638afcb32556c442",
+          "logical_id": "eaea733ef5a5de0af7a69ad4084b2077",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hospital_quarterly_hac_domain_hospital/release_date=2019-04-04/c21b72ebaf53c11a67490e9b03d0141c67349d8c58123c6e798169c823c5d470/HOSPITAL_QUARTERLY_HAC_DOMAIN_HOSPITAL.csv",
+          "s3_version_id": "toaIF_XmpBfKJHkK3T94pKVtQrWeUeff",
+          "byte_count": 851346,
+          "manifest_key": "cms/hospitals/manifests/release_date=2019-04-04/main-hai-pdc__20260924T174629Z__0403efe47d35435d8f9ad77439e6b216/17d64ebae5c865493248137ce5db74299123ca2fbda7fd81f6d6dda77f54197c/manifest.json",
+          "manifest_version_id": "PVaEUZ7Pkvf8Isdbg8a9D9XpCV2JEn0t"
+        },
+        {
+          "table_name": "cms_cc_hospital_quarterly_hac_domain_hospital",
+          "observation_id": "bb402bb3a7bf6f4cf9f56aee8f85432bbb69b0459b99a6466bde019b2c8564a8",
+          "logical_id": "331eda8b419beb7f2a8bf271a4043fc2",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hospital_quarterly_hac_domain_hospital/release_date=2019-07-31/c21b72ebaf53c11a67490e9b03d0141c67349d8c58123c6e798169c823c5d470/HOSPITAL_QUARTERLY_HAC_DOMAIN_HOSPITAL.csv",
+          "s3_version_id": "s8PJM5FDaxg6rvaSMGW_DH2S0DR8jO2F",
+          "byte_count": 851346,
+          "manifest_key": "cms/hospitals/manifests/release_date=2019-07-31/main-hai-pdc__20260924T182348Z__0089579585404e0995d8d9f59583204a/1567bd996c400adb9fad93c604bb9421a86c1398f94a3817c915c975c10709b3/manifest.json",
+          "manifest_version_id": "_hf65PCRaHUGPsotpypTPADAL_HPoIC9"
+        },
+        {
+          "table_name": "cms_cc_hospital_quartery_hac_domain_hospital",
+          "observation_id": "fcb7b0cc5421855981e8cde4fc87975e06c1ef69cde49d0d747b77827eca07d2",
+          "logical_id": "e00095448a8d2d49c35c5d28515b0b13",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hospital_quartery_hac_domain_hospital/release_date=2019-03-04/c21b72ebaf53c11a67490e9b03d0141c67349d8c58123c6e798169c823c5d470/HOSPITAL_QUARTERY_HAC_DOMAIN_HOSPITAL.csv",
+          "s3_version_id": "kErXYLq2BgHs9B3xfv3GoG2sNh8TTM9c",
+          "byte_count": 851346,
+          "manifest_key": "cms/hospitals/manifests/release_date=2019-03-04/main-hai-pdc__20260924T170628Z__f3cea24d6ba9442c8e4d30595b72b9e3/1b321ee5cbf343628eb265cf9897277dff0b1144c13de090f92e4731938548d8/manifest.json",
+          "manifest_version_id": "Od4tNbc_0.DNqTO.v0ceAPbETes5Picr"
+        }
+      ]
+    },
+    {
+      "sha256": "c6ee78e665e080c3cf7ff517793aa6e087c3e15444ace2b099cb2b6cc542da6e",
+      "owner_table": "cms_cc_e6hj_umam",
+      "canonical_observation_id": "5b29a879fbbadb415cd6b3b50a471b1052804ccdeba4fb8d10ad44571995fe8a",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_e6hj_umam",
+          "observation_id": "44cb74886375323af49a4cd1754f84b478bc4ea1ff66385c47572b36a51d8f31",
+          "logical_id": "3cb43405afe410074689903344d890a6",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_e6hj_umam/release_date=2020-07-04/c6ee78e665e080c3cf7ff517793aa6e087c3e15444ace2b099cb2b6cc542da6e/pdc_s3_hos_data_e6hj_umam.csv",
+          "s3_version_id": "HTFaiOdtqDzBC9c3s6q7GHbhxIj_lq_w",
+          "byte_count": 602,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/a9ffc99195476df38d4434a1195c4cd442dc0ea304adbe35d7460997dcb07968/manifest.json",
+          "manifest_version_id": "mv_bCGVchAMKMOS0h1zg8gnBiVB4wQRk"
+        },
+        {
+          "table_name": "cms_cc_e6hj_umam",
+          "observation_id": "5b29a879fbbadb415cd6b3b50a471b1052804ccdeba4fb8d10ad44571995fe8a",
+          "logical_id": "4b6ebf8d4872e7de3240513f4a6f4b1a",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_e6hj_umam/release_date=2020-10-16/c6ee78e665e080c3cf7ff517793aa6e087c3e15444ace2b099cb2b6cc542da6e/e6hj-umam.csv",
+          "s3_version_id": "h10kQC.AMQHnWyg0o6A2ZyYXSkwW6897",
+          "byte_count": 602,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/335bce8ffa67649a3d972ef554ce2ba164c99e4bec07af2b1ce42250644decd5/manifest.json",
+          "manifest_version_id": "pcbwMNJ8uliFCOA3VIQrULvDMujOu.0y"
+        }
+      ]
+    },
+    {
+      "sha256": "c70ef96db7f2dfc39686c203cb285aed0e92e9cc3b282a4443657c9fd016f0fd",
+      "owner_table": "cms_cc_p7bc_fjpi",
+      "canonical_observation_id": "0acbfaac0efbd6f38d4527a9de9e2c2f7da2347ec49f6adcfe5045ee99137ac1",
+      "observations": [
+        {
+          "table_name": "cms_cc_p7bc_fjpi",
+          "observation_id": "0acbfaac0efbd6f38d4527a9de9e2c2f7da2347ec49f6adcfe5045ee99137ac1",
+          "logical_id": "c8d8762c576b2b187498139664332f85",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_p7bc_fjpi/release_date=2020-10-16/c70ef96db7f2dfc39686c203cb285aed0e92e9cc3b282a4443657c9fd016f0fd/p7bc-fjpi.csv",
+          "s3_version_id": "jfqYpG9JPB0w_yO.EjZyNuIyNv7m8KKd",
+          "byte_count": 2437,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/ef9680c98dd1830013989d68cfed1fc9a88e4c1b62bd799d3a5a595be0ad7471/manifest.json",
+          "manifest_version_id": "1wwPY7AVtTdtx85.9fAvr.j7wB98hImR"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_p7bc_fjpi",
+          "observation_id": "7a8ef3d3cf5d7e373ff5886950cd3ea27a9520aba2cbe7164564b8128481fef4",
+          "logical_id": "16e62893323e378769206332cb1e289f",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_p7bc_fjpi/release_date=2020-07-04/c70ef96db7f2dfc39686c203cb285aed0e92e9cc3b282a4443657c9fd016f0fd/pdc_s3_hos_data_p7bc_fjpi.csv",
+          "s3_version_id": "UNkPEI7WdRX_brjFUU2ktsG1Flklqucc",
+          "byte_count": 2437,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/c57b675a41e252074409db25c0a4ecc9cb05b305edaf1df2ab4ab65b8e8b4c37/manifest.json",
+          "manifest_version_id": "tHui2qwyfGwhpM.XgQtNgvvpZFghnPoK"
+        }
+      ]
+    },
+    {
+      "sha256": "c91759d018d9b443311fdb3147e88daae466b1bf6306c1b468adcd0be24fe65f",
+      "owner_table": "cms_cc_pch_outcomes_hospital",
+      "canonical_observation_id": "757f388806e588111db870af2a7ab1e9d4974d6307c5fdc14887f508c3c66edd",
+      "observations": [
+        {
+          "table_name": "cms_cc_pch_outcomes_hospital",
+          "observation_id": "757f388806e588111db870af2a7ab1e9d4974d6307c5fdc14887f508c3c66edd",
+          "logical_id": "64482ba18fedb75e5fef91caedb0514a",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pch_outcomes_hospital/release_date=2021-04-28/c91759d018d9b443311fdb3147e88daae466b1bf6306c1b468adcd0be24fe65f/PCH_OUTCOMES_HOSPITAL.csv",
+          "s3_version_id": "OFnZZRj7p0IThw7fyEAknYwubo95e2Bt",
+          "byte_count": 6214,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-04-28/main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f/9a6c4620ea153d66a9f0502b16bc4e25b9652d64a28e912c87dec1df7d382784/manifest.json",
+          "manifest_version_id": "JHM0zYhwPcqo81dAUMZkOZreFd_RvriO"
+        },
+        {
+          "table_name": "cms_cc_pch_outcomes_hospital",
+          "observation_id": "7f831c63a27282bfcba07629e275ad6f93db45d407e11f2081894f0f7d8d18e9",
+          "logical_id": "e6d37ced2b1de23829cb29ee0639cb79",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pch_outcomes_hospital/release_date=2021-03-31/c91759d018d9b443311fdb3147e88daae466b1bf6306c1b468adcd0be24fe65f/PCH_OUTCOMES_HOSPITAL.csv",
+          "s3_version_id": "hcqBJOjbnZpM5b64Nc9GbBy4naN3EYyC",
+          "byte_count": 6214,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-03-31/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/0f4542d8c90a99a78fc067cadeea2619823737ba342d93d47c5cdca02b9a3837/manifest.json",
+          "manifest_version_id": "eRK6b3VwMV3u4dNPkOsQkIUn_adF2k5B"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_z8ax_x9j1",
+          "observation_id": "b2b7079a908532cb41514d607d51b2f91df7a7b0251a79410ce10feed9c80f56",
+          "logical_id": "479924c6fb82eaa62fcb4a75f36d78c6",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_z8ax_x9j1/release_date=2020-07-04/c91759d018d9b443311fdb3147e88daae466b1bf6306c1b468adcd0be24fe65f/pdc_s3_hos_data_z8ax_x9j1.csv",
+          "s3_version_id": "eVsMvM79kF0xmINGQBAKyxH5cm6LURPo",
+          "byte_count": 6214,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/e077055d5d939007fff512329a699efdf235e87c0f6446ba8cee667b6ef18eb8/manifest.json",
+          "manifest_version_id": "uZen5Uz8YVYYs3t_pLW8_rLhPZypgksE"
+        },
+        {
+          "table_name": "cms_cc_pch_complications_unplanned_hospital_visits_hospital",
+          "observation_id": "e6635d64813a81339f5d45b013c1b685ecf9795a90a042d2b1154436f1b2a71c",
+          "logical_id": "1a22834e96eb50710be42807f73fa28a",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_z8ax_x9j1/release_date=2020-10-16/c91759d018d9b443311fdb3147e88daae466b1bf6306c1b468adcd0be24fe65f/z8ax-x9j1.csv",
+          "s3_version_id": "pfWFG8HG48SW9KfqpcIlNoAFZQcaOpLF",
+          "byte_count": 6214,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/c44a96e2e1061fb6bdaebb0f2ce09ba26f40a380c4d09527e4d2d52b9015c4c7/manifest.json",
+          "manifest_version_id": "WXLzUj8fERSJCwOBTm_1.Gvi3Zt6M2w7"
+        },
+        {
+          "table_name": "cms_cc_pch_outcomes_hospital",
+          "observation_id": "f21b4754a85b9e124aa5a20851b85820899b0d8b19ae6c22e8b7af90a4e0a8a9",
+          "logical_id": "c67965e52f2620daa013f3d99b272d94",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pch_outcomes_hospital/release_date=2021-01-27/c91759d018d9b443311fdb3147e88daae466b1bf6306c1b468adcd0be24fe65f/PCH_OUTCOMES_HOSPITAL.csv",
+          "s3_version_id": "uzg8XuqOzyPzypkAInS88zs0MwXwkuK3",
+          "byte_count": 6214,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-01-27/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/5db5c425d61550529efc8c6da2d2980dd0e72f8f52d2408e0fa833d93b6028e5/manifest.json",
+          "manifest_version_id": "GpN.lp7kLbCsR8nlRf4Mwn3zhyGf6XQo"
+        }
+      ]
+    },
+    {
+      "sha256": "d856d4055d5793bf1464c16b8bf83f7c8c26881532f0808aaf864bd82625fc07",
+      "owner_table": "cms_cc_g3fg_3myg",
+      "canonical_observation_id": "fff7b5ef506e8bcf163cd80b564f13a520987bf694b80433ce07affab3b5f6de",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_g3fg_3myg",
+          "observation_id": "c028d4b20eb21bd203100f61bc25065d432177428e87a2cc0c9dc754c267dd14",
+          "logical_id": "c29510766a465343a3bc9d68dcdbe5bd",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_g3fg_3myg/release_date=2020-07-04/d856d4055d5793bf1464c16b8bf83f7c8c26881532f0808aaf864bd82625fc07/pdc_s3_hos_data_g3fg_3myg.csv",
+          "s3_version_id": "GpVV_ZLOAWn6Rg4SNGIG4rdppuMgo9HF",
+          "byte_count": 12910,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/01a6a6846074df93f5c16872b6081a9d4cefe6b2a7b09e29bb297507f743b58e/manifest.json",
+          "manifest_version_id": "sWsJ9ilfkZCzAmj0AMthhAlUkGBQ58FL"
+        },
+        {
+          "table_name": "cms_cc_g3fg_3myg",
+          "observation_id": "fff7b5ef506e8bcf163cd80b564f13a520987bf694b80433ce07affab3b5f6de",
+          "logical_id": "b7988c3e8bc97f814309a1310b4dd726",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_g3fg_3myg/release_date=2020-10-16/d856d4055d5793bf1464c16b8bf83f7c8c26881532f0808aaf864bd82625fc07/g3fg-3myg.csv",
+          "s3_version_id": "iWeMNGyiCb9CEKLXsWfpBbIKPyM6mdGk",
+          "byte_count": 12910,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/db9d27899fae5d80e3d1240bac40c66e3e312234d7bf308d2fb2352d2377c7ec/manifest.json",
+          "manifest_version_id": "V0Z7PcH69Bg27XY2Bsz3YkN7MT4trK96"
+        }
+      ]
+    },
+    {
+      "sha256": "d914d6e26d3de2e5d8f082d9bf6bdb9a82107fe905d8b7a75f675387c1f6e876",
+      "owner_table": "cms_cc_hvbp_tps",
+      "canonical_observation_id": "e925952b40694a26b51ee0060e245fc456ea8389e2c8518e8bf45edbad840854",
+      "observations": [
+        {
+          "table_name": "cms_cc_hvbp_tps",
+          "observation_id": "82b4895157d375b9fa29e55fab4ac08eaba412f6b321d8512bea16e7b41a0c23",
+          "logical_id": "fbd6d1f73703e2c535aa7c61981cdd81",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hvbp_tps_12_09_2019/release_date=2020-05-01/d914d6e26d3de2e5d8f082d9bf6bdb9a82107fe905d8b7a75f675387c1f6e876/hvbp_tps_12_09_2019.csv",
+          "s3_version_id": "Zpq7CcPW_BFV6C5tcx7O9aK_4Fm8tb6J",
+          "byte_count": 618197,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/9c31bca6366d0f8bb80035829ebaea026c7a13e5a7393b4fc04b47b8e4d1b7cf/manifest.json",
+          "manifest_version_id": "oKLCwH3WMSaos.hMP3yXPsuPAg7K9zwH"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_ypbt_wvdk",
+          "observation_id": "d1bf0f53519f2f645b0576c7c1bd0f0ae9119f9f47167a25ee5aab1d3b978f36",
+          "logical_id": "c16c927f73e5bfcb4875607e623e6592",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_ypbt_wvdk/release_date=2020-07-04/d914d6e26d3de2e5d8f082d9bf6bdb9a82107fe905d8b7a75f675387c1f6e876/pdc_s3_hos_data_ypbt_wvdk.csv",
+          "s3_version_id": "wEO17dt_jA7IOHqAISekxX2fuD3M54lg",
+          "byte_count": 618197,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/59887f78ea65bb25f3ff491dba8dd8526bc200a32aea1b1d6c6503b44f5ad2ff/manifest.json",
+          "manifest_version_id": "gB3lxc4zVqXyyKDQVzUeR5HJq4vjUzI7"
+        },
+        {
+          "table_name": "cms_cc_hvbp_tps",
+          "observation_id": "e925952b40694a26b51ee0060e245fc456ea8389e2c8518e8bf45edbad840854",
+          "logical_id": "13b46cfc5f3ad9899312413f1caa32b7",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hvbp_tps_12_09_2019/release_date=2020-01-04/d914d6e26d3de2e5d8f082d9bf6bdb9a82107fe905d8b7a75f675387c1f6e876/hvbp_tps_12_09_2019.csv",
+          "s3_version_id": "CVssXNgpXyHr8BTxIgIXPJj_rO51wawI",
+          "byte_count": 618197,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/a4f77324bc6c4061acd1a5b5f876e04caecd7cd54bccec369712347934a65470/manifest.json",
+          "manifest_version_id": "AKRL4ymJRisztmj.wYkWcyI3kgkZT5lV"
+        },
+        {
+          "table_name": "cms_cc_hvbp_tps",
+          "observation_id": "ef81bcd92aa12c101f87a85e7d939711969ab3b8c3664a1ae56f95880d02d2b3",
+          "logical_id": "583ec7a119a4a74882c12a06dc0af943",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_ypbt_wvdk/release_date=2020-10-16/d914d6e26d3de2e5d8f082d9bf6bdb9a82107fe905d8b7a75f675387c1f6e876/ypbt-wvdk.csv",
+          "s3_version_id": "JqmQioSlguDsaeqd57KUqyfqimCciJLX",
+          "byte_count": 618197,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/888a1d4d4152913062bdd945fe9365db002b191fe607f182a26fde8d9a1408d4/manifest.json",
+          "manifest_version_id": "War9xE9u46MZGXvQxJxpHNGxs1S8I2dQ"
+        }
+      ]
+    },
+    {
+      "sha256": "e2c66456a7c0106b69c4742a0b999d9317f606fc2d34744c3ff36e03454ee5ed",
+      "owner_table": "cms_cc_asc_national",
+      "canonical_observation_id": "c13dd4adc19acaa43c30cd420bcb2582190842d4ac8b6956ea00db8614c54f84",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_wue8_3vwe",
+          "observation_id": "0499b95de2665c12dd247b7dfbc742656577a10b43abc78ef93fb92f8cda9017",
+          "logical_id": "4497df652027b3992e2aca5d3768f182",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_wue8_3vwe/release_date=2020-07-04/e2c66456a7c0106b69c4742a0b999d9317f606fc2d34744c3ff36e03454ee5ed/pdc_s3_hos_data_wue8_3vwe.csv",
+          "s3_version_id": "YDZdISQ.n8dm3M1KtO5WiUAa1isJQRQW",
+          "byte_count": 529,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/0f67b7dc513ad7e85aeafac7d80fe366d4e4269f06fb1b50038571f298386d4c/manifest.json",
+          "manifest_version_id": "wc3CIBFMDtqXNvbzx0GWYmSDs8En5bXp"
+        },
+        {
+          "table_name": "cms_cc_asc_national",
+          "observation_id": "c13dd4adc19acaa43c30cd420bcb2582190842d4ac8b6956ea00db8614c54f84",
+          "logical_id": "5c9f76fdea32173254731273331a6ce7",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_asc_national/release_date=2020-01-04/e2c66456a7c0106b69c4742a0b999d9317f606fc2d34744c3ff36e03454ee5ed/ASC_National.csv",
+          "s3_version_id": "Fw7PSGV7QmLGLj24cRXDWSs7AjeGmyrj",
+          "byte_count": 529,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/c501ac2d5f7d82b462db12de1f48c59370aaf1c21bc6ac4ebdd4b6797cc239ff/manifest.json",
+          "manifest_version_id": "uNkR4BGG1Z8MBgl6YLs8d1aONLT7noNG"
+        },
+        {
+          "table_name": "cms_cc_asc_national",
+          "observation_id": "cc022b101592b6b84a44cd583b2b93efdc52697bc313af04bd1b1e9219205569",
+          "logical_id": "e96e41d7aa90b5881b5eb573efac070a",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_asc_national/release_date=2020-05-01/e2c66456a7c0106b69c4742a0b999d9317f606fc2d34744c3ff36e03454ee5ed/ASC_National.csv",
+          "s3_version_id": "zOnXZS9.bIrGSQJUtvqVJVvO6YoKkQXA",
+          "byte_count": 529,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/69cea4f72c9fc26fe9c55bdd686e7d02351ff5ff217943489ead5d4964c518a4/manifest.json",
+          "manifest_version_id": "B8G4rZWuIBWydeMThWiOCxrQqQJq29cC"
+        }
+      ]
+    },
+    {
+      "sha256": "e33e14a08a656c26b541ce73afafe492674b8b33a9069edf7b6bfe01de35e8d1",
+      "owner_table": "cms_cc_oqr_oas_cahps_national",
+      "canonical_observation_id": "a293b4c42c163a824ced516fc2143c41663769a8cecd8a1ee2920447bf73ad97",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_s5pj_hua3",
+          "observation_id": "3c5f6fbcc11b6c515140118688c240028b788a309230ec78e074a244f6db2283",
+          "logical_id": "0fee668e653328d3faf910b4ecd4e33e",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_s5pj_hua3/release_date=2020-07-04/e33e14a08a656c26b541ce73afafe492674b8b33a9069edf7b6bfe01de35e8d1/pdc_s3_hos_data_s5pj_hua3.csv",
+          "s3_version_id": "uU8MXF30CQNnoyKEuyru3gpYHVIzbhZb",
+          "byte_count": 1612,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/c73129a3a17590353c753d145439e4a1fd8e43ff351d6f8bc8b1999c9ed51056/manifest.json",
+          "manifest_version_id": "O_Y40owaf81pXueKfEZgO2uyib8RhrZo"
+        },
+        {
+          "table_name": "cms_cc_oqr_oas_cahps_national",
+          "observation_id": "a293b4c42c163a824ced516fc2143c41663769a8cecd8a1ee2920447bf73ad97",
+          "logical_id": "0f7dc9b30c1f0b131cb1008c74bdd833",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_s5pj_hua3/release_date=2020-10-16/e33e14a08a656c26b541ce73afafe492674b8b33a9069edf7b6bfe01de35e8d1/s5pj-hua3.csv",
+          "s3_version_id": "rTaUyQWdJQuZrLLe4sbwmQENw2Ilp00t",
+          "byte_count": 1612,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/0ca51e069afe5ee98634039354662943f6615e5fc4e1a926628cdfaf547e2224/manifest.json",
+          "manifest_version_id": "dEgQ8L8Hn81qzUsGVrhwezzTzhJ2POe9"
+        }
+      ]
+    },
+    {
+      "sha256": "ed0ce306419d6b5e02a3e12e7b0cf26fbb0166f1ee1b71dee586e7fb5d990bc7",
+      "owner_table": "cms_cc_hvbp_safety",
+      "canonical_observation_id": "c90927ae0ec9f4512f1e7f7360370b7403ab16a8f8c90f3298ced85cef8229f3",
+      "observations": [
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_dgmq_aat3",
+          "observation_id": "4ff48b64c0245fcd1fb82b9b36a5b1b12834dd65695f307cffea05f1dfed0bca",
+          "logical_id": "5d26fe433846ac7071e8a1112af6c941",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_dgmq_aat3/release_date=2020-07-04/ed0ce306419d6b5e02a3e12e7b0cf26fbb0166f1ee1b71dee586e7fb5d990bc7/pdc_s3_hos_data_dgmq_aat3.csv",
+          "s3_version_id": "im2udP2xfveJihtmP6P_FsiHGn5FnH9C",
+          "byte_count": 1571417,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/3e67d108dab4163e69a923cfa3d5e1e5fdf62e2cee59535ad5359760427b26c8/manifest.json",
+          "manifest_version_id": "DP3Ow_JgESwGa4tvM.vyuvP639nJuhsk"
+        },
+        {
+          "table_name": "cms_cc_hvbp_safety",
+          "observation_id": "5e6ff62bb418c9a50cce122dd1d422e190b9186743deb071486ed31a0acc6950",
+          "logical_id": "d368c09f26ee5d22ffa8499796e4afb7",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hvbp_safety_12_09_2019/release_date=2020-05-01/ed0ce306419d6b5e02a3e12e7b0cf26fbb0166f1ee1b71dee586e7fb5d990bc7/hvbp_safety_12_09_2019.csv",
+          "s3_version_id": "stxAyoi91KJ.Wpi.JG1BJehWOLkgP36w",
+          "byte_count": 1571417,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/74d2eb3caf0b0736fa622ca1916f72bc203e473ba4fd938a0f627057d10ffe5d/manifest.json",
+          "manifest_version_id": "vIv2K7s4yh7ucUKqj4eHe3optw0bW6dG"
+        },
+        {
+          "table_name": "cms_cc_hvbp_safety",
+          "observation_id": "8b388c7d69d8555f90a9aa389df4ae1534899509f255d839a99e5b6475bb8795",
+          "logical_id": "5030b3dc45cd23f7d27de9c5694f89f9",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_hvbp_safety_12_09_2019/release_date=2020-01-04/ed0ce306419d6b5e02a3e12e7b0cf26fbb0166f1ee1b71dee586e7fb5d990bc7/hvbp_safety_12_09_2019.csv",
+          "s3_version_id": "XNYBU_B9eOZf8vqibpeJt30mxwX.9M3h",
+          "byte_count": 1571417,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/351cd2444c071503c4e2d39b3cf9448f836ce4abd041a122641031a6c12bed2e/manifest.json",
+          "manifest_version_id": "rBIBq._hf9yUuRkRjFS3WU00Ffv711xE"
+        },
+        {
+          "table_name": "cms_cc_hvbp_safety",
+          "observation_id": "c90927ae0ec9f4512f1e7f7360370b7403ab16a8f8c90f3298ced85cef8229f3",
+          "logical_id": "2490d014f7700ff9543b543882a09013",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_dgmq_aat3/release_date=2020-10-16/ed0ce306419d6b5e02a3e12e7b0cf26fbb0166f1ee1b71dee586e7fb5d990bc7/dgmq-aat3.csv",
+          "s3_version_id": "e32CAFOTaYF0bf_4R8Hzrm7XiUnkk.U.",
+          "byte_count": 1571417,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/3d16639775cb465f83b6493986fc882d74e3e1b2f43ca81038db8bfc5b171af8/manifest.json",
+          "manifest_version_id": "8MubN5MUI_mmj2RFAvcKJZUGqiuYFb1C"
+        }
+      ]
+    },
+    {
+      "sha256": "f0ada3338afe8437ff0f8d903110c11fcdecd8d6358b689e775d8885ce26791b",
+      "owner_table": "cms_cc_va_psi",
+      "canonical_observation_id": "32569fb540144e1b518e2d6343aaabd8958d0c98c4cba75d1a9f9731d91ae0fe",
+      "observations": [
+        {
+          "table_name": "cms_cc_va_psi",
+          "observation_id": "32569fb540144e1b518e2d6343aaabd8958d0c98c4cba75d1a9f9731d91ae0fe",
+          "logical_id": "65210aa9e3d9c6a4a6b9b3da368eae29",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_va_psi/release_date=2021-03-31/f0ada3338afe8437ff0f8d903110c11fcdecd8d6358b689e775d8885ce26791b/VA_PSI.csv",
+          "s3_version_id": "uMIQExQA0zeHl0GnTNvWqpmosymhogbN",
+          "byte_count": 403166,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-03-31/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/b0dab798c5fcd372a05da1ac005cbd2c45884b2d634a1778a47ae790bbe4266d/manifest.json",
+          "manifest_version_id": ".yUMYerMON0cgp4OEpvOephbqUC3dxL5"
+        },
+        {
+          "table_name": "cms_cc_esr2_9zyn",
+          "observation_id": "63811126a9bfcf57c5baf37b838d10dbc894d79891ec530247a337ac074a944c",
+          "logical_id": "f17bd62058d9e1f5e7404b1f1101c48d",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_esr2_9zyn/release_date=2020-10-16/f0ada3338afe8437ff0f8d903110c11fcdecd8d6358b689e775d8885ce26791b/esr2-9zyn.csv",
+          "s3_version_id": "cYtmYQZxAf8h5UKQ8fbA8fOFel0npKf9",
+          "byte_count": 403166,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/875f8bd376886b82d4b5d32e80703bb56928d0f00f169812abd19ddf71344509/manifest.json",
+          "manifest_version_id": "FRQMSbku.SeoYe10YAmKQw8SwlKIQV_x"
+        },
+        {
+          "table_name": "cms_cc_va_psi",
+          "observation_id": "9d6f007b09415b8dc845aa52eb3a7432e687e0da9860329d2fdd016d3d252536",
+          "logical_id": "d1951f85f4152012a6a400d6e18c0560",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_va_psi/release_date=2021-01-27/f0ada3338afe8437ff0f8d903110c11fcdecd8d6358b689e775d8885ce26791b/VA_PSI.csv",
+          "s3_version_id": "yTcx8AkNvNFFp1u59N0iI3RTvyd1X051",
+          "byte_count": 403166,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-01-27/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/ffb9770fbe228348627c123d1f9a9653da3722fffb7f0aad7e76ed4138393d59/manifest.json",
+          "manifest_version_id": "3YActizoWLw1cZJ87x6K19zkLzspqOC4"
+        }
+      ]
+    },
+    {
+      "sha256": "f12e97fbdb2dc46f04cc0df6319aa693428a3a65d2890bcc853b50688072e018",
+      "owner_table": "cms_cc_value_of_care_national",
+      "canonical_observation_id": "be246f43f55f86ba315603a34a42cef22f86be980158a37270bb4e94e5049f72",
+      "observations": [
+        {
+          "table_name": "cms_cc_gbq5_7hzr",
+          "observation_id": "5c42e4f00c173b6844ed620b0d33eef1833754e6206f012ac9982120fa1c0c43",
+          "logical_id": "27192c598907710fc3d15f65158598ac",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_gbq5_7hzr/release_date=2020-10-16/f12e97fbdb2dc46f04cc0df6319aa693428a3a65d2890bcc853b50688072e018/gbq5-7hzr.csv",
+          "s3_version_id": "EwJFLwhGwzgrx6MJshcaDtqRDg5eXj9q",
+          "byte_count": 5903,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/ff6fffa2cc58ff166ace55aa5053e9d3113e57c7c16948b878b97c194670dea9/manifest.json",
+          "manifest_version_id": "Gkm66ozHLmrq_oyaLfiHgToA0FFyJPTe"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_gbq5_7hzr",
+          "observation_id": "7149957cd9b30652a5955745011e6d054ff55994e82b4c61bbb6af764cd1b848",
+          "logical_id": "82a93673b44d0d058d34a65c4509feb3",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_gbq5_7hzr/release_date=2020-07-04/f12e97fbdb2dc46f04cc0df6319aa693428a3a65d2890bcc853b50688072e018/pdc_s3_hos_data_gbq5_7hzr.csv",
+          "s3_version_id": "6Un26RXJUGkgxfq0Yf80QDn694jIrJTE",
+          "byte_count": 5903,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/83960492c5d88087741eaf1d251934f6fe8b7eb5b9b83618ad02f4109cb3dd71/manifest.json",
+          "manifest_version_id": "TM7TGcMjOCJLyw5f2l2CLQEx71NNKvdF"
+        },
+        {
+          "table_name": "cms_cc_value_of_care_national",
+          "observation_id": "822d3cd1b0d4b91a4f06c85559846e1201fc035042bb62a53165b21529791257",
+          "logical_id": "b50b577f1d9b319a5935ce6d0a21cd27",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_value_of_care_national/release_date=2021-01-27/f12e97fbdb2dc46f04cc0df6319aa693428a3a65d2890bcc853b50688072e018/Value_of_Care-National.csv",
+          "s3_version_id": "0GzjuQGCzjBm8m55PQAOaSqfAYAnSigD",
+          "byte_count": 5903,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-01-27/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/a648c37b488480cfbcb654aab8b4c58b3632f66f2acbacff081705a801e212ac/manifest.json",
+          "manifest_version_id": "FYviTHdhfCvZ00bEPC03iSa0xMsPQlKV"
+        },
+        {
+          "table_name": "cms_cc_value_of_care_national",
+          "observation_id": "be246f43f55f86ba315603a34a42cef22f86be980158a37270bb4e94e5049f72",
+          "logical_id": "1487cf9f818cc10fe255b2d8fd9b0a10",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_value_of_care_national/release_date=2021-03-31/f12e97fbdb2dc46f04cc0df6319aa693428a3a65d2890bcc853b50688072e018/Value_of_Care-National.csv",
+          "s3_version_id": "uHuho6gcWsK6ndW5AXYRlCtQvUs5SYxZ",
+          "byte_count": 5903,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-03-31/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/c420c38020e9c8de03111d22e4cc0c18cafbedd9537bc5d5541a3448b7cfebd3/manifest.json",
+          "manifest_version_id": "axYzmasSjBCWrtB1g3u2k5qrAln73ozv"
+        },
+        {
+          "table_name": "cms_cc_value_of_care_national",
+          "observation_id": "cba18b4a2e3b03f3e667efc306b9ba91aadd2b3389fbdb990985e0d882d900d7",
+          "logical_id": "5ab6165166efeae6c7ccc0e8c016326a",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_value_of_care_national/release_date=2021-04-28/f12e97fbdb2dc46f04cc0df6319aa693428a3a65d2890bcc853b50688072e018/Value_of_Care-National.csv",
+          "s3_version_id": "ySiPEOx9SuV.UlapnHolWASA0GkXbxRM",
+          "byte_count": 5903,
+          "manifest_key": "cms/hospitals/manifests/release_date=2021-04-28/main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f/c0cf7738d7b302b37e80aaaaafc5edfd5a3ef1c1bbe6cc8fd6ab24d0715213da/manifest.json",
+          "manifest_version_id": "hw7vPwFJSPBmrlQt4hoTQsbju1FPS0Es"
+        }
+      ]
+    },
+    {
+      "sha256": "fa2f5c48eb52cfce90ac3da9eea8e5303b3468261d8fed3210ca1db76f7d063c",
+      "owner_table": "cms_cc_value_based_incentive_payment_amount",
+      "canonical_observation_id": "49a277cac139ad8e0169de990f5657c4a690abce76fb16bb2043f93ca4c6c0cf",
+      "observations": [
+        {
+          "table_name": "cms_cc_value_based_incentive_payment_amount",
+          "observation_id": "17b31dacf5fc4835a86c3afcb0987d23a2697cfbba6d0a96ff90f12aa600b770",
+          "logical_id": "980d31001dfe7fd490e135169c54d916",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_fy2018_value_based_incentive_payment_amount_2019_11_22/release_date=2020-01-04/fa2f5c48eb52cfce90ac3da9eea8e5303b3468261d8fed3210ca1db76f7d063c/FY2018_Value_Based_Incentive_Payment_Amount_2019-11-22.csv",
+          "s3_version_id": "iqT.rs7pnlSZLZd9k0uA2DsrTT1ptTww",
+          "byte_count": 799,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-01-04/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/2f654516c84ceb97a150ece6d3e4766a73a14f80592a19750f666feb9226d5d4/manifest.json",
+          "manifest_version_id": "L4r62NNtdcL2o1nY3Ll4yrFh1th2O84o"
+        },
+        {
+          "table_name": "cms_cc_value_based_incentive_payment_amount",
+          "observation_id": "49a277cac139ad8e0169de990f5657c4a690abce76fb16bb2043f93ca4c6c0cf",
+          "logical_id": "26ab9243213c71f5c76fd2cedda1a646",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_fy2018_value_based_incentive_payment_amount_2019_11_22/release_date=2020-05-01/fa2f5c48eb52cfce90ac3da9eea8e5303b3468261d8fed3210ca1db76f7d063c/FY2018_Value_Based_Incentive_Payment_Amount_2019-11-22.csv",
+          "s3_version_id": "UsgKxFpYRtHhH0LGG5nGiVpG1uD7pZuj",
+          "byte_count": 799,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-05-01/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/eae2e77bfaf6afdc241c35b64cc9a43bab6012c7fe53c8a96bfc8d2bb41a568c/manifest.json",
+          "manifest_version_id": "cdg9VUUehiMYyIVMAqDevz2eTaSsV23f"
+        },
+        {
+          "table_name": "cms_cc_value_based_incentive_payment_amount",
+          "observation_id": "67375bf669adfbb37cf130dd521cfb309468c6b30b20fa38d82ad4fda82f47ae",
+          "logical_id": "7819ff4fd2e5e6857f87a42cfc0242b3",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_vtqa_m4zn/release_date=2020-10-16/fa2f5c48eb52cfce90ac3da9eea8e5303b3468261d8fed3210ca1db76f7d063c/vtqa-m4zn.csv",
+          "s3_version_id": "svTRKM16F1LO76Gy3ibUVvn9sGR6ciFS",
+          "byte_count": 799,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/3ae8202dbc5d46418b94da9344b02e8a451d8178c9540145468e6e24f62e69a7/manifest.json",
+          "manifest_version_id": "SlfbbqlHt3ztd2WzJE0LtHesrjjCwRVx"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_vtqa_m4zn",
+          "observation_id": "dcc6bbf4fbbcb24a807d1e323ea5c37855ef990ab7778eb27780cc9a126a0dc3",
+          "logical_id": "d7b1f3711762145067b22550a96c5abd",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_vtqa_m4zn/release_date=2020-07-04/fa2f5c48eb52cfce90ac3da9eea8e5303b3468261d8fed3210ca1db76f7d063c/pdc_s3_hos_data_vtqa_m4zn.csv",
+          "s3_version_id": "y9rFJ52jCdiNe5iC7MTkoTgrKzT_qRov",
+          "byte_count": 799,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/4f3b1fa4286ce3f35de21b1454f9ae508a4b925493b92344e3af272d4a2f1d73/manifest.json",
+          "manifest_version_id": "z7VfRroBmnAn_V33BjeXCuVoHB_whvyD"
+        }
+      ]
+    },
+    {
+      "sha256": "ffb47041082f7bda85d2c839dacc216488d0a7e629d4523d9b5479960a2ebbe2",
+      "owner_table": "cms_cc_ascqr_oas_cahps_state",
+      "canonical_observation_id": "04a317b98ec93ef5dd3ae627fc4c74269e74a0e9e21ba061a5be53e40934905d",
+      "observations": [
+        {
+          "table_name": "cms_cc_ascqr_oas_cahps_state",
+          "observation_id": "04a317b98ec93ef5dd3ae627fc4c74269e74a0e9e21ba061a5be53e40934905d",
+          "logical_id": "6aa9ac94dde5484a2a5b9028241a9a33",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_x663_bwbj/release_date=2020-10-16/ffb47041082f7bda85d2c839dacc216488d0a7e629d4523d9b5479960a2ebbe2/x663-bwbj.csv",
+          "s3_version_id": "HVAOBIekal9NG6I0QT5nqQs1PKbjVG8b",
+          "byte_count": 5676,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-10-16/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/46cd33a85820e2a73bdd1cde967c422ea763404cd0eeba637dbed4e49750b168/manifest.json",
+          "manifest_version_id": "GMQ42b7WJhxiDDwR8HBUtbV_DPyVsJDr"
+        },
+        {
+          "table_name": "cms_cc_pdc_s3_hos_data_x663_bwbj",
+          "observation_id": "066df1ff33d8f9a06f4f47ea536cdb89ff7d218a3552f6cee36c408c62f4774f",
+          "logical_id": "103d35aaf360104f201af3d2d39afd70",
+          "s3_key": "cms/hospitals/datasets/cms_legacy_pdc_s3_hos_data_x663_bwbj/release_date=2020-07-04/ffb47041082f7bda85d2c839dacc216488d0a7e629d4523d9b5479960a2ebbe2/pdc_s3_hos_data_x663_bwbj.csv",
+          "s3_version_id": "sgd_I22m6jT_Jtx4LWZe9l24qgzJJoSl",
+          "byte_count": 5676,
+          "manifest_key": "cms/hospitals/manifests/release_date=2020-07-04/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/bfaa9236a6e9225ddfb89d7ee89e3b020ed1baaba56f0b3dff6aa6d8de3c8ad9/manifest.json",
+          "manifest_version_id": "ix5GVsAsWe6VmPgvq.MrWVW5vNTnz30A"
+        }
+      ]
+    }
+  ]
+}

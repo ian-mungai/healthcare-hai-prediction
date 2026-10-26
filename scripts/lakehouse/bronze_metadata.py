@@ -19,6 +19,8 @@ from scripts.acquisition.single_copy import reference_scope
 from scripts.acquisition.transport import CaptureError
 
 TABLE = "file_metadata"
+BOOTSTRAP_OWNERSHIP = Path("config/lakehouse/bootstrap_ownership.json")
+BOOTSTRAP_REFERENCE_FIELDS = ("table_name", "observation_id", "_object_key", "s3_key", "s3_version_id", "byte_count", "manifest_key", "manifest_version_id")
 REFS_SQL = "SELECT snapshot_id FROM {namespace}.file_metadata.refs WHERE name = 'main'"
 FIELDS = (
     "generation_row_count",
@@ -70,6 +72,82 @@ CAPTURE_ID = re.compile(r".+__[0-9]{8}T[0-9]{6}Z__[a-f0-9]{32}")
 
 class MetadataError(ValueError):
     """A generation is incomplete, inconsistent or changes an immutable reference."""
+
+
+def _bootstrap_ownership() -> dict[str, dict[str, Any]]:
+    document = json.loads(BOOTSTRAP_OWNERSHIP.read_text())
+    if not isinstance(document, dict) or document.get("schema_version") != 1 or not isinstance(document.get("groups"), list):
+        raise MetadataError("reviewed bootstrap ownership requires schema version 1 and a groups list")
+    result: dict[str, dict[str, Any]] = {}
+    for group in document["groups"]:
+        if not isinstance(group, dict) or set(group) != {"sha256", "owner_table", "canonical_observation_id", "observations"}:
+            raise MetadataError("reviewed bootstrap ownership requires an owner, checksum, canonical observation and exact observations")
+        digest, owner = group["sha256"], group["owner_table"]
+        if not isinstance(digest, str) or re.fullmatch(r"[a-f0-9]{64}", digest) is None or digest in result:
+            raise MetadataError("reviewed bootstrap ownership repeats or lacks a valid checksum")
+        if (
+            not isinstance(owner, str)
+            or re.fullmatch(r"[a-z][a-z0-9_]*", owner) is None
+            or not isinstance(group["canonical_observation_id"], str)
+            or not isinstance(group["observations"], list)
+        ):
+            raise MetadataError("reviewed bootstrap ownership requires a table identifier and exact observations")
+        observed: dict[str, dict[str, Any]] = {}
+        config_fields = {"logical_id" if field == "_object_key" else field for field in BOOTSTRAP_REFERENCE_FIELDS}
+        for reference in group["observations"]:
+            if not isinstance(reference, dict) or set(reference) != config_fields:
+                raise MetadataError("reviewed bootstrap observation fields are incomplete")
+            row = {field: reference["logical_id" if field == "_object_key" else field] for field in BOOTSTRAP_REFERENCE_FIELDS}
+            if any(not isinstance(row[field], str) or not row[field] for field in BOOTSTRAP_REFERENCE_FIELDS if field != "byte_count"):
+                raise MetadataError("reviewed bootstrap observation references require nonempty strings")
+            if type(row["byte_count"]) is not int or row["byte_count"] < 0 or row["s3_version_id"] == "null":
+                raise MetadataError("reviewed bootstrap observations require an immutable version and byte count")
+            if row["observation_id"] in observed or re.fullmatch(r"[a-f0-9]{64}", row["observation_id"]) is None:
+                raise MetadataError("reviewed bootstrap ownership repeats or lacks a valid observation identity")
+            observed[row["observation_id"]] = row
+        canonical = observed.get(group["canonical_observation_id"])
+        if canonical is None or canonical["table_name"] != owner or len({row["table_name"] for row in observed.values()}) < 2:
+            raise MetadataError("reviewed bootstrap canonical observation must belong to its owner in a spanning group")
+        if {row["byte_count"] for row in observed.values()} != {canonical["byte_count"]}:
+            raise MetadataError("reviewed bootstrap observations disagree about byte count")
+        result[digest] = {**group, "by_observation": observed, "canonical": canonical}
+    return result
+
+
+def _reviewed_group(matches: list[dict[str, Any]], obj: dict[str, Any] | None, rule: dict[str, Any] | None) -> bool:
+    if obj is None or rule is None:
+        return False
+    frozen = ("table_name", "_object_key", "s3_key", "s3_version_id", "byte_count")
+    if any(obj[field] != rule["canonical"][field] for field in frozen):
+        return False
+    for row in matches:
+        expected = rule["by_observation"].get(row["observation_id"])
+        if expected is None or any(row[field] != expected[field] for field in BOOTSTRAP_REFERENCE_FIELDS):
+            return False
+        if live(row) and row["bucket"] != obj["bucket"]:
+            return False
+    return True
+
+
+def _apply_bootstrap_ownership(rows: list[dict[str, Any]], previous: list[dict[str, Any]], chosen: set[str]) -> None:
+    rules = _bootstrap_ownership()
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row["sha256"] in rules:
+            groups[row["sha256"]].append(row)
+    for digest, matches in groups.items():
+        rule = rules[digest]
+        if not previous and set(rule["by_observation"]) - {row["observation_id"] for row in matches}:
+            raise MetadataError(f"{digest}: reviewed bootstrap observations are missing from discovery")
+        if rule["owner_table"] in chosen and any(live(row) for row in matches):
+            canonical = [
+                row for row in matches if row["table_name"] == rule["owner_table"] and row["loaded"] and live(row) and not row["superseded_by_manifest_key"]
+            ]
+            if len(canonical) != 1 or (not previous and canonical[0]["observation_id"] != rule["canonical_observation_id"]):
+                raise MetadataError(f"{digest}: reviewed bootstrap owner is not the selected canonical observation")
+        for row in matches:
+            if row["table_name"] != rule["owner_table"]:
+                row["loaded"] = False
 
 
 def release_label(member_path: str, release_id: str) -> dict[str, str | None]:
@@ -164,6 +242,7 @@ def validate(rows: list[dict[str, Any]]) -> None:
         raise MetadataError("metadata generation repeats an object or observation identity")
     if set(index) - set(groups):
         raise MetadataError("physical object has no manifest observation")
+    ownership = _bootstrap_ownership()
     for digest, matches in groups.items():
         if not re.fullmatch(r"[a-f0-9]{64}", digest):
             raise MetadataError("observation requires a SHA-256")
@@ -177,8 +256,11 @@ def validate(rows: list[dict[str, Any]]) -> None:
             raise MetadataError("live observations require both object and observation kinds and one live physical object")
         if any(not isinstance(obj[field], str) or not obj[field] for field in ("bucket", "s3_key", "s3_version_id")) or obj["s3_version_id"] == "null":
             raise MetadataError("physical object requires an exact immutable version")
-        physical = {(row["bucket"], row["s3_key"], row["s3_version_id"], row["byte_count"]) for row in active}
+        reviewed = _reviewed_group(matches, obj, ownership.get(digest))
+        if digest in ownership and not reviewed:
+            raise MetadataError(f"{digest}: reviewed bootstrap mapping differs from the immutable observations or owning object")
         identity = (obj["bucket"], obj["s3_key"], obj["s3_version_id"], obj["byte_count"])
+        physical = {identity} if reviewed else {(row["bucket"], row["s3_key"], row["s3_version_id"], row["byte_count"]) for row in active}
         canonical = [row for row in active if row["loaded"] and not row["superseded_by_manifest_key"]]
         if (
             physical != {identity}
@@ -186,7 +268,7 @@ def validate(rows: list[dict[str, Any]]) -> None:
             or (canonical[0]["_object_key"], canonical[0]["observation_id"]) != (obj["_object_key"], obj["observation_id"])
         ):
             raise MetadataError("every live checksum must resolve to exactly one live physical version and one canonical observation")
-        if {row["table_name"] for row in matches} != {obj["table_name"]}:
+        if not reviewed and {row["table_name"] for row in matches} != {obj["table_name"]}:
             raise MetadataError("a checksum spans tables and requires a reviewed bootstrap mapping")
         if any(row["canonical_object_key"] != obj["_object_key"] for row in matches):
             raise MetadataError("observation canonical reference differs from the immutable object index")
@@ -210,6 +292,14 @@ def build(
     names: Iterable[str], inputs: list[dict[str, Any]], excluded: list[dict[str, Any]], previous: list[dict[str, Any]], all_tables: Iterable[str]
 ) -> list[dict[str, Any]]:
     """Retain every observation and untouched table, transferring canonical lineage only through a validated correction."""
+    rows = _build_rows(names, inputs, excluded, previous, all_tables)
+    validate(rows)
+    return sorted(rows, key=lambda row: (row["kind"], row["sha256"], row["observation_id"] or ""))
+
+
+def _build_rows(
+    names: Iterable[str], inputs: list[dict[str, Any]], excluded: list[dict[str, Any]], previous: list[dict[str, Any]], all_tables: Iterable[str]
+) -> list[dict[str, Any]]:
     if previous:
         validate(previous)
     chosen, complete_tables = set(names), set(all_tables)
@@ -217,6 +307,7 @@ def build(
         raise MetadataError("first metadata publication requires the full committed bronze table map")
     rows = [observation(item, True) for item in inputs] + [observation(entry["copy"], False) for entry in excluded if "copy" in entry]
     rows = [row for row in rows if row["table_name"] in chosen]
+    _apply_bootstrap_ownership(rows, previous, chosen)
     current = {row["observation_id"]: row for row in rows}
     mutable = {
         "generation",
@@ -271,8 +362,172 @@ def build(
     digest = generation_digest(rows)
     for row in rows:
         row["generation"] = digest
-    validate(rows)
-    return sorted(rows, key=lambda row: (row["kind"], row["sha256"], row["observation_id"] or ""))
+    return rows
+
+
+def _checksum_reasons(matches: list[dict[str, Any]], obj: dict[str, Any] | None, ownership: dict[str, dict[str, Any]] | None = None) -> list[str]:
+    active = [row for row in matches if live(row)]
+    if not active:
+        return (
+            ["inactive_observations_reference_object"]
+            if obj is not None or any(row["loaded"] or row["canonical_object_key"] is not None for row in matches)
+            else []
+        )
+    ownership = _bootstrap_ownership() if ownership is None else ownership
+    rule = ownership.get(matches[0]["sha256"])
+    reviewed = _reviewed_group(matches, obj, rule)
+    reasons = ["bootstrap_mapping_mismatch"] if rule is not None and not reviewed else []
+    resolved = [obj] if reviewed and obj is not None else active
+    locations: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for row in resolved:
+        locations[(row["bucket"], row["s3_key"])].add(row["s3_version_id"])
+    if len(locations) > 1:
+        reasons.append("multiple_physical_locations")
+    if any(len(versions) > 1 for versions in locations.values()):
+        reasons.append("multiple_versions_at_one_location")
+    if len({row["byte_count"] for row in resolved}) > 1:
+        reasons.append("inconsistent_byte_counts")
+    canonical = [row for row in active if row["loaded"] and not row["superseded_by_manifest_key"]]
+    if not canonical:
+        reasons.append("no_canonical_observation")
+    elif len(canonical) > 1:
+        reasons.append("multiple_canonical_observations")
+    if obj is None:
+        return sorted([*reasons, "missing_object"])
+    physical = {(row["bucket"], row["s3_key"], row["s3_version_id"], row["byte_count"]) for row in resolved}
+    identity = (obj["bucket"], obj["s3_key"], obj["s3_version_id"], obj["byte_count"])
+    if len(physical) == 1 and physical != {identity}:
+        reasons.append("object_physical_mismatch")
+    if any(not isinstance(obj[field], str) or not obj[field] for field in ("bucket", "s3_key", "s3_version_id")) or obj["s3_version_id"] == "null":
+        reasons.append("invalid_object_version")
+    if len(canonical) == 1 and (canonical[0]["_object_key"], canonical[0]["observation_id"]) != (obj["_object_key"], obj["observation_id"]):
+        reasons.append("canonical_identity_mismatch")
+    if not reviewed and {row["table_name"] for row in matches} != {obj["table_name"]}:
+        reasons.append("checksum_spans_tables")
+    if any(row["canonical_object_key"] != obj["_object_key"] for row in matches):
+        reasons.append("canonical_reference_mismatch")
+    return sorted(reasons)
+
+
+def diagnose_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize a candidate generation with complete counts and at most 20 checksum examples, excluding file contents."""
+    error = None
+    try:
+        validate(rows)
+    except MetadataError as caught:
+        error = str(caught)
+    objects = {row["sha256"]: row for row in rows if row["kind"] == "object"}
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row["kind"] == "observation":
+            groups[row["sha256"]].append(row)
+    reason_counts: dict[str, int] = defaultdict(int)
+    tables: dict[str, Any] = {}
+    examples: list[dict[str, Any]] = []
+    failing = 0
+    fields = (
+        "table_name",
+        "observation_id",
+        "_object_key",
+        "bucket",
+        "s3_key",
+        "s3_version_id",
+        "byte_count",
+        "loaded",
+        "retired",
+        "failed_attempt",
+        "manifest_key",
+        "manifest_version_id",
+        "superseded_by_manifest_key",
+        "superseded_by_manifest_version_id",
+    )
+    ownership = _bootstrap_ownership()
+    for digest, matches in sorted(groups.items()):
+        obj = objects.get(digest)
+        reasons = _checksum_reasons(matches, obj, ownership)
+        for reason in reasons:
+            reason_counts[reason] += 1
+        for name in sorted({row["table_name"] for row in matches}):
+            counts = tables.setdefault(name, {"checksum_count": 0, "failing_checksum_count": 0, "reason_counts": {}})
+            counts["checksum_count"] += 1
+            counts["failing_checksum_count"] += bool(reasons)
+            for reason in reasons:
+                counts["reason_counts"][reason] = counts["reason_counts"].get(reason, 0) + 1
+        if not reasons:
+            continue
+        failing += 1
+        if len(examples) == 20:
+            continue
+        active = [row for row in matches if live(row)]
+        physical = sorted({(row["bucket"], row["s3_key"], row["s3_version_id"], row["byte_count"]) for row in active}, key=json.dumps)
+        observations = sorted(matches, key=lambda row: (not live(row), not row["loaded"], row["observation_id"]))
+        examples.append(
+            {
+                "sha256": digest,
+                "tables": sorted({row["table_name"] for row in matches}),
+                "reasons": reasons,
+                "observation_count": len(matches),
+                "live_observation_count": len(active),
+                "canonical_observation_count": sum(row["loaded"] and not row["superseded_by_manifest_key"] for row in active),
+                "physical_reference_count": len(physical),
+                "physical_references": [dict(zip(("bucket", "s3_key", "s3_version_id", "byte_count"), identity, strict=True)) for identity in physical[:20]],
+                "omitted_physical_references": max(0, len(physical) - 20),
+                "observations": [{field: row[field] for field in fields} for row in observations[:20]],
+                "omitted_observations": max(0, len(observations) - 20),
+                "object": {field: obj[field] for field in fields} if obj is not None else None,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "mode": "bootstrap_diagnostic",
+        "passed": error is None,
+        "phase": "validation" if error else "complete",
+        "error": error,
+        "checksum_analysis_performed": True,
+        "generation": rows[0]["generation"] if rows else None,
+        "row_count": len(rows),
+        "observation_count": sum(len(matches) for matches in groups.values()),
+        "object_count": sum(row["kind"] == "object" for row in rows),
+        "checksum_count": len(groups),
+        "live_checksum_count": sum(any(live(row) for row in matches) for matches in groups.values()),
+        "failing_checksum_count": failing,
+        "reason_counts": dict(reason_counts),
+        "tables": tables,
+        "example_limit": 20,
+        "examples": examples,
+        "omitted_checksum_examples": max(0, failing - 20),
+    }
+
+
+def diagnose(
+    names: Iterable[str], inputs: list[dict[str, Any]], excluded: list[dict[str, Any]], previous: list[dict[str, Any]], all_tables: Iterable[str]
+) -> dict[str, Any]:
+    """Build the ordinary candidate without publishing and report preparation, checksum or successor failures."""
+    counts = {"inputs": len(inputs), "excluded_copies": sum("copy" in entry for entry in excluded), "previous_rows": len(previous)}
+    try:
+        rows = _build_rows(names, inputs, excluded, previous, all_tables)
+    except MetadataError as error:
+        return {
+            "schema_version": 1,
+            "mode": "bootstrap_diagnostic",
+            "passed": False,
+            "phase": "preparation",
+            "error": str(error),
+            "checksum_analysis_performed": False,
+            "failing_checksum_count": None,
+            "reason_counts": {},
+            "tables": {},
+            "examples": [],
+            "input_counts": counts,
+        }
+    report = diagnose_rows(rows)
+    report["input_counts"] = counts
+    if report["passed"]:
+        try:
+            validate_successor(previous, rows)
+        except MetadataError as error:
+            report.update(passed=False, phase="successor", error=str(error))
+    return report
 
 
 def snapshot(spark: Any, namespace: str) -> int | None:

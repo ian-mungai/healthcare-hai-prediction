@@ -1273,7 +1273,14 @@ SPARK_JOBS: dict[str, dict[str, Any]] = {
         "writes": ("data/e2e/bronze_load",),
         "aws": True,
         "deployment": True,
-        "grammar": {"--group": "value", "--tables": "value", "--bootstrap-all": "flag", "--drop-removed": "flag", "--copies-only": "flag"},
+        "grammar": {
+            "--group": "value",
+            "--tables": "value",
+            "--bootstrap-all": "flag",
+            "--drop-removed": "flag",
+            "--copies-only": "flag",
+            "--diagnose": "flag",
+        },
     },
     "dictionary": {
         "template": "spark_write",
