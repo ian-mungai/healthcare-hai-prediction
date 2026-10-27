@@ -1,8 +1,11 @@
 # Pre-commit checks for this repository; docs/quality_checks.md lists what each one enforces.
 # Every hook is local and pinned: pre-commit, Ruff and MyPy come from requirements.txt in .venv, gitleaks and TFLint
-# from scripts/quality/install_tools.py in .tools. Before every push, run `pre-commit run --all-files --hook-stage manual`.
+# from scripts/quality/install_tools.py in .tools. Install once with `.venv/bin/pre-commit install`: default_install_hook_types covers all three hook types.
+# Stages: the commit stage holds only fast checks (a typical commit takes about two minutes); every hook marked `stages: [manual]` below is what the hosted
+# hooks job runs (scripts/quality/ci_hooks.py) and is covered before a push by the pre-push run (scripts/quality/pre_push.py), which also runs the check groups
+# of the pushed range. `pre-commit run --all-files --hook-stage manual` runs the whole manual set on demand.
 # There are no other bypasses: do not use SKIP= or git commit --no-verify.
-default_install_hook_types: [pre-commit, commit-msg]
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
 default_stages: [pre-commit, manual]
 fail_fast: false
 
@@ -38,6 +41,7 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+        stages: [manual]
       - id: removed-names
         name: Removed names gone from code, config and docs
         entry: .venv/bin/python -m scripts.quality.repo_checks removed-names
@@ -51,24 +55,28 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+        stages: [manual]
       - id: unused-dependencies
         name: Dependencies declared and used per runtime (deptry)
         entry: .venv/bin/python -m scripts.quality.repo_checks unused-dependencies
         language: system
         pass_filenames: false
         always_run: true
+        stages: [manual]
       - id: orphan-files
         name: Every file referenced by another
         entry: .venv/bin/python -m scripts.quality.repo_checks orphan-files
         language: system
         pass_filenames: false
         always_run: true
+        stages: [manual]
       - id: terraform-unused
         name: No unused Terraform declarations (tflint)
         entry: .venv/bin/python -m scripts.quality.repo_checks terraform-unused
         language: system
         pass_filenames: false
         always_run: true
+        stages: [manual]
       - id: privacy-scan
         name: No personal data or environment-specific values in project files
         entry: .venv/bin/python -m scripts.quality.repo_checks privacy-scan --all
@@ -103,6 +111,7 @@ repos:
         language: system
         pass_filenames: false
         files: (\.sql$|^\.sqlfluff$|^scripts/quality/(lint_sources\.py$|sqlfluff/))
+        stages: [manual]
       - id: ruff
         name: Every nonignored Python source passes Ruff and formatting
         entry: .venv/bin/python -m scripts.quality.lint_sources ruff
@@ -145,6 +154,7 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+        stages: [manual]
       - id: gofmt
         name: Tracked Go sources match gofmt
         entry: .venv/bin/python -m scripts.quality.lint_sources gofmt
@@ -163,6 +173,7 @@ repos:
         language: system
         pass_filenames: false
         files: ^(dbt/.*\.(ya?ml|sql)|data_contracts/lakehouse/gold_contract\.json|config/lakehouse/bronze_tables\.json|scripts/(process\.py|quality/(model_metadata\.py|install_sqlfluff\.py|sqlfluff/requirements\.txt)))$
+        stages: [manual]
       - id: documentation-review
         name: All documentation reviewed for the staged revision
         entry: .venv/bin/python -m scripts.quality.documentation_review check
@@ -205,30 +216,34 @@ repos:
         language: system
         pass_filenames: false
         files: ^(scripts/(process|quality/(repo_checks|run_checks_e2e|run_lint_coverage_e2e|lint_sources|scan_secrets|install_tools|install_markdownlint|install_sqlfluff))\.py|scripts/quality/(markdownlint|sqlfluff)/.*|config/quality_tools\.json|\.yamllint|\.sqlfluff|\.pre-commit-config\.yaml|\.(privacy|writing)_allowlist|\.markdownlint-cli2\.jsonc)$
+        stages: [manual]
       - id: test-documentation-review
         name: Documentation review accepts good evidence and rejects bad evidence
         entry: .venv/bin/python -m scripts.quality.run_documentation_review_e2e
         language: system
         pass_filenames: false
         files: ^(scripts/(process|quality/(documentation_review|run_documentation_review_e2e|run_checks_e2e))\.py|\.pre-commit-config\.yaml)$
+        stages: [manual]
+      - id: local_ci_pushed
+        # Runs before acquisition-checks (hooks run in file order): after a passing full-scope run that hook skips once.
+        name: Run local CI for the pushed range (the full scope when the selector or CI scripts change)
+        entry: .venv/bin/python -m scripts.quality.pre_push run
+        language: system
+        pass_filenames: false
+        always_run: true
+        verbose: true
+        stages: [pre-push]
       - id: acquisition-checks
-        # 12-14 minutes, so it runs only when acquisition code, configuration or their dependencies change
+        # 12-14 minutes, so it runs only when the pushed range changes acquisition code, configuration or their dependencies (pre-push stage; commits skip it)
         # GitHub CI runs it in its own job, so it stays out of the full set; that job reads this files pattern through
         # scripts/acquisition/run_checks_ci.sh, so it runs for the same paths, plus the CI workflow that runs it. Run it directly
         # before a release: bash scripts/acquisition/run_checks.sh
         name: Acquisition lint, types, registry and offline E2E suites with the 90% coverage gate
-        entry: bash scripts/acquisition/run_checks.sh
+        entry: bash scripts/acquisition/run_checks_pushed.sh
         language: system
         pass_filenames: false
-        stages: [pre-commit]
+        stages: [pre-push]
         files: ^(scripts/acquisition/|config/acquisition/|config/lakehouse/bronze_tables\.json$|tests/test_source_registry\.py$|tests/fixtures/registry_additions_bronze_lineage\.csv$|scripts/process\.py$|scripts/quality/typecheck\.py$|scripts/quality/timing\.sh$|config/quality/mypy_runtimes\.json$|scripts/infrastructure/render_project_config\.py$|requirements\.txt$|\.github/workflows/ci\.yml$)
-      - id: local_ci_affected
-        name: Run local CI for the staged paths
-        entry: env CI_SCOPE=staged bash scripts/run_ci.sh
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-commit]
       - id: local_ci
         name: Run the full local CI
         entry: bash scripts/run_ci.sh

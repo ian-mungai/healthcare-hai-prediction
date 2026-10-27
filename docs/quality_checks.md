@@ -1,7 +1,7 @@
 ---
 title: Quality checks
 description: Every repository check the pre-commit hooks and CI run, what each blocks and how to run it on its own.
-last_updated: 2026-10-25
+last_updated: 2026-10-27
 ---
 
 # Quality checks
@@ -209,7 +209,7 @@ registry validation, the acquisition regression tests and every offline E2E
 suite twice, with a 90% coverage gate that also counts collector command lines
 run as child processes. They take about 20 minutes on this machine (the recorded profile estimate), so they run only
 when acquisition code, configuration or their dependencies change: through the
-`acquisition-checks` pre-commit hook, which is one unsharded run and in GitHub Actions, where the pytest run is four shard jobs
+`acquisition-checks` pre-push hook (`scripts/acquisition/run_checks_pushed.sh`), which is one unsharded run and in GitHub Actions, where the pytest run is four shard jobs
 and a combining job (see Sharded acquisition tests below; LFS checkout, pinned Terraform). The CI jobs use the
 hook's own path pattern through `scripts/acquisition/run_checks_ci.sh`, which also
 matches the CI workflow; a manual run, a push with no earlier commit or rewritten
@@ -342,11 +342,33 @@ scan excludes ignored acquisition data; neither scan sends files to an external
 service. Secret values and matching source fragments are omitted from scanner
 diagnostics.
 
-Pre-commit (`pre-commit` and `commit-msg` stages) and `scripts/run_ci.sh`
-enforce these repository rules at the pinned versions. On a commit the
-`local_ci_affected` hook runs `scripts/run_ci.sh` for the staged paths. The full
-set (`.venv/bin/pre-commit run --all-files --hook-stage manual`, whose
-`local_ci` hook runs the full local CI) runs before every release or push.
+Pre-commit (`pre-commit`, `commit-msg` and `pre-push` stages) and `scripts/run_ci.sh`
+enforce these repository rules at the pinned versions. Install all three hook types once with
+`.venv/bin/pre-commit install` (`default_install_hook_types`). One commit per reviewed change stays the rule.
+
+- **Commit stage (fast, about two minutes on a typical change):** secrets on the staged files, credential and
+  data files, the privacy scan, the writing check, front matter, Markdown lint of the staged files, Ruff, shell
+  syntax, ShellCheck, actionlint, yamllint, Hadolint, gofmt, go vet, the documentation review, the lint-settings,
+  suppression, subprocess-import and Docker-call guards, removed names and the commit message. No commit runs a
+  check group or a heavy hook.
+- **Pre-push stage:** the `local_ci_pushed` hook (`.venv/bin/python -m scripts.quality.pre_push run`) runs once
+  for the pushed range, from its merge base with `origin/main` to the pushed head, with the selector and path lists
+  GitHub CI uses, so the local result predicts the hosted run. It runs the commit-message and removed-name checks
+  of the hosted hooks job, `CI_SCOPE=range RANGE_START=<base> RANGE_END=<head> bash scripts/run_ci.sh` and the three
+  hosted hook partitions over the same range, in parallel. These partitions run the hooks that left the commit
+  stage (`unused-code`, `unused-dependencies`, `orphan-files`, `terraform-unused`, `sqlfluff`, `build-contexts`,
+  `model-metadata`, `env-example` and the two check E2Es). It runs the full scope instead (`CI_SCOPE=full`) when
+  the range changes a path in `pre_push.full_paths` of `config/quality/ci_groups.json` (the group selector and its
+  configuration, `scripts/run_ci.sh`, `scripts/ci/`, the CI scripts, the workflow, the setup action and
+  `.pre-commit-config.yaml`) and when `origin/main` or the merge base is missing. Every step has a deadline
+  (`pre_push.timeout_seconds`: 45 minutes in the range scope, 60 in the full scope) and a step that exceeds it
+  fails with its name. The `acquisition-checks` hook then runs when the pushed range changes a path it watches;
+  after a passing full-scope run for the same head it skips once. `pre_push plan` prints the scope and steps without
+  running them. Only the first pushed reference is checked and the checks read the working tree, so commit or stash
+  tracked changes first (the run warns).
+- **Manual stage:** unchanged. `.venv/bin/pre-commit run --all-files --hook-stage manual` runs the whole set
+  (its `local_ci` hook runs the full local CI) on demand. Run it also when the selector or CI scripts change
+  or when hosted CI is unavailable. Hosted CI stays the merge gate and runs this stage unchanged.
 GitHub CI runs the manual stage on every pull request and push to `main` as parallel
 jobs after a quick plan job (see Main-run reuse below): three hook partitions without `local_ci` (file-based hooks check the changed files of the range), `scripts/run_ci.sh` as `CI_PART=core`, one job each for bronze, silver and gold (`CI_PART=bronze`, `silver` or `gold`, see Lakehouse layers below), eight feature-source shards and four feature-column shards (`CI_PART=feature_sources` or `feature_columns`, `FEATURE_SHARD=K/N`), a feature evidence combining job and a job for the
 gold model metadata E2E (`CI_PART=gold` with `CI_UNITS=model_metadata_e2e`), the launcher E2E in two shards
@@ -380,12 +402,12 @@ never use `SKIP=` or `git commit --no-verify`. If a check blocks a valid change,
 fix the check or ask the repository owner.
 
 `CI_SCOPE` selects the check groups: `full` (the default: every group, the acquisition gate included), `staged` (the
-commit hook) or `range` with `RANGE_START` and `RANGE_END` (GitHub CI). `CI_LIST_ONLY=1` prints which groups would run
+groups the staged paths touch, on demand; no hook runs it since commits run only fast hooks) or `range` with `RANGE_START` and `RANGE_END` (GitHub CI and the pre-push hook). `CI_LIST_ONLY=1` prints which groups would run
 and why. It runs nothing. The groups and the paths they depend on are in `config/quality/ci_groups.json`. A path that
 no group lists and that is not passive selects every applicable group. Markdown outside `dbt/`, anything under `docs/`,
 `.gitignore` and `.gitattributes` are passive: they do not select every group, but a group whose list matches one still
 runs. A change of passive paths that no group lists selects no conditional group. The `sql_style` group runs in every
-full and range run (the run before a push and GitHub CI). On commits it runs when a listed SQL input changes:
+full and range run (the run before a push and GitHub CI). In the staged and paths scopes it runs when a listed SQL input changes:
 `dbt/`, `.sqlfluff` and `services/` SQL, the dbt package archive configuration and the SQLFluff pins and
 installer.
 The source, privacy, secret, credential, data-file, writing, Markdown lint and documentation gates always run.

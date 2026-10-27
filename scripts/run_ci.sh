@@ -9,9 +9,9 @@ set -euo pipefail
 # CI_UNITS selects the units of the gold layer (checks, writer_setup, model_metadata_e2e; default all three). GitHub CI runs the model
 # metadata E2E in its own job. A unit marked alone below (writer_setup: it has timing assertions) runs by itself, before the others.
 # CI_SCOPE selects the check groups (scripts/quality/ci_groups.py, config/quality/ci_groups.json): "full" (the default,
-# every group: run it before every push), "staged" (the groups the staged paths touch: the local_ci_affected commit
-# hook) or "range" (the groups RANGE_START..RANGE_END touches: GitHub CI). The privacy, secret, credential, data-file,
-# writing, Markdown lint and documentation gates run in every scope and in every part, also when no group is selected.
+# every group: the pre-push run escalates to it when the selector or the CI scripts change; run it on demand or when hosted CI is unavailable), "staged"
+# (the groups the staged paths touch, on demand) or "range" (the groups RANGE_START..RANGE_END touches: GitHub CI and the pre-push hook). The privacy, secret,
+# credential, data-file, writing, Markdown lint and documentation gates run in every scope and in every part, also when no group is selected.
 # CI_LIST_ONLY=1 prints the plan and runs nothing. Each group's seconds and each command's start, end and seconds (scripts/quality/timing.sh)
 # are printed and added to the job summary (GITHUB_STEP_SUMMARY).
 # The check groups' functions are not in this file: scripts/ci/groups/<group>.sh holds the functions of one group of config/quality/ci_groups.json. Each group

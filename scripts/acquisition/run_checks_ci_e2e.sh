@@ -41,7 +41,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP ALRM
 
 GIT_LFS_SKIP_SMUDGE=1 git worktree add --quiet --detach "$work" HEAD
-cp scripts/acquisition/run_checks_ci.sh scripts/acquisition/run_checks_combine.sh scripts/acquisition/shards.py "$work/scripts/acquisition/"
+cp scripts/acquisition/run_checks_ci.sh scripts/acquisition/run_checks_combine.sh scripts/acquisition/run_checks_pushed.sh scripts/acquisition/shards.py "$work/scripts/acquisition/"
 mkdir -p "$work/scripts/quality" "$work/config/acquisition"
 cp scripts/quality/timing.sh "$work/scripts/quality/timing.sh"
 cp config/acquisition/shard_weights.json config/acquisition/coverage.ini "$work/config/acquisition/"
@@ -53,7 +53,7 @@ printf 'ran\n' >>"${ACQUISITION_RAN_MARKER:-/dev/null}"
 exit "${STUB_EXIT:-0}"
 STUB
 # Staged, so the pre-commit stash of unstaged changes leaves them in place.
-git -C "$work" add scripts/acquisition/run_checks_ci.sh scripts/acquisition/run_checks_combine.sh scripts/acquisition/shards.py scripts/acquisition/run_checks.sh \
+git -C "$work" add scripts/acquisition/run_checks_ci.sh scripts/acquisition/run_checks_combine.sh scripts/acquisition/run_checks_pushed.sh scripts/acquisition/shards.py scripts/acquisition/run_checks.sh \
   scripts/quality/timing.sh config/acquisition/shard_weights.json config/acquisition/coverage.ini .pre-commit-config.yaml
 
 failures=0

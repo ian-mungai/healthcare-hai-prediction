@@ -27,7 +27,7 @@ marker="$(mktemp "${TMPDIR:-/tmp}/acquisition_ran.XXXXXX")"
 trap 'rm -f "$marker"' EXIT
 export ACQUISITION_RAN_MARKER="$marker"
 status=0
-"$python_bin" -m pre_commit run acquisition-checks --hook-stage pre-commit --from-ref "$start" --to-ref "$end" || status=$?
+"$python_bin" -m pre_commit run acquisition-checks --hook-stage pre-push --from-ref "$start" --to-ref "$end" || status=$?
 if [[ "$status" == 0 && -n "$part" && ! -s "$marker" ]]; then
   reason="the range $start..$end does not reach the acquisition checks"
   echo "Acquisition checks ($part): $reason." | tee -a "$summary"

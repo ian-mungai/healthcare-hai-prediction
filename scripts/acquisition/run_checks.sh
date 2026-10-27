@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The acquisition checks: Ruff, MyPy, registry validation and the offline E2E suites with the 90% coverage gate, as one run (the commit hook and a
+# The acquisition checks: Ruff, MyPy, registry validation and the offline E2E suites with the 90% coverage gate, as one run (the pre-push hook and a
 # local run). GitHub CI runs the same checks as shards plus a combining job: ACQUISITION_PART=shard (with ACQUISITION_SHARD=K/N) runs
 # scripts/acquisition/run_checks_shard.sh and ACQUISITION_PART=combine runs scripts/acquisition/run_checks_combine.sh, through
 # scripts/acquisition/run_checks_ci.sh. Each command prints its start, end and seconds (scripts/quality/timing.sh).
