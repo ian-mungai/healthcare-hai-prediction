@@ -1150,11 +1150,11 @@ run "container_definitions_match_the_approved_versions" {
 
   assert {
     condition = output.execution_digests == {
-      "airflow_apiserver/airflow_apiserver"         = "00313dc171ffca4bcd4565765fa3067028f4fb164618520e8fe861a0d2407dfc"
-      "airflow_apiserver/airflow_migrate"           = "388c19dbf540c8594fb8e99f366f3c255aa15e989e8f5102a85fdb1dc0e2d817"
-      "airflow_dag_processor/airflow_dag_processor" = "69f503115530a62c226b0bad91618715a7c32cf8f5290bcf59f3f71cbe901a38"
-      "airflow_scheduler/airflow_scheduler"         = "48d0a6c62ccfc1e18efb5b16aace02ab9300b1adb5d7fcfef164b14b720c0849"
-      "airflow_triggerer/airflow_triggerer"         = "8ce12daa5b8d49cbf30f32ac79a98dc73ed9a9cf7fb69deb7bdf21b9ec7b5285"
+      "airflow_apiserver/airflow_apiserver"         = "8c96398b7c6fa902b1078b5eba16e75ae844de66ee710de26ef7c2126741f9da"
+      "airflow_apiserver/airflow_migrate"           = "0daf62772bcd2e88304c71f0791c9f0b98983c289f715f046cc34c146b239be5"
+      "airflow_dag_processor/airflow_dag_processor" = "e64f9b28c1b9a8e603ce9eda79e1f4f22b229fcd2874cd251163b7fae622ecff"
+      "airflow_scheduler/airflow_scheduler"         = "c90a6e4228aaf0104da213b385e14dc54171187809acddc8e067fb0db95c31ff"
+      "airflow_triggerer/airflow_triggerer"         = "56fb00e607e83af0788fb802ade0906a43d2b24a55c8f8612f2f4583fcdce608"
       "host_prepare/host_prepare"                   = "c8d9a035f5588b9b5cb65f649058842ec6a980b6a3a8880abe6b306d8c953e1e"
       "marquez/marquez_api"                         = "9df0f81c5440fa10c2df2fc83d01edb1b5e09b06c2f5cbc1930659d87fae1033"
       "marquez/marquez_web"                         = "4ff0cc6590b24265a20486f1b4aeab92bf28afeb6eceb93ea83d022d279743c9"
