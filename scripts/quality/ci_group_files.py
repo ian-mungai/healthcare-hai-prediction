@@ -97,6 +97,8 @@ def owner_of(name: str, groups: list[str]) -> str | None:
 def entry_functions(group: str, dispatcher: str) -> list[str]:
     """The functions the dispatcher calls for a group: the group name, except the launcher (``launcher_e2e``) and the gold layer (one function for each unit of
     ``gold_units`` in the dispatcher)."""
+    if group == "lakehouse_features":
+        return ["lakehouse_features_sources", "lakehouse_features_columns", "lakehouse_features_combine"]
     if group == "launcher":
         return ["launcher_e2e"]
     units = re.search(r'^gold_units="([^"]+)"$', dispatcher, re.MULTILINE)

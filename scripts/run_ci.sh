@@ -3,7 +3,8 @@ set -euo pipefail
 
 # CI_PART selects what runs: "all" (the default, every part), "core" (everything except the launcher E2E, the
 # acquisition gate and the four lakehouse layers), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
-# if set), "bronze", "silver", "gold" or "features" (the gates and that lakehouse layer's checks) or "gates" (the gates only). GitHub CI runs
+# if set), "bronze", "silver", "gold" or "features" (that layer), "feature_sources" or "feature_columns" (one feature suite), or "gates" (the gates only).
+# FEATURE_SHARD=K/N selects one hosted feature shard. Without it the selected feature suites run all their shards and combine their evidence. GitHub CI runs
 # "core", the launcher shards and the four layers as parallel jobs; "gates" is the quick part of a reused pull request result.
 # CI_UNITS selects the units of the gold layer (checks, writer_setup, model_metadata_e2e; default all three). GitHub CI runs the model
 # metadata E2E in its own job. A unit marked alone below (writer_setup: it has timing assertions) runs by itself, before the others.
@@ -27,8 +28,8 @@ source "$repo_root/scripts/quality/timing.sh"
 python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 part="${CI_PART:-all}"
 case "$part" in
-  all | core | launcher | bronze | silver | gold | features | gates) ;;
-  *) printf 'CI_PART must be all, core, launcher, bronze, silver, gold, features or gates, not %s\n' "$part" >&2; exit 2 ;;
+  all | core | launcher | bronze | silver | gold | features | feature_sources | feature_columns | gates) ;;
+  *) printf 'CI_PART must be all, core, launcher, bronze, silver, gold, features, feature_sources, feature_columns or gates, not %s\n' "$part" >&2; exit 2 ;;
 esac
 gold_units="checks writer_setup model_metadata_e2e"
 units="${CI_UNITS:-$gold_units}"
@@ -93,13 +94,13 @@ require_group_file() {
 run_group() {
   env -u BASH_ENV -u ENV python_bin="$python_bin" repo_root="$repo_root" scratch="$scratch" quality_output="$quality_output" e2e_output="$e2e_output" \
     CI_TIMING_FILE="$CI_TIMING_FILE" "$BASH" --noprofile --norc -c \
-    'set -euo pipefail; source "$repo_root/scripts/quality/timing.sh"; source "$repo_root/scripts/ci/groups/$1.sh"; "$2"' check_group "$1" "$2"
+    'set -euo pipefail; source "$repo_root/scripts/quality/timing.sh"; source "$repo_root/scripts/ci/groups/$1.sh"; "$2" "${@:3}"' check_group "$@"
 }
 # run_item <item>: a check group's entry function runs through run_group, anything else is a function of this file.
 run_item() {
-  local group_variable="item_group_$1"
+  local group_variable="item_group_$1" entry_variable="item_entry_$1" argument_variable="item_argument_$1"
   if [[ -n "${!group_variable:-}" ]]; then
-    run_group "${!group_variable}" "$1"
+    run_group "${!group_variable}" "${!entry_variable:-$1}" "${!argument_variable:-}"
   else
     "$1"
   fi
@@ -178,15 +179,60 @@ acquisition_combine() {
   ACQUISITION_PART=combine ACQUISITION_SHARD_COUNT="$acquisition_shards" ACQUISITION_SHARD_DIR="$merged" bash scripts/acquisition/run_checks.sh
 }
 
+feature_counts="$("$python_bin" -c 'import json; c=json.load(open("config/quality/ci_groups.json"))["feature_shards"]; print(c["sources"], c["columns"])')"
+read -r feature_sources_shards feature_columns_shards <<<"$feature_counts"
+feature_shard="${FEATURE_SHARD:-}"
+if [[ -n "$feature_shard" ]]; then
+  if [[ "$part" != "feature_sources" && "$part" != "feature_columns" ]]; then
+    printf 'FEATURE_SHARD requires CI_PART=feature_sources or feature_columns.\n' >&2
+    exit 2
+  fi
+  suite="${part#feature_}"
+  count_variable="feature_${suite}_shards"
+  if [[ ! "$feature_shard" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] || [[ "${feature_shard##*/}" != "${!count_variable}" ]] || (( ${feature_shard%%/*} > ${!count_variable} )); then
+    printf 'FEATURE_SHARD must be K/%s with 1 <= K <= %s, not %s.\n' "${!count_variable}" "${!count_variable}" "$feature_shard" >&2
+    exit 2
+  fi
+fi
+hook_partition() {
+  timed "repository hooks: $1" "$python_bin" -m scripts.quality.ci_hooks --group "$1" --from "${RANGE_START:-}" --to "${RANGE_END:-}" \
+    --output-directory "$quality_output/hooks/$1"
+}
+hook_privacy() { hook_partition privacy; }
+hook_documentation() { hook_partition documentation; }
+hook_code() { hook_partition code; }
+combine_feature_sources() { run_group lakehouse_features lakehouse_features_combine "sources/$feature_sources_shards"; }
+combine_feature_columns() { run_group lakehouse_features lakehouse_features_combine "columns/$feature_columns_shards"; }
+
 # The work items: one per group, and for the gold layer one per selected unit. An alone item runs by itself, before the others.
 alone_items=" lakehouse_gold_writer_setup "
 alone=()
 shared=()
 for group in ${run_groups[@]+"${run_groups[@]}"}; do
-  if [[ "$group" == "launcher" || "$group" == "acquisition" ]]; then
+  if [[ "$group" == "launcher" || "$group" == "acquisition" || "$group" == "repository_hooks" ]]; then
     continue
   fi
   require_group_file "$group"
+  if [[ "$group" == "lakehouse_features" ]]; then
+    for suite in sources columns; do
+      if [[ "$part" == "feature_sources" || "$part" == "feature_columns" ]] && [[ "$part" != "feature_$suite" ]]; then
+        continue
+      fi
+      count_variable="feature_${suite}_shards"
+      count="${!count_variable}"
+      for ((index = 1; index <= count; index++)); do
+        if [[ -n "$feature_shard" && "${feature_shard%%/*}" != "$index" ]]; then
+          continue
+        fi
+        item="lakehouse_features_${suite}_$index"
+        printf -v "item_group_$item" '%s' "$group"
+        printf -v "item_entry_$item" '%s' "lakehouse_features_$suite"
+        printf -v "item_argument_$item" '%s' "$index/$count"
+        shared+=("$item")
+      done
+    done
+    continue
+  fi
   if [[ "$group" != "lakehouse_gold" ]]; then
     printf -v "item_group_$group" '%s' "$group"
     shared+=("$group")
@@ -209,29 +255,45 @@ if [[ "$part" == "all" ]] && is_selected acquisition; then
   shared+=(acquisition_shard_1 acquisition_shard_2 acquisition_shard_3 acquisition_shard_4)
 fi
 
+if [[ "$part" == "all" ]] && is_selected repository_hooks; then
+  shared+=(hook_privacy hook_documentation hook_code)
+fi
+
+run_timed_item() {
+  set -euo pipefail
+  local item="${1:?}" item_started=$SECONDS
+  export CI_TIMING_FILE="$scratch/$item.timing"
+  run_item "$item"
+  printf '%s\n' $((SECONDS - item_started)) >"$scratch/$item.seconds"
+}
+
 failed=()
-# run_items <item>...: start the items at the same time, wait for all, then print each log and its seconds in the given order.
+# run_items <item>...: stream a single item, buffer parallel items in order, and retain each log and duration.
 run_items() {
   local item index pids=() items=("$@")
-  for item in "$@"; do
-    (
-      set -euo pipefail
-      export CI_TIMING_FILE="$scratch/$item.timing"
-      item_started=$SECONDS
-      run_item "$item"
-      printf '%s\n' $((SECONDS - item_started)) >"$scratch/$item.seconds"
-    ) >"$scratch/$item.log" 2>&1 &
+  if ((${#items[@]} == 1)); then
+    item="${items[0]}"
+    printf '\n== %s ==\n' "$item"
+    run_timed_item "$item" 2>&1 | tee "$scratch/$item.log" &
     pids+=("$!")
     timing_files+=("$scratch/$item.timing")
-  done
+  else
+    for item in "$@"; do
+      run_timed_item "$item" >"$scratch/$item.log" 2>&1 &
+      pids+=("$!")
+      timing_files+=("$scratch/$item.timing")
+    done
+  fi
   for index in ${pids[@]+"${!pids[@]}"}; do
     if ! wait "${pids[$index]}"; then
       failed+=("${items[$index]}")
     fi
   done
   for item in "$@"; do
-    printf '\n== %s ==\n' "$item"
-    cat "$scratch/$item.log"
+    if ((${#items[@]} != 1)); then
+      printf '\n== %s ==\n' "$item"
+      cat "$scratch/$item.log"
+    fi
     record "$item" "$(cat "$scratch/$item.seconds" 2>/dev/null || printf 'failed')"
   done
 }
@@ -248,6 +310,21 @@ fi
 if ((${#failed[@]})); then
   printf '\nLocal CI failed in: %s\n' "${failed[*]}" >&2
   exit 1
+fi
+
+if is_selected lakehouse_features && [[ -z "$feature_shard" ]]; then
+  combines=()
+  if [[ "$part" != "feature_columns" ]]; then
+    combines+=(combine_feature_sources)
+  fi
+  if [[ "$part" != "feature_sources" ]]; then
+    combines+=(combine_feature_columns)
+  fi
+  run_items "${combines[@]}"
+  if ((${#failed[@]})); then
+    printf '\nLocal CI failed in: %s\n' "${failed[*]}" >&2
+    exit 1
+  fi
 fi
 
 if [[ "$part" == "all" ]] && is_selected acquisition; then
