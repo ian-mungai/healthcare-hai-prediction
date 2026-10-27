@@ -209,7 +209,7 @@ registry validation, the acquisition regression tests and every offline E2E
 suite twice, with a 90% coverage gate that also counts collector command lines
 run as child processes. They take about 20 minutes on this machine (the recorded profile estimate), so they run only
 when acquisition code, configuration or their dependencies change: through the
-`acquisition-checks` pre-commit hook, which is one unsharded run and in GitHub Actions, where the pytest run is two shard jobs
+`acquisition-checks` pre-commit hook, which is one unsharded run and in GitHub Actions, where the pytest run is four shard jobs
 and a combining job (see Sharded acquisition tests below; LFS checkout, pinned Terraform). The CI jobs use the
 hook's own path pattern through `scripts/acquisition/run_checks_ci.sh`, which also
 matches the CI workflow; a manual run, a push with no earlier commit or rewritten
@@ -348,9 +348,7 @@ enforce these repository rules at the pinned versions. On a commit the
 set (`.venv/bin/pre-commit run --all-files --hook-stage manual`, whose
 `local_ci` hook runs the full local CI) runs before every release or push.
 GitHub CI runs the manual stage on every pull request and push to `main` as parallel
-jobs after a quick plan job (see Main-run reuse below): the hooks without `local_ci` (file-based hooks check the changed files of
-the range), then `scripts/run_ci.sh` as `CI_PART=core`, one job for each lakehouse
-layer (`CI_PART=bronze`, `silver`, `gold` or `features`, see Lakehouse layers below), a job for the
+jobs after a quick plan job (see Main-run reuse below): three hook partitions without `local_ci` (file-based hooks check the changed files of the range), `scripts/run_ci.sh` as `CI_PART=core`, one job each for bronze, silver and gold (`CI_PART=bronze`, `silver` or `gold`, see Lakehouse layers below), eight feature-source shards and four feature-column shards (`CI_PART=feature_sources` or `feature_columns`, `FEATURE_SHARD=K/N`), a feature evidence combining job and a job for the
 gold model metadata E2E (`CI_PART=gold` with `CI_UNITS=model_metadata_e2e`), the launcher E2E in two shards
 (`CI_PART=launcher`, `LAUNCHER_SHARD=K/2`) and the acquisition shards with their combining job, each for the groups the range
 touches (`CI_SCOPE=range`). Every checkout of a pull request run is the head commit of the pull request, not GitHub's merge of the
@@ -362,9 +360,7 @@ the dbt package archive and the SQLFluff packages); the Python environment is
 built fresh from `requirements.txt` without a pip cache. Each job's timeout is about
 twice its measured time (see Measured durations below). Locally `scripts/run_ci.sh` runs every part the way the GitHub jobs do: the gates
 first, then the launcher E2E, then the units that run alone (the gold writer set-up) and then the independent check groups and units, which run
-concurrently: Local CI Core, the four lakehouse layers, the gold model metadata E2E with its workers and the four acquisition shards. After them the
-combining step of the acquisition gate merges the four shard folders and enforces the 90% coverage gate. The full local CI is expected to take about 60 minutes. The launcher E2E takes about 13 minutes and the feature checks take about 40 minutes, with gates and setup added. This is an estimate until the first full local run on this layout measures it. A separate measured trial runs the
-launcher E2E in the parallel set five times on this Mac (16 cores, 48 GiB). Only if all five runs pass does the launcher join the parallel set, which would remove the launcher time from the serial path. The exception to the run alone rule is recorded with the evidence. Until then the launcher stays alone, first. The commit hook
+concurrently: Local CI Core, bronze, silver and gold, eight feature-source shards, four feature-column shards, the three hook partitions, the gold model metadata E2E with its workers and the four acquisition shards. The feature combining steps require every numbered report and exactly one passing result for every expected case. After them the acquisition combining step merges the four acquisition shard folders and enforces the 90% coverage gate. The hosted target is about 15 to 20 minutes. The new feature and hook durations are estimates until a complete hosted run measures them. The local launcher E2E takes about 13 minutes and remains serial before the parallel set. Its time, the alone writer set-up and the final acquisition combine add to the parallel critical path, so this layout does not establish the 15 to 20 minute local target. A separate measured trial runs the launcher E2E in the parallel set five times on this Mac (16 cores, 48 GiB). Only if all five runs pass does the launcher join the parallel set. The exception to the run alone rule is recorded with the evidence. Until then the launcher stays alone, first. The commit hook
 (`CI_SCOPE=staged`) always runs the groups the staged paths select and reuses no earlier result. The run prints each group's seconds and each command's
 start, end and seconds (GitHub CI adds both to the job summary). In the full set gitleaks scans every outgoing source file instead of
 the staged index. The acquisition checks
@@ -405,7 +401,7 @@ Each CI run retains configuration evidence under `data/e2e/configuration/` and
 quality evidence under `data/e2e/quality/`. The secret store E2E writes its report under `data/e2e/secret_store/` and the gold writer set-up
 check under `data/e2e/gold_publish/`. E2E reports include source hashes,
 expected and observed process outcomes, repeat commands and tested limits.
-GitHub Actions uploads the configuration, quality, broker and feature evidence and retains it for 14 days. The feature job retains `data/e2e/feature_sources/` and `data/e2e/feature_columns/`. The secret store and gold set-up reports stay on the runner and are not uploaded. Local TFLint
+GitHub Actions uploads the configuration, quality, broker and feature evidence and retains it for 14 days. Feature shards retain their reports under `data/e2e/quality/feature_shards/<suite>/shard_<index>/`. The combining job retains both combined reports and their input shard reports. Hook partitions retain their logs and report under `data/e2e/hooks/`. The secret store and gold set-up reports stay on the runner and are not uploaded. Local TFLint
 needs permission to start its bundled plugin; a sandbox denial is a blocked
 check, not a passing result.
 
@@ -448,8 +444,7 @@ launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no fi
   GitHub CI (`repository_code_checks`, command "CI groups selection E2E"), whose runner has Bash 5. The job log names the Bash version they used.
 - To add a group, add its entry to `groups` in `config/quality/ci_groups.json` (the order of the file is the run order) with the pattern
   `^scripts/ci/groups/<group>\.sh$`. Add the file `scripts/ci/groups/<group>.sh` with a function named exactly like the group, because the dispatcher calls it by
-  that name. The two exceptions are the launcher (`launcher_e2e`) and the gold layer (one function `lakehouse_gold_<unit>` for each unit in `gold_units` of the
-  dispatcher). Helper functions are allowed. Add the group's expected selection to the body-file cases of `run_ci_groups_e2e` and its job to the workflow.
+  that name. The exceptions are the launcher (`launcher_e2e`), the gold layer (one function `lakehouse_gold_<unit>` for each unit in `gold_units` of the dispatcher) and features (`lakehouse_features_sources`, `lakehouse_features_columns` and `lakehouse_features_combine`). Helper functions are allowed. Add the group's expected selection to the body-file cases of `run_ci_groups_e2e` and its job to the workflow.
 - `run_ci_groups_e2e` proves the selection of each body file, plants drift for every guard rule and runs the dispatcher with a `timed` that only prints the
   command. These dry runs prove that a missing body file stops a run, that the full local plan names the same groups, gold units and acquisition shards as the
   GitHub jobs and that each of 15 hostile group files leaves the shell state of the other groups and of the dispatcher unchanged. Before the move the plans (`CI_LIST_ONLY=1`) and command lists of every part
@@ -458,7 +453,7 @@ launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no fi
 ## Lakehouse layers
 
 The lakehouse checks are four groups in `config/quality/ci_groups.json`: `lakehouse_bronze`, `lakehouse_silver`, `lakehouse_gold` and `lakehouse_features`, listed in
-`layers` from upstream to downstream. Each group has its own path list and its own GitHub job (`CI_PART=bronze`, `silver`, `gold` or `features`). The bronze list is the
+`layers` from upstream to downstream. Each group has its own path list. Bronze, silver and gold have one GitHub job each (`CI_PART=bronze`, `silver` or `gold`). Features have source and column shard jobs that both select the `lakehouse_features` group. The bronze list is the
 broad lakehouse list. It holds the code every layer shares: the launcher, memory plan, provenance, lock and compose file, the dbt project, macros and tests.
 The silver, gold and feature lists name only the files that belong to that layer. Each file is listed for the layer that reads it first. No later layer's pattern
 may match it. A file that an upstream layer's checks read although a later layer's list also matches it is named in `upstream_inputs` for the
@@ -487,8 +482,7 @@ completely belongs in `always` in `config/quality/ci_groups.json`.
 `scripts/quality/timing.sh` wraps every check command of `scripts/run_ci.sh` and the acquisition scripts in `timed <label> <command>`. The log gets
 `[timing] start <label> at <UTC time>` and `[timing] end <label> at <UTC time>: <seconds> s, exit <code>` and the command keeps its own exit code. Each
 command adds a row to a file of its own unit and when the run ends the rows of the gates, the launcher E2E and every unit are listed in the job
-summary as a table of command, start, end, seconds and exit code. In a unit that runs in the background the log is shown when the unit has ended; the
-times in it are those of the command. A wrapped function holds one command or one pipeline, because a shell function that runs under `||` ignores
+summary as a table of command, start, end, seconds and exit code. When a work batch contains one item, including a hosted lakehouse job or feature shard, its output streams to the job log while the item runs. The same output is retained in the per-item log and its duration remains in the summary. Batches with several parallel items retain separate logs and print them in order after every item finishes, so their output does not interleave. Feature-source and feature-column shards also print and flush a timing line when each case starts and ends. The times in each line are those of the case or command. A wrapped function holds one command or one pipeline, because a shell function that runs under `||` ignores
 `set -e`. `scripts/quality/run_ci_groups_e2e.py` checks the wrapper, the failing and the interrupted command and the rows of parallel units.
 
 ## Measured durations
@@ -502,12 +496,26 @@ metadata E2E (about 39 minutes one after another) and the 38 offline workflow te
 | --- | ---: | ---: | --- |
 | CI Plan | 1 | 5 | estimate |
 | Quick Gates of a Reused Result | 4 | 10 | estimate |
-| Repository Hooks | 20.7 | 45 | hosted, with all hooks |
-| Local CI Core | 14.1 | 30 | hosted |
+| Repository Hooks (privacy) | 5 | 12 | estimate, secret and data checks |
+| Repository Hooks (documentation) | 12 | 30 | estimate, prose, Markdown and review checks |
+| Repository Hooks (code) | 18 | 40 | estimate, remaining manual hooks |
+| Local CI Core | 15 | 30 | hosted, supplied run duration |
 | Lakehouse Bronze Checks | 8.9 | 20 | hosted |
 | Lakehouse Silver Checks | 2.4 | 5 | hosted |
-| Lakehouse Gold Checks | 30 | 60 | estimate |
-| Lakehouse Features Checks | 130 | 260 | estimate, three times local command time plus setup and gates |
+| Lakehouse Gold Checks | 11 | 25 | hosted, supplied 10 to 11 minute range |
+| Feature Sources (Shard 1 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 2 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 3 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 4 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 5 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 6 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 7 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 8 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Columns (Shard 1 of 4) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Columns (Shard 2 of 4) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Columns (Shard 3 of 4) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Columns (Shard 4 of 4) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Combined Evidence | 4 | 10 | estimate, setup and report validation |
 | Lakehouse Gold Model Metadata E2E | 14 | 30 | estimate |
 | Launcher E2E (Shard 1 of 2) | 8.4 | 20 | hosted |
 | Launcher E2E (Shard 2 of 2) | 9 | 20 | hosted |
@@ -517,7 +525,15 @@ metadata E2E (about 39 minutes one after another) and the 38 offline workflow te
 | Acquisition Checks (Shard 4 of 4) | 13 | 30 | estimate |
 | Acquisition Checks | 4 | 10 | estimate |
 
-The four feature commands took 2,402 seconds on the Mac. The feature estimate assumes hosted execution is three times slower. It adds 10 minutes for checkout, setup and shared gates, giving about 130 minutes. The 260-minute limit is about twice that estimate. Resize it from the first complete hosted run. The gold job keeps its 60-minute limit.
+The source runner has 157 cases, including 104 admission or resolved cases and one built-view checksum case. Eight strided shards have 19 or 20 cases each and distribute the build cases across all eight workers. The column runner has 12 cases. Four strided shards each have two documented-column cases and one extra-column, contract, admission or filter-hook case. A shard builds a base database only when its selected cases require one. The source check and column check each run once, in shard 1 of their suite. The counts are in `feature_shards` of `config/quality/ci_groups.json`. The 14-minute estimate allows repeated base setup and the shared gates. Resize it from the first complete hosted run.
+
+## Feature shards and repository hooks
+
+`run_feature_sources_e2e` and `run_feature_columns_e2e` accept `--shard K/N` (one-based) and `--list-cases`. The optional `--only` substring filter applies before striding. Listing cases starts no build. `config/quality/feature_cases.json` preserves the complete expected case inventory independently of the runners. Each shard report records the selected and executed cases, the full inventory and hashes of the feature implementation and dbt inputs. Inputs changing during a run fail it. `scripts.lakehouse.feature_shards combine` requires every numbered shard, the same candidate, successful outcomes and exact membership. Missing, repeated, failed or foreign cases fail the combining gate. The hosted gate requires both shard matrices to succeed and uses range selection to skip combining when the feature group is not selected. Its downloads are limited to this run and attempt. After a shard fails, choose **Re-run all jobs**. **Re-run failed jobs** does not recreate artifacts for the shards that passed in the earlier attempt, so the feature evidence job cannot pass. The acquisition combining job has the same full-rerun requirement.
+
+The `hook_groups` mapping in `config/quality/ci_groups.json` partitions every manual-stage hook exactly once, except the separate `local_ci` aggregate. Privacy covers secrets, credential files, data files, environment declarations and the privacy scan. Documentation covers writing, front matter, Markdown, the local-record tracking check and documentation-review E2E. Code holds all remaining manual hooks. `scripts.quality.ci_hooks` validates that partition before running any hook. It invokes each unchanged hook ID through the pinned pre-commit with its original range or all-files selection, manual stage and failure diff. It continues after ordinary hook failures and returns a failed group verdict. Each group deadline comes from its hosted job timeout with two minutes reserved for evidence upload. The first job step records `JOB_STARTED` before checkout. The hook runner subtracts elapsed checkout, setup and commit-check time from its budget. Privacy stops by minute 10 of its 12-minute job. Documentation stops by minute 28 of 30. Code stops by minute 38 of 40. An exhausted budget writes failed evidence without starting a hook. Local runs without `JOB_STARTED` count from the hook invocation with the same margin. A hook that exceeds the group deadline stops the partition, retains its partial stdout and stderr in the hook log and writes a failed report naming the hook and deadline. Full local CI runs the same three partitions in its parallel set. Commit-range messages and removed-name checks run in the hosted privacy partition, with the reused-run path retaining its own checks.
+
+`run_ci_groups_e2e --sharding-only` runs light case-list, synthetic report combination, recording hook-entry and print-only dispatcher cases. It checks the timestamp from the first job step, budgets after setup and hook timeout evidence. Deadline cases cover local invocation and exhausted admission. Further cases check named failures for incomplete partitions after moving a hook between groups. Output cases check live output from one item, buffered parallel output and case timing with substituted feature builds. It runs no feature build and labels the report as iteration evidence. The full E2E also covers unconditional gates in both new feature parts. Planted cases prove that a missing shard, repeated case, missing hook and failed parallel item cannot produce a combined pass.
 
 ## Gold units
 

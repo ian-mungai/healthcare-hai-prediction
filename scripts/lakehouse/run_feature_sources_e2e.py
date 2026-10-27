@@ -32,12 +32,14 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from scripts.lakehouse import feature_columns as shell
+from scripts.lakehouse import feature_shards
 from scripts.lakehouse import feature_sources as sources
 
 SQL_TREES = ("dbt/models/features", "dbt/macros/features", "dbt/tests/features", "dbt/models/gold", "dbt/models/silver")
@@ -1067,35 +1069,53 @@ def run_resolved(damage: Damage, base: Path, admitted: bool = True) -> tuple[lis
         return problems, list(shell.STARTED_STEPS)
 
 
-def run(output: Path, only: list[str] | None = None) -> dict[str, Any]:
-    """Run every case (or only the cases whose name contains one of ``only``) on a fresh scratch copy and return the report."""
+def case_names() -> list[str]:
+    """List every case in execution order without building a database or writing files."""
+    return (
+        [name for name, _, _ in [*admission_cases(), *resolved_cases()]]
+        + ["all_feature_views_have_checksums", "unreadable_relation_fails_after", "unreadable_relation_fails_before"]
+        + [name for name, _, _ in [*cases(), *pass_cases()]]
+    )
+
+
+def run(output: Path, only: list[str] | None = None, shard: str = "") -> dict[str, Any]:
+    """Run the selected cases on fresh scratch copies and persist exact shard membership."""
+    inventory = case_names()
+    selected = feature_shards.select(inventory, shard, only)
+    before = feature_shards.snapshot("sources")
     results: list[dict[str, Any]] = []
-    with tempfile.TemporaryDirectory(prefix="feature_sources_base_") as base_folder:
-        base = shell.build_shell(sources.REPO_ROOT, Path(base_folder))
-        results.extend(resolved_results(base, only))
-        results.extend(checksum_results(base, only))
+    needs_base = {name for name, _, _ in [*admission_cases(), *resolved_cases()]} | {"all_feature_views_have_checksums"}
+    if needs_base.intersection(selected):
+        with tempfile.TemporaryDirectory(prefix="feature_sources_base_") as base_folder:
+            base = shell.build_shell(sources.REPO_ROOT, Path(base_folder))
+            results.extend(resolved_results(base, selected))
+            results.extend(checksum_results(base, selected))
+    else:
+        results.extend(checksum_results(Path(), selected))
     for name, damage, expected in [*cases(), *pass_cases()]:
-        if only and not any(part in name for part in only):
+        if name not in selected:
             continue
-        with tempfile.TemporaryDirectory(prefix="feature_sources_") as folder:
-            scratch = Path(folder)
-            copy_scratch(scratch)
-            damage(scratch)
-            problems, counts = sources.check(scratch)
-        if expected is None:
-            results.append({"case": name, "expected": "no problem", "problems": problems[:3], "counts": counts, "ok": not problems})
-        else:
-            matched = [problem for problem in problems if expected in problem]
-            results.append({"case": name, "expected": expected, "matched": matched[:2], "problems": len(problems), "ok": bool(matched)})
+        with feature_shards.timed_case("sources", name) as started:
+            with tempfile.TemporaryDirectory(prefix="feature_sources_") as folder:
+                scratch = Path(folder)
+                copy_scratch(scratch)
+                damage(scratch)
+                problems, counts = sources.check(scratch)
+            if expected is None:
+                results.append({"case": name, "expected": "no problem", "problems": problems[:3], "counts": counts, "ok": not problems})
+            else:
+                matched = [problem for problem in problems if expected in problem]
+                results.append({"case": name, "expected": expected, "matched": matched[:2], "problems": len(problems), "ok": bool(matched)})
+            results[-1]["seconds"] = round(time.monotonic() - started, 3)
     report: dict[str, Any] = {
         "written_utc": datetime.now(UTC).isoformat(),
+        "mode": "iteration" if only else "full",
+        "note": "not commit evidence" if only else "complete assigned shard",
         "committed_counts": results[0].get("counts"),
         "cases": results,
         "status": "pass" if all(result["ok"] for result in results) else "fail",
     }
-    output.mkdir(parents=True, exist_ok=True)
-    (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-    return report
+    return feature_shards.finish(output, "sources", shard, inventory, selected, before, report)
 
 
 # One synthetic hospital-window in the spine, so that the views over it have rows to checksum.
@@ -1112,40 +1132,48 @@ def checksum_results(base: Path, only: list[str] | None = None) -> list[dict[str
     """Round 7, finding 3: the committed feature models, views included, have a row count and md5 after the build; an unreadable relation is a problem."""
     results: list[dict[str, Any]] = []
     wanted = "all_feature_views_have_checksums"
-    if not only or any(part in wanted for part in only):
-        with tempfile.TemporaryDirectory(prefix="feature_sources_checksums_") as folder:
-            run = shell.run_features(sources.REPO_ROOT, Path(folder), base, contract=True)
-            shell.step(
-                sources.REPO_ROOT / ".tools/sqlfluff/bin/python",
-                ["-c", INSERT_PROGRAM, str(run.database), SPINE_ROW],
-                sources.REPO_ROOT,
-                shell.tool_environment(sources.REPO_ROOT),
-                "insert one synthetic hospital-window",
+    if not only or wanted in only:
+        with feature_shards.timed_case("sources", wanted) as started:
+            with tempfile.TemporaryDirectory(prefix="feature_sources_checksums_") as folder:
+                run = shell.run_features(sources.REPO_ROOT, Path(folder), base, contract=True)
+                shell.step(
+                    sources.REPO_ROOT / ".tools/sqlfluff/bin/python",
+                    ["-c", INSERT_PROGRAM, str(run.database), SPINE_ROW],
+                    sources.REPO_ROOT,
+                    shell.tool_environment(sources.REPO_ROOT),
+                    "insert one synthetic hospital-window",
+                )
+                after = shell.read_relations(run.database)
+            built = {name: digest for name, digest in after.items() if name not in run.relations}
+            folder_models = sources.REPO_ROOT / "dbt/models/features"
+            tables = sum("materialized='table'" in path.read_text() for path in folder_models.glob("*.sql"))
+            real = {name for name, digest in built.items() if CHECKSUM.fullmatch(digest)}
+            with_rows = sorted(name for name, digest in built.items() if (found := CHECKSUM.fullmatch(digest)) and found.group(1))
+            results.append(
+                {
+                    "case": wanted,
+                    "expected": f"{len(built)} built relations, {len(built) - tables} views and {tables} tables, each readable (the md5 is empty without rows)",
+                    "unreadable": sorted(set(built) - real),
+                    "with_rows_and_an_md5": with_rows,
+                    "ok": len(built) == 23 and tables == 4 and real == set(built) and bool(with_rows),
+                }
             )
-            after = shell.read_relations(run.database)
-        built = {name: digest for name, digest in after.items() if name not in run.relations}
-        folder_models = sources.REPO_ROOT / "dbt/models/features"
-        tables = sum("materialized='table'" in path.read_text() for path in folder_models.glob("*.sql"))
-        real = {name for name, digest in built.items() if CHECKSUM.fullmatch(digest)}
-        with_rows = sorted(name for name, digest in built.items() if (found := CHECKSUM.fullmatch(digest)) and found.group(1))
-        results.append(
-            {
-                "case": wanted,
-                "expected": f"{len(built)} built relations, {len(built) - tables} views and {tables} tables, each readable (the md5 is empty without rows)",
-                "unreadable": sorted(set(built) - real),
-                "with_rows_and_an_md5": with_rows,
-                "ok": len(built) == 23 and tables == 4 and real == set(built) and bool(with_rows),
-            }
-        )
+            results[-1]["seconds"] = round(time.monotonic() - started, 3)
     wanted = "unreadable_relation_fails"
-    if not only or any(part in wanted for part in only):
+    if not only or any(name.startswith(wanted + "_") for name in only):
         message = "which cannot be read to compare its rows"
         for side, before, after_state in (
             ("after", {"main.x": "1 rows, md5 a"}, {"main.x": shell.UNREADABLE + "boom"}),
             ("before", {"main.x": shell.UNREADABLE + "boom"}, {"main.x": "1 rows, md5 a"}),
         ):
-            problems = sources.relation_problems({}, before, after_state, {})
-            results.append({"case": f"{wanted}_{side}", "expected": message, "matched": problems[:1], "ok": any(message in problem for problem in problems)})
+            if only and f"{wanted}_{side}" not in only:
+                continue
+            with feature_shards.timed_case("sources", f"{wanted}_{side}") as started:
+                problems = sources.relation_problems({}, before, after_state, {})
+                results.append(
+                    {"case": f"{wanted}_{side}", "expected": message, "matched": problems[:1], "ok": any(message in problem for problem in problems)}
+                )
+                results[-1]["seconds"] = round(time.monotonic() - started, 3)
     return results
 
 
@@ -1170,34 +1198,50 @@ def resolved_results(base: Path, only: list[str] | None = None) -> list[dict[str
     """
     results: list[dict[str, Any]] = []
     for name, damage, expected in admission_cases():
-        if only and not any(part in name for part in only):
+        if only and name not in only:
             continue
-        problems, starts = run_resolved(damage, base)
-        built = {"dbt run tag:features", "dbt compile tag:features"} <= set(starts)
-        result = judge(name, expected, problems, starts, rejected=expected is not None and expected not in DIRECT_READ_MESSAGES)
-        if expected is None:
-            result["ok"] = result["ok"] and built
+        with feature_shards.timed_case("sources", name) as started:
+            problems, starts = run_resolved(damage, base)
+            built = {"dbt run tag:features", "dbt compile tag:features"} <= set(starts)
+            result = judge(name, expected, problems, starts, rejected=expected is not None and expected not in DIRECT_READ_MESSAGES)
+            if expected is None:
+                result["ok"] = result["ok"] and built
+            result["seconds"] = round(time.monotonic() - started, 3)
         results.append(result)
     for name, damage, expected in resolved_cases():
-        if only and not any(part in name for part in only):
+        if only and name not in only:
             continue
-        problems, starts = run_resolved(damage, base, admitted=False)
-        results.append(judge(name, expected, problems, starts, rejected=False))
+        with feature_shards.timed_case("sources", name) as started:
+            problems, starts = run_resolved(damage, base, admitted=False)
+            results.append(judge(name, expected, problems, starts, rejected=False))
+            results[-1]["seconds"] = round(time.monotonic() - started, 3)
     return results
 
 
 def main() -> int:
     """Run the cases, write the artifact and fail when a case does not behave as expected."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--output-directory", type=Path, default=sources.REPO_ROOT / "data/e2e/feature_sources" / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"))
+    parser.add_argument("--output-directory", type=Path, default=None)
     parser.add_argument("--only", action="append", help="run only the cases whose name contains this text (repeatable); the default runs all of them")
+    parser.add_argument("--shard", default="", help="run every Nth case as K/N, with 1 <= K <= N")
+    parser.add_argument("--list-cases", action="store_true", help="print the selected case names as JSON without running them")
     args = parser.parse_args()
-    report = run(args.output_directory, args.only)
+    try:
+        selected = feature_shards.select(case_names(), args.shard, args.only)
+    except ValueError as error:
+        parser.error(str(error))
+    if args.list_cases:
+        sys.stdout.write(json.dumps(selected) + "\n")
+        return 0
+    if args.output_directory is None:
+        label = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + ("_shard" + args.shard.replace("/", "of") if args.shard else "")
+        args.output_directory = sources.REPO_ROOT / "data/e2e/feature_sources" / label
+    report = run(args.output_directory, args.only, args.shard)
     failed = [result["case"] for result in report["cases"] if not result["ok"]]
     sys.stdout.write(f"feature sources e2e: {report['status']}; artifact {args.output_directory / 'report.json'}\n")
     if failed:
         sys.stderr.write(f"feature sources e2e: failed cases {failed}\n")
-    return 1 if failed else 0
+    return int(report["status"] != "pass")
 
 
 if __name__ == "__main__":
