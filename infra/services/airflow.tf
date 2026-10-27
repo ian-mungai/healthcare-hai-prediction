@@ -63,8 +63,10 @@ locals {
     mountPoints = local.airflow_code_mounts
     stopTimeout = 60
     linuxParameters = {
-      capabilities = { drop = ["ALL"] }
+      capabilities = { add = [], drop = ["ALL"] }
     }
+    systemControls = []
+    volumesFrom    = []
   })
 
   airflow_wait_for_migrations = "airflow db check-migrations --migration-wait-timeout 600"
