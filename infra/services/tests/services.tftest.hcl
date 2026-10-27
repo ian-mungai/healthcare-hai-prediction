@@ -1159,7 +1159,7 @@ run "container_definitions_match_the_approved_versions" {
       "marquez/marquez_api"                         = "9df0f81c5440fa10c2df2fc83d01edb1b5e09b06c2f5cbc1930659d87fae1033"
       "marquez/marquez_web"                         = "4ff0cc6590b24265a20486f1b4aeab92bf28afeb6eceb93ea83d022d279743c9"
       "polaris/polaris"                             = "4091249731a1ee59e36999c93cacc38ad67f1c8be37c13308b5b65f3d673e487"
-      "polaris_bootstrap/polaris_bootstrap"         = "0d33ef24e4e1060358256973fc2d678892abd56956b4b533a3cc5dd00de0d5a1"
+      "polaris_bootstrap/polaris_bootstrap"         = "1a0bffac42991a144cec7b17cc7809f2316317c916bd9af2f3271f62ec7899c5"
       "postgres/postgres"                           = "84ffdb77ff2045be5b3abcf4437443a9a14b42cd406a155da052da8c5c4d860f"
       "postgres/postgres_databases"                 = "d1832558975c44ccb1c94ed39efbe9e024edaa1ddd6f3161b9d7e95288db71f4"
       "redis/redis"                                 = "583fcf4e2db9335bd827c6b0cf2fc7b2428b7c187ba72e1acbcb247d4a01db10"

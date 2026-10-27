@@ -74,6 +74,7 @@ locals {
             { name = "POLARIS_PERSISTENCE_TYPE", value = "relational-jdbc" },
             { name = "QUARKUS_DATASOURCE_JDBC_URL", value = "jdbc:postgresql://127.0.0.1:5432/polaris" },
             { name = "QUARKUS_DATASOURCE_USERNAME", value = "polaris" },
+            { name = "QUARKUS_HTTP_HOST_ENABLED", value = "false" },
           ]
           secrets = [
             { name = "POLARIS_ROOT_SECRET", valueFrom = local.secret_arn["polaris_root_secret"] },
