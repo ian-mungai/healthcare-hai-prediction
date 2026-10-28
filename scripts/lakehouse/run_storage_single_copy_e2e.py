@@ -875,7 +875,7 @@ def pre_load_successor_guard(root: Path) -> bool:
         patch.setattr(sys, "argv", ["bronze", "--tables", "preload"])
         patch.setattr(bronze, "DEPLOYMENT", deployment)
         patch.setattr(bronze, "load_table_map", lambda: {"namespace": "synthetic", "tables": [{"table": "preload"}]})
-        patch.setattr(bronze, "S3Storage", lambda: None)
+        patch.setattr(bronze, "S3Storage", lambda *, task_role=False: None)
         session = SimpleNamespace(spark_session=lambda *_args, **_kwargs: SimpleNamespace(stop=lambda: None), job_memory=lambda: "synthetic")
         patch.setitem(sys.modules, "scripts.lakehouse.session", session)
         patch.setattr(bronze, "load_retired", bronze.RetiredObjects)

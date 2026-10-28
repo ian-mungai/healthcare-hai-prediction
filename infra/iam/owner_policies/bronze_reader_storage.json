@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadBronzeNamespaceObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:GetObjectVersion"],
+      "Resource": ${TABLE_OBJECT_ARNS}
+    },
+    {
+      "Sid": "ListBronzeNamespacePrefixes",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:ListBucketVersions"],
+      "Resource": "${BUCKET_ARN}",
+      "Condition": {"StringLike": {"s3:prefix": ${TABLE_LIST_PREFIXES}}}
+    }
+  ]
+}
