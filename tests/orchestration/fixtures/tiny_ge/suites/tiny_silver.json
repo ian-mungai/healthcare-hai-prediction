@@ -1,7 +1,0 @@
-{
-  "name": "tiny_silver",
-  "expectations": [
-    {"id": "silver_two.id_not_null", "table": "silver_two", "type": "ExpectColumnValuesToNotBeNull", "kwargs": {"column": "id"}, "severity": "structural"},
-    {"id": "silver_two.id_unique", "table": "silver_two", "type": "ExpectColumnValuesToBeUnique", "kwargs": {"column": "id"}, "severity": "structural"}
-  ]
-}
