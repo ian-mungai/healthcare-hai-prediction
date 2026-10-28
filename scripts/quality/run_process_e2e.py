@@ -207,17 +207,36 @@ def partial_output(base: Path) -> dict[str, Any]:
 
 def interrupt_stops_group(base: Path) -> dict[str, Any]:
     def body(scratch: Scratch) -> dict[str, Any]:
-        timer = threading.Timer(1.0, os.kill, (os.getpid(), signal.SIGINT))
-        timer.start()
+        main = threading.get_ident()
+        ready = threading.Event()
+        done = threading.Event()
+
+        def interrupt_when_ready() -> None:
+            # A job started in the background by a shell without job control inherits SIGINT as ignored, so the case installs Python's handler and
+            # interrupts only after the grandchild is up.
+            end = time.monotonic() + 30
+            while not done.is_set() and time.monotonic() < end:
+                if "grandchild" in scratch.pids():
+                    ready.set()
+                    signal.pthread_kill(main, signal.SIGINT)
+                    return
+                done.wait(0.05)
+
+        earlier = signal.signal(signal.SIGINT, signal.default_int_handler)
+        sender = threading.Thread(target=interrupt_when_ready, daemon=True)
+        sender.start()
         caught: BaseException | None = None
         try:
             scratch.run("term", "wait", 60)
         except KeyboardInterrupt as error:
             caught = error
         finally:
-            timer.cancel()
+            done.set()
+            sender.join(5)
+            signal.signal(signal.SIGINT, earlier)
         pids = scratch.pids()
         return {
+            "interrupt_sent_after_the_grandchild_started": ready.is_set(),
             "interrupt_reached_the_caller": isinstance(caught, KeyboardInterrupt),
             "grandchild_started": "grandchild" in pids,
             "grandchild_gone": "grandchild" in pids and not alive(pids["grandchild"]),
