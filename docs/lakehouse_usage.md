@@ -1,7 +1,7 @@
 ---
 title: Lakehouse usage
-description: Commands and checks for the launcher, bronze, staging, gold, silver validation, the run lock and the fixture kit.
-last_updated: 2026-10-26
+description: Commands and checks for the launcher, bronze and its AWS cutover, staging, gold, silver, the run lock and fixtures.
+last_updated: 2026-10-28
 ---
 
 # Lakehouse usage
@@ -265,6 +265,112 @@ Compare dictionaries give types only. Bronze does not load:
 Two HRSA detail files, stored under the dictionary role, have corrected manifests in S3 that give them the data role
 (`config/acquisition/manifest_corrections.json`, written by `scripts.acquisition.correct_manifest_roles`); the original
 manifests stay unchanged. Open gaps are tracked in the local issue register.
+
+## Bronze cutover to the AWS catalog
+
+The cutover moves bronze write authority from the Mac catalog to the AWS Polaris catalog by registering the existing
+Iceberg metadata. Nothing is rebuilt or restored. Only `bronze` and `bronze_dictionary` are registered: the 330 map
+tables in each namespace plus `file_metadata`, `column_map`, `file_preambles` and `stored_copies` in `bronze`. Silver
+and gold are not registered. The owner runs one step at a time at a terminal. Each authority step prints a confirmation
+line and the owner types it back:
+
+```sh
+.venv/bin/python -m scripts.lakehouse.bronze_cutover status        # current authority record
+.venv/bin/python -m scripts.lakehouse.bronze_cutover dry-run       # read-only capture of every table, writes nothing
+.venv/bin/python -m scripts.lakehouse.bronze_cutover freeze --cutover <CUTOVER_ID>
+.venv/bin/python -m scripts.lakehouse.bronze_cutover fence         # waits until no Mac write is queued or running
+.venv/bin/python -m scripts.lakehouse.bronze_cutover capture       # writes the inventory and its SHA-256 once
+.venv/bin/python -m scripts.lakehouse.bronze_cutover refresh
+.venv/bin/python -m scripts.lakehouse.bronze_cutover route-check --probe-image <LOCAL_IMAGE_WITH_PYTHON3>   # Mac-side route acceptance
+.venv/bin/python -m scripts.lakehouse.bronze_cutover register --inventory <INVENTORY_FILE> --sha256 <DIGEST>
+.venv/bin/python -m scripts.lakehouse.bronze_cutover verify
+.venv/bin/python -m scripts.lakehouse.bronze_cutover switch        # AWS becomes the writer with every layer off
+.venv/bin/python -m scripts.lakehouse.bronze_cutover rollback      # before any AWS writer was admitted
+.venv/bin/python -m scripts.lakehouse.run_bronze_cutover_e2e       # stand-ins only, report: data/e2e/bronze_cutover/
+```
+
+The steps follow the catalog authority states: `freeze` moves `mac_writer` to `freezing` (a registry without a record is
+first initialized as `mac_writer`), `fence` to `source_fenced`, `refresh` to `refreshing` and `switch` to `aws_writer`.
+The launcher applies each step through its `catalog_authority` owner method inside its registry transaction. From
+`freezing` on, the launcher refuses every Mac catalog write at submit and ends a queued one as `fenced` before it
+starts. It classifies each real-run job by its validated arguments: `spark_write` jobs (including `smoke`, which creates
+and purges a scratch table), checksum jobs with `--fixture create` or `--fixture drop`, `real_dbt` except `ls` and
+`parse`, `gold_publish` and pipeline jobs of class `lakehouse_write` are writes. Checksum reads (`--tables` only), inert
+dbt commands, read-only sessions and test runs stay allowed. The fence does not wait for them. A running
+writer is never stopped: `fence` repeats until it has ended or the step deadline (`--seconds`) passes. On expiry authority
+stays `freezing`. Each command is stored write-once under `data/lakehouse/cutover/<CUTOVER_ID>/commands/`
+before it is sent, so repeating a step after a lost reply resends the same command and returns the stored record.
+A new freeze needs a new cutover ID.
+
+`capture` lists both namespaces on the frozen Mac catalog and stops on any table outside the set, any missing table or
+any table in `smoke_check` or `duckdb_view_check`. It pins each table from the catalog response and the versioned
+metadata object in S3, which must be byte-identical. It writes `bronze_inventory.json` and `bronze_inventory.sha256`
+once, mode 0600, in the cutover folder. A second capture must give the same digest.
+
+`register` and `verify` reach the AWS catalog only through the Session Manager tunnel to the host's private port 8181
+behind an owned loopback relay (`orchestration/catalog_transport.py`). The host is never typed by the owner: each step
+binds the one in-service instance of the approved host group named by the platform outputs.
+
+Route acceptance for this cutover is Mac-side (owner decision, Oct 28 2026, for this one attended cutover only, in
+`scripts/lakehouse/cutover_route.py`). `route-check` makes three observations of the bound host and records them once,
+pass or fail, in `route_checks/<STAMP>.json` in the cutover folder: the cutover ID, the host, each result and the
+SHA-256 of its sanitized evidence (kept beside it as `<STAMP>.<NAME>.evidence`, with no address or credential):
+
+1. `host_without_public_address`: the host is one running instance with the project tag and no public address on it
+   or any interface.
+2. `catalog_port_only`: the owned tunnel forwards only port 8181 of the bound host, the owned relay forwards only to
+   the tunnel, the transport owns exactly these two processes and the catalog answers through the relay.
+3. `mac_containers_refused`: while the route is open, no Docker network on the Mac reaches the tunnel or relay port.
+   `route-check` never runs Docker. It prints a command. The owner runs it in a second terminal at the repository
+   root. The command runs `scripts/lakehouse/mac_route_probe.py` from standard input once on every network that
+   `docker network ls` lists, with `--pull=never` and the local image given by `--probe-image` (it needs `python3`).
+   Each background Docker call gets the script through an explicit input redirection, so `/bin/sh` and zsh both pass
+   it. It writes `networks.txt` last. `route-check` waits up to 900 seconds for that file. The command ends at the same
+   deadline and writes no `networks.txt`. It removes its own named probe container, waiting at most 2 seconds. It stops
+   the running call, waiting at most 2 more seconds, then kills it. So it exits within about 5 seconds of the deadline,
+   even when Docker never returns. A container whose removal did not succeed in time is named on standard error and in
+   `cleanup_unconfirmed.txt` in the probe folder. `route-check` then records it as not observed. A missing, stale or
+   unreadable result counts as not observed. So does a result that tried no target or names another network than its
+   own.
+
+`route-check` writes `route_checks/<STAMP>.attempt` before the first observation. `register` and `verify` refuse to
+open the route unless the newest attempt completed and passed for the same cutover and host. Every evidence file must
+still match its recorded SHA-256. An attempt that expired or was interrupted refuses them even when an older check
+passed. The receipt records the check's digest. This check does not observe the ECS class-network matrix: lakehouse tasks reach the
+catalog and S3, offline tasks do not reach the catalog and both fail to reach Redis, unrelated hosts and the internet.
+That matrix stays required, under [real AWS read verification](ecs_real_runs.md), before any ECS job uses the catalog.
+Before the tunnel starts, the network acceptance check requires local tunnel and relay ports other than
+the Mac Polaris port 8181 (defaults 18181 and 18182) and a running project host without a public address. A lost route
+fails the step and is never reopened inside an operation.
+Each Polaris request ends at its absolute deadline, also while a slow peer is still sending headers or body: the client
+closes the connection and the step fails with the `deadline` cause.
+`register` first checks that the AWS catalog `hai_lakehouse` exists with the lakehouse base location and no credential
+vending, creates `bronze` and `bronze_dictionary` if absent (approved for this cutover ID only) and registers each table
+with its own deadline (`--per-table-seconds`). It stops at the first failure. It never overwrites a different table and
+never posts a registration twice. A rerun with the same inventory digest gives `unchanged` for done tables. The
+Polaris root credential registers, for this one attended run. `verify` loads every table through the AWS reader pair.
+For the first table of each namespace it then scans one data file through a short session of the lakehouse reader role,
+the S3 identity of AWS read jobs: it decodes the manifest list and a data manifest as Avro, then reads the first live
+data file's head, footer and first row group by byte range into a sparse local copy and decodes every row of that row
+group with DuckDB (one thread, no extension loads, interrupted at the step deadline). An absent or unreadable object, a
+file that is not Avro or Parquet, a data file whose size differs from its manifest entry and a Parquet file with a broken
+footer, a truncated body or pages that do not decompress all stop verification with the `data_read` cause. It recompares every Mac
+table last. Then it writes `bronze_receipt.json` once, which records the cutover ID, the inventory digest, the root
+principal, each registration run and each namespace scan. Both credentials are read
+from Parameter Store into memory only. `switch` names the receipt digest in its command reason. After the switch, no
+layer writes anywhere until AWS writers qualify. Mac reads are stale until the reader relay exists.
+
+`rollback` returns to `mac_writer` from `freezing` directly and from `source_fenced`, `refreshing` or `aws_writer` (P4)
+through `source_verify`, which recaptures the Mac catalog and requires the frozen inventory digest. AWS registrations
+stay in place and are adopted as `unchanged` by a later retry. The launcher refuses a rollback once an AWS writer was
+admitted (P5).
+Repeating `rollback` after it restored `mac_writer` resends this cutover's stored final command and returns the stored
+record, with authority and epoch unchanged.
+
+The E2E uses a launcher test registry with fake Docker, in-memory catalog and object stand-ins, a loopback Polaris
+stand-in and the real owned relay process. It makes no AWS, Session Manager or Docker call, so the tunnel start, the
+real catalogs, the AWS reader identity and the reader role session are verified only by the attended run. The scan
+reads with the lakehouse reader role, not the ECS task role of a read job.
 
 ## Staging, gold and pins
 

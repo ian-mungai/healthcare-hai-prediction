@@ -1,7 +1,7 @@
 ---
 title: ECS read target contract
 description: Proposed deployment captures, private target fields and jobs-wrapper interface for read tasks.
-last_updated: 2026-10-23
+last_updated: 2026-10-28
 audience: [developer, operator]
 status: Proposed
 ---
@@ -44,7 +44,7 @@ Without a binding, `catalog` is null. The selector must refuse every lakehouse j
 
 `class_networks` maps offline and seal jobs to the exported offline group. It maps read jobs to the exported lakehouse group. The groups must differ. The endpoint subnet must belong to the platform output. Every application request disables public IPs. The definition checks require ARM64 Linux, Fargate compatibility, the fixed bootstrap, private scratch volumes, a non-root user, dropped capabilities and a 90-second stop timeout.
 
-Catalog-dependent Mac preparation remains disabled in this proposal. Its transport label records the approved Session Manager route with an owned relay. The lead must supply native class-network acceptance before a separate change enables that route. No public catalog route is introduced.
+The bronze cutover (`scripts/lakehouse/bronze_cutover.py`) enables the approved Session Manager route with an owned relay for its `register` and `verify` steps only. The host is the one in-service instance of the approved host group from the platform outputs. Both steps refuse to open the route without a passing route check of that host for the same cutover (`route-check`). For this one attended cutover the check is Mac-side (owner decision, Oct 28 2026): the tunnel and relay reach only the catalog port of the bound host, the host has no public address and no Mac Docker network reaches the tunnel or relay. It does not observe the class-network matrix of the [real-run procedure](ecs_real_runs.md), which stays required before any ECS job uses the catalog. Its network acceptance check runs before the tunnel starts: the local tunnel and relay ports differ from the Mac Polaris port 8181. The host must be a running project instance without a public address on the instance or any interface. Every other catalog-dependent Mac preparation remains disabled. No public catalog route is introduced.
 
 ## Private target writer
 

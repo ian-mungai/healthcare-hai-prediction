@@ -34,6 +34,7 @@ orphan tests/orchestration/fixtures/tiny/* -- dbt loads every model, test and pr
 unused-code scripts/orchestration/run_lineage_e2e.py -- http.server calls the synthetic receiver do_POST and log_message callbacks
 unused-code scripts/orchestration/run_lineage_launcher_e2e.py -- http.server calls the synthetic receiver do_POST and log_message callbacks
 unused-code scripts/orchestration/traffic_probe.py -- http.server dispatches Catalog.do_GET and Catalog.log_message by method name
+unused-code scripts/lakehouse/run_bronze_cutover_e2e.py -- http.server dispatches do_GET, do_POST and do_DELETE of the loopback Polaris stand-in by method name
 dbt dbt/models/features/* -- int_hai_outcome_values, int_occmix_measures and int_validation_measure_windows are feature models: their rewrite moved them from features/models, so git records a delete and an add
 dbt dbt/tests/features/* -- int_hai_outcome_values, int_occmix_measures and int_validation_measure_windows are feature models: their rewrite moved them from features/models, so git records a delete and an add
 dbt docs/feature_phase_saved.md -- int_hai_outcome_values, int_occmix_measures and int_validation_measure_windows are feature models: their rewrite moved them from features/models, so git records a delete and an add
