@@ -344,11 +344,13 @@ models:
       that ends before it and the population flags (failure modes 306 to 317). Primary population: a CMI, a POS state
       in the 50 states and DC, no Veterans Health Administration, no critical access and no Maryland hospital
       (Maryland is paid under its own all-payer model). The sensitivity population adds critical access and Maryland
-      hospitals. Connecticut stays in both. A missing state, county or classification is filled where it can be
-      derived: the same CCN's other POS snapshots within 24 months of the window start, the enrollment file, the CCN's
-      SSA state code or a ZIP that HUD places in one county only, each named in a source column. Connecticut windows
-      also get their planning region when the ZIP lies in one region. A ZIP split across counties or regions gives
-      none (failure modes 612 to 618, 631, 698 and 701).
+      hospitals. Connecticut stays in both. A missing state, ZIP, county or classification is filled only from a source
+      whose period ends strictly before the window start (the as-of rule): the CCN's latest earlier POS snapshot within
+      24 months of the start, the latest enrollment row that ends before the start, or the latest HUD quarter that ends
+      before the start for a ZIP that HUD places in one county only. Each filled field names its source and that
+      source's period end. A later snapshot, an enrollment row or HUD quarter that ends on or after the start and the
+      CCN's SSA state code are never used. Connecticut windows also get their planning region when the ZIP lies in one
+      region. A ZIP split across counties or regions gives none (failure modes 612 to 618, 631, 698 and 701).
     meta:
       classification: Confidential
     columns:
@@ -374,51 +376,78 @@ models:
         description: The state code, filled in the order the state source names.
       - name: state_source
         data_type: varchar
-        description: Where the state comes from; null when no source has it.
+        description: >
+          Where the state comes from: pos_own (the window's own snapshot), pos_earlier (the CCN's latest earlier snapshot),
+          enrollment (the latest enrollment row that ends before the start); null when no source has it.
         data_tests:
           - accepted_values:
               arguments:
-                values: [pos, pos_other_snapshot, enrollment, ccn_state_code]
+                values: [pos_own, pos_earlier, enrollment]
+      - name: state_source_period_end
+        data_type: date
+        description: End of the period of the source that gave the state; always before window_start; null when the state is null.
       - name: zip_code
         data_type: varchar
         description: >
-          The hospital's 5-digit ZIP from its own POS snapshot, else its other snapshots, else the enrollment file; used
-          for the county and planning-region fills and the ZIP-based linkage.
+          The hospital's 5-digit ZIP from its own POS snapshot, else its latest earlier snapshot, else the latest enrollment
+          row that ends before the window start; used for the county and planning-region fills and the ZIP-based linkage.
+      - name: zip_source
+        data_type: varchar
+        description: Where the ZIP comes from, as for state_source; null when no source has it.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [pos_own, pos_earlier, enrollment]
+      - name: zip_source_period_end
+        data_type: date
+        description: End of the period of the source that gave the ZIP; always before window_start; null when the ZIP is null.
       - name: county_fips
         data_type: varchar
-        description: 'The county as 5-character FIPS: the snapshot''s county, else the single HUD county of the ZIP (county_source).'
+        description: >
+          The county as 5-character FIPS: the own or latest earlier snapshot's county, else the single HUD county of the
+          ZIP in the latest HUD quarter that ends before the window start (county_source).
       - name: county_source
         data_type: varchar
-        description: Where the county comes from; null when no source has it.
+        description: >
+          Where the county comes from: pos_own, pos_earlier or hud_quarter; null when no source has it.
         data_tests:
           - accepted_values:
               arguments:
-                values: [pos, pos_other_snapshot, hud_zip_single_county]
+                values: [pos_own, pos_earlier, hud_quarter]
+      - name: county_source_period_end
+        data_type: date
+        description: End of the snapshot period or HUD quarter that gave the county; always before window_start; null when the county is null.
       - name: planning_region_fips
         data_type: varchar
-        description: A Connecticut hospital's planning region from its ZIP; null elsewhere.
+        description: A Connecticut hospital's planning region from its ZIP in the latest HUD quarter that ends before the window start; null elsewhere.
       - name: planning_region_source
         data_type: varchar
-        description: hud_zip_single_county when the ZIP lies in one planning region; null otherwise.
+        description: hud_quarter when the ZIP lies in one planning region; null otherwise.
         data_tests:
           - accepted_values:
               arguments:
-                values: [hud_zip_single_county]
+                values: [hud_quarter]
+      - name: planning_region_source_period_end
+        data_type: date
+        description: End of the HUD quarter that gave the planning region; always before window_start; null when the region is null.
       - name: provider_subtype_code
         data_type: varchar
-        description: The window's snapshot provider subtype, else the neighbouring snapshots' when they agree (classification_source).
+        description: The window's own snapshot provider subtype, else the latest earlier snapshot's (classification_source).
       - name: control_type_code
         data_type: varchar
-        description: The window's snapshot type of control, else the neighbouring snapshots' when they agree (classification_source).
+        description: The window's own snapshot type of control, else the latest earlier snapshot's (classification_source).
       - name: classification_source
         data_type: varchar
         description: >
-          Where the provider subtype and control type come from; null when the window has no snapshot and its neighbours
-          within 24 months disagree or only an earlier one exists.
+          Where the provider subtype and control type come from: pos_own (the window's own snapshot) or pos_earlier (the
+          CCN's latest earlier snapshot within 24 months); null when neither exists. A later snapshot never gives them.
         data_tests:
           - accepted_values:
               arguments:
-                values: [pos, pos_other_snapshot]
+                values: [pos_own, pos_earlier]
+      - name: classification_source_period_end
+        data_type: date
+        description: End of the snapshot period that gave the classification; always before window_start; null when classification_source is null.
       - name: bed_count
         data_type: integer
         description: Beds from the window's own POS snapshot; null without one.

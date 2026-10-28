@@ -78,12 +78,15 @@ models were silver models.
 
 The case-mix index models choose one CMI per hospital and rule year from the year's best rule stage; disagreeing files are held in
 `int_cmi_holds`. `int_hospital_spine` has one row per hospital and calendar-year HAI window, as of the window start: the
-Provider of Services snapshot that ends in the 12 months before the window and the CMI of the fiscal year that ends before
-it (`int_cmi_hospital_data_years`), with the primary and sensitivity population flags. A window missing its own snapshot
-takes its state and county from the same hospital's other snapshots within 24 months, then the enrollment file, then the
-CCN's state code. A county can also come from the hospital ZIP when the HUD crosswalk places that ZIP in one county only; a
-ZIP split across counties gives none. Classification is filled only when the neighboring snapshots agree. Each filled field
-names its source. Connecticut windows also carry their planning region when the ZIP lies in one region.
+Provider of Services snapshot that ends in the 12 months before the window and the CMI of the fiscal year that ends
+before it (`int_cmi_hospital_data_years`), with the primary and sensitivity population flags. A window missing its own
+snapshot takes its state and ZIP from the same hospital's latest earlier snapshot within 24 months, then from the latest
+enrollment row that ends before the start. For every window, the county comes from the own or the latest earlier
+snapshot, else from the hospital ZIP when the latest HUD quarter that ends before the start places that ZIP in one county
+only. A ZIP split across counties gives none. Classification comes from the own or the latest earlier snapshot. Each
+filled field names its source (`pos_own`, `pos_earlier`, `enrollment`, `hud_quarter`) and that source's period end,
+always before the window start. Connecticut windows also carry their planning region when the ZIP lies in one region in
+the latest HUD quarter that ends before the start.
 
 The registry-map seeds of commit `e918ed7` are retired; the same mappings live in the gold control bridges and recipes named
 below, which the feature models read instead.
