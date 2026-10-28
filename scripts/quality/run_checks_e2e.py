@@ -471,6 +471,7 @@ CASES = [
     Case("time-bound word blocked by the hook", "writing-check", False, {"notes.md": "The loader currently reads S3.\n"}),
     Case("procedural soon passes the hook", "writing-check", True, {"notes.md": "Run it as soon as the load ends.\n"}),
     Case("warn-first kinds warn through the hook", "writing-check", True, {"notes.md": "Rules help; checks enforce them.\n"}),
+    Case("internal references warn through the hook", "writing-check", True, {"notes.md": "The work belongs to wave 3.\n"}),
     Case(
         "valid front matter passes",
         "front-matter",
@@ -576,6 +577,7 @@ BLOCK_REASONS = {
     "writing finding blocked by the hook": "notes.md:1: comma before a final 'and', 'or' or 'nor'",
     "time-bound word blocked by the hook": "notes.md:1: time-bound word in prose",
     "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
+    "internal references warn through the hook": "WARN notes.md:1: internal reference (wave)",
     "star bullet blocked by markdownlint": "MD004",
     "missing front matter blocked": "docs/guide.md:1: no front matter",
     "title different from the H1 blocked": "title does not match the H1",
@@ -590,6 +592,7 @@ BLOCK_REASONS = {
 PASS_MARKERS = {
     "unreadable file listed": "docs/diagram.png: unreviewed: cannot be read as text",
     "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
+    "internal references warn through the hook": "WARN notes.md:1: internal reference (wave)",
 }
 
 
@@ -795,6 +798,57 @@ PUNCTUATION_PROSE = (
 CLEAN_PUNCTUATION = f"---\ntitle: Notes\nnote: a {EM_DASH} b; c/d\n---\n\n# Notes\n\n{PUNCTUATION_PROSE}\n```text\n{ALL_KINDS}```\n"
 BLOCK_ALL = ("--block", "dash", "--block", "semicolon", "--block", "slash")
 KIND_FOLDERS = ("tests/fixtures/", "dbt/seeds/")
+INTERNAL_REFERENCE_SAMPLES = [
+    ("numbered owner decision", "Owner decision 12 permits the reader.", "owner-record"),
+    ("distant marked user approval", "User approval for the reader is #12.", "owner-record"),
+    ("owner decision with a lettered label", "The owner decision W0-1 permits the reader.", "owner-record"),
+    ("owner decision with a short label", "Owner decision U-4 sets the domain.", "owner-record"),
+    ("owner decision with a day-month date", "Kept by owner decision, 23 October 2026.", "owner-record"),
+    ("owner decision with a month-day date", "Kept by owner decision, Oct 23.", "owner-record"),
+    ("owner decision with a prefixed number", "Owner decision D12 permits the reader.", "owner-record"),
+    ("decision section used as provenance", "The contract follows D1 section 2 item 4.", "owner-record"),
+    ("compact decision used as provenance", "The contract follows D12.", "owner-record"),
+    ("dated approval record", "Approved Oct 25 2026.", "owner-record"),
+    ("direct marked approval record", "Approved #12 permits the reader.", "owner-record"),
+    ("direct prefixed approval record", "Approval D12 permits the reader.", "owner-record"),
+    ("dated owner decision", "The owner decision (Oct 25 2026) permits the reader.", "owner-record"),
+    ("dated owner approval", "Owner-approved on 2026-10-25.", "owner-record"),
+    ("numbered user approval", "User approval #12 permits the reader.", "owner-record"),
+    ("numbered amendment", "Amendment 14 defines the contract.", "amendment"),
+    ("compact amendment label", "The rule follows A273.", "amendment"),
+    ("explicit amendment with a cell label", "Amendment A1 defines the contract.", "amendment"),
+    ("explicit amendment with a paper label", "Amendment A4 defines the contract.", "amendment"),
+    ("cell label before amendment wording", "The A1 amendment defines the contract.", "amendment"),
+    ("paper label before amendment wording", "The A4 amendment defines the contract.", "amendment"),
+    ("longer compact amendment starting with one", "The rule follows A14.", "amendment"),
+    ("longer compact amendment starting with four", "The rule follows A40.", "amendment"),
+    ("work package with a lowercase suffix", "The work belongs to P7d.", "work-package"),
+    ("another work package", "The work belongs to P3c.", "work-package"),
+    ("wave work package", "The work belongs to WV2-001.", "work-package"),
+    ("numbered wave", "The work belongs to wave 3.", "wave"),
+    ("hyphenated wave", "The work belongs to Wave-3.", "wave"),
+    ("numbered review round", "The review round 2 accepted the change.", "review-round"),
+    ("compact review round label", "The R2 review accepted the change.", "review-round"),
+    ("hyphenated review round", "The review-r3 accepted the change.", "review-round"),
+    ("review round before its label", "Round 2 review accepted the change.", "review-round"),
+    ("issue number as provenance", "The rule follows issue 76.", "issue-provenance"),
+    ("hash issue number as provenance", "The rule follows #76.", "issue-provenance"),
+    ("local plan path", "Read plans/design.md.", "plans-path"),
+    ("relative local plan path", "Read ../plans/design.md.", "plans-path"),
+    ("inline local plan path", "Read `plans/design.md`.", "plans-path"),
+    ("local plan link destination", "Read [the design](plans/design.md).", "plans-path"),
+]
+INTERNAL_NEAR_MISSES = (
+    "Owner decisions describe scope. Approval is required. Amendments describe a rule. The wave breaks. Review rounds have names.\n"
+    "The approved code hashes of 9 collectors. Approval is required for 2 users. Approved: 5 of 10 rows.\n"
+    "Approved 5 rows were loaded. Approval 2 weeks later. User approval takes 2 steps. Encoded text +P7d/ and =P3c stays.\n"
+    "Owner decisions in October are logged. User approval for re-entry stays.\n"
+    "User approved utf-8 output. Owner approved sha-256 checksums. User approved top-10 results.\n"
+    "User approval retains 3 decimal places. Owner approval needs 2 marked rows. User approval uses 4 augmented rows and 2 decoders.\n"
+    "Approved Decimal 3 2026 values stay. Owner approval may 2 rows.\n"
+    "Observed on Oct 25 2026. Versions v9.10.0 and 1.2.3 stay. RQ4, P3.12, P7docs and WPA stay.\n"
+    "See https://example.invalid/plans/P7d/wave-3/issue/76#76 or [the source](https://example.invalid/plans/A273).\n"
+)
 WRITING_KIND_SAMPLES = [
     ("em dash warns", {"notes.md": DASH_LINE}, (), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
     ("en dash warns", {"notes.md": EN_DASH_LINE}, (), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
@@ -867,6 +921,179 @@ WRITING_KIND_SAMPLES = [
     ),
     ("an en dash in a declared article warns", {"articles/a.md": EN_DASH_LINE}, ("--articles=articles/*.md",), 0, [f"WARN articles/a.md:1: {DASH_FINDING}"]),
     *[(f"{folder} is not scanned", {f"{folder}notes.md": ALL_KINDS}, BLOCK_ALL, 0, []) for folder in KIND_FOLDERS],
+    *[
+        (name, {"notes.txt": sample + "\n"}, (), 0, [f"WARN notes.txt:1: internal reference ({pattern})"])
+        for name, sample, pattern in INTERNAL_REFERENCE_SAMPLES
+    ],
+    ("internal reference near misses", {"notes.md": INTERNAL_NEAR_MISSES}, ("--block", "internal-reference"), 0, []),
+    (
+        "review dates and versions are not review rounds",
+        {"notes.txt": "Live review 2026-09-18. Review 2.3.1 describes a version.\n"},
+        ("--block", "internal-reference"),
+        0,
+        [],
+    ),
+    (
+        "statistical metrics and row labels are not review rounds",
+        {"notes.json": '{"metric": "R2", "rows": ["r1", "r2"]}\n'},
+        ("--block", "internal-reference"),
+        0,
+        [],
+    ),
+    (
+        "UUID fragments are not amendments",
+        {"notes.txt": "Resource 78622c04-a158-4c95-8ea3-7660725e9526 or 78622C04-A158-4C95-8EA3-7660725E9526.\n"},
+        ("--block", "internal-reference"),
+        0,
+        [],
+    ),
+    (
+        "lowercase technical labels are not amendment numbers",
+        {"notes.json": '{"columns": ["a1", "a12"]}\n'},
+        ("--block", "internal-reference"),
+        0,
+        [],
+    ),
+    (
+        "quality guide approval prose remains ordinary",
+        {
+            "notes.txt": "The whitelist also keeps one dead WONDER constant until the next WONDER code version, because its file is in the "
+            "approved code hashes of 9 collectors.\n"
+        },
+        ("--block", "internal-reference"),
+        0,
+        [],
+    ),
+    (
+        "base64 fragments are not amendment labels",
+        {"notes.html": "<style>src:url(data:font/woff2;base64,rNUE+A5/rgt/A6=abc=A7/xyz)</style>\n"},
+        ("--block", "internal-reference"),
+        0,
+        [],
+    ),
+    (
+        "technical names are not work packages",
+        {"notes.txt": "Use p4d or p4d.24xlarge for compute. P2P links and P4d.24xlarge stay technical.\n"},
+        ("--block", "internal-reference"),
+        0,
+        [],
+    ),
+    (
+        "public paper and cell labels are not amendments",
+        {"notes.txt": "Print on A4 paper. Use cell A1. A1C describes a metric.\n"},
+        ("--block", "internal-reference"),
+        0,
+        [],
+    ),
+    (
+        "plan ignore exception stays within its path",
+        {
+            ".gitignore": "/plans/\n",
+            "notes.txt": "Read plans/design.md.\n",
+            WRITING_ALLOWLIST: "internal-reference .gitignore -- local planning records must stay untracked\n",
+        },
+        ("--block", "internal-reference"),
+        1,
+        ["notes.txt:1: internal reference (plans-path)"],
+    ),
+    (
+        "tracked public seed CSVs remain in scope",
+        {"dbt/seeds/labels.csv": "label\nwave 3\n"},
+        (),
+        0,
+        ["WARN dbt/seeds/labels.csv:2: internal reference (wave)"],
+    ),
+    ("Markdown inline plan path", {"notes.md": "Read `plans/design.md`.\n"}, (), 0, ["WARN notes.md:1: internal reference (plans-path)"]),
+    ("Markdown local link target", {"notes.md": "Read [the design](plans/design.md).\n"}, (), 0, ["WARN notes.md:1: internal reference (plans-path)"]),
+    ("Markdown fenced local path", {"notes.md": "```text\nplans/design.md\n```\n"}, (), 0, ["WARN notes.md:2: internal reference (plans-path)"]),
+    ("internal references block on request", {"notes.txt": "wave 3\n"}, ("--block", "internal-reference"), 1, ["notes.txt:1: internal reference (wave)"]),
+    (
+        "another blocked kind leaves internal references warning",
+        {"notes.txt": "wave 3\n"},
+        ("--block", "dash"),
+        0,
+        ["WARN notes.txt:1: internal reference (wave)"],
+    ),
+    (
+        "global warn keeps internal references nonblocking",
+        {"notes.txt": "wave 3\n"},
+        ("--block", "internal-reference", "--warn"),
+        0,
+        ["WARN notes.txt:1: internal reference (wave)"],
+    ),
+    (
+        "reasoned internal reference allowlist",
+        {"notes.txt": "wave 3\n", WRITING_ALLOWLIST: "internal-reference *.txt -- synthetic example\n"},
+        ("--block", "internal-reference"),
+        0,
+        [],
+    ),
+    (
+        "internal reference allowlist needs a reason",
+        {"notes.txt": "wave 3\n", WRITING_ALLOWLIST: "internal-reference *.txt\n"},
+        (),
+        1,
+        ["WARN notes.txt:1: internal reference (wave)", f"{WRITING_ALLOWLIST}:1: allowlist entry without a reason"],
+    ),
+    (
+        "internal reference allowlist checks the kind",
+        {"notes.txt": "wave 3\n", WRITING_ALLOWLIST: "semicolon *.txt -- another kind\n"},
+        (),
+        0,
+        ["WARN notes.txt:1: internal reference (wave)"],
+    ),
+    (
+        "internal reference allowlist checks the path",
+        {"notes.txt": "wave 3\n", WRITING_ALLOWLIST: "internal-reference docs/* -- another folder\n"},
+        (),
+        0,
+        ["WARN notes.txt:1: internal reference (wave)"],
+    ),
+    (
+        "Python comment source line",
+        {"sample.py": 'LABEL = "wave 3"\n# wave 3\n'},
+        (),
+        0,
+        ["WARN sample.py:2: internal reference (wave)"],
+    ),
+    (
+        "Python docstring source line",
+        {"sample.py": 'def sample() -> None:\n    """The rule follows A273."""\n'},
+        (),
+        0,
+        ["WARN sample.py:2: internal reference (amendment)"],
+    ),
+    ("shell comment", {"sample.sh": 'value="wave 3" # wave 3\n'}, (), 0, ["WARN sample.sh:1: internal reference (wave)"]),
+    ("SQL comment", {"sample.sql": "select '-- wave 3'; -- wave 3\n"}, (), 0, ["WARN sample.sql:1: internal reference (wave)"]),
+    ("C style block comment", {"sample.go": 'var value = "wave 3"\n/* rules\nwave 3\n*/\n'}, (), 0, ["WARN sample.go:3: internal reference (wave)"]),
+    ("C style line comment", {"sample.js": 'const value = "wave 3"; // wave 3\n'}, (), 0, ["WARN sample.js:1: internal reference (wave)"]),
+    ("JSON nested string value", {"sample.json": '{\n  "wave 3": ["wave 3"]\n}\n'}, (), 0, ["WARN sample.json:2: internal reference (wave)"]),
+    ("JSON escaped string value", {"sample.json": '{"note": "wa\\u0076e 3"}\n'}, (), 0, ["WARN sample.json:1: internal reference (wave)"]),
+    ("JSON keys are not prose", {"sample.json": '{"wave 3": "ordinary value"}\n'}, ("--block", "internal-reference"), 0, []),
+    (
+        "code literals are not comments",
+        {"sample.py": 'LABEL = "# wave 3"\n', "sample.sh": 'value="# wave 3"\n', "sample.sql": "select '-- wave 3';\n"},
+        ("--block", "internal-reference"),
+        0,
+        [],
+    ),
+    (
+        "tracked fixtures remain in internal reference scope",
+        {"tests/fixtures/notes.txt": "wave 3\n"},
+        (),
+        0,
+        ["WARN tests/fixtures/notes.txt:1: internal reference (wave)"],
+    ),
+    (
+        "all internal patterns on one line",
+        {"notes.txt": "Owner decision 12 follows amendment 14 for P7d in wave 3 after review round 2 per issue 76 at plans/design.md.\n"},
+        (),
+        0,
+        [
+            f"WARN notes.txt:1: internal reference ({pattern})"
+            for pattern in ("owner-record", "amendment", "work-package", "wave", "review-round", "issue-provenance", "plans-path")
+        ],
+    ),
 ]
 WRITING_KIND_ERRORS = [
     ("--block with an unknown kind", ("--block", "colon"), "invalid choice: 'colon'"),
@@ -875,22 +1102,27 @@ WRITING_KIND_ERRORS = [
 
 
 def finding_headers(stderr: str, paths: list[str]) -> list[str]:
+    """Return finding headers for the supplied fixture paths in CLI output."""
     return [line for line in stderr.splitlines() if line.removeprefix("WARN ").startswith(tuple(f"{path}:" for path in paths))]
 
 
 def writing_kinds_repo(scratch: str) -> Path:
+    """Create a writing fixture repository with only case inputs in its tracked inventory."""
     repo = scratch_repo(Path(scratch), Case("writing setup", "writing-check", True))
     for relative in git(repo, "ls-files", "*.md").splitlines():
         (repo / relative).unlink()
+    git(repo, "rm", "-r", "--cached", "--", ".")
     return repo
 
 
 def run_writing_kinds_case() -> tuple[bool, str]:
+    """Run writing fixtures through the CLI and return their combined outcome and log."""
     results = []
     for name, files, arguments, expected, headers in WRITING_KIND_SAMPLES:
         with tempfile.TemporaryDirectory(prefix="hai_writing_kinds_") as scratch:
             repo = writing_kinds_repo(scratch)
             write(repo, files)
+            git(repo, "add", "--", *files)
             result = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "writing-check", *arguments], cwd=repo)
             found = finding_headers(result.stderr, list(files))
             ok = result.returncode == expected and found == headers and "Traceback" not in result.stderr
@@ -909,6 +1141,16 @@ def run_writing_kinds_case() -> tuple[bool, str]:
             results.append((ok, f"{'ok' if ok else 'WRONG'} {name}: exit={result.returncode} (expected 2)"))
             if not ok:
                 results.append((False, result.stderr))
+    with tempfile.TemporaryDirectory(prefix="hai_writing_scope_") as scratch:
+        repo = writing_kinds_repo(scratch)
+        scope_files: dict[str, str | bytes] = {"tracked.txt": "wave 3\n", "untracked.txt": "wave 3\n", "binary.bin": b"\x00wave 3\xff"}
+        write(repo, scope_files)
+        (repo / "linked.txt").symlink_to(repo / "untracked.txt")
+        git(repo, "add", "--", "tracked.txt", "binary.bin", "linked.txt")
+        result = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "writing-check"], cwd=repo)
+        found = finding_headers(result.stderr, ["tracked.txt", "untracked.txt", "binary.bin", "linked.txt"])
+        ok = result.returncode == 0 and found == ["WARN tracked.txt:1: internal reference (wave)"]
+        results.append((ok, f"{'ok' if ok else 'WRONG'} tracked text only, without symlinks or binary: {found}"))
     return all(ok for ok, _ in results), "\n".join(line for _, line in results) + "\n"
 
 
