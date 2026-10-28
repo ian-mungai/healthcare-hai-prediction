@@ -53,6 +53,7 @@ class StandInHost:
     ``faults`` may hold: ``never_register``, ``never_terminate``, ``run_task_failure``, ``exit_code:<family key>=<n>``, ``never_stable``, ``pending_stuck``,
     ``throttle:<n>`` (the next n describe calls fail), ``api_error`` (every describe call fails) and
     ``interrupt_run_task`` (a run-task call raises KeyboardInterrupt), ``signal_run_task`` (a run-task call receives a real SIGTERM),
+    ``second_signal:<name>`` (the cleanup's set-desired-capacity call to 0 receives a real SIGINT, SIGTERM or SIGHUP once),
     ``lose_run_task_reply[:<n>]`` (the next n run-task calls start their task but time out before the reply; one when n is absent),
     ``stale_list_tasks`` (list-tasks never shows a task), ``slow_calls:<n>`` (every describe and list call takes n virtual seconds and
     times out when its limit is shorter) and ``leaky_reasons`` (every provider reason holds an ARN, an instance ID and an account ID).
@@ -128,6 +129,10 @@ class StandInHost:
             raise KeyboardInterrupt
         if operation == "run-task" and "signal_run_task" in self.faults:
             signal.raise_signal(signal.SIGTERM)
+        second = next((fault for fault in self.faults if fault.startswith("second_signal:")), None)
+        if second and operation == "set-desired-capacity" and options.get("--desired-capacity") == ["0"]:
+            self.faults.discard(second)
+            signal.raise_signal(signal.Signals[second.split(":")[1]])
         handler = self.handlers.get((service, operation))
         if handler is None:
             return CompletedProcess(argv, 252, "", "unknown command")

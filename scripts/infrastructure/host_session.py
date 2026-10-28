@@ -9,13 +9,14 @@ deadline and fails visibly. Output names no account ID and no ARN, and shows a p
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import signal
 import sys
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,21 @@ class HostSessionError(Exception):
 
 class TerminationRequested(Exception):
     """The process received SIGTERM or SIGHUP; it unwinds through the same cleanup as any other failure."""
+
+
+@contextlib.contextmanager
+def deferred_signals(report: Callable[[str, str], None]) -> Iterator[None]:
+    """Hold SIGINT, SIGTERM and SIGHUP while the host is being stopped, so a second signal cannot cut the cleanup short; each one is reported."""
+
+    def defer(number: int, _frame: object) -> None:
+        report("signal_deferred", f"{signal.Signals(number).name} received; stopping the host, please wait")
+
+    earlier = {number: signal.signal(number, defer) for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    try:
+        yield
+    finally:
+        for number, handler in earlier.items():
+            signal.signal(number, handler)
 
 
 def install_termination_handler() -> Callable[[], None]:
@@ -341,7 +357,8 @@ class Session:
             self.step("host_kept_on", "left on for diagnosis; run stop when done")
             return
         try:
-            self.host_off()
+            with deferred_signals(self.step):
+                self.host_off()
         except HostSessionError as error:
             self.step("host_off_failed", f"the host may still be on; run stop ({error})")
 
