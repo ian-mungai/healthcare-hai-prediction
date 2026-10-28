@@ -18,7 +18,8 @@ item 1). It uses only the Python 3 standard library.
    own enforcement and the removal of the container are the backstop).
 
 Exit codes: the command's own code (128 + signal when it was killed); 124 on a missed boundary or a deadline stop;
-125 when the deadline variable or the command is missing or malformed; 123 when a process group is not proved ended.
+125 when the deadline variable or the command is missing or malformed or the relay child fails before the command ends (it names the
+exception on stderr); 123 when a process group is not proved ended.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ USAGE_EXIT = 125
 UNCONFIRMED_EXIT = 123
 NOT_FOUND_EXIT = 127
 REAP_WAIT = 5.0
+FAULT_TEXT_LIMIT = 200
 
 
 def bracketed_sample(wall: Callable[[], float], mono: Callable[[], float]) -> tuple[float, float] | None:
@@ -133,7 +135,11 @@ def spawn(command: list[str], boundary: float, mono: Callable[[], float]) -> int
     except FileNotFoundError:
         sys.stderr.write(f"deadline_run: {command[0]} not found\n")
         os._exit(NOT_FOUND_EXIT)
-    except BaseException:
+    except BaseException as exc:
+        with contextlib.suppress(BaseException):
+            text = " ".join(f"{type(exc).__name__}: {exc}".split())
+            sys.stderr.write(f"deadline_run: relay child failed: {text[:FAULT_TEXT_LIMIT]}\n")
+            sys.stderr.flush()
         os._exit(USAGE_EXIT)
 
 
