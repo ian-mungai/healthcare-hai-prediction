@@ -291,8 +291,11 @@ line and the owner types it back:
 The steps follow the catalog authority states: `freeze` moves `mac_writer` to `freezing` (a registry without a record is
 first initialized as `mac_writer`), `fence` to `source_fenced`, `refresh` to `refreshing` and `switch` to `aws_writer`.
 The launcher applies each step through its `catalog_authority` owner method inside its registry transaction. From
-`freezing` on, the launcher refuses every Mac catalog write at submit (`spark_write`, `real_dbt`, `gold_publish` and
-pipeline jobs of class `lakehouse_write` in a real run) and ends a queued one as `fenced` before it starts. A running
+`freezing` on, the launcher refuses every Mac catalog write at submit and ends a queued one as `fenced` before it
+starts. It classifies each real-run job by its validated arguments: `spark_write` jobs (including `smoke`, which creates
+and purges a scratch table), checksum jobs with `--fixture create` or `--fixture drop`, `real_dbt` except `ls` and
+`parse`, `gold_publish` and pipeline jobs of class `lakehouse_write` are writes. Checksum reads (`--tables` only), inert
+dbt commands, read-only sessions and test runs stay allowed. The fence does not wait for them. A running
 writer is never stopped: `fence` repeats until it has ended or the step deadline (`--seconds`) passes. On expiry authority
 stays `freezing`. Each command is stored write-once under `data/lakehouse/cutover/<CUTOVER_ID>/commands/`
 before it is sent, so repeating a step after a lost reply resends the same command and returns the stored record.

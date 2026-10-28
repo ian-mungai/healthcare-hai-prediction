@@ -3097,8 +3097,13 @@ def is_open(attempt: Mapping[str, Any]) -> bool:
 MAC_WRITE_TEMPLATES = frozenset({"spark_write", "real_dbt", "gold_publish"})
 
 
-def mac_catalog_write(template_name: str, params: Mapping[str, Any], run_mode: str) -> bool:
-    """True for a job that writes the Mac production catalog: it may start only under Mac catalog authority (failure F1)."""
+def mac_catalog_write(template_name: str, params: Mapping[str, Any], args: Sequence[str], run_mode: str) -> bool:
+    """True for a job that writes the Mac production catalog: it may start only under Mac catalog authority (failure F1).
+
+    Classified by job and validated arguments: a checksum job without ``--fixture`` only reads and ``real_dbt ls`` or ``parse`` never opens the
+    build (``provenance.INERT``). Every other ``spark_write`` job, including ``smoke``, which creates and purges a scratch table, counts as a
+    write, and so do arguments outside a job's grammar.
+    """
     if run_mode != "real":
         return False
     if template_name.startswith("pipeline_"):
@@ -3106,6 +3111,13 @@ def mac_catalog_write(template_name: str, params: Mapping[str, Any], run_mode: s
             return pipeline_render.job_class(template_name, dict(params), run_mode) == "lakehouse_write"
         except pipeline_protocol.PipelineError:
             return False
+    if template_name == "real_dbt":
+        return not args or build_provenance.command_of(args) not in build_provenance.INERT
+    if template_name == "spark_write" and params.get("job") == "checksums":
+        try:
+            return "--fixture" in validate_spark_args("checksums", [str(token) for token in args])
+        except LauncherError:
+            return True
     return template_name in MAC_WRITE_TEMPLATES
 
 
@@ -4717,7 +4729,7 @@ class Launcher:
             return
         if "execution" in a and self.advance_target(state, a, actions):
             return
-        mac_problem = None if "execution" in a else self.mac_write_problem(state, owner, a["template"], a["params"])
+        mac_problem = None if "execution" in a else self.mac_write_problem(state, owner, a["template"], a["params"], a["args"])
         if mac_problem:
             self.finish_attempt(state, a, "fenced", mac_problem)
             return
@@ -6379,7 +6391,11 @@ class Launcher:
             and (authority.get("target") != "aws" or authority.get("frozen") is not False or type(authority.get("epoch")) is not int or authority["epoch"] < 1)
         ):
             raise LauncherError("AWS lakehouse execution requires an unfrozen authoritative AWS catalog", "refused")
-        mac_problem = None if cloud_managed else self.mac_write_problem(ctx.state, owner, template_name, params.get("params") or {})
+        mac_problem = (
+            None
+            if cloud_managed
+            else self.mac_write_problem(ctx.state, owner, template_name, params.get("params") or {}, [str(a) for a in params.get("args", [])])
+        )
         if mac_problem:
             raise LauncherError(mac_problem, "refused")
         if kind not in template.owners:
@@ -6762,12 +6778,12 @@ class Launcher:
         }
         return {"accepted": True, "result_sha256": digest}
 
-    def mac_write_problem(self, state: Mapping[str, Any], owner: str, template_name: str, params: Mapping[str, Any]) -> str | None:
+    def mac_write_problem(self, state: Mapping[str, Any], owner: str, template_name: str, params: Mapping[str, Any], args: Sequence[str]) -> str | None:
         """Why catalog authority refuses this Mac catalog write, or None. A registry without an authority record is still the Mac writer."""
         record = state["launcher"].get("catalog_authority")
         kind, _, ident = owner.partition(":")
         mode = str(state["runs"].get(ident, {}).get("mode", "")) if kind == "run" else ""
-        if record is None or not mac_catalog_write(template_name, params, mode):
+        if record is None or not mac_catalog_write(template_name, params, args, mode):
             return None
         try:
             catalog_authority.check_mac_start(record)
@@ -6789,7 +6805,7 @@ class Launcher:
             open_writes = sorted(
                 str(a["id"])
                 for a in ctx.state["attempts"].values()
-                if is_open(a) and "execution" not in a and self.mac_write_problem(ctx.state, str(a["owner"]), str(a["template"]), a["params"])
+                if is_open(a) and "execution" not in a and self.mac_write_problem(ctx.state, str(a["owner"]), str(a["template"]), a["params"], a["args"])
             )
             if open_writes:
                 raise LauncherError(f"Mac catalog writes are still open: {', '.join(open_writes)}", "refused")

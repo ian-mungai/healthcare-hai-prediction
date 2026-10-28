@@ -334,6 +334,55 @@ def queued_write_fenced(env: Env) -> dict[str, bool]:
     return checks
 
 
+def checksum_submit(env: Env, principal: dict[str, Any], launch: str, args: list[str]) -> dict[str, Any]:
+    return env.submit(principal, "spark_write", launch, args, {"job": "checksums"})
+
+
+@case
+def mac_gate_arguments(env: Env) -> dict[str, bool]:
+    """F1 by job and arguments: after the freeze, checksum reads pass at submit, queued dispatch and fence inspection; smoke, the checksum
+    fixture and every other write stay refused; inert dbt commands pass and test runs stay exempt."""
+    catalog_script(env)
+    instance = lifecycle_host(env, target="qread", held_phase="queued")
+    catalog_up(env)
+    reader = real_run(env, "reader", "acquisition", write_prefixes=["lakehouse/"])
+    owner_call(env, command("c_init", 0, "mac_writer", "mac_initial", "initialize"))
+    queued = checksum_submit(env, reader, "qread", ["--tables", "alpha"])
+    running = checksum_submit(env, reader, "r1", ["--tables", "alpha"])
+    env.wait_phase(running["attempt_id"], ("started",))
+    checks: dict[str, bool] = {"a checksum read is queued before the freeze": env.phase(queued["attempt_id"]) == "queued"}
+    owner_call(env, command("c_freeze", 1, "freezing", "cut1"))
+    late = expect_error(lambda: checksum_submit(env, reader, "r2", ["--tables", "beta"]))
+    checks["a checksum read is accepted at submit after the freeze"] = late is None
+    for label, launch, args, params in (
+        ("the checksum fixture create", "f1", ["--fixture", "create"], {"job": "checksums"}),
+        ("the checksum fixture drop", "f2", ["--tables", "alpha", "--fixture", "drop"], {"job": "checksums"}),
+        ("smoke", "s1", [], {"job": "smoke"}),
+        ("a bronze load", "b1", ["--group", "hai"], {"job": "bronze"}),
+    ):
+        refusal = expect_error(lambda args=args, params=params, launch=launch: env.submit(reader, "spark_write", launch, args, params))
+        checks[f"F1: {label} is refused at submit after the freeze"] = refused(refusal, "refused", "catalog authority")
+    for attempt in env.state()["attempts"].values():
+        if attempt["owner"] == "run:reader" and attempt["phase"] != "ended" and attempt["id"] != queued["attempt_id"]:
+            env.client().call("cancel", {"attempt_id": attempt["id"]}, reader)
+            env.wait_ended(attempt["id"])
+    instance.held_phase = ""
+    started = env.wait_phase(queued["attempt_id"], ("started", "ended"))
+    checks["the queued checksum read starts after the freeze instead of ending as fenced"] = env.phase(queued["attempt_id"]) == "started" and (
+        started.get("reason") != "fenced"
+    )
+    fenced = owner_call(env, command("c_fence", 2, "source_fenced", "cut1"))
+    checks["the fence passes while checksum reads run"] = fenced["state"] == "source_fenced"
+    write = launcher.mac_catalog_write
+    checks["dbt ls and parse are not Mac writes"] = not write("real_dbt", {}, ["ls"], "real") and not write("real_dbt", {}, ["parse", "--quiet"], "real")
+    checks["dbt build, compile and an empty dbt command are Mac writes"] = all(write("real_dbt", {}, args, "real") for args in (["build"], ["compile"], []))
+    checks["checksum arguments outside the grammar count as a write"] = write("spark_write", {"job": "checksums"}, ["--bogus"], "real")
+    checks["gold publish counts as a write"] = write("gold_publish", {"job": "gold_publish"}, [], "real")
+    checks["a test run stays exempt"] = not write("spark_write", {"job": "smoke"}, [], "fixture") and not write("real_dbt", {}, ["build"], "fixture")
+    end_run(env, reader, "reader")
+    return checks
+
+
 @case
 def rollback_paths(env: Env) -> dict[str, bool]:
     """F5, B1, B2, B4: rollback from P1 and P3, a reused cutover ID, and the refusal after a writer was admitted (P5)."""
@@ -961,6 +1010,7 @@ def run_offline(name: str, report: Path) -> tuple[dict[str, bool], str]:
 ALL_CASES = (
     freeze_gate_and_fence,
     queued_write_fenced,
+    mac_gate_arguments,
     rollback_paths,
     inventory_capture,
     inventory_identity,
