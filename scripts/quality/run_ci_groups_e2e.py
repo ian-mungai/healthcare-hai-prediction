@@ -644,7 +644,14 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
         path_case("layer_gold_suite_is_read_by_bronze_first", "data_contracts/great_expectations/gold/gold_keys.json", [*LAYERS, "orchestration_checks"]),
         path_case("layer_saved_silver_suite_selects_silver_and_gold", "features/great_expectations/suites/silver_spatial.json", silver_gold),
         path_case("layer_suite_baselines_are_read_by_bronze_first", "data_contracts/great_expectations/baselines.json", [*LAYERS, "orchestration_checks"]),
-        path_case("layer_archived_model_is_read_by_gold_only", "features/models/int_spine_county_context.sql", ["lakehouse_gold", "sql_style"]),
+        path_case(
+            "layer_feature_model_is_read_by_gold_only",
+            "dbt/models/features/int_spine_county_context.sql",
+            ["lakehouse_gold", "orchestration_checks", "sql_style"],
+        ),
+        path_case(
+            "layer_feature_recipe_seed_selects_gold_only", "dbt/seeds/features/mup_measures_recipe.csv", ["lakehouse_gold", "orchestration_checks", "sql_style"]
+        ),
         path_case("layer_silver_columns_select_silver_and_gold", "data_contracts/lakehouse/silver_columns.json", [*silver_gold, "orchestration_checks"]),
         path_case("layer_bronze_table_map_selects_every_layer", "config/lakehouse/bronze_tables.json", [*LAYERS, "configuration_checks"]),
         staged_case(
@@ -1056,8 +1063,8 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         selection_case(
             work,
             "feature_sql_selects_inventory",
-            ["--scope", "paths", "--path", "features/macros/hospital_alignment.sql", "--part", "core+layers"],
-            ["lakehouse_gold", "sql_style"],
+            ["--scope", "paths", "--path", "dbt/macros/features/hospital_alignment.sql", "--part", "core+layers"],
+            ["lakehouse_gold", "orchestration_checks", "sql_style"],
         ),
         selection_case(
             work,

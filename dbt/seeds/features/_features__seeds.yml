@@ -1,0 +1,595 @@
+version: 2
+
+# Formula recipes of the gold control bridge. They are configuration of the feature phase, not gold: the seeds carry the tag features, so the gold builds leave them out.
+seeds:
+  - name: cost_report_measures_recipe
+    description: >
+      Cost report controls (family S01): the rule of each control and the cost report columns it reads, one row per input.
+    config:
+      column_types:
+        measure_control: varchar
+        rule: varchar
+        role: varchar
+        fact: varchar
+        value_column: varchar
+        key_column: varchar
+        key_value: varchar
+        join_keys: varchar
+        aggregation: varchar
+        guard: varchar
+        group_by: varchar
+        period: varchar
+        suppression: varchar
+        source_row: integer
+    columns:
+      - name: measure_control
+        description: The registry measure control the rule belongs to.
+      - name: rule
+        description: The rule that computes the control from its inputs (the allowed rules of the recipe are checked by bridge_references).
+      - name: role
+        description: The role of the input in the rule (value, numerator, denominator, divisor, id, score or context, a column read for grain, filters or joins).
+      - name: fact
+        description: The gold fact or bridge that holds the input.
+      - name: value_column
+        description: The column of that fact the input reads; empty when the rule reads a key value instead.
+      - name: key_column
+        description: The column of a long fact that holds the published key (field, drg_cd or condition_label), for an input read by key; empty otherwise.
+      - name: key_value
+        description: The published key the input reads (a field name, a condition label or DRG codes separated by a vertical bar); empty when the rule reads a value column.
+      - name: join_keys
+        description: The columns that join this input to the others of the rule, separated by spaces; empty when none.
+      - name: aggregation
+        description: How the input is combined across rows (sum, avg, max, count_distinct, bool_or or string_agg_distinct); empty for none.
+      - name: guard
+        description: The condition under which the input gives a value, as written in the retired seed review.
+      - name: group_by
+        description: The columns the aggregation groups by, separated by spaces; empty when none.
+      - name: period
+        description: The period rule of the input, in words; empty when none.
+      - name: suppression
+        description: How a suppressed or withheld value is treated; empty when none.
+      - name: source_row
+        description: The data row number of the retired registry-map seed this input came from, counted from 1.
+
+  - name: hhs_onc_measures_recipe
+    description: >
+      HHS capacity and ONC certified EHR controls: the rule, grouping and period of each control and the fields it reads, one row per input.
+    config:
+      column_types:
+        measure_control: varchar
+        rule: varchar
+        role: varchar
+        fact: varchar
+        value_column: varchar
+        key_column: varchar
+        key_value: varchar
+        join_keys: varchar
+        aggregation: varchar
+        guard: varchar
+        group_by: varchar
+        period: varchar
+        suppression: varchar
+        source_row: integer
+        field_mapping: varchar
+    columns:
+      - name: measure_control
+        description: The registry measure control the rule belongs to.
+      - name: rule
+        description: The rule that computes the control from its inputs (the allowed rules of the recipe are checked by bridge_references).
+      - name: role
+        description: The role of the input in the rule (value, numerator, denominator, divisor, id, score or context, a column read for grain, filters or joins).
+      - name: fact
+        description: The gold fact or bridge that holds the input.
+      - name: value_column
+        description: The column of that fact the input reads; empty when the rule reads a key value instead.
+      - name: key_column
+        description: The column of a long fact that holds the published key (field, drg_cd or condition_label), for an input read by key; empty otherwise.
+      - name: key_value
+        description: The published key the input reads (a field name, a condition label or DRG codes separated by a vertical bar); empty when the rule reads a value column.
+      - name: join_keys
+        description: The columns that join this input to the others of the rule, separated by spaces; empty when none.
+      - name: aggregation
+        description: How the input is combined across rows (sum, avg, max, count_distinct, bool_or or string_agg_distinct); empty for none.
+      - name: guard
+        description: The condition under which the input gives a value, as written in the retired seed review.
+      - name: group_by
+        description: The columns the aggregation groups by, separated by spaces; empty when none.
+      - name: period
+        description: The period rule of the input, in words; empty when none.
+      - name: suppression
+        description: How a suppressed or withheld value is treated; empty when none.
+      - name: source_row
+        description: The data row number of the retired registry-map seed this input came from, counted from 1.
+      - name: field_mapping
+        description: How the field name maps to the published HHS or ONC field (exact, api_field_name or closed).
+
+  - name: impact_measures_recipe
+    description: >
+      IPPS impact controls (family S04): the rule of each control and the impact fields it reads, one row per input.
+    config:
+      column_types:
+        measure_control: varchar
+        rule: varchar
+        role: varchar
+        fact: varchar
+        value_column: varchar
+        key_column: varchar
+        key_value: varchar
+        join_keys: varchar
+        aggregation: varchar
+        guard: varchar
+        group_by: varchar
+        period: varchar
+        suppression: varchar
+        source_row: integer
+    columns:
+      - name: measure_control
+        description: The registry measure control the rule belongs to.
+      - name: rule
+        description: The rule that computes the control from its inputs (the allowed rules of the recipe are checked by bridge_references).
+      - name: role
+        description: The role of the input in the rule (value, numerator, denominator, divisor, id, score or context, a column read for grain, filters or joins).
+      - name: fact
+        description: The gold fact or bridge that holds the input.
+      - name: value_column
+        description: The column of that fact the input reads; empty when the rule reads a key value instead.
+      - name: key_column
+        description: The column of a long fact that holds the published key (field, drg_cd or condition_label), for an input read by key; empty otherwise.
+      - name: key_value
+        description: The published key the input reads (a field name, a condition label or DRG codes separated by a vertical bar); empty when the rule reads a value column.
+      - name: join_keys
+        description: The columns that join this input to the others of the rule, separated by spaces; empty when none.
+      - name: aggregation
+        description: How the input is combined across rows (sum, avg, max, count_distinct, bool_or or string_agg_distinct); empty for none.
+      - name: guard
+        description: The condition under which the input gives a value, as written in the retired seed review.
+      - name: group_by
+        description: The columns the aggregation groups by, separated by spaces; empty when none.
+      - name: period
+        description: The period rule of the input, in words; empty when none.
+      - name: suppression
+        description: How a suppressed or withheld value is treated; empty when none.
+      - name: source_row
+        description: The data row number of the retired registry-map seed this input came from, counted from 1.
+
+  - name: mmd_conditions_recipe
+    description: >
+      Mapping Medicare Disparities condition controls: the prevalence rule of each condition at county or state level; C258 keeps the shared columns only.
+    config:
+      column_types:
+        measure_control: varchar
+        rule: varchar
+        role: varchar
+        fact: varchar
+        value_column: varchar
+        key_column: varchar
+        key_value: varchar
+        join_keys: varchar
+        aggregation: varchar
+        guard: varchar
+        group_by: varchar
+        period: varchar
+        suppression: varchar
+        source_row: integer
+        geography_level: varchar
+        condition_code: varchar
+        shortage_source_row: integer
+    columns:
+      - name: measure_control
+        description: The registry measure control the rule belongs to.
+      - name: rule
+        description: The rule that computes the control from its inputs (the allowed rules of the recipe are checked by bridge_references).
+      - name: role
+        description: The role of the input in the rule (value, numerator, denominator, divisor, id, score or context, a column read for grain, filters or joins).
+      - name: fact
+        description: The gold fact or bridge that holds the input.
+      - name: value_column
+        description: The column of that fact the input reads; empty when the rule reads a key value instead.
+      - name: key_column
+        description: The column of a long fact that holds the published key (field, drg_cd or condition_label), for an input read by key; empty otherwise.
+      - name: key_value
+        description: The published key the input reads (a field name, a condition label or DRG codes separated by a vertical bar); empty when the rule reads a value column.
+      - name: join_keys
+        description: The columns that join this input to the others of the rule, separated by spaces; empty when none.
+      - name: aggregation
+        description: How the input is combined across rows (sum, avg, max, count_distinct, bool_or or string_agg_distinct); empty for none.
+      - name: guard
+        description: The condition under which the input gives a value, as written in the retired seed review.
+      - name: group_by
+        description: The columns the aggregation groups by, separated by spaces; empty when none.
+      - name: period
+        description: The period rule of the input, in words; empty when none.
+      - name: suppression
+        description: How a suppressed or withheld value is treated; empty when none.
+      - name: source_row
+        description: The data row number of the retired registry-map seed this input came from, counted from 1.
+      - name: geography_level
+        description: The geography the condition is published at (county or state).
+      - name: condition_code
+        description: The published code of the Mapping Medicare Disparities condition.
+      - name: shortage_source_row
+        description: The data row of the retired shortage seed that the condition row maps to.
+
+  - name: mup_measures_recipe
+    description: >
+      Medicare inpatient controls (family S08): the rule of each control and the provider-summary columns or DRG codes it reads, one row per input.
+    config:
+      column_types:
+        measure_control: varchar
+        rule: varchar
+        role: varchar
+        fact: varchar
+        value_column: varchar
+        key_column: varchar
+        key_value: varchar
+        join_keys: varchar
+        aggregation: varchar
+        guard: varchar
+        group_by: varchar
+        period: varchar
+        suppression: varchar
+        source_row: integer
+    columns:
+      - name: measure_control
+        description: The registry measure control the rule belongs to.
+      - name: rule
+        description: The rule that computes the control from its inputs (the allowed rules of the recipe are checked by bridge_references).
+      - name: role
+        description: The role of the input in the rule (value, numerator, denominator, divisor, id, score or context, a column read for grain, filters or joins).
+      - name: fact
+        description: The gold fact or bridge that holds the input.
+      - name: value_column
+        description: The column of that fact the input reads; empty when the rule reads a key value instead.
+      - name: key_column
+        description: The column of a long fact that holds the published key (field, drg_cd or condition_label), for an input read by key; empty otherwise.
+      - name: key_value
+        description: The published key the input reads (a field name, a condition label or DRG codes separated by a vertical bar); empty when the rule reads a value column.
+      - name: join_keys
+        description: The columns that join this input to the others of the rule, separated by spaces; empty when none.
+      - name: aggregation
+        description: How the input is combined across rows (sum, avg, max, count_distinct, bool_or or string_agg_distinct); empty for none.
+      - name: guard
+        description: The condition under which the input gives a value, as written in the retired seed review.
+      - name: group_by
+        description: The columns the aggregation groups by, separated by spaces; empty when none.
+      - name: period
+        description: The period rule of the input, in words; empty when none.
+      - name: suppression
+        description: How a suppressed or withheld value is treated; empty when none.
+      - name: source_row
+        description: The data row number of the retired registry-map seed this input came from, counted from 1.
+
+  - name: occmix_measures_recipe
+    description: >
+      Occupational-mix controls (family S03): the formula, guard and output column of each control; C043 is closed and keeps one row with no column.
+    config:
+      column_types:
+        measure_control: varchar
+        rule: varchar
+        role: varchar
+        fact: varchar
+        value_column: varchar
+        key_column: varchar
+        key_value: varchar
+        join_keys: varchar
+        aggregation: varchar
+        guard: varchar
+        group_by: varchar
+        period: varchar
+        suppression: varchar
+        source_row: integer
+        output_name: varchar
+        definition: varchar
+        source_status: varchar
+    columns:
+      - name: measure_control
+        description: The registry measure control the rule belongs to.
+      - name: rule
+        description: The rule that computes the control from its inputs (the allowed rules of the recipe are checked by bridge_references).
+      - name: role
+        description: The role of the input in the rule (value, numerator, denominator, divisor, id, score or context, a column read for grain, filters or joins).
+      - name: fact
+        description: The gold fact or bridge that holds the input.
+      - name: value_column
+        description: The column of that fact the input reads; empty when the rule reads a key value instead.
+      - name: key_column
+        description: The column of a long fact that holds the published key (field, drg_cd or condition_label), for an input read by key; empty otherwise.
+      - name: key_value
+        description: The published key the input reads (a field name, a condition label or DRG codes separated by a vertical bar); empty when the rule reads a value column.
+      - name: join_keys
+        description: The columns that join this input to the others of the rule, separated by spaces; empty when none.
+      - name: aggregation
+        description: How the input is combined across rows (sum, avg, max, count_distinct, bool_or or string_agg_distinct); empty for none.
+      - name: guard
+        description: The condition under which the input gives a value, as written in the retired seed review.
+      - name: group_by
+        description: The columns the aggregation groups by, separated by spaces; empty when none.
+      - name: period
+        description: The period rule of the input, in words; empty when none.
+      - name: suppression
+        description: How a suppressed or withheld value is treated; empty when none.
+      - name: source_row
+        description: The data row number of the retired registry-map seed this input came from, counted from 1.
+      - name: output_name
+        description: The name of the value column the model gives the control.
+      - name: definition
+        description: The control definition in words.
+      - name: source_status
+        description: Whether the source supports the definition (available_conditional or unavailable_source_definition).
+
+  - name: recipe_groups
+    description: >
+      Inventory of the recipe groups: each group with its rule and its count of inputs per role. bridge_references checks every recipe against it.
+    config:
+      column_types:
+        recipe: varchar
+        measure_control: varchar
+        source_row: integer
+        rule: varchar
+        inputs: varchar
+    columns:
+      - name: recipe
+        description: The recipe file the group belongs to, without the suffix _recipe.
+      - name: measure_control
+        description: The registry measure control the rule belongs to.
+      - name: source_row
+        description: The data row number of the retired registry-map seed this input came from, counted from 1.
+      - name: rule
+        description: The rule that computes the control from its inputs (the allowed rules of the recipe are checked by bridge_references).
+      - name: inputs
+        description: The count of inputs of the group by role.
+
+  - name: shortage_measures_recipe
+    description: >
+      HPSA and MUA shortage controls: the rule that counts designations in force or takes their highest score.
+    config:
+      column_types:
+        measure_control: varchar
+        rule: varchar
+        role: varchar
+        fact: varchar
+        value_column: varchar
+        key_column: varchar
+        key_value: varchar
+        join_keys: varchar
+        aggregation: varchar
+        guard: varchar
+        group_by: varchar
+        period: varchar
+        suppression: varchar
+        source_row: integer
+    columns:
+      - name: measure_control
+        description: The registry measure control the rule belongs to.
+      - name: rule
+        description: The rule that computes the control from its inputs (the allowed rules of the recipe are checked by bridge_references).
+      - name: role
+        description: The role of the input in the rule (value, numerator, denominator, divisor, id, score or context, a column read for grain, filters or joins).
+      - name: fact
+        description: The gold fact or bridge that holds the input.
+      - name: value_column
+        description: The column of that fact the input reads; empty when the rule reads a key value instead.
+      - name: key_column
+        description: The column of a long fact that holds the published key (field, drg_cd or condition_label), for an input read by key; empty otherwise.
+      - name: key_value
+        description: The published key the input reads (a field name, a condition label or DRG codes separated by a vertical bar); empty when the rule reads a value column.
+      - name: join_keys
+        description: The columns that join this input to the others of the rule, separated by spaces; empty when none.
+      - name: aggregation
+        description: How the input is combined across rows (sum, avg, max, count_distinct, bool_or or string_agg_distinct); empty for none.
+      - name: guard
+        description: The condition under which the input gives a value, as written in the retired seed review.
+      - name: group_by
+        description: The columns the aggregation groups by, separated by spaces; empty when none.
+      - name: period
+        description: The period rule of the input, in words; empty when none.
+      - name: suppression
+        description: How a suppressed or withheld value is treated; empty when none.
+      - name: source_row
+        description: The data row number of the retired registry-map seed this input came from, counted from 1.
+
+  # Frozen identity of the controls the four alignment models carry: generated once from the retired registry-map seeds at commit e918ed7
+  # (git show e918ed7:dbt/seeds/<retired_seed>.csv, one row per retired row, in retired_row order) and committed. Silver table names became the gold
+  # table of the same data and each value column the typed (_number), published (_published) or renamed gold column of the gold contract; nothing was
+  # read from the gold bridge or the recipes, so the singular tests assert_*_control_identity compare those against an independent oracle.
+  - name: frozen_care_compare_controls
+    description: >
+      The 57 Care Compare process and structure controls of the retired seed registry_measure_sources at e918ed7, with the gold fact, measure
+      key and typed value column that now hold each value. int_spine_care_compare_measures must carry exactly these controls.
+    config:
+      column_types:
+        measure_control: varchar
+        fact: varchar
+        measure_key: varchar
+        value_column: varchar
+        retired_seed: varchar
+        retired_row: integer
+    columns:
+      - name: measure_control
+        description: The registry measure control ID.
+      - name: fact
+        description: The gold table that holds the value (the gold name of the retired source_model).
+      - name: measure_key
+        description: The measure ID the control reads (the retired source_measure_id).
+      - name: value_column
+        description: The gold column the control reads (the retired value_column, typed or renamed).
+      - name: retired_seed
+        description: The retired seed the row comes from.
+      - name: retired_row
+        description: The data row number in that seed at e918ed7, counted from 1.
+
+  - name: frozen_validation_controls
+    description: >
+      The 41 validation controls of the retired seed validation_measures at e918ed7. C288.payment_adjustment has no measure and is not carried
+      (lead decision, design.md step 1 of the feature phase): is_carried is false for it. int_spine_validation_measures must carry exactly the
+      carried rows.
+    config:
+      column_types:
+        measure_control: varchar
+        fact: varchar
+        measure: varchar
+        measure_key: varchar
+        value_column: varchar
+        is_carried: boolean
+        retired_seed: varchar
+        retired_row: integer
+    columns:
+      - name: measure_control
+        description: The registry measure control ID.
+      - name: fact
+        description: The gold table that holds the value (the gold name of the retired source_model).
+      - name: measure
+        description: The measure the model reports (the retired source_measure_id).
+      - name: measure_key
+        description: The measure key of the gold control bridge; for a program control the gold column that holds the field.
+      - name: value_column
+        description: The gold column the control reads.
+      - name: is_carried
+        description: False for the retired control with no measure.
+      - name: retired_seed
+        description: The retired seed the row comes from.
+      - name: retired_row
+        description: The data row number in that seed at e918ed7, counted from 1.
+
+  - name: frozen_county_controls
+    description: >
+      The identity of the county lookups at e918ed7, one row per retired seed, control, fact, measure key and value column: the gold control bridge rows of
+      county_health_measures, geography_measures, acs_svi_measures, income_labor_measures and shortage_measures (the bridge replaced their component and
+      field lists), and the 81 conditions of the retired seed mmd_conditions with the condition label from that seed and its condition code and
+      geography level. assert_county_measures_control_identity and assert_county_context_control_identity compare the lookups the two county models
+      read with these rows in both directions, so a control redirected to another measure of the same fact fails.
+    config:
+      column_types:
+        retired_seed: varchar
+        measure_control: varchar
+        fact: varchar
+        measure_key: varchar
+        value_column: varchar
+        condition_code: varchar
+        geography_level: varchar
+        retired_row: integer
+    columns:
+      - name: retired_seed
+        description: The retired seed the lookup came from.
+      - name: measure_control
+        description: The registry measure control ID.
+      - name: fact
+        description: The gold table that holds the value.
+      - name: measure_key
+        description: The measure key of the gold control bridge (the published component or field); for mmd_conditions the condition label of the retired seed.
+      - name: value_column
+        description: The gold column the control reads.
+      - name: condition_code
+        description: The Medicare Chronic Conditions condition code of the retired seed; empty outside mmd_conditions.
+      - name: geography_level
+        description: The geography level of the retired mmd_conditions row; empty outside mmd_conditions.
+      - name: retired_row
+        description: The data row number in the retired seed at e918ed7, counted from 1.
+
+  - name: frozen_hospital_controls
+    description: >
+      The 98 source, control and field rows the hospital alignment carried at e918ed7: cost_report_measures (30), impact_measures (12), mup_measures
+      (50) and occmix_measures (6), with each retired rule and column. int_spine_hospital_measures must carry exactly these rows and the formula
+      recipes must give these rules and columns.
+    config:
+      column_types:
+        measure_source: varchar
+        measure_control: varchar
+        field: varchar
+        rule: varchar
+        value_column: varchar
+        denominator_column: varchar
+        drg_codes: varchar
+        retired_seed: varchar
+        retired_row: integer
+    columns:
+      - name: measure_source
+        description: cost_report, ipps_impact, medicare_inpatient or occupational_mix.
+      - name: measure_control
+        description: The registry measure control ID.
+      - name: field
+        description: The field the alignment row reports (value for a cost report, the impact or Medicare inpatient field, the occupational-mix output column; none when the control has none).
+      - name: rule
+        description: The retired rule (value, code, ratio, per_day, ratio_per_day_denominator, drg_share or hold); empty for occupational mix.
+      - name: value_column
+        description: The retired numerator column or field; empty when there is none.
+      - name: denominator_column
+        description: The retired denominator column or field; empty when there is none.
+      - name: drg_codes
+        description: The DRG codes of a drg_share control, separated by spaces; empty otherwise.
+      - name: retired_seed
+        description: The retired seed the row comes from.
+      - name: retired_row
+        description: The data row number in that seed at e918ed7, counted from 1.
+
+  - name: frozen_operations_controls
+    description: >
+      The 52 operations controls of the retired seeds hhs_onc_measures (47) and ownership_measures (5) at e918ed7. The closed HHS mappings C001 and C040
+      have no field and are not carried (lead decision, design.md step 1 of the feature phase): is_carried is false for them.
+      int_spine_operations_measures must carry exactly the carried rows.
+    config:
+      column_types:
+        measure_source: varchar
+        measure_control: varchar
+        fact: varchar
+        fields: varchar
+        is_carried: boolean
+        retired_seed: varchar
+        retired_row: integer
+    columns:
+      - name: measure_source
+        description: hhs_capacity, onc or ownership.
+      - name: measure_control
+        description: The registry measure control ID.
+      - name: fact
+        description: The gold table that holds the value (the gold name of the retired source_model).
+      - name: fields
+        description: The fields the control reads, separated by spaces (the value or numerator field first, then the denominator field).
+      - name: is_carried
+        description: False for the two closed mappings with no field.
+      - name: retired_seed
+        description: The retired seed the row comes from.
+      - name: retired_row
+        description: The data row number in that seed at e918ed7, counted from 1.
+
+  - name: frozen_hai_outcome_controls
+    description: >
+      The 60 HAI outcome controls of the retired seed hai_outcome_measures at e918ed7: the control, the infection type and the outcome field it reads.
+      The retired original_decision column has no gold home and is not frozen (the training configuration names the target candidates).
+      The HAI outcome values feature model must read exactly these from the gold control bridge.
+    config:
+      column_types:
+        measure_control: varchar
+        hai_type: varchar
+        field: varchar
+        retired_seed: varchar
+        retired_row: integer
+    columns:
+      - name: measure_control
+        description: The registry measure control ID.
+      - name: hai_type
+        description: The infection type, HAI_1 (CLABSI) to HAI_6 (C. difficile).
+      - name: field
+        description: The outcome field (sir, ci_lower, ci_upper, observed, predicted or sir_compared_to_national).
+      - name: retired_seed
+        description: The retired seed the row comes from.
+      - name: retired_row
+        description: The data row number in that seed at e918ed7, counted from 1.
+
+  - name: frozen_registry_controls
+    description: >
+      Every registry control of the 15 retired registry-map seeds at e918ed7 (432), with the seeds that listed it. The gold control bridge and the
+      formula recipes together must hold exactly the carried ones. C288.payment_adjustment has no measure and is not carried (lead decision,
+      design.md step 1 of the feature phase): is_carried is false for it.
+    config:
+      column_types:
+        measure_control: varchar
+        retired_seeds: varchar
+        is_carried: boolean
+    columns:
+      - name: measure_control
+        description: The registry measure control ID.
+      - name: retired_seeds
+        description: The retired seeds that listed the control, separated by spaces.
+      - name: is_carried
+        description: False for the retired control with no measure.

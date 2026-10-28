@@ -1,0 +1,382 @@
+retired_seed,measure_control,fact,measure_key,value_column,condition_code,geography_level,retired_row
+county_health_measures,C203,fct_places_county_value,DIABETES,data_value,,,1
+county_health_measures,C204,fct_places_county_value,OBESITY,data_value,,,2
+county_health_measures,C205,fct_places_county_value,COPD,data_value,,,3
+county_health_measures,C206,fct_places_county_value,CASTHMA,data_value,,,4
+county_health_measures,C207,fct_places_county_value,CANCER,data_value,,,5
+county_health_measures,C208,fct_places_county_value,CHD,data_value,,,6
+county_health_measures,C209,fct_places_county_value,STROKE,data_value,,,7
+county_health_measures,C210,fct_places_county_value,BPHIGH,data_value,,,8
+county_health_measures,C211,fct_places_county_value,HIGHCHOL,data_value,,,9
+county_health_measures,C212,fct_places_county_value,DEPRESSION,data_value,,,10
+county_health_measures,C213,fct_places_county_value,ARTHRITIS,data_value,,,11
+county_health_measures,C214,fct_places_county_value,TEETHLOST,data_value,,,12
+county_health_measures,C215,fct_places_county_value,KIDNEY,data_value,,,13
+county_health_measures,C216,fct_places_county_value,CSMOKING,data_value,,,14
+county_health_measures,C217,fct_places_county_value,LPA,data_value,,,15
+county_health_measures,C218,fct_places_county_value,SLEEP,data_value,,,16
+county_health_measures,C219,fct_places_county_value,BINGE,data_value,,,17
+county_health_measures,C220,fct_places_county_value,GHLTH,data_value,,,18
+county_health_measures,C221,fct_places_county_value,PHLTH,data_value,,,19
+county_health_measures,C222,fct_places_county_value,MHLTH,data_value,,,20
+county_health_measures,C223,fct_places_county_value,DISABILITY,data_value,,,21
+county_health_measures,C224,fct_places_county_value,MOBILITY,data_value,,,22
+county_health_measures,C225,fct_places_county_value,COGNITION,data_value,,,23
+county_health_measures,C226,fct_places_county_value,HEARING,data_value,,,24
+county_health_measures,C227,fct_places_county_value,VISION,data_value,,,25
+county_health_measures,C228,fct_places_county_value,SELFCARE,data_value,,,26
+county_health_measures,C229,fct_places_county_value,INDEPLIVE,data_value,,,27
+county_health_measures,C230,fct_places_county_value,CHECKUP,data_value,,,28
+county_health_measures,C231,fct_places_county_value,DENTAL,data_value,,,29
+county_health_measures,C232,fct_places_county_value,CHOLSCREEN,data_value,,,30
+county_health_measures,C233,fct_places_county_value,BPMED,data_value,,,31
+county_health_measures,C234,fct_places_county_value,MAMMOUSE,data_value,,,32
+county_health_measures,C235,fct_places_county_value,COLON_SCREEN,data_value,,,33
+county_health_measures,C236,fct_places_county_value,ACCESS2,data_value,,,34
+county_health_measures,C237,fct_places_county_value,FOODINSECU,data_value,,,35
+county_health_measures,C238,fct_places_county_value,HOUSINSECU,data_value,,,36
+county_health_measures,C239,fct_places_county_value,LACKTRPT,data_value,,,37
+county_health_measures,C240,fct_places_county_value,SHUTUTILITY,data_value,,,38
+county_health_measures,C241,fct_places_county_value,FOODSTAMP,data_value,,,39
+county_health_measures,C242,fct_places_county_value,LONELINESS,data_value,,,40
+county_health_measures,C243,fct_places_county_value,EMOTIONSPT,data_value,,,41
+county_health_measures,C252,fct_gv_county_value,ma_prtcptn_rate,value_number,,,42
+county_health_measures,C252,fct_gv_county_value,benes_ma_cnt,value_number,,,42
+county_health_measures,C252,fct_gv_county_value,benes_wth_ptaptb_cnt,value_number,,,42
+county_health_measures,C253,fct_gv_county_value,bene_dual_pct,value_number,,,43
+county_health_measures,C254,fct_gv_county_value,ip_cvrd_days_per_1000_benes,value_number,,,44
+county_health_measures,C255,fct_gv_county_value,er_visits_per_1000_benes,value_number,,,45
+county_health_measures,C255,fct_gv_county_value,benes_er_visits_cnt,value_number,,,45
+county_health_measures,C255,fct_gv_county_value,benes_er_visits_pct,value_number,,,45
+county_health_measures,C256,fct_gv_county_value,benes_snf_pct,value_number,,,46
+county_health_measures,C256,fct_gv_county_value,snf_cvrd_stays_per_1000_benes,value_number,,,46
+county_health_measures,C256,fct_gv_county_value,snf_cvrd_days_per_1000_benes,value_number,,,46
+county_health_measures,C257,fct_gv_county_value,benes_hh_pct,value_number,,,47
+county_health_measures,C257,fct_gv_county_value,hh_episodes_per_1000_benes,value_number,,,47
+county_health_measures,C257,fct_gv_county_value,hh_visits_per_1000_benes,value_number,,,47
+county_health_measures,C259,fct_wonder_county_deaths,deaths,deaths,,,48
+county_health_measures,C259,fct_wonder_county_deaths,population,population,,,48
+county_health_measures,C259,fct_wonder_county_deaths,crude_rate,crude_rate,,,48
+county_health_measures,C259,fct_wonder_county_deaths,crude_rate_lower_95,crude_rate_lower_95,,,48
+county_health_measures,C259,fct_wonder_county_deaths,crude_rate_upper_95,crude_rate_upper_95,,,48
+county_health_measures,C259,fct_wonder_county_deaths,crude_rate_standard_error,crude_rate_standard_error,,,48
+county_health_measures,C259,fct_wonder_county_deaths,deaths_token,deaths_token,,,48
+county_health_measures,C259,fct_wonder_county_deaths,crude_rate_token,crude_rate_token,,,48
+county_health_measures,C242.01,fct_places_county_value,LONELINESS,data_value,,,49
+county_health_measures,C242.02,fct_places_county_value,ISOLATION,data_value,,,50
+county_health_measures,C256.01,fct_gv_county_value,benes_snf_pct,value_number,,,51
+county_health_measures,C256.02,fct_gv_county_value,snf_cvrd_stays_per_1000_benes,value_number,,,52
+county_health_measures,C256.03,fct_gv_county_value,snf_cvrd_days_per_1000_benes,value_number,,,53
+county_health_measures,C257.01,fct_gv_county_value,benes_hh_pct,value_number,,,54
+county_health_measures,C257.02,fct_gv_county_value,hh_episodes_per_1000_benes,value_number,,,55
+county_health_measures,C257.03,fct_gv_county_value,hh_visits_per_1000_benes,value_number,,,56
+geography_measures,C198,fct_rucc_county,vintage,vintage,,,1
+geography_measures,C198,fct_rucc_county,county_fips,county_fips,,,1
+geography_measures,C198,fct_rucc_county,rucc_code,rucc_code,,,1
+geography_measures,C198,fct_rucc_county,rucc_published,rucc_published,,,1
+geography_measures,C198,fct_rucc_county,description,description,,,1
+geography_measures,C198,fct_rucc_county,population,population,,,1
+geography_measures,C199,fct_ruca_code,vintage,vintage,,,2
+geography_measures,C199,fct_ruca_code,geography_type,geography_type,,,2
+geography_measures,C199,fct_ruca_code,geography_id,geography_id,,,2
+geography_measures,C199,fct_ruca_code,county_fips,county_fips,,,2
+geography_measures,C199,fct_ruca_code,primary_ruca,primary_ruca,,,2
+geography_measures,C199,fct_ruca_code,secondary_ruca,secondary_ruca,,,2
+geography_measures,C199.01,fct_ruca_code,vintage,vintage,,,3
+geography_measures,C199.01,fct_ruca_code,geography_type,geography_type,,,3
+geography_measures,C199.01,fct_ruca_code,geography_id,geography_id,,,3
+geography_measures,C199.01,fct_ruca_code,county_fips,county_fips,,,3
+geography_measures,C199.01,fct_ruca_code,primary_ruca,primary_ruca,,,3
+geography_measures,C199.01,fct_ruca_code,primary_published,primary_published,,,3
+geography_measures,C199.02,fct_ruca_code,vintage,vintage,,,4
+geography_measures,C199.02,fct_ruca_code,geography_type,geography_type,,,4
+geography_measures,C199.02,fct_ruca_code,geography_id,geography_id,,,4
+geography_measures,C199.02,fct_ruca_code,county_fips,county_fips,,,4
+geography_measures,C199.02,fct_ruca_code,secondary_ruca,secondary_ruca,,,4
+geography_measures,C199.02,fct_ruca_code,secondary_published,secondary_published,,,4
+geography_measures,C199.03,fct_ruca_code,vintage,vintage,,,5
+geography_measures,C199.03,fct_ruca_code,geography_type,geography_type,,,5
+geography_measures,C199.03,fct_ruca_code,geography_id,geography_id,,,5
+geography_measures,C199.03,fct_ruca_code,zip_type,zip_type,,,5
+geography_measures,C199.03,fct_ruca_code,primary_ruca,primary_ruca,,,5
+geography_measures,C199.03,fct_ruca_code,secondary_ruca,secondary_ruca,,,5
+geography_measures,L001,fct_hsa_zip_cases,data_year,data_year,,,6
+geography_measures,L001,fct_hsa_zip_cases,ccn_published,ccn_published,,,6
+geography_measures,L001,fct_hsa_zip_cases,zip_code,zip_code,,,6
+geography_measures,L001,fct_hsa_zip_cases,total_cases,total_cases,,,6
+geography_measures,L001,fct_hsa_zip_cases,is_cases_suppressed,is_cases_suppressed,,,6
+geography_measures,L001,fct_hsa_zip_cases,is_zip_suppressed,is_zip_suppressed,,,6
+geography_measures,L001,fct_hsa_zip_cases,is_zip_missing,is_zip_missing,,,6
+geography_measures,L002,bridge_zip_county,quarter_label,quarter_label,,,7
+geography_measures,L002,bridge_zip_county,zip_code,zip_code,,,7
+geography_measures,L002,bridge_zip_county,county_fips,county_fips,,,7
+geography_measures,L002,bridge_zip_county,res_ratio,res_ratio,,,7
+geography_measures,L002,bridge_zip_county,bus_ratio,bus_ratio,,,7
+geography_measures,L002,bridge_zip_county,oth_ratio,oth_ratio,,,7
+geography_measures,L002,bridge_zip_county,tot_ratio,tot_ratio,,,7
+geography_measures,L002,bridge_zip_county,has_residential_addresses,has_residential_addresses,,,7
+geography_measures,L004,bridge_county_neighbor,vintage,vintage,,,8
+geography_measures,L004,bridge_county_neighbor,county_fips,county_fips,,,8
+geography_measures,L004,bridge_county_neighbor,neighbor_fips,neighbor_fips,,,8
+geography_measures,L004,bridge_county_neighbor,shared_border_length_m,shared_border_length_m,,,8
+geography_measures,L004,bridge_county_neighbor,is_self_link,is_self_link,,,8
+geography_measures,L004,bridge_county_neighbor,is_isolated,is_isolated,,,8
+acs_svi_measures,C175,fct_acs_county_value,S1701_C03_001E,value_number,,,1
+acs_svi_measures,C175,fct_acs_county_value,S1701_C02_001E,value_number,,,1
+acs_svi_measures,C175,fct_acs_county_value,S1701_C01_001E,value_number,,,1
+acs_svi_measures,C175.01,fct_acs_county_value,S1701_C03_001E,value_number,,,2
+acs_svi_measures,C175.02,fct_svi_county_value,ep_pov150,value_number,,,3
+acs_svi_measures,C176,fct_acs_county_value,B19013_001E,value_number,,,4
+acs_svi_measures,C176,fct_acs_county_value,B19013_001M,value_number,,,4
+acs_svi_measures,C177,fct_svi_county_value,ep_unemp,value_number,,,5
+acs_svi_measures,C177,fct_acs_county_value,DP03_0009PE,value_number,,,6
+acs_svi_measures,C177.01,fct_acs_county_value,DP03_0009PE,value_number,,,7
+acs_svi_measures,C177.01,fct_svi_county_value,ep_unemp,value_number,,,8
+acs_svi_measures,C178,fct_svi_county_value,ep_nohsdp,value_number,,,10
+acs_svi_measures,C178,fct_acs_county_value,S0601_C01_033E,value_number,,,11
+acs_svi_measures,C179,fct_svi_county_value,ep_uninsur,value_number,,,12
+acs_svi_measures,C179,fct_acs_county_value,S2701_C05_001E,value_number,,,13
+acs_svi_measures,C179,fct_acs_county_value,S2701_C04_001E,value_number,,,13
+acs_svi_measures,C180,fct_svi_county_value,ep_hburd,value_number,,,14
+acs_svi_measures,C180,fct_acs_county_value,S2503_C01_028E,value_number,,,15
+acs_svi_measures,C180,fct_acs_county_value,S2503_C01_032E,value_number,,,15
+acs_svi_measures,C180,fct_acs_county_value,S2503_C01_036E,value_number,,,15
+acs_svi_measures,C180,fct_acs_county_value,S2503_C01_040E,value_number,,,15
+acs_svi_measures,C180,fct_acs_county_value,S2503_C01_001E,value_number,,,15
+acs_svi_measures,C180.01,fct_svi_county_value,ep_hburd,value_number,,,16
+acs_svi_measures,C180.02,fct_acs_county_value,B25070_001E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25070_007E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25070_008E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25070_009E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25070_010E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25070_011E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25091_001E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25091_008E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25091_009E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25091_010E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25091_011E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25091_012E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25091_019E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25091_020E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25091_021E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25091_022E,value_number,,,17
+acs_svi_measures,C180.02,fct_acs_county_value,B25091_023E,value_number,,,17
+acs_svi_measures,C181,fct_svi_county_value,ep_crowd,value_number,,,18
+acs_svi_measures,C181,fct_acs_county_value,DP04_0078PE,value_number,,,19
+acs_svi_measures,C181,fct_acs_county_value,DP04_0079PE,value_number,,,19
+acs_svi_measures,C182,fct_svi_county_value,ep_noveh,value_number,,,20
+acs_svi_measures,C182,fct_acs_county_value,DP04_0058PE,value_number,,,21
+acs_svi_measures,C183,fct_svi_county_value,ep_limeng,value_number,,,22
+acs_svi_measures,C183,fct_acs_county_value,B16005_001E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_007E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_008E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_012E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_013E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_017E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_018E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_022E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_023E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_029E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_030E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_034E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_035E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_039E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_040E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_044E,value_number,,,23
+acs_svi_measures,C183,fct_acs_county_value,B16005_045E,value_number,,,23
+acs_svi_measures,C183.01,fct_svi_county_value,ep_limeng,value_number,,,24
+acs_svi_measures,C183.02,fct_acs_county_value,C16001_001E,value_number,,,25
+acs_svi_measures,C183.02,fct_acs_county_value,C16001_005E,value_number,,,25
+acs_svi_measures,C183.02,fct_acs_county_value,C16001_008E,value_number,,,25
+acs_svi_measures,C183.02,fct_acs_county_value,C16001_011E,value_number,,,25
+acs_svi_measures,C183.02,fct_acs_county_value,C16001_014E,value_number,,,25
+acs_svi_measures,C183.02,fct_acs_county_value,C16001_017E,value_number,,,25
+acs_svi_measures,C183.02,fct_acs_county_value,C16001_020E,value_number,,,25
+acs_svi_measures,C183.02,fct_acs_county_value,C16001_023E,value_number,,,25
+acs_svi_measures,C183.02,fct_acs_county_value,C16001_026E,value_number,,,25
+acs_svi_measures,C183.02,fct_acs_county_value,C16001_029E,value_number,,,25
+acs_svi_measures,C183.02,fct_acs_county_value,C16001_032E,value_number,,,25
+acs_svi_measures,C183.02,fct_acs_county_value,C16001_035E,value_number,,,25
+acs_svi_measures,C183.02,fct_acs_county_value,C16001_038E,value_number,,,25
+acs_svi_measures,C184,fct_svi_county_value,ep_disabl,value_number,,,26
+acs_svi_measures,C184,fct_acs_county_value,DP02_0072PE,value_number,,,27
+acs_svi_measures,C185,fct_svi_county_value,e_age65,value_number,,,28
+acs_svi_measures,C185,fct_svi_county_value,ep_age65,value_number,,,28
+acs_svi_measures,C185,fct_acs_county_value,S0101_C01_030E,value_number,,,29
+acs_svi_measures,C185,fct_acs_county_value,S0101_C02_030E,value_number,,,29
+acs_svi_measures,C185.01,fct_svi_county_value,e_age65,value_number,,,30
+acs_svi_measures,C185.02,fct_svi_county_value,ep_age65,value_number,,,31
+acs_svi_measures,C186,fct_svi_county_value,e_age17,value_number,,,32
+acs_svi_measures,C186,fct_svi_county_value,ep_age17,value_number,,,32
+acs_svi_measures,C186,fct_acs_county_value,DP05_0019E,value_number,,,33
+acs_svi_measures,C186,fct_acs_county_value,DP05_0019PE,value_number,,,33
+acs_svi_measures,C186.01,fct_svi_county_value,e_age17,value_number,,,34
+acs_svi_measures,C186.02,fct_svi_county_value,ep_age17,value_number,,,35
+acs_svi_measures,C187,fct_svi_county_value,ep_sngpnt,value_number,,,36
+acs_svi_measures,C187,fct_acs_county_value,DP02_0007PE,value_number,,,37
+acs_svi_measures,C187,fct_acs_county_value,DP02_0011PE,value_number,,,37
+acs_svi_measures,C188,fct_svi_county_value,ep_groupq,value_number,,,38
+acs_svi_measures,C188,fct_svi_county_value,e_totpop,value_number,,,38
+acs_svi_measures,C188,fct_acs_county_value,B26001_001E,value_number,,,39
+acs_svi_measures,C189,fct_svi_county_value,ep_munit,value_number,,,40
+acs_svi_measures,C189,fct_acs_county_value,DP04_0012PE,value_number,,,41
+acs_svi_measures,C189,fct_acs_county_value,DP04_0013PE,value_number,,,41
+acs_svi_measures,C190,fct_svi_county_value,ep_mobile,value_number,,,42
+acs_svi_measures,C190,fct_acs_county_value,DP04_0014PE,value_number,,,43
+acs_svi_measures,C191,fct_svi_county_value,e_totpop,value_number,,,44
+acs_svi_measures,C191,fct_svi_county_value,area_sqmi,value_number,,,44
+acs_svi_measures,C192,fct_svi_county_value,ep_hisp,value_number,,,45
+acs_svi_measures,C192,fct_svi_county_value,ep_afam,value_number,,,45
+acs_svi_measures,C192,fct_svi_county_value,ep_asian,value_number,,,45
+acs_svi_measures,C192,fct_svi_county_value,ep_aian,value_number,,,45
+acs_svi_measures,C192,fct_svi_county_value,ep_nhpi,value_number,,,45
+acs_svi_measures,C192,fct_svi_county_value,ep_twomore,value_number,,,45
+acs_svi_measures,C192,fct_svi_county_value,ep_otherrace,value_number,,,45
+acs_svi_measures,C192,fct_svi_county_value,ep_minrty,value_number,,,45
+acs_svi_measures,C192.01,fct_svi_county_value,ep_hisp,value_number,,,46
+acs_svi_measures,C192.02,fct_svi_county_value,ep_afam,value_number,,,47
+acs_svi_measures,C192.03,fct_svi_county_value,ep_asian,value_number,,,48
+acs_svi_measures,C192.04,fct_svi_county_value,ep_aian,value_number,,,49
+acs_svi_measures,C192.05,fct_svi_county_value,ep_nhpi,value_number,,,50
+acs_svi_measures,C192.06,fct_svi_county_value,ep_twomore,value_number,,,51
+acs_svi_measures,C192.07,fct_svi_county_value,ep_otherrace,value_number,,,52
+acs_svi_measures,C192.08,fct_svi_county_value,ep_minrty,value_number,,,53
+acs_svi_measures,C192.09,fct_svi_county_value,ep_minrty,value_number,,,54
+acs_svi_measures,C193,fct_svi_county_value,rpl_themes,value_number,,,55
+acs_svi_measures,C194,fct_svi_county_value,rpl_theme1,value_number,,,56
+acs_svi_measures,C195,fct_svi_county_value,rpl_theme2,value_number,,,57
+acs_svi_measures,C196,fct_svi_county_value,rpl_theme3,value_number,,,58
+acs_svi_measures,C197,fct_svi_county_value,rpl_theme4,value_number,,,59
+income_labor_measures,C177,fct_bls_county_series,unemployment_rate,value_number,,,1
+income_labor_measures,C177,fct_bls_county_series,unemployed,value_number,,,1
+income_labor_measures,C177,fct_bls_county_series,employed,value_number,,,1
+income_labor_measures,C177,fct_bls_county_series,labor_force,value_number,,,1
+income_labor_measures,C177.02,fct_bls_county_series,unemployment_rate,value_number,,,3
+income_labor_measures,C177.02,fct_bls_county_series,unemployment_rate,footnote_codes,,,3
+income_labor_measures,C177.02,fct_bls_county_series,unemployed,value_number,,,3
+income_labor_measures,C177.02,fct_bls_county_series,unemployed,footnote_codes,,,3
+income_labor_measures,C177.02,fct_bls_county_series,employed,value_number,,,3
+income_labor_measures,C177.02,fct_bls_county_series,employed,footnote_codes,,,3
+income_labor_measures,C177.02,fct_bls_county_series,labor_force,value_number,,,3
+income_labor_measures,C177.02,fct_bls_county_series,labor_force,footnote_codes,,,3
+income_labor_measures,C200,fct_saipe_county_estimate,estimate_year,estimate_year,,,4
+income_labor_measures,C200,fct_saipe_county_estimate,county_fips,county_fips,,,4
+income_labor_measures,C200,fct_saipe_county_estimate,poverty_all_pct,poverty_all_pct,,,4
+income_labor_measures,C200,fct_saipe_county_estimate,poverty_all_pct_lb90,poverty_all_pct_lb90,,,4
+income_labor_measures,C200,fct_saipe_county_estimate,poverty_all_pct_ub90,poverty_all_pct_ub90,,,4
+income_labor_measures,C200,fct_saipe_county_estimate,poverty_all_count,poverty_all_count,,,4
+income_labor_measures,C201,fct_saipe_county_estimate,estimate_year,estimate_year,,,5
+income_labor_measures,C201,fct_saipe_county_estimate,county_fips,county_fips,,,5
+income_labor_measures,C201,fct_saipe_county_estimate,median_household_income,median_household_income,,,5
+income_labor_measures,C201,fct_saipe_county_estimate,median_household_income_lb90,median_household_income_lb90,,,5
+income_labor_measures,C201,fct_saipe_county_estimate,median_household_income_ub90,median_household_income_ub90,,,5
+income_labor_measures,C202,fct_sahie_county_value,estimate_year,estimate_year,,,6
+income_labor_measures,C202,fct_sahie_county_value,county_fips,county_fips,,,6
+income_labor_measures,C202,fct_sahie_county_value,agecat,agecat,,,6
+income_labor_measures,C202,fct_sahie_county_value,racecat,racecat,,,6
+income_labor_measures,C202,fct_sahie_county_value,sexcat,sexcat,,,6
+income_labor_measures,C202,fct_sahie_county_value,iprcat,iprcat,,,6
+income_labor_measures,C202,fct_sahie_county_value,is_all_groups,is_all_groups,,,6
+income_labor_measures,C202,fct_sahie_county_value,nipr,nipr,,,6
+income_labor_measures,C202,fct_sahie_county_value,nui,nui,,,6
+income_labor_measures,C202,fct_sahie_county_value,pctui,pctui,,,6
+income_labor_measures,C202,fct_sahie_county_value,pctui_moe,pctui_moe,,,6
+shortage_measures,C249,fct_hpsa_component,hpsa_id,hpsa_id,,,1
+shortage_measures,C249,fct_hpsa_component,designation_type,designation_type,,,1
+shortage_measures,C249,fct_hpsa_component,hpsa_status,hpsa_status,,,1
+shortage_measures,C249,fct_hpsa_component,designation_date,designation_date,,,1
+shortage_measures,C249,fct_hpsa_component,last_update_date,last_update_date,,,1
+shortage_measures,C249,fct_hpsa_component,withdrawn_date,withdrawn_date,,,1
+shortage_measures,C250,fct_hpsa_component,hpsa_score,hpsa_score,,,2
+shortage_measures,C250,fct_hpsa_component,hpsa_id,hpsa_id,,,2
+shortage_measures,C250,fct_hpsa_component,designation_type,designation_type,,,2
+shortage_measures,C250,fct_hpsa_component,hpsa_status,hpsa_status,,,2
+shortage_measures,C250,fct_hpsa_component,designation_date,designation_date,,,2
+shortage_measures,C251,fct_mua_component,mua_id,mua_id,,,3
+shortage_measures,C251,fct_mua_component,designation_type,designation_type,,,3
+shortage_measures,C251,fct_mua_component,mua_status,mua_status,,,3
+shortage_measures,C251,fct_mua_component,designation_date,designation_date,,,3
+shortage_measures,C251,fct_mua_component,update_date,update_date,,,3
+shortage_measures,C251,fct_mua_component,withdrawal_date,withdrawal_date,,,3
+shortage_measures,C251,fct_mua_component,imu_score,imu_score,,,3
+mmd_conditions,C258.01,fct_mmd_prevalence,Acute Myocardial Infarction,value_number,2,county,1
+mmd_conditions,C258.02,fct_mmd_prevalence,"Alzheimer's Disease, Related Disorders, or Senile Dementia",value_number,1,county,2
+mmd_conditions,C258.03,fct_mmd_prevalence,Anemia,value_number,147,county,3
+mmd_conditions,C258.04,fct_mmd_prevalence,Asthma,value_number,4,county,4
+mmd_conditions,C258.05,fct_mmd_prevalence,Atrial Fibrillation,value_number,11,county,5
+mmd_conditions,C258.06,fct_mmd_prevalence,Benign Prostatic Hyperplasia,value_number,148,county,6
+mmd_conditions,C258.07,fct_mmd_prevalence,"Cancer, Colorectal, Breast, Prostate, Lung",value_number,5,county,7
+mmd_conditions,C258.08,fct_mmd_prevalence,Cancer - Breast,value_number,78,county,8
+mmd_conditions,C258.09,fct_mmd_prevalence,Cancer - Colorectal,value_number,79,county,9
+mmd_conditions,C258.10,fct_mmd_prevalence,Cancer - Endometrial,value_number,149,county,10
+mmd_conditions,C258.11,fct_mmd_prevalence,Cancer - Lung,value_number,80,county,11
+mmd_conditions,C258.12,fct_mmd_prevalence,Cancer - Prostate,value_number,81,county,12
+mmd_conditions,C258.13,fct_mmd_prevalence,Cancer - Urologic,value_number,150,county,13
+mmd_conditions,C258.14,fct_mmd_prevalence,Cataract,value_number,151,county,14
+mmd_conditions,C258.15,fct_mmd_prevalence,Chronic Kidney Disease,value_number,12,county,15
+mmd_conditions,C258.16,fct_mmd_prevalence,Chronic Obstructive Pulmonary Disease,value_number,13,county,16
+mmd_conditions,C258.17,fct_mmd_prevalence,Depression,value_number,14,county,17
+mmd_conditions,C258.18,fct_mmd_prevalence,Diabetes,value_number,15,county,18
+mmd_conditions,C258.19,fct_mmd_prevalence,Disability (reason for Medicare eligibility),value_number,24,county,19
+mmd_conditions,C258.20,fct_mmd_prevalence,End-stage renal disease (reason for Medicare eligibility),value_number,25,county,20
+mmd_conditions,C258.21,fct_mmd_prevalence,Glaucoma,value_number,153,county,21
+mmd_conditions,C258.22,fct_mmd_prevalence,Heart Failure and Non-Ischemic Heart Disease,value_number,16,county,22
+mmd_conditions,C258.23,fct_mmd_prevalence,Hip/Pelvic Fracture,value_number,152,county,23
+mmd_conditions,C258.24,fct_mmd_prevalence,Hyperlipidemia,value_number,18,county,24
+mmd_conditions,C258.25,fct_mmd_prevalence,Hypertension,value_number,17,county,25
+mmd_conditions,C258.26,fct_mmd_prevalence,Hypothyroidism,value_number,154,county,26
+mmd_conditions,C258.27,fct_mmd_prevalence,Ischemic Heart Disease,value_number,19,county,27
+mmd_conditions,C258.28,fct_mmd_prevalence,Obesity,value_number,20,county,28
+mmd_conditions,C258.29,fct_mmd_prevalence,Osteoporosis With or Without Pathological Fracture,value_number,21,county,29
+mmd_conditions,C258.30,fct_mmd_prevalence,Parkinson's Diseases and Secondary Parkinsonism,value_number,155,county,30
+mmd_conditions,C258.31,fct_mmd_prevalence,"Pneumonia, All-cause",value_number,156,county,31
+mmd_conditions,C258.32,fct_mmd_prevalence,Rheumatoid Arthritis/Osteoarthritis,value_number,3,county,32
+mmd_conditions,C258.33,fct_mmd_prevalence,Schizophrenia and Other Psychotic Disorders,value_number,22,county,33
+mmd_conditions,C258.34,fct_mmd_prevalence,Stroke/Transient Ischemic Attack,value_number,23,county,34
+mmd_conditions,C258.35,fct_mmd_prevalence,0 of the claims-based conditions,value_number,6,county,35
+mmd_conditions,C258.36,fct_mmd_prevalence,1 of the claims-based conditions,value_number,7,county,36
+mmd_conditions,C258.37,fct_mmd_prevalence,2 of the claims-based conditions,value_number,8,county,37
+mmd_conditions,C258.38,fct_mmd_prevalence,3+ of the claims-based conditions,value_number,9,county,38
+mmd_conditions,C258.39,fct_mmd_prevalence,Congenital and Developmental Conditions,value_number,72,county,39
+mmd_conditions,C258.40,fct_mmd_prevalence,"ADHD, Conduct Disorders, and Hyperkinetic Syndrome",value_number,42,county,40
+mmd_conditions,C258.41,fct_mmd_prevalence,Autism Spectrum Disorders,value_number,44,county,41
+mmd_conditions,C258.42,fct_mmd_prevalence,Cerebral Palsy,value_number,47,county,42
+mmd_conditions,C258.43,fct_mmd_prevalence,Cystic Fibrosis and Other Metabolic Developmental Disorders,value_number,48,county,43
+mmd_conditions,C258.44,fct_mmd_prevalence,Intellectual Disabilities and Related Conditions,value_number,55,county,44
+mmd_conditions,C258.45,fct_mmd_prevalence,Learning Disabilities,value_number,56,county,45
+mmd_conditions,C258.46,fct_mmd_prevalence,Liver Conditions,value_number,73,county,46
+mmd_conditions,C258.47,fct_mmd_prevalence,"Liver Disease, Cirrhosis and Other Liver Conditions (except Viral Hepatitis)",value_number,58,county,47
+mmd_conditions,C258.48,fct_mmd_prevalence,Viral Hepatitis (General),value_number,53,county,48
+mmd_conditions,C258.49,fct_mmd_prevalence,Anxiety Disorders,value_number,43,county,49
+mmd_conditions,C258.50,fct_mmd_prevalence,Bipolar Disorder,value_number,45,county,50
+mmd_conditions,C258.51,fct_mmd_prevalence,Depressive Disorders,value_number,49,county,51
+mmd_conditions,C258.52,fct_mmd_prevalence,Personality Disorders,value_number,64,county,52
+mmd_conditions,C258.53,fct_mmd_prevalence,Post-Traumatic Stress Disorder (PTSD),value_number,65,county,53
+mmd_conditions,C258.54,fct_mmd_prevalence,Schizophrenia,value_number,41,county,54
+mmd_conditions,C258.55,fct_mmd_prevalence,Tobacco Use Disorders,value_number,69,county,55
+mmd_conditions,C258.56,fct_mmd_prevalence,Overarching Opioid Use Disorder,value_number,109,county,56
+mmd_conditions,C258.57,fct_mmd_prevalence,Diagnosis- and Procedure-code basis for OUD,value_number,110,county,57
+mmd_conditions,C258.58,fct_mmd_prevalence,Opioid-related Hospitalizations/ED Visits,value_number,111,county,58
+mmd_conditions,C258.59,fct_mmd_prevalence,Utilization of Medication-Assisted Therapy (MAT),value_number,112,county,59
+mmd_conditions,C258.60,fct_mmd_prevalence,Mobility Limitations and Chronic Pain Conditions,value_number,75,county,60
+mmd_conditions,C258.61,fct_mmd_prevalence,"Fibromyalgia, Chronic Pain and Fatigue",value_number,51,county,61
+mmd_conditions,C258.62,fct_mmd_prevalence,Mobility Impairments,value_number,60,county,62
+mmd_conditions,C258.63,fct_mmd_prevalence,Multiple Sclerosis and Transverse Myelitis,value_number,61,county,63
+mmd_conditions,C258.64,fct_mmd_prevalence,Muscular Dystrophy,value_number,62,county,64
+mmd_conditions,C258.65,fct_mmd_prevalence,Neurological Conditions,value_number,76,county,65
+mmd_conditions,C258.66,fct_mmd_prevalence,Epilepsy,value_number,50,county,66
+mmd_conditions,C258.67,fct_mmd_prevalence,Migraine and Other Chronic Headache,value_number,59,county,67
+mmd_conditions,C258.68,fct_mmd_prevalence,Spina Bifida and Other Congenital Anomalies of the Nervous System,value_number,67,county,68
+mmd_conditions,C258.69,fct_mmd_prevalence,Spinal Cord Injury,value_number,68,county,69
+mmd_conditions,C258.70,fct_mmd_prevalence,Traumatic Brain Injury and Nonpsychotic Mental Disorders due to Brain Damage,value_number,46,county,70
+mmd_conditions,C258.71,fct_mmd_prevalence,Other Chronic or Disabling Conditions,value_number,77,county,71
+mmd_conditions,C258.72,fct_mmd_prevalence,Human Immunodeficiency Virus and/or Acquired Immunodeficiency Syndrome (HIV/AIDS),value_number,54,county,72
+mmd_conditions,C258.73,fct_mmd_prevalence,Leukemias and Lymphomas,value_number,57,county,73
+mmd_conditions,C258.74,fct_mmd_prevalence,Peripheral Vascular Disease (PVD),value_number,66,county,74
+mmd_conditions,C258.75,fct_mmd_prevalence,Pressure Ulcers and Chronic Ulcers,value_number,70,county,75
+mmd_conditions,C258.76,fct_mmd_prevalence,Sensory - Blindness and Visual Impairment,value_number,71,county,76
+mmd_conditions,C258.77,fct_mmd_prevalence,Sensory - Deafness and Hearing Impairment,value_number,52,county,77
+mmd_conditions,C258.78,fct_mmd_prevalence,Sickle Cell Disease,value_number,144,state,78
+mmd_conditions,C258.79,fct_mmd_prevalence,Other Developmental Delays,value_number,63,county,79
+mmd_conditions,C258.80,fct_mmd_prevalence,Alcohol Use Disorders,value_number,136,county,80
+mmd_conditions,C258.81,fct_mmd_prevalence,Drug Use Disorders,value_number,137,county,81
