@@ -25,6 +25,7 @@ from orchestration.ecs_api import EcsApi
 from orchestration.sdk_worker import Refused, Sdk, protocol
 from orchestration.worker_pool import Worker, WorkerConfig, WorkerPool
 from orchestration.worker_recovery import Recovery, WorkerLedger
+from scripts.orchestration.sdk_owned_cases import owned_cases, source_hashes
 from scripts.process_group import OwnedProcess, Snapshot, StopResult
 
 
@@ -352,6 +353,7 @@ def startup_close(folder: Path, kind: str) -> dict[str, bool]:
 
 def run(folder: Path, fixtures: Path | None = None) -> dict[str, Any]:
     """Run isolated failure checks without spawning a worker or contacting a service."""
+    frozen_sources = source_hashes()
     scratch = Path(tempfile.mkdtemp(prefix="worker_lifecycle_", dir=folder))
     (scratch / "retention.json").write_text(
         json.dumps(
@@ -366,6 +368,7 @@ def run(folder: Path, fixtures: Path | None = None) -> dict[str, Any]:
         + "\n"
     )
     checks = {
+        **owned_cases(scratch / "owned"),
         **recovery_sessions(scratch / "sessions"),
         **ledger_failure_cleanup(scratch / "cleanup"),
         **stop_slot_deadline(scratch / "slots"),
@@ -379,9 +382,11 @@ def run(folder: Path, fixtures: Path | None = None) -> dict[str, Any]:
     }
     if fixtures is not None:
         checks.update(validator_sensitivity(fixtures))
+    checks["owned_sources_unchanged_during_run"] = frozen_sources == source_hashes()
     return {
         "classification": "Synthetic",
         "written_utc": datetime.now(UTC).isoformat(),
+        "owned_source_sha256": frozen_sources,
         "checks": checks,
         "failed": [name for name, ok in checks.items() if not ok],
         "limits": ["Isolated transitions with substituted process observations, stop outcomes and SDK client", "No native ownership or launcher proof"],
