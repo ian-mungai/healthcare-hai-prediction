@@ -8,6 +8,9 @@ GitHub CI and local commits use the same lists. Scopes:
   scripts/quality/pre_push.py). A range that cannot be used (missing end, zero or unknown commit) selects every group.
 - ``paths``: the paths given with ``--path`` (to see what a change would run).
 
+The ``launcher`` group lists, besides the few patterns of the configuration, one exact path for each file and one prefix for each folder of
+config/quality/launcher_inputs.json: the files that the launcher E2E suite imports or reads and the folders it reads whole (generated and checked by
+scripts/quality/launcher_inputs.py).
 A path in ``global`` or a path that no group lists and that is not ``passive`` selects every group. Renames count with both
 names.
 The lakehouse layers (``layers`` in the configuration, upstream first) select one another: a changed path belongs to the most downstream layer whose
@@ -39,6 +42,7 @@ from typing import Any
 from scripts.process import run_command
 
 CONFIG = Path("config/quality/ci_groups.json")
+LAUNCHER_INPUTS = Path("config/quality/launcher_inputs.json")
 SCOPES = ("full", "staged", "range", "paths")
 LAYER_PARTS = {
     "bronze": "lakehouse_bronze",
@@ -63,6 +67,12 @@ def load() -> dict[str, Any]:
         raise ValueError(f"unknown groups in {CONFIG}: {', '.join(sorted(unknown))}")
     if set(config.setdefault("upstream_inputs", {})) - set(config["layers"]):
         raise ValueError(f"upstream_inputs in {CONFIG} may name only layers: {', '.join(sorted(set(config['upstream_inputs']) - set(config['layers'])))}")
+    inputs = json.loads(LAUNCHER_INPUTS.read_text(encoding="utf-8"))
+    config["groups"]["launcher"] = [
+        *config["groups"]["launcher"],
+        *(f"^{re.escape(folder)}/" for folder in inputs["folders"]),
+        *(f"^{re.escape(path)}$" for path in inputs["files"]),
+    ]
     if [layer for layer in order(config) if layer in config["layers"]] != config["layers"] or set(config["layers"]) - set(config["groups"]):
         raise ValueError(f"layers in {CONFIG} must be groups listed from upstream to downstream in the order of the groups in the file")
     return config

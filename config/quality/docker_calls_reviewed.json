@@ -1314,33 +1314,37 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 2025,
+      "line": 2091,
       "code_sha256": "7262a5d12d7ddd7c8b9f95d4ab8d9e815af69e92bbb232841afa48127d0a5f36",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "3c1a8d86b80efefcd613d7d164f9f6cc0feab0c54660e479b3a32166fec0d0cf",
+      "file_sha256": "bc3f03b736e36b9805ef5947c5be4e73a7b725c4126dfa86b5d2ed5a57515ebb",
       "dependencies": {
         "scripts/process.py": "sha256:6890e5c3ff2b527065a9df9ffc123b5451d0a58009e63bbdfa94701fbbed2a3e",
-        "scripts/quality/ci_groups.py": "sha256:cc390c57fd1c1aa1d4b57fb640569cf5a5304bb19831fae751db265a17659ca5",
+        "scripts/quality/ci_groups.py": "sha256:ce0d58f0bc935093c948860fe3d4a1461c86ea75a8ed29c20105f47dd32585bd",
+        "scripts/quality/launcher_inputs.py": "sha256:81551a291152d9f70fa9628b22d085aab8cf5e3e55db1b9786779e2ce022b3dd",
         "scripts/quality/pre_push.py": "sha256:0891a15b8ca29f9b10d45225203adda2417c61af360b4c2d9114afe4641c5fb6",
         "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684",
-        "scripts/quality/scratch_worktree.py": "sha256:dfeeb949842f5643170c9c9203ffee6b28c5496bf717e04e8e942b529450a347"
+        "scripts/quality/scratch_worktree.py": "sha256:dfeeb949842f5643170c9c9203ffee6b28c5496bf717e04e8e942b529450a347",
+        "scripts/quality/source_reads.py": "sha256:74ce048e75854b785903a7429412f59bbfa847f6b0c88bf1623fd3175176be2f"
       },
       "reason": "Runs the first hooks workflow step with Bash in a scratch folder. That step writes the current epoch to GITHUB_ENV through date and echo. It does not call Docker."
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 2077,
+      "line": 2143,
       "code_sha256": "ddfb4bd744b919616f97d784e28c5a981ddc3d18ee5b387f2f2b2bce6b160e35",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "3c1a8d86b80efefcd613d7d164f9f6cc0feab0c54660e479b3a32166fec0d0cf",
+      "file_sha256": "bc3f03b736e36b9805ef5947c5be4e73a7b725c4126dfa86b5d2ed5a57515ebb",
       "dependencies": {
         "scripts/process.py": "sha256:6890e5c3ff2b527065a9df9ffc123b5451d0a58009e63bbdfa94701fbbed2a3e",
-        "scripts/quality/ci_groups.py": "sha256:cc390c57fd1c1aa1d4b57fb640569cf5a5304bb19831fae751db265a17659ca5",
+        "scripts/quality/ci_groups.py": "sha256:ce0d58f0bc935093c948860fe3d4a1461c86ea75a8ed29c20105f47dd32585bd",
+        "scripts/quality/launcher_inputs.py": "sha256:81551a291152d9f70fa9628b22d085aab8cf5e3e55db1b9786779e2ce022b3dd",
         "scripts/quality/pre_push.py": "sha256:0891a15b8ca29f9b10d45225203adda2417c61af360b4c2d9114afe4641c5fb6",
         "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684",
-        "scripts/quality/scratch_worktree.py": "sha256:dfeeb949842f5643170c9c9203ffee6b28c5496bf717e04e8e942b529450a347"
+        "scripts/quality/scratch_worktree.py": "sha256:dfeeb949842f5643170c9c9203ffee6b28c5496bf717e04e8e942b529450a347",
+        "scripts/quality/source_reads.py": "sha256:74ce048e75854b785903a7429412f59bbfa847f6b0c88bf1623fd3175176be2f"
       },
       "reason": "Runs the literal HOOK_DEADLINE_PROGRAM with the project Python. It records calls to the shared process launcher and invokes ci_hooks against a scratch pre-commit stand-in that only records arguments and exits. It does not call Docker."
     },
