@@ -278,7 +278,7 @@ Run the same command locally and in CI:
 .venv/bin/python -m scripts.quality.container_mounts
 ```
 
-The `container-mounts` pre-commit hook always runs. The `repository_code_checks` CI group runs that command and its hook samples.
+The `container-mounts` pre-commit hook always runs. It takes about two seconds, so it stays in the commit stage with the other fast checks. The `repository_code_checks` CI group runs that command and its hook samples.
 Its path list covers Python sources, Dockerfiles and Compose files at the repository root or under `orchestration/`, `services/` and `config/`.
 Each service keeps its own mounts. A quality job does not gain the mounts of a pipeline job that shares its image.
 The mount declarations remain the authority. The check keeps no second mount allowlist.

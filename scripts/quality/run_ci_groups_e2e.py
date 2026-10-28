@@ -3069,6 +3069,7 @@ FAST_COMMIT_HOOKS = frozenset(
         "suppressions",
         "subprocess-imports",
         "docker-calls",
+        "container-mounts",
     }
 )
 PUSH_HOOKS = frozenset({"local_ci_pushed", "acquisition-checks"})
@@ -3097,6 +3098,7 @@ MANUAL_FINGERPRINTS = {
     "yamllint": "455872e07694",
     "hadolint": "9234e13781be",
     "build-contexts": "8ab075ce9c74",
+    "container-mounts": "8be103fa11d5",
     "gofmt": "de0cf2f5169c",
     "go-vet": "5bcd441b4c87",
     "model-metadata": "50f5ae35844c",
