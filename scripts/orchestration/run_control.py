@@ -54,6 +54,7 @@ ACTIONS = (
     "catalog_up",
     "catalog_release",
     "snapshot_project",
+    "snapshot_training",
     "reserve_silver",
     "seal_silver",
     "seal_gold",
@@ -70,6 +71,7 @@ REQUIRED_PARAMS = {
     "catalog_up": (),
     "catalog_release": (),
     "snapshot_project": (),
+    "snapshot_training": (),
     "reserve_silver": (),
     "seal_silver": (),
     "seal_gold": (),
@@ -160,6 +162,20 @@ def acquire(broker: Broker, request: SubmissionRequest, action: str, params: dic
     folder.mkdir(parents=True, exist_ok=True)
     for name in params.get("folders", []):
         (folder / name).mkdir(exist_ok=True)
+    if request.training is not None:
+        from orchestration import training_approvals
+
+        approval = None
+        if request.mode == "real" or request.dag_id == "model_promotion_dag":
+            try:
+                approval = training_approvals.read_approval(broker.paths.state, request)
+            except ValueError as error:
+                raise ControlRefused(str(error)) from None
+        for name in ("extract", "bundles", "mlflow"):
+            (folder / name).mkdir(exist_ok=True)
+        if approval is not None:
+            write_private(folder / "promotion_approval.json", json.dumps(approval, sort_keys=True) + "\n", folder)
+        broker.call("training_prepare", {"dag_id": request.dag_id, "parameters": request.training}, broker.principal(request.run_id))
     seeded = False
     if seed is not None and not (folder / SEEDED_MARKER).exists():
         shutil.copytree(seed, folder, dirs_exist_ok=True)
@@ -311,7 +327,8 @@ def checkpoint_problem(inputs: dict[str, str]) -> str | None:
 def recorded_result(broker: Broker, run_id: str, mode: str) -> str | None:
     """The gate result in the run's record (``accepted`` or ``rejected``), or None when there is no record, no result or the mode has no record step. A
     record that cannot be read raises ``OSError`` or ``ControlRefused``: the result is then unknown."""
-    control = (broker.templates.get("run_record", {}).get("modes", {}).get(mode) or {}).get("control")
+    training = any(lines[0].get("training") is not None for lines in broker.ledger.submissions(run_id).values())
+    control = (broker.templates.get("training_run_record" if training else "run_record", {}).get("modes", {}).get(mode) or {}).get("control")
     if control is None:
         return None
     path = Path(str(substitute(control["params"]["record_file"], broker.placeholder_values(run_id, mode))))
@@ -339,6 +356,7 @@ def record(broker: Broker, request: SubmissionRequest, action: str, params: dict
         "state": "finalizing",
         "written_at": now(),
         "submissions": submission_states(broker, request),
+        **({"training": request.training} if request.training is not None else {}),
     }
     write_record(broker, path, body)
     broker.crash("after_record")
@@ -442,7 +460,7 @@ def release_accepted(broker: Broker, request: SubmissionRequest, action: str, pa
     if state is None:
         raise ControlRefused("the lock is not held")
     stopped = stop_open(broker, request) if state != "released" else []
-    if state != "released" and request.mode in ("publish_fixture", "real"):
+    if state != "released" and (request.mode in ("publish_fixture", "real") or request.training is not None):
         from scripts.orchestration import pipeline_control
 
         pipeline_control.perform(broker, request, "catalog_release", {})
@@ -469,7 +487,7 @@ def release_accepted(broker: Broker, request: SubmissionRequest, action: str, pa
 def release_rejected(broker: Broker, request: SubmissionRequest, action: str, params: dict[str, Any]) -> dict[str, Any]:
     stopped = stop_open(broker, request)
     state = run_state(broker, request)
-    if state in ("held", "finalizing") and request.mode in ("publish_fixture", "real"):
+    if state in ("held", "finalizing") and (request.mode in ("publish_fixture", "real") or request.training is not None):
         from scripts.orchestration import pipeline_control
 
         pipeline_control.perform(broker, request, "catalog_release", {})

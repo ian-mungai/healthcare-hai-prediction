@@ -12,18 +12,29 @@ from orchestration.pipeline_protocol import PipelineError, seal_copy
 from scripts.orchestration.broker import Broker, LauncherUnavailable
 from scripts.orchestration.run_control import ControlFailed, ControlRefused
 
-ACTIONS = ("catalog_up", "catalog_release", "snapshot_project", "reserve_silver", "seal_silver", "seal_gold", "fixture_pin", "fixture_verify")
+ACTIONS = (
+    "catalog_up",
+    "catalog_release",
+    "snapshot_project",
+    "snapshot_training",
+    "reserve_silver",
+    "seal_silver",
+    "seal_gold",
+    "fixture_pin",
+    "fixture_verify",
+)
 WAIT_SECONDS = 600.0
 
 
-def wait_for(label: str, read: Callable[[float], dict[str, Any]], ready: Callable[[dict[str, Any]], bool]) -> dict[str, Any]:
+def wait_for(label: str, read: Callable[[float], dict[str, Any]], ready: Callable[[dict[str, Any]], bool], *, seconds: float = 600.0) -> dict[str, Any]:
     """Poll one launcher operation with an absolute ten-minute deadline.
 
     ``read`` receives the seconds left and bounds its own request by them. A reply that arrives after the deadline is refused, even when it is ready,
     and a launcher request that the deadline ended is reported as this wait's failure, naming ``label`` and carrying the request's own error. Cleaning
     up an intermediate launcher process that outlived the deadline can end the wait up to 1.0 second after it.
     """
-    deadline = time.monotonic() + WAIT_SECONDS
+    budget = min(WAIT_SECONDS, seconds)
+    deadline = time.monotonic() + budget
     last: dict[str, Any] = {}
     while (remaining := deadline - time.monotonic()) > 0:
         try:
@@ -31,15 +42,15 @@ def wait_for(label: str, read: Callable[[float], dict[str, Any]], ready: Callabl
         except LauncherUnavailable as error:
             if time.monotonic() < deadline:
                 raise
-            raise ControlFailed(f"{label} did not finish within {WAIT_SECONDS:g} seconds; its launcher request ended at the deadline ({error})") from error
+            raise ControlFailed(f"{label} did not finish within {budget:g} seconds. Its launcher request ended at the deadline ({error})") from error
         if time.monotonic() >= deadline:
-            raise ControlFailed(f"{label} did not finish before its {WAIT_SECONDS:g} second deadline; the last reply, phase {phase_of(last)}, came after it")
+            raise ControlFailed(f"{label} did not finish before its {budget:g} second deadline. The last reply, phase {phase_of(last)}, came after it")
         if ready(last):
             return last
         if last.get("phase") == "failed" or last.get("error"):
             raise ControlFailed(f"{label} failed before readiness")
         time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
-    raise ControlFailed(f"{label} did not finish within {WAIT_SECONDS:g} seconds; last phase {phase_of(last)}")
+    raise ControlFailed(f"{label} did not finish within {budget:g} seconds. Last phase {phase_of(last)}")
 
 
 def phase_of(view: dict[str, Any]) -> Any:
@@ -79,6 +90,15 @@ def perform(broker: Broker, request: SubmissionRequest, action: str, params: dic
                 "network startup", lambda left: broker.call("pipeline_network_up", {}, principal, timeout=left), lambda view: view.get("phase") == "ready"
             )
         if action == "catalog_release":
+            if request.training is not None:
+                wait_for(
+                    "local MLflow release",
+                    lambda left: broker.call("training_mlflow_release", {}, principal, timeout=left),
+                    lambda view: view.get("phase") == "down",
+                    seconds=120.0,
+                )
+                if request.mode == "fixture" or request.dag_id == "model_promotion_dag":
+                    return {"registered": False, "mlflow": "released"}
             wait_for(
                 "network release", lambda left: broker.call("pipeline_network_down", {}, principal, timeout=left), lambda view: view.get("phase") == "down"
             )
@@ -90,6 +110,13 @@ def perform(broker: Broker, request: SubmissionRequest, action: str, params: dic
                     lambda view: view.get("phase") == "down",
                 )
             return result
+        if action == "snapshot_training":
+            return wait_for(
+                "training snapshot",
+                lambda left: broker.call("snapshot_training", {"checkout": str(broker.repo_root)}, principal, timeout=left),
+                lambda view: view.get("state") == "complete",
+                seconds=120.0,
+            )
         if action == "snapshot_project":
             payload = {"checkout": str(broker.repo_root), "packages_host": str(broker.repo_root / "data/analytics/dbt/dbt_packages")}
             return wait_for(

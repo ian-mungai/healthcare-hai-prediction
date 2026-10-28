@@ -42,6 +42,7 @@ class SubmissionRequest:
     task_id: str
     dag_run_id: str
     input_run_id: str | None = None
+    training: dict[str, Any] | None = None
 
     @classmethod
     def from_record(cls, record: dict[str, Any]) -> SubmissionRequest:
@@ -58,6 +59,7 @@ class SubmissionRequest:
                 record["task_id"],
                 record["dag_run_id"],
                 record.get("input_run_id"),
+                record.get("training"),
             )
         except KeyError:
             raise SubmissionRefused("request version 2 is missing caller identity") from None
@@ -89,6 +91,8 @@ class SubmissionRequest:
         }
         if self.input_run_id is not None:
             body["input_run_id"] = self.input_run_id
+        if self.training is not None:
+            body["training"] = dict(self.training)
         return body
 
 

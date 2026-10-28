@@ -1,0 +1,67 @@
+name: hai-mlflow
+
+services:
+  mlflow_db:
+    image: postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_DB: mlflow
+      POSTGRES_PASSWORD: ${MLFLOW_DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: --encoding UTF8 --data-checksums
+    mem_limit: ${HAI_MLFLOW_DB_MEMORY}
+    volumes:
+      - ${HAI_MLFLOW_STATE}/postgres:/var/lib/postgresql/data
+    networks: [backend]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, pg_isready, -U, mlflow, -d, mlflow]
+      interval: 5s
+      timeout: 2s
+      retries: 24
+
+  mlflow:
+    image: hai-mlflow:3.17.0
+    user: "10005:10005"
+    entrypoint: [mlflow, server]
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5100"
+      - --workers
+      - "2"
+      - --serve-artifacts
+      - --artifacts-destination
+      - /mlflow/artifacts
+      - --allowed-hosts
+      - mlflow:5100,127.0.0.1:5100,localhost:5100
+      - --cors-allowed-origins
+      - http://127.0.0.1:5100
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql+psycopg2://mlflow@mlflow-db:5432/mlflow
+      PGPASSWORD: ${MLFLOW_DB_PASSWORD}
+      MLFLOW_DISABLE_TELEMETRY: "true"
+      DO_NOT_TRACK: "true"
+    mem_limit: ${HAI_MLFLOW_MEMORY}
+    mem_reservation: 536870912
+    volumes:
+      - ${HAI_MLFLOW_STATE}/artifacts:/mlflow/artifacts
+    networks: [ui, backend]
+    ports: ["127.0.0.1:5100:5100"]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ulimits:
+      core: {soft: 0, hard: 0}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5100/health', timeout=2).close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+
+networks:
+  backend:
+    internal: true
+  ui:
+    internal: false

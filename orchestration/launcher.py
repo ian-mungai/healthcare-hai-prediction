@@ -60,7 +60,18 @@ from typing import Any, Literal, NamedTuple, NoReturn
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from orchestration import dbt_lineage, lineage_services, network_policy, pipeline_protocol, pipeline_render, pipeline_session
+from orchestration import (
+    code_digest,
+    dbt_lineage,
+    lineage_services,
+    mlflow_service,
+    network_policy,
+    pipeline_protocol,
+    pipeline_render,
+    pipeline_session,
+    training_contract,
+    training_render,
+)
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import dbt_package_archive, gold_publish_record, memory_budget, pins, run_lock
 from scripts.lakehouse import provenance as build_provenance
@@ -68,7 +79,7 @@ from scripts.process import run_command
 
 PROTOCOL = 1
 REFUSED_EXIT, ERROR_EXIT, DEGRADED_EXIT = 3, 4, 5
-NETWORK_CLASSES_ENFORCED = network_policy.CLASSES
+NETWORK_CLASSES_ENFORCED = network_policy.ENFORCED_CLASSES
 LABEL_REGISTRY = "hai.registry_id"
 LABEL_RUN = run_lock.CONTAINER_LABEL
 LABEL_ALLOCATION = "hai.allocation"
@@ -1229,6 +1240,23 @@ TEMPLATES: dict[str, Template] = {
         Template("pipeline_publish", "spark", True, ("run",), run_domains=("transform",), run_modes=("publish_fixture", "real")),
         Template("pipeline_probe", "analytics-dbt", True, ("run",), run_domains=("transform",), run_modes=("publish_fixture",)),
         Template("pipeline_proxy", None, False, ("service",)),
+        Template(
+            "training_job", "training", True, ("run",), default_seconds=14400, max_seconds=14400, run_domains=("transform",), run_modes=("fixture", "real")
+        ),
+        Template(
+            "training_mlflow", "training", True, ("run",), default_seconds=1200, max_seconds=1200, run_domains=("transform",), run_modes=("fixture", "real")
+        ),
+        Template(
+            "training_extract",
+            "feature-store",
+            True,
+            ("run",),
+            default_seconds=3600,
+            max_seconds=3600,
+            run_domains=("transform",),
+            run_modes=("fixture", "real"),
+        ),
+        Template("mlflow_service", None, False, ("stack",)),
         *(
             Template(f"pipeline_validate_{layer}", "quality", True, ("run",), run_domains=("transform",), run_modes=("publish_fixture", "real"))
             for layer in ("silver", "gold", "cross")
@@ -1637,6 +1665,9 @@ class Renderer:
             "pipeline_publish": self.render_pipeline,
             "pipeline_probe": self.render_pipeline,
             "pipeline_proxy": self.render_pipeline_proxy,
+            "training_job": self.render_training,
+            "training_mlflow": self.render_training,
+            "training_extract": self.render_training,
             "gold_export": self.render_gold_export,
             "gold_publish": self.render_gold_publish,
             "probe": self.render_probe,
@@ -2419,6 +2450,88 @@ class Renderer:
             self.attach_networks(rendered, {networks[role]: ["polaris"] for role in network_policy.CLASSES})
         return rendered
 
+    def render_training(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+        """Render one training action without a writable alias of its code or unrelated inputs."""
+        try:
+            role = training_render.role_for(inp.template, dict(inp.params), inp.run_mode)
+            if role and role not in pipeline_session.ROLE_NAMES:
+                raise ValueError("DVC writer role binding is pending the data-versioning package")
+            session = self.session_of(role, inp.deadline_utc, name) if role else None
+            values: dict[str, str] = {}
+            if role:
+                wanted = ("AWS_REGION", *READER_ENV) if role == "reader" else ("AWS_REGION",)
+                values = self.compose_values(wanted, inp.values)
+                settings = json.loads(((self.config.catalog_checkout or self.checkout) / secret_store.DEPLOYMENT).read_text())
+                bucket = settings.get("data_bucket_name")
+                if not isinstance(bucket, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", bucket):
+                    raise ValueError("training has no valid configured data bucket")
+                values["DATA_BUCKET_NAME"] = bucket
+            spec = pipeline_render.build(inp, self.checkout, values, session)
+        except (OSError, ValueError, KeyError) as error:
+            raise LauncherError(f"training specification refused: {error}", "spec") from None
+        bounded = replace(inp, deadline_utc=min(inp.deadline_utc, int(inp.pipeline.get("training_deadline_utc", inp.deadline_utc))))
+        rendered = self.assemble(
+            bounded,
+            name,
+            self.image(spec.service),
+            ["python", "-m", spec.module],
+            spec.arguments,
+            spec.environment,
+            [Mount(*parts) for parts in spec.mounts],
+            int(inp.values["JOB_MEMORY_LIMIT"]),
+            spec.network,
+            workdir="/workspace",
+            extra_labels={network_policy.LABEL_CLASS: spec.network_class},
+            tmpfs=("/workspace/tmp",),
+            user="10004:10004" if spec.service == "feature-store" else "10006:10006",
+            cap_drop=("ALL",),
+            security_opt=("no-new-privileges:true",),
+        )
+        rendered.body["HostConfig"]["ReadonlyRootfs"] = True
+        rendered.body["HostConfig"]["Ulimits"] = [{"Name": "core", "Soft": 0, "Hard": 0}]
+        return rendered
+
+    def render_mlflow_service(self, inp: RenderInput, service: str, registry_id: str) -> Rendered:
+        """Render the local PostgreSQL or MLflow server with closed bindings and memory-only authentication."""
+        if service not in mlflow_service.SERVICES:
+            raise LauncherError("unknown MLflow service", "args")
+        values = mlflow_service.settings_for(inp.values)
+        self.allowed(values["HAI_MLFLOW_STATE"], "MLflow state")
+        password = (
+            mlflow_service.fixture_password(self.key, registry_id) if self.config.registry.kind == "test" else self.secret_of(secret_store.MLFLOW_DB_PASSWORD)
+        )
+        values["MLFLOW_DB_PASSWORD"] = password
+        self.fetched.add(password)
+        raw = self.compose.service(service)
+        mounts = self.compose.mounts(service, values)
+        for mount in mounts:
+            Path(mount.source).mkdir(mode=0o700, parents=True, exist_ok=True)
+        networks = mlflow_service.network_names(registry_id)
+        rendered = self.assemble(
+            inp,
+            f"hai-{registry_id[:8]}-svc-{service}",
+            self.image(service),
+            list(raw.get("entrypoint") or []),
+            list(raw.get("command") or []),
+            self.compose.environment(service, values),
+            mounts,
+            self.compose.memory(service, values),
+            networks["ui" if service == "mlflow" else "backend"],
+            ports=(("127.0.0.1", mlflow_service.PORT, mlflow_service.PORT),) if service == "mlflow" else (),
+            healthcheck=self.compose.healthcheck(service),
+            aliases=["mlflow" if service == "mlflow" else "mlflow-db"],
+            finite=False,
+            extra_labels={LABEL_STACK: mlflow_service.STACK, LABEL_SERVICE: service},
+            **self.orchestration_hardening(raw, values),
+        )
+        if service == "mlflow":
+            rendered.joins[networks["backend"]] = ["mlflow"]
+            rendered.body["HostConfig"].update(
+                {"ReadonlyRootfs": True, "MemoryReservation": 512 * 1024**2, "Ulimits": [{"Name": "core", "Soft": 0, "Hard": 0}]}
+            )
+        mlflow_service.validate_bindings(service, rendered.body)
+        return rendered
+
     @staticmethod
     def attach_networks(rendered: Rendered, memberships: Mapping[str, Sequence[str]]) -> None:
         """Put a container on several networks under aliases: it is created on the first and joined to the others before it starts.
@@ -3036,6 +3149,12 @@ METHODS: dict[str, MethodSpec] = {
     "release": MethodSpec(("run",)),
     "recover": MethodSpec(("run",), owner_flag=True),
     "snapshot": MethodSpec(("run",)),
+    "training_prepare": MethodSpec(("run",)),
+    "snapshot_training": MethodSpec(("run",)),
+    "training_fixture_publication": MethodSpec(("run",)),
+    "training_mlflow_up": MethodSpec(("run",)),
+    "training_mlflow_release": MethodSpec(("run",)),
+    "mlflow_down": MethodSpec(("any",), owner_flag=True),
     "accept_consumer": MethodSpec(("run",)),
     "register_reader": MethodSpec(("alloc",)),
     "deregister_reader": MethodSpec(("alloc",)),
@@ -3226,6 +3345,12 @@ class Launcher:
             "alloclist_dead": self.on_alloclist_dead,
             "cataloglimits": self.on_cataloglimits,
             "pipeline_net": self.on_pipeline_net,
+            "training_snapshot": self.on_training_snapshot,
+            "mlflow_prepare": self.on_mlflow_prepare,
+            "mlflow_health": self.on_mlflow_health,
+            "mlflow_client": self.on_mlflow_client,
+            "mlflow_release": self.on_mlflow_release,
+            "mlflow_stop": self.on_mlflow_stop,
             "netcreate": self.on_netcreate,
             "health": self.on_health,
             "netremove": self.on_netremove,
@@ -3269,6 +3394,12 @@ class Launcher:
             "release": self.m_release,
             "recover": self.m_recover,
             "snapshot": self.m_snapshot,
+            "training_prepare": self.m_training_prepare,
+            "snapshot_training": self.m_snapshot_training,
+            "training_fixture_publication": self.m_training_fixture_publication,
+            "training_mlflow_up": self.m_training_mlflow_up,
+            "training_mlflow_release": self.m_training_mlflow_release,
+            "mlflow_down": self.m_mlflow_down,
             "accept_consumer": self.m_accept_consumer,
             "register_reader": self.m_register_reader,
             "deregister_reader": self.m_deregister_reader,
@@ -3699,7 +3830,7 @@ class Launcher:
             raise Degraded(f"degraded: {self.degraded_reason}")
         if principal.get("kind") not in spec.kinds:
             raise LauncherError(f"{method} is not callable by principal {principal.get('kind')!r}", "principal")
-        if spec.owner_flag and method in ("docker_restart", "shutdown", "recover") and not principal.get("owner") and not params.get("owner"):
+        if spec.owner_flag and method in ("docker_restart", "shutdown", "recover", "mlflow_down") and not principal.get("owner") and not params.get("owner"):
             raise LauncherError(f"{method} needs --owner", "principal")
         with self.tx(write=spec.mutating) as state:
             key = self.authenticate(conn, principal, request_id, method, state)
@@ -4152,7 +4283,7 @@ class Launcher:
         if owner == DIAGNOSTIC_OWNER:
             return not self.stream_acked and self.probe is not None and self.probe["attempt"] == attempt["id"]
         if kind == "stack":
-            stack = state["launcher"].get(ident) or {} if ident in ("orchestration", "lineage") else {}
+            stack = state["launcher"].get(ident) or {} if ident in ("orchestration", "lineage", "mlflow") else {}
             return stack.get("phase") in ("starting", "up") and not state["launcher"].get("restart")
         if kind == "service" and ident.startswith("pipeline:"):
             run = state["runs"].get(ident.removeprefix("pipeline:"))
@@ -4218,6 +4349,14 @@ class Launcher:
 
     def renderer_of(self, template_name: str, checkout: Path) -> Renderer:
         """The renderer of a template: the orchestration templates read the orchestration Compose model, the others the lakehouse one."""
+        if template_name in (*training_contract.TEMPLATES, mlflow_service.TEMPLATE):
+            path = checkout / (mlflow_service.COMPOSE if template_name == mlflow_service.TEMPLATE else mlflow_service.TRAINING_COMPOSE)
+            if not path.is_file():
+                raise LauncherError("training Compose model is missing", "spec")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if digest not in self.compose_models:
+                self.compose_models[digest] = ComposeModel(path)
+            return Renderer(self.cfg, self.compose_models[digest], checkout, self.main_checkout, self.key)
         if template_name in ("lineage_service", "lineage_dump"):
             path = checkout / (LINEAGE_COMPOSE if template_name == "lineage_service" else LINEAGE_CHECKS_COMPOSE)
             if not path.is_file():
@@ -4351,8 +4490,14 @@ class Launcher:
             pipeline_run = state["runs"].get(ident.partition(":")[2])
             run_folder = self.cfg.runs_root / ident.partition(":")[2]
         completion, run_mode = self.gold_inputs(state, str(attempt["owner"]), str(attempt["template"]), attempt["params"])
-        if pipeline_run is not None and attempt["template"].startswith("pipeline_"):
+        if pipeline_run is not None and (attempt["template"].startswith("pipeline_") or attempt["template"] in training_contract.TEMPLATES):
             run_mode = str(pipeline_run["mode"])
+        pipeline = self.pipeline_inputs(state, pipeline_run) if pipeline_run is not None else {}
+        if attempt["template"] in training_contract.TEMPLATES:
+            budget = training_contract.ACTION_SECONDS.get(
+                str(attempt["params"].get("action")), int(attempt["deadline_utc"]) - int(datetime.fromisoformat(attempt["created_at"]).timestamp())
+            )
+            pipeline["training_deadline_utc"] = min(attempt["deadline_utc"], int(datetime.fromisoformat(attempt["created_at"]).timestamp()) + budget)
         inp = RenderInput(
             attempt["template"],
             self.owner_name(attempt),
@@ -4372,7 +4517,7 @@ class Launcher:
             completion,
             run_mode,
             self.gold_accepted(state, str(attempt["owner"]), str(attempt["template"]), attempt["params"]),
-            self.pipeline_inputs(state, pipeline_run) if pipeline_run is not None else {},
+            pipeline,
         )
         if template.name == "catalog_service":
             return renderer.render_service(inp, str(attempt["params"]["service"]), self.registry_id)
@@ -4380,6 +4525,8 @@ class Launcher:
             return renderer.render_orchestration_service(inp, str(attempt["params"]["service"]), self.registry_id)
         if template.name == "lineage_service":
             return renderer.render_lineage_service(inp, str(attempt["params"]["service"]), self.registry_id)
+        if template.name == mlflow_service.TEMPLATE:
+            return renderer.render_mlflow_service(inp, str(attempt["params"]["service"]), self.registry_id)
         return renderer.render(inp, self.registry_id)
 
     def image_reference(self, attempt: Mapping[str, Any]) -> str:
@@ -4388,7 +4535,7 @@ class Launcher:
         renderer = self.renderer_of(attempt["template"], Path(attempt["checkout"]))
         if template.name == "pipeline_proxy":
             return network_policy.PROXY_IMAGE
-        if template.name in ("catalog_service", "orchestration_service", "lineage_service"):
+        if template.name in ("catalog_service", "orchestration_service", "lineage_service", mlflow_service.TEMPLATE):
             return renderer.image(str(attempt["params"]["service"]))
         if template.name == "orchestration_check":
             return renderer.image("airflow-check")
@@ -4589,6 +4736,7 @@ class Launcher:
         """One pass over every open attempt and every owner: the state machine of D1 sections 4 to 6."""
         if self.status == "starting" and not self.docker_ok:
             self.expire_lineage_startup()
+            self.expire_mlflow_startup()
             return
         actions: list[Callable[[], None]] = []
         with self.tx() as state:
@@ -5699,6 +5847,8 @@ class Launcher:
             return {"found": created is not None, "attempt": None if created is None else {k: v for k, v in created.items() if k != "params"}}
         if what == "catalog":
             return dict(state["launcher"].get("catalog") or {"phase": "down"})
+        if what == "mlflow":
+            return dict(state["launcher"].get("mlflow") or {"phase": "down"})
         if what == "lineage":
             stack = dict(state["launcher"].get("lineage") or {"phase": "down"})
             stack["service_phases"] = {
@@ -6009,6 +6159,7 @@ class Launcher:
         self.advance_catalog(state, actions)
         self.advance_orchestration(state, actions)
         self.advance_lineage(state, actions)
+        self.advance_mlflow(state, actions)
         self.advance_restart(state, actions)
         self.advance_copies(state, actions)
         self.advance_seals(state, actions)
@@ -6260,11 +6411,15 @@ class Launcher:
         """What refuses a pipeline job whose timeout a role session cannot cover, or None: the job needs a session when its class needs AWS."""
         kind, _, ident = owner.partition(":")
         run = state["runs"].get(ident) if kind == "run" else None
-        if run is None or not template_name.startswith("pipeline_"):
+        if run is None or not (template_name.startswith("pipeline_") or template_name in training_contract.TEMPLATES):
             return None
         try:
-            role = pipeline_render.session_role(template_name, dict(params), str(run["mode"]))
-        except pipeline_protocol.PipelineError:
+            role = (
+                training_render.role_for(template_name, dict(params), str(run["mode"]))
+                if template_name in training_contract.TEMPLATES
+                else pipeline_render.session_role(template_name, dict(params), str(run["mode"]))
+            )
+        except (pipeline_protocol.PipelineError, ValueError):
             return None
         return pipeline_session.deadline_problem(seconds) if role else None
 
@@ -6286,7 +6441,7 @@ class Launcher:
         completion, run_mode = self.gold_inputs(state, owner, template_name, params)
         pipeline: Mapping[str, Any] = {}
         snapshot = None
-        if kind == "run" and template_name.startswith("pipeline_"):
+        if kind == "run" and (template_name.startswith("pipeline_") or template_name in training_contract.TEMPLATES):
             run = state["runs"][ident]
             run_mode = str(run["mode"])
             pipeline = self.pipeline_inputs(state, run)
@@ -6583,6 +6738,10 @@ class Launcher:
             "layer_exports": run.get("layer_exports", {}),
             "local_catalog": run.get("local_catalog", ""),
             "network": run.get("pipeline_network", {}),
+            "training": run.get("training", {}),
+            "training_snapshot": run.get("training_snapshot", {}),
+            "training_mlflow": run.get("training_mlflow", {}),
+            "training_publication": run.get("training_publication", {}),
         }
 
     @staticmethod
@@ -8070,7 +8229,13 @@ class Launcher:
     def template_images(self) -> set[str]:
         """Return only pinned images declared by Compose or the closed pipeline proxy policy: what the templates can run."""
         found: set[str] = {network_policy.PROXY_IMAGE}
-        for path in (self.cfg.root / "docker-compose.yaml", self.cfg.root / ORCHESTRATION_COMPOSE, self.cfg.root / LINEAGE_COMPOSE):
+        for path in (
+            self.cfg.root / "docker-compose.yaml",
+            self.cfg.root / ORCHESTRATION_COMPOSE,
+            self.cfg.root / LINEAGE_COMPOSE,
+            self.cfg.root / mlflow_service.COMPOSE,
+            self.cfg.root / mlflow_service.TRAINING_COMPOSE,
+        ):
             if path.is_file():
                 found |= {str(service["image"]) for service in ComposeModel(path).services.values() if service.get("image")}
         return found
@@ -8217,6 +8382,395 @@ class Launcher:
         self.complete_request(request_key, {"phase": "done", "catalog": "down"})
 
     # -- snapshot copies (D1 section 10 item 1) ---------------------------------------------------------------------
+
+    def m_training_prepare(self, ctx: Ctx) -> dict[str, Any]:
+        """Bind complete training parameters to the acquired transform run before accepting code or data."""
+        self.pipeline_params(ctx, ("dag_id", "parameters"))
+        run = self.run_entry(ctx)
+        if run["state"] != "held" or run["domain"] != "transform":
+            raise LauncherError("training preparation requires a held transform run", "refused")
+        try:
+            parameters = training_contract.parameters_for(str(ctx.params["dag_id"]), ctx.params["parameters"])
+        except ValueError as error:
+            raise LauncherError(str(error), "args") from None
+        binding = {"dag_id": str(ctx.params["dag_id"]), "parameters": parameters}
+        if run.get("training") is not None and run["training"] != binding:
+            raise LauncherError("training parameters differ from the acquired run", "refused")
+        folder = self.cfg.runs_root / run["run_id"]
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / "training_parameters.json"
+        content = canonical(parameters) + "\n"
+        if path.exists() or path.is_symlink():
+            if path.is_symlink() or path.read_text() != content:
+                raise LauncherError("recorded training parameters changed", "refused")
+        else:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o444)
+            try:
+                write_all(descriptor, content.encode())
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        run["training"] = binding
+        if self.registry.kind == "test" and run["mode"] == "fixture":
+            catalog, registry = folder / "fixture_publication/local_catalog", folder / "fixture_publication/registry.pb"
+            if catalog.is_dir() and registry.is_file():
+                self.m_training_fixture_publication(replace(ctx, params={"local_catalog": str(catalog), "registry": str(registry)}))
+        return {"prepared": True}
+
+    def m_training_fixture_publication(self, ctx: Ctx) -> dict[str, Any]:
+        """Bind the lead runner's synthetic publication and applied registry inside a test run."""
+        self.pipeline_params(ctx, ("local_catalog", "registry"))
+        run = self.run_entry(ctx)
+        folder = self.cfg.runs_root / run["run_id"]
+        if self.registry.kind != "test" or run["mode"] != "fixture" or run["state"] != "held":
+            raise LauncherError("synthetic publications require a held fixture run in a test registry", "refused")
+        binding = {}
+        for name in ("local_catalog", "registry"):
+            path = Path(str(ctx.params[name]))
+            if path.is_symlink() or not path.resolve().is_relative_to(folder.resolve()) or not (path.is_dir() if name == "local_catalog" else path.is_file()):
+                raise LauncherError("synthetic publication inputs must exist within this run", "args")
+            binding[name] = str(path.resolve())
+        if run.get("training_publication") is not None and run["training_publication"] != binding:
+            raise LauncherError("synthetic publication binding changed", "refused")
+        run["training_publication"] = binding
+        return {"prepared": True}
+
+    def m_snapshot_training(self, ctx: Ctx) -> dict[str, Any]:
+        """Create or verify the write-once training code copy through the launcher's owned worker."""
+        self.pipeline_params(ctx, ("checkout",))
+        run = self.run_entry(ctx)
+        if run["state"] != "held" or not run.get("training"):
+            raise LauncherError("training snapshot requires a prepared held run", "refused")
+        checkout = self.check_checkout(str(ctx.params["checkout"]))
+        folder = self.cfg.runs_root / run["run_id"]
+        current = run.get("training_snapshot", {})
+        if current.get("phase") == "complete":
+            record = code_digest.verify_snapshot(folder, run["run_id"], current["code_digest"])
+            if hashlib.sha256((folder / code_digest.RECORD).read_bytes()).hexdigest() != current["record_sha256"]:
+                raise LauncherError("training snapshot metadata changed", "refused")
+            return {"state": "complete", "code_digest": record["code_digest"]}
+        if current.get("phase") == "failed":
+            raise LauncherError("training snapshot failed: " + str(current["error"]), "refused")
+        if current and time.time() >= current["deadline"]:
+            current.update({"phase": "failed", "error": "training snapshot exceeded 120 seconds"})
+            raise LauncherError(current["error"], "timeout")
+        run["training_snapshot"] = current or {
+            "phase": "copying",
+            "generation": run.get("generation", 1),
+            "deadline": time.time() + code_digest.SNAPSHOT_SECONDS,
+        }
+        key = f"training_snapshot:{run['run_id']}"
+        if key not in self.inflight:
+            stop = time.monotonic() + max(0.0, run["training_snapshot"]["deadline"] - time.time())
+            self.spawn(key, "training_snapshot", partial(code_digest.snapshot_training, deadline=stop), checkout, folder, run["run_id"])
+        return {"state": "copying"}
+
+    def on_training_snapshot(self, key: str, outcome: str, value: Any) -> None:
+        """Publish only the current held run's verified snapshot completion."""
+        run_id = key.partition(":")[2]
+        with self.tx() as state:
+            run = state["runs"].get(run_id)
+            current = (run or {}).get("training_snapshot", {})
+            if run is None or current.get("phase") != "copying":
+                return
+            if outcome != "ok" or run["state"] != "held" or current["generation"] != run.get("generation", 1) or time.time() >= current["deadline"]:
+                current.update({"phase": "failed", "error": "snapshot worker failed or its run expired" if outcome == "ok" else failure_text(value)})
+                return
+            record_file = self.cfg.runs_root / run_id / code_digest.RECORD
+            current.update({"phase": "complete", "code_digest": value["code_digest"], "record_sha256": hashlib.sha256(record_file.read_bytes()).hexdigest()})
+
+    def m_training_mlflow_up(self, ctx: Ctx) -> dict[str, Any]:
+        """Start the local server if needed and attach only that server to this run's isolated client network."""
+        self.pipeline_params(ctx)
+        run = self.run_entry(ctx)
+        if run["state"] != "held" or not run.get("training") or run["training"]["parameters"]["mlflow"] != "local":
+            raise LauncherError("local MLflow requires a prepared held local training run", "refused")
+        stack = ctx.state["launcher"].setdefault("mlflow", {"phase": "down"})
+        checkout = self.check_checkout(str(run.get("checkout") or self.cfg.root))
+        if stack["phase"] == "down":
+            stack.update(
+                {
+                    "phase": "starting",
+                    "checkout": str(checkout),
+                    "services": {},
+                    "health": {},
+                    "settings": {},
+                    "state": str(self.registry.path.parent / "mlflow"),
+                    "deadline": time.time() + mlflow_service.START_SECONDS,
+                    "error": "",
+                }
+            )
+        if stack.get("checkout") != str(checkout) or stack["phase"] in ("tearing_down", "cleanup_failed"):
+            raise LauncherError("local MLflow is bound to another checkout or awaits cleanup: " + str(stack.get("error", "")), "refused")
+        if stack["phase"] != "up":
+            if "mlflow:prepare" not in self.inflight and not stack.get("networks"):
+                self.spawn(
+                    "mlflow:prepare",
+                    "mlflow_prepare",
+                    self.prepare_mlflow,
+                    checkout,
+                    Path(stack["state"]),
+                    stack["deadline"],
+                    self.growth_reserve_map(ctx.state),
+                )
+            return {"phase": "starting"}
+        current = run.setdefault(
+            "training_mlflow", {"phase": "creating", "name": mlflow_service.run_network(self.registry_id, run["run_id"]), "deadline": time.time() + 120}
+        )
+        if current["phase"] == "ready":
+            return {"phase": "ready", "name": current["name"]}
+        if current["phase"] != "creating" or time.time() >= current["deadline"]:
+            raise LauncherError("the MLflow client network requires cleanup or exceeded its deadline", "refused")
+        key = f"mlflow_client:{run['run_id']}"
+        if key not in self.inflight:
+            server = ctx.state["attempts"][stack["services"]["mlflow"]]["container_id"]
+            self.spawn(key, "mlflow_client", self.create_mlflow_client, run["run_id"], current["name"], server, current["deadline"])
+        return {"phase": "creating"}
+
+    def prepare_mlflow(self, checkout: Path, folder: Path, deadline: float, growth: dict[str, int] | None = None) -> dict[str, Any]:
+        """Compute live memory, ensure the real password and create or adopt only owned shared networks."""
+        if not (checkout / mlflow_service.COMPOSE).is_file():
+            raise LauncherError("MLflow Compose model is missing", "spec")
+        budget = memory_budget.launch_plan(self.reader(), growth or {}).budget
+        settings = {
+            "HAI_MLFLOW_STATE": str(folder),
+            "HAI_MLFLOW_DB_MEMORY": str(memory_budget.service_limit(budget, 0.01, 256 * 1024**2)),
+            "HAI_MLFLOW_MEMORY": str(memory_budget.service_limit(budget, 0.03, 1024**3)),
+        }
+        mlflow_service.settings_for(settings)
+        needed = int(settings["HAI_MLFLOW_DB_MEMORY"]) + int(settings["HAI_MLFLOW_MEMORY"])
+        if needed > budget.free:
+            raise memory_budget.BudgetError("local MLflow service memory exceeds the plan after other service growth is reserved")
+        if self.registry.kind != "test":
+            self.cfg.secret_store().ensure(secret_store.MLFLOW_DB_PASSWORD, secret_store.new_password, wait=max(0.01, min(10.0, deadline - time.time())))
+        identities = {}
+        labels = {LABEL_REGISTRY: self.registry_id, LABEL_STACK: mlflow_service.STACK}
+        for role, name in mlflow_service.network_names(self.registry_id).items():
+            if time.time() >= deadline:
+                raise TimeoutError("local MLflow startup exceeded its absolute deadline")
+            found = [item for item in self.docker.networks(self.network_label()) if item.get("Name") == name]
+            if len(found) > 1:
+                raise LauncherError("MLflow network ownership is ambiguous", "refused")
+            identity = str(found[0]["Id"]) if found else self.docker.create_network(name, labels, internal=role == "backend")
+            inspected = self.docker.call("GET", f"/networks/{identity}")
+            if (
+                inspected.get("Name") != name
+                or inspected.get("Driver") != "bridge"
+                or bool(inspected.get("Internal")) != (role == "backend")
+                or any((inspected.get("Labels") or {}).get(key) != value for key, value in labels.items())
+                or inspected.get("EnableIPv6")
+            ):
+                raise LauncherError("MLflow network differs from its owned isolation contract", "refused")
+            identities[role] = identity
+        return {"settings": settings, "networks": identities}
+
+    def on_mlflow_prepare(self, key: str, outcome: str, value: Any) -> None:
+        """Record the completed service setup without persisting any password."""
+        with self.tx() as state:
+            stack = state["launcher"].get("mlflow", {})
+            if outcome != "ok":
+                stack.update({"phase": "tearing_down", "error": failure_text(value)})
+                return
+            stack.update(value)
+            for service, setting in (("mlflow_db", "HAI_MLFLOW_DB_MEMORY"), ("mlflow", "HAI_MLFLOW_MEMORY")):
+                state["services"][service] = int(value["settings"][setting])
+            for identity in value["networks"].values():
+                state["containers"]["network:" + identity] = {"kind": "network", "at": utc_now()}
+
+    def advance_mlflow(self, state: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        """Advance bounded service startup and stop, retaining reservations until absence is confirmed."""
+        stack = state["launcher"].get("mlflow")
+        if not stack or stack["phase"] == "down":
+            return
+        if stack["phase"] == "starting" and time.time() >= stack["deadline"]:
+            stack.update({"phase": "tearing_down", "error": "local MLflow startup exceeded 300 seconds"})
+        if not self.docker_ok or self.status != "serving":
+            return
+        if stack["phase"] == "starting" and stack.get("networks"):
+            for service in mlflow_service.SERVICES:
+                if service not in stack["services"]:
+                    attempt = self.new_attempt(
+                        state,
+                        mlflow_service.OWNER,
+                        mlflow_service.TEMPLATE,
+                        service,
+                        [],
+                        {"service": service},
+                        request="launcher",
+                        checkout=stack["checkout"],
+                        seconds=10**7,
+                    )
+                    stack["services"][service] = attempt["id"]
+                attempt = state["attempts"][stack["services"][service]]
+                if attempt["phase"] == "ended":
+                    stack.update({"phase": "tearing_down", "error": f"local MLflow service {service} ended during startup"})
+                    return
+                if stack["health"].get(service) != "healthy":
+                    if attempt["phase"] == "started":
+                        stack.setdefault("health_deadlines", {}).setdefault(service, time.time() + mlflow_service.HEALTH_SECONDS)
+                        if time.time() >= stack["health_deadlines"][service]:
+                            stack.update({"phase": "tearing_down", "error": f"local MLflow service {service} was not healthy within 120 seconds"})
+                            return
+                        key = f"mlflow_health:{service}"
+                        if key not in self.inflight:
+                            actions.append(partial(self.spawn, key, "mlflow_health", self.read_health, attempt["container_id"]))
+                    return
+            stack["phase"] = "up"
+        elif stack["phase"] == "up":
+            if any(state["attempts"][identity]["phase"] == "ended" for identity in stack["services"].values()):
+                stack.update({"phase": "tearing_down", "error": "a local MLflow service stopped"})
+        elif stack["phase"] == "tearing_down":
+            stack.setdefault("stop_deadline", time.time() + mlflow_service.RELEASE_SECONDS)
+            if time.time() >= stack["stop_deadline"]:
+                stack.update({"phase": "cleanup_failed", "error": "MLflow stop exceeded 120 seconds. Its services and reservations remain owned"})
+                return
+            if "mlflow:prepare" in self.inflight:
+                return
+            for service in reversed(mlflow_service.SERVICES):
+                attempt = state["attempts"].get(stack.get("services", {}).get(service))
+                if attempt is not None and is_open(attempt):
+                    attempt["cancel_intent"] = attempt["cancel_intent"] or {"reason": "mlflow_down", "at": utc_now()}
+                    return
+            if "mlflow:stop" not in self.inflight:
+                actions.append(partial(self.spawn, "mlflow:stop", "mlflow_stop", self.remove_mlflow_shared))
+
+    def expire_mlflow_startup(self) -> None:
+        """Record startup or cleanup expiry even while the Docker connection is unavailable."""
+        with self.tx(write=False) as state:
+            stack = state["launcher"].get("mlflow", {})
+            late_start = stack.get("phase") == "starting" and time.time() >= stack.get("deadline", 0)
+            late_stop = stack.get("phase") == "tearing_down" and time.time() >= stack.get("stop_deadline", float("inf"))
+        if late_start or late_stop:
+            with self.tx() as state:
+                stack = state["launcher"]["mlflow"]
+                stack.update({"phase": "cleanup_failed" if late_stop else "tearing_down", "error": "MLflow lifecycle deadline passed. Cleanup remains owned"})
+                stack.setdefault("stop_deadline", time.time() + mlflow_service.RELEASE_SECONDS)
+
+    def on_mlflow_health(self, key: str, outcome: str, value: Any) -> None:
+        """Record health only for an MLflow service that is still starting."""
+        with self.tx() as state:
+            stack = state["launcher"].get("mlflow", {})
+            if outcome == "ok" and stack.get("phase") == "starting":
+                stack["health"][key.partition(":")[2]] = value
+
+    def create_mlflow_client(self, run_id: str, name: str, server: str, deadline: float) -> dict[str, str]:
+        """Provision an isolated client bridge and connect only the shared MLflow server."""
+        if time.time() >= deadline:
+            raise TimeoutError("MLflow client network startup exceeded its deadline")
+        labels = {LABEL_REGISTRY: self.registry_id, network_policy.LABEL_RUN: run_id, network_policy.LABEL_CLASS: "mlflow"}
+        found = [item for item in self.docker.networks(self.network_label()) if item.get("Name") == name]
+        if len(found) > 1:
+            raise LauncherError("MLflow client network ownership is ambiguous", "refused")
+        identity = str(found[0]["Id"]) if found else self.docker.create_network(name, labels, internal=True)
+        inspected = self.docker.call("GET", f"/networks/{identity}")
+        network_policy.check_network(inspected, name, self.registry_id, run_id, True)
+        if any(container != server for container in inspected.get("Containers", {})):
+            raise LauncherError("MLflow client network has an unexpected endpoint", "refused")
+        if server not in inspected.get("Containers", {}):
+            self.docker.connect_network(identity, server, ["mlflow"])
+        if time.time() >= deadline:
+            raise TimeoutError("MLflow client attachment exceeded its deadline")
+        return {"id": identity, "server": server}
+
+    def on_mlflow_client(self, key: str, outcome: str, value: Any) -> None:
+        """Record attachment success or a visible failure without dropping network ownership."""
+        with self.tx() as state:
+            run = state["runs"].get(key.partition(":")[2])
+            if run is None:
+                return
+            current = run.get("training_mlflow", {})
+            if outcome == "ok":
+                current.update(value)
+                if current.get("phase") == "creating":
+                    current["phase"] = "ready" if time.time() < current["deadline"] else "failed"
+                state["containers"]["network:" + value["id"]] = {"kind": "network", "at": utc_now()}
+            else:
+                current.update({"phase": "failed", "error": failure_text(value)})
+
+    def m_training_mlflow_release(self, ctx: Ctx) -> dict[str, Any]:
+        """Stop remaining run clients before removing this run's owned server attachment."""
+        self.pipeline_params(ctx)
+        run = self.run_entry(ctx)
+        current = run.get("training_mlflow")
+        if not current or current["phase"] == "down":
+            return {"phase": "down"}
+        current.setdefault("release_deadline", time.time() + mlflow_service.RELEASE_SECONDS)
+        if time.time() >= current["release_deadline"]:
+            raise LauncherError("MLflow network cleanup exceeded 120 seconds and remains owned", "timeout")
+        for attempt in ctx.state["attempts"].values():
+            if attempt["owner"] == f"run:{run['run_id']}" and attempt["template"] == "training_mlflow" and is_open(attempt):
+                attempt["cancel_intent"] = attempt["cancel_intent"] or {"reason": "mlflow_release", "at": utc_now()}
+                return {"phase": "releasing"}
+        if f"mlflow_client:{run['run_id']}" in self.inflight:
+            return {"phase": "releasing"}
+        current["phase"] = "releasing"
+        key = f"mlflow_release:{run['run_id']}"
+        if key not in self.inflight:
+            self.spawn(key, "mlflow_release", self.remove_mlflow_client, run["run_id"], dict(current))
+        return {"phase": "releasing"}
+
+    def remove_mlflow_client(self, run_id: str, current: dict[str, Any]) -> bool:
+        """Remove an owned client network only after every client container is gone."""
+        found = [item for item in self.docker.networks(self.network_label()) if item.get("Name") == current["name"]]
+        for network in found:
+            inspected = self.docker.call("GET", f"/networks/{network['Id']}")
+            network_policy.check_network(inspected, current["name"], self.registry_id, run_id, True)
+            for container in inspected.get("Containers", {}):
+                if container != current.get("server"):
+                    raise LauncherError("MLflow network still has a client endpoint", "refused")
+                self.docker.call("POST", f"/networks/{network['Id']}/disconnect", {"Container": container, "Force": False})
+            self.docker.remove_network(str(network["Id"]))
+        return not any(item.get("Name") == current["name"] for item in self.docker.networks(self.network_label()))
+
+    def on_mlflow_release(self, key: str, outcome: str, value: Any) -> None:
+        """Declare a client network released only after its absence is confirmed."""
+        with self.tx() as state:
+            run = state["runs"].get(key.partition(":")[2])
+            if run is not None:
+                current = run.get("training_mlflow", {})
+                if outcome == "ok" and value:
+                    current["phase"] = "down"
+                else:
+                    current["error"] = "client cleanup has not confirmed absence"
+
+    def m_mlflow_down(self, ctx: Ctx) -> dict[str, Any]:
+        """Stop the environment's local MLflow server after every run has released its client network."""
+        self.pipeline_params(ctx, ("owner",))
+        if ctx.params["owner"] is not True:
+            raise LauncherError("MLflow shutdown requires the owner's explicit request", "principal")
+        if any(run.get("training_mlflow", {}).get("phase", "down") != "down" for run in ctx.state["runs"].values()):
+            raise LauncherError("MLflow still has owned run attachments", "refused")
+        stack = ctx.state["launcher"].setdefault("mlflow", {"phase": "down"})
+        if stack["phase"] != "down":
+            stack["phase"] = "tearing_down"
+            stack["stop_deadline"] = time.time() + mlflow_service.RELEASE_SECONDS
+        return {"phase": stack["phase"]}
+
+    def remove_mlflow_shared(self) -> bool:
+        """Remove only the registry's shared MLflow networks and confirm all service containers are gone."""
+        label = f"{LABEL_STACK}={mlflow_service.STACK}"
+
+        def own(item: Mapping[str, Any]) -> bool:
+            return (item.get("Labels") or {}).get(LABEL_REGISTRY) == self.registry_id
+
+        if any(own(item) for item in self.docker.containers(label=label)):
+            return False
+        for network in self.docker.networks(label):
+            if own(network):
+                self.docker.remove_network(str(network["Id"]))
+        return not any(own(item) for item in self.docker.networks(label))
+
+    def on_mlflow_stop(self, key: str, outcome: str, value: Any) -> None:
+        """Release service memory only after the owned containers and shared networks are absent."""
+        if outcome != "ok" or not value:
+            return
+        with self.tx() as state:
+            stack = state["launcher"].get("mlflow", {})
+            if stack.get("phase") != "tearing_down":
+                return
+            state["launcher"]["mlflow"] = {"phase": "down", "error": stack.get("error", "")}
+            for service in mlflow_service.SERVICES:
+                state["services"].pop(service, None)
 
     GENERATED = ("target", "dbt_packages", "logs")
 
@@ -9392,7 +9946,7 @@ def parser() -> argparse.ArgumentParser:
     commands = cli.add_subparsers(dest="command", required=True)
     commands.add_parser("serve", help="run the launcher in the foreground")
     status = commands.add_parser("status", help="print the launcher, registry or a record")
-    status.add_argument("--what", default="launcher", choices=("launcher", "registry", "catalog", "orchestration", "protected_sets"))
+    status.add_argument("--what", default="launcher", choices=("launcher", "registry", "catalog", "orchestration", "mlflow", "protected_sets"))
     commands.add_parser("plan", help="print the memory plan the launcher computes now")
     commands.add_parser("catalog-up", help="start the catalog services and wait")
     commands.add_parser("catalog-down", help="stop the catalog services and wait")

@@ -56,7 +56,7 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPONENTS = ("metadatabase", "scheduler", "triggerer", "dag_processor")
 PULL_SECONDS = 3600.0
 TRANSFORM_DAG = "transform_dag"
-PIPELINE_DAGS = ("silver_transform_dag", "gold_transform_dag", "gold_maintenance_dag")
+PIPELINE_DAGS = ("silver_transform_dag", "gold_transform_dag", "gold_maintenance_dag", "training_dag", "model_promotion_dag")
 RECONCILE_SECONDS = 60.0
 RECONCILE_ATTEMPT = 99
 LIVE_RUN_STATES = ("queued", "running")
@@ -269,7 +269,13 @@ class Supervisor:
                 (name, item)
                 for name in names
                 for item in api.runs(name)
-                if (item.get("conf") or {}).get("run_id") == run_id and (item.get("conf") or {}).get("mode") == mode
+                if (item.get("conf") or {}).get("run_id") == run_id
+                and (
+                    (item.get("conf") or {}).get("mode") == mode
+                    or name == "model_promotion_dag"
+                    and mode == "real"
+                    and (item.get("conf") or {}).get("mode") in ("promote", "rollback")
+                )
             ]
             if len(runs) != 1:
                 return {"unavailable": f"{len(runs)} pipeline DAG runs name run {run_id} in mode {mode}, not one"}
@@ -311,8 +317,22 @@ class Supervisor:
         elif held["state"] == "finalizing" and self.release_pending(run_id, mode, snapshot["tasks"], outcome):
             pass
         else:
+            dag_id = str(snapshot["dag_id"])
+            training = None
+            if dag_id in ("training_dag", "model_promotion_dag"):
+                admitted = [
+                    SubmissionRequest.from_record(lines[0])
+                    for lines in self.broker.ledger.submissions(run_id).values()
+                    if lines[0].get("dag_id") == dag_id and lines[0].get("training") is not None
+                ]
+                if not admitted or any(item.training != admitted[0].training for item in admitted):
+                    outcome["left"][run_id] = "training caller parameters cannot be reconciled from the admitted ledger"
+                    return outcome
+                training = admitted[0].training
             handle = self.broker.submit(
-                SubmissionRequest("release_rejected", run_id, mode, RECONCILE_ATTEMPT, self.transform_dag, "supervisor_reconcile", snapshot["dag_run_id"])
+                SubmissionRequest(
+                    "release_rejected", run_id, mode, RECONCILE_ATTEMPT, dag_id, "supervisor_reconcile", snapshot["dag_run_id"], training=training
+                )
             )
             outcome["reconciled"].append({"run_id": run_id, "submission_id": handle.submission_id, "dag_run_states": [snapshot["dag_run_state"]]})
         return outcome
