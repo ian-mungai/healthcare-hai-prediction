@@ -18,6 +18,7 @@ lakehouse_gold_checks() {
   # The gold Great Expectations suites must match the gold contract they are generated from.
   timed "lakehouse_gold: suites check" "$python_bin" -m scripts.lakehouse.gold_checks check-suites
   timed "lakehouse_gold: publish contract E2E" "$python_bin" -m scripts.lakehouse.run_gold_publish_e2e --mode contract
+  timed "lakehouse_gold: catalog registration E2E" "$python_bin" -m scripts.lakehouse.run_catalog_registration_e2e --out "$quality_output/catalog_registration" --mutations
   timed "lakehouse_gold: model metadata check" "$python_bin" -m scripts.quality.model_metadata
 }
 
