@@ -9,6 +9,7 @@ The commit stage holds only fast hooks (.pre-commit-config.yaml). Before a push 
   ``pre_push.full_paths`` (the selector, its configuration, the CI scripts and group bodies, the acquisition CI entry scripts, the workflow and the
   pre-commit configuration), when ``origin/main`` or the merge base cannot be found, or with ``--full``.
 
+The steps run at once, except the hook partitions: pre-commit takes the worktree's index lock, so they run one after the other in one worker.
 Every step has a deadline from ``pre_push.timeout_seconds`` and fails visibly with its name when it expires. The run and every step start without the variables
 that change what the CI scripts or pre-commit run (``EXECUTION_CONTROLS``, ``SKIP`` included) and without the Git repository variables of the caller.
 
@@ -224,6 +225,16 @@ def run_step(root: Path, output: Path, step: dict[str, Any]) -> dict[str, Any]:
     return {"name": step["name"], "exit": code, "seconds": round(time.monotonic() - started, 1), "output": text, "error": error}
 
 
+def run_steps(root: Path, output: Path, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Run the steps at once, except the hook partitions: they share the worktree's index, so one worker runs them one after the other (WV3-033)."""
+    hooks = [step for step in steps if step["kind"] == "ci_hooks"]
+    jobs = [[step] for step in steps if step["kind"] != "ci_hooks"] + ([hooks] if hooks else [])
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        finished = list(pool.map(lambda job: [run_step(root, output, step) for step in job], jobs))
+    rows: dict[str, dict[str, Any]] = {row["name"]: row for job in finished for row in job}
+    return [rows[step["name"]] for step in steps]
+
+
 def parse_updates(text: str) -> list[tuple[str, str]]:
     """The (remote reference, local object) pairs of a pre-push input; a deletion has an all-zero object."""
     updates: list[tuple[str, str]] = []
@@ -309,14 +320,13 @@ def run(root: Path, base: str, head: str, full: bool, push_input: str | None = N
     output = Path(chosen["output"])
     output.mkdir(parents=True, exist_ok=True)
     sys.stdout.write(f"pre-push: scope {chosen['scope']}: {chosen['reason']}\n")
-    with ThreadPoolExecutor(max_workers=len(chosen["steps"])) as pool:
-        results = list(pool.map(lambda step: run_step(root, output, step), chosen["steps"]))
-    for row in results:
-        sys.stdout.write(f"pre-push: {'PASS' if row['exit'] == 0 else 'FAIL'} {row['name']} ({row['seconds']} s)\n")
-        if row["exit"] != 0:
-            sys.stdout.write("\n".join(row["output"].splitlines()[-80:]) + "\n" + row["error"] + "\n")
-    failed = [row["name"] for row in results if row["exit"] != 0]
-    record(output, chosen, [{k: v for k, v in row.items() if k != "output"} for row in results], decisions)
+    results = run_steps(root, output, chosen["steps"])
+    for result in results:
+        sys.stdout.write(f"pre-push: {'PASS' if result['exit'] == 0 else 'FAIL'} {result['name']} ({result['seconds']} s)\n")
+        if result["exit"] != 0:
+            sys.stdout.write("\n".join(result["output"].splitlines()[-80:]) + "\n" + result["error"] + "\n")
+    failed = [result["name"] for result in results if result["exit"] != 0]
+    record(output, chosen, [{k: v for k, v in result.items() if k != "output"} for result in results], decisions)
     if failed:
         sys.stdout.write(f"pre-push: failed steps: {', '.join(failed)}; logs in {output}\n")
         return 1
