@@ -10,6 +10,7 @@ stays in data/e2e/launcher/<stamp>/. No real Docker, catalog, AWS service or sec
 from __future__ import annotations
 
 import argparse
+import atexit
 import base64
 import contextlib
 import errno
@@ -48,8 +49,8 @@ from orchestration import launcher, pipeline_session
 from scripts.infrastructure import sts_stand_in
 from scripts.infrastructure.secret_store_stand_in import StandIn, stack_seeds
 from scripts.infrastructure.sts_stand_in import StandInSts
+from scripts.lakehouse import launcher_cleanup, run_lock
 from scripts.lakehouse import pins as pins_module
-from scripts.lakehouse import run_lock
 from scripts.lakehouse.fake_docker import FakeDocker, Gate
 from scripts.process import TimeoutExpired, run_command
 
@@ -111,6 +112,61 @@ def host_tools(binary: Path, *, mac_gib: int, vm_gib: int, host_cpus: str) -> No
     )
 
 
+OPEN_ENVS: list[Env] = []
+EXIT_HOOKS = [False]
+
+
+@launcher_cleanup.finish_cleanup
+def reap_open_envs(remove: bool) -> None:
+    """Ask the launcher of every case that never finished ``close`` to stop. With ``remove``, also remove the scratch folder of a case whose launcher is gone.
+
+    The signal handler calls it without ``remove``: the interrupted stack has not run its ``finally`` blocks yet, and a launcher hosted in a thread of this
+    process needs the case's files to shut down. The exit handler calls it with ``remove``, after the stack and its threads are settled. A launcher that
+    does not stop, or is not this case's, keeps its folder and is named on stderr.
+    """
+    for env in list(OPEN_ENVS):
+        serving = launcher_cleanup.lock_held(env.registry)
+        outcome = launcher_cleanup.end_launcher(env.registry, env.nonce)
+        if serving:
+            said = {
+                "none": "its launcher had already ended",
+                "stopped": "its launcher was stopped",
+                "foreign": f"a launcher that is not this case's serves its registry and was left running; the folder {env.temp} is kept",
+                "survived": f"its launcher was NOT stopped; the folder {env.temp} is kept",
+            }[outcome]
+            sys.stderr.write(f"cleanup: case {env.name}: the run ended before the case closed; {said}\n")
+            sys.stderr.flush()
+        if remove and outcome in ("none", "stopped"):
+            shutil.rmtree(env.temp, ignore_errors=True)
+
+
+def end_run(number: int, _frame: Any) -> None:
+    """SIGTERM or SIGHUP: stop the open cases' launchers now (the exit first waits for this process's non-daemon threads, which may be blocked on one), then
+    leave through ``SystemExit`` so the stack unwinds and the exit handler runs. Later SIGTERM and SIGHUP are ignored while it does."""
+    launcher_cleanup.record_termination(number)
+    for other in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(other, signal.SIG_IGN)
+    reap_open_envs(remove=False)
+    raise SystemExit(128 + number)
+
+
+def reap_at_exit() -> None:
+    """The exit handler: settle every case still open and remove the folders of those whose launcher is gone."""
+    with launcher_cleanup.defer_termination():
+        reap_open_envs(remove=True)
+
+
+def install_exit_cleanup() -> None:
+    """Once per process: reap open cases at exit, and turn SIGTERM and SIGHUP into an orderly exit."""
+    if EXIT_HOOKS[0]:
+        return
+    EXIT_HOOKS[0] = True
+    atexit.register(reap_at_exit)
+    if threading.current_thread() is threading.main_thread():
+        for number in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(number, end_run)
+
+
 class CaseFailure(Exception):
     """A case could not reach the state it needs to assert on."""
 
@@ -118,16 +174,19 @@ class CaseFailure(Exception):
 class Env:
     """One case: a test registry, a fake daemon, a launcher process and the evidence folders."""
 
-    def __init__(self, name: str, report: Path, stub_host: bool = True, **settings: Any) -> None:
+    def __init__(self, name: str, report: Path, stub_host: bool = True, *, scratch: Path | None = None, nonce: str = "", **settings: Any) -> None:
         self.name = name
         self.saved_path = os.environ["PATH"]
         self.report = report / name
         self.report.mkdir(parents=True)
         self.work = self.report / "work"
         self.work.mkdir()
-        self.temp = Path(tempfile.mkdtemp(prefix="hl"))
+        self.temp = scratch if scratch is not None else Path(tempfile.mkdtemp(prefix="hl"))
         self.registry = self.temp / "registry"
         self.registry.mkdir(mode=0o700)
+        self.nonce = nonce or os.urandom(8).hex()
+        install_exit_cleanup()
+        OPEN_ENVS.append(self)
         self.daemon = FakeDocker(self.temp / "d.sock")
         self.secret_values = {name: (prefix + os.urandom(6).hex() if prefix.endswith("-") else prefix) for name, prefix in COMPOSE_ENV_NAMES.items()}
         stack_values = {name: "stack-" + os.urandom(6).hex() for name in launcher.STACK_SECRETS}
@@ -202,6 +261,7 @@ class Env:
     def start(self, wait_serving: bool = True) -> int:
         """Start the launcher (as a client would) and wait until it serves."""
         client = self.client()
+        client.launch_nonce = self.nonce
         client.connect().close()
         if wait_serving:
             self.wait(lambda: self.ping().get("status") == "serving", 30, "the launcher serves")
@@ -231,10 +291,14 @@ class Env:
             return False
         return True
 
+    @launcher_cleanup.finish_cleanup
     def teardown(self) -> None:
         """End a case: cancel what is still open, release allocations and stop the catalog, so nothing of the case outlives it."""
-        if not self.ping():
+        reply = self.ping()
+        if not reply:
             return
+        if reply.get("launch_nonce") and reply["launch_nonce"] != self.nonce:
+            raise CaseFailure("cleanup refused: a launcher with another nonce serves this registry")
         client = self.client(start=False)
         with contextlib.suppress(launcher.ClientError, OSError, KeyError, ValueError, CaseFailure):
             for attempt_id, attempt in self.state()["attempts"].items():
@@ -258,17 +322,13 @@ class Env:
                 client.call("catalog_down")
                 self.wait(lambda: self.state()["launcher"]["catalog"]["phase"] == "down", 40, "the catalog is down")
 
+    @launcher_cleanup.finish_cleanup
     def stop_launcher(self) -> None:
-        """Stop the launcher cleanly."""
-        if self.ping():
-            with_pid = int(self.ping()["pid"])
-            with contextlib.suppress(launcher.ClientError, OSError):
-                self.client(start=False).call("shutdown", {"owner": True}, {"kind": "any", "owner": True})
-            try:
-                self.wait(lambda: not self.ping() if with_pid == os.getpid() else not self.alive(with_pid), 15, "the launcher stops")
-            except CaseFailure:
-                os.kill(with_pid, signal.SIGKILL)
-                self.stuck = True
+        """Stop only this case's launcher and fail while its completion is unresolved."""
+        outcome = launcher_cleanup.end_launcher(self.registry, self.nonce)
+        self.stuck = outcome not in ("none", "stopped")
+        if self.stuck:
+            raise CaseFailure(f"cleanup unresolved: launcher {outcome}, registry kept at {self.registry}")
 
     # -- state and waiting -----------------------------------------------------------------------------------------
 
@@ -390,28 +450,44 @@ class Env:
 
     def close(self) -> list[str]:
         """Stop the launcher and the daemon, keep the evidence, remove the scratch folder; returns what was left over."""
-        for thread in self.threads:
-            thread.join(timeout=5)
-        self.teardown()
-        self.stop_launcher()
-        left = self.leftovers() + (["launcher did not stop on request"] if self.stuck else [])
-        evidence = self.report / "evidence"
-        evidence.mkdir()
-        for name in ("registry.json", "registry_id", "launcher.log", "launcher_test.json", "pool_cancel_unresolved.json"):
-            if (self.registry / name).exists():
-                shutil.copy2(self.registry / name, evidence / name)
-        (evidence / "daemon_calls.json").write_text(json.dumps(self.daemon.calls, indent=1))
-        (evidence / "daemon_events.json").write_text(json.dumps(self.daemon.event_log, indent=1))
-        for sub in ("allocations", "services"):
-            if (self.registry / sub).exists():
-                shutil.copytree(self.registry / sub, evidence / sub)
-        if (self.temp / "runs").exists():
-            shutil.copytree(self.temp / "runs", evidence / "runs")
-        self.daemon.close()
-        self.stand_in.__exit__()
-        self.sts.__exit__()
-        shutil.rmtree(self.temp, ignore_errors=True)
-        os.environ["PATH"] = self.saved_path
+        with launcher_cleanup.defer_termination() as interrupted:
+            left: list[str] = []
+            try:
+                for thread in self.threads:
+                    thread.join(timeout=5)
+                self.teardown()
+            except Exception as error:
+                left.append(f"case teardown: {type(error).__name__}: {error}")
+            finally:
+                try:
+                    self.stop_launcher()
+                except CaseFailure as error:
+                    left.append(str(error))
+            left += self.leftovers()
+            evidence = self.report / "evidence"
+            evidence.mkdir(exist_ok=True)
+            for name in ("registry.json", "registry_id", "launcher.log", "launcher_test.json", "pool_cancel_unresolved.json"):
+                if (self.registry / name).exists():
+                    shutil.copy2(self.registry / name, evidence / name)
+            (evidence / "daemon_calls.json").write_text(json.dumps(self.daemon.calls, indent=1))
+            (evidence / "daemon_events.json").write_text(json.dumps(self.daemon.event_log, indent=1))
+            for sub in ("allocations", "services"):
+                if (self.registry / sub).exists():
+                    shutil.copytree(self.registry / sub, evidence / sub, dirs_exist_ok=True)
+            if (self.temp / "runs").exists():
+                shutil.copytree(self.temp / "runs", evidence / "runs", dirs_exist_ok=True)
+            self.daemon.close()
+            self.stand_in.__exit__()
+            self.sts.__exit__()
+            os.environ["PATH"] = self.saved_path
+            if interrupted:
+                left.append(f"termination signal {interrupted[0]} received during cleanup")
+            if not left:
+                shutil.rmtree(self.temp, ignore_errors=True)
+                if self in OPEN_ENVS:
+                    OPEN_ENVS.remove(self)
+        if interrupted:
+            signal.raise_signal(interrupted[0])
         return left
 
 
@@ -9030,6 +9106,161 @@ def launcher_child_bytecode(env: Env) -> dict[str, bool]:
     return results
 
 
+CHILD_SECONDS = 120.0  # the limit on a child runner
+
+
+def as_text(value: bytes | str | None) -> str:
+    """Output of a command as text: a timed-out command carries bytes, text or nothing."""
+    return value.decode(errors="replace") if isinstance(value, bytes) else (value or "")
+
+
+def scratch_of(output: str) -> tuple[str, str]:
+    """The scratch folder and start nonce a child runner printed (``SCRATCH <folder> <nonce>``) before it started its launcher, or two empty strings."""
+    found = re.search(r"^SCRATCH (\S+) (\S+)$", output, re.MULTILINE)
+    return (found[1], found[2]) if found else ("", "")
+
+
+@launcher_cleanup.finish_cleanup
+def settle_child(scratch: str, nonce: str = "") -> str:
+    """Stop the launcher of a child runner's scratch folder and remove the folder; returns what is unresolved, or an empty string.
+
+    A launcher that survives (or is not the child's) keeps its folder, so it can still be shut down; nothing is signalled.
+    """
+    if not scratch:
+        return ""
+    registry = Path(scratch) / "registry"
+    outcome = launcher_cleanup.end_launcher(registry, nonce)
+    if outcome in ("none", "stopped"):
+        shutil.rmtree(scratch, ignore_errors=True)
+        return ""
+    return f"the launcher of {scratch} was not stopped ({outcome}); the folder is kept"
+
+
+def run_child_runner(env: Env, mode: str) -> tuple[dict[str, bool], str, str]:
+    """Run a child runner that ends on SIGTERM before it closes its case; returns the checks, the child's output and the unresolved cleanup.
+
+    The parent creates the scratch folder and nonce before spawn. Its finally block retains that identity even when interruption returns no output.
+    """
+    child_report = env.work / "child_report"
+    scratch = str(Path(tempfile.mkdtemp(prefix="hl")))
+    nonce = os.urandom(8).hex()
+    output = unresolved = ""
+    checks: dict[str, bool] = {}
+    try:
+        try:
+            result = run_command(
+                sys.executable,
+                [
+                    "-m",
+                    "scripts.lakehouse.run_launcher_e2e",
+                    "--end-before-close",
+                    str(child_report),
+                    "--child-mode",
+                    mode,
+                    "--child-scratch",
+                    scratch,
+                    "--child-nonce",
+                    nonce,
+                ],
+                cwd=ROOT,
+                timeout=CHILD_SECONDS,
+            )
+            status, output, errors = str(result.returncode), result.stdout, result.stderr
+        except TimeoutExpired as expired:
+            status, output, errors = f"timeout after {CHILD_SECONDS:g} s", as_text(expired.stdout), as_text(expired.stderr)
+        (env.report / "child_output.txt").write_text(f"status {status}\n--- stdout\n{output}\n--- stderr\n{errors}")
+        reported = re.search(r"^LAUNCHER (\d+) (\S+)$", output, re.MULTILINE)
+        pid = int(reported[1]) if reported else 0
+        checks = {
+            "the child reported the parent-known identity": scratch_of(output) == (scratch, nonce),
+            "the child reported a serving launcher": reported is not None,
+            "the child exits 143 on SIGTERM": status == str(128 + signal.SIGTERM),
+            "no launcher holds the child's registry lock when the child ended": bool(scratch) and not launcher_cleanup.lock_held(Path(scratch) / "registry"),
+            "the child's folder is removed": bool(scratch) and not Path(scratch).exists(),
+            "the child said its launcher was stopped": "its launcher was stopped" in errors,
+        }
+        if mode == "detached":
+            checks["the launcher process is gone when the child ended"] = reported is not None and not Env.alive(pid)
+    finally:
+        with launcher_cleanup.defer_termination() as interrupted:
+            unresolved = settle_child(scratch, nonce)
+            if unresolved:
+                (env.report / "unresolved_cleanup.txt").write_text(unresolved + "\n")
+        if interrupted:
+            raise SystemExit(128 + interrupted[0])
+    return checks, output, unresolved
+
+
+@case("runner_ends_before_close", stub_host=False)
+def runner_ends_before_close(env: Env) -> dict[str, bool]:
+    """A runner that ends on SIGTERM before its case closes leaves no launcher and no scratch folder (the leftover launchers of Oct 23 2026).
+
+    A child runner (``--end-before-close``) makes an ``Env``, starts its detached launcher and sends SIGTERM to itself. Only the runner's exit handler can stop
+    that launcher: it is in a session of its own. The child is a separate process because the handler ends the process it runs in. A failing case leaves
+    nothing behind and keeps the folder of a launcher it could not stop.
+    """
+    checks, _, unresolved = run_child_runner(env, "detached")
+    return {**checks, "the case left no launcher or folder behind": not unresolved}
+
+
+@case("runner_ends_with_hosted_launcher", stub_host=False)
+def runner_ends_with_hosted_launcher(env: Env) -> dict[str, bool]:
+    """SIGTERM to a runner whose case hosts a launcher in a non-daemon thread of its own process ends the runner: the launcher stops, the thread ends and the
+    folder goes. The handler must keep the case's files until the hosted launcher has shut down."""
+    checks, _, unresolved = run_child_runner(env, "hosted")
+    return {**checks, "the case left no launcher or folder behind": not unresolved}
+
+
+@case("cleanup_waits_for_hosted_worker")
+def cleanup_waits_for_hosted_worker(env: Env) -> dict[str, bool]:
+    """Retain the registry after a real launcher releases its lock while a pool worker is still running."""
+    instance = host_launcher(env, "ordinary")
+    entered, release = threading.Event(), threading.Event()
+
+    def worker() -> None:
+        entered.set()
+        if not release.wait(20):
+            raise CaseFailure("the worker release did not arrive within 20 s")
+
+    future = instance.pool.submit(worker)
+    try:
+        env.wait(entered.is_set, 5, "the launcher worker starts")
+        env.client(start=False).call("shutdown", {"owner": True}, {"kind": "any", "owner": True}, budget=5)
+        env.wait(lambda: not launcher_cleanup.lock_held(env.registry), 5, "the hosted launcher releases its lock")
+        pending = launcher_cleanup.end_launcher(env.registry, env.nonce, seconds=0.2)
+        kept = env.temp.exists() and not future.done()
+    finally:
+        release.set()
+        future.result(timeout=5)
+        instance.thread.join(timeout=5)
+    finished = launcher_cleanup.end_launcher(env.registry, env.nonce, seconds=5)
+    return {
+        "a free lock with a running worker remains unresolved": pending == "survived",
+        "the registry stays while the worker runs": kept,
+        "cleanup succeeds after the worker and server end": finished in ("none", "stopped") and not instance.thread.is_alive(),
+    }
+
+
+def end_before_close(report: Path, mode: str, scratch: Path | None = None, nonce: str = "") -> int:
+    """The child runner of ``runner_ends_before_close``: start a launcher, say so, then end on SIGTERM without closing the case."""
+    child = Env("child", report, scratch=scratch, nonce=nonce)
+    sys.stdout.write(f"SCRATCH {child.temp} {child.nonce}\n")
+    sys.stdout.flush()
+    if mode == "hosted":
+        with served_here(child):
+            sys.stdout.write(f"LAUNCHER {os.getpid()} {child.temp}\n")
+            sys.stdout.flush()
+            os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(30)  # the handler ends the run first; this only bounds the wait if it does not
+        return 1
+    child.start()
+    sys.stdout.write(f"LAUNCHER {child.ping()['pid']} {child.temp}\n")
+    sys.stdout.flush()
+    os.kill(os.getpid(), signal.SIGTERM)
+    time.sleep(30)  # the handler ends the run first; this only bounds the wait if it does not
+    return 1
+
+
 # Every case, listed so a case that loses its decorator cannot go unnoticed: the runner checks the list against the registry.
 ALL_CASES = (
     launcher_child_bytecode,
@@ -9166,6 +9397,9 @@ ALL_CASES = (
     staging_runner_conversion,
     staging_read_share,
     staging_read_plan_shrinks,
+    runner_ends_before_close,
+    runner_ends_with_hosted_launcher,
+    cleanup_waits_for_hosted_worker,
 )
 
 
@@ -9241,6 +9475,8 @@ def run_cases(selected: list[str], shard: str = "") -> int:
                 sys.stdout.write(f"      failed: {check}\n")
         if error:
             sys.stdout.write(f"      error: {error.splitlines()[0]}\n")
+        if env in OPEN_ENVS:
+            break
     head = run_command("git", ["rev-parse", "HEAD"], cwd=ROOT).stdout.strip()
     source_changed = source_changes(sources, source_snapshot())
     summary = {
@@ -9269,7 +9505,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--case", action="append", default=[], choices=sorted(CASES))
     parser.add_argument("--shard", default="", help="run every Nth case only, as K/N (1-based)")
+    parser.add_argument("--end-before-close", type=Path, help=argparse.SUPPRESS)  # the child runner of runner_ends_before_close
+    parser.add_argument("--child-mode", choices=("detached", "hosted"), default="detached", help=argparse.SUPPRESS)
+    parser.add_argument("--child-scratch", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--child-nonce", default="", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.end_before_close:
+        return end_before_close(args.end_before_close, args.child_mode, args.child_scratch, args.child_nonce)
     return run_cases(args.case, args.shard)
 
 
