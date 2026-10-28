@@ -109,6 +109,18 @@ Publication verification is pending. Fixture runs use a test registry and local 
 
 ## Usage
 
+With owner approval, load named bronze tables while creating the complete metadata generation:
+
+```sh
+.venv/bin/python -m scripts.lakehouse.catalog job bronze -- --bootstrap-all --repair-tables "<TABLE_A>,<TABLE_B>"
+```
+
+This command validates metadata for the full table map before loading the named tables. It does not prune source rows.
+Every table must pass verification before the command publishes metadata. Only the named tables' dictionaries are rebuilt.
+A failed run can leave loaded partitions committed. A failed verification writes a report. A failed load prints only its error.
+After fixing the cause, rerun the same command.
+Without `--repair-tables`, `--bootstrap-all` updates metadata without loading source files.
+
 Run the full local CI, which the pre-commit hooks and GitHub Actions also run, without AWS credentials. Run it before
 every push; a commit runs only the check groups its staged paths touch:
 

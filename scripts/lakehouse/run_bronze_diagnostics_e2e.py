@@ -608,12 +608,166 @@ class CatalogLink:
         return None
 
 
+def bootstrap_repair_case(
+    root: Path,
+    label: str,
+    tokens: list[str],
+    *,
+    bad_metadata: bool = False,
+    load_failure: bool = False,
+    unrelated_missing: bool = False,
+    all_loaded: bool = False,
+) -> dict[str, Any]:
+    """Drive first-generation repair through the command with synthetic table contents and write records."""
+    names = ["repair_a", "repair_b", "untouched"]
+    tables = [{**{key: value for key, value in TABLE.items() if key != "member_pattern"}, "table": name, "dataset_ids": [name]} for name in names]
+    documents = []
+    for name in names:
+        document = manifest(name, f"cms/synthetic/{name}.csv")
+        document["objects"][0]["dataset_id"] = name
+        document["objects"][0]["object"]["sha256"] = hashlib.sha256(name.encode()).hexdigest()
+        documents.append(document)
+    if bad_metadata:
+        duplicate = copy.deepcopy(documents[0])
+        duplicate["objects"][0]["object"]["version_id"] = "conflicting-version"
+        documents.append(duplicate)
+    config = {"namespace": "synthetic", "tables": tables}
+    storage = ManifestStorage(documents)
+    contents = {name: all_loaded or (name == "untouched" and not unrelated_missing) for name in names}
+    events: list[tuple[str, list[str]]] = []
+    stops: list[bool] = []
+    output = root / label
+    deployment = root / f"{label}_deployment.json"
+    deployment.write_text('{"data_bucket_name":"synthetic"}')
+    original_build = bronze_metadata.build
+
+    def build(chosen: Any, inputs: Any, excluded: Any, previous: Any, all_tables: Any) -> Any:
+        rows = original_build(chosen, inputs, excluded, previous, all_tables)
+        events.append(("validated", list(chosen)))
+        return rows
+
+    def load(_spark: Any, inputs: Any, *_args: Any) -> Any:
+        chosen = [item["table"] for item in inputs]
+        events.append(("load", chosen))
+        if load_failure:
+            raise bronze.BronzeError("synthetic parser failure")
+        contents.update(dict.fromkeys(chosen, True))
+        return {name: {"objects": 1, "rows": 1} for name in chosen}
+
+    def prune(*_args: Any) -> Any:
+        events.append(("prune", []))
+        raise AssertionError("bootstrap repair pruned rows")
+
+    def copies(_spark: Any, _namespace: Any, chosen: Any, *_args: Any) -> int:
+        events.append(("copies", list(chosen)))
+        return len(chosen)
+
+    def verify(_spark: Any, _config: Any, inputs: Any, *_args: Any) -> Any:
+        chosen = [item["table"] for item in inputs]
+        events.append(("verify", chosen))
+        return {name: {"passed": contents[name]} for name in chosen}
+
+    def dictionaries(_spark: Any, _config: Any, chosen: Any, *_args: Any) -> Any:
+        events.append(("dictionary", list(chosen)))
+        return dict.fromkeys(chosen, 1)
+
+    def publish(_spark: Any, _namespace: Any, rows: Any) -> str:
+        bronze_metadata.validate(rows)
+        events.append(("publish", sorted({row["table_name"] for row in rows})))
+        return "synthetic-generation"
+
+    session = SimpleNamespace(spark_session=lambda *_args, **_kwargs: SimpleNamespace(stop=lambda: stops.append(True)), job_memory=lambda: "synthetic")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(sys, "argv", ["bronze", *tokens])
+        patch.setitem(sys.modules, "scripts.lakehouse.session", session)
+        patch.setattr(bronze, "DEPLOYMENT", deployment)
+        patch.setattr(bronze, "REPORT_ROOT", output)
+        patch.setattr(bronze, "S3Storage", lambda: storage)
+        patch.setattr(bronze, "load_table_map", lambda: config)
+        patch.setattr(bronze, "load_retired", bronze.RetiredObjects)
+        patch.setattr(bronze_metadata, "read", lambda *_args: [])
+        patch.setattr(bronze_metadata, "build", build)
+        patch.setattr(bronze, "load_objects", load)
+        patch.setattr(bronze, "prune", prune)
+        patch.setattr(bronze, "write_copies", copies)
+        patch.setattr(bronze, "verify", verify)
+        patch.setattr(dictionary, "build", dictionaries)
+        patch.setattr(bronze_metadata, "publish", publish)
+        patch.setattr(bronze_metadata, "write_bootstrap", lambda *_args: "synthetic-hash")
+        code: int | str | None
+        try:
+            code = bronze.main()
+        except SystemExit as error:
+            code = error.code
+    reports = list(output.glob("report_*.json"))
+    return {"code": code, "events": events, "stops": stops, "reads": storage.reads, "report": json.loads(reports[0].read_text()) if reports else None}
+
+
+def bootstrap_repair_cases(root: Path) -> dict[str, bool]:
+    """Check full metadata scope, bounded repair writes and failure-before-publication behavior."""
+    arguments = ["--bootstrap-all", "--repair-tables", "repair_a,repair_b"]
+    good = bootstrap_repair_case(root, "repair_success", arguments)
+    expected = [
+        ("validated", ["repair_a", "repair_b", "untouched"]),
+        ("load", ["repair_a", "repair_b"]),
+        ("copies", ["repair_a", "repair_b", "untouched"]),
+        ("verify", ["repair_a", "repair_b", "untouched"]),
+        ("dictionary", ["repair_a", "repair_b"]),
+        ("publish", ["repair_a", "repair_b", "untouched"]),
+    ]
+    results = {
+        "bootstrap repair validates full map before only named loads": good["code"] == 0 and good["events"] == expected,
+        "bootstrap repair report names exact repair scope": (good["report"] or {}).get("repair_tables") == ["repair_a", "repair_b"],
+        "bootstrap repair stops Spark": good["stops"] == [True],
+    }
+    for label, settings, expected_events in (
+        ("invalid metadata", {"bad_metadata": True}, []),
+        ("load failure", {"load_failure": True}, expected[:2]),
+        ("untouched table missing", {"unrelated_missing": True}, expected[:4]),
+    ):
+        failed = bootstrap_repair_case(root, "repair_" + label.replace(" ", "_"), arguments, **settings)
+        results[f"bootstrap repair refuses publication after {label}"] = (
+            failed["code"] == 1 and failed["events"] == expected_events and failed["stops"] == [True]
+        )
+    plain = bootstrap_repair_case(root, "bootstrap_stays_metadata_only", ["--bootstrap-all"])
+    results["ordinary bootstrap still loads no tables"] = plain["code"] == 1 and plain["events"] == [expected[0], expected[2], expected[3]]
+    complete = bootstrap_repair_case(root, "bootstrap_all_loaded", ["--bootstrap-all"], all_loaded=True)
+    results["successful ordinary bootstrap publishes without loading or dictionaries"] = (
+        complete["code"] == 0 and complete["events"] == [expected[0], expected[2], expected[3], expected[5]] and complete["stops"] == [True]
+    )
+    partial = bootstrap_repair_case(root, "partial_generation_refused", ["--tables", "repair_a"])
+    results["ordinary first subset load remains refused"] = partial["code"] == 1 and partial["events"] == []
+    invalid = [
+        ["--tables", "repair_a", "--repair-tables", "repair_a"],
+        ["--bootstrap-all", "--repair-tables", "repair_a", "--diagnose"],
+        ["--bootstrap-all", "--repair-tables", "repair_a", "--copies-only"],
+        ["--bootstrap-all", "--repair-tables", "unknown"],
+        ["--bootstrap-all", "--repair-tables", ""],
+        ["--bootstrap-all", "--repair-tables", "repair_a,"],
+        ["--bootstrap-all", "--repair-tables", "repair_a,repair_a"],
+    ]
+    for number, tokens in enumerate(invalid):
+        case = bootstrap_repair_case(root, f"invalid_repair_{number}", tokens)
+        results["invalid repair refused before services: " + " ".join(tokens)] = (
+            case["code"] == 2 and not case["events"] and not case["stops"] and not case["reads"]
+        )
+    try:
+        results["closed grammar accepts scoped bootstrap repair"] = launcher.validate_spark_args("bronze", arguments) == arguments
+    except launcher.LauncherError:
+        results["closed grammar accepts scoped bootstrap repair"] = False
+    (root / "repair_outcomes.json").write_text(
+        json.dumps({"success": good, "ordinary_bootstrap": plain, "complete_bootstrap": complete, "partial": partial}, indent=2)
+    )
+    return results
+
+
 def catalog_cases(root: Path) -> dict[str, bool]:
     """Run the real host wrapper with a synthetic launcher and observe setup and deadline behavior."""
     results: dict[str, bool] = {}
     for label, arguments, phase, setup_count, seconds in (
         ("diagnostic wrapper", ["--bootstrap-all", "--diagnose"], "up", 0, 1200),
         ("ordinary wrapper", ["--bootstrap-all"], "up", 1, None),
+        ("repair wrapper", ["--bootstrap-all", "--repair-tables", "repair_a,repair_b"], "up", 1, None),
         ("diagnostic without catalog", ["--bootstrap-all", "--diagnose"], "down", 0, 1200),
     ):
         link = CatalogLink(root / label.replace(" ", "_"), phase)
@@ -658,9 +812,11 @@ def main() -> int:
             **ownership_reference_commands(folder),
             **ownership_identity_commands(folder),
             **catalog_cases(folder),
+            **bootstrap_repair_cases(folder),
         }
         outcomes = json.loads((folder / "ownership_outcomes.json").read_text())
         all_groups = json.loads((folder / "all_ownership_outcomes.json").read_text())
+        repair_outcomes = json.loads((folder / "repair_outcomes.json").read_text())
         command_reports = {path.parent.name: json.loads(path.read_text()) for path in folder.glob("*/diagnostic.json")}
     results["sources unchanged during run"] = source_sha256 == {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}
     report = {
@@ -672,6 +828,7 @@ def main() -> int:
         "command_reports": command_reports,
         "ownership_outcomes": outcomes,
         "all_ownership_groups": all_groups,
+        "repair_outcomes": repair_outcomes,
         "results": results,
         "passed": all(results.values()),
         "cleanup": "done",

@@ -1,7 +1,7 @@
 ---
 title: Lakehouse usage
 description: Commands and checks for the launcher, bronze, staging, gold, silver validation, the run lock and the fixture kit.
-last_updated: 2026-10-22
+last_updated: 2026-10-26
 ---
 
 # Lakehouse usage
@@ -221,13 +221,16 @@ complete metadata snapshot. The first bootstrap selects the smallest logical key
 that canonical lineage, list every observation in `bronze.stored_copies`, replace each loaded object in its own commit,
 prune objects a table no longer selects, rebuild the table's data dictionary and write a counts-only report.
 The initial `--bootstrap-all` path requires coverage of the full map and publishes the copies ledger and one complete
-metadata generation. It verifies the existing data without loading, pruning or rebuilding dictionaries.
+metadata generation. Without `--repair-tables`, it verifies the existing data without loading, pruning or rebuilding dictionaries.
+With owner approval, add `--repair-tables` to load only the named tables before verification of the full map.
+Only those tables' dictionaries are rebuilt. Neither bootstrap mode prunes source rows.
 A corrected manifest replaces the manifest it names as superseded. Tables taken out of the map are listed in
 `config/lakehouse/removed_tables.json` and dropped with `--drop-removed`:
 
 ```sh
 .venv/bin/python -m scripts.lakehouse.catalog job bronze_e2e        # report: data/e2e/bronze/
 .venv/bin/python -m scripts.lakehouse.catalog job bronze -- --bootstrap-all    # full-map metadata bootstrap, no data reload
+.venv/bin/python -m scripts.lakehouse.catalog job bronze -- --bootstrap-all --repair-tables a,b   # repair named tables during bootstrap
 .venv/bin/python -m scripts.lakehouse.catalog job bronze -- --group hai           # or --tables a,b; report: data/e2e/bronze_load/
 .venv/bin/python -m scripts.lakehouse.catalog job bronze -- --tables a,b --copies-only   # list copies, prune, verify
 .venv/bin/python -m scripts.lakehouse.catalog job bronze -- --drop-removed       # drop tables in removed_tables.json
