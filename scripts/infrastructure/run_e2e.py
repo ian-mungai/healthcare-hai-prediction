@@ -15,6 +15,7 @@ import stat
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,14 @@ SOURCE_PATHS = (
     "scripts/infrastructure/render_platform_config.py",
     "scripts/infrastructure/render_project_config.sh",
     "scripts/infrastructure/terraform.sh",
+    "config/aws/iam_preparation.json",
+    "config/lakehouse/bronze_tables.json",
 )
+PREPARATION_PATH = "config/aws/iam_preparation.json"
+PREPARATION_OUTPUT = "infra/iam/preparation.auto.tfvars.json"
+BRONZE_TABLES_PATH = "config/lakehouse/bronze_tables.json"
+# The IAM stack files that declare the four preparation inputs.
+PREPARATION_VARIABLE_FILES = ("variables.tf", "bronze_writer_variables.tf", "job_writer_variables.tf")
 # The resource types the platform stack (the project profile) may declare, and the ones the IAM stack (the administrator) must keep.
 PLATFORM_RESOURCE_TYPES = {
     "aws_cloudwatch_log_group",
@@ -540,15 +548,381 @@ def copied_workspace(temporary: Path, name: str, sources: dict[str, bytes], valu
     return workspace
 
 
+def copy_variable_files(evidence: Evidence, stack: Path, names: tuple[str, ...]) -> None:
+    """Copy real IAM variable files into a synthetic stack and record their hashes."""
+    stack.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        content = (REPO_ROOT / "infra/iam" / name).read_bytes()
+        evidence.report["source_hashes"][f"infra/iam/{name}"] = {"original_sha256": sha256(content), "fixture_sha256": sha256(content)}
+        (stack / name).write_bytes(content)
+
+
+def mapped_collections() -> list[str]:
+    """The collections the committed bronze table map names."""
+    tables = json.loads((REPO_ROOT / BRONZE_TABLES_PATH).read_text(encoding="utf-8"))["tables"]
+    return sorted({row["collection"] for row in tables})
+
+
+def prepared_document(bucket: str = FIXTURE["S3_BUCKET"], **changes: Any) -> dict[str, Any]:
+    """A valid, fully prepared input file for the synthetic bucket, with optional overrides."""
+    locations = {"bronze": f"s3://{bucket}/lakehouse/bronze/", "bronze_dictionary": f"s3://{bucket}/lakehouse/bronze_dictionary/"}
+    document = {
+        "bronze_writer_prepared": True,
+        "job_writer_e2e_prepared": True,
+        "bronze_qualification_collection": mapped_collections()[0],
+        "bronze_live_locations": locations,
+    }
+    return {**document, **changes}
+
+
+def default_document() -> dict[str, Any]:
+    """The committed safe defaults."""
+    document: dict[str, Any] = json.loads((REPO_ROOT / PREPARATION_PATH).read_text(encoding="utf-8"))
+    return document
+
+
+def write_preparation(workspace: Path, document: Any, raw: str | None = None) -> None:
+    """Replace the workspace copy of the input file."""
+    (workspace / PREPARATION_PATH).write_text(raw if raw is not None else json.dumps(document, indent=2) + "\n", encoding="utf-8")
+
+
+RENDERER_PATH = "scripts/infrastructure/render_project_config.py"
+RENDERER_MODULE = "scripts.infrastructure.render_project_config"
+# Each planted defect: the renderer edits and what must notice it (rejection labels, or "@storage", "@stale", "@render", "@plan").
+PREPARATION_PLANTS: dict[str, tuple[list[tuple[str, str]], list[str]]] = {
+    "missing_file_check_removed": (
+        [
+            (
+                'if not path.is_file():\n        raise ConfigurationError("The IAM preparation file',
+                'if False:\n        raise ConfigurationError("The IAM preparation file',
+            )
+        ],
+        ["missing_file"],
+    ),
+    "duplicate_key_allowed": ([("if len({key for key, _ in pairs}) != len(pairs):", "if False:")], ["duplicate_key"]),
+    "object_check_removed": ([("if not isinstance(document, dict):", "if False:")], ["not_json", "not_object"]),
+    "closed_schema_removed": ([("if document.keys() != PREPARATION_NAMES:", "if False:")], ["missing_key", "extra_key"]),
+    "bool_check_removed": ([("if not isinstance(document[name], bool):", "if document[name] is None:")], ["string_bool", "int_bool"]),
+    "pattern_check_removed": ([("(collection and not COLLECTION_PATTERN.fullmatch(collection))", "False")], ["collection_pattern", "collection_extra_part"]),
+    "membership_check_removed": ([("if collection and collection not in mapped_collections(tables):", "if False:")], ["unmapped_collection"]),
+    "table_map_errors_uncaught": ([("except (OSError, ValueError, KeyError, TypeError):", "except KeyError:")], ["tables_garbage"]),
+    "locations_check_loosened": (
+        [('if document["bronze_live_locations"] not in ({}, locations):', 'if not isinstance(document["bronze_live_locations"], dict):')],
+        ["locations_other_bucket", "locations_no_trailing_slash", "locations_swapped"],
+    ),
+    "rejected_value_echoed": (
+        [
+            (
+                '"Set bronze_qualification_collection to empty or a publisher/collection name in the IAM preparation file."',
+                'f"Set bronze_qualification_collection to empty or a publisher/collection name in the IAM preparation file. Got {collection}."',
+            )
+        ],
+        ["collection_pattern"],
+    ),
+    "validation_after_write": (
+        [
+            ('preparation = load_preparation(storage["data_bucket_name"]) if arguments.stack in ("iam", "both") else None', "preparation = None"),
+            (
+                'if name == "iam" and preparation is not None:\n                    write_or_check(directory / "preparation.auto.tfvars.json", '
+                "preparation, arguments.check)",
+                'if name == "iam":\n                    write_or_check(directory / "preparation.auto.tfvars.json", '
+                'load_preparation(storage["data_bucket_name"]), arguments.check)',
+            ),
+        ],
+        ["extra_key"],
+    ),
+    "storage_stack_validated": ([('if arguments.stack in ("iam", "both") else None', "if True else None")], ["@storage"]),
+    "stale_check_disabled": (
+        [
+            (
+                'write_or_check(directory / "preparation.auto.tfvars.json", preparation, arguments.check)',
+                'write_or_check(directory / "preparation.auto.tfvars.json", preparation, False)',
+            )
+        ],
+        ["@stale"],
+    ),
+    "output_not_written": ([('write_or_check(directory / "preparation.auto.tfvars.json", preparation, arguments.check)', "pass")], ["@render"]),
+    "plan_comparison_removed": ([("if {name: value for name, value in actual.items() if name in wanted} != wanted:", "if False:")], ["@plan"]),
+    "plan_names_not_exempt": ([("actual.keys() - expected.keys() - wanted.keys()", "actual.keys() - expected.keys()")], ["@plan"]),
+    "plan_inputs_not_forwarded": ([("verify_plan_variables(plan, values, preparation)", "verify_plan_variables(plan, values)")], ["@plan"]),
+    "plan_missing_names_ignored": (
+        [
+            (
+                "if {name: value for name, value in actual.items() if name in wanted} != wanted:",
+                "if any(actual.get(name, value) != value for name, value in wanted.items()):",
+            )
+        ],
+        ["@plan"],
+    ),
+}
+
+
+def planted_sources(sources: dict[str, bytes], edits: list[tuple[str, str]]) -> dict[str, bytes]:
+    """The synthetic sources with one defect planted in the renderer; an edit that no longer matches stops the suite."""
+    text = sources[RENDERER_PATH].decode("utf-8")
+    for old, new in edits:
+        if old not in text:
+            raise CheckFailed(f"A planted defect no longer matches the renderer: {old[:60]}")
+        text = text.replace(old, new, 1)
+    return {**sources, RENDERER_PATH: text.encode("utf-8")}
+
+
+def preparation_rejections() -> list[tuple[str, str | None, str, str | None, str | None]]:
+    """Each invalid input as (label, file text or None for absent, message fragment, planted value that must never be echoed, bronze table map text or None)."""
+    good = prepared_document()
+    other = mapped_collections()[0]
+
+    def text(**changes: Any) -> str:
+        return json.dumps({**good, **changes})
+
+    without_key = {key: value for key, value in good.items() if key != "job_writer_e2e_prepared"}
+    cases: list[tuple[str, str | None, str, str | None]] = [
+        ("missing_file", None, "IAM preparation file is missing", None),
+        ("not_json", "{not json", "one JSON object with unique keys", None),
+        ("not_object", "[]", "one JSON object with unique keys", None),
+        ("duplicate_key", json.dumps(default_document())[:-1] + ', "bronze_writer_prepared": true}', "one JSON object with unique keys", None),
+        ("missing_key", json.dumps(without_key), "exactly the four inputs", None),
+        ("extra_key", text(example_extra_input="example_planted_extra"), "exactly the four inputs", "example_planted_extra"),
+        ("string_bool", text(bronze_writer_prepared="true"), "bronze_writer_prepared to true or false", None),
+        ("int_bool", text(job_writer_e2e_prepared=1), "job_writer_e2e_prepared to true or false", None),
+        ("null_bool", text(bronze_writer_prepared=None), "bronze_writer_prepared to true or false", None),
+        ("collection_type", text(bronze_qualification_collection=5), "empty or a publisher/collection", None),
+        ("collection_pattern", text(bronze_qualification_collection="Example/Planted_Bad"), "empty or a publisher/collection", "Example/Planted_Bad"),
+        ("collection_extra_part", text(bronze_qualification_collection=other + "/planted"), "empty or a publisher/collection", "/planted"),
+        ("collection_space", text(bronze_qualification_collection=other + " "), "empty or a publisher/collection", None),
+        ("unmapped_collection", text(bronze_qualification_collection="example_publisher/example_unmapped"), "not a mapped collection", "example_unmapped"),
+        ("locations_not_object", text(bronze_live_locations=[]), "Set bronze_live_locations", None),
+        ("locations_one_key", text(bronze_live_locations={"bronze": good["bronze_live_locations"]["bronze"]}), "Set bronze_live_locations", None),
+        ("locations_extra_key", text(bronze_live_locations={**good["bronze_live_locations"], "example_extra": "x"}), "Set bronze_live_locations", None),
+        ("locations_non_string", text(bronze_live_locations={"bronze": 1, "bronze_dictionary": 2}), "Set bronze_live_locations", None),
+        (
+            "locations_other_bucket",
+            text(bronze_live_locations=prepared_document("example-planted-other-bucket")["bronze_live_locations"]),
+            "Set bronze_live_locations",
+            "example-planted-other-bucket",
+        ),
+        (
+            "locations_no_trailing_slash",
+            text(bronze_live_locations={key: value.rstrip("/") for key, value in good["bronze_live_locations"].items()}),
+            "Set bronze_live_locations",
+            None,
+        ),
+        (
+            "locations_swapped",
+            text(
+                bronze_live_locations={
+                    "bronze": good["bronze_live_locations"]["bronze_dictionary"],
+                    "bronze_dictionary": good["bronze_live_locations"]["bronze"],
+                }
+            ),
+            "Set bronze_live_locations",
+            None,
+        ),
+    ]
+    unmapped_tables = json.dumps({"tables": [{"collection": "example_publisher/other"}]})
+    return [(*case, None) for case in cases] + [
+        ("tables_garbage", json.dumps(good), "bronze table map", None, "{not json"),
+        ("tables_without_collection", json.dumps(good), "not a mapped collection", None, unmapped_tables),
+    ]
+
+
+def preparation_rejected(
+    evidence: Evidence,
+    sources: dict[str, bytes],
+    case: tuple[str, str | None, str, str | None, str | None],
+    prefix: str = "prep_reject",
+) -> tuple[dict[str, Any], bool]:
+    """Render with one invalid input file; report whether the renderer refused it cleanly, without output and without echoing the planted value."""
+    label, text, fragment, planted, tables = case
+    workspace = copied_workspace(evidence.temporary, f"{prefix}_{label}", sources, FIXTURE)
+    if text is None:
+        (workspace / PREPARATION_PATH).unlink()
+    else:
+        write_preparation(workspace, None, text)
+    if tables is not None:
+        (workspace / BRONZE_TABLES_PATH).write_text(tables, encoding="utf-8")
+    step, result = evidence.run(f"{prefix}_{label}", [sys.executable, "-m", RENDERER_MODULE, "--stack", "iam"], workspace)
+    clean = result.returncode == 2 and fragment in result.stderr and not result.stdout and not (workspace / "infra").exists()
+    return step, clean and (planted is None or planted not in result.stdout + result.stderr)
+
+
+def storage_ignores_file(evidence: Evidence, sources: dict[str, bytes], prefix: str) -> tuple[dict[str, Any], bool]:
+    """The storage stack must render although the IAM input file is invalid, and must not create the IAM directory."""
+    workspace = copied_workspace(evidence.temporary, f"{prefix}_storage", sources, FIXTURE)
+    write_preparation(workspace, None, "{not json")
+    step, result = evidence.run(f"{prefix}_storage_stack_untouched", [sys.executable, "-m", RENDERER_MODULE, "--stack", "storage"], workspace)
+    return step, result.returncode == 0 and (workspace / "infra/deployment.auto.tfvars.json").is_file() and not (workspace / "infra/iam").exists()
+
+
+def render_written(evidence: Evidence, sources: dict[str, bytes], prefix: str) -> tuple[dict[str, Any], bool]:
+    """A prepared file must render to the exact owner-only output, leave no temporary file and pass the matching check."""
+    workspace = copied_workspace(evidence.temporary, f"{prefix}_render", sources, FIXTURE)
+    write_preparation(workspace, prepared_document())
+    command = [sys.executable, "-m", RENDERER_MODULE, "--stack", "iam"]
+    step, result = evidence.run(f"{prefix}_render_prepared", command, workspace)
+    path = workspace / PREPARATION_OUTPUT
+    written = result.returncode == 0 and not result.stderr and path.is_file()
+    exact = written and json.loads(path.read_text(encoding="utf-8")) == prepared_document() and stat.S_IMODE(path.stat().st_mode) == 0o600
+    step_check, checked = evidence.run(f"{prefix}_check_prepared", [*command, "--check"], workspace)
+    return step, exact and checked.returncode == 0 and not list(workspace.rglob(".config_*"))
+
+
+def stale_rejected(evidence: Evidence, sources: dict[str, bytes], prefix: str) -> tuple[dict[str, Any], bool]:
+    """Editing the committed file after rendering must make the check refuse the old output."""
+    workspace = copied_workspace(evidence.temporary, f"{prefix}_stale", sources, FIXTURE)
+    command = [sys.executable, "-m", RENDERER_MODULE, "--stack", "iam"]
+    write_preparation(workspace, prepared_document())
+    step, result = evidence.run(f"{prefix}_stale_render", command, workspace)
+    rendered = result.returncode == 0
+    write_preparation(workspace, prepared_document(bronze_writer_prepared=False))
+    step, result = evidence.run(f"{prefix}_stale_after_edit", [*command, "--check"], workspace)
+    return step, rendered and result.returncode == 2 and "Generated configuration is stale" in result.stderr and not result.stdout
+
+
+def run_preparation_cases(evidence: Evidence, sources: dict[str, bytes], renderer: list[str], shell_renderer: list[str]) -> None:
+    """Check the input file route: strict validation, rendering, staleness and the saved-plan comparison with the real terraform command."""
+    cases = preparation_rejections()
+    for case in cases:
+        step, rejected = preparation_rejected(evidence, sources, case)
+        evidence.check(step, "invalid_file_refused_cleanly", rejected)
+    workspace = copied_workspace(evidence.temporary, "prep_tables_absent", sources, FIXTURE)
+    (workspace / BRONZE_TABLES_PATH).unlink()
+    write_preparation(workspace, prepared_document(bronze_qualification_collection=""))
+    step, result = evidence.run("prep_tables_not_needed_for_empty_collection", [*renderer, "--stack", "iam"], workspace)
+    evidence.check(step, "empty_collection_needs_no_table_map", result.returncode == 0)
+    step, ok = storage_ignores_file(evidence, sources, "prep")
+    evidence.check(step, "storage_render_ignores_the_file", ok)
+    step, ok = render_written(evidence, sources, "prep")
+    evidence.check(step, "prepared_file_rendered_exactly", ok)
+    step, ok = stale_rejected(evidence, sources, "prep")
+    evidence.check(step, "stale_output_rejected", ok)
+    workspace = copied_workspace(evidence.temporary, "prep_defaults", sources, FIXTURE)
+    step, result = evidence.run("prep_render_defaults", shell_renderer, workspace)
+    path = workspace / PREPARATION_OUTPUT
+    evidence.check(step, "defaults_rendered", result.returncode == 0 and not result.stderr and path.is_file())
+    evidence.check(step, "defaults_exact", json.loads(path.read_text(encoding="utf-8")) == default_document())
+    evidence.check(step, "storage_has_no_preparation_file", not (workspace / "infra/preparation.auto.tfvars.json").exists())
+
+    detected = run_preparation_plan_cases(evidence, sources, renderer, shell_renderer)
+    for name, (edits, targets) in PREPARATION_PLANTS.items():
+        planted = planted_sources(sources, edits)
+        prefix = f"plant_{name}"
+        by_label = {case[0]: case for case in cases}
+        outcomes: list[bool] = []
+        for target in targets:
+            if target == "@plan":
+                outcomes.append(detected(prefix, planted[RENDERER_PATH]))
+            elif target == "@storage":
+                outcomes.append(storage_ignores_file(evidence, planted, prefix)[1])
+            elif target == "@stale":
+                outcomes.append(stale_rejected(evidence, planted, prefix)[1])
+            elif target == "@render":
+                outcomes.append(render_written(evidence, planted, prefix)[1])
+            else:
+                outcomes.append(preparation_rejected(evidence, planted, by_label[target], prefix)[1])
+        evidence.check(evidence.report["steps"][-1], f"planted_defect_{name}_noticed", not all(outcomes))
+        evidence.report.setdefault("planted_defects", {})[name] = "noticed"
+
+
+def run_preparation_plan_cases(evidence: Evidence, sources: dict[str, bytes], renderer: list[str], shell_renderer: list[str]) -> Callable[[str, bytes], bool]:
+    """Plan with the real variable files, then check which input changes between plan and apply the renderer refuses; return the check for planted defects."""
+    environment = {"CHECKPOINT_DISABLE": "1", "TF_IN_AUTOMATION": "1"}
+
+    def stack_for(name: str, names: tuple[str, ...]) -> tuple[Path, Path, list[str]]:
+        workspace = copied_workspace(evidence.temporary, name, sources, FIXTURE)
+        stack = workspace / "infra" / "iam"
+        copy_variable_files(evidence, stack, names)
+        terraform = ["terraform", f"-chdir={stack}"]
+        step, result = evidence.run(f"{name}_init", [*terraform, "init", "-input=false", "-backend=false"], workspace, environment)
+        evidence.check(step, "init_succeeded", result.returncode == 0)
+        return workspace, stack, terraform
+
+    def plan(label: str, workspace: Path, stack: Path, terraform: list[str], document: dict[str, Any], *extra: str) -> Path:
+        write_preparation(workspace, document)
+        step, result = evidence.run(f"{label}_render", shell_renderer, workspace)
+        evidence.check(step, "render_succeeded", result.returncode == 0 and not result.stderr)
+        arguments = ["plan", "-input=false", "-lock=false", f"-var=admin_profile={ADMIN}", *extra, f"-out={label}.tfplan"]
+        step, result = evidence.run(label, [*terraform, *arguments], workspace, environment)
+        evidence.check(step, "plan_succeeded", result.returncode == 0)
+        return stack / f"{label}.tfplan"
+
+    def check(label: str, workspace: Path, saved: Path) -> tuple[dict[str, Any], Any]:
+        command = [*renderer, "--stack", "iam", "--admin-profile", ADMIN, "--check", "--check-plan", str(saved)]
+        return evidence.run(label, command, workspace, environment)
+
+    def refused(result: Any, *planted: str) -> bool:
+        output = result.stdout + result.stderr
+        return bool(
+            result.returncode == 2 and "IAM preparation inputs" in result.stderr and not result.stdout and not any(value in output for value in planted)
+        )
+
+    workspace, stack, terraform = stack_for("prep_plan", PREPARATION_VARIABLE_FILES)
+    prepared = prepared_document()
+    collections = mapped_collections()
+    bucket = FIXTURE["S3_BUCKET"]
+    changes: dict[str, dict[str, Any]] = {
+        "reverted_to_defaults": default_document(),
+        "bronze_writer_prepared": {**prepared, "bronze_writer_prepared": False},
+        "job_writer_e2e_prepared": {**prepared, "job_writer_e2e_prepared": False},
+        "bronze_qualification_collection": {**prepared, "bronze_qualification_collection": collections[1]},
+        "bronze_live_locations": {**prepared, "bronze_live_locations": {}},
+    }
+    saved_prepared = plan("prep_plan_prepared", workspace, stack, terraform, prepared)
+    step, result = check("prep_plan_prepared_accepted", workspace, saved_prepared)
+    evidence.check(step, "matching_prepared_plan_accepted", result.returncode == 0 and "Verified .env-derived" in result.stdout)
+    for name, document in changes.items():
+        write_preparation(workspace, document)
+        step, result = check(f"prep_plan_changed_{name}", workspace, saved_prepared)
+        evidence.check(step, "changed_file_refused", refused(result, collections[1], bucket))
+    saved_defaults = plan("prep_plan_defaults", workspace, stack, terraform, default_document())
+    write_preparation(workspace, prepared)
+    step, result = check("prep_plan_defaults_then_prepared", workspace, saved_defaults)
+    evidence.check(step, "prepared_file_after_default_plan_refused", refused(result, collections[0], bucket))
+    write_preparation(workspace, default_document())
+    step, result = check("prep_plan_defaults_accepted", workspace, saved_defaults)
+    evidence.check(step, "default_plan_with_default_file_accepted", result.returncode == 0)
+    saved_override = plan("prep_plan_override", workspace, stack, terraform, default_document(), "-var=bronze_writer_prepared=true")
+    step, result = check("prep_plan_command_line_override", workspace, saved_override)
+    evidence.check(step, "command_line_override_refused", refused(result))
+    lean, lean_stack, lean_terraform = stack_for("prep_plan_lean", ("variables.tf",))
+    saved_lean = plan("prep_plan_lean_plan", lean, lean_stack, lean_terraform, default_document())
+    step, result = check("prep_plan_without_variables", lean, saved_lean)
+    evidence.check(step, "plan_without_the_inputs_refused", refused(result))
+
+    def matrix(prefix: str, renderer_bytes: bytes) -> bool:
+        """Run every plan case against the given renderer; True only when every case gives its expected answer."""
+        outcomes: list[bool] = []
+        write_preparation(workspace, prepared)
+        # Render the matching output with the real renderer first, so only the saved-plan comparison is under test.
+        (workspace / RENDERER_PATH).write_bytes(sources[RENDERER_PATH])
+        step, result = evidence.run(f"{prefix}_render", [*renderer, "--stack", "iam"], workspace)
+        evidence.check(step, "render_succeeded", result.returncode == 0)
+        for folder in (workspace, lean):
+            (folder / RENDERER_PATH).write_bytes(renderer_bytes)
+        outcomes.append(check(f"{prefix}_accept", workspace, saved_prepared)[1].returncode == 0)
+        for name, document in changes.items():
+            write_preparation(workspace, document)
+            outcomes.append(refused(check(f"{prefix}_changed_{name}", workspace, saved_prepared)[1]))
+        write_preparation(workspace, prepared)
+        outcomes.append(refused(check(f"{prefix}_defaults_then_prepared", workspace, saved_defaults)[1]))
+        write_preparation(workspace, default_document())
+        outcomes.append(refused(check(f"{prefix}_override", workspace, saved_override)[1]))
+        outcomes.append(refused(check(f"{prefix}_without_variables", lean, saved_lean)[1]))
+        return all(outcomes)
+
+    original = sources[RENDERER_PATH]
+    step = evidence.report["steps"][-1]
+    evidence.check(step, "unplanted_renderer_passes_every_plan_case", matrix("prep_plan_matrix", original))
+    return matrix
+
+
 def check_saved_plans(evidence: Evidence, sources: dict[str, bytes], renderer: list[str], shell_renderer: list[str]) -> None:
     """Plan the real IAM variables with the real terraform command, then check which saved plans the renderer accepts."""
     workspace = copied_workspace(evidence.temporary, "saved_plan", sources, FIXTURE)
     step, result = evidence.run("render_for_saved_plan", shell_renderer, workspace)
     evidence.check(step, "render_succeeded", result.returncode == 0 and not result.stderr)
-    variables = (REPO_ROOT / "infra/iam/variables.tf").read_bytes()
-    evidence.report["source_hashes"]["infra/iam/variables.tf"] = {"original_sha256": sha256(variables), "fixture_sha256": sha256(variables)}
     stack = workspace / "infra" / "iam"
-    (stack / "variables.tf").write_bytes(variables)
+    copy_variable_files(evidence, stack, PREPARATION_VARIABLE_FILES)
     terraform_environment = {"CHECKPOINT_DISABLE": "1", "TF_IN_AUTOMATION": "1"}
     terraform = ["terraform", f"-chdir={stack}"]
     plan_arguments = ["plan", "-input=false", "-lock=false", f"-var=admin_profile={ADMIN}", "-var=example_extra_input=example_value"]
@@ -1643,6 +2017,7 @@ def run_suite(evidence: Evidence) -> None:
         evidence.check(step, "no_injected_value_disclosure", "example_unapproved" not in result.stderr)
 
     check_saved_plans(evidence, sources, renderer, shell_renderer)
+    run_preparation_cases(evidence, sources, renderer, shell_renderer)
 
     before = {path.relative_to(evidence.output).as_posix(): sha256(path.read_bytes()) for path in evidence.output.rglob("*") if path.is_file()}
     step, result = evidence.run(
