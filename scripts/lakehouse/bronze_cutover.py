@@ -350,8 +350,11 @@ class LiveServices:
             reader = bronze_inventory.PolarisHttp("127.0.0.1", route.port, client_id=reader_id, secret=reader_secret)
             yield Remote(request, reg.PolarisCatalog(request, CATALOG), reg.PolarisCatalog(reader, CATALOG), route.execute)
         finally:
-            if not transport.close(deadline=time.monotonic() + 30):
-                raise CutoverError("the catalog route did not close with every process confirmed gone; check the transport ledger")
+            closed = transport.close(deadline=time.monotonic() + 30)
+            if not closed:
+                sys.stderr.write("bronze cutover: the catalog route did not close with every process confirmed gone; check the transport ledger\n")
+            if not closed and sys.exc_info()[0] is None:
+                raise CutoverError("the catalog route did not close with every process confirmed gone")
 
 
 def client() -> launcher.LauncherClient:
