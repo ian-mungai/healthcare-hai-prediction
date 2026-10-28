@@ -27,7 +27,7 @@ COMPOSE = "docker-compose.yaml"
 QUALITY = "scripts/lakehouse/silver_quality.py"
 RUNTIME = "orchestration/dag_runtime.py"
 PIPELINE = "orchestration/pipeline_render.py"
-RUN_SECONDS = 300
+RUN_SECONDS = 720
 PYTHON = ROOT / ".venv/bin/python"
 
 
