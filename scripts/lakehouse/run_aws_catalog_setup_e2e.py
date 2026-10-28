@@ -14,6 +14,7 @@ import json
 import re
 import secrets
 import shutil
+import socket
 import sys
 import tempfile
 import threading
@@ -863,6 +864,52 @@ def case_extra_role_membership(_: Path) -> dict[str, bool]:
     }
 
 
+@contextlib.contextmanager
+def slow_peer(trickle: bool) -> Iterator[int]:
+    """A loopback peer that reads the request, then sends a reply one byte every 0.04 s (trickle) or nothing at all (silent)."""
+    server = socket.create_server(("127.0.0.1", 0))
+    stop = threading.Event()
+
+    def serve() -> None:
+        with contextlib.suppress(OSError):
+            connection, _ = server.accept()
+            with connection:
+                connection.recv(65536)
+                reply = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n" + b" " * 62 + b"{}"
+                for byte in reply if trickle else b"":
+                    if stop.wait(0.04):
+                        return
+                    connection.sendall(bytes([byte]))
+                stop.wait(STALL_SECONDS)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield int(server.getsockname()[1])
+    finally:
+        stop.set()
+        server.close()
+        thread.join(timeout=STALL_SECONDS + 2)
+
+
+def case_request_expiry(_: Path) -> dict[str, bool]:
+    """Every wait has a deadline: a peer that trickles its reply or never answers fails the request at its absolute deadline, not later."""
+    checks: dict[str, bool] = {}
+    for label, trickle in (("trickling", True), ("silent", False)):
+        with slow_peer(trickle) as port:
+            request = setup.TunnelRequest(port, deadline=time.monotonic() + 0.3)
+            began = time.monotonic()
+            try:
+                request("GET", setup.CATALOG_PATH, "token")
+                failed = ""
+            except setup.SetupError as error:
+                failed = error.code
+            took = time.monotonic() - began
+        checks[f"the {label} peer fails the request on its deadline"] = failed == "deadline"
+        checks[f"the {label} peer is cut off within 0.5 s"] = took < 0.5
+    return checks
+
+
 CASES: dict[str, Case] = {
     "catalog_created": case_catalog_created,
     "catalog_rerun": case_catalog_rerun,
@@ -894,6 +941,7 @@ CASES: dict[str, Case] = {
     "check_grants": case_check_grants,
     "live_writer_try": case_live_writer_try,
     "extra_role_membership": case_extra_role_membership,
+    "request_expiry": case_request_expiry,
 }
 
 
@@ -937,6 +985,10 @@ MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[A
     ),
     "the approval is not recorded": ("namespace_approval", lambda: mock.patch.object(setup, "record_approval", lambda folder, approval: None)),
     "a working pair is always reset": ("rerun_keeps_pair", lambda: mock.patch.object(principal_credentials, "pair_accepted", lambda *a: False)),
+    "the request read has no absolute expiry": (
+        "request_expiry",
+        lambda: mock.patch.object(setup, "threading", mock.Mock(Event=threading.Event, Timer=lambda *a, **k: mock.Mock())),
+    ),
     "role memberships are not checked": ("extra_role_membership", lambda: mock.patch.object(setup, "verify_memberships", lambda *a: None)),
     "live writer tries are not checked": ("live_writer_try", lambda: mock.patch.object(setup, "no_live_writer_try", lambda *a, **k: contextlib.nullcontext())),
 }
