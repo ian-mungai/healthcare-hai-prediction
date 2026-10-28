@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from scripts.acquisition import api_keys, echo_guard
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition.bls_api_contract import digest, request_for
+from scripts.acquisition.collector_state import CollectorState, QuotaExceeded, StateFile
 from scripts.acquisition.s3_store import AwsCli, encoded_json, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, read_json, require
 
@@ -26,8 +27,13 @@ class RetryableRequest(ValueError):
 
 
 @contextmanager
-def collection_lock(root: Path) -> Iterator[None]:
+def collection_lock(root: Path, *, state_backend: CollectorState | None = None) -> Iterator[None]:
     """Hold an OS lock shared by every batch in the collection; stale processes release it."""
+    if state_backend is not None:
+        require(controls.CURRENT.get() is None, "Cloud redownload state requires separate approval")
+        with state_backend.run(root):
+            yield
+        return
     root.mkdir(parents=True, exist_ok=True)
     with (root / ".collection.lock").open("a") as handle:
         try:
@@ -40,8 +46,16 @@ def collection_lock(root: Path) -> Iterator[None]:
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def reserve(root: Path, identity: str, limit: int, now: datetime) -> None:
+def reserve(root: Path, identity: str, limit: int, now: datetime, *, state_backend: CollectorState | None = None) -> None:
     """Reserve and persist a counted request before sending it, including failed attempts."""
+    if state_backend is not None:
+        require(controls.CURRENT.get() is None, "Cloud redownload state requires separate approval")
+        state_backend.verify_active(root)
+        try:
+            state_backend.reserve("bls_v2", identity, limit, now)
+        except QuotaExceeded as error:
+            raise QuotaPause(str(error)) from None
+        return
     with controls.quota_lock(root, REPO_ROOT) as paths:
         if controls.recent(paths, now) >= limit:
             raise QuotaPause("Local BLS rolling-24-hour request budget reached; resume after oldest reservation expires")
@@ -89,10 +103,24 @@ def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
 
 
 def fetch(
-    plan: dict, batch: dict, root: Path, allow_network: bool, client: AwsCli | None, request: Callable | None = None, sleep: Callable = time.sleep
+    plan: dict,
+    batch: dict,
+    root: Path,
+    allow_network: bool,
+    client: AwsCli | None,
+    request: Callable | None = None,
+    sleep: Callable = time.sleep,
+    *,
+    state_backend: CollectorState | None = None,
 ) -> dict:
     """Reuse one atomic response/provenance envelope or make at most three counted requests."""
     path = root / "batches" / batch["id"] / "transport.json"
+    if state_backend is not None:
+        require(controls.CURRENT.get() is None, "Cloud redownload state requires separate approval")
+        state_backend.verify_active(root)
+        state_backend.hydrate()
+        if path.exists():
+            require(state_backend.read_file(path.relative_to(root).as_posix()) == path.read_bytes(), "BLS cache differs from durable state")
     if path.exists():
         envelope = read_json(path)
         raw = bytes.fromhex(envelope["body_hex"])
@@ -103,7 +131,7 @@ def fetch(
         raise ValueError("BLS response missing; --fetch required")
     action = request or request_live
     for attempt in range(3):
-        reserve(root, batch["id"], plan["request_limit_24h"], datetime.now(UTC))
+        reserve(root, batch["id"], plan["request_limit_24h"], datetime.now(UTC), state_backend=state_backend)
         try:
             raw = controls.returned(action, plan, batch, client)
             break
@@ -120,6 +148,8 @@ def fetch(
         "body_hex": raw.hex(),
         "http_status": 200,
     }
+    if state_backend is not None:
+        state_backend.checkpoint([StateFile(path.relative_to(root).as_posix(), encoded_json(envelope), "public_cache")])
     write_once(path, encoded_json(envelope))
     sleep(plan["request_spacing_seconds"])
     return envelope
