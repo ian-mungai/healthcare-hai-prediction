@@ -35,9 +35,9 @@
       }
     },
     "analytics": {
-      "reason": "The DuckDB UI relay runs in the analytics image.",
+      "reason": "The builders, DuckDB UI relay and Synthetic pipeline flow checks use the analytics runtime. Full quality flows also need the quality runtime packages.",
       "requirements": ["services/analytics/requirements.txt"],
-      "code": ["scripts/lakehouse/pipeline_build.py", "services/analytics/*.py"],
+      "code": ["scripts/lakehouse/pipeline_build.py", "scripts/orchestration/pipeline_flow_fixture.py", "scripts/orchestration/run_pipeline_flow_e2e.py", "services/analytics/*.py"],
       "provided": {
         "dbt": "the module of dbt-core, pinned in services/analytics/requirements.txt; the host environment does not install dbt-core, so deptry cannot map the module to its package"
       }

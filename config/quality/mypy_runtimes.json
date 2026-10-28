@@ -72,6 +72,14 @@
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.dag_processing.dagbag\"; Cannot find implementation or library stub for module named \"airflow.providers.standard.operators.empty\"; Cannot find implementation or library stub for module named \"airflow.sdk\"; Cannot find implementation or library stub for module named \"airflow.sdk.bases.operator\""
     },
+    "scripts/orchestration/pipeline_flow_fixture.py": {
+      "runtime": "analytics",
+      "reason": "Cannot find implementation or library stub for module named \"duckdb\""
+    },
+    "scripts/orchestration/run_pipeline_flow_e2e.py": {
+      "runtime": "analytics",
+      "reason": "Cannot find implementation or library stub for module named \"duckdb\""
+    },
     "scripts/review/catalog_documents.py": {
       "runtime": "review",
       "reason": "Library stubs not installed for \"openpyxl\"; Cannot find implementation or library stub for module named \"pypdf\"; Cannot find implementation or library stub for module named \"pypdf.errors\""

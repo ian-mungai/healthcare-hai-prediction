@@ -1085,7 +1085,15 @@ def planted_defects(destination: Path) -> dict[str, Any]:
         (
             "leak_seal_stage_error",
             "orchestration/remote_run.py",
-            (('        raise PipelineError("remote_seal_unavailable")', '        raise StageError("remote_seal_unavailable")'),),
+            (
+                ('                    raise PipelineError("remote_seal_unavailable")', '                    raise StageError("remote_seal_unavailable")'),
+                (
+                    '                stage["sealed"][layer] = record\n'
+                    "        except StageError as error:\n"
+                    "            raise PipelineError(error.code) from None",
+                    '                stage["sealed"][layer] = record\n        except StageError:\n            raise',
+                ),
+            ),
             remote_run,
             "RemoteRunStore",
             partial(seam_error, variant="seal"),
@@ -1094,7 +1102,12 @@ def planted_defects(destination: Path) -> dict[str, Any]:
         (
             "leak_clear_stage_error",
             "orchestration/remote_run.py",
-            (("        except StageError as error:\n            raise PipelineError(error.code) from None", "        except StageError:\n            raise"),),
+            (
+                (
+                    "                        del objects[path]\n        except StageError as error:\n            raise PipelineError(error.code) from None",
+                    "                        del objects[path]\n        except StageError:\n            raise",
+                ),
+            ),
             remote_run,
             "RemoteRunStore",
             partial(seam_error, variant="clear_identity"),

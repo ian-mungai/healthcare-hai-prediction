@@ -254,10 +254,13 @@ def remove_tree(path: Path) -> None:
 
 
 def export_files_match(export_dir: Path, manifest: Mapping[str, Any]) -> bool:
-    """True when every exported file is present with the hash the manifest names."""
+    """True when exactly the manifest's regular export files are present with their recorded hashes."""
+    expected = {"manifest.json", *(str(item["file"]) for item in manifest.get("tables", {}).values())}
+    if not export_dir.is_dir() or export_dir.is_symlink() or {path.name for path in export_dir.iterdir()} != expected:
+        return False
     for item in manifest.get("tables", {}).values():
         file = export_dir / str(item["file"])
-        if not file.is_file() or sha256_file(file) != item["file_sha256"]:
+        if file.is_symlink() or not file.is_file() or sha256_file(file) != item["file_sha256"]:
             return False
     return True
 

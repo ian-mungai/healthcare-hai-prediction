@@ -193,8 +193,8 @@ def output_record(attempt: Mapping[str, Any]) -> dict[str, Any]:
     return dict(document)
 
 
-def accept_validation(state: Mapping[str, Any], run_id: str, layer: str, attempt_id: str, folder: Path, *, store: RunStore | None = None) -> dict[str, Any]:
-    """Bind a layer seal to a successful quality attempt owned by this run and generation."""
+def validation_evidence(state: Mapping[str, Any], run_id: str, layer: str, attempt_id: str, folder: Path) -> dict[str, Any]:
+    """Read the latest successful validation and its independent producer receipt before sealing."""
     fixed_layer(layer)
     run = state["runs"][run_id]
     attempt = state["attempts"].get(attempt_id)
@@ -223,7 +223,7 @@ def accept_validation(state: Mapping[str, Any], run_id: str, layer: str, attempt
     if result.get("counts", {}).get("fail") != 0 or result.get("counts", {}).get("warn") != 0:
         raise PipelineError("the quality result does not pass every expectation")
     expected = str(result.get("build_file_sha256", ""))
-    if not SHA256.fullmatch(expected) or not (store if store is not None else LocalRunStore(folder)).sealed_digest(layer, expected, state=state):
+    if not SHA256.fullmatch(expected):
         raise PipelineError("the sealed bytes are not the quality attempt's validated bytes")
     return {
         "run_id": run_id,
@@ -234,6 +234,15 @@ def accept_validation(state: Mapping[str, Any], run_id: str, layer: str, attempt
         "file": f"layer_sealed/{layer}/{expected}.duckdb",
         "sha256": expected,
     }
+
+
+def accept_validation(state: Mapping[str, Any], run_id: str, layer: str, attempt_id: str, folder: Path, *, store: RunStore | None = None) -> dict[str, Any]:
+    """Bind a layer seal to a successful quality attempt owned by this run and generation."""
+    completion = validation_evidence(state, run_id, layer, attempt_id, folder)
+    selected = store if store is not None else LocalRunStore(folder)
+    if not selected.sealed_digest(layer, str(completion["sha256"]), state=state):
+        raise PipelineError("the sealed bytes are not the quality attempt's validated bytes")
+    return completion
 
 
 def accepted_completion(run: Mapping[str, Any], layer: str) -> dict[str, Any]:

@@ -15,7 +15,16 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.ecs_stage import validate_result
-from orchestration.pipeline_protocol import MATERIALIZATION_GATE, MAX_RECORD, PipelineError, fixed_layer
+from orchestration.pipeline_protocol import (
+    MATERIALIZATION_GATE,
+    MAX_RECORD,
+    PipelineError,
+    fixed_layer,
+    output_record,
+    read_record,
+    require_materialized,
+    validation_evidence,
+)
 from scripts.lakehouse import run_lock
 from services.hai.bootstrap.integrity import StageError, canonical, check_deadline, digest_descriptor, held_directory, held_file, parse_json, safe_path
 from services.hai.bootstrap.outputs import Declaration, Output
@@ -24,6 +33,17 @@ from services.hai.bootstrap.transfer import FileRef, StorageError, Transfer
 
 STREAMS = ("stdout.txt", "stderr.txt")
 JOURNAL_LIMIT = 3 * MAX_RECORD + 1024
+
+
+def updated_result_map(current: Mapping[str, Any], returned: Mapping[str, Any], template: str) -> dict[str, Any]:
+    """Merge verified references, replacing the shared export scope for an export result.
+
+    The caller verifies the complete declared result first and persists this map
+    under the registry lock. Both remote collection and staged local fallback
+    use this operation when their verified result supersedes the current export.
+    """
+    kept = {path: value for path, value in current.items() if template != "pipeline_export" or not path.startswith("publish/export/")}
+    return {**kept, **returned}
 
 
 class RemoteRunStore:
@@ -290,7 +310,7 @@ class RemoteRunStore:
                 raise StageError("result_identity", 71)
             if previous == applied:
                 self._verify_entries(entries, logs)
-                if any(stage["objects"].get(path) != value for path, value in mapped.items()):
+                if stage["objects"] != updated_result_map(stage["objects"], mapped, str(job["template"])):
                     raise StageError("materialized_record", 71)
             else:
                 current = self._pending()
@@ -301,7 +321,7 @@ class RemoteRunStore:
                 for entry in entries:
                     self._publish_entry(entry, spool, logs)
                 self._verify_entries(entries, logs)
-                stage["objects"].update(mapped)
+                stage["objects"] = updated_result_map(stage["objects"], mapped, str(job["template"]))
                 attempt.setdefault("ecs", {})["applied"] = applied
         with self._transaction() as state:
             _, attempt, _ = self._identity(state, job)
@@ -341,8 +361,86 @@ class RemoteRunStore:
         return self.materialize(pending["job"], pending["marker"], contract, pending["job_sha256"], secret_values)
 
     def seal(self, layer: str, expected: str) -> dict[str, str]:
-        """Refuse remote seal dispatch until its dedicated task integration exists."""
-        raise PipelineError("remote_seal_unavailable")
+        """Accept a materialized seal task without writing layer completion authority.
+
+        The launcher dispatches and materializes the dedicated task first. This
+        method then binds its independent receipt, latest validation and exact
+        source version under the registry lock. Missing evidence needs dispatch.
+        """
+        from scripts.orchestration.pipeline_seal import evidence
+
+        fixed_layer(layer)
+        try:
+            with self._transaction(write=True) as state:
+                require_materialized(self.folder)
+                run = state["runs"][self.run_id]
+                stage = run.get("stage", {})
+                mapped = stage.get("objects", {})
+                returned = mapped.get("seal.json")
+                if not isinstance(returned, dict):
+                    raise PipelineError("remote_seal_unavailable")
+                record, digest = read_record(self.folder, "seal.json")
+                source = mapped.get("staging.duckdb", {})
+                validation_id = record.get("validation_attempt")
+                validation = validation_evidence(state, self.run_id, layer, str(validation_id), self.folder)
+                reference, wanted = evidence(
+                    {
+                        "run_id": self.run_id,
+                        "generation": run.get("generation", 1),
+                        "layer": layer,
+                        "validation_attempt": validation_id,
+                        "sha256": expected,
+                        "source": {"path": "staging.duckdb", **{key: source.get(key) for key in ("key", "version_id", "sha256", "size")}},
+                    }
+                )
+                if record != wanted or validation["sha256"] != expected or stage.get("generation") != run.get("generation", 1):
+                    raise StageError("seal_binding", 71)
+                candidates = [
+                    attempt
+                    for attempt in state["attempts"].values()
+                    if attempt.get("owner") == "run:" + self.run_id
+                    and attempt.get("template") == "pipeline_seal"
+                    and attempt.get("ecs", {}).get("applied", {}).get("try_id") == returned.get("try_id")
+                ]
+                if len(candidates) != 1:
+                    raise StageError("seal_binding", 71)
+                attempt = candidates[0]
+                execution = attempt.get("execution", {})
+                placements = execution.get("placements", [])
+                if (
+                    run.get("state") != "held"
+                    or attempt.get("generation") != wanted["generation"]
+                    or attempt.get("cancel_intent")
+                    or execution.get("live_try") not in (None, returned.get("try_id"))
+                    or not placements
+                    or placements[-1].get("try_id") != returned.get("try_id")
+                    or placements[-1].get("target") != "ecs"
+                    or placements[-1].get("state") != "complete"
+                    or not placements[-1].get("task_arn")
+                ):
+                    raise StageError("result_identity", 71)
+                if (
+                    attempt.get("phase") != "ended"
+                    or attempt.get("reason") != "exited"
+                    or attempt.get("exit_code") != 0
+                    or attempt.get("ecs", {}).get("applied", {}).get("try_id") != returned.get("try_id")
+                    or output_record(attempt).get("seal_sha256") != digest
+                    or returned.get("sha256") != digest
+                ):
+                    raise StageError("seal_receipt", 71)
+                self._head(reference)
+                self._head(FileRef("seal.json", returned["key"], returned["version_id"], digest, returned["size"]))
+                previous = stage.setdefault("sealed", {}).get(layer)
+                if previous is not None and previous != record:
+                    raise StageError("seal_conflict", 71)
+                stage["sealed"][layer] = record
+        except StageError as error:
+            raise PipelineError(error.code) from None
+        except OSError as error:
+            raise PipelineError("remote seal evidence is unreadable") from error
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise PipelineError("remote seal evidence is malformed") from error
+        return {"file": f"layer_sealed/{layer}/{expected}.duckdb", "sha256": expected}
 
     def _seal_reference(self, state: Mapping[str, Any], layer: str, expected: str) -> FileRef | None:
         run = state["runs"][self.run_id]
