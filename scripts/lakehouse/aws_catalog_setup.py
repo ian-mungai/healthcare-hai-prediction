@@ -629,11 +629,11 @@ def role_names(request: Request, access: str, path: str, what: str) -> set[str] 
     return {str(item["name"]) for item in roles}
 
 
-def verify_memberships(request: Request, access: str, identity: str) -> None:
+def verify_memberships(request: Request, access: str, identity: str, exact: bool = False) -> None:
     """The identity's principal holds no principal role but its own, and that principal role no catalog role on the catalog but its own (P7).
 
     Polaris gives a principal every privilege of every role it holds, so an extra role would keep privileges outside the plan. Extras are
-    refused, never removed.
+    refused, never removed. Creation allows a missing role, which it assigns later; with ``exact`` (the inspection) both assignments must exist.
     """
     role = PRINCIPALS[identity]
     listings = (
@@ -644,6 +644,8 @@ def verify_memberships(request: Request, access: str, identity: str) -> None:
         found = role_names(request, access, path, what)
         if found is not None and found - {role}:
             raise SetupError("roles", f"{what} include a role outside the approved plan; it is never removed here")
+        if exact and found != {role}:
+            raise SetupError("roles", f"{what} do not include the approved role")
 
 
 def ensure_principal(
@@ -756,7 +758,10 @@ def step_principal(services: Services, identity: str, instance: str, approval_id
 
 
 def check_principals(request: Request, access: str, approvals: Path) -> dict[str, str]:
-    """Each identity's role memberships and grants against its plan, read only: ``matches``, ``differs`` or ``absent`` (no catalog role yet)."""
+    """Each identity's role memberships and grants against its plan, read only: ``matches``, ``differs`` or ``absent`` (no catalog role yet).
+
+    ``matches`` needs both exact assignments (the principal role to the principal, the catalog role to the principal role) and the exact grants.
+    """
     found: dict[str, str] = {}
     for identity, role in PRINCIPALS.items():
         try:
@@ -771,6 +776,13 @@ def check_principals(request: Request, access: str, approvals: Path) -> dict[str
             found[identity] = "absent"
             continue
         ensure_status(status, f"reading catalog role {role}")
+        try:
+            verify_memberships(request, access, identity, exact=True)
+        except SetupError as error:
+            if error.code != "roles":
+                raise
+            found[identity] = "differs"
+            continue
         approval = approval_for(approvals, identity, None)
         try:
             compare_grants(request, access, role, grant_plan(identity, approval is not None))

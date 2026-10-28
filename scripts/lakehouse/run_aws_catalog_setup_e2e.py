@@ -873,6 +873,32 @@ SLOW_REPLIES = {
 }
 
 
+def case_missing_role_assignment(_: Path) -> dict[str, bool]:
+    """P7: after a successful reader setup, removing its principal-role assignment or its catalog-role assignment makes the read-only inspection
+    report the reader as differing; ``matches`` needs both exact assignments."""
+    role = setup.PRINCIPALS["reader"]
+    found: dict[str, Any] = {}
+    for label in ("principal role", "catalog role"):
+        with catalog_world() as (ssm, polaris, root):
+            services = Services(ssm, polaris)
+            set_up = principal(services, root, "reader")
+            clean = call(["inspect", "--instance", INSTANCE], services, root)
+            if label == "principal role":
+                polaris.assigned[role].discard(role)
+            else:
+                polaris.principal_roles[role].discard(role)
+            found[label] = (set_up[0], clean, call(["inspect", "--instance", INSTANCE], services, root))
+    checks: dict[str, bool] = {}
+    for label, (set_up, clean, missing) in found.items():
+        checks[f"the reader set up and matched before its {label} assignment was removed"] = (
+            set_up == 0 and ((outcome(clean[1]) or {}).get("principals") or {}).get("reader") == "matches"
+        )
+        checks[f"a missing {label} assignment is reported as differing"] = (
+            missing[0] == 0 and ((outcome(missing[1]) or {}).get("principals") or {}).get("reader") == "differs"
+        )
+    return checks
+
+
 @contextlib.contextmanager
 def slow_peer(kind: str) -> Iterator[int]:
     """A loopback peer that reads the request, sends the headers of its ``SLOW_REPLIES`` entry at once, then the rest one byte every 0.04 s."""
@@ -1005,6 +1031,7 @@ CASES: dict[str, Case] = {
     "live_writer_try": case_live_writer_try,
     "extra_role_membership": case_extra_role_membership,
     "request_expiry": case_request_expiry,
+    "missing_role_assignment": case_missing_role_assignment,
     "lock_before_changes": case_lock_before_changes,
     "check_never_decrypts": case_check_never_decrypts,
 }
@@ -1059,6 +1086,10 @@ MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[A
         lambda: mock.patch.object(principal_credentials, "serialized", lambda *a: contextlib.nullcontext()),
     ),
     "role memberships are not checked": ("extra_role_membership", lambda: mock.patch.object(setup, "verify_memberships", lambda *a: None)),
+    "missing role assignments are accepted": (
+        "missing_role_assignment",
+        lambda: mock.patch.object(setup, "verify_memberships", lambda request, access, identity, exact=False: None),
+    ),
     "live writer tries are not checked": ("live_writer_try", lambda: mock.patch.object(setup, "no_live_writer_try", lambda *a, **k: contextlib.nullcontext())),
 }
 
