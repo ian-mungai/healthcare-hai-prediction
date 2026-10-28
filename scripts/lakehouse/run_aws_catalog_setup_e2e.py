@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import io
 import json
 import re
@@ -30,7 +31,7 @@ from unittest import mock
 from orchestration import ecs_target
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.infrastructure import secret_store
-from scripts.infrastructure.secret_store_stand_in import CIPHERTEXT_MARKER, StandIn
+from scripts.infrastructure.secret_store_stand_in import CIPHERTEXT_MARKER, StandIn, StandInHandler
 from scripts.lakehouse import aws_catalog_setup as setup
 from scripts.lakehouse import catalog, polaris_writer, principal_credentials, run_lock
 
@@ -899,6 +900,96 @@ def case_missing_role_assignment(_: Path) -> dict[str, bool]:
     return checks
 
 
+def lock_free(path: Path) -> bool:
+    """True when nobody holds the lock file now."""
+    with path.open("a") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return True
+
+
+@contextlib.contextmanager
+def held_secret_write(ssm: StandIn, name: str) -> Iterator[tuple[threading.Event, threading.Event, threading.Event]]:
+    """The stand-in Parameter Store holds the next write of ``name`` before it commits until ``release`` is set; yields entered, release, finished."""
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    claimed: list[bool] = []
+
+    class HeldWrite(StandInHandler):
+        def do_POST(self) -> None:
+            payload = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            body = json.loads(payload or b"{}")
+            held = not claimed and self.headers.get("X-Amz-Target", "").endswith(".PutParameter") and body.get("Name") == name
+            if held:
+                claimed.append(True)
+                entered.set()
+                release.wait(STALL_SECONDS * 3)
+            original, self.rfile = self.rfile, io.BytesIO(payload)
+            try:
+                super().do_POST()
+            finally:
+                self.rfile = original
+                if held:
+                    finished.set()
+
+    before = ssm.server.RequestHandlerClass
+    ssm.server.RequestHandlerClass = HeldWrite
+    try:
+        yield entered, release, finished
+    finally:
+        release.set()
+        finished.wait(STALL_SECONDS)
+        ssm.server.RequestHandlerClass = before
+
+
+def case_late_credential_write(_: Path) -> dict[str, bool]:
+    """P4 and P5: a credential write still running at the run's deadline keeps the principal lock and the launcher registry lock until it is
+    confirmed finished; one that cannot be confirmed in time leaves a pending mark that refuses every rerun until the write has ended, so a late
+    write can never overwrite the pair a later run stored."""
+    role = setup.PRINCIPALS["reader"]
+    secret_name = setup.configured_pairs()["reader"][1]
+    args = ["--seconds", "1", "principal", "--identity", "reader", "--instance", INSTANCE]
+    checks: dict[str, bool] = {}
+    with catalog_world() as (ssm, polaris, root), mock.patch.object(setup, "WRITE_SETTLE_SECONDS", STALL_SECONDS * 2, create=True):
+        services = Services(ssm, polaris)
+        principal(services, root, "reader")
+        del ssm.values[secret_name]
+        result: list[tuple[int, str, str]] = []
+        with held_secret_write(ssm, secret_name) as (entered, release, finished):
+            first = threading.Thread(target=lambda: result.append(call(args, services, root)), daemon=True)
+            first.start()
+            entered.wait(STALL_SECONDS)
+            time.sleep(1.3)
+            checks["a write past the deadline keeps the principal lock"] = not lock_free(services.locks / f"aws_{role}.lock")
+            checks["a write past the deadline keeps the registry lock"] = not lock_free(services.registry.path / "registry.lock")
+            checks["the run waits for its write to be confirmed"] = first.is_alive() and not finished.is_set()
+            release.set()
+            first.join(STALL_SECONDS * 3)
+        rerun = principal(services, root, "reader")
+        checks["the confirmed late write fails its run"] = bool(result) and result[0][0] == 1
+        checks["a rerun after a confirmed write succeeds with a working pair"] = rerun[0] == 0 and stored_pair(ssm, "reader") == live_pair(polaris, "reader")
+    with catalog_world() as (ssm, polaris, root), mock.patch.object(setup, "WRITE_SETTLE_SECONDS", 0.3, create=True):
+        services = Services(ssm, polaris)
+        principal(services, root, "reader")
+        del ssm.values[secret_name]
+        with held_secret_write(ssm, secret_name) as (entered, release, finished):
+            first_run = call(args, services, root)
+            issued = len(polaris.issued)
+            refused = principal(services, root, "reader")
+            checks["an unconfirmed write fails its run"] = first_run[0] == 1 and not finished.is_set()
+            checks["a rerun while the write may commit is refused before any reset"] = (
+                refused[0] == 1 and "(credentials)" in refused[2] and len(polaris.issued) == issued
+            )
+            release.set()
+            finished.wait(STALL_SECONDS)
+            time.sleep(0.2)
+        ended = principal(services, root, "reader")
+        checks["once the write has ended a rerun succeeds with a working pair"] = ended[0] == 0 and stored_pair(ssm, "reader") == live_pair(polaris, "reader")
+    return checks
+
+
 @contextlib.contextmanager
 def slow_peer(kind: str) -> Iterator[int]:
     """A loopback peer that reads the request, sends the headers of its ``SLOW_REPLIES`` entry at once, then the rest one byte every 0.04 s."""
@@ -1031,6 +1122,7 @@ CASES: dict[str, Case] = {
     "live_writer_try": case_live_writer_try,
     "extra_role_membership": case_extra_role_membership,
     "request_expiry": case_request_expiry,
+    "late_credential_write": case_late_credential_write,
     "missing_role_assignment": case_missing_role_assignment,
     "lock_before_changes": case_lock_before_changes,
     "check_never_decrypts": case_check_never_decrypts,
@@ -1089,6 +1181,12 @@ MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[A
     "missing role assignments are accepted": (
         "missing_role_assignment",
         lambda: mock.patch.object(setup, "verify_memberships", lambda request, access, identity, exact=False: None),
+    ),
+    "a late credential write is abandoned": (
+        "late_credential_write",
+        lambda: mock.patch.object(
+            setup.PairVault, "put", lambda self, name, value: self.within_deadline(lambda: secret_store.SecretStore.put(self, name, value), name)
+        ),
     ),
     "live writer tries are not checked": ("live_writer_try", lambda: mock.patch.object(setup, "no_live_writer_try", lambda *a, **k: contextlib.nullcontext())),
 }
