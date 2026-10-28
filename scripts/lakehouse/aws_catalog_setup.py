@@ -39,7 +39,9 @@ import http.client
 import json
 import os
 import re
+import socket
 import sys
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Iterator
@@ -198,15 +200,37 @@ class TunnelRequest:
         return result
 
     def send(self, method: str, path: str, data: bytes | None, headers: dict[str, str]) -> tuple[int, Any]:
+        """One request within the absolute deadline: a watchdog shuts the socket at expiry, so neither a silent peer nor one that keeps sending a
+        few bytes holds the header or body read past it (the cutover's ``bronze_inventory.PolarisHttp.send``)."""
         timeout = min(REQUEST_SECONDS, check_deadline(self.deadline, self.clock))
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+        expired = threading.Event()
+
+        def expire() -> None:
+            expired.set()
+            if connection.sock is not None:
+                with contextlib.suppress(OSError):
+                    connection.sock.shutdown(socket.SHUT_RDWR)
+
+        watchdog = threading.Timer(timeout, expire)
+        watchdog.daemon = True
+        watchdog.start()
         try:
-            connection.request(method, path, body=data, headers=headers)
-            response = connection.getresponse()
-            raw = response.read(MAX_REPLY_BYTES + 1)
-        except (OSError, http.client.HTTPException) as error:
-            raise SetupError("catalog_http", f"{method} {path} got no complete reply ({type(error).__name__}); it is not repeated") from None
+            try:
+                connection.connect()
+                if expired.is_set():
+                    raise TimeoutError
+                connection.request(method, path, body=data, headers=headers)
+                response = connection.getresponse()
+                raw = response.read(MAX_REPLY_BYTES + 1)
+            except (OSError, http.client.HTTPException) as error:
+                if expired.is_set() or self.clock() >= self.deadline:
+                    raise SetupError("deadline", f"{method} {path} passed its deadline; it is not repeated") from None
+                raise SetupError("catalog_http", f"{method} {path} got no complete reply ({type(error).__name__}); it is not repeated") from None
+            if expired.is_set():
+                raise SetupError("deadline", f"{method} {path} passed its deadline; it is not repeated")
         finally:
+            watchdog.cancel()
             connection.close()
         if len(raw) > MAX_REPLY_BYTES:
             raise SetupError("catalog_http", f"{method} {path} replied with more than {MAX_REPLY_BYTES} bytes")
