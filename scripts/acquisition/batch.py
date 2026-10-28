@@ -15,6 +15,7 @@ from typing import Any
 from scripts.acquisition import s3_store
 from scripts.acquisition.capture import capture, prepare_capture, receipt_validator, validate_receipt
 from scripts.acquisition.cli_tools import executable, run_argv
+from scripts.acquisition.collector_state import CollectorState, QuotaExceeded, StateError
 from scripts.acquisition.reuse_capture import plan_identity, reuse_capture
 from scripts.acquisition.s3_store import AwsCli, component, encoded_json, preflight, upload_snapshot, write_once
 from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json
@@ -71,9 +72,16 @@ def receipt_for_job(directory: Path, job: dict, registry: dict, validator: Any) 
     return None
 
 
-def reserve_bls_requests(root: Path, attempts: int, now: datetime | None = None) -> None:
+def reserve_bls_requests(root: Path, attempts: int, now: datetime | None = None, *, state_backend: CollectorState | None = None) -> None:
     """Reserve bounded BLS requests against the local rolling 24-hour ledger."""
     now = now or datetime.now(UTC)
+    if state_backend is not None:
+        state_backend.verify_active(root)
+        try:
+            state_backend.reserve("bls_v1", "legacy_batch", 25, now, weight=attempts)
+        except QuotaExceeded as error:
+            raise CaptureError(str(error)) from None
+        return
     directory = root / "quota" / "bls"
     directory.mkdir(parents=True, exist_ok=True)
     # A rolling 24-hour cap is conservative across uncertain publisher reset boundaries.
@@ -98,6 +106,13 @@ def run_batch(batch: dict, root: Path, registry: dict, validator: Any, client: A
         return {"status": "validated_offline", "job_count": len(jobs), "max_jobs_per_run": max_jobs, "aws_calls": 0, "downloads": 0}
     if client is None or outputs is None:
         raise CaptureError("Live execution requires explicit project storage configuration.")
+    state_backend = options.get("state_backend")
+    if state_backend is not None:
+        if not isinstance(state_backend, CollectorState):
+            raise CaptureError("Select a collector state backend explicitly.")
+        with state_backend.run(root):
+            preflight(client, outputs)
+            return execute_jobs(batch, jobs, root, registry, validator, client, outputs, max_jobs, max_bytes, options)
     root.mkdir(parents=True, exist_ok=True)
     with (root / ".execution.lock").open("a+") as lock:
         try:
@@ -159,7 +174,7 @@ def execute_jobs(
                     if reserved_bytes + upper_bound > max_bytes:
                         raise CaptureError("Per-run download budget would be exceeded; job remains pending.")
                     if job["plan"].get("mode") == "bls_api":
-                        reserve_bls_requests(root, limits.attempts)
+                        reserve_bls_requests(root, limits.attempts, state_backend=options.get("state_backend"))
                     reserved_bytes += upper_bound
                     sleep_fn(1)
                     receipt_path = capture_fn(job["plan"], directory / "captures", registry, validator, limits)
@@ -181,6 +196,8 @@ def execute_jobs(
                 write_once(state_path, encoded_json(state))
                 capture_cache[reuse_identity(receipt)] = receipt_path
             events.append(state)
+        except StateError:
+            raise
         except (ValueError, OSError, KeyError, TypeError) as error:
             # Keep failures auditable without copying provider bodies, credentials or CLI stderr.
             events.append(
