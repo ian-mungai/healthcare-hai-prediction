@@ -5,8 +5,12 @@ child starts a grandchild (one that ignores TERM in some cases) and the case che
 returns or raises. Cases: a grandchild stopped at the deadline, a grandchild and a child that ignore TERM (KILL after the grace period), a grandchild
 that holds the output pipe after the child exited, partial output kept in the ``TimeoutExpired``, a caller interrupt that stops the group, a child in
 its own group (the caller is never signalled), a survivor that fails visibly, and unchanged results for a program that ends in time (exit code, text,
-``check``, a missing program, working folder, environment and a closed stdin).
-Planted defects run the same cases with a broken stop (the direct child only, TERM only, no confirmation) and each must be caught by a named case.
+``check``, a missing program, working folder, environment and a closed stdin). Nested cases start a Python program that itself calls ``run_command``
+(one and two levels deep): the outer deadline must stop the nested groups too, through the private registry of owned groups that the launcher passes to
+its descendants in ``PROCESS_GROUP_REGISTRIES``; a nested launch keeps its own earlier deadline; a recorded group that has already ended counts as stopped;
+the registry is private (mode 600 in a folder with mode 700) and removed, and a write to a removed registry is skipped.
+Planted defects run the same cases with a broken stop (the direct child only, TERM only, no confirmation, the own group only). Each plant has the real
+parameters of ``stop_process_group`` and counts as caught only when the named check of each named case is false and the case raised nothing.
 A member that starts its own session is outside the group; that limit is documented in scripts/process.py and not tested here.
 The report goes to data/e2e/process/<UTC>_<pid>/report.json with the revision and the SHA-256 of the files under test.
 """
@@ -15,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import inspect
 import json
 import os
 import shutil
@@ -37,6 +42,8 @@ WATCHED = ("scripts/process.py", "scripts/quality/run_process_e2e.py")
 # The grace periods of the cases (the real defaults are checked by a separate case); short, so the cases stay quick.
 CASE_GRACE_SECONDS = 1.0
 CASE_TIMEOUT_SECONDS = 1.0
+# The outer deadline of the nested cases: long enough for a nested Python launcher to start its program on a loaded machine.
+NESTED_OUTER_TIMEOUT_SECONDS = 3.0
 # The child is one literal bash program; the folder and the modes reach it and its grandchild through the environment. A program that ignores TERM
 # does so for its children too (an ignored signal survives exec).
 GRANDCHILD = """
@@ -50,11 +57,42 @@ CHILD = """
 if [ "$CHILD_MODE" = ignore_term ]; then trap '' TERM; fi
 echo $$ >"$CASE_DIR/child.pid"
 echo "pgid $(ps -o pgid= -p $$ | tr -d ' ')" >"$CASE_DIR/child.group"
+printf '%s' "${PROCESS_GROUP_REGISTRIES:-}" >"$CASE_DIR/child.registries"
 printf 'partial output\\n'
 printf 'partial error\\n' >&2
 bash -c "$GRANDCHILD_CODE" grandchild "$CASE_DIR/grandchild.pid" "$GRANDCHILD_MODE" &
 if [ "$CHILD_MODE" = leave ]; then exit 0; fi
 while :; do sleep 1; done
+"""
+# The nested launcher, written to the case folder as nested.py. Arguments: repository root, case folder, levels, inner timeout, inner grace period, and
+# "exit" or "wait" (what it does after the inner timeout). With levels above 1 it starts itself again through run_command; at level 1 it starts CHILD.
+# It records its pid, its group and, for each registry it inherited, the registry's mode, its folder's mode and its owner.
+NESTED = """
+import json, os, stat, sys, time
+root, folder, levels, timeout, grace, after = sys.argv[1], sys.argv[2], int(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5]), sys.argv[6]
+sys.path.insert(0, root)
+from scripts.process import TimeoutExpired, run_command
+with open(os.path.join(folder, f"level{levels}.pid"), "w") as file:
+    file.write(str(os.getpid()))
+seen = [path for path in os.environ.get("PROCESS_GROUP_REGISTRIES", "").split(":") if path]
+details = []
+for path in seen:
+    item = {"path": path, "exists": os.path.exists(path)}
+    if item["exists"]:
+        item.update(mode=stat.S_IMODE(os.stat(path).st_mode), folder_mode=stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode), owner=os.stat(path).st_uid)
+    details.append(item)
+with open(os.path.join(folder, f"level{levels}.json"), "w") as file:
+    json.dump({"group": os.getpgrp(), "registries": details}, file)
+try:
+    if levels > 1:
+        run_command(sys.executable, ["-B", __file__, root, folder, str(levels - 1), str(timeout), str(grace), after], timeout=60)
+    else:
+        run_command("bash", ["-c", os.environ.get("NESTED_CHILD_CODE", "")], timeout=timeout, grace_seconds=grace)
+except TimeoutExpired:
+    print("inner timeout", flush=True)
+    if after == "wait":
+        while True:
+            time.sleep(1)
 """
 
 
@@ -79,18 +117,43 @@ class Scratch:
         self.folder = base / name
         self.folder.mkdir(parents=True)
 
+    def environment(self, grandchild_mode: str, child_mode: str) -> dict[str, str]:
+        return {
+            **os.environ,
+            "CASE_DIR": str(self.folder),
+            "GRANDCHILD_CODE": GRANDCHILD,
+            "GRANDCHILD_MODE": grandchild_mode,
+            "CHILD_MODE": child_mode,
+            "NESTED_CHILD_CODE": CHILD,
+        }
+
     def run(self, grandchild_mode: str, child_mode: str, timeout: float) -> CompletedProcess[str]:
         """Start the child through the launcher; its environment names the folder and the modes."""
-        environment = {**os.environ, "CASE_DIR": str(self.folder), "GRANDCHILD_CODE": GRANDCHILD, "GRANDCHILD_MODE": grandchild_mode, "CHILD_MODE": child_mode}
-        return run_command("bash", ["-c", CHILD], cwd=ROOT, env=environment, timeout=timeout)
+        return run_command("bash", ["-c", CHILD], cwd=ROOT, env=self.environment(grandchild_mode, child_mode), timeout=timeout)
+
+    def run_nested(self, levels: int, inner_timeout: float, after: str, timeout: float) -> CompletedProcess[str]:
+        """Start the nested launcher through the launcher; its innermost program is CHILD with a grandchild that ignores TERM."""
+        script = self.folder / "nested.py"
+        script.write_text(NESTED, encoding="utf-8")
+        arguments = ["-B", str(script), str(ROOT), str(self.folder), str(levels), str(inner_timeout), str(CASE_GRACE_SECONDS), after]
+        return run_command(sys.executable, arguments, cwd=ROOT, env=self.environment("term", "wait"), timeout=timeout)
 
     def pids(self) -> dict[str, int]:
         found: dict[str, int] = {}
-        for name in ("child", "grandchild"):
-            file = self.folder / f"{name}.pid"
-            if file.exists() and file.read_text().strip():
-                found[name] = int(file.read_text().strip())
+        for file in self.folder.glob("*.pid"):
+            if file.read_text().strip():
+                found[file.stem] = int(file.read_text().strip())
         return found
+
+    def registries(self) -> list[str]:
+        """Every registry path a nested launcher or the child saw."""
+        seen: list[str] = []
+        for file in self.folder.glob("level*.json"):
+            seen.extend(item["path"] for item in json.loads(file.read_text())["registries"])
+        child = self.folder / "child.registries"
+        if child.exists():
+            seen.extend(path for path in child.read_text().split(":") if path)
+        return sorted(set(seen))
 
     def cleanup(self) -> None:
         for pid in self.pids().values():
@@ -309,6 +372,104 @@ def normal_run_unchanged(base: Path) -> dict[str, Any]:
     return case("normal_run_unchanged", base, body)
 
 
+def nested_stopped(scratch: Scratch, levels: int) -> dict[str, Any]:
+    started = time.monotonic()
+    caught: BaseException | None = None
+    try:
+        scratch.run_nested(levels, 60, "exit", NESTED_OUTER_TIMEOUT_SECONDS)
+    except TimeoutExpired as error:
+        caught = error
+    elapsed = time.monotonic() - started
+    pids = scratch.pids()
+    group = (scratch.folder / "child.group").read_text().split()[1] if (scratch.folder / "child.group").exists() else ""
+    innermost = scratch.folder / "level1.json"
+    seen = len(json.loads(innermost.read_text())["registries"]) if innermost.exists() else 0
+    return {
+        "raised_timeout": isinstance(caught, TimeoutExpired),
+        "not_a_survivor_error": not isinstance(caught, ProcessGroupSurvived),
+        "nested_launchers_started": all(f"level{level}" in pids for level in range(1, levels + 1)),
+        "nested_child_started": "child" in pids and "grandchild" in pids,
+        "nested_child_in_another_group": bool(group) and "level1" in pids and int(group) != pids["level1"] and int(group) != os.getpgrp(),
+        "innermost_launcher_saw_every_ancestor_registry": seen == levels,
+        "nested_launchers_gone": all(not alive(pid) for name, pid in pids.items() if name.startswith("level")),
+        "child_gone": "child" in pids and not alive(pids["child"]),
+        "grandchild_that_ignores_term_gone": "grandchild" in pids and not alive(pids["grandchild"]),
+        "nested_group_gone": "child" in pids and not process.group_alive(pids["child"]),
+        "registries_removed": bool(scratch.registries()) and not any(Path(path).exists() for path in scratch.registries()),
+        "seconds": round(elapsed, 2),
+    }
+
+
+def nested_launch(base: Path) -> dict[str, Any]:
+    return case("nested_launch_stopped_at_the_outer_deadline", base, lambda scratch: nested_stopped(scratch, 1))
+
+
+def two_level_nested_launch(base: Path) -> dict[str, Any]:
+    return case("two_level_nested_launch_stopped_at_the_outer_deadline", base, lambda scratch: nested_stopped(scratch, 2))
+
+
+def nested_own_deadline(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        started = time.monotonic()
+        done = scratch.run_nested(1, CASE_TIMEOUT_SECONDS, "exit", 30)
+        elapsed = time.monotonic() - started
+        pids = scratch.pids()
+        level = scratch.folder / "level1.json"
+        details = json.loads(level.read_text())["registries"] if level.exists() else []
+        child_saw = (scratch.folder / "child.registries").read_text().split(":") if (scratch.folder / "child.registries").exists() else []
+        return {
+            "outer_call_completed": done.returncode == 0,
+            "inner_deadline_reported": "inner timeout" in done.stdout,
+            "child_gone": "child" in pids and not alive(pids["child"]),
+            "grandchild_that_ignores_term_gone": "grandchild" in pids and not alive(pids["grandchild"]),
+            "inner_deadline_not_the_outer": elapsed < 15,
+            "child_saw_the_outer_and_the_nested_registry": len([path for path in child_saw if path]) == 2,
+            "registry_is_private": bool(details)
+            and all(item["exists"] and item["mode"] == 0o600 and item["folder_mode"] == 0o700 and item["owner"] == os.getuid() for item in details),
+            "registries_removed": bool(scratch.registries()) and not any(Path(path).exists() for path in scratch.registries()),
+            "seconds": round(elapsed, 2),
+        }
+
+    return case("nested_launch_keeps_its_own_deadline", base, body)
+
+
+def ended_recorded_group(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        caught: BaseException | None = None
+        try:
+            scratch.run_nested(1, CASE_TIMEOUT_SECONDS, "wait", NESTED_OUTER_TIMEOUT_SECONDS + CASE_TIMEOUT_SECONDS)
+        except TimeoutExpired as error:
+            caught = error
+        pids = scratch.pids()
+        output = caught.stdout if isinstance(caught, TimeoutExpired) else None
+        return {
+            "inner_deadline_passed_first": "inner timeout" in ((output.decode() if isinstance(output, bytes) else output) or ""),
+            "raised_timeout": isinstance(caught, TimeoutExpired),
+            "not_a_survivor_error": not isinstance(caught, ProcessGroupSurvived),
+            "nested_launcher_gone": "level1" in pids and not alive(pids["level1"]),
+            "child_gone": "child" in pids and not alive(pids["child"]),
+        }
+
+    return case("ended_recorded_group_counts_as_stopped", base, body)
+
+
+def late_registry_write(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        removed = scratch.folder / "removed_owner" / "groups"
+        saved = os.environ.get(process.REGISTRY_VARIABLE)
+        os.environ[process.REGISTRY_VARIABLE] = str(removed)
+        try:
+            done = run_command("bash", ["-c", "printf ok"], cwd=ROOT, timeout=30)
+        finally:
+            if saved is None:
+                os.environ.pop(process.REGISTRY_VARIABLE, None)
+            else:
+                os.environ[process.REGISTRY_VARIABLE] = saved
+        return {"launch_ran": done.stdout == "ok", "removed_registry_not_created_again": not removed.parent.exists()}
+
+    return case("write_to_a_removed_registry_is_skipped", base, body)
+
+
 def default_periods(base: Path) -> dict[str, Any]:
     return {
         "case": "default_grace_periods_are_set",
@@ -327,11 +488,17 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "caller_not_signalled": caller_not_signalled,
     "survivor_fails_visibly": survivor_fails_visibly,
     "normal_run_unchanged": normal_run_unchanged,
+    "nested_launch_stopped_at_the_outer_deadline": nested_launch,
+    "two_level_nested_launch_stopped_at_the_outer_deadline": two_level_nested_launch,
+    "nested_launch_keeps_its_own_deadline": nested_own_deadline,
+    "ended_recorded_group_counts_as_stopped": ended_recorded_group,
+    "write_to_a_removed_registry_is_skipped": late_registry_write,
     "default_grace_periods_are_set": default_periods,
 }
+REAL_STOP = process.stop_process_group
 
 
-def plant_direct_child_only(group: int, leader: Any = None) -> bool:
+def plant_direct_child_only(process_group: int, leader: Any = None, grace_seconds: float | None = None, registry: Path | None = None) -> bool:
     """The defect WV3-027 describes: only the direct child is killed."""
     if leader is not None:
         leader.kill()
@@ -339,45 +506,68 @@ def plant_direct_child_only(group: int, leader: Any = None) -> bool:
     return False
 
 
-def plant_term_only(group: int, leader: Any = None) -> bool:
+def plant_term_only(process_group: int, leader: Any = None, grace_seconds: float | None = None, registry: Path | None = None) -> bool:
     """TERM to the group, a wait for the grace period, no KILL."""
     with contextlib.suppress(ProcessLookupError):
-        os.killpg(group, signal.SIGTERM)
-    time.sleep(process.STOP_GRACE_SECONDS)
+        os.killpg(process_group, signal.SIGTERM)
+    time.sleep(process.STOP_GRACE_SECONDS if grace_seconds is None else grace_seconds)
     if leader is not None:
         leader.poll()
     return False
 
 
-def plant_no_confirmation(group: int, leader: Any = None) -> bool:
+def plant_no_confirmation(process_group: int, leader: Any = None, grace_seconds: float | None = None, registry: Path | None = None) -> bool:
     """TERM and KILL, no check that the group is gone: a survivor is never reported."""
     for number in (signal.SIGTERM, signal.SIGKILL):
         with contextlib.suppress(ProcessLookupError):
-            os.killpg(group, number)
+            os.killpg(process_group, number)
     if leader is not None:
         leader.poll()
     return False
 
 
-# plant name -> (replacement for stop_process_group, cases that must fail)
-PLANTS: dict[str, tuple[Callable[..., bool], tuple[str, ...]]] = {
-    "direct_child_only": (plant_direct_child_only, ("grandchild_stopped_at_deadline", "grandchild_holding_pipe_stopped")),
-    "term_only": (plant_term_only, ("term_ignoring_grandchild_killed", "term_ignoring_child_killed")),
-    "no_confirmation": (plant_no_confirmation, ("survivor_fails_visibly",)),
+def plant_own_group_only(process_group: int, leader: Any = None, grace_seconds: float | None = None, registry: Path | None = None) -> bool:
+    """The defect of review finding 1: the real stop of the own group, without the groups that descendants recorded."""
+    return REAL_STOP(process_group, leader, grace_seconds)
+
+
+# plant name -> (replacement for stop_process_group, {case that must fail: the check that must be false in it})
+PLANTS: dict[str, tuple[Callable[..., bool], dict[str, str]]] = {
+    "direct_child_only": (
+        plant_direct_child_only,
+        {"grandchild_stopped_at_deadline": "grandchild_gone", "grandchild_holding_pipe_stopped": "grandchild_gone"},
+    ),
+    "term_only": (plant_term_only, {"term_ignoring_grandchild_killed": "grandchild_gone", "term_ignoring_child_killed": "child_gone"}),
+    "no_confirmation": (plant_no_confirmation, {"survivor_fails_visibly": "raised_survivor_error"}),
+    "own_group_only": (
+        plant_own_group_only,
+        {"nested_launch_stopped_at_the_outer_deadline": "child_gone", "two_level_nested_launch_stopped_at_the_outer_deadline": "child_gone"},
+    ),
 }
+
+
+def caught_on(result: dict[str, Any], check: str) -> bool:
+    """A plant is caught only by the intended failed check: a case that raised (a setup error) is no evidence."""
+    checks = result["checks"]
+    return "raised" not in checks and checks.get(check) is False
 
 
 def planted_cases(base: Path) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
+    real = list(inspect.signature(REAL_STOP).parameters)
     for name, (replacement, wanted) in PLANTS.items():
+        if list(inspect.signature(replacement).parameters) != real:
+            results.append({"case": f"planted_{name}_is_caught", "passed": False, "checks": {"plant_takes_the_real_arguments": False, "real": real}})
+            continue
         saved = process.stop_process_group
         process.stop_process_group = replacement
         try:
             ran = {case_name: CASES[case_name](base / f"plant_{name}") for case_name in wanted}
         finally:
             process.stop_process_group = saved
-        caught = {case_name: not result["passed"] for case_name, result in ran.items()}
-        results.append({"case": f"planted_{name}_is_caught", "passed": all(caught.values()), "checks": caught})
+        caught = {case_name: caught_on(ran[case_name], check) for case_name, check in wanted.items()}
+        raised = {case_name: result["checks"]["raised"] for case_name, result in ran.items() if "raised" in result["checks"]}
+        results.append({"case": f"planted_{name}_is_caught", "passed": all(caught.values()), "checks": {**caught, **({"raised": raised} if raised else {})}})
     return results
 
 
