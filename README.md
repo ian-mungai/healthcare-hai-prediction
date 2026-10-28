@@ -109,8 +109,11 @@ Publication verification is pending. Fixture runs use a test registry and local 
 
 ## Usage
 
-Run the full local CI, which the pre-commit hooks and GitHub Actions also run, without AWS credentials. Run it before
-every push; a commit runs only the check groups its staged paths touch:
+Install the hooks once with `.venv/bin/pre-commit install` and `.venv/bin/python -m scripts.quality.pre_push install-shim` (the Git config hook that gates every push). A commit runs only the fast checks (about two minutes).
+A push runs the check groups of the pushed range once with the same selector as GitHub Actions
+(`.venv/bin/python -m scripts.quality.pre_push plan` shows the scope and steps without running them). It runs the full
+scope when the selector or the CI scripts change. Run the full local CI on demand without AWS credentials. Run it also
+when those scripts change or when GitHub Actions is unavailable:
 
 ```sh
 env PYTHON_BIN="$PWD/.venv/bin/python" \

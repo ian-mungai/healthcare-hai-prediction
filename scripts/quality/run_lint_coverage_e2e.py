@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from scripts.process import clear_git_environment, run_command
+from scripts.quality.hook_stage import hook_stage
 
 ROOT = Path(__file__).resolve().parents[2]
 COPIED = (
@@ -355,7 +356,7 @@ def sample_case(sample: Sample, out: Path, mutant: bool) -> dict[str, object]:
             git(repo, "add", "--", name)
             result = run_command(
                 str(ROOT / ".venv/bin/pre-commit"),
-                ["run", sample.hook, "--all-files", "--verbose"],
+                ["run", sample.hook, "--hook-stage", hook_stage(repo / ".pre-commit-config.yaml", sample.hook), "--all-files", "--verbose"],
                 cwd=repo,
                 env={**os.environ, "PRE_COMMIT_HOME": str(ROOT / ".tools/lint_caches/pre_commit")},
                 timeout=360,

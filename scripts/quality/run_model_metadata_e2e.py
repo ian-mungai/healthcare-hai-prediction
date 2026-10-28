@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.process import TimeoutExpired, clear_git_environment, run_command
+from scripts.quality.hook_stage import hook_stage
 
 ROOT = Path(__file__).resolve().parents[2]
 PRE_COMMIT = ROOT / ".venv" / "bin" / "pre-commit"
@@ -1290,7 +1291,14 @@ def run_case(case: Case, checker: Path, hook_config: Path, case_seconds: int = C
     with tempfile.TemporaryDirectory(prefix="hai_model_metadata_") as scratch:
         repo = scratch_repo(Path(scratch), checker, hook_config)
         apply(repo, case)
-        args = ["run", HOOK, "--verbose", *(["--all-files"] if case.scope == ALL_FILES_SCOPE else [])]
+        args = [
+            "run",
+            HOOK,
+            "--hook-stage",
+            hook_stage(repo / ".pre-commit-config.yaml", HOOK),
+            "--verbose",
+            *(["--all-files"] if case.scope == ALL_FILES_SCOPE else []),
+        ]
         environment = {**os.environ, "PRE_COMMIT_HOME": str(ROOT / ".tools" / "pre_commit_cache")}
         hook = run_command(str(PRE_COMMIT), args, cwd=repo, env=environment, timeout=case_seconds)
         hook_output = hook.stdout + hook.stderr

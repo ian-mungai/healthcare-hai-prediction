@@ -2,10 +2,10 @@
 
 GitHub CI and local commits use the same lists. Scopes:
 
-- ``full``: every group (the local run before a push; the default of scripts/run_ci.sh).
-- ``staged``: the paths in the Git index against HEAD (the commit hook).
-- ``range``: the paths changed from ``--from`` to ``--to`` (GitHub CI). A range that cannot be used (missing end, zero or
-  unknown commit) selects every group.
+- ``full``: every group (the default of scripts/run_ci.sh; the pre-push run uses it when the selector or the CI scripts change).
+- ``staged``: the paths in the Git index against HEAD (on demand; no hook runs it).
+- ``range``: the paths changed from ``--from`` to ``--to`` (GitHub CI and the pre-push run,
+  scripts/quality/pre_push.py). A range that cannot be used (missing end, zero or unknown commit) selects every group.
 - ``paths``: the paths given with ``--path`` (to see what a change would run).
 
 A path in ``global`` or a path that no group lists and that is not ``passive`` selects every group. Renames count with both
