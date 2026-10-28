@@ -1074,7 +1074,12 @@ def route_binding_and_evidence(folder: Path) -> dict[str, bool]:
         ("a host that is not in service", group_runner([{**service, "LifecycleState": "Pending"}])),
         ("two matching groups", group_runner([service], groups=2)),
     ):
-        code, _ = code_of(lambda runner=runner: bronze_cutover.bind_target(AwsCli(settings, runner=runner), "synthetic_group", deadline=time.monotonic() + 10))
+        code, _ = code_of(
+            functools.partial(
+                lambda bound_runner: bronze_cutover.bind_target(AwsCli(settings, runner=bound_runner), "synthetic_group", deadline=time.monotonic() + 10),
+                runner,
+            )
+        )
         checks[f"binding refuses {label}"] = code == "network"
     cutover = folder / "cutover" / "cut1"
     refusal = code_of_cutover(lambda: bronze_cutover.require_route(cutover, "cut1", bound))
@@ -1215,15 +1220,16 @@ def mac_route_observations(folder: Path) -> dict[str, bool]:
         listener.listen()
         open_port = listener.getsockname()[1]
         report = mac_route_probe.report("nonce1", [open_port, closed], ["127.0.0.1"])
-    checks["the container probe reports a port it reached"] = report["reached"] == [["127.0.0.1", open_port]] and report["nonce"] == "nonce1"
-    checks["the container probe reports refused ports as not reached"] = ["127.0.0.1", closed] not in report["reached"]
+    reached = report["reached"]
+    checks["the container probe reports a port it reached"] = reached == [["127.0.0.1", open_port]] and report["nonce"] == "nonce1"
+    checks["the container probe reports refused ports as not reached"] = isinstance(reached, list) and ["127.0.0.1", closed] not in reached
     checks["outside a container the probe finds no host route to try"] = set(mac_route_probe.host_targets(folder / "absent_route_table")) <= {
         "127.0.0.1",
         mac_route_probe.HOST_NAME,
     }
 
     ports = [18181, 18182]
-    refused_all = {"bridge": {}, "hai_lakehouse": {}, "hai_offline": {}}
+    refused_all: dict[str, Mapping[str, Any] | None] = {"bridge": {}, "hai_lakehouse": {}, "hai_offline": {}}
     for label, results, listed, nonce, expected in (
         ("every network refused", refused_all, None, "nonce1", True),
         ("one network that reached the relay", {**refused_all, "hai_lakehouse": {"reached": [["host.docker.internal", 18182]]}}, None, "nonce1", False),
