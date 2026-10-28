@@ -491,9 +491,9 @@ def case_check_catalog(_: Path) -> dict[str, bool]:
     """The check with an instance reads the catalog and changes nothing."""
     with world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
-        absent = call(["check", "--instance", "i-0123456789abcdef0"], services, root)
+        absent = call(["inspect", "--instance", "i-0123456789abcdef0"], services, root)
         polaris.catalog = setup.catalog_body(BUCKET, REGION)
-        present = call(["check", "--instance", "i-0123456789abcdef0"], services, root)
+        present = call(["inspect", "--instance", "i-0123456789abcdef0"], services, root)
         return {
             "an absent catalog is reported": absent[0] == 0 and (outcome(absent[1]) or {}).get("catalog") == "absent",
             "a present catalog is reported": present[0] == 0 and (outcome(present[1]) or {}).get("catalog") == "present",
@@ -775,10 +775,10 @@ def case_check_grants(_: Path) -> dict[str, bool]:
     with catalog_world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
         principal(services, root, "reader")
-        clean = call(["check", "--instance", INSTANCE], services, root)
+        clean = call(["inspect", "--instance", INSTANCE], services, root)
         polaris.grants[setup.PRINCIPALS["reader"]].append({"type": "catalog", "privilege": "TABLE_WRITE_DATA"})
         calls = len([item for item in polaris.calls if item[0] in ("POST", "PUT") and item[1] != setup.OAUTH_PATH])
-        drifted = call(["check", "--instance", INSTANCE], services, root)
+        drifted = call(["inspect", "--instance", INSTANCE], services, root)
         writes = len([item for item in polaris.calls if item[0] in ("POST", "PUT") and item[1] != setup.OAUTH_PATH])
         return {
             "a matching reader is reported": ((outcome(clean[1]) or {}).get("principals") or {}).get("reader") == "matches",
@@ -846,7 +846,7 @@ def case_extra_role_membership(_: Path) -> dict[str, bool]:
         seeded = principal(services, root, "reader")
         assigned = [item for item in polaris.calls if item[0] == "PUT" and "/catalog-roles/" in item[1] and not item[1].endswith("/grants")]
         untouched = role not in polaris.principals and ssm.writes() == 0
-        inspected = call(["check", "--instance", INSTANCE], services, root)
+        inspected = call(["inspect", "--instance", INSTANCE], services, root)
     with catalog_world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
         polaris.issue(role)
@@ -944,6 +944,25 @@ def case_lock_before_changes(_: Path) -> dict[str, bool]:
         }
 
 
+def case_check_never_decrypts(_: Path) -> dict[str, bool]:
+    """P6: ``check`` takes no instance and never decrypts; the authenticated grant inspection is the separate ``inspect`` step, read only."""
+    with catalog_world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        try:
+            refused = run_main(["check", "--instance", INSTANCE], services)[0]
+        except SystemExit as stop:
+            refused = int(stop.code or 0)
+        asked = list(ssm.requests()) + [f"{method} {path}" for method, path in polaris.calls]
+        code, out, _err = call(["inspect", "--instance", INSTANCE], services, root)
+        changes = [item for item in polaris.calls if item[0] in ("POST", "PUT") and item[1] != setup.OAUTH_PATH]
+        return {
+            "check refuses an instance before any request": refused != 0 and not asked,
+            "inspect reports the catalog": code == 0 and (outcome(out) or {}).get("catalog") == "present",
+            "inspect reads no pair parameter": not [name for _action, name in ssm.requests() if name in setup.writable_names()],
+            "inspect changes nothing": not changes and ssm.writes() == 0,
+        }
+
+
 CASES: dict[str, Case] = {
     "catalog_created": case_catalog_created,
     "catalog_rerun": case_catalog_rerun,
@@ -977,6 +996,7 @@ CASES: dict[str, Case] = {
     "extra_role_membership": case_extra_role_membership,
     "request_expiry": case_request_expiry,
     "lock_before_changes": case_lock_before_changes,
+    "check_never_decrypts": case_check_never_decrypts,
 }
 
 
