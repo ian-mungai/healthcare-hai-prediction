@@ -8,7 +8,7 @@ Run from the repository root, one step at a time, at a terminal (each authority 
     .venv/bin/python -m scripts.lakehouse.bronze_cutover fence
     .venv/bin/python -m scripts.lakehouse.bronze_cutover capture
     .venv/bin/python -m scripts.lakehouse.bronze_cutover refresh
-    .venv/bin/python -m scripts.lakehouse.bronze_cutover route-check
+    .venv/bin/python -m scripts.lakehouse.bronze_cutover route-check --probe-image <LOCAL_IMAGE_WITH_PYTHON3>
     .venv/bin/python -m scripts.lakehouse.bronze_cutover register --inventory <FILE> --sha256 <DIGEST>
     .venv/bin/python -m scripts.lakehouse.bronze_cutover verify
     .venv/bin/python -m scripts.lakehouse.bronze_cutover switch
@@ -20,8 +20,10 @@ is sent, so repeating a step after a lost reply sends the identical command and 
 
 The AWS catalog is reached only through ``orchestration.catalog_transport.CatalogTransport``: a Session Manager tunnel to the host's private
 port 8181 behind an owned loopback relay. The host is the one in-service instance of the approved host group from the platform outputs.
-``register`` and ``verify`` refuse to open the route without a passing native route check of that host (``route-check``) and run the network
-acceptance check before the tunnel starts. Every dependent call runs once through ``Route.execute``; a lost
+``register`` and ``verify`` refuse to open the route without a passing route check of that host for this cutover (``route-check``) and run
+the network acceptance check before the tunnel starts. The route check is Mac-side (owner decision, Oct 28 2026, for this one attended
+cutover only; ``scripts.lakehouse.cutover_route``): it does not observe the ECS class-network matrix, which stays required before any ECS
+job uses the catalog. Every dependent call runs once through ``Route.execute``; a lost
 route fails visibly and is never reopened inside an operation. Registration uses ``register_aws_catalog.register_exact_metadata`` per table
 with its own deadline, so a rerun with the same inventory adopts done tables as ``unchanged`` and never overwrites a different table. The
 Polaris root credential registers (owner decision for this one attended run; the receipt records it) and the AWS reader pair verifies. Both
@@ -49,7 +51,7 @@ from orchestration import catalog_authority, launcher, pipeline_session
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.acquisition.s3_store import AwsCli, StorageError
 from scripts.infrastructure import secret_store
-from scripts.lakehouse import bronze_inventory, bronze_scan, run_lock
+from scripts.lakehouse import bronze_inventory, bronze_scan, cutover_route, run_lock
 from scripts.lakehouse import register_aws_catalog as reg
 from scripts.lakehouse.catalog_journal import durable_directory
 
@@ -123,76 +125,70 @@ def network_acceptance(spec: TransportSpec, aws: AwsCli, project_tag: str, *, de
         described = aws.call_bounded("ec2", "describe-instances", ["--instance-ids", spec.instance], timeout=deadline - clock())
     except StorageError as error:
         raise reg.RegistrationError("network", f"describing the catalog host failed ({error.code})") from None
-    instances = [item for reservation in described.get("Reservations") or [] for item in reservation.get("Instances") or []]
-    if (
-        len(instances) != 1
-        or (instances[0].get("State") or {}).get("Name") != "running"
-        or instances[0].get("PublicIpAddress")
-        or any((interface.get("Association") or {}).get("PublicIp") for interface in instances[0].get("NetworkInterfaces") or [])
-        or {"Key": "Project", "Value": project_tag} not in (instances[0].get("Tags") or [])
-    ):
+    if not cutover_route.host_accepted(cutover_route.host_facts(described, spec.instance, project_tag)):
         raise reg.RegistrationError("network", "the catalog host is not one running project instance without a public address")
 
 
-# The native route observations the cutover needs before its route is used: (origin, destination, must reach). Lakehouse jobs reach the
-# approved catalog and S3, offline jobs do not reach the catalog, both are refused Redis, unrelated hosts and the internet, and a Mac container
-# cannot reach the cutover's tunnel or relay (docs/ecs_real_runs.md, "Identity and actual reads").
-ROUTE_MATRIX: tuple[tuple[str, str, bool], ...] = (
-    ("lakehouse", "catalog", True),
-    ("lakehouse", "s3", True),
-    ("lakehouse", "redis", False),
-    ("lakehouse", "unrelated_host", False),
-    ("lakehouse", "internet", False),
-    ("offline", "catalog", False),
-    ("offline", "redis", False),
-    ("offline", "unrelated_host", False),
-    ("offline", "internet", False),
-    ("mac_container", "catalog_route", False),
+# The Mac-side route observations the cutover needs before its route is used (owner decision, Oct 28 2026, for this one attended cutover
+# only; scripts/lakehouse/cutover_route.py). Each must pass. They do not replace the ECS class-network matrix of docs/ecs_real_runs.md.
+ROUTE_OBSERVATIONS = ("host_without_public_address", "catalog_port_only", "mac_containers_refused")
+ROUTE_SCOPE = (
+    "Mac-side route acceptance for this one attended bronze cutover (owner decision 2026-10-28); "
+    "the ECS class-network matrix stays required before any ECS job uses the catalog"
 )
 ROUTE_CHECKS = "route_checks"
 
 
 class RouteProbe(Protocol):
-    def observe(self, origin: str, destination: str, *, deadline: float) -> bool | None:
-        """True when the origin reached the destination, False when it was refused, None when the observation could not run."""
+    def observe(self, name: str, *, deadline: float) -> tuple[bool | None, bytes]:
+        """True when the observation held, False when it did not, None when it could not run; with its sanitized evidence."""
         ...
 
 
-def route_check(probe: RouteProbe, instance: str, folder: Path, *, deadline: float, stamp: str, clock: reg.Clock = time.monotonic) -> dict[str, Any]:
-    """Observe every pair of the route matrix once for the bound host and record the result write-once, passing or not."""
+def route_check(
+    probe: RouteProbe, cutover_id: str, instance: str, folder: Path, *, deadline: float, stamp: str, clock: reg.Clock = time.monotonic
+) -> dict[str, Any]:
+    """Make every route observation once for the bound host and record the results and evidence hashes write-once, passing or not."""
     observations = []
-    for origin, destination, reach in ROUTE_MATRIX:
-        reg.check_deadline(deadline, clock)
-        observed = probe.observe(origin, destination, deadline=deadline)
-        observations.append({"origin": origin, "destination": destination, "expected": reach, "observed": observed})
-    document = {"schema": 1, "instance": instance, "time": stamp, "observations": observations, "passed": route_problem(observations) is None}
     durable_directory(folder / ROUTE_CHECKS)
+    for name in ROUTE_OBSERVATIONS:
+        reg.check_deadline(deadline, clock)
+        passed, evidence = probe.observe(name, deadline=deadline)
+        bronze_inventory.write_new(folder / ROUTE_CHECKS / f"{stamp}.{name}.evidence", evidence)
+        observations.append({"name": name, "passed": passed, "evidence_sha256": hashlib.sha256(evidence).hexdigest()})
+    document = {
+        "schema": 2,
+        "cutover_id": cutover_id,
+        "instance": instance,
+        "time": stamp,
+        "scope": ROUTE_SCOPE,
+        "observations": observations,
+        "passed": route_problem(observations) is None,
+    }
     bronze_inventory.write_new(folder / ROUTE_CHECKS / f"{stamp}.json", reg.canonical(document))
     return document
 
 
 def route_problem(observations: object) -> str | None:
-    """The first observation that differs from the route matrix, or None when every pair was observed as required."""
-    found = (
-        {(item.get("origin"), item.get("destination")): item.get("observed") for item in observations if isinstance(item, dict)}
-        if isinstance(observations, list)
-        else {}
-    )
-    for origin, destination, reach in ROUTE_MATRIX:
-        observed = found.get((origin, destination))
-        if observed is not reach:
-            state = "not observed" if observed is None else "reached" if observed else "refused"
-            return f"{origin} to {destination} was {state}; it must be {'reached' if reach else 'refused'}"
+    """The first observation that did not pass, or None when every observation passed with an evidence hash."""
+    found = {item.get("name"): item for item in observations if isinstance(item, dict)} if isinstance(observations, list) else {}
+    for name in ROUTE_OBSERVATIONS:
+        item = found.get(name) or {}
+        if item.get("passed") is not True or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("evidence_sha256"))):
+            state = "not observed" if item.get("passed") is None else "failed" if item.get("passed") is False else "unproved"
+            return f"{name} was {state}"
     return None
 
 
-def require_route(folder: Path, instance: str) -> str:
-    """The SHA-256 of the newest route check; refuse when none exists, when it names another host or when any observation differs."""
+def require_route(folder: Path, cutover_id: str, instance: str) -> str:
+    """The SHA-256 of the newest route check; refuse when none exists, when it names another cutover or host or when any observation failed."""
     checks = sorted((folder / ROUTE_CHECKS).glob("*.json")) if (folder / ROUTE_CHECKS).exists() else []
     if not checks:
-        raise CutoverError("no native route check is recorded for this cutover; run route-check first")
+        raise CutoverError("no route check is recorded for this cutover; run route-check first")
     raw = checks[-1].read_bytes()
     document = json.loads(raw)
+    if document.get("schema") != 2 or document.get("cutover_id") != cutover_id:
+        raise CutoverError("the newest route check belongs to another cutover; run route-check again")
     if document.get("instance") != instance:
         raise CutoverError("the newest route check names another catalog host; run route-check again")
     problem = route_problem(document.get("observations"))
@@ -386,8 +382,8 @@ class Services(Protocol):
         """The catalog host bound from the approved host group."""
         ...
 
-    def route_probe(self, instance: str, *, deadline: float) -> RouteProbe:
-        """The native route observations of the bound host."""
+    def route_probe(self, instance: str, folder: Path, stamp: str, terminal: Terminal, *, deadline: float) -> contextlib.AbstractContextManager[RouteProbe]:
+        """The Mac-side route observations of the bound host, with the route held open until they end."""
         ...
 
     def remote(self, instance: str, *, deadline: float) -> contextlib.AbstractContextManager[Remote]:
@@ -398,10 +394,11 @@ class Services(Protocol):
 class LiveServices:
     """The project profile, the Mac Polaris on 127.0.0.1 and the Session Manager route to the AWS host."""
 
-    def __init__(self, tunnel_port: int, relay_port: int) -> None:
+    def __init__(self, tunnel_port: int, relay_port: int, probe_image: str | None = None) -> None:
         self.state_root = run_lock.main_checkout(REPO_ROOT) / "data/lakehouse"
         self.required = bronze_inventory.required_bronze(REPO_ROOT)
         self.ports = (tunnel_port, relay_port)
+        self.probe_image = probe_image
 
     @functools.cached_property
     def settings(self) -> dict[str, str]:
@@ -457,8 +454,21 @@ class LiveServices:
     def target(self, *, deadline: float) -> str:
         return bind_target(self.aws, self.platform[0], deadline=deadline)
 
-    def route_probe(self, instance: str, *, deadline: float) -> RouteProbe:
-        raise CutoverError("no native route probe is available in this checkout; the class-network observations run in the attended session")
+    @contextlib.contextmanager
+    def route_probe(self, instance: str, folder: Path, stamp: str, terminal: Terminal, *, deadline: float) -> Iterator[RouteProbe]:
+        spec = TransportSpec(instance, self.settings["aws_profile"], self.settings["aws_region"], *self.ports)
+        if not self.probe_image:
+            raise CutoverError("route-check needs --probe-image: a local image that has python3")
+        probe = cutover_route.LiveRouteProbe(
+            self.aws, spec, self.platform[1], self.state_root / "cutover_transport", folder / ROUTE_CHECKS / f"{stamp}.probe", self.probe_image, terminal.write
+        )
+        try:
+            yield probe
+        finally:
+            if not probe.close(deadline=time.monotonic() + 30):
+                sys.stderr.write("bronze cutover: the catalog route did not close with every process confirmed gone; check the transport ledger\n")
+                if sys.exc_info()[0] is None:
+                    raise CutoverError("the catalog route did not close with every process confirmed gone")
 
     @contextlib.contextmanager
     def remote(self, instance: str, *, deadline: float) -> Iterator[Remote]:
@@ -627,13 +637,14 @@ def step_dry_run(services: Services, terminal: Terminal, seconds: float, per_tab
 
 
 def step_route_check(services: Services, terminal: Terminal, seconds: float) -> dict[str, Any]:
-    """Bind the catalog host and record the native route observations before the route is used; a failed check refuses register and verify."""
+    """Bind the catalog host and record the Mac-side route observations before the route is used; a failed check refuses register and verify."""
     record = require_state("refreshing")
     folder = folder_of(services, record["cutover_id"])
     deadline = time.monotonic() + seconds
     instance = services.target(deadline=deadline)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    document = route_check(services.route_probe(instance, deadline=deadline), instance, folder, deadline=deadline, stamp=stamp)
+    with services.route_probe(instance, folder, stamp, terminal, deadline=deadline) as probe:
+        document = route_check(probe, record["cutover_id"], instance, folder, deadline=deadline, stamp=stamp)
     terminal.write(f"route check: {'passed' if document['passed'] else 'failed'}; record: {folder / ROUTE_CHECKS / (stamp + '.json')}\n")
     if not document["passed"]:
         raise CutoverError(f"the route check failed: {route_problem(document['observations'])}")
@@ -649,7 +660,7 @@ def step_register(services: Services, terminal: Terminal, inventory_path: Path, 
     inventory = bronze_inventory.read_inventory(inventory_path, sha256, services.required)
     deadline = time.monotonic() + seconds
     instance = services.target(deadline=deadline)
-    require_route(folder, instance)
+    require_route(folder, record["cutover_id"], instance)
     with services.remote(instance, deadline=deadline) as remote:
         preflight(remote.request, services.bucket, deadline=deadline, execute=remote.execute)
         outcomes = register_tables(
@@ -669,7 +680,7 @@ def step_verify(services: Services, terminal: Terminal, seconds: float, per_tabl
     inventory = bronze_inventory.read_inventory(folder / bronze_inventory.INVENTORY_NAME, digest, services.required)
     deadline = time.monotonic() + seconds
     instance = services.target(deadline=deadline)
-    route = require_route(folder, instance)
+    route = require_route(folder, record["cutover_id"], instance)
     with services.remote(instance, deadline=deadline) as remote:
         facts = verify_tables(
             remote.reader,
@@ -740,8 +751,9 @@ def parser() -> argparse.ArgumentParser:
     cli.add_argument("--seconds", type=float, default=7200, help="the deadline of the whole step")
     cli.add_argument("--per-table-seconds", type=float, default=120)
     steps = cli.add_subparsers(dest="step", required=True)
-    for name in ("status", "dry-run", "fence", "capture", "refresh", "route-check", "verify", "switch", "rollback"):
+    for name in ("status", "dry-run", "fence", "capture", "refresh", "verify", "switch", "rollback"):
         steps.add_parser(name)
+    steps.add_parser("route-check").add_argument("--probe-image", required=True, help="a local image that has python3; it is never pulled")
     steps.add_parser("freeze").add_argument("--cutover", required=True)
     register = steps.add_parser("register")
     register.add_argument("--inventory", type=Path, required=True)
@@ -785,7 +797,7 @@ def main(argv: list[str] | None = None) -> int:
     TEST_REGISTRY = args.test_registry
     terminal = Terminal(sys.stdin.isatty() and sys.stdout.isatty(), input, sys.stdout.write)
     try:
-        services = LiveServices(args.tunnel_port, args.relay_port)
+        services = LiveServices(args.tunnel_port, args.relay_port, getattr(args, "probe_image", None))
         result = run(args, services, terminal)
     except (CutoverError, reg.RegistrationError, launcher.ClientError, OSError, ValueError) as error:
         code = f" ({error.code})" if isinstance(error, reg.RegistrationError) else ""

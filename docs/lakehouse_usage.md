@@ -281,7 +281,7 @@ line and the owner types it back:
 .venv/bin/python -m scripts.lakehouse.bronze_cutover fence         # waits until no Mac write is queued or running
 .venv/bin/python -m scripts.lakehouse.bronze_cutover capture       # writes the inventory and its SHA-256 once
 .venv/bin/python -m scripts.lakehouse.bronze_cutover refresh
-.venv/bin/python -m scripts.lakehouse.bronze_cutover route-check   # records the native route observations of the host
+.venv/bin/python -m scripts.lakehouse.bronze_cutover route-check --probe-image <LOCAL_IMAGE_WITH_PYTHON3>   # Mac-side route acceptance
 .venv/bin/python -m scripts.lakehouse.bronze_cutover register --inventory <INVENTORY_FILE> --sha256 <DIGEST>
 .venv/bin/python -m scripts.lakehouse.bronze_cutover verify
 .venv/bin/python -m scripts.lakehouse.bronze_cutover switch        # AWS becomes the writer with every layer off
@@ -309,13 +309,29 @@ once, mode 0600, in the cutover folder. A second capture must give the same dige
 
 `register` and `verify` reach the AWS catalog only through the Session Manager tunnel to the host's private port 8181
 behind an owned loopback relay (`orchestration/catalog_transport.py`). The host is never typed by the owner: each step
-binds the one in-service instance of the approved host group named by the platform outputs. `route-check` records the
-native route observations of that host once, write-once under `route_checks/` in the cutover folder. Lakehouse jobs
-must reach the approved catalog and S3. Offline jobs must not reach the catalog. Both classes must be refused Redis,
-unrelated hosts and the internet. A Mac container must not reach the cutover's tunnel or relay. `register` and `verify`
-refuse to open the route unless the newest check passed for the same host. The receipt records the check's digest. In this checkout the live
-observations have no probe yet, so `route-check` refuses and `register` stays blocked until the attended session
-supplies them. Before the tunnel starts, the network acceptance check requires local tunnel and relay ports other than
+binds the one in-service instance of the approved host group named by the platform outputs.
+
+Route acceptance for this cutover is Mac-side (owner decision, Oct 28 2026, for this one attended cutover only, in
+`scripts/lakehouse/cutover_route.py`). `route-check` makes three observations of the bound host and records them once,
+pass or fail, in `route_checks/<STAMP>.json` in the cutover folder: the cutover ID, the host, each result and the
+SHA-256 of its sanitized evidence (kept beside it as `<STAMP>.<NAME>.evidence`, with no address or credential):
+
+1. `host_without_public_address`: the host is one running instance with the project tag and no public address on it
+   or any interface.
+2. `catalog_port_only`: the owned tunnel forwards only port 8181 of the bound host, the owned relay forwards only to
+   the tunnel, the transport owns exactly these two processes and the catalog answers through the relay.
+3. `mac_containers_refused`: while the route is open, no Docker network on the Mac reaches the tunnel or relay port.
+   `route-check` never runs Docker. It prints a command. The owner runs it in a second terminal at the repository
+   root. The command runs `scripts/lakehouse/mac_route_probe.py` from standard input once on every network that
+   `docker network ls` lists, with `--pull=never` and the local image given by `--probe-image` (it needs `python3`). It
+   writes `networks.txt` last. `route-check` waits up to 900 seconds for that file. A missing, stale or unreadable
+   result counts as not observed.
+
+`register` and `verify` refuse to open the route unless the newest check passed for the same cutover and host. The
+receipt records the check's digest. This check does not observe the ECS class-network matrix: lakehouse tasks reach the
+catalog and S3, offline tasks do not reach the catalog and both fail to reach Redis, unrelated hosts and the internet.
+That matrix stays required, under [real AWS read verification](ecs_real_runs.md), before any ECS job uses the catalog.
+Before the tunnel starts, the network acceptance check requires local tunnel and relay ports other than
 the Mac Polaris port 8181 (defaults 18181 and 18182) and a running project host without a public address. A lost route
 fails the step and is never reopened inside an operation.
 Each Polaris request ends at its absolute deadline, also while a slow peer is still sending headers or body: the client

@@ -16,7 +16,7 @@ Prepare each approved cloud run with the [procedure data](../config/orchestratio
 2. Apply the approved endpoint and role plans. Verify the catalog host identity, private IP and native read-class network.
 3. Complete both prerequisite real publishes and read-only registration. Retain their source snapshots and reader reservations.
 4. Record current regional price evidence and the approved run's cost ceiling, code hash and absolute UTC window.
-5. Render and check the [target](ecs_target_contract.md). Keep catalog-dependent Mac preparation disabled except the bronze cutover's route, which runs only after a passing native route check of the bound host and its network acceptance check.
+5. Render and check the [target](ecs_target_contract.md). Keep catalog-dependent Mac preparation disabled except the bronze cutover's route, which runs only after a passing Mac-side route check of the bound host and its network acceptance check.
 
 The early one-task identity check must pass before grant delivery relies on task-session naming. The two-task identity check below remains required. A failed premise stops the run. Return it to the lead without broadening grant access.
 
@@ -53,6 +53,8 @@ The outer limit is two hours. Begin with two tasks and their separate grants. Ke
 5. Release the owned run objects and tasks. Record multipart cleanup, delete markers and the versions that remain.
 
 Lakehouse tasks must reach their approved catalog and S3. Offline tasks must not reach the catalog. Both classes must fail to reach Redis, unrelated hosts and the internet. The native Mac-container route remains a separate required observation. Mark it blocked when acceptance is absent. Keep catalog-dependent Mac preparation disabled.
+
+The one attended bronze cutover uses Mac-side route acceptance instead (owner decision, Oct 28 2026, described in [lakehouse usage](lakehouse_usage.md#bronze-cutover-to-the-aws-catalog)). Its `route-check` records that the tunnel and relay reach only the catalog port of the bound host, that the host has no public address and that no Mac Docker network reaches the tunnel or relay. That record does not replace this class-network matrix. The matrix stays required before any ECS job uses the catalog.
 
 The cap includes pending, running, stopping and unknown tasks. An unconfirmed stop keeps its reservation. The budget alert is a warning to the owner. Lifecycle expiration remains a configuration assertion. A delete marker does not prove old versions disappeared.
 

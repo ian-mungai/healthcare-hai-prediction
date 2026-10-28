@@ -34,7 +34,7 @@ from orchestration import catalog_authority, launcher
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from orchestration.pipeline_session import RoleSession
 from scripts.acquisition.s3_store import AwsCli
-from scripts.lakehouse import bronze_cutover, bronze_inventory, bronze_scan
+from scripts.lakehouse import bronze_cutover, bronze_inventory, bronze_scan, cutover_route, mac_route_probe
 from scripts.lakehouse import register_aws_catalog as reg
 from scripts.lakehouse import run_catalog_registration_e2e as registration_e2e
 from scripts.lakehouse import run_launcher_e2e as launcher_e2e
@@ -1040,15 +1040,15 @@ def tunnel_route(folder: Path) -> dict[str, bool]:
 
 
 class RouteProbe:
-    """Native route observations as stand-ins: each origin and destination pair answers as the approved class networks would, unless changed."""
+    """The Mac-side route observations as stand-ins: each observation holds as the attended cutover requires, unless changed."""
 
     def __init__(self) -> None:
-        self.answers: dict[tuple[str, str], bool | None] = {(origin, destination): expected for origin, destination, expected in bronze_cutover.ROUTE_MATRIX}
-        self.calls: list[tuple[str, str]] = []
+        self.answers: dict[str, bool | None] = dict.fromkeys(bronze_cutover.ROUTE_OBSERVATIONS, True)
+        self.calls: list[str] = []
 
-    def observe(self, origin: str, destination: str, *, deadline: float) -> bool | None:
-        self.calls.append((origin, destination))
-        return self.answers.get((origin, destination))
+    def observe(self, name: str, *, deadline: float) -> tuple[bool | None, bytes]:
+        self.calls.append(name)
+        return self.answers.get(name), f"sanitized evidence of {name}".encode()
 
 
 def group_runner(instances: list[dict[str, Any]], groups: int = 1) -> Callable[..., SimpleNamespace]:
@@ -1077,48 +1077,172 @@ def route_binding_and_evidence(folder: Path) -> dict[str, bool]:
         code, _ = code_of(lambda runner=runner: bronze_cutover.bind_target(AwsCli(settings, runner=runner), "synthetic_group", deadline=time.monotonic() + 10))
         checks[f"binding refuses {label}"] = code == "network"
     cutover = folder / "cutover" / "cut1"
-    refusal = code_of_cutover(lambda: bronze_cutover.require_route(cutover, bound))
+    refusal = code_of_cutover(lambda: bronze_cutover.require_route(cutover, "cut1", bound))
     checks["register is refused before any route check"] = "route-check" in refusal
     probe = RouteProbe()
     clock = registration_e2e.Clock()
-    passed = bronze_cutover.route_check(probe, bound, cutover, deadline=clock() + 100, clock=clock, stamp="20261028T000000000000Z")
-    checks["the route check observes every pair of the matrix once"] = sorted(probe.calls) == sorted((o, d) for o, d, _ in bronze_cutover.ROUTE_MATRIX)
-    checks["the matrix covers both classes, the catalog, S3, Redis, unrelated hosts, the internet and the Mac container"] = {
-        (o, d) for o, d, _ in bronze_cutover.ROUTE_MATRIX
-    } >= {
-        ("lakehouse", "catalog"),
-        ("lakehouse", "s3"),
-        ("offline", "catalog"),
-        *((origin, target) for origin in ("lakehouse", "offline") for target in ("redis", "unrelated_host", "internet")),
-        ("mac_container", "catalog_route"),
+    passed = bronze_cutover.route_check(probe, "cut1", bound, cutover, deadline=clock() + 100, clock=clock, stamp="20261028T000000000000Z")
+    checks["the route check makes each Mac-side observation once"] = sorted(probe.calls) == sorted(bronze_cutover.ROUTE_OBSERVATIONS)
+    checks["the observations are the catalog port only, no public address and Mac containers refused"] = set(bronze_cutover.ROUTE_OBSERVATIONS) == {
+        "catalog_port_only",
+        "host_without_public_address",
+        "mac_containers_refused",
     }
     evidence = cutover / bronze_cutover.ROUTE_CHECKS / "20261028T000000000000Z.json"
-    checks["a passing check is recorded write-once with the bound host"] = (
-        passed["passed"] is True and json.loads(evidence.read_text())["instance"] == bound and stat.S_IMODE(evidence.stat().st_mode) == 0o600
+    recorded = json.loads(evidence.read_text())
+    checks["a passing check is recorded write-once with the cutover ID and the bound host"] = (
+        passed["passed"] is True and recorded["instance"] == bound and recorded["cutover_id"] == "cut1" and stat.S_IMODE(evidence.stat().st_mode) == 0o600
     )
-    checks["register is allowed with the passing check of the same host"] = code_of_cutover(lambda: bronze_cutover.require_route(cutover, bound)) == ""
-    checks["a check of another host does not count"] = "another" in code_of_cutover(lambda: bronze_cutover.require_route(cutover, "i-0fedcba9876543210"))
-    for number, (label, pair, answer) in enumerate(
+    checks["each observation names its result and the hash of its sanitized evidence"] = all(
+        item["passed"] is True and item["evidence_sha256"] == hashlib.sha256(f"sanitized evidence of {item['name']}".encode()).hexdigest()
+        for item in recorded["observations"]
+    )
+    checks["the record states the owner decision and that the ECS class-network matrix stays required"] = (
+        "2026-10-28" in recorded["scope"] and "ECS class-network matrix" in recorded["scope"]
+    )
+    checks["register is allowed with the passing check of the same host"] = code_of_cutover(lambda: bronze_cutover.require_route(cutover, "cut1", bound)) == ""
+    checks["a check of another host does not count"] = "another" in code_of_cutover(
+        lambda: bronze_cutover.require_route(cutover, "cut1", "i-0fedcba9876543210")
+    )
+    checks["a check of another cutover does not count"] = "cutover" in code_of_cutover(lambda: bronze_cutover.require_route(cutover, "cut2", bound))
+    for number, (label, name, answer) in enumerate(
         (
-            ("an offline job that reaches the catalog", ("offline", "catalog"), True),
-            ("a lakehouse job that cannot reach S3", ("lakehouse", "s3"), False),
-            ("a lakehouse job that reaches Redis", ("lakehouse", "redis"), True),
-            ("an offline job that reaches the internet", ("offline", "internet"), True),
-            ("a Mac container that reaches the catalog route", ("mac_container", "catalog_route"), True),
-            ("an observation that could not run", ("lakehouse", "catalog"), None),
+            ("a tunnel that reaches another port", "catalog_port_only", False),
+            ("a host with a public address", "host_without_public_address", False),
+            ("a Mac container that reaches the tunnel or relay", "mac_containers_refused", False),
+            ("a container probe that did not run", "mac_containers_refused", None),
         ),
         1,
     ):
         probe = RouteProbe()
-        probe.answers[pair] = answer
-        failed = bronze_cutover.route_check(probe, bound, cutover, deadline=clock() + 100, clock=clock, stamp=f"20261028T00000{number}000000Z")
-        refusal = code_of_cutover(lambda: bronze_cutover.require_route(cutover, bound))
-        checks[f"{label} fails the check and register is refused"] = failed["passed"] is False and pair[1] in refusal
+        probe.answers[name] = answer
+        failed = bronze_cutover.route_check(probe, "cut1", bound, cutover, deadline=clock() + 100, clock=clock, stamp=f"20261028T00000{number}000000Z")
+        refusal = code_of_cutover(lambda: bronze_cutover.require_route(cutover, "cut1", bound))
+        checks[f"{label} fails the check, is recorded and register is refused"] = failed["passed"] is False and name in refusal
     tampered = cutover / bronze_cutover.ROUTE_CHECKS / "20261028T000009000000Z.json"
     document = json.loads(evidence.read_text())
     document["observations"] = document["observations"][1:]
     tampered.write_bytes(reg.canonical(document))
-    checks["a recorded check that misses an observation is refused"] = "route" in code_of_cutover(lambda: bronze_cutover.require_route(cutover, bound))
+    checks["a recorded check that misses an observation is refused"] = "route" in code_of_cutover(lambda: bronze_cutover.require_route(cutover, "cut1", bound))
+    return checks
+
+
+def describe_runner(instance: dict[str, Any] | None) -> Callable[..., SimpleNamespace]:
+    """A stand-in `describe-instances` reply, or a failed call when the instance is None."""
+
+    def runner(command: list[str], **_: Any) -> SimpleNamespace:
+        if instance is None:
+            return SimpleNamespace(returncode=255, stdout="", stderr="An error occurred (UnauthorizedOperation)")
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"Reservations": [{"Instances": [instance]}]}), stderr="")
+
+    return runner
+
+
+class Answer(BaseHTTPRequestHandler):
+    """The catalog behind the relay as a stand-in: every request is refused for want of a token, as Polaris answers without one."""
+
+    def do_GET(self) -> None:
+        self.send_response(401)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: Any) -> None:
+        """Keep the case output quiet."""
+
+
+def probe_folder(folder: Path, nonce: str, ports: list[int], results: Mapping[str, Mapping[str, Any] | None], listed: list[str] | None = None) -> Path:
+    """A container probe folder as the owner's documented command leaves it: one result per Docker network and the network list last."""
+    folder.mkdir(parents=True)
+    for network, result in results.items():
+        if result is not None:
+            (folder / f"{network}.json").write_text(json.dumps({"nonce": nonce, "ports": ports, "targets": ["172.17.0.1"], "reached": [], **result}) + "\n")
+    (folder / "networks.txt").write_text("".join(f"{name}\n" for name in (listed if listed is not None else list(results))))
+    return folder
+
+
+@offline
+def mac_route_observations(folder: Path) -> dict[str, bool]:
+    """Route acceptance, Mac side (owner decision Oct 28 2026): the host check, the catalog answer through the relay and the container probe."""
+    checks: dict[str, bool] = {}
+    settings = {"aws_profile": "synthetic", "aws_region": "us-east-1", "data_bucket_name": BUCKET, "expected_account_id": "synthetic_account"}
+    host = {
+        "InstanceId": "i-0123456789abcdef0",
+        "State": {"Name": "running"},
+        "PrivateIpAddress": "10.23.0.11",
+        "NetworkInterfaces": [{"PrivateIpAddress": "10.23.0.11"}],
+        "Tags": [{"Key": "Project", "Value": "hai"}],
+    }
+
+    def host_result(instance: dict[str, Any] | None) -> tuple[bool | None, bytes]:
+        aws = AwsCli(settings, runner=describe_runner(instance))
+        return cutover_route.observe_host(aws, "i-0123456789abcdef0", "hai", deadline=time.monotonic() + 10)
+
+    passed, evidence = host_result(host)
+    checks["a running project host without a public address passes"] = passed is True
+    checks["the host evidence holds no address"] = b"10.23" not in evidence and b"i-0123456789abcdef0" in evidence
+    for label, changed in (
+        ("a public address on the instance", {**host, "PublicIpAddress": "203.0.113.9"}),
+        ("a public address on an interface", {**host, "NetworkInterfaces": [{"Association": {"PublicIp": "203.0.113.9"}}]}),
+        ("a host without the project tag", {**host, "Tags": []}),
+        ("a stopped host", {**host, "State": {"Name": "stopped"}}),
+    ):
+        result, evidence = host_result(changed)
+        checks[f"{label} fails and is recorded without the address"] = result is False and b"203.0.113" not in evidence
+    checks["a failed describe call is recorded as not observed"] = host_result(None)[0] is None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Answer)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status = cutover_route.catalog_status(server.server_address[1], deadline=time.monotonic() + 5)
+    finally:
+        server.shutdown()
+        server.server_close()
+    checks["the catalog answers through the relay"] = status == 401
+    with socket.socket() as unused:
+        unused.bind(("127.0.0.1", 0))
+        closed = unused.getsockname()[1]
+    checks["a relay without the catalog behind it gives no answer"] = cutover_route.catalog_status(closed, deadline=time.monotonic() + 5) == 0
+    spec = TransportSpec("i-0123456789abcdef0", "synthetic", "us-east-1", 18181, 18182)
+    result, evidence = cutover_route.port_observation(spec, 401, 2)
+    checks["the tunnel forwards only the catalog port and the relay only the tunnel"] = (
+        result is True and json.loads(evidence)["remote_port"] == 8181 and json.loads(evidence)["relay_target_port"] == 18181
+    )
+    checks["no catalog answer fails the port observation"] = cutover_route.port_observation(spec, 0, 2)[0] is False
+    checks["an extra owned process fails the port observation"] = cutover_route.port_observation(spec, 401, 3)[0] is False
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        open_port = listener.getsockname()[1]
+        report = mac_route_probe.report("nonce1", [open_port, closed], ["127.0.0.1"])
+    checks["the container probe reports a port it reached"] = report["reached"] == [["127.0.0.1", open_port]] and report["nonce"] == "nonce1"
+    checks["the container probe reports refused ports as not reached"] = ["127.0.0.1", closed] not in report["reached"]
+    checks["outside a container the probe finds no host route to try"] = set(mac_route_probe.host_targets(folder / "absent_route_table")) <= {
+        "127.0.0.1",
+        mac_route_probe.HOST_NAME,
+    }
+
+    ports = [18181, 18182]
+    refused_all = {"bridge": {}, "hai_lakehouse": {}, "hai_offline": {}}
+    for label, results, listed, nonce, expected in (
+        ("every network refused", refused_all, None, "nonce1", True),
+        ("one network that reached the relay", {**refused_all, "hai_lakehouse": {"reached": [["host.docker.internal", 18182]]}}, None, "nonce1", False),
+        ("a listed network without a result", {**refused_all, "hai_offline": None}, None, "nonce1", None),
+        ("a result of another run", refused_all, None, "nonce2", None),
+        ("no network listed", refused_all, [], "nonce1", None),
+        ("a network name that is not a plain name", refused_all, ["../bridge"], "nonce1", None),
+    ):
+        probe = probe_folder(folder / "probes" / label.replace(" ", "_"), "nonce1", ports, results, listed)
+        result, evidence = cutover_route.container_observation(probe, nonce, ports)
+        checks[f"container probe: {label} gives {expected}"] = result is expected and b"172.17" not in evidence
+    started = time.monotonic()
+    waited = cutover_route.wait_for_probe(folder / "probes" / "never", deadline=time.monotonic() + 0.3, poll=0.05)
+    checks["the wait for the container probe ends at its deadline"] = waited is False and time.monotonic() - started < 2
+    command = cutover_route.probe_command(Path("data/lakehouse/cutover/cut1/route_checks/s1.probe"), "nonce1", ports, "hai/analytics-dbt:pinned")
+    checks["the documented probe command covers every Docker network, never pulls and runs the probe from standard input"] = all(
+        part in command
+        for part in ("docker network ls", '--network "$network"', "--pull=never", "-I -", "nonce1 18181 18182", "hai/analytics-dbt:pinned", "networks.txt")
+    )
     return checks
 
 
@@ -1137,8 +1261,9 @@ class StandInServices:
     def target(self, *, deadline: float) -> str:
         return self.instance
 
-    def route_probe(self, instance: str, *, deadline: float) -> RouteProbe:
-        return self.probe
+    @contextlib.contextmanager
+    def route_probe(self, instance: str, folder: Path, stamp: str, terminal: bronze_cutover.Terminal, *, deadline: float) -> Iterator[RouteProbe]:
+        yield self.probe
 
     def source(self, *, deadline: float) -> bronze_inventory.Source:
         return bronze_inventory.SourceCatalog(self.cut.lake.source.request, "hai_lakehouse")
@@ -1218,10 +1343,10 @@ def owner_cli_sequence(env: Env) -> dict[str, bool]:
     checks["register is refused before a route check and opens no route"] = (
         "route-check" in code_of_cutover(lambda: owner.run("register", "--inventory", inventory, "--sha256", digest)) and services.routes == 0
     )
-    services.probe.answers[("offline", "catalog")] = True
-    checks["a failing route check is refused"] = "catalog" in code_of_cutover(lambda: owner.run("route-check"))
-    services.probe.answers[("offline", "catalog")] = False
-    checks["step 5a: the route check passes and is recorded"] = owner.run("route-check")["passed"] is True
+    services.probe.answers["mac_containers_refused"] = False
+    checks["a failing route check is refused"] = "mac_containers_refused" in code_of_cutover(lambda: owner.run("route-check", "--probe-image", "synthetic"))
+    services.probe.answers["mac_containers_refused"] = True
+    checks["step 5a: the route check passes and is recorded"] = owner.run("route-check", "--probe-image", "synthetic")["passed"] is True
     counts = owner.run("register", "--inventory", inventory, "--sha256", digest)
     checks["step 5: every table is registered"] = counts == {"registered": len(REQUIRED), "unchanged": 0}
     again = owner.run("register", "--inventory", inventory, "--sha256", digest)
@@ -1304,6 +1429,7 @@ ALL_CASES = (
     http_absolute_deadline,
     role_storage_reads,
     route_binding_and_evidence,
+    mac_route_observations,
     register_and_verify,
     preflight_refusals,
     register_failures,
