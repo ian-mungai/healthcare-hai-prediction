@@ -64,10 +64,6 @@
       "runtime": "orchestration_image",
       "reason": "Library stubs not installed for \"psycopg2\""
     },
-    "scripts/orchestration/ecs_stage_runtime_cases.py": {
-      "runtime": "host",
-      "reason": "Library stubs not installed for module yaml (PyYAML)"
-    },
     "scripts/orchestration/in_image_checks.py": {
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.dag_processing.dagbag\"; Cannot find implementation or library stub for module named \"airflow.providers.standard.operators.empty\"; Cannot find implementation or library stub for module named \"airflow.sdk\"; Cannot find implementation or library stub for module named \"airflow.sdk.bases.operator\""

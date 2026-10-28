@@ -32,7 +32,7 @@ import great_expectations as gx
 import great_expectations.expectations as gxe
 from great_expectations.execution_engine import sqlalchemy_execution_engine as engine_module
 
-from scripts.lakehouse.ecs_engine import duckdb_temp_settings
+from scripts.lakehouse.ecs_engine import TemporaryStorageError, duckdb_temp_settings
 
 # The connection fix below patches a private constant, so it is applied only to the version the spike proved.
 PINNED_GX = "1.23.2"
@@ -83,7 +83,9 @@ def private_copy(database: Path) -> Iterator[tuple[Path, str]]:
     Every suite reads the copy, so the SHA-256 names the bytes that were validated whatever happens to the original afterwards. The copy is hashed again
     when the block ends and a copy that changed raises ``QualityError``.
     """
-    with tempfile.TemporaryDirectory(prefix="build_") as folder:
+    settings = duckdb_temp_settings()
+    scratch = Path(settings["temp_directory"]).parent if settings else None
+    with tempfile.TemporaryDirectory(prefix="build_", dir=scratch) as folder:
         copy = Path(folder) / database.name
         try:
             shutil.copyfile(database, copy)
@@ -285,10 +287,13 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
+        settings = duckdb_temp_settings()
         with private_copy(args.database) as (copy, digest):
             record = validate(copy, args.suites, args.baselines)
+            if settings:
+                record["runtime_measurements"] = {"validation_copy_bytes": copy.stat().st_size}
         record["build_file_sha256"] = digest
-    except QualityError as error:
+    except (QualityError, TemporaryStorageError) as error:
         args.output.write_text(json.dumps({"error": str(error)}, indent=2) + "\n")
         sys.stderr.write(f"silver quality: stopped: {error}\n")
         return 2
