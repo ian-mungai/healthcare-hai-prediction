@@ -1234,6 +1234,11 @@ dim_county,county_fips,,false
 dim_county,in_latest_county_list,,false
 dim_county,last_listed_vintage,,false
 dim_county,first_unlisted_vintage,,false
+dim_county,is_retired,,false
+dim_county,retired_effective_date,,false
+dim_county,successor_county_fips,,false
+dim_county,historical_county_name,,false
+dim_county,retirement_basis,,false
 dim_date,calendar_date,,false
 dim_date,iso_year,,false
 dim_date,iso_week,,false

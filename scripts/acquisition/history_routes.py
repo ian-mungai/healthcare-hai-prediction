@@ -17,6 +17,7 @@ from typing import Any
 from scripts.acquisition.capture import capture, prepare_capture, receipt_validator, validate_receipt
 from scripts.acquisition.cli_tools import executable, run_argv
 from scripts.acquisition.collection_layout import load_routes
+from scripts.acquisition.county_change_pages import FILE_PATTERN, page_problem
 from scripts.acquisition.dataset_layout import cms_members, source_folder
 from scripts.acquisition.mapped_archives import expand_tree
 from scripts.acquisition.plan_remaining import capture_plan
@@ -188,6 +189,33 @@ def map_captured_archive(path: Path, registry: dict) -> dict:
     }
 
 
+def acquired_receipt(root: Path) -> Path | None:
+    """Return the newest receipt of a job's captures that holds an acquired, unvalidated snapshot."""
+    receipts = sorted(root.glob("captures/*/*/receipt.json"))
+    return next((item for item in reversed(receipts) if read_json(item)["snapshot_status"] == "acquired_unvalidated"), None)
+
+
+def change_list_refusal(candidate: dict, receipt_path: Path | None) -> str | None:
+    """Return why the page captured for a candidate with change-list evidence is refused: no capture, an unreadable layout or a differing change list."""
+    if "change_list_sha256" not in candidate["evidence"]:
+        return None
+    if receipt_path is None:
+        return "stored_page_capture_missing"
+    artifacts = read_json(receipt_path)["artifacts"]
+    named = FILE_PATTERN.fullmatch(candidate["url"].rsplit("/", 1)[-1])
+    if named is None or len(artifacts) != 1:
+        return "decade_heading_or_layout_differs"
+    path = receipt_path.parent / artifacts[0]["storage_path"]
+    if not path.is_file():
+        return "stored_page_capture_missing"
+    return page_problem(path, int(named.group(1)), candidate["evidence"]["change_list_sha256"])[0]
+
+
+def has_change_list_pin(job: dict) -> bool:
+    """Whether the job's candidate pins a change list, so its page is checked again on every run."""
+    return "change_list_sha256" in job["candidate"]["evidence"]
+
+
 def run_job(job: dict, registry: dict, validator: Any, directory: Path, settings: dict, outputs: dict) -> dict:
     """Execute one historical capture and return its preserved completion or failure event."""
     if job["candidate"].get("reviewed_unsigned_redirect"):
@@ -197,10 +225,18 @@ def run_job(job: dict, registry: dict, validator: Any, directory: Path, settings
     root = directory / "jobs" / job["job_id"]
     write_once(root / "job.json", encoded_json(job))
     completed = root / "completed.json"
+    path = acquired_receipt(root)
     if completed.exists():
+        refusal = change_list_refusal(job["candidate"], path)
+        if refusal is not None:
+            return {
+                "job_id": job["job_id"],
+                "source_id": job["plan"]["source_id"],
+                "url": job["candidate"]["url"],
+                "status": "blocked_download",
+                "reasons": [refusal],
+            }
         return {"job_id": job["job_id"], "status": "already_completed", "live_s3_rechecked": False}
-    receipts = sorted(root.glob("captures/*/*/receipt.json"))
-    path = next((item for item in reversed(receipts) if read_json(item)["snapshot_status"] == "acquired_unvalidated"), None)
     if path is None:
         path = capture(job["plan"], root / "captures", registry, validator, Limits(max_bytes=job["candidate"].get("max_bytes", 512 * 1024**2), attempts=2))
     receipt = read_json(path)
@@ -208,6 +244,9 @@ def run_job(job: dict, registry: dict, validator: Any, directory: Path, settings
     event = {"job_id": job["job_id"], "source_id": job["plan"]["source_id"], "url": job["candidate"]["url"], "receipt_path": str(path)}
     if receipt["snapshot_status"] != "acquired_unvalidated":
         return {**event, "status": "blocked_download", "reasons": receipt["quality_profile"]["checks_failed"]}
+    refusal = change_list_refusal(job["candidate"], path)
+    if refusal is not None:
+        return {**event, "status": "blocked_download", "reasons": [refusal]}
     mapping = map_captured_archive(path, registry) if job["plan"]["expected_format"] == "zip" else None
     result = upload_snapshot(path, [], AwsCli(settings), outputs, registry, validator, archive_mapping=mapping)
     event.update(status="stored_unvalidated", reconciliation_path=result["reconciliation_path"], model_eligible=False)
@@ -229,7 +268,9 @@ def main() -> None:
     validator = receipt_validator()
     for job in jobs:
         prepare_capture(job["plan"], registry, validator)
-    pending_jobs = [job for job in jobs if not (args.state_root / "jobs" / job["job_id"] / "completed.json").exists()]
+    completed_ids = {job["job_id"] for job in jobs if (args.state_root / "jobs" / job["job_id"] / "completed.json").exists()}
+    rechecked = [job for job in jobs if job["job_id"] in completed_ids and has_change_list_pin(job)]
+    pending_jobs = [job for job in jobs if job["job_id"] not in completed_ids]
     jobs, deferred, reserved = bounded_jobs(pending_jobs, args.max_download_bytes)
     sys.stdout.write(
         str(
@@ -238,6 +279,7 @@ def main() -> None:
                     "validated_historical_jobs": len(jobs),
                     "source_count": len({job["plan"]["source_id"] for job in jobs}),
                     "deferred_jobs": len(deferred),
+                    "completed_pages_rechecked": len(rechecked),
                     "reserved_download_bytes": reserved,
                     "executing": args.execute,
                     "model_eligible": False,
@@ -258,7 +300,7 @@ def main() -> None:
     execution_lock = (args.state_root / ".execution.lock").open("a")
     fcntl.flock(execution_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        pending = {pool.submit(run_job, job, registry, validator, args.state_root, settings, outputs): job for job in jobs}
+        pending = {pool.submit(run_job, job, registry, validator, args.state_root, settings, outputs): job for job in [*jobs, *rechecked]}
         for future in as_completed(pending):
             job = pending[future]
             try:

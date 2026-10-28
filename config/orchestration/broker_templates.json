@@ -2,7 +2,7 @@
   "schema_version": 1,
   "templates": {
     "acquire_run": {
-      "purpose": "Take the transform lock for the run, make the run folder and copy the fixture seed into it (step 1)",
+      "purpose": "Take the transform lock for the run, make the run folder and copy the fixture seed into it",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -53,7 +53,7 @@
       }
     },
     "catalog_up": {
-      "purpose": "Start the catalog and register the run as a catalog user (step 2)",
+      "purpose": "Start the catalog and register the run as a catalog user",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -77,7 +77,7 @@
       }
     },
     "pin_bronze": {
-      "purpose": "Record the snapshot ID of every bronze table the build reads (step 3)",
+      "purpose": "Record the snapshot ID of every bronze table the build reads",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -111,7 +111,7 @@
       }
     },
     "silver_build": {
-      "purpose": "Build the kept silver models into the run's build file at the pinned bronze snapshots (step 4)",
+      "purpose": "Build the kept silver models into the run's build file at the pinned bronze snapshots",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -485,6 +485,10 @@
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
               },
               "model.hai.int_county_adjacency_edges": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_county_retirements": {
                 "namespace": "file",
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
               },
@@ -957,6 +961,14 @@
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
               },
               "seed.hai.acs_variable_map": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.alaska_county_code_labels": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.census_county_change_events": {
                 "namespace": "file",
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
               },
@@ -1416,7 +1428,7 @@
       }
     },
     "silver_validate": {
-      "purpose": "Run the atomic silver Great Expectations contracts on the build file and record its SHA-256 and the run (step 5)",
+      "purpose": "Run the atomic silver Great Expectations contracts on the build file and record its SHA-256 and the run",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -1495,7 +1507,7 @@
       }
     },
     "gold_build": {
-      "purpose": "Build the gold dimensions, bridges and facts on the same build file after rechecking its SHA-256 (step 6)",
+      "purpose": "Build the gold dimensions, bridges and facts on the same build file after rechecking its SHA-256",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -1874,6 +1886,10 @@
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
               },
               "model.hai.int_county_adjacency_edges": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "model.hai.int_county_retirements": {
                 "namespace": "file",
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
               },
@@ -2349,6 +2365,14 @@
                 "namespace": "file",
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
               },
+              "seed.hai.alaska_county_code_labels": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
+              "seed.hai.census_county_change_events": {
+                "namespace": "file",
+                "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
+              },
               "seed.hai.cmi_layout_columns": {
                 "namespace": "file",
                 "name": "data/analytics/dbt/runs/{run_id}/staging.duckdb"
@@ -2805,7 +2829,7 @@
       }
     },
     "gold_validate": {
-      "purpose": "Run the gold Great Expectations suites (step 7)",
+      "purpose": "Run the gold Great Expectations suites",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -2882,7 +2906,7 @@
       }
     },
     "cross_layer_checks": {
-      "purpose": "Reconcile every gold fact with its silver model row for row and by content, and run the silver and gold suites on the same build file (step 8)",
+      "purpose": "Reconcile every gold fact with its silver model row for row and by content, and run the silver and gold suites on the same build file",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -2976,7 +3000,7 @@
       }
     },
     "verify_bronze": {
-      "purpose": "Check that the bronze heads still equal the pinned snapshots before any publish (step 9)",
+      "purpose": "Check that the bronze heads still equal the pinned snapshots before any publish",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -3010,7 +3034,7 @@
       }
     },
     "publish_branch": {
-      "purpose": "Record the branch by mode: publish modes continue to step 10 and the fixture mode goes to skip_publish (step 9a)",
+      "purpose": "Record the branch by mode: publish modes continue to publishing and the fixture mode goes to skip_publish",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -3030,7 +3054,7 @@
       }
     },
     "publish_candidates": {
-      "purpose": "Write each gold table with MERGE INTO and record the new snapshot IDs as candidates (step 10)",
+      "purpose": "Write each gold table with MERGE INTO and record the new snapshot IDs as candidates",
       "modes": {
         "publish_fixture": {
           "class": "offline",
@@ -3071,7 +3095,7 @@
       }
     },
     "reconcile_candidates": {
-      "purpose": "Compare counts and fingerprints of exactly the candidate snapshots with the build (step 11)",
+      "purpose": "Compare counts and fingerprints of exactly the candidate snapshots with the build",
       "modes": {
         "publish_fixture": {
           "class": "offline",
@@ -3112,7 +3136,7 @@
       }
     },
     "catalog_backup": {
-      "purpose": "Write the catalog backup and read it back (step 12)",
+      "purpose": "Write the catalog backup and read it back",
       "modes": {
         "publish_fixture": {
           "class": "offline",
@@ -3153,7 +3177,7 @@
       }
     },
     "commit_publish": {
-      "purpose": "Write the publish_runs row naming the candidate snapshot set, last (step 13)",
+      "purpose": "Write the publish_runs row naming the candidate snapshot set, last",
       "modes": {
         "publish_fixture": {
           "class": "offline",
@@ -3194,7 +3218,7 @@
       }
     },
     "run_record": {
-      "purpose": "Write the durable run record and move the run to finalizing; the build file and the lock are kept (step 14)",
+      "purpose": "Write the durable run record and move the run to finalizing; the build file and the lock are kept",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -3229,7 +3253,7 @@
       }
     },
     "catalog_release": {
-      "purpose": "Deregister the run as a catalog user and stop the catalog when no user remains (step 15)",
+      "purpose": "Deregister the run as a catalog user and stop the catalog when no user remains",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -3253,7 +3277,7 @@
       }
     },
     "final_gate_accepted": {
-      "purpose": "Write the accepted result of the final gate and the DAG run's predecessor states into the run record (step 16)",
+      "purpose": "Write the accepted result of the final gate and the DAG run's predecessor states into the run record",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -3287,7 +3311,7 @@
       }
     },
     "final_gate_rejected": {
-      "purpose": "Write the rejected result of the final gate and the DAG run's predecessor states into the run record (step 16)",
+      "purpose": "Write the rejected result of the final gate and the DAG run's predecessor states into the run record",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -3321,7 +3345,7 @@
       }
     },
     "release_accepted": {
-      "purpose": "After an accepted gate, stop what is open, delete the build files and release the lock (step 17)",
+      "purpose": "After an accepted gate, stop what is open, delete the build files and release the lock",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -3368,7 +3392,7 @@
       }
     },
     "release_rejected": {
-      "purpose": "After a rejected gate, stop what is open, keep the build files and keep the lock as failed_retained (step 17)",
+      "purpose": "After a rejected gate, stop what is open, keep the build files and keep the lock as failed_retained",
       "modes": {
         "fixture": {
           "class": "offline",
@@ -3435,7 +3459,7 @@
       }
     },
     "sense_markers": {
-      "purpose": "Read the approved bronze snapshot manifest and the gold publish_runs head for sensing_dag (decision O5)",
+      "purpose": "Read the approved bronze snapshot manifest and the gold publish_runs head for sensing_dag",
       "modes": {
         "real": {
           "class": "lakehouse_read",

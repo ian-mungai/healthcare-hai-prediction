@@ -621,7 +621,7 @@
             "{{ strict_number('score') }} (moved from the validation control-map models)"
           ]
         ],
-        "grain": "window_key over the reviewed measure ID: an alias row is kept only where the exact ID has no row for that hospital and window, and a kept alias row takes the reviewed ID (amendment A12; 9 to 8 fixture rows)",
+        "grain": "window_key over the reviewed measure ID: an alias row is kept only where the exact ID has no row for that hospital and window, and a kept alias row takes the reviewed ID. Alias selection reduces the fixture from 9 to 8 rows.",
         "note": "Alias precedence below; an alias row exists only where the exact ID has no row for that hospital and window."
       },
       "columns": [
@@ -772,7 +772,7 @@
       "baseline_rows": null,
       "changes": {
         "grain": "hold_key",
-        "note": "One row per event and release whose values differ from the latest release (decision 4)."
+        "note": "One row per event and release whose values differ from the latest release."
       },
       "columns": [
         [
@@ -815,7 +815,7 @@
             "how many releases list the event"
           ]
         ],
-        "grain": "event_key (one row per event, from the latest release; decision 4)",
+        "grain": "event_key (one row per event, from the latest release)",
         "note": "Rows fall to one per event; differing values go to int_change_of_ownership_holds."
       },
       "columns": [
@@ -1766,6 +1766,51 @@
       ],
       "package": null,
       "unchanged": true
+    },
+    "int_county_retirements": {
+      "baseline_content": null,
+      "baseline_rows": null,
+      "changes": {
+        "grain": "county_fips",
+        "note": "New model: one row per county code that a Census county-change page retires or that the reviewed Alaska labels name. It reads two seeds and no bronze table, so it has no beab859 baseline."
+      },
+      "columns": [
+        [
+          "is_retired",
+          "BOOLEAN"
+        ],
+        [
+          "retired_effective_date",
+          "DATE"
+        ],
+        [
+          "change_page",
+          "INTEGER"
+        ],
+        [
+          "change_event",
+          "VARCHAR"
+        ],
+        [
+          "county_fips",
+          "VARCHAR"
+        ],
+        [
+          "successor_county_fips",
+          "VARCHAR"
+        ],
+        [
+          "historical_county_name",
+          "VARCHAR"
+        ],
+        [
+          "retirement_basis",
+          "VARCHAR"
+        ]
+      ],
+      "new": true,
+      "package": null,
+      "unchanged": false
     },
     "int_gv_county_values": {
       "baseline_content": "91402448402968613617:11913244220251326176624667195286266387",
@@ -5545,8 +5590,8 @@
       "baseline_content": "8785935515808275776:162071903908230583726171343472827941581",
       "baseline_rows": 1,
       "changes": {
-        "grain": "one row per build: every column is run identity, so the marker is not compared with the baseline (amendment A9)",
-        "note": "Depends on two kept models only; the full dependency list and the four L1 columns are wave 2 work (amendment A28); dbt_invocation_id stays."
+        "grain": "one row per build: every column is run identity, so the marker is not compared with the baseline",
+        "note": "Depends on two kept models only. The contract omits the full dependency list and the four provenance columns. dbt_invocation_id identifies the run."
       },
       "columns": [
         [
@@ -6005,11 +6050,11 @@
     }
   },
   "rules": {
-    "alias_precedence": "The exact published measure ID wins; a reviewed alias from measure_id_aliases fills only a hospital and window the exact ID leaves empty; the row keeps published_measure_id (failure modes 629 and 630).",
+    "alias_precedence": "The exact published measure ID wins; a reviewed alias from measure_id_aliases fills only a hospital and window the exact ID leaves empty; the row keeps published_measure_id.",
     "changed_models": "A changed model equals its baseline on every column not named in its changes; its new and retyped columns are checked by the package's tests and expected-failure cases.",
-    "fills": "A filled column keeps its published value in <column>_published and names its source in <column>_source (silver failure mode 741).",
+    "fills": "A filled column keeps its published value in <column>_published and names its source in <column>_source.",
     "hold_key": "md5(concat_ws('|', bronze_table, hold_reason, coalesce(entity_id or ccn, '<null>'), coalesce(measure_id, '<null>'), coalesce(cast(window_start or fiscal_year as varchar), '<null>'), coalesce(cast(window_end as varchar), '<null>'))); unique test per hold model",
-    "unchanged_models": "A model marked unchanged must equal its baseline_rows and baseline_content on the fixture (silver failure mode 737).",
+    "unchanged_models": "A model marked unchanged must equal its baseline_rows and baseline_content on the fixture.",
     "value_preservation": "A typed column keeps its published text beside it unless a cast test proves every non-blank published value cast exactly (silver plan section 5). The check of silver section 5 fails a typed column with neither.",
     "column_order": "Column order is not binding: checks compare column names and types. The adjacency edge checks keep their original ordered form. int_hac_program_years and int_vbp_program_years list their columns in the built order."
   },

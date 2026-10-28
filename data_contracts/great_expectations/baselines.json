@@ -3,7 +3,7 @@
   "source": "real silver build of the full silver E2E data/e2e/staging/report_20261009T235041Z.json (363 of 363)",
   "rule": "windows per year and spine rows: 95% of the smallest to 105% of the largest; aligned shares: the measured share plus or minus 0.05; spine county share: at least 0.99; rows per spine row: the control count of each table (structural); spine counties without adjacency edges (state and DC windows): at most the 7 retired Alaska codes of the reviewed build",
   "approved": true,
-  "approval": "owner, Oct 10 2026: the recommended values are accepted for now; review them again when a new release changes the build; owner, Oct 12 2026: the row-count bands of the atomic silver models are approved for now; review them after a real build of the refactored silver",
+  "approval": "The listed bounds apply to the real silver models and require review when a release changes the build. Atomic silver row-count bands require review after a real build. The int_county_retirements row-count band is 95% to 105% of the seed-derived count 22, which gives 20 to 24 rows.",
   "values": {
     "spine.windows_per_year.min": 4519,
     "spine.windows_per_year.max": 5183,
@@ -121,7 +121,9 @@
     "silver.rows.int_vbp_program_years.min": 19345,
     "silver.rows.int_vbp_program_years.max": 21383,
     "silver.rows.int_wonder_county_deaths.min": 89651,
-    "silver.rows.int_wonder_county_deaths.max": 99089
+    "silver.rows.int_wonder_county_deaths.max": 99089,
+    "silver.rows.int_county_retirements.min": 20,
+    "silver.rows.int_county_retirements.max": 24
   },
   "row_count_source": "fingerprint of the real silver build file of commit beab859 (real report report_20261010T201212Z), data/wave0/baselines/real_beab859/baseline.json, rows per kept model; no real build of the refactored silver exists yet",
   "row_count_rule": "row count of each kept model with rows, no grain change, not a hold model: 95% of the real beab859 count to 105% of it",
@@ -305,6 +307,10 @@
     "int_wonder_county_deaths": {
       "real_rows_beab859": 94370,
       "fixture_rows": 5
+    },
+    "int_county_retirements": {
+      "seed_rows": 22,
+      "fixture_rows": 22
     }
   },
   "row_count_without_band": {

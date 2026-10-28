@@ -1,8 +1,3 @@
--- One row per 5-character county FIPS any fact's county key carries, plus the unknown member. The value space is the contract grain: five
--- characters. A value outside that space takes the unknown member in every fact [824] [825]. Three attributes come from the county lists per vintage
--- (the counties and neighbors of the adjacency files, the RUCC counties and the ACS counties): whether the latest adjacency list names the code, the
--- last vintage of any list that names it, and, for a code outside the latest list, the first vintage of any list after that. A code in no list has no
--- vintages. There is no successor column: a successor would be an inference, not a published fact [943].
 {%- set sources = [
     {'model': 'int_acs_county_values', 'column': 'county_fips'},
     {'model': 'int_bls_county_series', 'column': 'county_fips'},
@@ -96,13 +91,29 @@ first_unlisted as (
     group by last_listed.county_fips
 ),
 
+retirements as (
+    select
+        county_fips,
+        is_retired,
+        retired_effective_date,
+        successor_county_fips,
+        historical_county_name,
+        retirement_basis
+    from {{ ref('int_county_retirements') }}
+),
+
 final as (
     select
         md5(valid.county_fips) as county_sk,
         valid.county_fips,
         latest.county_fips is not null as in_latest_county_list,
         last_listed.last_listed_vintage,
-        first_unlisted.first_unlisted_vintage
+        first_unlisted.first_unlisted_vintage,
+        retirements.is_retired,
+        retirements.retired_effective_date,
+        retirements.successor_county_fips,
+        retirements.historical_county_name,
+        retirements.retirement_basis
     from valid
     left join latest
         on valid.county_fips = latest.county_fips
@@ -110,13 +121,20 @@ final as (
         on valid.county_fips = last_listed.county_fips
     left join first_unlisted
         on valid.county_fips = first_unlisted.county_fips
+    left join retirements
+        on valid.county_fips = retirements.county_fips
     union all
     select
         md5('<unknown>') as county_sk,
         '<unknown>' as county_fips,
         cast(null as boolean) as in_latest_county_list,
         cast(null as varchar) as last_listed_vintage,
-        cast(null as varchar) as first_unlisted_vintage
+        cast(null as varchar) as first_unlisted_vintage,
+        cast(null as boolean) as is_retired,
+        cast(null as date) as retired_effective_date,
+        cast(null as varchar) as successor_county_fips,
+        cast(null as varchar) as historical_county_name,
+        cast(null as varchar) as retirement_basis
 )
 
 select * from final

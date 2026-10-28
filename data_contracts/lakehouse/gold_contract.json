@@ -348,12 +348,18 @@
         "county_fips",
         "in_latest_county_list",
         "last_listed_vintage",
-        "first_unlisted_vintage"
+        "first_unlisted_vintage",
+        "is_retired",
+        "retired_effective_date",
+        "successor_county_fips",
+        "historical_county_name",
+        "retirement_basis"
       ],
       "grain": "5-character county FIPS",
       "inputs": [
         "published codes in the facts",
-        "int_county_adjacency_edges, int_rucc_county_codes and int_acs_county_values (the county lists per vintage)"
+        "int_county_adjacency_edges, int_rucc_county_codes and int_acs_county_values (the county lists per vintage)",
+        "int_county_retirements (Census county-change pages 1970 to 2000 and the reviewed Alaska labels; passed through, never computed in gold)"
       ],
       "package": "G2"
     },
@@ -9591,7 +9597,7 @@
   },
   "publish": {
     "backup_prefix": "lakehouse/catalog_backups/",
-    "backup_prefix_note": "Owner decision of Oct 13 2026: one catalog backup per publish run under this prefix, named catalog_backup_<run ID>.json. Owner decision 5 allows S3 writes under it.",
+    "backup_prefix_note": "One catalog backup is written per publish run under this prefix, named catalog_backup_<run ID>.json. This prefix allows S3 backup writes.",
     "branch_prefix": "publish_",
     "maintenance": {
       "expire_after_days": 7,
@@ -10033,12 +10039,12 @@
     "writer_principal": "gold_writer"
   },
   "rules": {
-    "columns": "Every silver column lands once, under its silver name; no value is stored twice (failure mode 744). Controls appear only in bridge_measure_control.",
-    "grain": "A fact's rows equal its silver model's rows; grain test on the silver unique key; rows and content fingerprint equal the silver model's over the silver columns (gold failure mode 743).",
-    "lineage": "Facts read only their kept silver model, their dimensions and lookup seeds; a dimension or bridge reads only the inputs this contract lists for it, lookup seeds and gold models (failure mode 746; amendment A37).",
-    "surrogate_keys": "<dimension>_sk = md5 of the natural key's text in the dimension; a null or unmatched natural key takes the unknown member (failure mode 745). A natural key of several parts is concat_ws('|', parts): a null part is skipped, so a row with a null edition keeps the key it had before the edition column existed.",
-    "unknown_member": "Each dimension has one row with natural key '<unknown>' and <dimension>_sk = md5('<unknown>'); the one exception is dim_date, whose unknown row has a null calendar_date (amendment A40); facts never carry a null foreign key."
+    "columns": "Every silver column lands once, under its silver name; no value is stored twice. Controls appear only in bridge_measure_control.",
+    "grain": "A fact's rows equal its silver model's rows; grain test on the silver unique key; rows and content fingerprint equal the silver model's over the silver columns.",
+    "lineage": "Facts read only their kept silver model, their dimensions and lookup seeds; a dimension or bridge reads only the inputs this contract lists for it, lookup seeds and gold models.",
+    "surrogate_keys": "<dimension>_sk = md5 of the natural key's text in the dimension; a null or unmatched natural key takes the unknown member. A natural key of several parts is concat_ws('|', parts): a null part is skipped, so a row with a null edition keeps the key it had before the edition column existed.",
+    "unknown_member": "Each dimension has one row with natural key '<unknown>' and <dimension>_sk = md5('<unknown>'); the one exception is dim_date, whose unknown row has a null calendar_date; facts never carry a null foreign key."
   },
-  "source": "silver_columns.json (wave 0 item 6) and plans/gold_20261010/plan.md draft 4",
-  "wave2_amendments_applied": "A36 to A41, except the A39 bridge_measure_control column list, which stays as the A39 constant in scripts/lakehouse/gold_checks.py until the expression-check rebuild (A45); A42 in dbt_project.yml; A43 and A36 rule 8 as constants in scripts/lakehouse/gold_sql.py"
+  "source": "silver_columns.json",
+  "wave2_amendments_applied": "Column and expression rules are defined in scripts/lakehouse/gold_checks.py, scripts/lakehouse/gold_sql.py and dbt/dbt_project.yml. The bridge_measure_control column list is defined in scripts/lakehouse/gold_checks.py."
 }

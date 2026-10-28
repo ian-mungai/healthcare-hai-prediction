@@ -807,6 +807,42 @@
       "severity": "structural"
     },
     {
+      "id": "int_county_retirements.columns",
+      "table": "int_county_retirements",
+      "type": "ExpectTableColumnsToMatchSet",
+      "kwargs": {
+        "column_set": [
+          "is_retired",
+          "retired_effective_date",
+          "change_page",
+          "change_event",
+          "county_fips",
+          "successor_county_fips",
+          "historical_county_name",
+          "retirement_basis"
+        ]
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_county_retirements.has_rows",
+      "table": "int_county_retirements",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": 1
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_county_retirements.types",
+      "table": "int_county_retirements",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('is_retired', 'BOOLEAN'), ('retired_effective_date', 'DATE'), ('change_page', 'INTEGER'), ('change_event', 'VARCHAR'), ('county_fips', 'VARCHAR'), ('successor_county_fips', 'VARCHAR'), ('historical_county_name', 'VARCHAR'), ('retirement_basis', 'VARCHAR')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'int_county_retirements' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+      },
+      "severity": "structural"
+    },
+    {
       "id": "int_gv_county_values.columns",
       "table": "int_gv_county_values",
       "type": "ExpectTableColumnsToMatchSet",

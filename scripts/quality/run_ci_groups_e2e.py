@@ -13,7 +13,7 @@ scripts/quality/ci_group_files.py fails with the file and group named. Dry-run c
 command: a missing or unreadable body file stops the run with its name, the full local run names the same groups, gold units and acquisition shards as
 the GitHub jobs (a planted workflow with three shards differs), a failed shard stops the run before the combining step and a missing shard fails it.
 One case runs this runner under a real pre-commit hook that inherits an alternate ``GIT_INDEX_FILE``, ``GIT_DIR`` and ``GIT_WORK_TREE`` and checks that
-the caller's index, staged diff and working files survive. Failure modes CS1 to CS31 (plans, local). The report goes to
+the caller's index, staged diff and working files survive. The report goes to
 data/e2e/ci_groups/<UTC>_<pid>/report.json with the revision, the SHA-256 of the files under test and the tool versions;
 the run fails when a file under test changes while it runs.
 
@@ -654,6 +654,20 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [*silver_downstream, "orchestration_checks", "sql_style"],
         ),
         path_case("layer_gold_seed_selects_gold_and_features", "dbt/seeds/gold/identity_splits.csv", [*LAYERS[2:], "orchestration_checks", "sql_style"]),
+        path_case(
+            "layer_county_change_seed_selects_gold_and_features",
+            "dbt/seeds/census_county_change_events.csv",
+            [*LAYERS[2:], "orchestration_checks", "sql_style"],
+        ),
+        path_case(
+            "layer_county_change_pin_selects_gold_and_features", "config/acquisition/census_county_change_golden.json", [*LAYERS[2:], "configuration_checks"]
+        ),
+        path_case(
+            "layer_county_change_seed_check_selects_gold_and_features",
+            "scripts/lakehouse/county_change_seed.py",
+            ["python_lint", *LAYERS[2:], "orchestration_checks", "repository_code_checks"],
+        ),
+        path_case("layer_county_label_seed_selects_every_layer", "dbt/seeds/alaska_county_code_labels.csv", [*LAYERS, "orchestration_checks", "sql_style"]),
         path_case("layer_gold_macro_read_by_bronze_selects_every_layer", "dbt/macros/gold_facts.sql", [*LAYERS, "orchestration_checks", "sql_style"]),
         path_case(
             "layer_gold_identity_macro_read_by_bronze_selects_every_layer", "dbt/macros/gold_identity.sql", [*LAYERS, "orchestration_checks", "sql_style"]
@@ -1204,7 +1218,9 @@ OLD_GOLD_COMMANDS = (
     "scripts.lakehouse.run_bridge_references_e2e",
     "scripts.lakehouse.identity_splits --check",
     "scripts.lakehouse.source_labels --check",
+    "scripts.lakehouse.county_change_seed --check",
     "scripts.lakehouse.run_identity_seeds_e2e",
+    'scripts.lakehouse.run_county_change_seed_e2e --output "$quality_output/county_change_seed.json"',
     "scripts.lakehouse.feature_sources --check",
     "scripts.lakehouse.run_feature_sources_e2e",
     "scripts.lakehouse.feature_columns --check",

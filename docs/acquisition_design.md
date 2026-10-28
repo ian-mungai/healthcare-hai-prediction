@@ -36,6 +36,9 @@ Collection checks prove integrity and provenance only. A successful capture stay
   - [Download Batches](#download-batches)
   - [History Routes](#history-routes)
   - [Reference Document Fetch](#reference-document-fetch)
+  - [Census County-Change Pages](#census-county-change-pages)
+    - [County-Change Page Grammar](#county-change-page-grammar)
+    - [County-Change Seed](#county-change-seed)
   - [ZIP Archives](#zip-archives)
 - [Browser Downloads](#browser-downloads)
   - [Census Table Exports](#census-table-exports)
@@ -310,6 +313,60 @@ Discovery scripts (`discover_history.py`, `discover_publisher_history.py`, `disc
 | A folder that holds a receipt is only rechecked: the URL and file name list must match, each accepted file must keep its hash and must still meet the current rules (media type, header, payload structure and any candidate pin). A changed pin that a saved file violates fails the rerun. A folder with files and no receipt is refused. | A rerun repeats requests, mixes two runs or reuses bytes that break the pin now requested. |
 | Each file downloads in its own process. The project's process launcher starts it and ends it 180 seconds after it started. The limit covers name lookup, connect, headers, body and retry pauses. The command installs no signal handler or timer. A file stopped by it is rejected as `capture_deadline_exceeded`: its receipt entry has no size or SHA-256, its folder keeps the attempts that finished (the running attempt keeps its partial file and has no `transport.json`) and gets `deadline.json` naming the URL and the seconds. Nothing partial is accepted. A download process that fails another way, for example on a refused URL, stops the command with exit 2. | A response that sends a few bytes at a time or a name lookup that never returns keeps a command running as long as the publisher or resolver keeps it waiting. |
 | The county-code check reads the named columns of each file and fails when a column or archive member is missing. It writes its report once and a rerun must reproduce it byte for byte. | A changed layout is read as a different column. |
+
+### Census County-Change Pages
+
+`scripts/acquisition/one_off/county_changes/county_changes.py` fetches the Census county-change pages for 1970, 1980, 1990 and 2000 into a local folder. The `history_routes.py` mechanism stores the pages as reference documents of the registered `ADJ` source. The transport refuses HTML as a data role. The page contract (`page_problem`, `parse_page` and everything they run) is `scripts/acquisition/county_change_pages.py`, a top-level acquisition module, so the collector code fingerprints cover it. It is the only reader of the pages. The part of a page that holds the changes is its section (the decade heading and the change list). The repository commits the four sections in `config/acquisition/census_county_changes`. `scripts/lakehouse/county_change_seed.py` turns the committed sections into the reviewed dbt seed `dbt/seeds/census_county_change_events.csv`, which silver reads. The warehouse never parses a page.
+
+| Check | Failure it prevents |
+| --- | --- |
+| A page is accepted only when it arrives as `text/html` with at least 50 KB, did not redirect and its change list follows the [grammar](#county-change-page-grammar). | An error page served with HTTP 200 is stored as a page. A changed layout is read in part. |
+| The candidates pin the SHA-256 of each page's change list (its headings and item texts as the reader reads them) instead of its bytes, because the page bytes differ on every request. `fetch`, the history route (before it stores a page) and the seed tool all refuse a page or section whose change list differs from the pin. | A revised page enters unreviewed. A regenerated identifier rejects a good page. |
+| A fetch folder holds a write-once receipt with the raw and change-list hashes. A rerun only rechecks it offline. The recheck stops on a changed file, on an accepted page that the current page check refuses (with the requested pin) and on a change list that differs from the receipt's. A folder with files and no receipt stops the run. | A rerun overwrites evidence. A changed capture is accepted. A page that an earlier, looser reader accepted is trusted under a tighter grammar or a pin it never met. |
+| The history route checks a completed page job again on every `--execute` run when its candidate pins a change list: the capture kept in the job folder must still pass `page_problem` with the pin. A page that fails or whose capture is gone is reported as `blocked_download` with a reason (`decade_heading_or_layout_differs`, `change_list_differs_from_pin` or `stored_page_capture_missing`) and the completion record is left as it is. | A stored page stays "completed" after the grammar or the pin it was accepted under changed. |
+| The reader stops on every construct outside the grammar and on an unknown section, an item without a county code, a state that differs from the state code, an impossible date, a retirement with two dates, a retirement with a detail and no successor, a page without a change event and a repeated event. | The markup changes and events are dropped or misread without notice. |
+| The successors of a retirement are the codes named after the last "to create" or in the whole detail with its own code excluded. | A donor county is recorded as a successor. |
+| The seed check verifies each committed section against its pin, regenerates the events from the four sections and requires the seed to equal them byte for byte. It also compares the regenerated events and the seed with a reviewed golden file: the count per page and event plus every retirement row. It requires the four pages, one change-list hash per page equal to its pin, contiguous event numbers and well-formed rows. A page, a section, the seed or the golden file is read once, so a replacement between two reads cannot change the events that were checked. | A page, a rule or a reviewed value drifts without a visible difference. A hand edit of the seed, of the golden file or of both reaches silver. |
+
+#### County-Change Page Grammar
+
+The grammar is closed: a page that uses anything it does not list is refused by `page_problem` (reason `decade_heading_or_layout_differs`) and is never stored or turned into seed rows. Only the section is read; the rest of the page (head, navigation, scripts, comments, footer) is ignored whatever it holds. A committed section is read by the same rules: it starts with the decade heading and holds the change list after it.
+
+1. **Text and lines.** The page is UTF-8. A line ends at LF, CRLF or CR and reads as LF. White space is space, tab, CR and LF only.
+2. **Location.** The decade heading element occurs exactly once in the page text and names the decade of the page (`1970` for the 1970 page). Its form is `<h3 style="V" class="V">Changes to Counties or County Equivalent Entities: DDDDs</h3>`, where each attribute is optional and `style` comes before `class`. The section is the heading and the text after it up to the first `</section>` (that exact spelling), which must exist; the change list is the text after the heading. A committed section holds the heading and the change list without the closing tag.
+3. **Tags.** Inside the change list only the tags below occur, spelled exactly as shown. A tag name ends at the first character that is not a letter or digit, so `<br-note>` is not `br`. `V` is zero or more characters other than `"`, `<`, `>`, `&` and the control characters U+0000 to U+001F and U+007F, in double quotes.
+
+   | Tag | Where | Attributes |
+   | --- | --- | --- |
+   | `<div>`, `</div>` | between sections | optional `style="V"` then optional `class="V"` |
+   | `<section>` | between sections | optional `style="V"` |
+   | `<p>`, `</p>` | between sections | optional `class="V"` then optional `style="V"` |
+   | `<h4>`, `</h4>` | one per section heading | none |
+   | `<b>`, `</b>` or `<strong>`, `</strong>` | at most one pair inside `<h4>`, around the whole heading text; a heading without the pair is read the same | none |
+   | `<ul>`, `</ul>` | right after `</h4>` | none |
+   | `<li>`, `</li>` | inside `<ul>`, not nested | none |
+   | `<br />` | inside `<li>` (it reads as a space) | none; this spelling only |
+
+   Any other `<...>`, an upper-case tag, a self-closing form other than `<br />`, a space inside a tag, an attribute elsewhere, another attribute name, order or quote style, a comment, a declaration, a processing instruction, a script or a style is refused. So is any `<` or `>` in text or in an attribute value.
+4. **Structure.** The change list is a sequence of sections between frame tags (`div`, `section`, `p` and their closing tags): `<h4>` heading `</h4>`, then `<ul>`, any number of `<li>` items and `</ul>`. The reader skips a frame tag wherever it stands between sections and does not match opening tags with closing tags, so an unclosed or stray frame tag changes nothing. White space may separate any two tags. Several items may share a line. Text outside a heading or an item must be white space only. A list without a heading, an item outside a list, nesting and an unclosed heading, bold wrapper, list or item are refused.
+5. **Characters in text.** Tab, LF, CR, printable ASCII except `<`, `>` and `&` and the Latin letters U+00C0 to U+024F. Section headings are ASCII only. Any other character (Unicode white space and separators, control characters, a byte-order mark, other scripts, curly quotes, dashes) is refused.
+6. **Entities.** Only `&amp;`, `&quot;`, `&apos;`, `&#39;` and `&nbsp;`, with the semicolon, in this case. Any other `&` (a missing semicolon, another name, another number, another case, a bare `&`) is refused. After decoding, text may not contain `&` followed by a letter or `#` (`&amp;nbsp;` is refused).
+7. **Item and heading text.** The text between the tags with entities decoded, each `<br />` as a space, runs of white space collapsed to one space and the ends trimmed. The change-list digest that the candidates pin is the SHA-256 of the headings and item texts so read.
+8. **Sections.** The heading text, lower-cased, starts with one of: `new counties or county equivalent entities` (created), `deleted counties or county equivalent entities` or `deleted county equivalent entities` (deleted), `name and/or code changes or corrections` (renamed or corrected), `substantial county or county equivalent` (boundary change), `changes to county equivalent entities in alaska` (Alaska summary list). Any other heading is refused.
+9. **Items.** The entity is the text before the first `(SS-CCC)` code (two digits, a hyphen, three digits; the state code must be in the state table), trimmed and without trailing commas. An empty entity is refused. So is a trailing state name that differs from the state code. The detail is the text after the first colon or semicolon that follows the code. In the name and code section the detail starts with `Renamed as`, `Renamed from` or `Name corrected`, else the page is refused. A retirement (a deleted entity or one renamed to another code) takes its successors from the codes after the last ` to create ` or from the whole detail, its own code excluded, in text order. A retirement with a detail and no successor is refused. So is a retirement with two dates.
+10. **Dates.** A date is a month name with a capital letter, one or two digits, a comma, a space and a year from 1000 to 2999 (`July 1, 1994`), delimited by a word boundary on both sides (`PreJuly 1, 1994` and `July 1, 19945` hold no date). An impossible date is refused. The dates of an item are its distinct dates.
+11. **Alaska lists.** The summary item starts with `The county equivalent entities in Alaska changed from Census Divisions in 1970`. The created item starts with `New entities created in Alaska are:`, holds that one colon only and no digit outside the `(SS-CCC)` codes and becomes one created event per `Name (SS-CCC)`. Any other item of that section is refused.
+12. **Page.** At least one event other than the summary and no repeated event (same page, code, event and text).
+
+#### County-Change Seed
+
+`scripts/lakehouse/county_change_seed.py` builds `dbt/seeds/census_county_change_events.csv` from the four committed sections in `config/acquisition/census_county_changes` (`county-changes.<year>.section.html`): one row per event with the page, the event's number on the page, the page's change-list hash and the fields silver needs (state, county code, county name, event, the single effective date or none, successors and the item text). Each section must give the change-list digest pinned in the candidates file before any event is read, so changing a section, the seed or the golden file needs a reviewed pin to change as well. The sections are public Census page text (heading and change list only) and are the only input of `--check`, `--write` and `--print-golden`.
+
+- `--check` runs in the lakehouse group of `scripts/run_ci.sh` and needs no pages: pins, regeneration byte for byte, the golden file and the row shapes.
+- `--write` writes nothing when a section fails the page check or its pin or when the events differ from the golden file.
+- `--extract --pages <folder>` is the only mode that reads fetched pages. It checks all four against the page check and their pins and only then writes the four sections; a second run writes the same bytes.
+
+`scripts/lakehouse/run_county_change_seed_e2e.py` is the repeatable E2E: damaged copies of the committed seed and sections, synthetic pages, read races and (with `--pages`) the four real pages, each case naming its intended cause. Silver reads the seed in `int_county_retirements` and the Alaska label test.
 
 ### ZIP Archives
 
