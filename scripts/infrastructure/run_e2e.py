@@ -1403,10 +1403,16 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         ),
         "boot_elastic_ip_malformed": ({}, {"BOOT_ALLOCATION_RESULT": "not-an-id"}, "Exactly one Elastic IP must carry the project tags"),
         "boot_elastic_ip_search_fails": ({}, {"BOOT_AWS_FAIL": "describe-addresses"}, "The Elastic IP could not be listed."),
+        "boot_with_the_step_lost_in_a_substitution": ({}, {"BOOT_AWS_FAIL": "describe-volumes"}, "The data volume could not be listed."),
         "boot_with_misplaced_dependency": ({}, {}, None),
         "boot_with_privileged_containers_allowed": ({}, {}, None),
         "boot_without_the_privilege_setting": ({}, {}, None),
         "boot_with_the_privilege_setting_overridden": ({}, {}, None),
+    }
+    failing_steps = {
+        "boot_data_volume_search_fails": "Finding the data volume",
+        "boot_with_the_step_lost_in_a_substitution": "Finding the data volume",
+        "boot_elastic_ip_search_fails": "Finding the Elastic IP",
     }
     planted_privilege = {
         "boot_with_privileged_containers_allowed": "false",
@@ -1420,6 +1426,8 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
             if planted
             else allow_privileged_containers(template, planted_privilege[name])
             if name in planted_privilege
+            else replace_once(template, 'current_step="Finding the data volume"\n', "")
+            if name == "boot_with_the_step_lost_in_a_substitution"
             else template
         )
         root, environment, step, result = boot_host(evidence, bash, name, case_template, stub_overrides, case_environment, gnu_timeout)
@@ -1484,6 +1492,12 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         else:
             evidence.check(step, "boot_failed", result.returncode not in (0, None))
             evidence.check(step, "failure_reported", message in log)
+            if name in failing_steps:
+                names_step = log.rstrip("\n").splitlines()[-1].endswith(f"during: {failing_steps[name]}")
+                if name == "boot_with_the_step_lost_in_a_substitution":
+                    evidence.check(step, "planted_lost_step_is_detected", not names_step)
+                else:
+                    evidence.check(step, "failure_names_the_failing_step", names_step)
             evidence.check(step, "stopped_within_deadline", step["duration_seconds"] < 15)
             evidence.check(step, "cluster_not_joined", "ECS_CLUSTER=" not in config)
     run_console_copy_cases(evidence, bash, template, gnu_timeout)

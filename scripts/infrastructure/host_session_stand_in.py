@@ -9,9 +9,11 @@ incident of 2026-10-27: a service starts no task after the host registers until 
 from __future__ import annotations
 
 import json
+import re
+import signal
 from typing import Any
 
-from scripts.process import CompletedProcess
+from scripts.process import CompletedProcess, TimeoutExpired
 
 PROFILE = "stand-in-profile"
 REGION = "stand-in-region"
@@ -26,6 +28,8 @@ BOOT_SECONDS = 120
 TERMINATE_SECONDS = 90
 TASK_SECONDS = 20
 SERVICE_START_SECONDS = 45
+LEAK = f"{ACCOUNT_MARK}task/leak i-0123456789abcdef0 123456789012"
+CLIENT_TOKEN_LIMIT = 64
 FLAGS = {"--force-new-deployment", "--enable-ecs-managed-tags", "--no-honor-cooldown"}
 
 
@@ -48,7 +52,11 @@ class StandInHost:
 
     ``faults`` may hold: ``never_register``, ``never_terminate``, ``run_task_failure``, ``exit_code:<family key>=<n>``, ``never_stable``, ``pending_stuck``,
     ``throttle:<n>`` (the next n describe calls fail), ``api_error`` (every describe call fails) and
-    ``interrupt_run_task`` (a run-task call raises KeyboardInterrupt).
+    ``interrupt_run_task`` (a run-task call raises KeyboardInterrupt), ``signal_run_task`` (a run-task call receives a real SIGTERM),
+    ``lose_run_task_reply[:<n>]`` (the next n run-task calls start their task but time out before the reply; one when n is absent),
+    ``stale_list_tasks`` (list-tasks never shows a task), ``slow_calls:<n>`` (every describe and list call takes n virtual seconds and
+    times out when its limit is shorter) and ``leaky_reasons`` (every provider reason holds an ARN, an instance ID and an account ID).
+    A run-task call with a client token that an earlier call used answers with that call's task, as ECS does.
     """
 
     def __init__(self, faults: set[str] | None = None) -> None:
@@ -62,6 +70,9 @@ class StandInHost:
         self.tasks: dict[str, dict[str, Any]] = {}
         self.services: dict[str, dict[str, Any]] = {name: {"desired": 1, "forced_at": None, "state": "IN_PROGRESS", "running": 0} for name in SERVICES.values()}
         self.log: list[dict[str, Any]] = []
+        self.tokens: dict[str, str] = {}
+        self.lost_replies = next((int(fault.split(":")[1]) if ":" in fault else 1 for fault in self.faults if fault.startswith("lose_run_task_reply")), 0)
+        self.latency = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("slow_calls:")), 0)
         self.handlers = {
             ("autoscaling", "set-desired-capacity"): self.autoscaling_set_desired_capacity,
             ("autoscaling", "describe-auto-scaling-groups"): self.autoscaling_describe_auto_scaling_groups,
@@ -98,21 +109,33 @@ class StandInHost:
         """True when the container instance is registered."""
         return self.instance_up_at is not None and self.now >= self.instance_up_at
 
-    def runner(self, argv: list[str], **_: Any) -> CompletedProcess[str]:
+    def runner(self, argv: list[str], **kwargs: Any) -> CompletedProcess[str]:
         """The ``AwsCli`` runner: answer one command line."""
         service, operation, options = argv[1], argv[2], parse(argv)
-        self.log.append({"service": service, "operation": operation, "options": options})
+        limit = kwargs.get("timeout")
+        self.log.append({"service": service, "operation": operation, "options": options, "timeout": limit})
         if options.get("--profile") != [PROFILE] or options.get("--region") != [REGION]:
             return CompletedProcess(argv, 255, "", "wrong profile or region")
         if operation.startswith(("describe", "list")) and (self.throttled > 0 or "api_error" in self.faults):
             self.throttled = max(self.throttled - 1, 0)
             return CompletedProcess(argv, 254, "", "\nAn error occurred (ThrottlingException) when calling the operation: Rate exceeded\n")
+        if operation.startswith(("describe", "list")) and self.latency:
+            if limit is not None and limit < self.latency:
+                self.advance(limit)
+                raise TimeoutExpired(argv, limit)
+            self.advance(self.latency)
         if operation == "run-task" and "interrupt_run_task" in self.faults:
             raise KeyboardInterrupt
+        if operation == "run-task" and "signal_run_task" in self.faults:
+            signal.raise_signal(signal.SIGTERM)
         handler = self.handlers.get((service, operation))
         if handler is None:
             return CompletedProcess(argv, 252, "", "unknown command")
-        return CompletedProcess(argv, 0, json.dumps(handler(options)), "")
+        answer = json.dumps(handler(options))
+        if operation == "run-task" and self.lost_replies > 0:
+            self.lost_replies -= 1
+            raise TimeoutExpired(argv, limit or 0)
+        return CompletedProcess(argv, 0, answer, "")
 
     def autoscaling_set_desired_capacity(self, options: dict[str, list[str]]) -> dict[str, Any]:
         self.desired = int(options["--desired-capacity"][0])
@@ -143,12 +166,19 @@ class StandInHost:
 
     def ecs_list_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
         family = options["--family"][0]
+        if "stale_list_tasks" in self.faults:
+            return {"taskArns": []}
         return {"taskArns": [arn for arn, task in self.tasks.items() if task["family"] == family and task["status"] != "STOPPED"]}
 
     def ecs_run_task(self, options: dict[str, list[str]]) -> dict[str, Any]:
         family = options["--task-definition"][0]
+        token = options.get("--client-token", [""])[0]
+        if token and (len(token) > CLIENT_TOKEN_LIMIT or not re.fullmatch(r"[A-Za-z0-9_-]+", token)):
+            return {"tasks": [], "failures": [{"reason": "InvalidClientToken"}]}
+        if token in self.tokens:
+            return {"tasks": [{"taskArn": self.tokens[token]}], "failures": []}
         if "run_task_failure" in self.faults or not self.instance_active():
-            return {"tasks": [], "failures": [{"reason": "RESOURCE:MEMORY"}]}
+            return {"tasks": [], "failures": [{"reason": f"RESOURCE:MEMORY {LEAK}" if "leaky_reasons" in self.faults else "RESOURCE:MEMORY"}]}
         key = next(name for name, value in FAMILIES.items() if value == family)
         if key == "polaris_bootstrap":
             self.bootstrap_runs += 1
@@ -158,12 +188,15 @@ class StandInHost:
         )
         arn = f"{ACCOUNT_MARK}task/{key}-{len(self.tasks)}"
         self.tasks[arn] = {"key": key, "family": family, "status": "RUNNING", "stops_at": self.now + TASK_SECONDS, "exit": code, "options": options}
+        if token:
+            self.tokens[token] = arn
         return {"tasks": [{"taskArn": arn}], "failures": []}
 
     def ecs_describe_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
         task = self.tasks[options["--tasks"][0]]
         container = {"name": task["key"], "exitCode": task["exit"]} if task["status"] == "STOPPED" else {"name": task["key"]}
-        return {"tasks": [{"lastStatus": task["status"], "stoppedReason": "Essential container exited", "containers": [container]}], "failures": []}
+        reason = "Essential container in task exited" + (f" {LEAK}" if "leaky_reasons" in self.faults else "")
+        return {"tasks": [{"lastStatus": task["status"], "stoppedReason": reason, "containers": [container]}], "failures": []}
 
     def ecs_update_service(self, options: dict[str, list[str]]) -> dict[str, Any]:
         service = self.services[options["--service"][0]]
@@ -172,6 +205,7 @@ class StandInHost:
 
     def ecs_describe_services(self, options: dict[str, list[str]]) -> dict[str, Any]:
         found = []
+        reason = "ECS deployment circuit breaker: tasks failed to start" + (f" {LEAK}" if "leaky_reasons" in self.faults else "")
         for name in options["--services"]:
             service = self.services[name]
             found.append(
@@ -180,7 +214,7 @@ class StandInHost:
                     "desiredCount": service["desired"],
                     "runningCount": service["running"],
                     "pendingCount": 1 if "pending_stuck" in self.faults else 0,
-                    "deployments": [{"rolloutState": service["state"], "rolloutStateReason": "ECS deployment circuit breaker: tasks failed to start"}],
+                    "deployments": [{"rolloutState": service["state"], "rolloutStateReason": reason}],
                 }
             )
         return {"services": found, "failures": []}

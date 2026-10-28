@@ -297,7 +297,7 @@
       "code_sha256": "6528e3517932d758564fcd8f1945878372a41b8c0340ba088741c4e3fefb5996",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "407bc5424cebd512468c6b213d66a0b0dd906cba3d1e89d0b99bd151adae73b0",
+      "file_sha256": "a6754a40aab418c7ff6165078fea8b7dd67731aaf3a9455cdf38436a94cdee8e",
       "dependencies": {
         "scripts/infrastructure/systemd_model.py": "sha256:e0824402fae8dce41af8951237254490b35178bd5a42bab3c80e27091de7b40d",
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
@@ -1319,11 +1319,11 @@
     },
     {
       "path": "scripts/infrastructure/host_session.py",
-      "line": 325,
+      "line": 416,
       "code_sha256": "ee20a27238cf5e8b14a791933c550d1cdcae10ff3635aef6ab74e5f57407c008",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "5a90480586f71f1f16f0b4f5443ecb189f61580aa326c9cd8a3d7e52dbda3c22",
+      "file_sha256": "da68124fd000c795da3d1b2755a8b829f80a01373f30954c43df7a104578fe3f",
       "dependencies": {
         "scripts/acquisition/cli_tools.py": "sha256:aa5f092234a646fd25971f7edbd53b420d48600fc80f2902a3d8899b800066d0",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",

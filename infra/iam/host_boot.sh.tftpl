@@ -85,6 +85,7 @@ trap 'finish $LINENO' EXIT
 trap 'exit 143' TERM HUP INT
 log "Copying this log to the console as lines that start with \"$console_prefix\" (process $copy_pid)."
 
+# A command substitution runs in a subshell, which loses current_step, so the shell sets current_step before each substitution.
 # GNU timeout sends TERM at the deadline and KILL 10 seconds later, so a command that ignores TERM still ends. Status
 # 124 means TERM stopped it and 137 means KILL did.
 run_within() {
@@ -111,8 +112,10 @@ kernel.core_pattern = core
 fs.suid_dumpable = 0
 SYSCTL
 run_within 30 "Applying the core dump settings" sysctl -q -p "$sysctl_file"
-core_pattern=$(run_within 30 "Reading the core dump pattern" sysctl -n kernel.core_pattern)
-suid_dumpable=$(run_within 30 "Reading the set-user-ID dump setting" sysctl -n fs.suid_dumpable)
+current_step="Reading the core dump pattern"
+core_pattern=$(run_within 30 "$current_step" sysctl -n kernel.core_pattern)
+current_step="Reading the set-user-ID dump setting"
+suid_dumpable=$(run_within 30 "$current_step" sysctl -n fs.suid_dumpable)
 if [ "$core_pattern" != "core" ] || [ "$suid_dumpable" != "0" ]; then
   echo "The core dump settings did not take effect (pattern $core_pattern, set-user-ID dumps $suid_dumpable)."
   exit 1
@@ -247,11 +250,13 @@ token=$(curl -sf --max-time 10 -X PUT -H "X-aws-ec2-metadata-token-ttl-seconds: 
 }
 instance=$(metadata_get instance-id) || { echo "The instance ID could not be read."; exit 1; }
 command -v aws >/dev/null || run_within 300 "Installing the AWS CLI" dnf install -y -q awscli-2
-volume=$(run_within 60 "Finding the data volume" aws ec2 describe-volumes --region "$region" --filters "Name=tag:Name,Values=$data_volume_name" "Name=tag:Project,Values=$project_tag" --query "Volumes[].VolumeId" --output text) || {
+current_step="Finding the data volume"
+volume=$(run_within 60 "$current_step" aws ec2 describe-volumes --region "$region" --filters "Name=tag:Name,Values=$data_volume_name" "Name=tag:Project,Values=$project_tag" --query "Volumes[].VolumeId" --output text) || {
   echo "The data volume could not be listed."
   exit 1
 }
-allocation=$(run_within 60 "Finding the Elastic IP" aws ec2 describe-addresses --region "$region" --filters "Name=tag:Name,Values=$address_name" "Name=tag:Project,Values=$project_tag" --query "Addresses[].AllocationId" --output text) || {
+current_step="Finding the Elastic IP"
+allocation=$(run_within 60 "$current_step" aws ec2 describe-addresses --region "$region" --filters "Name=tag:Name,Values=$address_name" "Name=tag:Project,Values=$project_tag" --query "Addresses[].AllocationId" --output text) || {
   echo "The Elastic IP could not be listed."
   exit 1
 }
@@ -281,7 +286,8 @@ elif [ "$status" -ne 0 ]; then
   echo "Could not read the data volume's file system (blkid status $status)."
   exit 1
 fi
-uuid=$(run_within 60 "Reading the data volume's UUID" blkid -s UUID -o value "$device")
+current_step="Reading the data volume's UUID"
+uuid=$(run_within 60 "$current_step" blkid -s UUID -o value "$device")
 mkdir -p "$mount_path"
 grep -q "UUID=$uuid" "$fstab_file" || echo "UUID=$uuid $mount_path xfs defaults,nofail 0 2" >>"$fstab_file"
 run_within 30 "Checking the data mount" mountpoint -q "$mount_path" || run_within 120 "Mounting the data volume" mount "$mount_path"
