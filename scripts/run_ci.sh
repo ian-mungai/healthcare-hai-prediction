@@ -14,8 +14,9 @@ set -euo pipefail
 # credential, data-file, writing, Markdown lint and documentation gates run in every scope and in every part, also when no group is selected.
 # CI_LIST_ONLY=1 prints the plan and runs nothing. Each worker (a group, a gold unit, a feature shard, a hook partition, an acquisition shard or a combining step) runs in its own
 # process group and has a deadline: the timeout of the hosted job that runs the same work (worker_limits in config/quality/ci_groups.json), or CI_WORKER_LIMIT_SECONDS for every
-# worker. At the deadline the dispatcher stops the worker's process group (TERM, then KILL after CI_WORKER_GRACE_SECONDS, default 5), confirms that no member is left and fails the run
-# with the worker's name. An exit, Ctrl-C or TERM of the dispatcher stops every live worker group the same way. Each group's seconds and each command's start, end and seconds (scripts/quality/timing.sh)
+# worker. A worker is overdue only when the whole seconds since its start exceed its limit, so it is never stopped before its limit. At the deadline the dispatcher stops the worker's
+# process group and every group the worker's descendants started through scripts/process.py (recorded in the worker's registry, below) (TERM, then KILL after CI_WORKER_GRACE_SECONDS,
+# default 5), confirms that no member is left and fails the run with the worker's name. An exit, Ctrl-C or TERM of the dispatcher stops every live worker group the same way. Each group's seconds and each command's start, end and seconds (scripts/quality/timing.sh)
 # are printed and added to the job summary (GITHUB_STEP_SUMMARY).
 # The check groups' functions are not in this file: scripts/ci/groups/<group>.sh holds the functions of one group of config/quality/ci_groups.json. Each group
 # runs in its own shell process (run_group) that loads only scripts/quality/timing.sh and that one file, so the shell state of a group (functions, variables, options,
@@ -53,8 +54,17 @@ scratch="$(mktemp -d "${TMPDIR:-/tmp}/hai_ci.XXXXXX")"
 # to the job summary in a fixed order, also when a gate or a unit failed.
 export CI_TIMING_FILE="$scratch/main.timing"
 timing_files=("$CI_TIMING_FILE")
-# Each worker leads its own process group (set -m while it starts), so a stop reaches the worker and everything it started. The live workers are listed in worker_pids.
+# Each worker leads its own process group (set -m while it starts), so a stop reaches the worker and everything it started in that group. The live workers are listed in worker_pids
+# and their registries in worker_registries (same order).
 worker_pids=()
+worker_registries=()
+# Owned descendant groups (scripts/process.py): PROCESS_GROUP_REGISTRIES names the registries of this run's ancestors. Each worker gets a registry of its own in the private folder
+# below and sees it after those; a launch in the worker appends its new group to every registry it sees, so the worker's registry lists every group the worker's descendants started.
+# This run appends each worker group to the inherited registries, so an ancestor's stop reaches the workers even when this script is killed.
+inherited_registries="${PROCESS_GROUP_REGISTRIES:-}"
+registry_dir="$scratch/process_groups"
+mkdir -m 700 "$registry_dir"
+own_group="$(ps -o pgid= -p $$ | tr -d ' ')"
 worker_grace="${CI_WORKER_GRACE_SECONDS:-5}"
 worker_override="${CI_WORKER_LIMIT_SECONDS:-}"
 if [[ ! "$worker_grace" =~ ^[1-9][0-9]*$ ]] || [[ -n "$worker_override" && ! "$worker_override" =~ ^[1-9][0-9]*$ ]]; then
@@ -70,6 +80,46 @@ groups_left() {
     if group_alive "$pgid"; then left=$((left + 1)); fi
   done
   printf '%s' "$left"
+}
+# record_group <pgid>: append a new worker group to every inherited registry. A registry whose owner has returned (and removed it) is skipped, never created again.
+record_group() {
+  local path paths=()
+  IFS=: read -r -a paths <<<"$inherited_registries"
+  for path in ${paths[@]+"${paths[@]}"}; do
+    if [[ -n "$path" && -f "$path" ]]; then printf '%s\n' "$1" >>"$path" 2>/dev/null || true; fi
+  done
+}
+# registry_groups <registry>...: print the groups recorded in the registries. A line that is not a group id above 1, or that names this script's own group, is ignored.
+registry_groups() {
+  local registry line
+  for registry in "$@"; do
+    if [[ ! -f "$registry" ]]; then continue; fi
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^[1-9][0-9]*$ ]] && ((line > 1 && line != own_group)); then printf '%s\n' "$line"; fi
+    done <"$registry"
+  done
+}
+# stop_owned <grace seconds> <registry count> <registry>... <pgid>...: stop the groups and every group recorded in the registries, then read the registries again for a group
+# recorded while the stop ran (three rounds at most). A group that has already ended counts as stopped. Fails when a member survives KILL.
+stop_owned() {
+  local grace="$1" count="$2" registries=() groups=() new=() stopped=" " pgid round
+  shift 2
+  registries=("${@:1:count}")
+  shift "$count"
+  groups=("$@")
+  for ((round = 0; round < 3; round++)); do
+    new=()
+    for pgid in ${groups[@]+"${groups[@]}"} $(registry_groups ${registries[@]+"${registries[@]}"}); do
+      if [[ "$stopped" != *" $pgid "* ]]; then
+        new+=("$pgid")
+        stopped+="$pgid "
+      fi
+    done
+    if ((${#new[@]} == 0)); then return 0; fi
+    stop_groups "$grace" "${new[@]}" || return 1
+    groups=()
+  done
+  return 0
 }
 # stop_groups <grace seconds> <pgid>...: TERM to every group, KILL to the groups with a member left after the grace period, then confirm (5 s at most) that none is left.
 # Fails when a member survives KILL.
@@ -90,19 +140,29 @@ stop_groups() {
 }
 # forget_worker <pid>: take a worker that has ended out of the live list.
 forget_worker() {
-  local pid keep=()
-  for pid in ${worker_pids[@]+"${worker_pids[@]}"}; do
-    if [[ "$pid" != "$1" ]]; then keep+=("$pid"); fi
+  local index keep=() keep_registries=()
+  for index in ${worker_pids[@]+"${!worker_pids[@]}"}; do
+    if [[ "${worker_pids[$index]}" != "$1" ]]; then
+      keep+=("${worker_pids[$index]}")
+      keep_registries+=("${worker_registries[$index]}")
+    fi
   done
-  if ((${#keep[@]})); then worker_pids=("${keep[@]}"); else worker_pids=(); fi
+  if ((${#keep[@]})); then
+    worker_pids=("${keep[@]}")
+    worker_registries=("${keep_registries[@]}")
+  else
+    worker_pids=()
+    worker_registries=()
+  fi
 }
-# stop_workers: stop every live worker group (the exit trap, so also after Ctrl-C and TERM). It waits 2 s after TERM, less than the 5 s that scripts/process.py gives this
-# script after its own TERM.
+# stop_workers: stop every live worker group and the groups recorded in their registries (the exit trap, so also after Ctrl-C and TERM). It waits 2 s after TERM, less than the 5 s
+# that scripts/process.py gives this script after its own TERM.
 stop_workers() {
   if ((${#worker_pids[@]} == 0)); then return 0; fi
-  local pids=("${worker_pids[@]}")
+  local pids=("${worker_pids[@]}") registries=("${worker_registries[@]}")
   worker_pids=()
-  if ! stop_groups 2 "${pids[@]}"; then
+  worker_registries=()
+  if ! stop_owned 2 "${#registries[@]}" "${registries[@]}" "${pids[@]}"; then
     printf 'Local CI could not stop every worker process group: %s\n' "${pids[*]}" >&2
   fi
 }
@@ -349,15 +409,23 @@ worker_group() {
   local variable="item_group_$1"
   printf '%s' "${!variable:-$1}"
 }
-# worker_overdue <started seconds> <limit seconds>: true when a worker has run past its limit.
-worker_overdue() { ((SECONDS - $1 >= $2)); }
+# worker_overdue <started seconds> <limit seconds>: true when a worker has run past its limit. SECONDS counts whole wall-clock seconds, so the start and the check are each
+# truncated: the difference exceeds the limit only when the worker's real age is above it (at most about 1.5 s late with the poll), while ">=" would stop it up to 1 s early.
+worker_overdue() { ((SECONDS - $1 > $2)); }
 # run_items <item>...: stream a single item, buffer parallel items in order, and retain each log and duration. Each item is a worker in its own process group with a deadline.
 run_items() {
-  local item index pid pids=() starts=() limits=() items=("$@") worker_limit pending
+  local item index pid pids=() starts=() limits=() registries=() items=("$@") worker_limit pending registry
+  for item in "$@"; do
+    registry="$registry_dir/$item.groups"
+    (umask 077 && : >"$registry")
+  done
   set -m
   for item in "$@"; do
     set_worker_limit "$item"
     limits+=("$worker_limit")
+    registry="$registry_dir/$item.groups"
+    registries+=("$registry")
+    export PROCESS_GROUP_REGISTRIES="${inherited_registries:+$inherited_registries:}$registry"
     starts+=("$SECONDS")
     if ((${#items[@]} == 1)); then
       printf '\n== %s ==\n' "$item"
@@ -367,9 +435,12 @@ run_items() {
     fi
     pids+=("$!")
     worker_pids+=("$!")
+    worker_registries+=("$registry")
+    record_group "$!"
     timing_files+=("$scratch/$item.timing")
   done
   set +m
+  if [[ -n "$inherited_registries" ]]; then export PROCESS_GROUP_REGISTRIES="$inherited_registries"; else unset PROCESS_GROUP_REGISTRIES; fi
   pending=${#pids[@]}
   while ((pending > 0)); do
     for index in ${pids[@]+"${!pids[@]}"}; do
@@ -382,10 +453,10 @@ run_items() {
       elif worker_overdue "${starts[$index]}" "${limits[$index]}"; then
         printf 'Local CI worker %s (check group %s) ran past its deadline of %s s: stopping its process group %s.\n' \
           "${items[$index]}" "$(worker_group "${items[$index]}")" "${limits[$index]}" "$pid" >&2
-        if stop_groups "$worker_grace" "$pid"; then
-          printf 'Stopped: no process of the group %s is left.\n' "$pid" >&2
+        if stop_owned "$worker_grace" 1 "${registries[$index]}" "$pid"; then
+          printf 'Stopped: no process of the group %s or of the groups it started is left.\n' "$pid" >&2
         else
-          printf 'The process group %s still has members after KILL.\n' "$pid" >&2
+          printf 'The process group %s or a group it started still has members after KILL.\n' "$pid" >&2
         fi
         wait "$pid" 2>/dev/null || true
         failed+=("${items[$index]} (deadline ${limits[$index]} s)")

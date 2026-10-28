@@ -665,12 +665,18 @@ summary as a table of command, start, end, seconds and exit code. When a work ba
 `scripts/run_ci.sh` runs each work item as a worker: a check group, a gold unit, a feature shard, a hook partition, an acquisition shard or a combining step. Every worker starts in its own
 process group and has a deadline. The deadline is the timeout of the hosted job that runs the same work, from `worker_limits` in `config/quality/ci_groups.json` (the kind of the item
 without a trailing shard number, in minutes). `run_ci_groups_e2e` keeps each value equal to the timeout of its job in `.github/workflows/ci.yml` and requires a limit for every kind. A kind
-without a limit stops the run before its workers start. `CI_WORKER_LIMIT_SECONDS` replaces every limit for one run. The dispatcher polls its workers every half second. At a deadline it sends TERM to the worker's
-process group, KILL after `CI_WORKER_GRACE_SECONDS` (5 by default) and confirms that no process of the group is left. It prints the worker, its check group and the limit,
+without a limit stops the run before its workers start. `CI_WORKER_LIMIT_SECONDS` replaces every limit for one run. The dispatcher polls its workers every half second. Bash counts whole
+seconds, so a worker is overdue only when the whole seconds since its start exceed the limit: it is never stopped before its limit and at most about 1.5 seconds after it. Each worker
+gets a private registry of owned process groups in the dispatcher's scratch folder (see Process launcher deadline), so a program that the worker starts through `scripts/process.py`, which
+leads a group of its own, is recorded there. At a deadline the dispatcher sends TERM to the worker's process group and to every recorded group, KILL after `CI_WORKER_GRACE_SECONDS`
+(5 by default) and confirms that no process of those groups is left. Groups that have already ended count as stopped. It prints the worker, its check group and the limit,
 fails the run with `Local CI failed in: <worker> (deadline <seconds> s)` and keeps the worker's partial log. The other workers keep their result. An exit, Ctrl-C, TERM or HUP of the
-dispatcher stops every live worker group the same way (2 seconds after TERM), so the deadline of `scripts/quality/pre_push.py` (which stops the dispatcher's group through `scripts/process.py`)
-leaves no worker. A process that starts its own session is outside the group. `.venv/bin/python -m scripts.quality.run_worker_deadline_e2e` (in `repository_code_checks`) runs the real
-dispatcher in a scratch folder with a worker that never ends and a child that ignores TERM. It also plants a dispatcher without a deadline and one that stops the direct process only.
+dispatcher stops every live worker group and its recorded groups the same way (2 seconds after TERM). The dispatcher also records each worker group in the registries it inherited, so the
+deadline of `scripts/quality/pre_push.py` (which stops the dispatcher through `scripts/process.py`) leaves no worker even if the dispatcher is killed. A process that starts its own session
+without the launcher is outside every group. `.venv/bin/python -m scripts.quality.run_worker_deadline_e2e` (in `repository_code_checks`) runs the real dispatcher in a scratch folder with a
+worker that never ends and a child that ignores TERM. It also runs a worker that starts its program through the launcher and workers that start late in a wall-clock second (one ends 0.25 seconds
+before its limit and must pass; one never ends and must get TERM only after its limit). It plants a dispatcher without a deadline, one that stops the direct process only, one with the
+old whole-second comparison and one that ignores the worker's registry. A plant counts as caught only when the intended check of its case fails.
 
 ## Measured durations
 
