@@ -194,34 +194,60 @@ def _check_absence(api: Any) -> bool:
     return all(handle.state == "read_only" and group_state(handle.pgid) == "gone" for handle in api.handles)
 
 
+def _deadline_params(operation: str, path: Path) -> dict[str, Any]:
+    params = _request_fixture(ROOT, operation)
+    if operation == "s3_download":
+        params["temp_path"] = str(path / "download.partial")
+    if operation == "s3_upload_part":
+        payload = path / "upload.bin"
+        payload.write_bytes(b"synthetic_part")
+        status = payload.stat()
+        params.update(
+            path=str(payload),
+            offset=0,
+            length=status.st_size,
+            file_identity={"size": status.st_size, "mtime_ns": status.st_mtime_ns, "inode": status.st_ino},
+        )
+    return params
+
+
+def _startup_probe_s(folder: Path, operation: str) -> float:
+    """Measure one unfaulted call, whose spawn, connect and reply time is the cost any deadline budget must cover before a stall can begin."""
+    from orchestration.ecs_api import WorkerConfig
+
+    path = Path(tempfile.mkdtemp(prefix="sdk_probe_", dir=folder))
+    params = _deadline_params(operation, path)
+    with (
+        WorkerStandin(Scenario(operation, "normal", lifetime_s=15)) as standin,
+        _owned_api(WorkerConfig(region="us-west-2", test_endpoint=standin.endpoint), path / "registry") as api,
+    ):
+        started = time.monotonic()
+        api.call(operation, params, deadline=started + 30)
+        return time.monotonic() - started
+
+
 def deadline_cases(folder: Path, operations: tuple[str, ...]) -> list[dict[str, Any]]:
-    """Keep absolute deadlines armed through all HTTP response stages."""
+    """Keep absolute deadlines armed through all HTTP response stages.
+
+    Each budget is a 0.8 second stall window plus triple the slowest unfaulted call measured so far, so the request reaches the stand-in first.
+    """
     from orchestration.ecs_api import WorkerConfig
 
     results: list[dict[str, Any]] = []
+    startup_s = 0.0
     for operation in operations:
+        startup_s = max(startup_s, _startup_probe_s(folder, operation))
         for mode in SLOW_MODES:
             scratch = tempfile.mkdtemp(prefix="sdk_deadline_", dir=folder)
             path = Path(scratch)
-            params = _request_fixture(ROOT, operation)
-            if operation == "s3_download":
-                params["temp_path"] = str(path / "download.partial")
-            if operation == "s3_upload_part":
-                payload = path / "upload.bin"
-                payload.write_bytes(b"synthetic_part")
-                status = payload.stat()
-                params.update(
-                    path=str(payload),
-                    offset=0,
-                    length=status.st_size,
-                    file_identity={"size": status.st_size, "mtime_ns": status.st_mtime_ns, "inode": status.st_ino},
-                )
+            params = _deadline_params(operation, path)
             with (
                 WorkerStandin(Scenario(operation, mode, lifetime_s=15, drip_interval_s=0.05)) as standin,
                 _owned_api(WorkerConfig(region="us-west-2", test_endpoint=standin.endpoint), path / "registry") as api,
             ):
+                budget_s = 0.8 + 3 * startup_s
                 started = time.monotonic()
-                deadline = started + 0.8
+                deadline = started + budget_s
                 reply = api.call(operation, params, deadline=deadline)
                 stopped = time.monotonic()
                 shutdown = api.close(deadline=time.monotonic() + 10)
@@ -246,6 +272,8 @@ def deadline_cases(folder: Path, operations: tuple[str, ...]) -> list[dict[str, 
                         "operation": operation,
                         "mode": mode,
                         "checks": checks,
+                        "budget_s": budget_s,
+                        "reply_error": reply.get("error"),
                         "elapsed_s": stopped - started,
                         "events": [{"kind": event.kind, "connection": event.connection, "elapsed_s": event.elapsed_s} for event in standin.events],
                     }
