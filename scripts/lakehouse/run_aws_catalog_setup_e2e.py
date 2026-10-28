@@ -18,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,6 +30,7 @@ from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.infrastructure import secret_store
 from scripts.infrastructure.secret_store_stand_in import CIPHERTEXT_MARKER, StandIn
 from scripts.lakehouse import aws_catalog_setup as setup
+from scripts.lakehouse import catalog, polaris_writer, principal_credentials
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUCKET = "example-lakehouse-bucket"
@@ -36,6 +38,9 @@ REGION = "us-west-2"
 RUN_SECONDS = 120.0
 CASE_SECONDS = 60.0
 STALL_SECONDS = 3.0
+INSTANCE = "i-0123456789abcdef0"
+# The suite's work folder; main sets it and removes it at the end.
+STATE_ROOT = Path(tempfile.gettempdir())
 # The Mac Polaris port, written out so a changed constant in the setup module cannot hide a defect.
 MAC_PORT = 8181
 
@@ -45,8 +50,14 @@ class Polaris:
 
     def __init__(self, root_secret: str) -> None:
         self.root_secret = root_secret
-        self.tokens: set[str] = set()
+        self.tokens: dict[str, str] = {}
         self.catalog: dict[str, Any] | None = None
+        self.namespaces: set[str] = set()
+        self.principal_roles: dict[str, set[str]] = {}
+        self.grants: dict[str, list[dict[str, Any]]] = {}
+        self.principals: dict[str, dict[str, str]] = {}
+        self.assigned: dict[str, set[str]] = {}
+        self.issued: list[str] = []
         self.calls: list[tuple[str, str]] = []
         self.faults: set[str] = set()
         self.lock = threading.Lock()
@@ -93,32 +104,110 @@ class Polaris:
         if headers.get("Polaris-Realm") != "POLARIS":
             return 400, None, False
         if method == "POST" and path == setup.OAUTH_PATH:
-            form = dict(item.split("=", 1) for item in raw.decode().split("&")) if raw else {}
-            if form.get("client_id") != "root" or "root_refused" in self.faults:
-                return 401, None, False
-            if form.get("client_secret") != self.root_secret:
+            form = {key: urllib.parse.unquote_plus(value) for key, value in (item.split("=", 1) for item in raw.decode().split("&"))} if raw else {}
+            who = None
+            if form.get("client_id") == "root" and form.get("client_secret") == self.root_secret and "root_refused" not in self.faults:
+                who = "root"
+            for name, pair in self.principals.items():
+                if (form.get("client_id"), form.get("client_secret")) == (pair["clientId"], pair["clientSecret"]):
+                    who = name
+            if who is None:
                 return 401, None, False
             token = secrets.token_hex(16)
-            self.tokens.add(token)
+            self.tokens[token] = who
             return 200, {"access_token": token, "token_type": "bearer"}, False
-        if headers.get("Authorization", "").removeprefix("Bearer ") not in self.tokens:
+        if self.tokens.get(headers.get("Authorization", "").removeprefix("Bearer ")) != "root":
             return 401, None, False
         if "stall" in self.faults:
             time.sleep(STALL_SECONDS)
+        body = json.loads(raw) if raw else None
+        with self.lock:
+            return self.manage(method, path, body)
+
+    def manage(self, method: str, path: str, body: Any) -> tuple[int, Any, bool]:
+        management, catalog = "/api/management/v1", f"/api/catalog/v1/{setup.CATALOG}"
+        roles = f"{setup.CATALOG_PATH}/catalog-roles"
         if path == setup.CATALOG_PATH and method == "GET":
             return (200, self.catalog, False) if self.catalog is not None else (404, None, False)
-        if path == "/api/management/v1/catalogs" and method == "POST":
-            body = json.loads(raw)["catalog"]
+        if path == f"{management}/catalogs" and method == "POST":
             if "conflict" in self.faults:
-                self.catalog = body
+                self.catalog = body["catalog"]
+                self.grants["catalog_admin"] = []
                 return 409, None, False
             if self.catalog is not None:
                 return 409, None, False
-            self.catalog = body
-            return 201, body, "lose_create_reply" in self.faults
-        if path == f"{setup.CATALOG_PATH}/catalog-roles/catalog_admin/grants" and method == "PUT":
-            return (201, None, False) if self.catalog is not None else (404, None, False)
+            self.catalog = body["catalog"]
+            self.grants["catalog_admin"] = []
+            return 201, body["catalog"], "lose_create_reply" in self.faults
+        if self.catalog is None:
+            return 404, None, False
+        if path.startswith(f"{catalog}/namespaces/") and method == "GET":
+            return (200, {"namespace": [path.rsplit("/", 1)[1]]}, False) if path.rsplit("/", 1)[1] in self.namespaces else (404, None, False)
+        if path == f"{catalog}/namespaces" and method == "POST":
+            name = body["namespace"][0]
+            if name in self.namespaces:
+                return 409, None, False
+            self.namespaces.add(name)
+            return 200, body, False
+        if path == f"{management}/principal-roles" and method == "POST":
+            name = body["principalRole"]["name"]
+            if name in self.principal_roles:
+                return 409, None, False
+            self.principal_roles[name] = set()
+            return 201, None, False
+        if path == roles and method == "POST":
+            name = body["catalogRole"]["name"]
+            if name in self.grants:
+                return 409, None, False
+            self.grants[name] = []
+            return 201, None, False
+        if path.startswith(f"{roles}/") and path.endswith("/grants"):
+            role = path.removeprefix(f"{roles}/").removesuffix("/grants")
+            if role not in self.grants:
+                return 404, None, False
+            if method == "GET":
+                return 200, {"grants": list(self.grants[role])}, False
+            grant = body["grant"]
+            if grant["type"] == "namespace" and grant["namespace"][0] not in self.namespaces:
+                return 404, None, False
+            if grant not in self.grants[role]:
+                self.grants[role].append(grant)
+            return 201, None, False
+        if path.startswith(f"{roles}/") and method == "GET":
+            return (200, {"name": path.rsplit("/", 1)[1]}, False) if path.rsplit("/", 1)[1] in self.grants else (404, None, False)
+        if path.startswith(f"{management}/principal-roles/") and path.endswith(f"/catalog-roles/{setup.CATALOG}") and method == "PUT":
+            name = path.removeprefix(f"{management}/principal-roles/").split("/")[0]
+            if name not in self.principal_roles or body["catalogRole"]["name"] not in self.grants:
+                return 404, None, False
+            self.principal_roles[name].add(body["catalogRole"]["name"])
+            return 201, None, False
+        if path == f"{management}/principals" and method == "POST":
+            name = body["principal"]["name"]
+            if name in self.principals:
+                return 409, None, False
+            return 201, {"principal": {"name": name}, "credentials": self.issue(name)}, False
+        if path.startswith(f"{management}/principals/"):
+            rest = path.removeprefix(f"{management}/principals/").split("/")
+            name = rest[0]
+            if name not in self.principals:
+                return 404, None, False
+            if len(rest) == 1 and method == "GET":
+                return 200, {"name": name}, False
+            if rest[1:] == ["reset"] and method == "POST":
+                return 200, {"credentials": self.issue(name)}, False
+            if rest[1:] == ["principal-roles"] and method == "PUT":
+                if body["principalRole"]["name"] not in self.principal_roles:
+                    return 404, None, False
+                self.assigned.setdefault(name, set()).add(body["principalRole"]["name"])
+                return 201, None, False
         return 404, None, False
+
+    def issue(self, name: str) -> dict[str, str]:
+        """A new pair for the principal; the old one stops working at once, as Polaris resets it."""
+        pair = {"clientId": self.principals.get(name, {}).get("clientId") or "id-" + secrets.token_hex(6), "clientSecret": "sec-" + secrets.token_hex(12)}
+        self.principals[name] = pair
+        self.issued.append(pair["clientSecret"])
+        return dict(pair)
 
     def __enter__(self) -> Polaris:
         self.thread.start()
@@ -136,8 +225,11 @@ class Services:
     bucket = BUCKET
     region = REGION
 
-    def __init__(self, ssm: StandIn, polaris: Polaris, execute: setup.Execute = setup.direct, relay: Path | None = None) -> None:
+    def __init__(self, ssm: StandIn, polaris: Polaris, execute: setup.Execute = setup.direct, relay: Path | None = None, state: Path | None = None) -> None:
         self.ssm, self.polaris, self.execute, self.relay = ssm, polaris, execute, relay
+        self.state = state or STATE_ROOT / secrets.token_hex(6)
+        self.approvals = self.state / "namespace_approvals"
+        self.locks = self.state / "principal_locks"
         self.decryption: list[bool] = []
         self.closed: list[bool] = []
 
@@ -449,6 +541,243 @@ def case_pair_names(out: Path) -> dict[str, bool]:
     return checks
 
 
+def catalog_world(seeded: dict[str, str] | None = None) -> contextlib.AbstractContextManager[tuple[StandIn, Polaris, str]]:
+    @contextlib.contextmanager
+    def made() -> Iterator[tuple[StandIn, Polaris, str]]:
+        with world(seeded) as (ssm, polaris, root):
+            polaris.catalog = setup.catalog_body(BUCKET, REGION)
+            polaris.grants["catalog_admin"] = []
+            yield ssm, polaris, root
+
+    return made()
+
+
+def principal(services: Services, root: str, identity: str, approval: str | None = None) -> tuple[int, str, str]:
+    argv = ["principal", "--identity", identity, "--instance", INSTANCE, *(["--namespace-approval", approval] if approval else [])]
+    result = call(argv, services, root)
+    SECRETS_SEEN.extend(services.polaris.issued)
+    return result
+
+
+def stored_pair(ssm: StandIn, identity: str) -> tuple[str | None, str | None]:
+    names = setup.configured_pairs()[identity]
+    return ssm.values.get(names[0]), ssm.values.get(names[1])
+
+
+def live_pair(polaris: Polaris, identity: str) -> tuple[str | None, str | None]:
+    pair = polaris.principals.get(setup.PRINCIPALS[identity], {})
+    return pair.get("clientId"), pair.get("clientSecret")
+
+
+def same_grants(polaris: Polaris, identity: str, approved: bool) -> bool:
+    actual = sorted(json.dumps({"grant": grant}, sort_keys=True) for grant in polaris.grants.get(setup.PRINCIPALS[identity], []))
+    return actual == sorted(json.dumps(grant, sort_keys=True) for grant in setup.grant_plan(identity, approved))
+
+
+def case_reader_principal(_: Path) -> dict[str, bool]:
+    """The reader: catalog-wide read grants only, roles assigned, the issued pair stored straight in the two AWS reader names (P1)."""
+    with catalog_world() as (ssm, polaris, root):
+        code, out, _err = principal(Services(ssm, polaris), root, "reader")
+        role = setup.PRINCIPALS["reader"]
+        return {
+            "the step succeeds": code == 0 and (outcome(out) or {}).get("credentials") == "created",
+            "the grants equal the reader plan": same_grants(polaris, "reader", False),
+            "every grant is a read privilege": all(grant["privilege"] in catalog.READER_PRIVILEGES for grant in polaris.grants[role]),
+            "the catalog role is assigned to the principal role": polaris.principal_roles.get(role) == {role},
+            "the principal role is assigned to the principal": polaris.assigned.get(role) == {role},
+            "the stored pair is the issued pair": stored_pair(ssm, "reader") == live_pair(polaris, "reader"),
+            "no namespace was created": not polaris.namespaces,
+        }
+
+
+def case_rerun_keeps_pair(_: Path) -> dict[str, bool]:
+    """P5: a stored pair that Polaris accepts is kept; the rerun issues nothing and writes nothing."""
+    with catalog_world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        first = principal(services, root, "reader")
+        changes, issued = ssm.changed(), list(polaris.issued)
+        second = principal(services, root, "reader")
+        return {
+            "both runs succeed": first[0] == 0 and second[0] == 0,
+            "the rerun keeps the pair": (outcome(second[1]) or {}).get("credentials") == "already present",
+            "no new pair was issued": polaris.issued == issued,
+            "nothing was written again": ssm.changed() == changes,
+        }
+
+
+def case_put_fails(_: Path) -> dict[str, bool]:
+    """P3: Polaris issues a pair and the write fails; the rerun resets the credentials and stores a working pair, and the unstored pair is void."""
+    with catalog_world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        ssm.denied.add("PutParameter")
+        first = principal(services, root, "reader")
+        lost = live_pair(polaris, "reader")
+        ssm.denied.clear()
+        second = principal(services, root, "reader")
+        return {
+            "the first run fails": first[0] == 1,
+            "a pair had been issued": lost[1] is not None,
+            "the rerun resets the credentials": second[0] == 0 and (outcome(second[1]) or {}).get("credentials") == "credentials reset",
+            "the stored pair is the live pair": stored_pair(ssm, "reader") == live_pair(polaris, "reader"),
+            "the unstored pair no longer works": live_pair(polaris, "reader")[1] != lost[1],
+        }
+
+
+def case_half_pair(_: Path) -> dict[str, bool]:
+    """P4: only the client ID was stored before a crash; the run treats the half pair as refused and stores a full new pair."""
+    with catalog_world() as (ssm, polaris, root):
+        polaris.issue(setup.PRINCIPALS["reader"])
+        ssm.values[setup.configured_pairs()["reader"][0]] = live_pair(polaris, "reader")[0] or ""
+        code, out, _err = principal(Services(ssm, polaris), root, "reader")
+        return {
+            "the step succeeds": code == 0,
+            "the credentials are reset": (outcome(out) or {}).get("credentials") == "credentials reset",
+            "both halves are stored and live": stored_pair(ssm, "reader") == live_pair(polaris, "reader") and None not in stored_pair(ssm, "reader"),
+        }
+
+
+def case_extra_grant(_: Path) -> dict[str, bool]:
+    """P7: a grant outside the plan stops the step before the catalog role is assigned; no principal or pair is made."""
+    with catalog_world() as (ssm, polaris, root):
+        polaris.namespaces |= set(setup.namespace_set("bronze"))
+        role = setup.PRINCIPALS["bronze"]
+        polaris.grants[role] = [{"type": "namespace", "namespace": ["bronze"], "privilege": "TABLE_DROP"}]
+        code, _out, err = principal(Services(ssm, polaris), root, "bronze")
+        return {
+            "the step fails on the grants": code == 1 and "(grants)" in err,
+            "the catalog role is not assigned": not polaris.principal_roles.get(role),
+            "no principal was created": role not in polaris.principals,
+            "nothing was written": ssm.writes() == 0,
+        }
+
+
+def case_namespace_needs_approval(_: Path) -> dict[str, bool]:
+    """P8: absent namespaces without an approval stop the step before any change."""
+    with catalog_world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        code, _out, err = principal(services, root, "bronze")
+        return {
+            "the step fails on the approval": code == 1 and "(approval)" in err,
+            "no namespace was created": not polaris.namespaces,
+            "no role was created": not polaris.principal_roles and set(polaris.grants) == {"catalog_admin"},
+            "no approval was recorded": not services.approvals.exists() or not any(services.approvals.iterdir()),
+        }
+
+
+def case_namespace_approval(_: Path) -> dict[str, bool]:
+    """P8: an approval is recorded once for the exact set before creation, grants NAMESPACE_CREATE, carries to a rerun and is never replaced."""
+    with catalog_world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        first = principal(services, root, "bronze", "cutover_initial")
+        record = json.loads((services.approvals / "bronze.json").read_text()) if (services.approvals / "bronze.json").exists() else {}
+        again = principal(services, root, "bronze")
+        before = len(polaris.calls)
+        other = principal(services, root, "bronze", "another_approval")
+        return {
+            "the approved run succeeds": first[0] == 0 and (outcome(first[1]) or {}).get("phase") == "active",
+            "the absent namespaces were created": polaris.namespaces == set(setup.namespace_set("bronze")),
+            "the record names the approval and the exact set": record.get("approval_id") == "cutover_initial"
+            and record.get("namespaces") == list(setup.namespace_set("bronze")),
+            "the grants are the active plan with NAMESPACE_CREATE": same_grants(polaris, "bronze", True)
+            and {"type": "catalog", "privilege": "NAMESPACE_CREATE"} in polaris.grants[setup.PRINCIPALS["bronze"]],
+            "a rerun keeps the recorded approval": again[0] == 0 and (outcome(again[1]) or {}).get("phase") == "active",
+            "another approval is refused before any request": other[0] == 1 and "(approval)" in other[2] and len(polaris.calls) == before,
+        }
+
+
+def case_prepared_phase(_: Path) -> dict[str, bool]:
+    """P8: existing namespaces without an approval get the prepared plan only, with no NAMESPACE_CREATE."""
+    with catalog_world() as (ssm, polaris, root):
+        polaris.namespaces |= set(setup.namespace_set("bronze"))
+        code, out, _err = principal(Services(ssm, polaris), root, "bronze")
+        grants = polaris.grants.get(setup.PRINCIPALS["bronze"], [])
+        return {
+            "the step succeeds in the prepared phase": code == 0 and (outcome(out) or {}).get("phase") == "prepared",
+            "the grants are the prepared plan": same_grants(polaris, "bronze", False),
+            "no namespace creation is granted": not any(grant["privilege"] == "NAMESPACE_CREATE" for grant in grants),
+        }
+
+
+def case_e2e_principal(_: Path) -> dict[str, bool]:
+    """The qualification writer: the twin namespaces plus the table grants on silver_e2e, gold_e2e and features_e2e, in its own pair."""
+    with catalog_world() as (ssm, polaris, root):
+        code, _out, _err = principal(Services(ssm, polaris), root, "e2e", "qualification_twins")
+        grants = polaris.grants.get(setup.PRINCIPALS["e2e"], [])
+        return {
+            "the step succeeds": code == 0,
+            "the seven twin namespaces exist": polaris.namespaces == set(setup.namespace_set("e2e")),
+            "the grants equal the active qualification plan": same_grants(polaris, "e2e", True),
+            "the silver, gold and features twins get table writes": all(
+                {"type": "namespace", "namespace": [name], "privilege": "TABLE_WRITE_DATA"} in grants for name in setup.E2E_TABLE_NAMESPACES
+            ),
+            "no production namespace is named": not any(grant.get("namespace", [""])[0] in ("bronze", "silver", "gold") for grant in grants),
+            "the pair is in the e2e names": stored_pair(ssm, "e2e") == live_pair(polaris, "e2e"),
+        }
+
+
+def case_layer_writers(_: Path) -> dict[str, bool]:
+    """P12: the silver and gold writers write their own namespace only, and their pairs go to the AWS names, never the Mac names."""
+    checks: dict[str, bool] = {}
+    with catalog_world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        for layer, mac in (("silver", secret_store.POLARIS_SILVER_CLIENT_ID), ("gold", secret_store.POLARIS_GOLD_CLIENT_ID)):
+            code, _out, _err = principal(services, root, layer, f"{layer}_namespace")
+            grants = polaris.grants.get(setup.PRINCIPALS[layer], [])
+            checks[f"the {layer} step succeeds"] = code == 0
+            checks[f"the {layer} grants equal the writer plan"] = same_grants(polaris, layer, True)
+            checks[f"the {layer} grants name only {layer}"] = all(grant.get("namespace", [layer]) == [layer] for grant in grants)
+            checks[f"the {layer} grants hold no forbidden privilege"] = not {grant["privilege"] for grant in grants} & set(polaris_writer.FORBIDDEN_PRIVILEGES)
+            checks[f"the {layer} pair is in the AWS names"] = stored_pair(ssm, layer) == live_pair(polaris, layer)
+            checks[f"the Mac {layer} names are untouched"] = mac not in ssm.values
+    return checks
+
+
+def case_catalog_missing(_: Path) -> dict[str, bool]:
+    """P10: a principal before the catalog stops the step with no role, namespace or pair."""
+    with world() as (ssm, polaris, root):
+        code, _out, err = principal(Services(ssm, polaris), root, "reader")
+        return {
+            "the step fails on the catalog": code == 1 and "(catalog)" in err,
+            "no role was created": not polaris.principal_roles,
+            "nothing was written": ssm.writes() == 0,
+        }
+
+
+def case_principal_lock(_: Path) -> dict[str, bool]:
+    """P11: a second update of the same principal waits for the lock at most its bound, then stops without issuing or writing a pair."""
+    with catalog_world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        lock = services.locks / f"aws_{setup.PRINCIPALS['reader']}.lock"
+        with principal_credentials.serialized(lock, "reader", 1.0), mock.patch.object(principal_credentials, "LOCK_WAIT_SECONDS", 0.3):
+            began = time.monotonic()
+            code, _out, err = principal(services, root, "reader")
+            took = time.monotonic() - began
+        return {
+            "the step stops on the lock": code == 1 and "(credentials)" in err,
+            "it waited about its bound": took < 5.0,
+            "no pair was issued": not polaris.issued,
+            "nothing was written": ssm.writes() == 0,
+        }
+
+
+def case_check_grants(_: Path) -> dict[str, bool]:
+    """The check compares each existing catalog role's grants with its plan and changes nothing."""
+    with catalog_world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        principal(services, root, "reader")
+        clean = call(["check", "--instance", INSTANCE], services, root)
+        polaris.grants[setup.PRINCIPALS["reader"]].append({"type": "catalog", "privilege": "TABLE_WRITE_DATA"})
+        calls = len([item for item in polaris.calls if item[0] in ("POST", "PUT") and item[1] != setup.OAUTH_PATH])
+        drifted = call(["check", "--instance", INSTANCE], services, root)
+        writes = len([item for item in polaris.calls if item[0] in ("POST", "PUT") and item[1] != setup.OAUTH_PATH])
+        return {
+            "a matching reader is reported": ((outcome(clean[1]) or {}).get("principals") or {}).get("reader") == "matches",
+            "an identity without a role is absent": ((outcome(clean[1]) or {}).get("principals") or {}).get("bronze") == "absent",
+            "an extra grant is reported": ((outcome(drifted[1]) or {}).get("principals") or {}).get("reader") == "differs",
+            "the check changed nothing": writes == calls,
+        }
+
+
 CASES: dict[str, Case] = {
     "catalog_created": case_catalog_created,
     "catalog_rerun": case_catalog_rerun,
@@ -465,6 +794,19 @@ CASES: dict[str, Case] = {
     "check_catalog": case_check_catalog,
     "vault_scope": case_vault_scope,
     "pair_names": case_pair_names,
+    "reader_principal": case_reader_principal,
+    "rerun_keeps_pair": case_rerun_keeps_pair,
+    "put_fails": case_put_fails,
+    "half_pair": case_half_pair,
+    "extra_grant": case_extra_grant,
+    "namespace_needs_approval": case_namespace_needs_approval,
+    "namespace_approval": case_namespace_approval,
+    "prepared_phase": case_prepared_phase,
+    "e2e_principal": case_e2e_principal,
+    "layer_writers": case_layer_writers,
+    "catalog_missing": case_catalog_missing,
+    "principal_lock": case_principal_lock,
+    "check_grants": case_check_grants,
 }
 
 
@@ -501,6 +843,13 @@ MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[A
     "the vault writes any name": ("vault_scope", lambda: mock.patch.object(setup.PairVault, "check", staticmethod(lambda name, write=False: None))),
     "the Mac port is allowed": ("mac_port", lambda: mock.patch.object(setup, "MAC_POLARIS_PORT", 1)),
     "a conflict is a failure": ("create_conflict", lambda: mock.patch.object(setup, "verify_catalog", lambda *a: "absent")),
+    "the grant comparison is skipped": ("extra_grant", lambda: mock.patch.object(setup, "compare_grants", lambda *a: None)),
+    "absent namespaces need no approval": (
+        "namespace_needs_approval",
+        lambda: mock.patch.object(setup, "approval_for", lambda folder, identity, approval_id: setup.Approval("any", identity, setup.namespace_set(identity))),
+    ),
+    "the approval is not recorded": ("namespace_approval", lambda: mock.patch.object(setup, "record_approval", lambda folder, approval: None)),
+    "a working pair is always reset": ("rerun_keeps_pair", lambda: mock.patch.object(principal_credentials, "pair_accepted", lambda *a: False)),
 }
 
 
@@ -529,7 +878,9 @@ def main() -> int:
     out = args.out.expanduser().absolute()
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
     deadline = time.monotonic() + (CASE_SECONDS * (len(CASES) + 1))
+    global STATE_ROOT
     work = Path(tempfile.mkdtemp(prefix="aws_catalog_setup_", dir=out))
+    STATE_ROOT = work / "state"
     try:
         results = run_cases(work, deadline)
         mutations = run_mutations(work, deadline) if args.mutations else {}
