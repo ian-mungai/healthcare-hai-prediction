@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InjectBronzePairOnly",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameters"],
+      "Resource": ${BRONZE_PARAMETER_ARNS}
+    }
+  ]
+}

@@ -1,6 +1,8 @@
 # Exceptions to the privacy scan (scripts/quality/repo_checks.py privacy-scan; docs/quality_checks.md).
 # One entry per line: <type> <path glob> -- <why this value is intentionally public>. Entries match by type and path only.
 aws-account infra/iam/tests/policies.tftest.hcl -- synthetic all-ones account IDs in Terraform tests; not the project's account
+aws-account infra/iam/tests/bronze_writer.tftest.hcl -- synthetic all-ones account IDs in mocked bronze IAM tests
+aws-account infra/modules/bronze_writer_job/tests/definition.tftest.hcl -- synthetic all-ones account IDs in mocked bronze definition tests
 aws-account infra/tests/storage.tftest.hcl -- synthetic all-ones account ID in a Terraform test; not the project's account
 aws-account infra/platform/tests/platform.tftest.hcl -- synthetic all-ones account ID in a Terraform test; not the project's account
 aws-account infra/services/tests/services.tftest.hcl -- synthetic all-ones account IDs in Terraform tests; not the project's account
