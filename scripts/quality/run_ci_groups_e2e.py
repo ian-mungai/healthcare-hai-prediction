@@ -811,6 +811,12 @@ LAUNCHER_UNRELATED = (
 )
 # The reviewer's reproduction: an exact read added beside the reviewed mount comparison of ROOT / "config" in the suite's docker_calls_check case.
 LAUNCHER_EXACT_READ = ("    from scripts.quality import docker_calls\n", '    json.loads((ROOT / "config/quality/mypy_runtimes.json").read_text())\n')
+# The recheck's reproductions: inventories whose root the round 1 scan did not read (a wrapped root, a keyword argument, a listing program by path).
+LAUNCHER_INVENTORY_READS = {
+    "wrapped_rglob": '    for path in Path(ROOT).rglob("*.json"):\n        if path.is_file():\n            json.loads(path.read_text())\n',
+    "walk_keyword": "    for _folder, _names, files in os.walk(top=ROOT):\n        json.dumps(files)\n",
+    "find_by_path": '    run_command("/usr/bin/find", [str(ROOT), "-name", "*.json"], timeout=60, check=True)\n',
+}
 SAMPLE_REPOSITORY = {
     "entry.py": (
         "from pathlib import Path\nfrom pkg import used\n\nROOT = Path(__file__).resolve().parent\n\n\ndef run():\n    import late\n"
@@ -910,6 +916,12 @@ def sample_cases(scratch: Path) -> list[dict[str, Any]]:
             {"late.py": 'LISTING = ["git", "ls-files", "--", "*.py"]\n'},
         ),
         planted(
+            "launcher_undeclared_bare_listdir_is_named",
+            lambda listing: listing,
+            "late.py: lists files by inventory",
+            {"late.py": 'from os import listdir\n\nNAMES = listdir(".")\n'},
+        ),
+        planted(
             "launcher_stale_inventory_read_is_named",
             lambda listing: {**listing, "inventory_reads": [{"module": "late.py", "pattern": "\\.py$", "why": "planted"}]},
             "late.py: inventory_reads",
@@ -946,12 +958,14 @@ def sample_cases(scratch: Path) -> list[dict[str, Any]]:
     return cases
 
 
-def exact_read_problems(launcher_inputs: Any, tracked: set[str], committed: dict[str, Any]) -> list[str]:
-    """The list check on the suite with LAUNCHER_EXACT_READ added after the first anchor (in docker_calls_check): the source is changed only for this
+def overlay_problems(tracked: set[str], committed: dict[str, Any], line: str) -> list[str]:
+    """The list check on the suite with ``line`` added after the anchor of LAUNCHER_EXACT_READ (in docker_calls_check): the source is changed only for this
     process's reads, never on disk."""
+    from scripts.quality import launcher_inputs
+
     target = ROOT / LAUNCHER_E2E
     original = target.read_text(encoding="utf-8")
-    anchor, line = LAUNCHER_EXACT_READ
+    anchor = LAUNCHER_EXACT_READ[0]
     if anchor not in original:
         return []
     changed = original.replace(anchor, anchor + line, 1)
@@ -983,7 +997,8 @@ def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
     committed = json.loads((ROOT / launcher_inputs.LIST).read_text(encoding="utf-8"))
     config = ci_groups.load()
     gaps = launcher_inputs.selection_gaps(config, committed["files"], tracked)
-    exact = exact_read_problems(launcher_inputs, tracked, committed)
+    exact = overlay_problems(tracked, committed, LAUNCHER_EXACT_READ[1])
+    inventories = {name: overlay_problems(tracked, committed, line) for name, line in LAUNCHER_INVENTORY_READS.items()}
     with tempfile.TemporaryDirectory(prefix="launcher_sample.") as folder:
         sample = sample_cases(Path(folder))
     return [
@@ -998,6 +1013,14 @@ def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
             "passed": any(line.startswith("config/quality/mypy_runtimes.json: the launcher suite needs it") for line in exact),
             "problems": exact[:4],
         },
+        *(
+            {
+                "case": f"launcher_list_names_an_inventory_by_{name}",
+                "passed": any(line.startswith(f"{LAUNCHER_E2E}: ") and "inventory sites" in line for line in found),
+                "problems": found[:4],
+            }
+            for name, found in inventories.items()
+        ),
         {
             "case": "launcher_list_is_selected_by_the_group",
             "passed": not gaps and len(committed["files"]) > 0,
