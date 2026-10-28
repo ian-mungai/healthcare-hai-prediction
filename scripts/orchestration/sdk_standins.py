@@ -167,7 +167,12 @@ class WorkerStandin:
         for value in payload:
             if not self._wait(peer, connection, time.monotonic()):
                 return
-            peer.sendall(bytes([value]))
+            try:
+                peer.sendall(bytes([value]))
+            except ConnectionError:
+                # The client closed between the last check and this send, which is the close that _wait records.
+                self._record("peer_closed", connection)
+                return
             if not self._wait(peer, connection, time.monotonic() + self.scenario.drip_interval_s):
                 return
         self._wait(peer, connection, self._deadline)
