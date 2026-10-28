@@ -1,0 +1,366 @@
+{
+  "catalog_binding": {
+    "authority_epoch": 1,
+    "endpoint": "http://10.23.0.10:8181/api/catalog",
+    "instance_id": "i-0123456789abcdef0",
+    "private_ip": "10.23.0.10",
+    "reader_parameters": {
+      "POLARIS_CLIENT_ID": "arn:aws:ssm:eu-west-1:000000000000:parameter/example_project/aws_polaris_reader_client_id",
+      "POLARIS_CLIENT_SECRET": "arn:aws:ssm:eu-west-1:000000000000:parameter/example_project/aws_polaris_reader_client_secret"
+    },
+    "readiness_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "realm": "example_aws",
+    "source_inventory_sha256": "7f4cce70832e7c3a2f0a9a5dc8fb9b36aa787c2bfca6259e1b62fde1292983d2"
+  },
+  "classification": "Synthetic",
+  "iam_outputs": {
+    "job_network": {
+      "sensitive": false,
+      "type": "dynamic",
+      "value": {
+        "endpoints_enabled": true,
+        "security_group_ids": {
+          "lakehouse": "sg-1123456789abcdef0",
+          "offline": "sg-0123456789abcdef0"
+        },
+        "subnet_id": "subnet-0123456789abcdef0"
+      }
+    },
+    "job_roles": {
+      "sensitive": false,
+      "type": "dynamic",
+      "value": {
+        "execution": {
+          "arn": "arn:aws:iam::000000000000:role/example_project_job_execution_dev",
+          "name": "example_project_job_execution_dev",
+          "unique_id": "AROA11111111111111111"
+        },
+        "offline_task": {
+          "arn": "arn:aws:iam::000000000000:role/example_project_job_offline_task_dev",
+          "name": "example_project_job_offline_task_dev",
+          "unique_id": "AROA22222222222222222"
+        },
+        "read_task": {
+          "arn": "arn:aws:iam::000000000000:role/example_project_job_read_task_dev",
+          "name": "example_project_job_read_task_dev",
+          "unique_id": "AROA44444444444444444"
+        },
+        "seal_task": {
+          "arn": "arn:aws:iam::000000000000:role/example_project_job_seal_task_dev",
+          "name": "example_project_job_seal_task_dev",
+          "unique_id": "AROA33333333333333333"
+        },
+        "try_writer": {
+          "arn": "arn:aws:iam::000000000000:role/example_project_job_try_writer_dev",
+          "name": "example_project_job_try_writer_dev",
+          "unique_id": "AROA55555555555555555"
+        }
+      }
+    }
+  },
+  "image_measurements": {
+    "images": {
+      "analytics": {
+        "compressed_bytes": 1073741825,
+        "image": "000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_analytics_dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "uncompressed_bytes": 2147483649
+      },
+      "quality": {
+        "compressed_bytes": 1073741825,
+        "image": "000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_quality_dev@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "uncompressed_bytes": 2147483649
+      },
+      "spark": {
+        "compressed_bytes": 1073741825,
+        "image": "000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_spark_dev@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "uncompressed_bytes": 2147483649
+      }
+    },
+    "platform": "linux/arm64",
+    "schema_version": 1
+  },
+  "jobs_outputs": {
+    "container_definitions": {
+      "sensitive": false,
+      "type": "dynamic",
+      "value": {
+        "analytics_offline": "[{\"command\":[],\"entryPoint\":[\"/opt/hai/deadline_run\",\"python\",\"-I\",\"/opt/hai/bootstrap/run.py\"],\"environment\":[],\"environmentFiles\":[],\"essential\":true,\"image\":\"000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_analytics_dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"linuxParameters\":{\"capabilities\":{\"add\":[],\"drop\":[\"ALL\"]}},\"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"example_project_jobs_dev\",\"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"analytics_offline\"}},\"mountPoints\":[{\"containerPath\":\"/workspace\",\"readOnly\":false,\"sourceVolume\":\"workspace\"},{\"containerPath\":\"/tmp\",\"readOnly\":false,\"sourceVolume\":\"tmp\"}],\"name\":\"job\",\"privileged\":false,\"readonlyRootFilesystem\":true,\"secrets\":[],\"stopTimeout\":90,\"user\":\"1000:1000\"}]",
+        "analytics_read": "[{\"command\":[],\"entryPoint\":[\"/opt/hai/deadline_run\",\"python\",\"-I\",\"/opt/hai/bootstrap/run.py\"],\"environment\":[],\"environmentFiles\":[],\"essential\":true,\"image\":\"000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_analytics_dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"linuxParameters\":{\"capabilities\":{\"add\":[],\"drop\":[\"ALL\"]}},\"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"example_project_jobs_dev\",\"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"analytics_read\"}},\"mountPoints\":[{\"containerPath\":\"/workspace\",\"readOnly\":false,\"sourceVolume\":\"workspace\"},{\"containerPath\":\"/tmp\",\"readOnly\":false,\"sourceVolume\":\"tmp\"}],\"name\":\"job\",\"privileged\":false,\"readonlyRootFilesystem\":true,\"secrets\":[{\"name\":\"POLARIS_CLIENT_ID\",\"valueFrom\":\"arn:aws:ssm:eu-west-1:000000000000:parameter/example_project/aws_polaris_reader_client_id\"},{\"name\":\"POLARIS_CLIENT_SECRET\",\"valueFrom\":\"arn:aws:ssm:eu-west-1:000000000000:parameter/example_project/aws_polaris_reader_client_secret\"}],\"stopTimeout\":90,\"user\":\"1000:1000\"}]",
+        "quality_offline": "[{\"command\":[],\"entryPoint\":[\"/opt/hai/deadline_run\",\"python\",\"-I\",\"/opt/hai/bootstrap/run.py\"],\"environment\":[],\"environmentFiles\":[],\"essential\":true,\"image\":\"000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_quality_dev@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"linuxParameters\":{\"capabilities\":{\"add\":[],\"drop\":[\"ALL\"]}},\"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"example_project_jobs_dev\",\"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"quality_offline\"}},\"mountPoints\":[{\"containerPath\":\"/workspace\",\"readOnly\":false,\"sourceVolume\":\"workspace\"},{\"containerPath\":\"/tmp\",\"readOnly\":false,\"sourceVolume\":\"tmp\"}],\"name\":\"job\",\"privileged\":false,\"readonlyRootFilesystem\":true,\"secrets\":[],\"stopTimeout\":90,\"user\":\"1000:1000\"}]",
+        "seal": "[{\"command\":[],\"entryPoint\":[\"/opt/hai/deadline_run\",\"python\",\"-I\",\"/opt/hai/bootstrap/run.py\"],\"environment\":[],\"environmentFiles\":[],\"essential\":true,\"image\":\"000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_analytics_dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"linuxParameters\":{\"capabilities\":{\"add\":[],\"drop\":[\"ALL\"]}},\"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"example_project_jobs_dev\",\"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"seal\"}},\"mountPoints\":[{\"containerPath\":\"/workspace\",\"readOnly\":false,\"sourceVolume\":\"workspace\"},{\"containerPath\":\"/tmp\",\"readOnly\":false,\"sourceVolume\":\"tmp\"}],\"name\":\"job\",\"privileged\":false,\"readonlyRootFilesystem\":true,\"secrets\":[],\"stopTimeout\":90,\"user\":\"1000:1000\"}]",
+        "spark_read": "[{\"command\":[],\"entryPoint\":[\"/opt/hai/deadline_run\",\"python\",\"-I\",\"/opt/hai/bootstrap/run.py\"],\"environment\":[],\"environmentFiles\":[],\"essential\":true,\"image\":\"000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_spark_dev@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"linuxParameters\":{\"capabilities\":{\"add\":[],\"drop\":[\"ALL\"]}},\"logConfiguration\":{\"logDriver\":\"awslogs\",\"options\":{\"awslogs-group\":\"example_project_jobs_dev\",\"awslogs-region\":\"eu-west-1\",\"awslogs-stream-prefix\":\"spark_read\"}},\"mountPoints\":[{\"containerPath\":\"/workspace\",\"readOnly\":false,\"sourceVolume\":\"workspace\"},{\"containerPath\":\"/tmp\",\"readOnly\":false,\"sourceVolume\":\"tmp\"}],\"name\":\"job\",\"privileged\":false,\"readonlyRootFilesystem\":true,\"secrets\":[{\"name\":\"POLARIS_CLIENT_ID\",\"valueFrom\":\"arn:aws:ssm:eu-west-1:000000000000:parameter/example_project/aws_polaris_reader_client_id\"},{\"name\":\"POLARIS_CLIENT_SECRET\",\"valueFrom\":\"arn:aws:ssm:eu-west-1:000000000000:parameter/example_project/aws_polaris_reader_client_secret\"}],\"stopTimeout\":90,\"user\":\"1000:1000\"}]"
+      }
+    },
+    "execution_digests": {
+      "sensitive": false,
+      "type": "dynamic",
+      "value": {
+        "analytics_offline/job": "1111111111111111111111111111111111111111111111111111111111111111",
+        "analytics_read/job": "4444444444444444444444444444444444444444444444444444444444444444",
+        "quality_offline/job": "2222222222222222222222222222222222222222222222222222222222222222",
+        "seal/job": "3333333333333333333333333333333333333333333333333333333333333333",
+        "spark_read/job": "5555555555555555555555555555555555555555555555555555555555555555"
+      }
+    },
+    "task_definition_arns": {
+      "sensitive": false,
+      "type": "dynamic",
+      "value": {
+        "analytics_offline": "arn:aws:ecs:eu-west-1:000000000000:task-definition/example_project_analytics_offline_dev:7",
+        "analytics_read": "arn:aws:ecs:eu-west-1:000000000000:task-definition/example_project_analytics_read_dev:7",
+        "quality_offline": "arn:aws:ecs:eu-west-1:000000000000:task-definition/example_project_quality_offline_dev:7",
+        "seal": "arn:aws:ecs:eu-west-1:000000000000:task-definition/example_project_seal_dev:7",
+        "spark_read": "arn:aws:ecs:eu-west-1:000000000000:task-definition/example_project_spark_read_dev:7"
+      }
+    },
+    "task_definition_settings": {
+      "sensitive": false,
+      "type": "dynamic",
+      "value": {
+        "analytics_offline": {
+          "cpu": "1024",
+          "ephemeral_storage": [
+            {
+              "size_in_gib": 21
+            }
+          ],
+          "execution_role_arn": "arn:aws:iam::000000000000:role/example_project_job_execution_dev",
+          "family": "example_project_analytics_offline_dev",
+          "memory": "2048",
+          "network_mode": "awsvpc",
+          "requires_compatibilities": [
+            "FARGATE"
+          ],
+          "runtime_platform": [
+            {
+              "cpu_architecture": "ARM64",
+              "operating_system_family": "LINUX"
+            }
+          ],
+          "tags": {
+            "Environment": "dev",
+            "Project": "example_project"
+          },
+          "task_role_arn": "arn:aws:iam::000000000000:role/example_project_job_offline_task_dev",
+          "volume": [
+            {
+              "docker_volume_configuration": [],
+              "efs_volume_configuration": [],
+              "host_path": null,
+              "name": "workspace"
+            },
+            {
+              "docker_volume_configuration": [],
+              "efs_volume_configuration": [],
+              "host_path": null,
+              "name": "tmp"
+            }
+          ]
+        },
+        "analytics_read": {
+          "cpu": "1024",
+          "ephemeral_storage": [
+            {
+              "size_in_gib": 21
+            }
+          ],
+          "execution_role_arn": "arn:aws:iam::000000000000:role/example_project_job_execution_dev",
+          "family": "example_project_analytics_read_dev",
+          "memory": "2048",
+          "network_mode": "awsvpc",
+          "requires_compatibilities": [
+            "FARGATE"
+          ],
+          "runtime_platform": [
+            {
+              "cpu_architecture": "ARM64",
+              "operating_system_family": "LINUX"
+            }
+          ],
+          "tags": {
+            "Environment": "dev",
+            "Project": "example_project"
+          },
+          "task_role_arn": "arn:aws:iam::000000000000:role/example_project_job_read_task_dev",
+          "volume": [
+            {
+              "docker_volume_configuration": [],
+              "efs_volume_configuration": [],
+              "host_path": null,
+              "name": "workspace"
+            },
+            {
+              "docker_volume_configuration": [],
+              "efs_volume_configuration": [],
+              "host_path": null,
+              "name": "tmp"
+            }
+          ]
+        },
+        "quality_offline": {
+          "cpu": "1024",
+          "ephemeral_storage": [
+            {
+              "size_in_gib": 21
+            }
+          ],
+          "execution_role_arn": "arn:aws:iam::000000000000:role/example_project_job_execution_dev",
+          "family": "example_project_quality_offline_dev",
+          "memory": "2048",
+          "network_mode": "awsvpc",
+          "requires_compatibilities": [
+            "FARGATE"
+          ],
+          "runtime_platform": [
+            {
+              "cpu_architecture": "ARM64",
+              "operating_system_family": "LINUX"
+            }
+          ],
+          "tags": {
+            "Environment": "dev",
+            "Project": "example_project"
+          },
+          "task_role_arn": "arn:aws:iam::000000000000:role/example_project_job_offline_task_dev",
+          "volume": [
+            {
+              "docker_volume_configuration": [],
+              "efs_volume_configuration": [],
+              "host_path": null,
+              "name": "workspace"
+            },
+            {
+              "docker_volume_configuration": [],
+              "efs_volume_configuration": [],
+              "host_path": null,
+              "name": "tmp"
+            }
+          ]
+        },
+        "seal": {
+          "cpu": "1024",
+          "ephemeral_storage": [
+            {
+              "size_in_gib": 21
+            }
+          ],
+          "execution_role_arn": "arn:aws:iam::000000000000:role/example_project_job_execution_dev",
+          "family": "example_project_seal_dev",
+          "memory": "2048",
+          "network_mode": "awsvpc",
+          "requires_compatibilities": [
+            "FARGATE"
+          ],
+          "runtime_platform": [
+            {
+              "cpu_architecture": "ARM64",
+              "operating_system_family": "LINUX"
+            }
+          ],
+          "tags": {
+            "Environment": "dev",
+            "Project": "example_project"
+          },
+          "task_role_arn": "arn:aws:iam::000000000000:role/example_project_job_seal_task_dev",
+          "volume": [
+            {
+              "docker_volume_configuration": [],
+              "efs_volume_configuration": [],
+              "host_path": null,
+              "name": "workspace"
+            },
+            {
+              "docker_volume_configuration": [],
+              "efs_volume_configuration": [],
+              "host_path": null,
+              "name": "tmp"
+            }
+          ]
+        },
+        "spark_read": {
+          "cpu": "1024",
+          "ephemeral_storage": [
+            {
+              "size_in_gib": 21
+            }
+          ],
+          "execution_role_arn": "arn:aws:iam::000000000000:role/example_project_job_execution_dev",
+          "family": "example_project_spark_read_dev",
+          "memory": "2048",
+          "network_mode": "awsvpc",
+          "requires_compatibilities": [
+            "FARGATE"
+          ],
+          "runtime_platform": [
+            {
+              "cpu_architecture": "ARM64",
+              "operating_system_family": "LINUX"
+            }
+          ],
+          "tags": {
+            "Environment": "dev",
+            "Project": "example_project"
+          },
+          "task_role_arn": "arn:aws:iam::000000000000:role/example_project_job_read_task_dev",
+          "volume": [
+            {
+              "docker_volume_configuration": [],
+              "efs_volume_configuration": [],
+              "host_path": null,
+              "name": "workspace"
+            },
+            {
+              "docker_volume_configuration": [],
+              "efs_volume_configuration": [],
+              "host_path": null,
+              "name": "tmp"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "platform_outputs": {
+    "cluster_arn": {
+      "sensitive": false,
+      "type": "dynamic",
+      "value": "arn:aws:ecs:eu-west-1:000000000000:cluster/example_project_dev"
+    },
+    "ecr_repository_urls": {
+      "sensitive": false,
+      "type": "dynamic",
+      "value": {
+        "analytics": "000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_analytics_dev",
+        "quality": "000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_quality_dev",
+        "spark": "000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_spark_dev"
+      }
+    },
+    "log_group_names": {
+      "sensitive": false,
+      "type": "dynamic",
+      "value": {
+        "jobs": "example_project_jobs_dev"
+      }
+    },
+    "project_tag": {
+      "sensitive": false,
+      "type": "dynamic",
+      "value": "example_project"
+    },
+    "public_subnet_ids": {
+      "sensitive": false,
+      "type": "dynamic",
+      "value": [
+        "subnet-0123456789abcdef0",
+        "subnet-2123456789abcdef0"
+      ]
+    }
+  },
+  "storage_outputs": {
+    "bucket_name": {
+      "sensitive": false,
+      "type": "dynamic",
+      "value": "example-project-data"
+    }
+  }
+}

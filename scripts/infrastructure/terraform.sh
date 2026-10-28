@@ -9,8 +9,8 @@ admin_profile=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --iam | --platform | --services)
-      [[ "$stack" == storage ]] || { printf 'Choose one stack: --iam, --platform or --services.\n' >&2; exit 2; }
+    --iam | --platform | --services | --jobs)
+      [[ "$stack" == storage ]] || { printf 'Choose one stack: --iam, --platform, --services or --jobs.\n' >&2; exit 2; }
       stack="${1#--}"
       shift
       ;;
@@ -50,6 +50,12 @@ if [[ "$stack" == platform || "$stack" == services ]]; then
   directory="$directory/$stack"
   renderer=scripts.infrastructure.render_platform_config
   render_args=(--stack "$stack")
+fi
+# The jobs stack has its own renderer, which writes only the inputs that stack declares.
+if [[ "$stack" == jobs ]]; then
+  directory="$directory/jobs"
+  renderer=scripts.infrastructure.render_jobs_config
+  render_args=()
 fi
 if [[ "$stack" == iam ]]; then
   [[ -n "$admin_profile" ]] || { printf 'IAM updates require --admin-profile.\n' >&2; exit 2; }
