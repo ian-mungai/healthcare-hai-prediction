@@ -1,0 +1,453 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthcare-hai-prediction.invalid/orchestration/aws_qualification.schema.json",
+  "title": "Closed AWS layer qualification",
+  "description": "Fixed test namespaces, task identities and storage prefixes. Dispatch records do not attest native qualification.",
+  "$ref": "#/$defs/binding",
+  "$defs": {
+    "scope": {
+      "type": "object",
+      "required": [
+        "mode",
+        "layer",
+        "step",
+        "job_class",
+        "namespace",
+        "table_prefix",
+        "backup_prefix",
+        "output_prefixes",
+        "definition",
+        "task_role_key",
+        "catalog_principal"
+      ],
+      "properties": {
+        "mode": {
+          "const": "aws_qualify"
+        },
+        "layer": {
+          "enum": [
+            "silver",
+            "gold",
+            "features"
+          ]
+        },
+        "step": {
+          "enum": [
+            "candidates",
+            "reconcile",
+            "backup",
+            "commit",
+            "maintenance"
+          ]
+        },
+        "job_class": {
+          "enum": [
+            "lakehouse_read",
+            "lakehouse_write"
+          ]
+        },
+        "namespace": {
+          "enum": [
+            "silver_e2e",
+            "gold_e2e",
+            "features_e2e"
+          ]
+        },
+        "table_prefix": {
+          "type": "string"
+        },
+        "backup_prefix": {
+          "type": "string"
+        },
+        "output_prefixes": {
+          "type": "array",
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "definition": {
+          "enum": [
+            "spark_read",
+            "spark_write_e2e"
+          ]
+        },
+        "task_role_key": {
+          "enum": [
+            "read_task",
+            "write_e2e_task"
+          ]
+        },
+        "catalog_principal": {
+          "enum": [
+            "lakehouse_reader",
+            "e2e_writer"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "layer": {
+                "const": "silver"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "namespace": {
+                "const": "silver_e2e"
+              },
+              "table_prefix": {
+                "const": "lakehouse/silver_e2e/"
+              },
+              "backup_prefix": {
+                "const": "lakehouse/silver_e2e/catalog_backups/"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "step": {
+                      "const": "backup"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "output_prefixes": {
+                      "const": [
+                        "lakehouse/silver_e2e/catalog_backups/"
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "step": {
+                      "enum": [
+                        "candidates",
+                        "commit",
+                        "maintenance"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "output_prefixes": {
+                      "const": [
+                        "lakehouse/silver_e2e/"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "layer": {
+                "const": "gold"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "namespace": {
+                "const": "gold_e2e"
+              },
+              "table_prefix": {
+                "const": "lakehouse/gold_e2e/"
+              },
+              "backup_prefix": {
+                "const": "lakehouse/gold_e2e/catalog_backups/"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "step": {
+                      "const": "backup"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "output_prefixes": {
+                      "const": [
+                        "lakehouse/gold_e2e/catalog_backups/"
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "step": {
+                      "enum": [
+                        "candidates",
+                        "commit",
+                        "maintenance"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "output_prefixes": {
+                      "const": [
+                        "lakehouse/gold_e2e/"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "layer": {
+                "const": "features"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "namespace": {
+                "const": "features_e2e"
+              },
+              "table_prefix": {
+                "const": "lakehouse/features_e2e/"
+              },
+              "backup_prefix": {
+                "const": "lakehouse/features_e2e/catalog_backups/"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "step": {
+                      "const": "backup"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "output_prefixes": {
+                      "const": [
+                        "lakehouse/features_e2e/catalog_backups/"
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "step": {
+                      "enum": [
+                        "candidates",
+                        "commit",
+                        "maintenance"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "output_prefixes": {
+                      "const": [
+                        "lakehouse/features_e2e/"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "step": {
+                "const": "reconcile"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "job_class": {
+                "const": "lakehouse_read"
+              },
+              "definition": {
+                "const": "spark_read"
+              },
+              "task_role_key": {
+                "const": "read_task"
+              },
+              "catalog_principal": {
+                "const": "lakehouse_reader"
+              },
+              "output_prefixes": {
+                "const": []
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "job_class": {
+                "const": "lakehouse_write"
+              },
+              "definition": {
+                "const": "spark_write_e2e"
+              },
+              "task_role_key": {
+                "const": "write_e2e_task"
+              },
+              "catalog_principal": {
+                "const": "e2e_writer"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "binding": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scope"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "dispatch_record": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scope"
+        },
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "evidence",
+            "native_qualification_passed",
+            "run_id",
+            "try_id",
+            "target",
+            "capacity_provider",
+            "task_role",
+            "task_definition_arn"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": 1
+            },
+            "evidence": {
+              "const": "dispatch_binding"
+            },
+            "native_qualification_passed": {
+              "const": false
+            },
+            "run_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "try_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "target": {
+              "const": "ecs"
+            },
+            "capacity_provider": {
+              "enum": [
+                "FARGATE",
+                "FARGATE_SPOT"
+              ]
+            },
+            "task_role": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "arn",
+                "unique_id"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^(?:[A-Za-z0-9_+=,.@-]{1,64})$(?![\\s\\S])"
+                },
+                "arn": {
+                  "type": "string",
+                  "pattern": "^(?:arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9_+=,.@/-]+)$(?![\\s\\S])"
+                },
+                "unique_id": {
+                  "type": "string",
+                  "pattern": "^(?:AROA[A-Z0-9]{17})$(?![\\s\\S])"
+                }
+              }
+            },
+            "task_definition_arn": {
+              "type": "string",
+              "pattern": "^(?:arn:aws:ecs:[a-z]{2}(?:-[a-z]+)+-[0-9]+:[0-9]{12}:task-definition/[A-Za-z0-9_-]{1,255}:[1-9][0-9]*)$(?![\\s\\S])"
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "job_class": {
+                "const": "lakehouse_write"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "capacity_provider": {
+                "const": "FARGATE"
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "dispatch_job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "step",
+        "task_role_id"
+      ],
+      "properties": {
+        "step": {
+          "enum": [
+            "candidates",
+            "reconcile",
+            "backup",
+            "commit",
+            "maintenance"
+          ]
+        },
+        "task_role_id": {
+          "type": "string",
+          "pattern": "^(?:AROA[A-Z0-9]{17})$(?![\\s\\S])"
+        }
+      }
+    }
+  }
+}

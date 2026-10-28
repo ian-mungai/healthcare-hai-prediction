@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from orchestration import network_policy
+from orchestration import aws_qualify, network_policy
+from orchestration.ecs_target import PlacementError
 from orchestration.pipeline_protocol import PipelineError, accepted_completion, read_record
 from orchestration.pipeline_session import CLASS_ROLE, RoleSession
 from scripts.lakehouse.gold_publish_record import SHA256
@@ -54,6 +55,11 @@ def job_class(template: str, params: dict[str, Any], mode: str) -> str:
         if value not in (*network_policy.CLASSES, "offline"):
             raise PipelineError("the probe class is unknown")
         return value
+    if mode == aws_qualify.MODE:
+        try:
+            return aws_qualify.binding(template, params, mode).job_class
+        except PlacementError as error:
+            raise PipelineError(str(error)) from None
     if mode == "publish_fixture":
         return "offline"
     if template == "pipeline_dbt":
@@ -68,7 +74,7 @@ def job_class(template: str, params: dict[str, Any], mode: str) -> str:
 def needed_values(template: str, params: dict[str, Any], mode: str) -> tuple[str, ...]:
     """Name only the catalog principal and region entries the selected class needs; the AWS access comes from a role session."""
     selected = job_class(template, params, mode)
-    if selected == "offline" or template == "pipeline_probe":
+    if mode == aws_qualify.MODE or selected == "offline" or template == "pipeline_probe":
         return ()
     principal = READER if selected == "lakehouse_read" else SILVER_WRITER if params.get("layer") == "silver" else GOLD_WRITER
     return ("AWS_REGION", *principal)

@@ -6326,7 +6326,7 @@ class Launcher:
                 job_class = pipeline_render.job_class(template_name, dict(params.get("params") or {}), run_mode)
             except pipeline_protocol.PipelineError as error:
                 raise LauncherError(str(error), "args") from None
-        cloud_row = ecs_target.row_for(self.ecs_jobs, template_name, params.get("params") or {}, job_class)
+        cloud_row = ecs_target.row_for(self.ecs_jobs, template_name, params.get("params") or {}, job_class, mode=run_mode)
         cloud_managed = bool(self.ecs_jobs["enabled"] and cloud_row is not None)
         if cloud_managed and self.ecs_runtime is None:
             raise LauncherError("ECS placement is enabled but its runtime is not integrated", "refused")

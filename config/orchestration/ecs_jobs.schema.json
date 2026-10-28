@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Cloud placement rollout",
-  "description": "The closed read-job allowlist. Enabling placement also requires the reviewed nonblocking execution facade.",
+  "description": "Closed job eligibility. Qualification rows require the fixed AWS test binding and the reviewed execution facade.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "enabled", "jobs"],
@@ -18,9 +18,20 @@
         "required": ["template", "class"],
         "properties": {
           "template": {"enum": ["pipeline_dbt", "pipeline_validate_silver", "pipeline_validate_gold", "pipeline_validate_cross", "pipeline_export", "pipeline_spark", "pipeline_publish"]},
-          "layer": {"enum": ["silver", "gold"]},
-          "class": {"enum": ["offline", "lakehouse_read"]}
-        }
+          "layer": {"enum": ["silver", "gold", "features"]},
+          "class": {"enum": ["offline", "lakehouse_read", "lakehouse_write"]},
+          "mode": {"const": "aws_qualify"}
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"class": {"const": "lakehouse_write"}}},
+            "then": {"required": ["mode", "layer"], "properties": {"template": {"const": "pipeline_publish"}}}
+          },
+          {
+            "if": {"required": ["mode"]},
+            "then": {"required": ["layer"], "properties": {"template": {"const": "pipeline_publish"}, "class": {"enum": ["lakehouse_read", "lakehouse_write"]}}}
+          }
+        ]
       }
     }
   }

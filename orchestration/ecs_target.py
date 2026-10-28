@@ -125,7 +125,7 @@ def load_jobs(root: Path) -> dict[str, Any]:
         schema = json.loads((root / "config/orchestration/ecs_jobs.schema.json").read_text())
         if list(Draft202012Validator(schema).iter_errors(value)):
             raise PlacementError("ECS jobs violate their schema")
-        keys = [(row["template"], row.get("layer"), row["class"]) for row in value["jobs"]]
+        keys = [(row["template"], row.get("layer"), row["class"], row.get("mode")) for row in value["jobs"]]
         if len(keys) != len(set(keys)):
             raise PlacementError("ECS jobs contain duplicate selectors")
         return value
@@ -133,9 +133,18 @@ def load_jobs(root: Path) -> dict[str, Any]:
         raise PlacementError(f"ECS jobs are unreadable: {type(error).__name__}") from None
 
 
-def row_for(jobs: Mapping[str, Any], template: str, params: Mapping[str, Any], job_class: str) -> dict[str, Any] | None:
-    """Return the exact closed template, layer and class row or no eligibility."""
+def row_for(jobs: Mapping[str, Any], template: str, params: Mapping[str, Any], job_class: str, *, mode: str = "real") -> dict[str, Any] | None:
+    """Return the closed template, layer, class and mode row or no eligibility."""
+    if mode == "aws_qualify":
+        if template != "pipeline_publish":
+            return None
+        from orchestration import aws_qualify
+
+        if aws_qualify.binding(template, params, mode).job_class != job_class:
+            raise PlacementError("qualification class differs from the closed action")
     for row in jobs["jobs"]:
+        if (mode == "aws_qualify" and row.get("mode") != mode) or ("mode" in row and row["mode"] != mode):
+            continue
         if row["template"] == template and row["class"] == job_class and ("layer" not in row or row["layer"] == params.get("layer")):
             return dict(row)
     return None
@@ -358,6 +367,10 @@ def validate_execution(execution: Mapping[str, Any]) -> None:
             request_bytes = json.dumps(dispatch["request"], sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
             if dispatch["request_sha256"] != hashlib.sha256(request_bytes).hexdigest():
                 raise PlacementError("persisted dispatch request changed")
+            if execution.get("admission", {}).get("mode") == "aws_qualify":
+                from orchestration import aws_qualify
+
+                aws_qualify.validate_record(execution, placement)
 
 
 def usage_record(usage: Usage) -> dict[str, int]:

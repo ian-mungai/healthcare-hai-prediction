@@ -14,7 +14,7 @@ from datetime import timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 
-from orchestration import ecs_admission, ecs_reconcile
+from orchestration import aws_qualify, ecs_admission, ecs_reconcile
 from orchestration.ecs_stage import validate_contract
 from orchestration.ecs_target import PlacementError, Size, validate_execution
 from orchestration.worker_protocol import ProtocolError, validate
@@ -157,6 +157,7 @@ def build_request(
     """Build the complete closed request, checking all identities before RunTask."""
     try:
         admission = attempt["execution"]["admission"]
+        aws_qualify.validate_dispatch(target, definition_name, job, attempt, placement, described)
         job_class = admission["job_class"]
         if job.get("job_class") != job_class or target["definitions"][definition_name]["job_class"] != job_class:
             raise PlacementError("job class differs from its definition")
@@ -340,6 +341,10 @@ class Dispatcher:
                 "clock_observation": observation,
                 "sent": True,
             }
+            qualification = aws_qualify.validate_dispatch(target, definition_name, job, attempt, placement, described)
+            if qualification is not None:
+                placement["dispatch"]["qualification_job"] = {"step": job["qualification"]["step"], "task_role_id": job["task_role_id"]}
+                placement["dispatch"]["qualification"] = aws_qualify.dispatch_record(qualification, target, attempt, placement, request)
             placement.update(state="unknown", dispatch_attempted=True)
             validate_execution(attempt["execution"])
         if self.clock.monotonic() >= deadline:

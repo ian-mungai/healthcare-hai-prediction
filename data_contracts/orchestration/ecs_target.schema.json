@@ -62,11 +62,19 @@
       "$ref": "#/$defs/job_network"
     },
     "class_networks": {
-      "const": {
-        "offline": "offline",
-        "seal": "offline",
-        "lakehouse_read": "lakehouse"
-      }
+      "enum": [
+        {
+          "offline": "offline",
+          "seal": "offline",
+          "lakehouse_read": "lakehouse"
+        },
+        {
+          "offline": "offline",
+          "seal": "offline",
+          "lakehouse_read": "lakehouse",
+          "lakehouse_write": "lakehouse"
+        }
+      ]
     },
     "definitions": {
       "type": "object",
@@ -159,6 +167,23 @@
                 },
                 "task_role_key": {
                   "const": "read_task"
+                }
+              }
+            }
+          ]
+        },
+        "spark_write_e2e": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/definition"
+            },
+            {
+              "properties": {
+                "job_class": {
+                  "const": "lakehouse_write"
+                },
+                "task_role_key": {
+                  "const": "write_e2e_task"
                 }
               }
             }
@@ -258,6 +283,9 @@
           "$ref": "#/$defs/role"
         },
         "try_writer": {
+          "$ref": "#/$defs/role"
+        },
+        "write_e2e_task": {
           "$ref": "#/$defs/role"
         }
       }
@@ -387,7 +415,8 @@
           "enum": [
             "offline",
             "seal",
-            "lakehouse_read"
+            "lakehouse_read",
+            "lakehouse_write"
           ]
         },
         "image": {
@@ -397,7 +426,8 @@
           "enum": [
             "offline_task",
             "seal_task",
-            "read_task"
+            "read_task",
+            "write_e2e_task"
           ]
         },
         "execution_sha256": {
@@ -509,5 +539,55 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "definitions": {
+            "required": [
+              "spark_write_e2e"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "job_roles": {
+            "required": [
+              "write_e2e_task"
+            ]
+          },
+          "class_networks": {
+            "const": {
+              "offline": "offline",
+              "seal": "offline",
+              "lakehouse_read": "lakehouse",
+              "lakehouse_write": "lakehouse"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "job_roles": {
+            "required": [
+              "write_e2e_task"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "definitions": {
+            "required": [
+              "spark_write_e2e"
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

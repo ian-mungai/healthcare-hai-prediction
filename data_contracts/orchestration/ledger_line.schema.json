@@ -578,6 +578,8 @@
                   "project_tag": {
                     "type": "string"
                   },
+                  "qualification": {"type": "object"},
+                  "qualification_job": {"type": "object"},
                   "clock_observation": {
                     "type": "object"
                   },

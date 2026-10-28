@@ -9,6 +9,12 @@
     {"template": "pipeline_validate_cross", "class": "offline"},
     {"template": "pipeline_export", "class": "offline"},
     {"template": "pipeline_spark", "class": "lakehouse_read"},
-    {"template": "pipeline_publish", "class": "lakehouse_read"}
+    {"template": "pipeline_publish", "class": "lakehouse_read"},
+    {"template": "pipeline_publish", "layer": "silver", "class": "lakehouse_write", "mode": "aws_qualify"},
+    {"template": "pipeline_publish", "layer": "silver", "class": "lakehouse_read", "mode": "aws_qualify"},
+    {"template": "pipeline_publish", "layer": "gold", "class": "lakehouse_write", "mode": "aws_qualify"},
+    {"template": "pipeline_publish", "layer": "gold", "class": "lakehouse_read", "mode": "aws_qualify"},
+    {"template": "pipeline_publish", "layer": "features", "class": "lakehouse_write", "mode": "aws_qualify"},
+    {"template": "pipeline_publish", "layer": "features", "class": "lakehouse_read", "mode": "aws_qualify"}
   ]
 }

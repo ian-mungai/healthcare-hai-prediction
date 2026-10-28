@@ -133,7 +133,7 @@ def validate_contract(name: str, value: Mapping[str, Any], code: str) -> None:
     contracts = Path(__file__).resolve().parents[1] / "data_contracts/orchestration"
     registry: Registry[Any] = Registry()
     documents = {}
-    for schema in ("ecs_input_map", "ecs_job", "ecs_outputs"):
+    for schema in ("ecs_input_map", "ecs_job", "ecs_outputs", "aws_qualification"):
         document = json.loads((contracts / f"{schema}.schema.json").read_bytes())
         registry = registry.with_resource(document["$id"], Resource.from_contents(document))
         documents[schema] = document

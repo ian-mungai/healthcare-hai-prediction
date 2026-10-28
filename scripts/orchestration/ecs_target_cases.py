@@ -172,7 +172,10 @@ def contract_cases(root: Path) -> dict[str, bool]:
         "target_roundtrip": restored == request,
         "target_preserves_submission_key": request.submission_id == SubmissionRequest(**{**request.__dict__, "target": None}).submission_id,
         "rollout_disabled_without_runtime": jobs["enabled"] is False,
-        "writer_has_no_enabled_row": all(row["class"] != "lakehouse_write" for row in jobs["jobs"]),
+        "writer_has_no_enabled_row": jobs["enabled"] is False
+        and all(
+            row["class"] != "lakehouse_write" or row.get("mode") == "aws_qualify" and row.get("layer") in ("silver", "gold", "features") for row in jobs["jobs"]
+        ),
     }
     candidate: dict[str, Any] = {"id": "at-example", "deadline_utc": NOW + 300, "generation": 1}
     subject.initialize(candidate, "ecs", NOW, 7)

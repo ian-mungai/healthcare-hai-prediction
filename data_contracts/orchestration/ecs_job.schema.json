@@ -50,7 +50,8 @@
     "job_class": {
       "enum": [
         "offline",
-        "lakehouse_read"
+        "lakehouse_read",
+        "lakehouse_write"
       ]
     },
     "task_role_id": {
@@ -247,6 +248,9 @@
           ]
         }
       }
+    },
+    "qualification": {
+      "$ref": "aws_qualification.schema.json"
     }
   },
   "allOf": [
@@ -262,6 +266,37 @@
         "properties": {
           "secret_names": {
             "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "job_class": {
+            "const": "lakehouse_write"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "qualification",
+          "catalog_authority",
+          "writer_authorization"
+        ],
+        "properties": {
+          "qualification": {
+            "properties": {
+              "job_class": {
+                "const": "lakehouse_write"
+              }
+            }
+          },
+          "catalog_authority": {
+            "type": "object"
+          },
+          "writer_authorization": {
+            "type": "object"
           }
         }
       }
