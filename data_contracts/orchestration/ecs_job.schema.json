@@ -1,0 +1,321 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthcare-hai-prediction.invalid/orchestration/ecs_job.schema.json",
+  "title": "Verified task job description",
+  "description": "Proposed read-task shape. The renderer, mount checks, archive verifier and live-try authority must enforce semantic bindings before use.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "generation",
+    "attempt_id",
+    "try_id",
+    "template",
+    "job_class",
+    "task_role_id",
+    "command",
+    "plain_environment",
+    "secret_names",
+    "inputs",
+    "input_map_sha256",
+    "code_sha256",
+    "dbt_tree_sha256",
+    "declaration_source",
+    "expected_outputs",
+    "max_record_bytes"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "run_id": {
+      "$ref": "ecs_input_map.schema.json#/$defs/run_id"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "attempt_id": {
+      "$ref": "ecs_input_map.schema.json#/$defs/identifier"
+    },
+    "try_id": {
+      "$ref": "ecs_input_map.schema.json#/$defs/try_id"
+    },
+    "template": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$(?![\\s\\S])",
+      "description": "The verified declaration source must separately allow this exact template and action."
+    },
+    "job_class": {
+      "enum": [
+        "offline",
+        "lakehouse_read"
+      ]
+    },
+    "task_role_id": {
+      "type": "string",
+      "pattern": "^AROA[A-Z0-9]+$(?![\\s\\S])"
+    },
+    "command": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[^\\x00\\r\\n]+$(?![\\s\\S])"
+      }
+    },
+    "plain_environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "JOB_MEMORY_LIMIT": {
+          "type": "string",
+          "minLength": 1
+        },
+        "DUCKDB_MEMORY_LIMIT": {
+          "type": "string",
+          "minLength": 1
+        },
+        "SPARK_JOB_MEMORY": {
+          "type": "string",
+          "minLength": 1
+        },
+        "JOB_THREADS": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$(?![\\s\\S])"
+        },
+        "AWS_REGION": {
+          "type": "string",
+          "minLength": 1
+        },
+        "POLARIS_URI": {
+          "type": "string",
+          "minLength": 1
+        },
+        "HAI_DUCKDB_TEMP_DIRECTORY": {
+          "type": "string",
+          "minLength": 1
+        },
+        "HAI_DUCKDB_MAX_TEMP_BYTES": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$(?![\\s\\S])"
+        },
+        "HAI_SPARK_LOCAL_DIRECTORY": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "secret_names": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]*$(?![\\s\\S])"
+      }
+    },
+    "inputs": {
+      "$ref": "ecs_input_map.schema.json"
+    },
+    "input_map_sha256": {
+      "$ref": "ecs_input_map.schema.json#/$defs/sha256"
+    },
+    "code_sha256": {
+      "$ref": "ecs_input_map.schema.json#/$defs/sha256"
+    },
+    "dbt_tree_sha256": {
+      "$ref": "ecs_input_map.schema.json#/$defs/sha256"
+    },
+    "max_record_bytes": {
+      "const": 33554432
+    },
+    "declaration_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "schema_path",
+        "schema_sha256"
+      ],
+      "properties": {
+        "path": {
+          "const": "config/orchestration/ecs_jobs.json"
+        },
+        "sha256": {
+          "$ref": "ecs_input_map.schema.json#/$defs/sha256"
+        },
+        "schema_path": {
+          "$ref": "ecs_input_map.schema.json#/$defs/path"
+        },
+        "schema_sha256": {
+          "$ref": "ecs_input_map.schema.json#/$defs/sha256"
+        }
+      }
+    },
+    "expected_outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "optional",
+        "scratch",
+        "scratch_gib"
+      ],
+      "properties": {
+        "required": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/output"
+          }
+        },
+        "optional": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/output"
+          }
+        },
+        "scratch": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_.*?-]+(?:/[A-Za-z0-9_.*?-]+)*$(?![\\s\\S])"
+          }
+        },
+        "scratch_gib": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "archives": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "dbt"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/archive"
+        },
+        "dbt": {
+          "$ref": "#/$defs/archive"
+        }
+      },
+      "description": "Required by the verified runtime entry point. Preparation examples without archives are not executable jobs."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "job_class": {
+            "const": "offline"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "secret_names": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "max_bytes"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "ecs_input_map.schema.json#/$defs/path"
+        },
+        "kind": {
+          "enum": [
+            "controller_record",
+            "data"
+          ]
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "controller_record"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "max_bytes": {
+                "maximum": 33554432
+              }
+            }
+          }
+        }
+      ]
+    },
+    "archive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_path",
+        "members"
+      ],
+      "properties": {
+        "input_path": {
+          "$ref": "ecs_input_map.schema.json#/$defs/path"
+        },
+        "members": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 200000,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "sha256",
+              "size",
+              "executable"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "ecs_input_map.schema.json#/$defs/path"
+              },
+              "sha256": {
+                "$ref": "ecs_input_map.schema.json#/$defs/sha256"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "executable": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

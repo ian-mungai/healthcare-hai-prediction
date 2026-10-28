@@ -1,0 +1,83 @@
+{
+  "attempt_id": "synthetic_attempt",
+  "code_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "command": [
+    "python",
+    "-m",
+    "scripts.lakehouse.pipeline_build",
+    "--layer",
+    "gold",
+    "--mode",
+    "publish_fixture",
+    "--run",
+    "20261024T000000Z-a1b2c3d4"
+  ],
+  "dbt_tree_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "declaration_source": {
+    "path": "config/orchestration/ecs_jobs.json",
+    "schema_path": "data_contracts/orchestration/ecs_jobs.schema.json",
+    "schema_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "expected_outputs": {
+    "optional": [
+      {
+        "kind": "controller_record",
+        "max_bytes": 33554432,
+        "name": "logs/dbt.log"
+      }
+    ],
+    "required": [
+      {
+        "kind": "data",
+        "max_bytes": 64,
+        "name": "staging.duckdb"
+      },
+      {
+        "kind": "controller_record",
+        "max_bytes": 33554432,
+        "name": "target/run_results.json"
+      },
+      {
+        "kind": "controller_record",
+        "max_bytes": 33554432,
+        "name": "target/manifest.json"
+      },
+      {
+        "kind": "controller_record",
+        "max_bytes": 33554432,
+        "name": "build_receipt.json"
+      }
+    ],
+    "scratch": [
+      "target/compiled/**",
+      "target/run/**",
+      "target/partial_parse.msgpack",
+      "silver_import_*"
+    ],
+    "scratch_gib": 0
+  },
+  "generation": 1,
+  "input_map_sha256": "e4357f23ffbbced9331d27eedaab04abe01202ef247f240f9f9e537f42aefa2d",
+  "inputs": [
+    {
+      "key": "lakehouse/run_stage/20261024T000000Z-a1b2c3d4/g1/inputs/files/2e872263e12593bf0c92feeb8cad3a84609a638af7515696ed3356631249a6d8",
+      "path": "resources/fixture.txt",
+      "sha256": "2e872263e12593bf0c92feeb8cad3a84609a638af7515696ed3356631249a6d8",
+      "size": 18,
+      "version_id": "synthetic-version-1"
+    }
+  ],
+  "job_class": "offline",
+  "max_record_bytes": 33554432,
+  "plain_environment": {
+    "DUCKDB_MEMORY_LIMIT": "1GB",
+    "JOB_THREADS": "1"
+  },
+  "run_id": "20261024T000000Z-a1b2c3d4",
+  "schema_version": 1,
+  "secret_names": [],
+  "task_role_id": "AROASYNTHETIC",
+  "template": "pipeline_dbt",
+  "try_id": "hai_synthetic_attempt_1_0123456789abcdef"
+}
