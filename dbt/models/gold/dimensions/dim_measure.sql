@@ -322,7 +322,7 @@ names_published as (
 ),
 
 -- A measure published under more than one name keeps the name of its latest release (then the latest window, then the first name in order);
--- every published name stays on the fact rows (amendment A48).
+-- every published name stays on the fact rows.
 names as (
     select distinct on (fact, measure_key)
         fact,

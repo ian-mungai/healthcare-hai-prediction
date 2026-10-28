@@ -330,7 +330,7 @@ MUTANTS: dict[str, Mutant] = {
         patch=("AirflowApi.request",),
     ),
     "request_schema_off": Mutant(
-        "the broker does not check a request body against the four-field schema",
+        "the broker does not check a request body against the request schema",
         (("        errors = sorted(broker.requests_schema.iter_errors(payload), key=str)\n", "        errors = []\n"),),
         (Probe("refused_specifications", "the probe task saw 400 for every refused specification and 200 for the control"),),
         module=BROKER_FILE,
@@ -1103,10 +1103,10 @@ def task_fails_before_submission(stack: Stack) -> dict[str, bool]:
         and states.get("dag_run_id") == run_id,
         "one DAG run bound to the run and mode gives its task states": exact.get("dag_run_id") == run_id
         and (exact.get("tasks") or {}).get("gold_validate") == "failed",
-        "another mode selects no DAG run and is unavailable": "0 DAG runs" in str(other_mode.get("unavailable")),
-        "two DAG runs for the run and mode are unavailable, not a guess": "2 DAG runs" in str(ambiguous.get("unavailable")),
+        "another mode selects no DAG run and is unavailable": "0 pipeline DAG runs" in str(other_mode.get("unavailable")),
+        "two DAG runs for the run and mode are unavailable, not a guess": "2 pipeline DAG runs" in str(ambiguous.get("unavailable")),
         "an unreadable API is unavailable, not a snapshot": "cannot be read" in str(unreadable.get("unavailable")) and "tasks" not in unreadable,
-        "a duplicate match beyond page 1 is unavailable, not the visible match": "2 DAG runs" in str(beyond["duplicate"].get("unavailable"))
+        "a duplicate match beyond page 1 is unavailable, not the visible match": "2 pipeline DAG runs" in str(beyond["duplicate"].get("unavailable"))
         and "tasks" not in beyond["duplicate"],
         "a sole match beyond page 1 is selected": beyond["sole"].get("dag_run_id") == run_id
         and (beyond["sole"].get("tasks") or {}).get("gold_validate") == "failed",
@@ -1566,17 +1566,22 @@ def graph_validator(stack: Stack) -> dict[str, bool]:
         "report": str(reports[-1].relative_to(ROOT)) if reports else None,
         "checks": len(results),
     }
-    real = results.get("transform_dag passes the graph validator (Airflow object)", {})
+    real = {name: results.get(f"{name} passes the graph validator (Airflow object)", {}) for name in supervisor_module.PIPELINE_DAGS}
     synthetic = {name: item["ok"] for name, item in results.items() if name.startswith("graph (Airflow objects): ")}
     return {
         "the offline checks with the image ran and passed": process.returncode == 0 and bool(results),
         "Airflow imported every DAG file in the image with no error": results.get("every DAG file imports in the image with no error or cycle", {}).get("ok")
         is True,
-        "the validator passes on the real transform_dag object": real.get("ok") is True and real.get("present") is True and real.get("violations") == [],
-        "the real graph has the 19 tasks of the plan": len(real.get("tasks", [])) == len(STEPS),
+        "the validator passes on every real pipeline DAG object": all(
+            item.get("ok") is True and item.get("present") is True and item.get("violations") == [] for item in real.values()
+        ),
         "the synthetic rejection cases still fail with their rules": len(synthetic) >= 10 and all(synthetic.values()),
     }
 
+
+PROBE_REQUEST = {"request_version": 2, "dag_id": PROBE_DAG, "task_id": "refused", "dag_run_id": "manual__2026-10-15T00:00:00+00:00"}
+PROBE_BASE = {"template": "silver_build", "run_id": "20261015T000000Z-0a0a0a0a", "mode": "fixture", "attempt": 1, **PROBE_REQUEST}
+PROBE_CONTROL = {"template": "catalog_up", "run_id": "20261015T000001Z-0b0b0b0b", "mode": "fixture", "attempt": 1, **PROBE_REQUEST}
 
 PROBE_DAG_TEXT = '''"""Test-only DAG of the E2E: a task posts refused specifications straight to the broker with the session token (never part of dags/)."""
 
@@ -1589,9 +1594,7 @@ from pathlib import Path
 
 from airflow.sdk import DAG, task
 
-REFUSED_RUN = "20261015T000000Z-0a0a0a0a"
-OK_RUN = "20261015T000001Z-0b0b0b0b"
-BASE = {"template": "silver_build", "run_id": REFUSED_RUN, "mode": "fixture", "attempt": 1}
+BASE = __PROBE_BASE__
 BODIES = {
     "extra field: image": {**BASE, "image": "evil@sha256:" + "0" * 64},
     "extra field: command": {**BASE, "command": ["sh", "-c", "id"]},
@@ -1629,7 +1632,7 @@ def post(operation: str, body: object) -> int:
 def refused() -> str:
     """Every body is refused with 400; a valid request (a no-op) is accepted with 200 so that the poster is known to work."""
     results = {name: post("submit", body) for name, body in BODIES.items()}
-    results["control: a valid no-op"] = post("submit", {"template": "catalog_up", "run_id": OK_RUN, "mode": "fixture", "attempt": 1})
+    results["control: a valid no-op"] = post("submit", __PROBE_CONTROL__)
     wrong = {name: status for name, status in results.items() if status != (200 if name.startswith("control:") else 400)}
     if wrong:
         raise RuntimeError(f"unexpected statuses: {wrong}")
@@ -1638,7 +1641,7 @@ def refused() -> str:
 
 with DAG(dag_id="refused_probe", schedule=None, start_date=datetime(2026, 1, 1, tzinfo=UTC), catchup=False):
     refused()
-'''
+'''.replace("__PROBE_BASE__", repr(PROBE_BASE)).replace("__PROBE_CONTROL__", repr(PROBE_CONTROL))
 
 
 @case
@@ -1657,6 +1660,7 @@ def refused_specifications(stack: Stack) -> dict[str, bool]:
         "tasks": tasks,
         "seconds": round(time.monotonic() - started, 1),
     }
+    schema = broker_module.schema_validator("submission_request.schema.json")
     refused_ledger = Ledger(stack.supervisor.paths.ledger)
     refused_lines = refused_ledger.read("20261015T000000Z-0a0a0a0a")
     ok_lines = refused_ledger.read("20261015T000001Z-0b0b0b0b")
@@ -1664,6 +1668,9 @@ def refused_specifications(stack: Stack) -> dict[str, bool]:
     return {
         "the probe task saw 400 for every refused specification and 200 for the control": observation["state"] == "success"
         and tasks.get("refused") == "success",
+        "the base and control bodies satisfy the request schema, so each refusal comes from its own defect": not any(
+            list(schema.iter_errors(body)) for body in (PROBE_BASE, PROBE_CONTROL)
+        ),
         "the refused requests left no ledger line": refused_lines == [],
         "the control request did leave its ledger lines": [line["event"] for line in ok_lines] == ["intent", "finished"],
         "no job container exists": created == [],

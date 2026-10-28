@@ -264,8 +264,11 @@ def loaded_files() -> list[dict[str, str]]:
 
 
 def build() -> list[dict[str, str]]:
-    """Return the seed rows from storage, the receipts and the job plans."""
-    return rows_for(loaded_files(), receipt_quarters(), job_coverage(), receipt_editions(), receipt_databases())
+    """Return the seed rows from storage, the receipts and the job plans of the main checkout (a worktree has no stored data of its own)."""
+    from scripts.lakehouse import run_lock
+
+    root = run_lock.main_checkout(REPO_ROOT) / "data/datasets"
+    return rows_for(loaded_files(), receipt_quarters(root), job_coverage(root), receipt_editions(root), receipt_databases(root))
 
 
 def as_csv(rows: Iterable[Mapping[str, str]]) -> str:

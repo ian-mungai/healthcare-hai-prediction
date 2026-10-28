@@ -1,4 +1,4 @@
-"""Check whether six Alaska county codes in Provider of Services rows appear as an SSA or FIPS code in county crosswalks (WV3-002).
+"""Check whether six Alaska county codes in Provider of Services rows appear as an SSA or FIPS code in county crosswalks.
 
 The primary source is the CMS FY 2020 final rule county-to-CBSA crosswalk. The three NBER SSA-to-FIPS files are supporting evidence (built from CMS files).
 The files are fetched into a new local folder and never committed. The check is offline analysis: nothing is loaded into bronze.

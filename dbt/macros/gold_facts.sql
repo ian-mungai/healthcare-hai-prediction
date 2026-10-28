@@ -74,7 +74,7 @@ having count(*) <> 1
 {% test unknown_member_natural_key(model, column_name, natural_key, expected="'<unknown>'") %}
 {#-
     Fails for an unknown member row (key md5('<unknown>')) whose natural key is not the expected value: the text '<unknown>' for every
-    dimension. Amendment A40 item 1 allows one exception: dim_date, whose natural key is a DATE, passes expected="null" and holds a null
+    dimension. One exception is allowed: dim_date, whose natural key is a DATE, passes expected="null" and holds a null
     calendar_date on its unknown row [824].
 -#}
 select *

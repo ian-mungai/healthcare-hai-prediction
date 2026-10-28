@@ -128,7 +128,7 @@ class Contract:
 
     @property
     def date_pairs(self) -> frozenset[tuple[str, str]]:
-        """(silver model, column) of every DATE source date of a fact: the only inputs of the dimensions' date aggregates (amendment A36 rule 2)."""
+        """(silver model, column) of every DATE source date of a fact: the only inputs of the dimensions' date aggregates."""
         return frozenset(
             (fact.silver_model, column.name) for fact in self.facts for column in fact.columns if column.name in fact.source_dates and column.type == "DATE"
         )
@@ -153,7 +153,7 @@ class Contract:
 
 
 class ContractError(ValueError):
-    """The contract is incomplete: a table definition with no columns is an error, never an empty schema (amendment A39)."""
+    """The contract is incomplete: a table definition with no columns is an error, never an empty schema."""
 
 
 class BridgeSchema(NamedTuple):
@@ -607,14 +607,14 @@ def bridge_problems(bridges: Iterable[Table], rows: list[list[str]]) -> dict[str
 
 
 def silver_row_statements(contract: Contract, relations: Relations) -> list[str]:
-    """Row count of each fact's silver model, whether or not its gold fact exists (amendment A39 item 2)."""
+    """Row count of each fact's silver model, whether or not its gold fact exists."""
     return [build(ROWS, label=literal(fact.name), source=relation(fact.silver_model)) for fact in contract.facts if fact.silver_model in relations]
 
 
 def coverage_problems(
     contract: Contract, silver_rows: dict[str, int], gold_rows: dict[str, int], allowed_empty: dict[str, str]
 ) -> tuple[list[str], dict[str, Any]]:
-    """Every fact needs a silver and a gold row, unless the caller names it with a reason; one non-empty hold fact proves row preservation (A39)."""
+    """Every fact needs a silver and a gold row, unless the caller names it with a reason; one non-empty hold fact proves row preservation."""
     problems: list[str] = []
     detail: dict[str, Any] = {}
     for fact in contract.facts:

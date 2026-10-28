@@ -369,7 +369,7 @@ sources:
         meta:
           classification: Confidential
           confidential_columns: all
-          confidential_columns_reason: Every publisher column is confidential until an ONC publisher dictionary is stored; loader lineage _object_key and _member_sha256 are exempt (A273).
+          confidential_columns_reason: Every publisher column is confidential until an ONC publisher dictionary is stored; loader lineage _object_key and _member_sha256 are exempt.
           proposed_confidential_columns:
             - npi
             - specialty
@@ -389,7 +389,7 @@ sources:
         meta:
           classification: Confidential
           confidential_columns: all
-          confidential_columns_reason: Every publisher column is confidential until an ONC publisher dictionary is stored; loader lineage _object_key and _member_sha256 are exempt (A273).
+          confidential_columns_reason: Every publisher column is confidential until an ONC publisher dictionary is stored; loader lineage _object_key and _member_sha256 are exempt.
           proposed_confidential_columns:
             - facility_id
             - facility_name

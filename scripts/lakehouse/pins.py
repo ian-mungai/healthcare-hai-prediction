@@ -7,7 +7,7 @@ Run from the repository root; the catalog script asks the launcher to run it as 
 
 ``pins.json`` is a flat JSON object of bronze table to the snapshot ID of its ``main`` branch, written once and
 atomically in the run directory. Passing it to the build marker (failure mode 894) is deferred to wave 2 with the
-launcher wiring (amendment A28). The job only reads catalog metadata. Failure modes 890 to 894 are in
+launcher wiring. The job only reads catalog metadata. Failure modes 890 to 894 are in
 plans/wave1_20261011/gate/pins_failure_modes.md.
 """
 

@@ -1,6 +1,6 @@
 -- Fails for each POS hospital snapshot whose county_fips_published, county_fips, county_source or county_fill_reason
--- differs from what the published POS fields and the HUD crosswalk in force require (decision 1, silver section 7, owner
--- decision A, amendments A4, A8 and A19; failure modes 796 and 797). The expected values are derived here from the POS
+-- differs from what the published POS fields and the HUD crosswalk in force require (the owner's county fill rule;
+-- failure modes 796 and 797). The expected values are derived here from the POS
 -- source row (state, ZIP and FIPS parts), the file's period and the HUD quarters, never from the model's own columns: a
 -- published county whose state part is the snapshot's state wins; otherwise one residential county of the ZIP under the
 -- snapshot's state in the quarter containing the period end fills it (Connecticut: 090xx only); otherwise the reason.

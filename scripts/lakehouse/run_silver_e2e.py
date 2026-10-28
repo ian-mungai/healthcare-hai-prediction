@@ -448,7 +448,7 @@ def cases(models: dict[str, list[tuple[str, str]]]) -> list[Case]:
             mutation("ALTER TABLE $table ALTER $column TYPE VARCHAR;", table=layouts, column=first_column(models, layouts, "BIGINT")),
             frozenset({f"{layouts}.types"}),
         ),  # [853]
-        # The committed bands are approved (A52), so an empty table fails its band as well as has_rows.
+        # The committed bands are owner-approved, so an empty table fails its band as well as has_rows.
         Case("empty_table", mutation("DELETE FROM $table;", table=layouts), frozenset({f"{layouts}.has_rows", f"{layouts}.row_count"})),  # [853] [856]
         Case(
             "self_link_unflagged",
@@ -553,7 +553,7 @@ def stop_cases(work: Path) -> list[tuple[str, str, list[Path], Path | None, str]
     names = (f"silver.rows.{table}.min", f"silver.rows.{table}.max")
 
     def variant(kind: str, proposed: dict[str, Any], keep: tuple[str, ...] = ()) -> Path:
-        # The committed bands are approved (A52), so each proposal exists only here: the band leaves values unless kept, and returns as proposed.
+        # The committed bands are owner-approved, so each proposal exists only here: the band leaves values unless kept, and returns as proposed.
         document = json.loads(FIXTURE_BASELINES.read_text())
         for name in set(names) - set(keep):
             document["values"].pop(name)

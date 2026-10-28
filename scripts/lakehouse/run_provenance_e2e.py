@@ -1361,7 +1361,7 @@ def release_copy_warning_refused(env: Env) -> dict[str, bool]:
 
 @case("seal_concurrent", "unpatched")
 def seal_concurrent(env: Env) -> dict[str, bool]:
-    """WV3-015: two seals of one run at the same time (the launcher's seal worker and a direct caller) do not break each other. The second waits for the
+    """Two seals of one run at the same time (the launcher's seal worker and a direct caller) do not break each other. The second waits for the
     first and returns the same sealed copy. The first seal pauses between its copy and its rename: there an unlocked second seal removed the first's
     temporary copy or made the sealed folder read-only, so the first failed with FileNotFoundError or PermissionError."""
     run, fakes = prepare(env, builds=[{"mode": "success", "seconds": 0.3}])

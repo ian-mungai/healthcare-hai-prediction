@@ -56,7 +56,7 @@ ONC_PROPOSALS = {
     "onc_pi_chpl_linkage_csv": ("facility_id", "facility_name", "address", "city_town", "zip_code", "telephone_number", "developer_name"),
 }
 ALL_COLUMNS_REASON = (
-    "Every publisher column is confidential until an ONC publisher dictionary is stored; loader lineage _object_key and _member_sha256 are exempt (A273)."
+    "Every publisher column is confidential until an ONC publisher dictionary is stored; loader lineage _object_key and _member_sha256 are exempt."
 )
 LINEAGE_ENTRY = "  - name: stg_bronze__file_copies\n    description: Staged lineage.\n    meta:\n      classification: Public\n"
 LINEAGE_SELECT = "select _object_key as object_key, count(distinct _member_sha256) as checksum_count, count(*) as row_count"

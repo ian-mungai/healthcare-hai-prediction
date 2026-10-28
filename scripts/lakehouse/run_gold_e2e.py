@@ -59,7 +59,7 @@ REAL_EMPTY_HOLD_REASON = "A48: nothing is held for this source in the real silve
 
 
 def real_empty_allowed(contract: gold_checks.Contract) -> dict[str, str]:
-    """The hold facts, each with the reason it may be empty in the real stage (amendment A48)."""
+    """The hold facts, each with the reason it may be empty in the real stage."""
     return {fact.name: REAL_EMPTY_HOLD_REASON for fact in contract.facts if fact.is_hold}
 
 
@@ -248,7 +248,7 @@ def run_checks(
     statuses: dict[str, str] | None,
     empty_allowed: dict[str, str],
 ) -> Results:
-    """Every contract-driven check on one build file and its dbt target folder; ``empty_allowed`` names facts that may hold no rows (A39)."""
+    """Every contract-driven check on one build file and its dbt target folder; ``empty_allowed`` names facts that may hold no rows."""
     results = Results({}, {})
     for name in CHECK_NAMES:
         results.add(name, [])
@@ -525,7 +525,7 @@ def test_nodes(case: package_fixture.Case, tests: list[str], require_release_tes
 
 
 def contract_error_case(path: Path, fragment: str) -> dict[str, Any]:
-    """A contract with an incomplete table definition must be refused when it is read, never run as an empty schema (A39)."""
+    """A contract with an incomplete table definition must be refused when it is read, never run as an empty schema."""
     try:
         gold_checks.load_contract(path)
     except gold_checks.ContractError as error:
