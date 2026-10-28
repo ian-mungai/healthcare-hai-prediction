@@ -763,7 +763,7 @@ def render_written(evidence: Evidence, sources: dict[str, bytes], prefix: str) -
     path = workspace / PREPARATION_OUTPUT
     written = result.returncode == 0 and not result.stderr and path.is_file()
     exact = written and json.loads(path.read_text(encoding="utf-8")) == prepared_document() and stat.S_IMODE(path.stat().st_mode) == 0o600
-    step_check, checked = evidence.run(f"{prefix}_check_prepared", [*command, "--check"], workspace)
+    _, checked = evidence.run(f"{prefix}_check_prepared", [*command, "--check"], workspace)
     return step, exact and checked.returncode == 0 and not list(workspace.rglob(".config_*"))
 
 
