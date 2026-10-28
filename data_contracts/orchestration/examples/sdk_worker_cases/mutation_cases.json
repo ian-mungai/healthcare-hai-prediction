@@ -1,0 +1,306 @@
+{
+  "scope": "intended_mutations_only",
+  "mutations": [
+    {
+      "design_defect": 1,
+      "name": "leader_only_kill",
+      "change": "Stop only the leader and leave its descendant alive.",
+      "cases": [
+        "61a",
+        "61c"
+      ],
+      "expected_failure": "descendant_esrch",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 2,
+      "name": "missing_final_reap",
+      "change": "Confirm stop without reaping the zombie leader.",
+      "cases": [
+        "61a"
+      ],
+      "expected_failure": "no_zombies",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 3,
+      "name": "sdk_thread_close",
+      "change": "Use a thread and client.close for a blocking SDK call.",
+      "cases": [
+        "61a"
+      ],
+      "expected_failure": "forbidden_imports_and_thread_baseline",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 4,
+      "name": "deadline_after_first_byte",
+      "change": "Disarm the deadline after the first response byte.",
+      "cases": [
+        "61a"
+      ],
+      "expected_failure": "body_drip_absolute_deadline",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 5,
+      "name": "reuse_timed_out_worker",
+      "change": "Reuse a worker after a deadline.",
+      "cases": [
+        "61b"
+      ],
+      "expected_failure": "worker_identity_changes",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 6,
+      "name": "persist_session_value",
+      "change": "Write a synthetic session marker outside an in-memory frame.",
+      "cases": [
+        "85"
+      ],
+      "expected_failure": "no_marker_on_persisted_surfaces",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 7,
+      "name": "shutdown_waits_call",
+      "change": "Wait for a blocked SDK call during shutdown.",
+      "cases": [
+        "61c"
+      ],
+      "expected_failure": "sdk_cleanup_within_ten_seconds",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 8,
+      "name": "stop_only_deadline_shutdown",
+      "change": "Skip group stop when the worker ends by EOF or exits first.",
+      "cases": [
+        "61c",
+        "61d"
+      ],
+      "expected_failure": "descendant_esrch_after_leader_exit",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 9,
+      "name": "close_on_leader_exit",
+      "change": "Close the ledger on leader exit or reap, or signal only its PID.",
+      "cases": [
+        "61c",
+        "61d"
+      ],
+      "expected_failure": "ledger_stays_open_until_group_esrch",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 10,
+      "name": "remove_eof_monitor",
+      "change": "Remove EOF monitoring and retain only the deadline backstop.",
+      "cases": [
+        "61d"
+      ],
+      "expected_failure": "descendant_esrch_within_three_seconds",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 11,
+      "name": "seal_before_sdk_stop",
+      "change": "Drain local seals before SDK cleanup.",
+      "cases": [
+        "61f"
+      ],
+      "expected_failure": "sdk_gone_while_seal_inflight",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 12,
+      "name": "inheritable_control_pipe",
+      "change": "Let another worker inherit a control-pipe write end.",
+      "cases": [
+        "61d"
+      ],
+      "expected_failure": "controller_eof_reaches_every_worker",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 13,
+      "name": "signal_recovered_entry",
+      "change": "Signal a recovered token-bearing group or marker leftover.",
+      "cases": [
+        "61d"
+      ],
+      "expected_failure": "zero_signals_heartbeat_no_stopped_state",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 14,
+      "name": "unconfirmed_recovery_close",
+      "change": "Close on the first read, non-ESRCH evidence or invalid owner input.",
+      "cases": [
+        "61d",
+        "61g"
+      ],
+      "expected_failure": "entry_remains_open_without_current_esrch_or_confirmation",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 15,
+      "name": "skip_witness_rescan_continue",
+      "change": "Skip the post-STOP rescan or omit CONT when it fails.",
+      "cases": [
+        "61d"
+      ],
+      "expected_failure": "rescan_no_witness_continues_without_kill",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 16,
+      "name": "missing_evidence_means_gone",
+      "change": "Treat omitted, denied or timed-out environment evidence as gone.",
+      "cases": [
+        "61d"
+      ],
+      "expected_failure": "unproven_evidence_keeps_entry_open",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 17,
+      "name": "missing_pause_or_alert",
+      "change": "Dispatch with an open entry or omit an alert member.",
+      "cases": [
+        "61d"
+      ],
+      "expected_failure": "zero_run_task_and_one_complete_alert",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 18,
+      "name": "leak_witness_or_environment",
+      "change": "Persist raw process environment or witness outside the private spawn field.",
+      "cases": [
+        "61d",
+        "61g"
+      ],
+      "expected_failure": "redacted_surfaces_private_spawn_field_exempt",
+      "status": "pending_runtime",
+      "private_spawn_witness_exempt": true,
+      "saved_ledger_witness": "redacted"
+    },
+    {
+      "design_defect": 19,
+      "name": "unsafe_owner_stop",
+      "change": "Owner stop pauses first, skips confirmation, closes early or runs from the launcher.",
+      "cases": [
+        "61g"
+      ],
+      "expected_failure": "one_confirmed_sigkill_and_esrch_only_closure",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 20,
+      "name": "signal_after_reap",
+      "change": "Signal after reap or fail to set read_only at reap.",
+      "cases": [
+        "61d",
+        "61e"
+      ],
+      "expected_failure": "refused_reaped_and_zero_foreign_signals",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 21,
+      "name": "reap_before_last_signal",
+      "change": "Reap early, outside stop_owned or its lock, or use probe state instead of member state.",
+      "cases": [
+        "61c",
+        "61d",
+        "61e"
+      ],
+      "expected_failure": "leader_held_until_last_signal",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 22,
+      "name": "missing_current_esrch_closure",
+      "change": "Omit later absent closure or use a stale probe or a signal.",
+      "cases": [
+        "61d"
+      ],
+      "expected_failure": "one_closed_absent_from_current_probe",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 23,
+      "name": "reap_only_never_reaps",
+      "change": "Never reap the leader after entering reap_only.",
+      "cases": [
+        "61d"
+      ],
+      "expected_failure": "failed_witness_eventual_reap",
+      "status": "pending_runtime"
+    },
+    {
+      "design_defect": 24,
+      "name": "inherit_sigchld_ignore",
+      "change": "Spawn while SIGCHLD retains inherited SIG_IGN.",
+      "cases": [
+        "61d"
+      ],
+      "expected_failure": "sigchld_default_before_first_spawn",
+      "status": "pending_runtime"
+    }
+  ],
+  "additional_mutations": [
+    {
+      "name": "sdk_retry_setting",
+      "case": "83",
+      "change": "Replace total_max_attempts=1 with max_attempts=1.",
+      "expected_failure": "exactly_one_http_request",
+      "status": "pending_runtime"
+    },
+    {
+      "name": "pool_network_reuse",
+      "case": "86",
+      "change": "Reuse a worker after a network error.",
+      "expected_failure": "fresh_worker_identity",
+      "status": "pending_runtime"
+    },
+    {
+      "name": "pool_call_limit",
+      "case": "86",
+      "change": "Reuse a worker for call 501.",
+      "expected_failure": "new_worker_after_five_hundred",
+      "status": "pending_runtime"
+    },
+    {
+      "name": "pool_age_limit",
+      "case": "86",
+      "change": "Reuse a worker after ten monotonic minutes.",
+      "expected_failure": "age_retirement_without_wall_clock_reset",
+      "status": "pending_runtime"
+    },
+    {
+      "name": "parameter_latest",
+      "case": "93",
+      "change": "Read latest instead of the requested version.",
+      "expected_failure": "exact_name_and_version_match",
+      "status": "pending_runtime"
+    },
+    {
+      "name": "parameter_interior_gap",
+      "case": "93",
+      "change": "Scan only dispatch and collection values.",
+      "expected_failure": "interior_unreadable_version_withholds_logs_and_outputs",
+      "status": "pending_runtime"
+    },
+    {
+      "name": "parameter_reply_persisted",
+      "case": "93",
+      "change": "Reuse the secret-bearing worker or persist its reply.",
+      "expected_failure": "one_shot_and_marker_absent_from_records",
+      "status": "pending_runtime"
+    }
+  ]
+}

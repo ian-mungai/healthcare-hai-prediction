@@ -1287,14 +1287,14 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 1961,
+      "line": 1966,
       "code_sha256": "7262a5d12d7ddd7c8b9f95d4ab8d9e815af69e92bbb232841afa48127d0a5f36",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "aea042067848ac5c6cf846ac0d9b521328197249a81639938d88cb5f95b4bb33",
+      "file_sha256": "628463e83a8eeaf389554c8aa72378bacac8ae35945e7b0db6896b4901f4df89",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/ci_groups.py": "sha256:f879b6530d4ac46752d238e79710b98ae732f66dbd331f8fec23823ddfe3fcab",
+        "scripts/quality/ci_groups.py": "sha256:cc390c57fd1c1aa1d4b57fb640569cf5a5304bb19831fae751db265a17659ca5",
         "scripts/quality/pre_push.py": "sha256:1884669904efd7c66fecae9525f5173ad05c116bdddd0987634c6c87e769c8d3",
         "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684",
         "scripts/quality/scratch_worktree.py": "sha256:60e9d686976414f37753f2476f3da430162650f06bf70e4d6ab560f992e32934"
@@ -1303,14 +1303,14 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 2013,
+      "line": 2018,
       "code_sha256": "ddfb4bd744b919616f97d784e28c5a981ddc3d18ee5b387f2f2b2bce6b160e35",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "aea042067848ac5c6cf846ac0d9b521328197249a81639938d88cb5f95b4bb33",
+      "file_sha256": "628463e83a8eeaf389554c8aa72378bacac8ae35945e7b0db6896b4901f4df89",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/ci_groups.py": "sha256:f879b6530d4ac46752d238e79710b98ae732f66dbd331f8fec23823ddfe3fcab",
+        "scripts/quality/ci_groups.py": "sha256:cc390c57fd1c1aa1d4b57fb640569cf5a5304bb19831fae751db265a17659ca5",
         "scripts/quality/pre_push.py": "sha256:1884669904efd7c66fecae9525f5173ad05c116bdddd0987634c6c87e769c8d3",
         "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684",
         "scripts/quality/scratch_worktree.py": "sha256:60e9d686976414f37753f2476f3da430162650f06bf70e4d6ab560f992e32934"
@@ -1335,6 +1335,39 @@
       "lines": [
         325
       ]
+    },
+    {
+      "path": "orchestration/catalog_transport_child.py",
+      "line": 152,
+      "code_sha256": "47861b0f735f8e953ee990ada1d8240c9ced44fe88468cfd6c59a73eb9312480",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "5f5f43336646f9a6d53c358f672250408a613ee72a3c3e6358dec71b4829748c",
+      "dependencies": {},
+      "reason": "the catalog tunnel child starts only the AWS CLI: it refuses any executable that is not absolute or does not resolve to the aws on PATH, then runs fixed ssm start-session AWS-StartPortForwardingSession arguments; reviewed by the lead on Oct 24 2026; never Docker"
+    },
+    {
+      "path": "scripts/process_group.py",
+      "line": 202,
+      "code_sha256": "47861b0f735f8e953ee990ada1d8240c9ced44fe88468cfd6c59a73eb9312480",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "4b38004e3db28e03e20602694d73be2085e53ecfb9f428839af330721b711609",
+      "dependencies": {
+        "orchestration/worker_stderr.py": "sha256:b789fbb6d329adf6e571344079066028bb80b9a78be9e9f0700dbdac855898d1",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "reason": "spawn_owned refuses any program that does not resolve to the running Python or the project .venv Python, so it starts only Python with the caller's script (WorkerPool and CatalogTransport); reviewed by the lead on Oct 24 2026; never Docker"
+    },
+    {
+      "path": "services/hai/bootstrap/supervisor.py",
+      "line": 190,
+      "code_sha256": "e04455b966ee42c025febd778484dd49f717f35b4a6c634d5fe6ca84d406d795",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "3bb6e7e0b2e654579d45d57f37973f0233d1efaabb674d0cab26439116e1bae9",
+      "dependencies": {},
+      "reason": "the in-image supervisor starts sys.executable -I -B with its own sdk_worker.py (or the worker its caller passes in the source smoke), never another program; never Docker"
     }
   ]
 }

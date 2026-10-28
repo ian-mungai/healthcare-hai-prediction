@@ -1,0 +1,1058 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthcare-hai-prediction.invalid/orchestration/sdk_worker.schema.json",
+  "title": "SDK worker frames",
+  "description": "Closed worker requests and normalized replies. Runtime checks also enforce byte framing and request correlation.",
+  "$defs": {
+    "error_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": false},
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"enum": ["service", "throttle", "network", "bad_request", "deadline", "worker_died", "protocol", "shutdown"]},
+            "code": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$(?![\\s\\S])"},
+            "http_status": {"type": ["integer", "null"], "minimum": 100, "maximum": 599},
+            "request_id": {"type": ["string", "null"], "maxLength": 256},
+            "effect_unknown": {"type": "boolean"}
+          },
+          "required": ["kind", "code", "http_status", "request_id", "effect_unknown"]
+        }
+      },
+      "required": ["id", "ok", "error"]
+    },
+    "run_task_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "run_task"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cluster": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "taskDefinition": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "count": {"const": 1},
+            "capacityProviderStrategy": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {"capacityProvider": {"enum": ["FARGATE", "FARGATE_SPOT"]}, "weight": {"const": 1}},
+                "required": ["capacityProvider", "weight"]
+              },
+              "maxItems": 1
+            },
+            "networkConfiguration": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "awsvpcConfiguration": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "subnets": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 4096}, "maxItems": 1000},
+                    "securityGroups": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 4096}, "maxItems": 1000},
+                    "assignPublicIp": {"const": "DISABLED"}
+                  },
+                  "required": ["subnets", "securityGroups", "assignPublicIp"]
+                }
+              },
+              "required": ["awsvpcConfiguration"]
+            },
+            "overrides": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cpu": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "memory": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "ephemeralStorage": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {"sizeInGiB": {"type": "integer", "minimum": 21, "maximum": 200}},
+                  "required": ["sizeInGiB"]
+                },
+                "containerOverrides": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {"type": "string", "minLength": 1, "maxLength": 4096},
+                      "environment": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "name": {"type": "string", "minLength": 1, "maxLength": 4096},
+                            "value": {"type": "string", "minLength": 1, "maxLength": 4096}
+                          },
+                          "required": ["name", "value"]
+                        },
+                        "maxItems": 7
+                      }
+                    },
+                    "required": ["name", "environment"]
+                  },
+                  "maxItems": 1
+                }
+              },
+              "required": ["cpu", "memory", "ephemeralStorage", "containerOverrides"]
+            },
+            "startedBy": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+            "clientToken": {"type": "string", "pattern": "^[a-f0-9]{48}$(?![\\s\\S])"},
+            "propagateTags": {"const": "TASK_DEFINITION"},
+            "enableECSManagedTags": {"const": true},
+            "enableExecuteCommand": {"const": false}
+          },
+          "required": [
+            "cluster",
+            "taskDefinition",
+            "count",
+            "capacityProviderStrategy",
+            "networkConfiguration",
+            "overrides",
+            "startedBy",
+            "clientToken",
+            "propagateTags",
+            "enableECSManagedTags",
+            "enableExecuteCommand"
+          ]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 25}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "run_task_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "task_arns": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 4096}, "maxItems": 1000},
+            "failures": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "arn": {"type": "string", "minLength": 1, "maxLength": 4096},
+                  "reason": {"type": "string", "minLength": 1, "maxLength": 4096},
+                  "detail": {"type": "string", "minLength": 1, "maxLength": 4096}
+                },
+                "required": ["arn", "reason"]
+              },
+              "maxItems": 1000
+            }
+          },
+          "required": ["task_arns", "failures"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "stop_task_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "stop_task"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cluster": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "task": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["cluster", "task", "reason"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 25}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "stop_task_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"task_arn": {"type": "string", "minLength": 1, "maxLength": 4096}, "last_status": {"type": "string", "minLength": 1, "maxLength": 4096}},
+          "required": ["task_arn", "last_status"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "describe_tasks_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "describe_tasks"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cluster": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "tasks": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 4096}, "maxItems": 100},
+            "include": {"const": ["TAGS"]}
+          },
+          "required": ["cluster", "tasks", "include"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 12}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "describe_tasks_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tasks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "task_arn": {"type": "string", "minLength": 1, "maxLength": 4096},
+                  "started_by": {"type": "string", "minLength": 1, "maxLength": 4096},
+                  "group": {"type": "string", "minLength": 1, "maxLength": 4096},
+                  "last_status": {"type": "string", "minLength": 1, "maxLength": 4096},
+                  "stop_code": {"type": "string", "minLength": 1, "maxLength": 4096},
+                  "stopped_reason": {"type": "string", "minLength": 1, "maxLength": 4096},
+                  "containers": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {"type": "string", "minLength": 1, "maxLength": 4096},
+                        "exit_code": {"type": "integer", "minimum": 0, "maximum": 255},
+                        "reason": {"type": "string", "minLength": 1, "maxLength": 4096}
+                      },
+                      "required": ["name"]
+                    },
+                    "maxItems": 1000
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {"key": {"type": "string", "minLength": 1, "maxLength": 4096}, "value": {"type": "string", "minLength": 1, "maxLength": 4096}},
+                      "required": ["key", "value"]
+                    },
+                    "maxItems": 1000
+                  }
+                },
+                "required": ["task_arn", "started_by", "group", "last_status", "containers", "tags"]
+              },
+              "maxItems": 100
+            },
+            "failures": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "arn": {"type": "string", "minLength": 1, "maxLength": 4096},
+                  "reason": {"type": "string", "minLength": 1, "maxLength": 4096},
+                  "detail": {"type": "string", "minLength": 1, "maxLength": 4096}
+                },
+                "required": ["arn", "reason"]
+              },
+              "maxItems": 1000
+            }
+          },
+          "required": ["tasks", "failures"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "list_tasks_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "list_tasks"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cluster": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "startedBy": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+            "desiredStatus": {"enum": ["RUNNING", "STOPPED"]},
+            "family": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "nextToken": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "maxResults": {"type": "integer", "minimum": 1, "maximum": 100}
+          },
+          "required": ["cluster"],
+          "allOf": [{"if": {"required": ["startedBy"]}, "then": {"not": {"anyOf": [{"required": ["desiredStatus"]}, {"required": ["family"]}]}}}]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 12}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "list_tasks_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "task_arns": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 4096}, "maxItems": 100},
+            "next_token": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["task_arns"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "assume_role_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "assume_role"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "role_arn": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "session_name": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "policy_json": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "duration_seconds": {"type": "integer", "minimum": 900, "maximum": 43200}
+          },
+          "required": ["role_arn", "session_name", "policy_json", "duration_seconds"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 25}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "assume_role_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "credentials": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "access_key_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "secret_access_key": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "session_token": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "expiration_utc": {"type": "string", "minLength": 1, "maxLength": 4096}
+              },
+              "required": ["access_key_id", "secret_access_key", "session_token", "expiration_utc"]
+            },
+            "date_utc": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["credentials", "date_utc"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "caller_identity_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "caller_identity"},
+        "params": {"type": "object", "additionalProperties": false, "properties": {}, "required": []},
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 25}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "caller_identity_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "account": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "arn": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "user_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "date_utc": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["account", "arn", "user_id", "date_utc"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "s3_head_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "s3_head"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bucket": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "key": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "version_id": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["bucket", "key"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "s3_head_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "size": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"}
+          },
+          "required": ["version_id", "size", "sha256"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "s3_list_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "s3_list"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bucket": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "prefix": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "continuation_token": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["bucket", "prefix"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "s3_list_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "objects": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {"key": {"type": "string", "minLength": 1, "maxLength": 4096}, "size": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807}},
+                "required": ["key", "size"]
+              },
+              "maxItems": 1000
+            },
+            "next_token": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["objects"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "s3_put_small_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "s3_put_small"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bucket": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "key": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "body_utf8": {"type": "string", "minLength": 0, "maxLength": 16777216},
+            "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"},
+            "if_none_match": {"const": "*"},
+            "session": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "access_key_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "secret_access_key": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "session_token": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "expiration_utc": {"type": "string", "minLength": 1, "maxLength": 4096}
+              },
+              "required": ["access_key_id", "secret_access_key", "session_token", "expiration_utc"]
+            }
+          },
+          "required": ["bucket", "key", "body_utf8", "sha256", "if_none_match"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "s3_put_small_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "size": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"}
+          },
+          "required": ["version_id", "size", "sha256"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "s3_get_small_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "s3_get_small"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bucket": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "key": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "version_id": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["bucket", "key"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "s3_get_small_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "body_utf8": {"type": "string", "minLength": 0, "maxLength": 16777216},
+            "version_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "size": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"}
+          },
+          "required": ["body_utf8", "version_id", "size", "sha256"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "s3_download_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "s3_download"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bucket": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "key": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "version_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "temp_path": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "expected_size": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "expected_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"}
+          },
+          "required": ["bucket", "key", "version_id", "temp_path", "expected_size", "expected_sha256"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 40}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "s3_download_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "temp_path": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "version_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "size": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"}
+          },
+          "required": ["temp_path", "version_id", "size", "sha256"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "s3_upload_part_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "s3_upload_part"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bucket": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "key": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "upload_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "part_number": {"type": "integer", "minimum": 1, "maximum": 10000},
+            "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "offset": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            "length": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+            "file_identity": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "size": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+                "mtime_ns": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+                "inode": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807}
+              },
+              "required": ["size", "mtime_ns", "inode"]
+            },
+            "session": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "access_key_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "secret_access_key": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "session_token": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "expiration_utc": {"type": "string", "minLength": 1, "maxLength": 4096}
+              },
+              "required": ["access_key_id", "secret_access_key", "session_token", "expiration_utc"]
+            }
+          },
+          "required": ["bucket", "key", "upload_id", "part_number", "path", "offset", "length", "file_identity"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 40}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "s3_upload_part_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "part_number": {"type": "integer", "minimum": 1, "maximum": 10000},
+            "etag": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "checksum_sha256": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["part_number", "etag", "checksum_sha256"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "s3_mpu_create_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "s3_mpu_create"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bucket": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "key": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"},
+            "session": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "access_key_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "secret_access_key": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "session_token": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "expiration_utc": {"type": "string", "minLength": 1, "maxLength": 4096}
+              },
+              "required": ["access_key_id", "secret_access_key", "session_token", "expiration_utc"]
+            }
+          },
+          "required": ["bucket", "key", "sha256"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "s3_mpu_create_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"upload_id": {"type": "string", "minLength": 1, "maxLength": 4096}},
+          "required": ["upload_id"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "s3_mpu_complete_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "s3_mpu_complete"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bucket": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "key": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "upload_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "parts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "part_number": {"type": "integer", "minimum": 1, "maximum": 10000},
+                  "etag": {"type": "string", "minLength": 1, "maxLength": 4096},
+                  "checksum_sha256": {"type": "string", "minLength": 1, "maxLength": 4096}
+                },
+                "required": ["part_number", "etag", "checksum_sha256"]
+              },
+              "maxItems": 10000
+            },
+            "if_none_match": {"const": "*"},
+            "session": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "access_key_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "secret_access_key": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "session_token": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "expiration_utc": {"type": "string", "minLength": 1, "maxLength": 4096}
+              },
+              "required": ["access_key_id", "secret_access_key", "session_token", "expiration_utc"]
+            }
+          },
+          "required": ["bucket", "key", "upload_id", "parts", "if_none_match"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "s3_mpu_complete_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"version_id": {"type": "string", "minLength": 1, "maxLength": 4096}, "etag": {"type": "string", "minLength": 1, "maxLength": 4096}},
+          "required": ["version_id", "etag"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "s3_mpu_abort_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "s3_mpu_abort"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bucket": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "key": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "upload_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "session": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "access_key_id": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "secret_access_key": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "session_token": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "expiration_utc": {"type": "string", "minLength": 1, "maxLength": 4096}
+              },
+              "required": ["access_key_id", "secret_access_key", "session_token", "expiration_utc"]
+            }
+          },
+          "required": ["bucket", "key", "upload_id"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 10}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "s3_mpu_abort_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {"type": "object", "additionalProperties": false, "properties": {"aborted": {"type": "boolean"}}, "required": ["aborted"]}
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "s3_mpu_list_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "s3_mpu_list"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bucket": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "prefix": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "key_marker": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "upload_id_marker": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["bucket", "prefix"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "s3_mpu_list_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "uploads": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {"key": {"type": "string", "minLength": 1, "maxLength": 4096}, "upload_id": {"type": "string", "minLength": 1, "maxLength": 4096}},
+                "required": ["key", "upload_id"]
+              },
+              "maxItems": 1000
+            },
+            "next_key_marker": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "next_upload_id_marker": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["uploads"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "s3_delete_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "s3_delete"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"bucket": {"type": "string", "minLength": 1, "maxLength": 4096}, "key": {"type": "string", "minLength": 1, "maxLength": 4096}},
+          "required": ["bucket", "key"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "s3_delete_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"delete_marker": {"type": "boolean"}, "version_id": {"type": "string", "minLength": 1, "maxLength": 4096}},
+          "required": ["delete_marker", "version_id"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "logs_get_events_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "logs_get_events"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "log_group": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "log_stream": {"type": "string", "minLength": 1, "maxLength": 4096},
+            "next_token": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["log_group", "log_stream"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "logs_get_events_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "events": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "timestamp_ms": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+                  "message": {"type": "string", "minLength": 1, "maxLength": 65536}
+                },
+                "required": ["timestamp_ms", "message"]
+              },
+              "maxItems": 1000
+            },
+            "next_token": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["events"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    },
+    "get_parameter_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "op": {"const": "get_parameter"},
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {"type": "string", "pattern": "^/[A-Za-z0-9_./-]+:[1-9][0-9]*$(?![\\s\\S])", "maxLength": 2048},
+            "with_decryption": {"const": true}
+          },
+          "required": ["name", "with_decryption"]
+        },
+        "budget_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
+      },
+      "required": ["id", "op", "params", "budget_s"]
+    },
+    "get_parameter_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+        "ok": {"const": true},
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {"type": "string", "pattern": "^/[A-Za-z0-9_./-]+$(?![\\s\\S])"},
+            "version": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+            "value": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "required": ["name", "version", "value"]
+        }
+      },
+      "required": ["id", "ok", "result"]
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/run_task_request"},
+    {"$ref": "#/$defs/stop_task_request"},
+    {"$ref": "#/$defs/describe_tasks_request"},
+    {"$ref": "#/$defs/list_tasks_request"},
+    {"$ref": "#/$defs/assume_role_request"},
+    {"$ref": "#/$defs/caller_identity_request"},
+    {"$ref": "#/$defs/s3_head_request"},
+    {"$ref": "#/$defs/s3_list_request"},
+    {"$ref": "#/$defs/s3_put_small_request"},
+    {"$ref": "#/$defs/s3_get_small_request"},
+    {"$ref": "#/$defs/s3_download_request"},
+    {"$ref": "#/$defs/s3_upload_part_request"},
+    {"$ref": "#/$defs/s3_mpu_create_request"},
+    {"$ref": "#/$defs/s3_mpu_complete_request"},
+    {"$ref": "#/$defs/s3_mpu_abort_request"},
+    {"$ref": "#/$defs/s3_mpu_list_request"},
+    {"$ref": "#/$defs/s3_delete_request"},
+    {"$ref": "#/$defs/logs_get_events_request"},
+    {"$ref": "#/$defs/get_parameter_request"},
+    {"$ref": "#/$defs/error_reply"},
+    {
+      "anyOf": [
+        {"$ref": "#/$defs/run_task_reply"},
+        {"$ref": "#/$defs/stop_task_reply"},
+        {"$ref": "#/$defs/describe_tasks_reply"},
+        {"$ref": "#/$defs/list_tasks_reply"},
+        {"$ref": "#/$defs/assume_role_reply"},
+        {"$ref": "#/$defs/caller_identity_reply"},
+        {"$ref": "#/$defs/s3_head_reply"},
+        {"$ref": "#/$defs/s3_list_reply"},
+        {"$ref": "#/$defs/s3_put_small_reply"},
+        {"$ref": "#/$defs/s3_get_small_reply"},
+        {"$ref": "#/$defs/s3_download_reply"},
+        {"$ref": "#/$defs/s3_upload_part_reply"},
+        {"$ref": "#/$defs/s3_mpu_create_reply"},
+        {"$ref": "#/$defs/s3_mpu_complete_reply"},
+        {"$ref": "#/$defs/s3_mpu_abort_reply"},
+        {"$ref": "#/$defs/s3_mpu_list_reply"},
+        {"$ref": "#/$defs/s3_delete_reply"},
+        {"$ref": "#/$defs/logs_get_events_reply"},
+        {"$ref": "#/$defs/get_parameter_reply"}
+      ]
+    }
+  ]
+}

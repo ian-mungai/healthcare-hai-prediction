@@ -57,7 +57,7 @@ def order(config: dict[str, Any]) -> list[str]:
 
 
 def load() -> dict[str, Any]:
-    config = json.loads(CONFIG.read_text(encoding="utf-8"))
+    config: dict[str, Any] = json.loads(CONFIG.read_text(encoding="utf-8"))
     unknown = (set(config.get("always", [])) | set(config.get("always_except_commits", [])) | set(config["layers"])) - set(order(config))
     if unknown:
         raise ValueError(f"unknown groups in {CONFIG}: {', '.join(sorted(unknown))}")
