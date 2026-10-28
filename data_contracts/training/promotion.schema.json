@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bootstrap": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence_level": {
+          "const": 0.95
+        },
+        "draws": {
+          "const": 5000
+        },
+        "generator": {
+          "const": "numpy.random.default_rng"
+        },
+        "interval_method": {
+          "const": "percentile"
+        },
+        "paired": {
+          "const": true
+        },
+        "unit": {
+          "const": "hospital"
+        }
+      },
+      "required": [
+        "draws",
+        "confidence_level",
+        "interval_method",
+        "unit",
+        "paired",
+        "generator"
+      ],
+      "type": "object"
+    },
+    "group_boundary_inclusive": {
+      "const": true
+    },
+    "groups": {
+      "additionalProperties": false,
+      "properties": {
+        "bed_size_band": {
+          "additionalProperties": false,
+          "properties": {
+            "bands": {
+              "const": [
+                "under_100",
+                "100_to_299",
+                "300_and_over"
+              ]
+            },
+            "column": {
+              "const": "bed_count"
+            },
+            "cut_points": {
+              "const": [
+                100,
+                300
+              ]
+            }
+          },
+          "required": [
+            "column",
+            "cut_points",
+            "bands"
+          ],
+          "type": "object"
+        },
+        "census_region": {
+          "additionalProperties": false,
+          "properties": {
+            "column": {
+              "const": "state_code"
+            },
+            "lookup": {
+              "const": "census_regions.json"
+            }
+          },
+          "required": [
+            "column",
+            "lookup"
+          ],
+          "type": "object"
+        },
+        "hospital_subtype": {
+          "additionalProperties": false,
+          "properties": {
+            "column": {
+              "const": "provider_subtype_code"
+            }
+          },
+          "required": [
+            "column"
+          ],
+          "type": "object"
+        },
+        "ownership_type": {
+          "additionalProperties": false,
+          "properties": {
+            "column": {
+              "const": "control_type_code"
+            }
+          },
+          "required": [
+            "column"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "ownership_type",
+        "hospital_subtype",
+        "census_region",
+        "bed_size_band"
+      ],
+      "type": "object"
+    },
+    "improvement_boundary_inclusive": {
+      "const": true
+    },
+    "interval_must_exclude_zero": {
+      "const": true
+    },
+    "maximum_group_rmse_increase": {
+      "const": 0.05
+    },
+    "minimum_group_size": {
+      "const": 100
+    },
+    "minimum_rmse_improvement": {
+      "const": 0.02
+    },
+    "null_group_values": {
+      "const": "excluded_and_counted"
+    },
+    "population": {
+      "const": "primary"
+    },
+    "schema": {
+      "const": 1
+    }
+  },
+  "required": [
+    "schema",
+    "minimum_rmse_improvement",
+    "maximum_group_rmse_increase",
+    "minimum_group_size",
+    "interval_must_exclude_zero",
+    "improvement_boundary_inclusive",
+    "group_boundary_inclusive",
+    "population",
+    "null_group_values",
+    "bootstrap",
+    "groups"
+  ],
+  "title": "Promotion",
+  "type": "object"
+}

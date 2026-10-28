@@ -1,0 +1,79 @@
+{
+  "directory_template": "bundles/bundle_{hai_type}",
+  "hai_types": [
+    "HAI_1",
+    "HAI_2",
+    "HAI_3",
+    "HAI_4",
+    "HAI_5",
+    "HAI_6"
+  ],
+  "integrity": {
+    "algorithm": "sha256",
+    "done_record": "fit.done.json",
+    "scope": "every_bundle_file"
+  },
+  "model_directory": "model",
+  "optional_files": [
+    "shap.json",
+    "diagnostics.json"
+  ],
+  "provenance_fields": [
+    "run_id",
+    "timings",
+    "try",
+    "git_commit",
+    "git_dirty",
+    "code_digest",
+    "resolved_versions"
+  ],
+  "reproducibility": {
+    "encoding": "canonical_json",
+    "exclude": [
+      "run_id",
+      "timings",
+      "try",
+      "model_uuid",
+      "utc_time_created"
+    ],
+    "file": "result.json",
+    "float_format": "repr",
+    "prediction_sort_key": "spine_key",
+    "prediction_value_type": "float64",
+    "separators": [
+      ",",
+      ":"
+    ],
+    "sort_keys": true
+  },
+  "required_files": [
+    "result.json",
+    "provenance.json",
+    "holdout_predictions.parquet",
+    "feature_list.json"
+  ],
+  "result_fields": [
+    "statuses",
+    "selection",
+    "fitted_parameters",
+    "holdout_metrics",
+    "test_statistics",
+    "p_values",
+    "counts",
+    "seeds",
+    "input_hashes",
+    "holdout_predictions_content_sha256"
+  ],
+  "schema": 1,
+  "slot_statuses": [
+    "fitted",
+    "not_converged",
+    "not_estimable",
+    "not_run"
+  ],
+  "status_reason_required": [
+    "not_converged",
+    "not_estimable",
+    "not_run"
+  ]
+}
