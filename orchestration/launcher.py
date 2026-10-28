@@ -1277,6 +1277,7 @@ SPARK_JOBS: dict[str, dict[str, Any]] = {
             "--group": "value",
             "--tables": "value",
             "--bootstrap-all": "flag",
+            "--repair-tables": "value",
             "--drop-removed": "flag",
             "--copies-only": "flag",
             "--diagnose": "flag",
