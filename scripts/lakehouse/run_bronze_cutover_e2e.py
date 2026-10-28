@@ -14,6 +14,8 @@ import copy
 import functools
 import hashlib
 import json
+import os
+import signal
 import socket
 import stat
 import sys
@@ -1400,37 +1402,79 @@ def mac_route_observations(folder: Path) -> dict[str, bool]:
 
 
 # The owner's tool as a shell stand-in: the command text names the tool once per call, so only the tool name is replaced and no Docker
-# binary can run. A probe container is a background sleep whose process ID `rm -f` stops, as Docker stops a named container.
+# binary can run. Two networks are listed. A probe container is a background sleep whose process ID `rm -f` stops, as Docker stops a
+# named container; each call records the bytes of probe script it received. TRAP makes a call ignore SIGTERM and RM_SECONDS makes the
+# removal hang. Every sleep records its process ID so the case stops what cleanup left behind.
 STAND_IN_TOOL = """stand_in_tool() {
   case "$1" in
-    network) printf '%s\\n' bridge ;;
-    run) /bin/sleep "$RUN_SECONDS" & echo $! > "$probe/container.pid"; wait $!
-         printf '%s\\n' '{"nonce":"nonce1","ports":[18181,18182],"network":"bridge","targets":["127.0.0.1"],"reached":[]}' ;;
-    rm) echo "$*" >> "$probe/stopped"; kill "$(cat "$probe/container.pid")" 2>/dev/null ;;
+    network) printf '%s\\n' bridge hai_net ;;
+    run) TRAP
+         while [ "$1" != --network ]; do shift; done; net=$2
+         wc -c | tr -d ' ' > "$probe/received.$net"
+         /bin/sleep "$RUN_SECONDS" </dev/null 2>/dev/null & echo $! > "$probe/container.pid"; echo $! >> "$probe/sleeps"; wait $!
+         printf '{"nonce":"nonce1","ports":[18181,18182],"network":"%s","targets":["127.0.0.1"],"reached":[]}\\n' "$net" ;;
+    rm) echo "$*" >> "$probe/stopped"; kill "$(cat "$probe/container.pid")" 2>/dev/null
+        /bin/sleep "$RM_SECONDS" </dev/null 2>/dev/null & echo $! >> "$probe/sleeps"; wait $! ;;
   esac
 }
 """
+
+
+def run_owner_probe(probe: Path, seconds: int, *, run: int, remove: int = 0, trap: bool = False) -> tuple[Any, float]:
+    """Run the owner's command under /bin/sh with the stand-in tool; returns the result and the seconds it ran past the step deadline."""
+    probe.mkdir(parents=True)
+    expires = int(time.time()) + seconds
+    command = cutover_route.probe_command(probe, "nonce1", [18181, 18182], "synthetic_image", expires)
+    tool = STAND_IN_TOOL.replace("TRAP", "trap '' TERM" if trap else ":").replace("$RUN_SECONDS", str(run)).replace("$RM_SECONDS", str(remove))
+    script = tool + command.replace("docker ", "stand_in_tool ")
+    try:
+        result = run_command("/bin/sh", ["-c", script], cwd=ROOT, env={"PATH": "/usr/bin:/bin"}, timeout=20)
+    finally:
+        with contextlib.suppress(OSError):
+            for pid in (probe / "sleeps").read_text().split():
+                with contextlib.suppress(OSError):
+                    os.kill(int(pid), signal.SIGKILL)
+    return result, time.time() - expires
 
 
 @offline
 def owner_probe_deadline(folder: Path) -> dict[str, bool]:
     """Route acceptance, owner command: it ends at the step's deadline and stops its own container then; in time it writes the network list."""
     checks: dict[str, bool] = {}
-    for label, run_seconds, seconds, finished in (("a probe that outlasts the deadline", 30, 1, False), ("a probe within the deadline", 0, 30, True)):
-        probe = folder / label.replace(" ", "_")
-        probe.mkdir(parents=True)
-        command = cutover_route.probe_command(probe, "nonce1", [18181, 18182], "synthetic_image", int(time.time()) + seconds)
-        started = time.monotonic()
-        script = STAND_IN_TOOL.replace("$RUN_SECONDS", str(run_seconds)) + command.replace("docker ", "stand_in_tool ")
-        result = run_command("/bin/sh", ["-c", script], cwd=ROOT, env={"PATH": "/usr/bin:/bin"}, timeout=20)
-        elapsed = time.monotonic() - started
-        stopped = (probe / "stopped").read_text() if (probe / "stopped").exists() else ""
-        if finished:
-            checks[f"{label} writes the network list and exits 0"] = result.returncode == 0 and (probe / cutover_route.NETWORK_LIST).is_file()
-        else:
-            checks[f"{label} exits nonzero by the deadline"] = result.returncode != 0 and elapsed < seconds + 3
-            checks[f"{label} stops its own container"] = "-f hai_route_probe_nonce1_bridge" in stopped
-            checks[f"{label} writes no network list"] = not (probe / cutover_route.NETWORK_LIST).exists()
+    late = folder / "late"
+    result, overrun = run_owner_probe(late, 1, run=30)
+    stopped = (late / "stopped").read_text() if (late / "stopped").exists() else ""
+    checks["a probe that outlasts the deadline exits nonzero by the deadline"] = result.returncode != 0 and overrun < 1.5
+    checks["a probe that outlasts the deadline stops its own container"] = "-f hai_route_probe_nonce1_bridge" in stopped
+    checks["a probe that outlasts the deadline writes no network list"] = not (late / cutover_route.NETWORK_LIST).exists()
+    ontime = folder / "on_time"
+    result, _ = run_owner_probe(ontime, 30, run=0)
+    script = (ROOT / "scripts/lakehouse/mac_route_probe.py").stat().st_size
+    checks["a probe within the deadline writes the network list and exits 0"] = result.returncode == 0 and (ontime / cutover_route.NETWORK_LIST).is_file()
+    checks["under /bin/sh every network receives the whole probe script"] = all(
+        (ontime / f"received.{name}").is_file() and (ontime / f"received.{name}").read_text().strip() == str(script) for name in ("bridge", "hai_net")
+    )
+    checks["the results of a probe within the deadline are accepted"] = cutover_route.container_observation(ontime, "nonce1", [18181, 18182])[0] is True
+    return checks
+
+
+@offline
+def owner_probe_cleanup(folder: Path) -> dict[str, bool]:
+    """Route acceptance, owner command: cleanup after the deadline has a fixed ceiling when removal hangs or the tool ignores SIGTERM."""
+    checks: dict[str, bool] = {}
+    ceiling = 2 * cutover_route.CLEANUP_SECONDS + 1.5
+    hung = folder / "hung_removal"
+    result, overrun = run_owner_probe(hung, 1, run=30, remove=30)
+    named = "hai_route_probe_nonce1_bridge"
+    listed = (hung / cutover_route.CLEANUP_UNCONFIRMED).read_text().split() if (hung / cutover_route.CLEANUP_UNCONFIRMED).exists() else []
+    checks["a hanging removal still ends the command within the deadline plus the cleanup ceiling"] = result.returncode != 0 and overrun < ceiling
+    checks["a container whose removal hangs is named in the output and the probe folder"] = named in result.stderr and listed == [named]
+    observed, record = cutover_route.container_observation(hung, "nonce1", [18181, 18182])
+    checks["the route check records the unconfirmed container as not observed"] = observed is None and named in record.decode()
+    ignoring = folder / "ignores_term"
+    result, overrun = run_owner_probe(ignoring, 1, run=30, trap=True)
+    checks["a tool that ignores SIGTERM is force-stopped within the deadline plus the cleanup ceiling"] = result.returncode != 0 and overrun < ceiling
+    checks["a container removed in time is not reported unconfirmed"] = not (ignoring / cutover_route.CLEANUP_UNCONFIRMED).exists()
     return checks
 
 
@@ -1620,6 +1664,7 @@ ALL_CASES = (
     route_binding_and_evidence,
     mac_route_observations,
     owner_probe_deadline,
+    owner_probe_cleanup,
     register_and_verify,
     preflight_refusals,
     register_failures,

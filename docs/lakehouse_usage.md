@@ -323,10 +323,15 @@ SHA-256 of its sanitized evidence (kept beside it as `<STAMP>.<NAME>.evidence`, 
 3. `mac_containers_refused`: while the route is open, no Docker network on the Mac reaches the tunnel or relay port.
    `route-check` never runs Docker. It prints a command. The owner runs it in a second terminal at the repository
    root. The command runs `scripts/lakehouse/mac_route_probe.py` from standard input once on every network that
-   `docker network ls` lists, with `--pull=never` and the local image given by `--probe-image` (it needs `python3`). It
-   writes `networks.txt` last. `route-check` waits up to 900 seconds for that file. The command ends at the same
-   deadline: it then removes its own named probe container and writes no `networks.txt`. A missing, stale or unreadable
-   result counts as not observed. So does a result that tried no target or names another network than its own.
+   `docker network ls` lists, with `--pull=never` and the local image given by `--probe-image` (it needs `python3`).
+   Each background Docker call gets the script through an explicit input redirection, so `/bin/sh` and zsh both pass
+   it. It writes `networks.txt` last. `route-check` waits up to 900 seconds for that file. The command ends at the same
+   deadline and writes no `networks.txt`. It removes its own named probe container, waiting at most 2 seconds. It stops
+   the running call, waiting at most 2 more seconds, then kills it. So it exits within about 5 seconds of the deadline,
+   even when Docker never returns. A container whose removal did not succeed in time is named on standard error and in
+   `cleanup_unconfirmed.txt` in the probe folder. `route-check` then records it as not observed. A missing, stale or
+   unreadable result counts as not observed. So does a result that tried no target or names another network than its
+   own.
 
 `route-check` writes `route_checks/<STAMP>.attempt` before the first observation. `register` and `verify` refuse to
 open the route unless the newest attempt completed and passed for the same cutover and host. Every evidence file must

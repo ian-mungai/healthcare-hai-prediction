@@ -14,6 +14,7 @@ stays required before any ECS job uses the catalog.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
@@ -33,6 +34,8 @@ CATALOG_ANSWERS = (200, 401)
 PROBE_SECONDS = 900.0
 PROBE_POLL_SECONDS = 2.0
 NETWORK_LIST = "networks.txt"
+CLEANUP_SECONDS = 2.0
+CLEANUP_UNCONFIRMED = "cleanup_unconfirmed.txt"
 NETWORK_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 STATUS_LINE = re.compile(rb"HTTP/1\.[01] ([0-9]{3}) ")
 Observation = tuple[bool | None, bytes]
@@ -119,17 +122,38 @@ def probe_command(folder: Path, nonce: str, ports: list[int], image: str, expire
 
     The command ends at ``expires`` (seconds since the epoch), the deadline of the step that waits for it: every Docker call runs in the
     background and, when the deadline passes first, the command removes its own named probe container, stops and writes no network list.
+    The removal and the stop of the running call each get ``CLEANUP_SECONDS``; a call still running then is killed, and a container whose
+    removal did not succeed in time is named on standard error and in ``CLEANUP_UNCONFIRMED``. The probe script reaches every background
+    call through an explicit standard input redirection, as POSIX shells give background commands an empty input otherwise.
     """
     arguments = f'{nonce} {ports[0]} {ports[1]} "$network"'
+    polls = int(CLEANUP_SECONDS / 0.2)
     return (
         f"probe='{folder}'\n"
         f"deadline={expires}\n"
+        "reap() {\n"
+        "  i=0\n"
+        '  while kill -0 "$1" 2>/dev/null; do\n'
+        f'    [ "$i" -lt {polls} ] || return 124\n'
+        "    sleep 0.2; i=$((i + 1))\n"
+        "  done\n"
+        '  wait "$1"\n'
+        "}\n"
         "bounded() {\n"
-        '  name=$1; shift; "$@" & pid=$!\n'
+        '  name=$1; shift; "$@" <&0 & pid=$!\n'
         '  while kill -0 "$pid" 2>/dev/null; do\n'
         '    if [ "$(date +%s)" -ge "$deadline" ]; then\n'
-        '      [ -z "$name" ] || docker rm -f "$name" >/dev/null 2>&1\n'
-        '      kill "$pid" 2>/dev/null; wait "$pid"\n'
+        '      if [ -n "$name" ]; then\n'
+        '        docker rm -f "$name" </dev/null >/dev/null 2>&1 & remover=$!\n'
+        '        reap "$remover"; removed=$?\n'
+        '        if [ "$removed" -ne 0 ]; then\n'
+        '          [ "$removed" -ne 124 ] || kill -9 "$remover" 2>/dev/null\n'
+        f'          echo "$name" >> "$probe/{CLEANUP_UNCONFIRMED}"\n'
+        '          echo "route probe: cleanup could not confirm that container $name stopped; stop it with: docker rm -f $name" >&2\n'
+        "        fi\n"
+        "      fi\n"
+        '      kill "$pid" 2>/dev/null; reap "$pid"\n'
+        '      [ "$?" -ne 124 ] || { kill -9 "$pid" 2>/dev/null; wait "$pid"; }\n'
         '      echo "route probe: the step deadline passed; no network list written" >&2; exit 1\n'
         "    fi\n"
         "    sleep 0.2\n"
@@ -159,6 +183,9 @@ def wait_for_probe(folder: Path, *, deadline: float, poll: float = PROBE_POLL_SE
 def container_observation(folder: Path, nonce: str, ports: list[int]) -> Observation:
     """Observation 3: every listed Docker network has this run's result, made on that network with at least one target, and none reached a
     port; any gap is not observed."""
+    with contextlib.suppress(OSError):
+        unconfirmed = sorted({line.strip() for line in (folder / CLEANUP_UNCONFIRMED).read_text().splitlines() if line.strip()})
+        return None, evidence({"not_observed": "cleanup could not confirm that these probe containers stopped", "containers": unconfirmed})
     try:
         names = [line.strip() for line in (folder / NETWORK_LIST).read_text().splitlines() if line.strip()]
     except OSError:
