@@ -9,7 +9,9 @@ its own group (the caller is never signalled), a survivor that fails visibly, an
 that itself calls ``run_command`` (one and two levels deep): a nested launch stays in the outer session in a group of its own, the outer deadline stops
 every member of the session, and a nested launch keeps its own earlier deadline. A descendant that moves to a new process group is stopped; a
 descendant that tampers with the old registry variable cannot hide (the review reproductions); an unrelated command in another session is never
-signalled; a failed session listing still stops the leader's group and fails visibly.
+signalled; a failed session listing still stops the leader's group and fails visibly, also when the lister cannot start or stalls with a child that
+holds its pipes; a second interrupt during the stop is held until the stop is confirmed; a member that leaves the session after the listing is not
+signalled (the review reproductions of fix round 4).
 Planted defects run the same cases with a broken stop (the direct child only, TERM only, no confirmation, the leader's group only). Each plant has the
 real parameters of ``stop_launch`` and counts as caught only when the named check of each named case is false and the case raised nothing.
 A member that starts its own session is outside the launch's session; that limit is documented in scripts/process.py and not tested here.
@@ -599,6 +601,197 @@ def listing_failure(base: Path) -> dict[str, Any]:
     return case("session_listing_failure_fails_visibly", base, body)
 
 
+# A program that ignores TERM and records its pid (the review's subject program).
+TERM_IGNORING = """
+import os, signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+open(sys.argv[1], 'w').write(str(os.getpid()))
+while True:
+    time.sleep(1)
+"""
+
+
+def wait_for_file(path: Path, seconds: float = 10.0) -> bool:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if path.exists() and path.read_text().strip():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def listing_start_failure(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        # The review reproduction: an executable lister with invalid executable bytes fails to start with OSError (errno 8).
+        lister = scratch.folder / "ps"
+        lister.write_text("Not an executable format\n", encoding="utf-8")
+        lister.chmod(0o700)
+        subject = scratch.folder / "subject.pid"
+        with mock.patch("scripts.process.SESSION_LISTING", (str(lister), "-A")):
+            caught, elapsed = timed_out_with(
+                lambda: run_command(sys.executable, ["-B", "-c", TERM_IGNORING, str(subject)], cwd=ROOT, timeout=CASE_TIMEOUT_SECONDS)
+            )
+        pids = scratch.pids()
+        return {
+            "raised_survivor_error": isinstance(caught, ProcessGroupSurvived),
+            "message_names_the_listing": caught is not None and "could not be listed" in str(caught),
+            "subject_started": "subject" in pids,
+            "subject_gone": "subject" in pids and not alive(pids["subject"]),
+            "seconds": round(elapsed, 2),
+        }
+
+    return case("listing_start_failure_fails_visibly", base, body)
+
+
+def stalled_listing(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        # The review reproduction: the lister forks a process that holds its pipes and then sleeps, so the listing times out and a reap that waits for
+        # the pipes to close never returns.
+        holder = scratch.folder / "holder.pid"
+        subject = scratch.folder / "subject.pid"
+        lister_code = f"import os, time; os.fork() == 0 and open({str(holder)!r}, 'w').write(str(os.getpid())); time.sleep(60)"
+        outcome: dict[str, Any] = {}
+
+        def invoke() -> None:
+            caught, elapsed = timed_out_with(
+                lambda: run_command(sys.executable, ["-B", "-c", TERM_IGNORING, str(subject)], cwd=ROOT, timeout=CASE_TIMEOUT_SECONDS)
+            )
+            outcome.update(caught=caught, seconds=elapsed)
+
+        calling = threading.Thread(target=invoke, daemon=True)
+        with mock.patch("scripts.process.SESSION_LISTING", (sys.executable, "-c", lister_code)), mock.patch("scripts.process.LISTING_SECONDS", 0.5):
+            calling.start()
+            # Bound: the deadline, one listing, the fallback group stop's confirmation and slack for a loaded machine.
+            calling.join(CASE_TIMEOUT_SECONDS + 0.5 + CASE_GRACE_SECONDS + 6)
+            finished = not calling.is_alive()
+            if not finished and holder.exists():
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(int(holder.read_text()), signal.SIGKILL)
+                calling.join(5)
+        pids = scratch.pids()
+        return {
+            "call_finished_within_its_bound": finished,
+            "raised_survivor_error": isinstance(outcome.get("caught"), ProcessGroupSurvived),
+            "holder_started": "holder" in pids,
+            "holder_gone": "holder" in pids and not alive(pids["holder"]),
+            "subject_gone": "subject" in pids and not alive(pids["subject"]),
+            "seconds": round(float(outcome.get("seconds", -1.0)), 2),
+        }
+
+    return case("stalled_listing_is_bounded", base, body)
+
+
+def second_interrupt(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        # The review reproduction: SIGINT while the program runs, then a second SIGINT 0.2 s into the stop of a member that ignores TERM.
+        main = threading.get_ident()
+        subject = scratch.folder / "subject.pid"
+        cleaning, finished = threading.Event(), threading.Event()
+        sent: list[str] = []
+        real_stop = process.stop_launch
+
+        def observed_stop(leader_pid: int, leader: Any = None, grace_seconds: float | None = None, session: bool = False) -> bool:
+            cleaning.set()
+            survived = real_stop(leader_pid, leader, grace_seconds, session)
+            finished.set()
+            return survived
+
+        def sender() -> None:
+            if not wait_for_file(subject):
+                return
+            signal.pthread_kill(main, signal.SIGINT)
+            sent.append("first")
+            if cleaning.wait(5) and not finished.wait(0.2):
+                signal.pthread_kill(main, signal.SIGINT)
+                sent.append("second")
+
+        earlier = signal.signal(signal.SIGINT, signal.default_int_handler)
+        sending = threading.Thread(target=sender, daemon=True)
+        caught: BaseException | None = None
+        stop_finished_before_return = False
+        try:
+            with mock.patch("scripts.process.stop_launch", observed_stop):
+                sending.start()
+                try:
+                    run_command(sys.executable, ["-B", "-c", TERM_IGNORING, str(subject)], cwd=ROOT, timeout=60)
+                except KeyboardInterrupt as error:
+                    caught = error
+                    stop_finished_before_return = finished.is_set()
+            sending.join(5)
+        finally:
+            signal.signal(signal.SIGINT, earlier)
+        pids = scratch.pids()
+        return {
+            "both_interrupts_sent": sent == ["first", "second"],
+            "interrupt_reached_the_caller": isinstance(caught, KeyboardInterrupt),
+            "stop_finished_before_the_interrupt_returned": stop_finished_before_return,
+            "subject_started": "subject" in pids,
+            "subject_gone": "subject" in pids and not alive(pids["subject"]),
+        }
+
+    return case("second_interrupt_during_cleanup_is_deferred", base, body)
+
+
+# A leader whose forked member leaves the session (setsid) when the file "escape" appears, and records the session in which TERM reached it.
+ESCAPING = """
+import os, signal, sys, time
+from pathlib import Path
+folder = Path(sys.argv[1])
+if os.fork() == 0:
+    (folder / 'escaper.pid').write_text(str(os.getpid()))
+    while not (folder / 'escape').exists():
+        time.sleep(0.005)
+    os.setsid()
+    def term(_number, _frame):
+        (folder / 'term_session').write_text(str(os.getsid(0)))
+        os._exit(0)
+    signal.signal(signal.SIGTERM, term)
+    (folder / 'escaped').write_text(str(os.getsid(0)))
+    while True:
+        time.sleep(1)
+while True:
+    time.sleep(1)
+"""
+
+
+def member_leaves_before_signal(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        # The review reproduction: the member leaves the session after it was listed and before its signal.
+        leader = process.start([sys.executable, "-B", "-c", ESCAPING, str(scratch.folder)], ROOT, None, new_session=True)
+        (scratch.folder / "leader.pid").write_text(str(leader.pid))
+        real_members = process.session_members
+        synchronized: list[bool] = []
+
+        def members_then_escape(sessions: Any, parent: int) -> set[int]:
+            members = real_members(sessions, parent)
+            escaper = int((scratch.folder / "escaper.pid").read_text())
+            if escaper in members and not synchronized:
+                synchronized.append(True)
+                (scratch.folder / "escape").write_text("go")
+                wait_for_file(scratch.folder / "escaped", 2)
+            return members
+
+        try:
+            if not wait_for_file(scratch.folder / "escaper.pid"):
+                return {"escaper_started": False}
+            with mock.patch("scripts.process.session_members", members_then_escape):
+                survived = process.stop_sessions({leader.pid}, grace_seconds=0.2, leader=leader)
+            time.sleep(0.3)
+            return {
+                "member_left_after_the_listing": bool(synchronized) and (scratch.folder / "escaped").exists(),
+                "member_outside_the_session_not_signalled": not (scratch.folder / "term_session").exists(),
+                "stop_confirmed": not survived,
+                "leader_gone": leader.poll() is not None,
+            }
+        finally:
+            # The escaped member holds the leader's pipes, so it is killed before the leader is reaped.
+            scratch.cleanup()
+            process.close_pipes(leader)
+            leader.wait(timeout=CASE_GRACE_SECONDS + 5)
+
+    return case("member_that_leaves_before_the_signal_is_skipped", base, body)
+
+
 def default_periods(base: Path) -> dict[str, Any]:
     return {
         "case": "default_grace_periods_are_set",
@@ -625,6 +818,10 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "descendant_in_a_new_group_is_stopped": new_group_descendant,
     "unrelated_command_is_not_signalled": unrelated_command,
     "session_listing_failure_fails_visibly": listing_failure,
+    "listing_start_failure_fails_visibly": listing_start_failure,
+    "stalled_listing_is_bounded": stalled_listing,
+    "second_interrupt_during_cleanup_is_deferred": second_interrupt,
+    "member_that_leaves_before_the_signal_is_skipped": member_leaves_before_signal,
     "default_grace_periods_are_set": default_periods,
 }
 REAL_STOP = process.stop_launch
@@ -711,9 +908,12 @@ def main() -> int:
     started = datetime.now(UTC)
     before = {name: sha256_of(ROOT / name) for name in WATCHED}
     base = Path(tempfile.mkdtemp(prefix="process_e2e."))
+    # Case names on the command line run only those cases, without the plants (a quick check while a change is made).
+    selected = sys.argv[1:]
     try:
-        results = [case_function(base) for case_function in CASES.values()]
-        results.extend(planted_cases(base))
+        results = [CASES[name](base) for name in selected] if selected else [case_function(base) for case_function in CASES.values()]
+        if not selected:
+            results.extend(planted_cases(base))
     finally:
         shutil.rmtree(base, ignore_errors=True)
     after = {name: sha256_of(ROOT / name) for name in WATCHED}

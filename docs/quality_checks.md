@@ -793,12 +793,15 @@ tree, the reused run and the conclusion of each required job. `.venv/bin/python 
 at the deadline and when the caller is interrupted while it waits (Ctrl-C): TERM first, then KILL after `STOP_GRACE_SECONDS` (5 s), then a check that no member is left (up to
 `CONFIRM_SECONDS`, 5 s). A caller whose own deadline must hold within a shorter bound passes `grace_seconds` (the reference-document download passes at most a quarter of its limit). A
 program that ends in time gives the same result as before. A deadline raises `TimeoutExpired` with the output so far. If a member survives KILL or the session cannot be listed, the call
-raises `ProcessGroupSurvived`, a `TimeoutExpired` that names the session, so no timeout ends silently with a live process.
+raises `ProcessGroupSurvived`, a `TimeoutExpired` that names the session, so no timeout ends silently with a live process. SIGINT is held while the program starts
+and while it is stopped. It is raised once the stop is confirmed, so a second Ctrl-C cannot cut the stop short.
 
 The stop lists every live process with `ps -A -o pid=,ppid=,stat=` (macOS `pgrep` has no session option and its `ps` shows the session as 0) and signals those whose `os.getsid` is the
 session. It lists again on every 50 ms poll, so a member that starts during the stop is signalled too. Zombies are not counted. The leader is reaped only after the stop, so its pid, which is
-the session id, cannot be reused while the stop runs. A pid that ends and is reused in the moment between its listing and its signal is the remaining race. The listing fails when `ps` is missing,
-fails, times out (5 s) or prints a line that is not a process. It also fails when a session cannot be read. Then the stop still sends TERM and KILL to the leader's group (its id is the
+the session id, cannot be reused while the stop runs. A pid that ends and is reused in the moment between its listing and its signal is the remaining race. Each member's session is read again just before its signal, so a member that left the session after the listing is
+skipped. The listing fails when `ps` is missing,
+cannot start, fails, times out (5 s: its own process group then gets KILL and its reap waits at most 1 s, so a child that holds its pipes cannot block
+it) or prints a line that is not a process. It also fails when a session cannot be read. Then the stop still sends TERM and KILL to the leader's group (its id is the
 session id) and the call fails as a survivor. The stop refuses the caller's own session.
 
 The launcher names its session to the program with `PROCESS_LAUNCH_SESSION=1`. A descendant that calls `run_command` itself (for example `scripts/quality/ci_hooks.py` under the

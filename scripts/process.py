@@ -8,7 +8,9 @@ processes (``ps -A -o pid=,ppid=,stat=``; macOS ``pgrep`` has no session option 
 launch, whose environment carries the variable) stays in that session: it starts its program in a new process group and stops only that group at its
 own deadline; the outer stop reaches it as a session member. A member that starts its own session (``setsid``) without this launcher is outside the
 session and is not stopped. The leader is reaped only after the stop, so its pid, which is the session id, cannot be reused while the stop runs. If
-the session cannot be listed, the stop still signals the leader's group and the call fails as if a member survived. Other scripts import
+the session cannot be listed (the lister cannot start, fails or stalls: its own group is killed and reaped within a bound), the stop still signals
+the leader's group and the call fails as if a member survived. Each member's session is read again just before its signal. SIGINT is held while the
+program starts and while it is stopped, and is raised once the stop is confirmed. Other scripts import
 ``run_command`` from here instead of ``subprocess``, so the lint exception for starting a process exists on one line. Run scripts that import it as
 modules from the repository root, for example ``.venv/bin/python -m scripts.quality.scan_secrets``.
 """
@@ -20,8 +22,9 @@ import os
 import shutil
 import signal
 import subprocess
+import threading
 import time
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from pathlib import Path
 from subprocess import CalledProcessError, CompletedProcess, SubprocessError, TimeoutExpired
 from typing import Any
@@ -50,6 +53,8 @@ SESSION_VARIABLE = "PROCESS_LAUNCH_SESSION"
 # The command that lists every live process with its parent and state, and the seconds it may take.
 SESSION_LISTING = ("ps", "-A", "-o", "pid=,ppid=,stat=")
 LISTING_SECONDS = 5.0
+# Seconds the lister gets to be reaped after its group got KILL at the listing deadline.
+REAP_SECONDS = 1.0
 
 
 class ProcessGroupSurvived(TimeoutExpired):
@@ -111,12 +116,19 @@ def list_processes() -> list[tuple[int, int, str]]:
     executable = find_program(SESSION_LISTING[0])
     if executable is None:
         raise SessionListingFailed(f"{SESSION_LISTING[0]} is not on PATH")
-    lister = start([executable, *SESSION_LISTING[1:]], None, None, new_session=False)
+    try:
+        lister = start([executable, *SESSION_LISTING[1:]], None, None, new_session=False)
+    except OSError as failure:
+        raise SessionListingFailed(f"{executable} could not start: {failure}") from None
     try:
         output, error = lister.communicate(timeout=LISTING_SECONDS)
     except TimeoutExpired:
-        lister.kill()
-        lister.communicate()
+        # The lister leads its own group: KILL reaches a process it started that holds its pipes, and the reap is bounded too.
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(lister.pid, signal.SIGKILL)
+        close_pipes(lister)
+        with contextlib.suppress(TimeoutExpired):
+            lister.wait(timeout=REAP_SECONDS)
         raise SessionListingFailed(f"{executable} did not finish within {LISTING_SECONDS} s") from None
     if lister.returncode:
         raise SessionListingFailed(f"{executable} exited {lister.returncode}: {error.strip()}")
@@ -154,6 +166,22 @@ def session_members(sessions: Collection[int], parent: int) -> set[int]:
     return members
 
 
+def still_member(pid: int, sessions: Collection[int]) -> bool:
+    """Read the session of a listed member again just before its signal: a member that has left the sessions (``setsid``) or ended is skipped.
+
+    A leader that has not made its session yet (``pid`` is a session id) stays a member. A pid that ends and is reused between this check and the
+    signal is the remaining race (microseconds).
+    """
+    if pid in sessions:
+        return True
+    try:
+        return os.getsid(pid) in sessions
+    except ProcessLookupError:
+        return False
+    except PermissionError as error:
+        raise SessionListingFailed(f"the session of process {pid} cannot be read: {error}") from None
+
+
 def session_left(members: set[int]) -> bool:
     """Return whether a listed session still has a member."""
     return bool(members)
@@ -182,7 +210,11 @@ def stop_process_group(process_group: int, leader: subprocess.Popen[str] | None 
 
 
 def stop_sessions(
-    sessions: Collection[int], grace_seconds: float | None = None, parent: int | None = None, leader: subprocess.Popen[str] | None = None
+    sessions: Collection[int],
+    grace_seconds: float | None = None,
+    parent: int | None = None,
+    leader: subprocess.Popen[str] | None = None,
+    allow_own: bool = False,
 ) -> bool:
     """Stop every member of the sessions: TERM, then KILL after the grace period, and confirm none is left.
 
@@ -190,10 +222,11 @@ def stop_sessions(
     every poll, so a member started during the stop is signalled too. Returns True when a member survived KILL for ``CONFIRM_SECONDS`` or when the
     sessions could not be listed; then each leader's process group (its id is the session id) still gets TERM and KILL and the stop waits up to
     ``CONFIRM_SECONDS`` for those groups to end (``leader`` is reaped there only, because a zombie keeps its group alive).
-    Refuses (``ValueError``) the caller's own session.
+    Refuses (``ValueError``) the caller's own session unless ``allow_own`` is set (a CI worker's leader that stops its own session when the dispatcher
+    has died; the caller is never signalled by the listing stop, but the fallback group stop reaches it).
     """
     targets = set(sessions)
-    if os.getsid(0) in targets:
+    if os.getsid(0) in targets and not allow_own:
         raise ValueError(f"refusing to stop session {os.getsid(0)}: it is the caller's own session")
     grace = STOP_GRACE_SECONDS if grace_seconds is None else grace_seconds
     owner = os.getpid() if parent is None else parent
@@ -204,6 +237,8 @@ def stop_sessions(
             while True:
                 members = session_members(targets, owner)
                 for pid in members - signalled:
+                    if not still_member(pid, targets):
+                        continue
                     with contextlib.suppress(ProcessLookupError):
                         os.kill(pid, signal_number)
                 signalled |= members
@@ -237,6 +272,25 @@ def stop_launch(leader_pid: int, leader: subprocess.Popen[str] | None = None, gr
     if leader is not None:
         leader.poll()
     return survived
+
+
+@contextlib.contextmanager
+def interrupts_deferred() -> Iterator[None]:
+    """Hold SIGINT while a launch is created or stopped, and deliver it once that work is done, so a second Ctrl-C cannot cut a stop short.
+
+    Only the main thread receives signals in Python, so in another thread this does nothing.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    received: list[int] = []
+    previous = signal.signal(signal.SIGINT, lambda number, _frame: received.append(number))
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, signal.SIG_DFL if previous is None else previous)
+        if received:
+            signal.raise_signal(signal.SIGINT)
 
 
 def clear_git_environment() -> None:
@@ -307,18 +361,26 @@ def run_command(
     nested = os.environ.get(SESSION_VARIABLE) == "1"
     child_environment = dict(os.environ if env is None else env)
     child_environment[SESSION_VARIABLE] = "1"
-    process = start([executable, *args], cwd, child_environment, new_session=not nested)
+    # SIGINT is held while the program starts and while it is stopped; one that arrived then is raised once the stop is confirmed.
+    process: subprocess.Popen[str] | None = None
     try:
+        with interrupts_deferred():
+            process = start([executable, *args], cwd, child_environment, new_session=not nested)
         stdout, stderr = process.communicate(timeout=timeout)
     except TimeoutExpired as expired:
-        survived = stop_launch(process.pid, process, grace_seconds, session=not nested)
-        close_pipes(process)
+        if process is None:
+            raise
+        with interrupts_deferred():
+            survived = stop_launch(process.pid, process, grace_seconds, session=not nested)
+            close_pipes(process)
         if survived:
             raise ProcessGroupSurvived(process.args, timeout, process.pid, expired.stdout, expired.stderr) from None
         raise
     except BaseException:
-        stop_launch(process.pid, process, grace_seconds, session=not nested)
-        close_pipes(process)
+        if process is not None:
+            with interrupts_deferred():
+                stop_launch(process.pid, process, grace_seconds, session=not nested)
+                close_pipes(process)
         raise
     if check and process.returncode:
         raise CalledProcessError(process.returncode, process.args, output=stdout, stderr=stderr)
