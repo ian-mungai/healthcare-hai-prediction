@@ -1,7 +1,7 @@
 ---
 title: Real AWS read verification
 description: Bounded procedures and evidence requirements for cloud identity, admission and actual gold spill runs.
-last_updated: 2026-10-23
+last_updated: 2026-10-28
 audience: [developer, operator]
 status: Proposed
 ---
@@ -16,7 +16,7 @@ Prepare each approved cloud run with the [procedure data](../config/orchestratio
 2. Apply the approved endpoint and role plans. Verify the catalog host identity, private IP and native read-class network.
 3. Complete both prerequisite real publishes and read-only registration. Retain their source snapshots and reader reservations.
 4. Record current regional price evidence and the approved run's cost ceiling, code hash and absolute UTC window.
-5. Render and check the [target](ecs_target_contract.md). Keep catalog-dependent Mac preparation disabled until its native network acceptance.
+5. Render and check the [target](ecs_target_contract.md). Keep catalog-dependent Mac preparation disabled except the bronze cutover's route, which runs only after its network acceptance check.
 
 The early one-task identity check must pass before grant delivery relies on task-session naming. The two-task identity check below remains required. A failed premise stops the run. Return it to the lead without broadening grant access.
 

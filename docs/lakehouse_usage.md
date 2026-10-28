@@ -1,7 +1,7 @@
 ---
 title: Lakehouse usage
-description: Commands and checks for the launcher, bronze, staging, gold, silver validation, the run lock and the fixture kit.
-last_updated: 2026-10-26
+description: Commands and checks for the launcher, bronze and its AWS cutover, staging, gold, silver, the run lock and fixtures.
+last_updated: 2026-10-28
 ---
 
 # Lakehouse usage
@@ -265,6 +265,67 @@ Compare dictionaries give types only. Bronze does not load:
 Two HRSA detail files, stored under the dictionary role, have corrected manifests in S3 that give them the data role
 (`config/acquisition/manifest_corrections.json`, written by `scripts.acquisition.correct_manifest_roles`); the original
 manifests stay unchanged. Open gaps are tracked in the local issue register.
+
+## Bronze cutover to the AWS catalog
+
+The cutover moves bronze write authority from the Mac catalog to the AWS Polaris catalog by registering the existing
+Iceberg metadata. Nothing is rebuilt or restored. Only `bronze` and `bronze_dictionary` are registered: the 330 map
+tables in each namespace plus `file_metadata`, `column_map`, `file_preambles` and `stored_copies` in `bronze`. Silver
+and gold are not registered. The owner runs one step at a time at a terminal. Each authority step prints a confirmation
+line and the owner types it back:
+
+```sh
+.venv/bin/python -m scripts.lakehouse.bronze_cutover status        # current authority record
+.venv/bin/python -m scripts.lakehouse.bronze_cutover dry-run       # read-only capture of every table, writes nothing
+.venv/bin/python -m scripts.lakehouse.bronze_cutover freeze --cutover <CUTOVER_ID>
+.venv/bin/python -m scripts.lakehouse.bronze_cutover fence         # waits until no Mac write is queued or running
+.venv/bin/python -m scripts.lakehouse.bronze_cutover capture       # writes the inventory and its SHA-256 once
+.venv/bin/python -m scripts.lakehouse.bronze_cutover refresh
+.venv/bin/python -m scripts.lakehouse.bronze_cutover register --inventory <INVENTORY_FILE> --sha256 <DIGEST> --instance <HOST_INSTANCE_ID>
+.venv/bin/python -m scripts.lakehouse.bronze_cutover verify --instance <HOST_INSTANCE_ID>
+.venv/bin/python -m scripts.lakehouse.bronze_cutover switch        # AWS becomes the writer with every layer off
+.venv/bin/python -m scripts.lakehouse.bronze_cutover rollback      # before any AWS writer was admitted
+.venv/bin/python -m scripts.lakehouse.run_bronze_cutover_e2e       # stand-ins only, report: data/e2e/bronze_cutover/
+```
+
+The steps follow the catalog authority states: `freeze` moves `mac_writer` to `freezing` (a registry without a record is
+first initialized as `mac_writer`), `fence` to `source_fenced`, `refresh` to `refreshing` and `switch` to `aws_writer`.
+The launcher applies each step through its `catalog_authority` owner method inside its registry transaction. From
+`freezing` on, the launcher refuses every Mac catalog write at submit (`spark_write`, `real_dbt`, `gold_publish` and
+pipeline jobs of class `lakehouse_write` in a real run) and ends a queued one as `fenced` before it starts. A running
+writer is never stopped: `fence` repeats until it has ended or the step deadline (`--seconds`) passes. On expiry authority
+stays `freezing`. Each command is stored write-once under `data/lakehouse/cutover/<CUTOVER_ID>/commands/`
+before it is sent, so repeating a step after a lost reply resends the same command and returns the stored record.
+A new freeze needs a new cutover ID.
+
+`capture` lists both namespaces on the frozen Mac catalog and stops on any table outside the set, any missing table or
+any table in `smoke_check` or `duckdb_view_check`. It pins each table from the catalog response and the versioned
+metadata object in S3, which must be byte-identical. It writes `bronze_inventory.json` and `bronze_inventory.sha256`
+once, mode 0600, in the cutover folder. A second capture must give the same digest.
+
+`register` and `verify` reach the AWS catalog only through the Session Manager tunnel to the host's private port 8181
+behind an owned loopback relay (`orchestration/catalog_transport.py`). Before the tunnel starts, the network acceptance
+check requires local tunnel and relay ports other than the Mac Polaris port 8181 (defaults 18181 and 18182) and one
+running host instance without a public address. A lost route fails the step and is never reopened inside an operation.
+`register` first checks that the AWS catalog `hai_lakehouse` exists with the lakehouse base location and no credential
+vending, creates `bronze` and `bronze_dictionary` if absent (approved for this cutover ID only) and registers each table
+with its own deadline (`--per-table-seconds`). It stops at the first failure. It never overwrites a different table and
+never posts a registration twice. A rerun with the same inventory digest gives `unchanged` for done tables. The
+Polaris root credential registers, for this one attended run. `verify` loads every table through the AWS reader pair,
+reads one manifest list per namespace and recompares every Mac table. Then it writes `bronze_receipt.json` once, which
+records the cutover ID, the inventory digest, the root principal and each registration run. Both credentials are read
+from Parameter Store into memory only. `switch` names the receipt digest in its command reason. After the switch, no
+layer writes anywhere until AWS writers qualify. Mac reads are stale until the reader relay exists.
+
+`rollback` returns to `mac_writer` from `freezing` directly and from `source_fenced`, `refreshing` or `aws_writer` (P4)
+through `source_verify`, which recaptures the Mac catalog and requires the frozen inventory digest. AWS registrations
+stay in place and are adopted as `unchanged` by a later retry. The launcher refuses a rollback once an AWS writer was
+admitted (P5).
+
+The E2E uses a launcher test registry with fake Docker, in-memory catalog and object stand-ins, a loopback Polaris
+stand-in and the real owned relay process. It makes no AWS, Session Manager or Docker call, so the tunnel start, the
+real catalogs and the AWS reader identity are verified only by the attended run. The manifest-list read shows the S3
+objects exist through the project profile, not that the AWS task role can read them.
 
 ## Staging, gold and pins
 
