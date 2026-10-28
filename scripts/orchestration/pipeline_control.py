@@ -8,7 +8,7 @@ from typing import Any
 
 from orchestration import launcher
 from orchestration.interface import SubmissionRequest
-from orchestration.pipeline_protocol import PipelineError, seal_copy
+from orchestration.pipeline_protocol import LocalRunStore, PipelineError, RunStore
 from scripts.orchestration.broker import Broker, LauncherUnavailable
 from scripts.orchestration.run_control import ControlFailed, ControlRefused
 
@@ -59,7 +59,7 @@ def validation(broker: Broker, request: SubmissionRequest, name: str) -> dict[st
     return dict(result)
 
 
-def perform(broker: Broker, request: SubmissionRequest, action: str, params: dict[str, Any]) -> dict[str, Any]:
+def perform(broker: Broker, request: SubmissionRequest, action: str, params: dict[str, Any], *, store: RunStore | None = None) -> dict[str, Any]:
     """Execute a closed lifecycle action using only this submission's run principal."""
     if action == "catalog_release" and broker.token_absent(request.run_id):
         return {"registered": False}
@@ -102,7 +102,7 @@ def perform(broker: Broker, request: SubmissionRequest, action: str, params: dic
         if action in ("seal_silver", "seal_gold", "fixture_pin", "fixture_verify"):
             layer = action.removeprefix("seal_")
             result = validation(broker, request, f"{layer}_validate")
-            seal_copy(folder, layer, str(result["sha256"]))
+            (store if store is not None else LocalRunStore(folder)).seal(layer, str(result["sha256"]))
             payload = {"layer": layer, "attempt_id": result["attempt_id"]}
             if layer == "gold":
                 cross = validation(broker, request, "cross_layer_checks")
