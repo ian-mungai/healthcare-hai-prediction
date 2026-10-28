@@ -1002,7 +1002,7 @@ def seal_descriptor_traversal(env: Env) -> dict[str, bool]:
     }
     aside = folder.with_name(folder.name + ".aside")
     with writable(folder / "sealed"):
-        shutil.rmtree(folder / "sealed", ignore_errors=True)
+        shutil.rmtree(folder / "sealed")
     (folder / "sealed").mkdir()
     (folder / "sealed").rename(aside)
     (folder / "sealed").symlink_to(aside)
