@@ -3234,10 +3234,38 @@ STUB_LOG_PROGRAM = (
     "    log.write(json.dumps({'stub': %r, 'argv': sys.argv[1:], 'env': {k: os.environ.get(k) for k in keys}, 'seen': seen}) + '\\n')\n"
     "sys.exit(int(os.environ.get('STUB_EXIT_%s', '0')))\n"
 )
+STUB_HOOK_PROGRAM = (
+    "import json, os, re, sys, time\n"
+    "keys = ('PRE_COMMIT_FROM_REF', 'PRE_COMMIT_TO_REF')\n"
+    "seen = ','.join(sorted(name for name in os.environ if re.match(%r, name)))\n"
+    "lock, collided = os.environ.get('STUB_INDEX_LOCK', ''), False\n"
+    "if lock:\n"
+    "    try:\n"
+    "        os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))\n"
+    "    except FileExistsError:\n"
+    "        collided = True\n"
+    "        sys.stderr.write('fatal: Unable to create index.lock: File exists.\\n')\n"
+    "if not collided:\n"
+    "    time.sleep(float(os.environ.get('STUB_HOLD', '0')))\n"
+    "    if lock:\n"
+    "        os.remove(lock)\n"
+    "row = {'stub': 'ci_hooks', 'argv': sys.argv[1:], 'env': {k: os.environ.get(k) for k in keys}, 'seen': seen, 'collided': collided}\n"
+    "with open(os.environ['STUB_LOG'], 'a') as log:\n"
+    "    log.write(json.dumps(row) + '\\n')\n"
+    "sys.exit(128 if collided else int(os.environ.get('STUB_EXIT_CI_HOOKS', '0')))\n"
+)
 STUB_RUN_CI = """#!/usr/bin/env bash
 seen="$(env | cut -d= -f1 | grep -E '@PATTERN@' | sort | paste -sd, - || true)"
-printf '{"stub": "run_ci", "env": {"CI_SCOPE": "%s", "RANGE_START": "%s", "RANGE_END": "%s"}, "seen": "%s"}\\n' \\
-  "${CI_SCOPE-}" "${RANGE_START-unset}" "${RANGE_END-unset}" "$seen" >>"$STUB_LOG"
+overlap=unchecked
+if [[ -n "${STUB_WAIT_FOR_LOCK:-}" ]]; then
+  overlap=false
+  for _ in $(seq 100); do
+    if [[ -e "$STUB_WAIT_FOR_LOCK" ]]; then overlap=true; break; fi
+    sleep 0.1
+  done
+fi
+printf '{"stub": "run_ci", "env": {"CI_SCOPE": "%s", "RANGE_START": "%s", "RANGE_END": "%s"}, "seen": "%s", "overlap": "%s"}\\n' \\
+  "${CI_SCOPE-}" "${RANGE_START-unset}" "${RANGE_END-unset}" "$seen" "$overlap" >>"$STUB_LOG"
 if [[ -n "${STUB_SLEEP:-}" ]]; then exec sleep "$STUB_SLEEP"; fi
 exit "${STUB_EXIT_RUN_CI:-0}"
 """.replace("@PATTERN@", INHERITED_PATTERN)
@@ -3283,8 +3311,8 @@ def pre_push_repo(
         config["pre_push"]["timeout_seconds"] = {"range": timeout, "full": timeout}
     (root / "config/quality/ci_groups.json").write_text(json.dumps(config))
     (root / "scripts/run_ci.sh").write_text(STUB_RUN_CI)
-    for stub in ("ci_hooks", "repo_checks"):
-        (root / f"scripts/quality/{stub}.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, stub, stub.upper()))
+    (root / "scripts/quality/ci_hooks.py").write_text(STUB_HOOK_PROGRAM % INHERITED_PATTERN)
+    (root / "scripts/quality/repo_checks.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "repo_checks", "REPO_CHECKS"))
     for package in ("scripts", "scripts/quality"):
         (root / package / "__init__.py").write_text("")
     shutil.copy2(ROOT / "scripts/process.py", root / "scripts/process.py")
@@ -3338,6 +3366,63 @@ def escalation_case(scratch: Path, name: str, path: str, want_scope: str, timeou
     root = pre_push_repo(scratch, name, path)
     plan = pre_push_plan(root)
     return {"case": name, "passed": plan["scope"] == want_scope, "scope": plan["scope"], "want": want_scope, "path": path}
+
+
+def hook_partition_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """Hook partitions share one worktree and its index lock, so they run one after the other while the other steps run beside them.
+
+    The partition stand-in takes a lock file like ``index.lock`` and exits 128 when it exists; the ``local_ci`` stand-in waits for that lock to be held.
+    """
+    root = pre_push_repo(scratch, "pre_push_hook_partitions", mutate=mutate)
+    lock = root / "index.lock"
+    code, out, error = pre_push(root, "run", extra={"STUB_INDEX_LOCK": str(lock), "STUB_HOLD": "1.5", "STUB_WAIT_FOR_LOCK": str(lock)})
+    calls = pre_push_calls(root)
+    hooks = [call for call in calls if call["stub"] == "ci_hooks"]
+    ci = [call["overlap"] for call in calls if call["stub"] == "run_ci"]
+    groups = list(json.loads((ROOT / "config/quality/ci_groups.json").read_text())["hook_groups"])
+    collided = [call["argv"][call["argv"].index("--group") + 1] for call in hooks if call["collided"]]
+    return {
+        "case": "pre_push_hook_partitions_run_one_after_the_other",
+        "passed": code == 0 and len(hooks) == len(groups) and not collided and ci == ["true"],
+        "exit": code,
+        "partitions": len(hooks),
+        "collided": collided,
+        "local_ci_saw_the_lock_held": ci,
+        "output": (out + error)[-300:],
+    }
+
+
+def hook_failure_case(scratch: Path) -> dict[str, Any]:
+    """A failed hook partition does not stop the later ones, and the failure report names every failed partition."""
+    root = pre_push_repo(scratch, "pre_push_hook_failures")
+    code, out, error = pre_push(root, "run", extra={"STUB_EXIT_CI_HOOKS": "3"})
+    groups = list(json.loads((ROOT / "config/quality/ci_groups.json").read_text())["hook_groups"])
+    hook_calls = [call for call in pre_push_calls(root) if call["stub"] == "ci_hooks"]
+    names = [f"hooks_{group}" for group in groups]
+    failed_line = next((line for line in out.splitlines() if line.startswith("pre-push: failed steps:")), "")
+    return {
+        "case": "pre_push_hook_failures_are_all_reported",
+        "passed": code != 0 and len(hook_calls) == len(groups) and all(f"FAIL {name}" in out and name in failed_line for name in names),
+        "exit": code,
+        "partitions": len(hook_calls),
+        "failed_line": failed_line,
+    }
+
+
+def hook_deadline_case(scratch: Path) -> dict[str, Any]:
+    """Every hook partition keeps its own deadline when they run one after the other."""
+    root = pre_push_repo(scratch, "pre_push_hook_deadlines", timeout=2)
+    started = time.monotonic()
+    code, out, error = pre_push(root, "run", extra={"STUB_HOLD": "60"}, timeout=120)
+    seconds = time.monotonic() - started
+    groups = list(json.loads((ROOT / "config/quality/ci_groups.json").read_text())["hook_groups"])
+    return {
+        "case": "pre_push_hook_deadlines_fail_visibly",
+        "passed": code != 0 and all(f"step hooks_{group} exceeded its deadline of 2 seconds" in out for group in groups) and seconds < 60,
+        "exit": code,
+        "seconds": round(seconds, 1),
+        "output": (out + error)[-300:],
+    }
 
 
 def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
@@ -3442,6 +3527,12 @@ def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
             "output": (out + error)[-300:],
         }
     )
+    results += [hook_partition_case(scratch), hook_failure_case(scratch), hook_deadline_case(scratch)]
+    serial_hooks = 'jobs = [[step] for step in steps if step["kind"] != "ci_hooks"] + ([hooks] if hooks else [])'
+    results += [
+        planted_case("hook_partitions_in_parallel", hook_partition_case, scratch, mutate=source_edit(serial_hooks, "jobs = [[step] for step in steps]")),
+        planted_case("every_step_in_sequence", hook_partition_case, scratch, mutate=source_edit(serial_hooks, "jobs = [steps]")),
+    ]
     return (
         results + hook_and_tree_cases(scratch) + acquisition_cases(scratch) + control_scan_cases() + pre_commit_control_cases() + entry_cases() + docs_cases()
     )

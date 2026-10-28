@@ -357,7 +357,9 @@ One commit per reviewed change stays the rule.
   for the pushed range, from its merge base with `origin/main` to the pushed head, with the selector and path lists
   GitHub CI uses, so the local result predicts the hosted run. It runs the commit-message and removed-name checks
   of the hosted hooks job, `CI_SCOPE=range RANGE_START=<base> RANGE_END=<head> bash scripts/run_ci.sh` and the three
-  hosted hook partitions over the same range, in parallel. These partitions run the hooks that left the commit
+  hosted hook partitions over the same range. The steps run in parallel, except the three hook partitions: they run
+  one after the other in one worker (about 3 minutes together), because pre-commit takes the worktree's index lock
+  and two partitions at once fail with `index.lock: File exists`. These partitions run the hooks that left the commit
   stage (`unused-code`, `unused-dependencies`, `orphan-files`, `terraform-unused`, `sqlfluff`, `build-contexts`,
   `model-metadata`, `env-example` and the two check E2Es). It runs the full scope instead (`CI_SCOPE=full`) when
   the range changes a path in `pre_push.full_paths` of `config/quality/ci_groups.json` (the group selector and its
