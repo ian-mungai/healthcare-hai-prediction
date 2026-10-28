@@ -338,7 +338,7 @@ It requires the checker and sample runner commands exactly once. `--mutants` pla
 Evidence is `data/e2e/container_mounts/<UTC>/report.json`. It includes source hashes, fixture changes, exact hook commands, expected diagnostics and observed exit codes.
 The runner checks that its source snapshot stays unchanged and removes its temporary repositories.
 Each hook runs under the repository's process-group deadline entry point, with a 30-second command deadline.
-The 300-second run deadline includes setup and reserves 70 seconds for process-group cleanup.
+The 720-second run deadline includes setup and reserves 70 seconds for process-group cleanup.
 An unconfirmed cleanup stops the run and retains its workspace. A case labeled `harness` verifies the deadline entry point and its process-group cleanup.
 
 ## Model metadata
