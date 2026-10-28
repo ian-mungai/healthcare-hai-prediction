@@ -68,7 +68,7 @@ Scaling and ECS. The account may already hold them: `aws iam get-role --role-nam
 | `ecr` | Log in, push and pull images, create, delete, describe and set the lifecycle of repositories | `<PROJECT_NAME>_*_<ENVIRONMENT>` repositories |
 | `ecs` | Create, update, delete and describe the cluster, the capacity provider and services; register and describe task definitions; run, stop, describe and list tasks; describe container instances | The project cluster, services, task definition families, tasks and container instances (`container-instance/<cluster>/*`); no deregistering of task definitions |
 | `autoscaling` | `SetDesiredCapacity`, describe calls; `CreateOrUpdateTags` with the `AmazonECSManaged` key only, which ECS adds while it creates the capacity provider | The host group only |
-| `ec2` | Describe calls; create and delete the data volume; allocate and release the Elastic IP; tag them while creating | Volumes and addresses with the exact `Project` tag; no launch, template, network, image, snapshot or copy action |
+| `ec2` | Describe calls; read the console output of the project host (`ec2:GetConsoleOutput`); create and delete the data volume; allocate and release the Elastic IP; tag them while creating | Volumes and addresses with the exact `Project` tag; instances that carry both the `Project` tag and the host's `Name` tag, `<PROJECT_NAME>_host_<ENVIRONMENT>`, in the project region and account; no console screenshot, password data, launch, template, network, image, snapshot or copy action |
 | `dlm` | Create, update, delete and read the snapshot schedule | Schedules tagged `Project` |
 | `logs` | Create, delete and set the retention of log groups; read log events | `<PROJECT_NAME>_*_<ENVIRONMENT>` log groups |
 | `cloudwatch` | Put, delete and describe alarms | `<PROJECT_NAME>_*_<ENVIRONMENT>` alarms |
@@ -207,6 +207,27 @@ is written to `data/e2e/policies/` by the local CI. Five request-context cases c
   the data volume and the Elastic IP by tag. The stand-ins model the kernel and systemd; neither is exercised. The runner
   uses GNU `timeout` when one is on `PATH` and a stand-in with the same TERM,
   KILL and exit-status behavior otherwise.
+- Every line the boot script and its commands write goes to
+  `/var/log/platform_boot.log` and, with the prefix `platform_boot:`, to the
+  serial console (`/dev/console`). The project user reads the console of the
+  project host with `ec2:GetConsoleOutput` after the instance ends, because the
+  log file ends with the instance. A separate process copies the log, so a
+  console that cannot be opened or never accepts a write does not stop or hold
+  a boot step. The exit handler creates a stop file, waits up to
+  `console_flush_seconds` (4) for the last lines and then ends the copy. Each
+  step logs a `starting:` and an `ended:` line, so a hang shows the stalled
+  step. The last line is `finished: every step succeeded and ECS_CLUSTER is
+  written.` or `FAILED: exit status <N> at line <L> during: <step>`. The AWS CLI
+  calls that print JSON (`associate-address`, `attach-volume`) print nothing and
+  the metadata token is never logged. An AWS error message can name the
+  account, the role and the instance of the project; that stays in the console,
+  which needs `ec2:GetConsoleOutput` to read. The configuration E2E
+  runs every boot case with a console file and requires the same lines in the
+  log and on the console, each with the prefix, in order. It also boots with a
+  console that is a directory and with one that is a named pipe nobody reads,
+  and plants eight defects (final lines not flushed, copy left running, no
+  prefix, AWS output on the console, a token in the log, an unbounded wait, a
+  success line after a failure and no step markers). Each must be reported.
 - At boot the host finds its Elastic IP and data volume by tag, associates the
   address, attaches the volume and mounts it at `/data`. It joins the cluster only after the volume is mounted. The data
   volume survives a replaced or resized instance; a new template version or a

@@ -53,6 +53,7 @@ SCHEDULE = arn("dlm", "policy/policy-0123456789abcdef0")
 VOLUME = arn("ec2", "volume/vol-0123456789abcdef0")
 ADDRESS = arn("ec2", "elastic-ip/eipalloc-0123456789abcdef0")
 INSTANCE = arn("ec2", "instance/i-0123456789abcdef0")
+HOST_TAGS = {"aws:ResourceTag/Project": P, "aws:ResourceTag/Name": f"{P}_host_{E}"}
 GROUP = arn("autoscaling", f"autoScalingGroup:00000000-0000-0000-0000-000000000000:autoScalingGroupName/{P}_host_{E}")
 # ECS adds this tag to the host group when it creates the capacity provider; the call is checked against the project user's policy.
 ECS_GROUP_TAG = {"AmazonECSManaged": ""}
@@ -168,6 +169,7 @@ def approved_requests() -> dict[str, list[Request]]:
     add("ec2", "CreateTags", VOLUME, region=None, tags=TAG, extra={"ec2:CreateAction": "CreateVolume"})
     add("ec2", "DeleteVolume", VOLUME, region=None, extra={"aws:ResourceTag/Project": P})
     add("ec2", "ReleaseAddress", ADDRESS, region=None, extra={"aws:ResourceTag/Project": P})
+    add("ec2", "GetConsoleOutput", INSTANCE, region=None, extra=HOST_TAGS)
     add("ecr", "GetAuthorizationToken", "*")
     for action in ("BatchCheckLayerAvailability", "InitiateLayerUpload", "UploadLayerPart", "CompleteLayerUpload", "PutImage", "BatchGetImage"):
         add("ecr", action, REPOSITORY, region=None)
@@ -677,6 +679,22 @@ def session_cases() -> Iterator[Case]:
     )
 
 
+def console_cases() -> Iterator[Case]:
+    """Console output: the project host only, so the boot log copied to the console can be read and no other instance's."""
+    read = "ec2:GetConsoleOutput"
+    yield Case("console: the project host", request(read, INSTANCE, extra=HOST_TAGS, region=None), True)
+    yield Case("console: instance without tags", request(read, INSTANCE, region=None), False)
+    yield Case(
+        "console: instance of another project", request(read, INSTANCE, extra={**HOST_TAGS, "aws:ResourceTag/Project": "other_project"}, region=None), False
+    )
+    yield Case("console: another host name", request(read, INSTANCE, extra={**HOST_TAGS, "aws:ResourceTag/Name": f"{P}_other_{E}"}, region=None), False)
+    yield Case("console: the project tag only", request(read, INSTANCE, extra={"aws:ResourceTag/Project": P}, region=None), False)
+    yield Case("console: the name tag only", request(read, INSTANCE, extra={"aws:ResourceTag/Name": f"{P}_host_{E}"}, region=None), False)
+    yield Case("console: every instance", request(read, "*", extra=HOST_TAGS, region=None), False)
+    for action in ("GetConsoleScreenshot", "GetPasswordData"):
+        yield Case(f"console: no ec2:{action} on the project host", request(f"ec2:{action}", INSTANCE, extra=HOST_TAGS, region=None), False)
+
+
 def parameter_cases() -> Iterator[Case]:
     """Parameter Store: exact names, no batch or path read, no write to the read-only name."""
     yield Case("parameter: write the Airflow administrator password", request("ssm:PutParameter", parameter("airflow_admin"), region=None), False)
@@ -886,6 +904,8 @@ FORBIDDEN = {
         "CreateFleet",
         "RunScheduledInstances",
         "CreateKeyPair",
+        "GetConsoleScreenshot",
+        "GetPasswordData",
     ),
     "autoscaling": (
         "CreateAutoScalingGroup",
@@ -1277,6 +1297,7 @@ def all_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     yield from tag_cases()
     yield from container_instance_cases()
     yield from session_cases()
+    yield from console_cases()
     yield from parameter_cases()
     yield from pass_role_cases()
     yield from job_project_cases()
@@ -1474,6 +1495,18 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def session_to_any_instance(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "ssm", "PortForwardToProjectHost")["Condition"]["StringEquals"]["ssm:resourceTag/Name"]
 
+    def console_of_any_named_instance(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "ec2", "ReadProjectHostConsole")["Condition"]["StringEquals"]["aws:ResourceTag/Name"]
+
+    def console_of_any_project(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "ec2", "ReadProjectHostConsole")["Condition"]["StringEquals"]["aws:ResourceTag/Project"]
+
+    def console_of_every_instance(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "ec2", "ReadProjectHostConsole")["Resource"] = "*"
+
+    def console_screenshot(documents: dict[str, dict[str, Any]]) -> None:
+        add_action(documents, "ec2", "ReadProjectHostConsole", "ec2:GetConsoleScreenshot")
+
     def session_of_any_user(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "ssm", "EndOwnSessions")["Resource"] = f"arn:aws:ssm:{R}:{A}:session/*"
 
@@ -1633,6 +1666,10 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "PassRole of the host role": ("PassRole ecs_host is not the user's", pass_host_role),
         "port forwarding to any tagged instance": ("session: another host name", session_to_any_instance),
         "sessions of another user": ("session: another user's session", session_of_any_user),
+        "console output of any instance with the project tag": ("console: another host name", console_of_any_named_instance),
+        "console output of any project's host": ("console: instance of another project", console_of_any_project),
+        "console output of every instance": ("console: every instance", console_of_every_instance),
+        "console screenshot beside the console output": ("console: no ec2:GetConsoleScreenshot on the project host", console_screenshot),
         "task definitions can be deregistered": ("forbidden ecs:DeregisterTaskDefinition", deregister_task_definitions),
         "cluster actions on every cluster": ("ecs:DeleteCluster in another project", ecs_other_project),
         "secret creation": ("secret: no CreateSecret", secrets_create),
