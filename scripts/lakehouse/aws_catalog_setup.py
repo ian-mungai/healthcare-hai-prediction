@@ -4,6 +4,8 @@ Run from the repository root at a terminal:
 
     .venv/bin/python -m scripts.lakehouse.aws_catalog_setup catalog --instance <HOST_INSTANCE_ID>
     .venv/bin/python -m scripts.lakehouse.aws_catalog_setup check [--instance <HOST_INSTANCE_ID>]
+    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup principal --identity reader|e2e|bronze|silver|gold --instance <HOST_INSTANCE_ID>
+        [--namespace-approval <APPROVAL_ID>]
 
 The AWS catalog is reached only through ``orchestration.catalog_transport.CatalogTransport``: the Session Manager tunnel to the host's private
 port 8181 behind an owned loopback relay, after the network acceptance check. Neither local port may be the Mac Polaris port 8181, so a request
@@ -14,7 +16,17 @@ mode is ``already present`` and one that differs is refused, never changed.
 The tool refuses to start unless the configured profile resolves to the project user. The Polaris root credential is read from Parameter
 Store into memory only and never printed, logged or written; errors carry the action and the HTTP status only. ``check`` reports each of the
 ten AWS Polaris pair parameters by exact name with its type and version, never a value: it reads without decryption and drops the encrypted
-value unread. With ``--instance`` it also reads the AWS catalog and changes nothing.
+value unread. With ``--instance`` it also reads the AWS catalog and each existing principal's grants and changes nothing.
+
+``principal`` sets up one AWS identity: its principal role, catalog role, grants and credentials. The grants are the approved plan of the
+identity (``bronze_writer.grant_plan`` for ``bronze`` and ``e2e``, which also gets the table grants on ``silver_e2e``, ``gold_e2e`` and
+``features_e2e``; ``polaris_writer.grants`` on ``silver`` or ``gold`` only; the Mac reader privileges for ``reader``). Every namespace a grant
+names must exist. An absent one is created only under ``--namespace-approval``, which the tool records once for that identity and its exact
+namespace set before it creates anything; for ``bronze`` and ``e2e`` the approval also grants ``NAMESPACE_CREATE`` (phase ``active``). After the
+grants the tool lists the catalog role's grants and compares them with the plan; any extra, missing or duplicate grant stops it before the
+catalog role is assigned (P7). The issued pair goes from the Polaris reply straight to Parameter Store (``principal_credentials``), so a
+stored pair that Polaris accepts is kept, and a missing, half-written or refused pair is reset (P3 to P5). Updates of one principal run one at
+a time under a lock in the main checkout (P11).
 """
 
 from __future__ import annotations
@@ -24,11 +36,14 @@ import contextlib
 import functools
 import http.client
 import json
+import os
+import re
 import sys
 import time
 import urllib.parse
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -38,7 +53,7 @@ from orchestration import launcher
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.acquisition.s3_store import AwsCli, StorageError
 from scripts.infrastructure import secret_store
-from scripts.lakehouse import run_lock
+from scripts.lakehouse import bronze_writer, catalog, polaris_writer, principal_credentials, run_lock
 from scripts.lakehouse.catalog_journal import durable_directory
 
 CATALOG = "hai_lakehouse"
@@ -52,6 +67,10 @@ READY_SECONDS = 120.0
 CLOSE_SECONDS = 30.0
 SECRET_SECONDS = 30.0
 MAX_REPLY_BYTES = 1 << 20
+MANAGEMENT = "/api/management/v1"
+APPROVAL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+E2E_TABLE_NAMESPACES = ("silver_e2e", "gold_e2e", "features_e2e")
+PRINCIPALS = {"reader": "lakehouse_reader", "e2e": "test_writer", "bronze": "bronze_writer", "silver": "silver_writer", "gold": "gold_writer"}
 
 Clock = Callable[[], float]
 # Runs one dependent catalog request exactly once and returns its result.
@@ -323,6 +342,12 @@ class Services(Protocol):
     @property
     def region(self) -> str: ...
 
+    @property
+    def approvals(self) -> Path: ...
+
+    @property
+    def locks(self) -> Path: ...
+
     def vault(self) -> PairVault: ...
 
     def remote(self, instance: str, *, deadline: float) -> contextlib.AbstractContextManager[Remote]: ...
@@ -366,8 +391,218 @@ def step_check(services: Services, instance: str | None, seconds: float, clock: 
         secret = read_root(vault, min(SECRET_SECONDS, check_deadline(deadline, clock)))
         with services.remote(instance, deadline=deadline) as remote:
             request = TunnelRequest(remote.port, deadline=deadline, execute=remote.execute, clock=clock)
-            result["catalog"] = verify_catalog(request, root_token(request, secret), services.bucket)
+            access = root_token(request, secret)
+            result["catalog"] = verify_catalog(request, access, services.bucket)
+            if result["catalog"] == "present":
+                result["principals"] = check_principals(request, access, services.approvals)
     return result
+
+
+def namespace_set(identity: str) -> tuple[str, ...]:
+    """The namespaces the identity's grants name, in plan order; each must exist before its grant."""
+    if identity == "reader":
+        return ()
+    if identity == "e2e":
+        return (*bronze_writer.QUALIFICATION, *E2E_TABLE_NAMESPACES)
+    if identity == "bronze":
+        return bronze_writer.PRODUCTION
+    return (identity,)
+
+
+def grant_plan(identity: str, approved: bool) -> list[dict[str, Any]]:
+    """The exact grants of the identity's catalog role; ``approved`` is the recorded namespace approval, which makes bronze and e2e ``active``."""
+    if identity == "reader":
+        return [{"grant": {"type": "catalog", "privilege": privilege}} for privilege in catalog.READER_PRIVILEGES]
+    if identity in ("bronze", "e2e"):
+        phase = "active" if approved else "prepared"
+        grants = bronze_writer.grant_plan("real" if identity == "bronze" else "aws_qualify", phase, namespace_creation_approved=approved)
+        if identity == "e2e":
+            grants += [
+                {"grant": {"type": "namespace", "namespace": [name], "privilege": privilege}}
+                for name in E2E_TABLE_NAMESPACES
+                for privilege in polaris_writer.NAMESPACE_PRIVILEGES
+            ]
+        return grants
+    return polaris_writer.grants(polaris_writer.Writer(PRINCIPALS[identity], (identity,), configured_pairs()[identity]))
+
+
+def ensure_status(status: int, action: str, allowed: tuple[int, ...] = (200, 201, 204)) -> None:
+    """Raise with the action and the HTTP status only."""
+    if status not in allowed:
+        raise SetupError("principal", f"{action} failed (HTTP {status})")
+
+
+@dataclass(frozen=True)
+class Approval:
+    """One owner approval to create an identity's absent namespaces, stored write-once before anything is created (P8)."""
+
+    approval_id: str
+    identity: str
+    namespaces: tuple[str, ...]
+
+    def document(self) -> dict[str, Any]:
+        return {"approval_id": self.approval_id, "identity": self.identity, "namespaces": list(self.namespaces)}
+
+
+def recorded_approval(folder: Path, identity: str) -> dict[str, Any] | None:
+    path = folder / f"{identity}.json"
+    if not path.exists():
+        return None
+    try:
+        found = json.loads(path.read_text())
+    except (OSError, ValueError):
+        raise SetupError("approval", f"the recorded namespace approval of {identity} cannot be read") from None
+    if not isinstance(found, dict):
+        raise SetupError("approval", f"the recorded namespace approval of {identity} is not an approval")
+    return found
+
+
+def record_approval(folder: Path, approval: Approval) -> None:
+    """Store the approval once; the same approval again is accepted, another one for the same identity is refused."""
+    found = recorded_approval(folder, approval.identity)
+    wanted = approval.document()
+    if found is not None:
+        if {key: found.get(key) for key in wanted} != wanted:
+            raise SetupError("approval", f"{approval.identity} already has another recorded namespace approval; it is never replaced")
+        return
+    durable_directory(folder)
+    temporary = folder / f".{approval.identity}.{os.getpid()}.tmp"
+    temporary.write_text(json.dumps({**wanted, "recorded_at_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}, sort_keys=True) + "\n")
+    try:
+        os.link(temporary, folder / f"{approval.identity}.json")
+    except FileExistsError:
+        temporary.unlink()
+        record_approval(folder, approval)
+        return
+    temporary.unlink()
+    descriptor = os.open(folder, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def approval_for(folder: Path, identity: str, approval_id: str | None) -> Approval | None:
+    """The approval in force for the identity: the flag's, checked against any recorded one, or the recorded one alone (a rerun)."""
+    if approval_id is not None and identity == "reader":
+        raise SetupError("approval", "the reader names no namespace; a namespace approval does not apply")
+    if approval_id is not None and not APPROVAL_ID.fullmatch(approval_id):
+        raise SetupError("approval", "an approval ID has letters, digits, dashes and underscores only, at most 64")
+    found = recorded_approval(folder, identity)
+    if approval_id is None:
+        if found is None:
+            return None
+        approval_id = str(found.get("approval_id"))
+    approval = Approval(approval_id, identity, namespace_set(identity))
+    if found is not None and {key: found.get(key) for key in approval.document()} != approval.document():
+        raise SetupError("approval", f"{identity} already has another recorded namespace approval; it is never replaced")
+    return approval
+
+
+def listed_grants(request: Request, access: str, role: str) -> list[dict[str, Any]]:
+    status, body = request("GET", f"{MANAGEMENT}/catalogs/{CATALOG}/catalog-roles/{role}/grants", access)
+    ensure_status(status, f"listing the grants of catalog role {role}")
+    grants = body.get("grants") if isinstance(body, dict) else None
+    if not isinstance(grants, list):
+        raise SetupError("grants", f"the grant listing of catalog role {role} is not a list")
+    return [{"grant": item} for item in grants]
+
+
+def compare_grants(request: Request, access: str, role: str, expected: list[dict[str, Any]]) -> None:
+    """The listed grants of the catalog role equal the plan exactly (P7)."""
+    try:
+        bronze_writer.verify_grants(listed_grants(request, access, role), expected)
+    except bronze_writer.BindingError:
+        raise SetupError("grants", f"the grants of catalog role {role} differ from the approved plan; the role stays unassigned") from None
+
+
+def ensure_principal(
+    request: Request, access: str, identity: str, approval: Approval | None, vault: PairVault, *, bucket: str, lock_path: Path, approvals: Path
+) -> dict[str, Any]:
+    """Set up one identity in order: namespaces, roles, grants, grant comparison, role assignment, credentials, principal assignment."""
+    role = PRINCIPALS[identity]
+    if verify_catalog(request, access, bucket) == "absent":
+        raise SetupError("catalog", f"catalog {CATALOG} does not exist; run the catalog step first")
+    absent = []
+    for name in namespace_set(identity):
+        status, _ = request("GET", f"/api/catalog/v1/{CATALOG}/namespaces/{name}", access)
+        if status == 404:
+            absent.append(name)
+        else:
+            ensure_status(status, f"reading namespace {name}")
+    if absent and approval is None:
+        raise SetupError("approval", f"namespaces {', '.join(absent)} are absent; creating them needs --namespace-approval")
+    if approval is not None:
+        record_approval(approvals, approval)
+    for name in absent:
+        status, _ = request("POST", f"/api/catalog/v1/{CATALOG}/namespaces", access, body={"namespace": [name], "properties": {}})
+        ensure_status(status, f"creating namespace {name}", (200, 201, 409))
+    status, _ = request("POST", f"{MANAGEMENT}/principal-roles", access, body={"principalRole": {"name": role}})
+    ensure_status(status, "creating the principal role", (200, 201, 409))
+    status, _ = request("POST", f"{MANAGEMENT}/catalogs/{CATALOG}/catalog-roles", access, body={"catalogRole": {"name": role}})
+    ensure_status(status, "creating the catalog role", (200, 201, 409))
+    expected = grant_plan(identity, approval is not None)
+    for grant in expected:
+        status, _ = request("PUT", f"{MANAGEMENT}/catalogs/{CATALOG}/catalog-roles/{role}/grants", access, body=grant)
+        ensure_status(status, f"granting {grant['grant']['privilege']} to {role}")
+    compare_grants(request, access, role, expected)
+    status, _ = request("PUT", f"{MANAGEMENT}/principal-roles/{role}/catalog-roles/{CATALOG}", access, body={"catalogRole": {"name": role}})
+    ensure_status(status, "assigning the catalog role")
+
+    def check(status: int, action: str, allowed: tuple[int, ...] = (200, 201, 204)) -> None:
+        ensure_status(status, action, allowed)
+
+    try:
+        outcome = principal_credentials.ensure_credentials(
+            principal=role, names=configured_pairs()[identity], vault=vault, request=request, access=access, check=check, lock_path=lock_path
+        )
+    except principal_credentials.CredentialError as error:
+        raise SetupError("credentials", str(error)) from None
+    status, _ = request("PUT", f"{MANAGEMENT}/principals/{role}/principal-roles", access, body={"principalRole": {"name": role}})
+    ensure_status(status, "assigning the principal role")
+    return {
+        "identity": identity,
+        "principal": role,
+        "credentials": outcome,
+        "namespaces_created": absent,
+        "phase": "active" if approval is not None and identity in ("bronze", "e2e") else "prepared" if identity in ("bronze", "e2e") else "fixed",
+        "grants": len(expected),
+    }
+
+
+def step_principal(services: Services, identity: str, instance: str, approval_id: str | None, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
+    """Set up one AWS identity through the route; the approval is checked against the record before any request."""
+    if identity not in PRINCIPALS:
+        raise SetupError("principal", f"unknown identity {identity}")
+    deadline = clock() + seconds
+    approval = approval_for(services.approvals, identity, approval_id)
+    vault = services.vault()
+    secret = read_root(vault, min(SECRET_SECONDS, check_deadline(deadline, clock)))
+    with services.remote(instance, deadline=deadline) as remote:
+        request = TunnelRequest(remote.port, deadline=deadline, execute=remote.execute, clock=clock)
+        access = root_token(request, secret)
+        lock_path = services.locks / f"aws_{PRINCIPALS[identity]}.lock"
+        return ensure_principal(request, access, identity, approval, vault, bucket=services.bucket, lock_path=lock_path, approvals=services.approvals)
+
+
+def check_principals(request: Request, access: str, approvals: Path) -> dict[str, str]:
+    """Each identity's grants against its plan, read only: ``matches``, ``differs`` or ``absent`` (no catalog role yet)."""
+    found: dict[str, str] = {}
+    for identity, role in PRINCIPALS.items():
+        status, _ = request("GET", f"{MANAGEMENT}/catalogs/{CATALOG}/catalog-roles/{role}", access)
+        if status == 404:
+            found[identity] = "absent"
+            continue
+        ensure_status(status, f"reading catalog role {role}")
+        approval = approval_for(approvals, identity, None)
+        try:
+            compare_grants(request, access, role, grant_plan(identity, approval is not None))
+            found[identity] = "matches"
+        except SetupError as error:
+            if error.code != "grants":
+                raise
+            found[identity] = "differs"
+    return found
 
 
 class LiveServices:
@@ -396,6 +631,14 @@ class LiveServices:
     @property
     def region(self) -> str:
         return self.settings["aws_region"]
+
+    @property
+    def approvals(self) -> Path:
+        return self.state_root / "catalog_setup" / "namespace_approvals"
+
+    @property
+    def locks(self) -> Path:
+        return self.state_root / "principal_locks"
 
     def vault(self) -> PairVault:
         import boto3
@@ -430,6 +673,10 @@ def parser() -> argparse.ArgumentParser:
     steps = cli.add_subparsers(dest="step", required=True)
     steps.add_parser("catalog").add_argument("--instance", required=True)
     steps.add_parser("check").add_argument("--instance")
+    principal = steps.add_parser("principal")
+    principal.add_argument("--identity", required=True, choices=IDENTITIES)
+    principal.add_argument("--instance", required=True)
+    principal.add_argument("--namespace-approval", help="the owner's approval ID for creating this identity's absent namespaces")
     return cli
 
 
@@ -438,6 +685,8 @@ def run(args: argparse.Namespace, services: Services) -> dict[str, Any]:
         raise SetupError("deadline", "--seconds must be positive")
     if args.step == "catalog":
         return step_catalog(services, args.instance, args.seconds)
+    if args.step == "principal":
+        return step_principal(services, args.identity, args.instance, args.namespace_approval, args.seconds)
     return step_check(services, args.instance, args.seconds)
 
 
@@ -445,7 +694,7 @@ def main(argv: list[str] | None = None, services: Services | None = None) -> int
     args = parser().parse_args(argv)
     try:
         result = run(args, services or LiveServices(args.tunnel_port, args.relay_port))
-    except (SetupError, secret_store.SecretStoreError, OSError, ValueError) as error:
+    except (SetupError, secret_store.SecretStoreError, bronze_writer.BindingError, OSError, ValueError) as error:
         code = f" ({error.code})" if isinstance(error, SetupError) else ""
         sys.stderr.write(f"aws catalog setup {args.step}{code}: {error}\n")
         return 1

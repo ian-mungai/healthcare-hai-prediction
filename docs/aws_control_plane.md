@@ -97,10 +97,11 @@ How each secret reaches its program without a command line or a file:
 
 ## AWS catalog setup
 
-The owner creates the AWS catalog `hai_lakehouse` and checks its pair parameters with `scripts/lakehouse/aws_catalog_setup.py`, under the project profile only:
+The owner creates the AWS catalog `hai_lakehouse`, sets up its five principals and checks them with `scripts/lakehouse/aws_catalog_setup.py`, under the project profile only:
 
 ```sh
 .venv/bin/python -m scripts.lakehouse.aws_catalog_setup catalog --instance <HOST_INSTANCE_ID>
+.venv/bin/python -m scripts.lakehouse.aws_catalog_setup principal --identity <IDENTITY> --instance <HOST_INSTANCE_ID> [--namespace-approval <APPROVAL_ID>]
 .venv/bin/python -m scripts.lakehouse.aws_catalog_setup check [--instance <HOST_INSTANCE_ID>]
 ```
 
@@ -108,7 +109,11 @@ The owner creates the AWS catalog `hai_lakehouse` and checks its pair parameters
 - **Route.** Every catalog request goes through the owned Session Manager tunnel and loopback relay (`orchestration/catalog_transport.py`) after the network acceptance check: one running host with no public address. Neither local port may be 8181, the Mac Polaris port, so no request reaches the Mac catalog. Each request runs once within the step's deadline (`--seconds`, 600 by default). A lost reply fails the step and is not repeated.
 - **Catalog.** `catalog` creates the catalog with the body of the Mac setup on `s3://<S3_BUCKET>/lakehouse/` with static credentials, then grants `CATALOG_MANAGE_CONTENT` to `catalog_admin`. A rerun over a matching catalog reports `already present`. A catalog with another location or credential mode is refused and never changed.
 - **Credentials.** The Polaris root secret is read from Parameter Store into memory only. It is never printed, logged or written. Errors carry the step and the HTTP status only.
-- **Check.** `check` reports each of the ten pair names (`aws_polaris_<identity>_client_id` and `_client_secret` for `reader`, `e2e`, `bronze`, `silver` and `gold`) with its presence, type and version. It reads without decryption and drops the encrypted value unread, so it never shows a value. With `--instance` it also reports whether the AWS catalog is `present` or `absent` and changes nothing.
+- **Check.** `check` reports each of the ten pair names (`aws_polaris_<identity>_client_id` and `_client_secret` for `reader`, `e2e`, `bronze`, `silver` and `gold`) with its presence, type and version. It reads without decryption and drops the encrypted value unread, so it never shows a value. With `--instance` it also reports whether the AWS catalog is `present` or `absent` and whether each identity's grants match its plan (`matches`, `differs` or `absent`). It changes nothing.
+- **Principals.** `principal` sets up one identity: `reader` (`lakehouse_reader`), `e2e` (`test_writer`), `bronze` (`bronze_writer`), `silver` (`silver_writer`) or `gold` (`gold_writer`). Each gets a principal role and a catalog role of the same name. The reader gets the catalog-wide read privileges of the Mac reader. `bronze` and `e2e` get `bronze_writer.grant_plan`. `e2e` also gets the table grants on `silver_e2e`, `gold_e2e` and `features_e2e`. `silver` and `gold` get `polaris_writer.grants` on their own namespace only.
+- **Grant check.** After the grants the tool lists the catalog role's grants and compares them with the plan. Any extra, missing or duplicate grant stops it before the catalog role is assigned and before a pair is issued.
+- **Namespace approval.** Every namespace a grant names must exist. Absent ones are created only with `--namespace-approval`. The tool stores the approval once under `data/lakehouse/catalog_setup/namespace_approvals/<identity>.json` with the exact namespace set before it creates anything. It refuses a different approval for the same identity. For `bronze` and `e2e` the approval also grants `NAMESPACE_CREATE` (phase `active`). Without one they get the `prepared` plan.
+- **Pairs.** The issued client ID and secret go from the Polaris reply straight to Parameter Store (`principal_credentials`). A stored pair that Polaris accepts is kept. A missing, half-written or refused pair is reset and stored again. Updates of one principal run one at a time under `data/lakehouse/principal_locks/aws_<principal>.lock` in the main checkout.
 - **Names.** The ten names are the defaults of their variables in `infra/iam/variables.tf`. The tool refuses names that repeat, lose their own leaf or match a managed Mac name, so a Mac and an AWS writer never share a pair.
 
 The stand-in E2E is `.venv/bin/python -m scripts.lakehouse.run_aws_catalog_setup_e2e --out <new_directory> --mutations`. It uses a loopback Polaris, the Parameter Store stand-in and the real owned relay. It contacts no AWS service.
