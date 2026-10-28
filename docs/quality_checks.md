@@ -630,21 +630,27 @@ launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no fi
 The `launcher` group (the launcher E2E suite, `scripts/lakehouse/run_launcher_e2e.py`, about 14 minutes) runs only when a change can affect what that suite
 runs. It no longer matches `^orchestration/`, `^scripts/`, `^config/`, `^services/`, `^data_contracts/` and `^dbt/` as a whole. The list is computed and checked:
 
-- `config/quality/launcher_inputs.json` holds `entry_points` and `extra_inputs` (the only hand-written keys), `ignored_reads` (each pair of module and text
-  with the reason the suite does not read it) and the computed `files`, `folders` and `dynamic_sites`.
+- `config/quality/launcher_inputs.json` holds the hand-written `entry_points`, `extra_inputs`, `ignored_reads` and `inventory_reads` and the computed `files`,
+  `folders`, `dynamic_sites` and `inventory_sites`. Each `ignored_reads` entry names a module and a text, the reason the suite does not read it and the
+  stripped source `lines` of the occurrences it covers. `--check` fails when those occurrences change. `--write` never updates them. An ignore removes
+  only its own text: a file that another text of the module names stays listed. Each `inventory_reads` entry names a module that lists files instead of
+  naming them (a `git ls-files` call or a glob or walk over `ROOT`), the path `pattern` of the files it reads (or none, with the reason) and why.
+  `docker_calls.check`, which the suite runs, parses every Python file, so `\.py$` selects the group for any Python file, present or future.
 - `scripts/quality/launcher_inputs.py` computes the list from the entry point: every module a Python file imports (also inside functions and in code held in
   strings), every module a string, an f-string or a shell, YAML or template file names, every tracked file a string, a `/` join (also one that starts at
   `ROOT`) or an f-string names (`scripts/quality/source_reads.py`, moved from the E2E runner) and the same for each file found. A folder that a module names is
   read whole: its files are listed, a new file in it selects the group (prefix in `folders`) and its own imports are not followed. A call that imports by a
   computed name cannot be followed; the number of such calls per file is in `dynamic_sites`. Run `--check` (default), `--write`, `--explain PATH` or
   `--trace FILE`.
-- `scripts/quality/ci_groups.py` adds one exact-path pattern per listed file and one prefix per folder to the group. The hand-written patterns are the group
+- `scripts/quality/ci_groups.py` adds each `inventory_reads` pattern, one exact-path pattern per listed file and one prefix per folder to the group. The hand-written patterns are the group
   body, the tool and the list. `global` paths and the unclassified-path rule still select every group.
-- A change to a module the suite imports or a file it reads selects the group; a change to an unrelated module (for example `scripts/quality/lint_sources.py`)
-  does not. A new import or read in a listed module changes the computed list, so `launcher_list_equals_computed` in `run_ci_groups_e2e` fails until
+- A change to a module the suite imports or a file it reads selects the group. So does a change to any Python file. A change to an unrelated non-Python
+  file (for example `infra/main.tf` or `config/quality/mypy_runtimes.json`) does not. A new import or read in a listed module changes the computed list, so `launcher_list_equals_computed` in `run_ci_groups_e2e` fails until
   `--write` is run and the diff is reviewed. The same E2E fails when a listed file is not selected by the group, when a pattern matches no tracked file and
   for planted defects in a small sample repository (stale entry, missing module, package, read file, module named in a text file, folder file or folder, a
-  new dynamic import, a changed entry point, a missed file in a trace).
+  new dynamic import, a changed entry point, a missed file in a trace, an undeclared or stale inventory read, a new occurrence of an ignored text and an exact
+  read beside an ignored folder). It also adds an exact read of `config/quality/mypy_runtimes.json` to the suite's `docker_calls_check` case for its own
+  process only and requires the list check to name that file.
 - Not provable by a static scan: a path built at run time from a variable, an environment variable or a glob over `ROOT`. Control: run the suite once under
   file-open tracing and check the trace with `--trace` (commands in the report of the change). Until that run is recorded, `extra_inputs` and every folder
   read whole stay in the list.

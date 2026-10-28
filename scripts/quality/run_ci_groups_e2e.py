@@ -50,6 +50,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from scripts.process import clear_git_environment, find_program, run_command
 from scripts.quality import ci_groups
@@ -772,15 +773,18 @@ LAUNCHER_IMPORTED = (
     "scripts/quality/docker_calls.py",
     "scripts/acquisition/new_probe.py",
     "dbt/models/gold/new_probe.sql",
-)
-LAUNCHER_UNRELATED = (
     "scripts/quality/lint_sources.py",
     "scripts/quality/ci_hooks.py",
-    "scripts/orchestration/run_lineage_e2e.py",
     "dags/gold_transform_dag.py",
     "tests/orchestration/fixtures/combined_dag.py",
-    "infra/main.tf",
+    "scripts/quality/future_probe.py",
 )
+LAUNCHER_UNRELATED = (
+    "infra/main.tf",
+    "config/quality/mypy_runtimes.json",
+)
+# The reviewer's reproduction: an exact read added beside the reviewed mount comparison of ROOT / "config" in the suite's docker_calls_check case.
+LAUNCHER_EXACT_READ = ("    from scripts.quality import docker_calls\n", '    json.loads((ROOT / "config/quality/mypy_runtimes.json").read_text())\n')
 SAMPLE_REPOSITORY = {
     "entry.py": (
         "from pathlib import Path\nfrom pkg import used\n\nROOT = Path(__file__).resolve().parent\n\n\ndef run():\n    import late\n"
@@ -800,6 +804,7 @@ SAMPLE_REPOSITORY = {
     "scripts/ci/groups/launcher.sh": 'launcher_e2e() {\n  "$python_bin" -m entry\n}\n',
 }
 SAMPLE_ENTRY = {"entry_points": ["entry.py"], "extra_inputs": []}
+FOLDER_LINE = 'files = sorted((ROOT / "folder").glob("*"))'
 
 
 def sample_cases(scratch: Path) -> list[dict[str, Any]]:
@@ -872,8 +877,30 @@ def sample_cases(scratch: Path) -> list[dict[str, Any]]:
             "nothing/here",
         ),
         planted("launcher_entry_point_must_match_the_group_body", lambda listing: {**listing, "entry_points": ["unrelated.py"]}, "launcher.sh"),
+        planted(
+            "launcher_undeclared_inventory_read_is_named",
+            lambda listing: listing,
+            "late.py: lists files by inventory",
+            {"late.py": 'LISTING = ["git", "ls-files", "--", "*.py"]\n'},
+        ),
+        planted(
+            "launcher_stale_inventory_read_is_named",
+            lambda listing: {**listing, "inventory_reads": [{"module": "late.py", "pattern": "\\.py$", "why": "planted"}]},
+            "late.py: inventory_reads",
+        ),
+        planted(
+            "launcher_new_occurrence_of_an_ignored_text_is_named",
+            lambda listing: {**listing, "ignored_reads": [{"module": "entry.py", "text": "folder", "why": "planted", "lines": [FOLDER_LINE]}]},
+            "entry.py: ignored read 'folder'",
+            {"entry.py": SAMPLE_REPOSITORY["entry.py"] + 'COPY = ROOT / "folder"\n'},
+        ),
     ]
     ignoring = launcher_inputs.compute(root, tracked, SAMPLE_ENTRY["entry_points"], [], [{"module": "entry.py", "text": "folder", "why": "planted"}])
+    (root / "entry.py").write_text(SAMPLE_REPOSITORY["entry.py"] + 'EXACT = (ROOT / "folder/x.txt").read_text()\n', encoding="utf-8")
+    try:
+        exact = launcher_inputs.compute(root, tracked, SAMPLE_ENTRY["entry_points"], [], [{"module": "entry.py", "text": "folder", "why": "planted"}])
+    finally:
+        (root / "entry.py").write_text(SAMPLE_REPOSITORY["entry.py"], encoding="utf-8")
     cases += [
         {
             "case": "launcher_trace_names_a_file_the_list_misses",
@@ -883,8 +910,32 @@ def sample_cases(scratch: Path) -> list[dict[str, Any]]:
             "case": "launcher_ignored_read_drops_its_folder",
             "passed": "folder/x.txt" not in ignoring["files"] and ignoring["folders"] == [] and ("entry.py", "folder") in ignoring["ignored"],
         },
+        {
+            "case": "launcher_ignored_read_keeps_an_exact_read_of_its_folder",
+            "passed": "folder/x.txt" in exact["files"] and "folder/y.txt" not in exact["files"] and exact["folders"] == [],
+            "files": [path for path in exact["files"] if path.startswith("folder/")],
+            "folders": exact["folders"],
+        },
     ]
     return cases
+
+
+def exact_read_problems(launcher_inputs: Any, tracked: set[str], committed: dict[str, Any]) -> list[str]:
+    """The list check on the suite with LAUNCHER_EXACT_READ added after the first anchor (in docker_calls_check): the source is changed only for this
+    process's reads, never on disk."""
+    target = ROOT / LAUNCHER_E2E
+    original = target.read_text(encoding="utf-8")
+    anchor, line = LAUNCHER_EXACT_READ
+    if anchor not in original:
+        return []
+    changed = original.replace(anchor, anchor + line, 1)
+    read_text = Path.read_text
+
+    def overlay(path: Path, *args: Any, **kwargs: Any) -> str:
+        return changed if path == target else read_text(path, *args, **kwargs)
+
+    with mock.patch.object(Path, "read_text", overlay):
+        return launcher_inputs.problems(ROOT, tracked, committed)
 
 
 def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
@@ -906,6 +957,7 @@ def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
     committed = json.loads((ROOT / launcher_inputs.LIST).read_text(encoding="utf-8"))
     config = ci_groups.load()
     gaps = launcher_inputs.selection_gaps(config, committed["files"], tracked)
+    exact = exact_read_problems(launcher_inputs, tracked, committed)
     with tempfile.TemporaryDirectory(prefix="launcher_sample.") as folder:
         sample = sample_cases(Path(folder))
     return [
@@ -914,6 +966,11 @@ def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
             "case": "launcher_list_equals_computed",
             "passed": launcher_inputs.problems(ROOT, tracked, committed) == [],
             "problems": launcher_inputs.problems(ROOT, tracked, committed)[:6],
+        },
+        {
+            "case": "launcher_list_names_an_exact_read_beside_an_ignored_folder",
+            "passed": any(line.startswith("config/quality/mypy_runtimes.json: the launcher suite needs it") for line in exact),
+            "problems": exact[:4],
         },
         {
             "case": "launcher_list_is_selected_by_the_group",

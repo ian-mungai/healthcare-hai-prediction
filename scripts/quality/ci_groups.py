@@ -8,7 +8,8 @@ GitHub CI and local commits use the same lists. Scopes:
   scripts/quality/pre_push.py). A range that cannot be used (missing end, zero or unknown commit) selects every group.
 - ``paths``: the paths given with ``--path`` (to see what a change would run).
 
-The ``launcher`` group lists, besides the few patterns of the configuration, one exact path for each file and one prefix for each folder of
+The ``launcher`` group lists, besides the few patterns of the configuration, the path pattern of each ``inventory_reads`` entry (files a suite module
+lists by inventory, such as every Python file the Docker-call guard parses), one exact path for each file and one prefix for each folder of
 config/quality/launcher_inputs.json: the files that the launcher E2E suite imports or reads and the folders it reads whole (generated and checked by
 scripts/quality/launcher_inputs.py).
 A path in ``global`` or a path that no group lists and that is not ``passive`` selects every group. Renames count with both
@@ -70,6 +71,7 @@ def load() -> dict[str, Any]:
     inputs = json.loads(LAUNCHER_INPUTS.read_text(encoding="utf-8"))
     config["groups"]["launcher"] = [
         *config["groups"]["launcher"],
+        *(item["pattern"] for item in inputs.get("inventory_reads", []) if item["pattern"]),
         *(f"^{re.escape(folder)}/" for folder in inputs["folders"]),
         *(f"^{re.escape(path)}$" for path in inputs["files"]),
     ]
