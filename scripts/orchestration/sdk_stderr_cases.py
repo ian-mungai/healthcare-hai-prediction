@@ -30,13 +30,15 @@ ROOT = Path(__file__).resolve().parents[2]
 PARAMS = {"cluster": "synthetic", "tasks": ["synthetic_task"], "include": ["TAGS"]}
 FILE_CAP = 8 * 1024 * 1024
 TRUNCATION_MARKER = b"\n[stderr truncated]\n"
+SOCKET_PATH_LIMIT = 100
 
 
 class HeldStderr:
     """Retain the worker's actual stderr writer until the case explicitly releases it."""
 
     def __init__(self) -> None:
-        self.folder = Path(tempfile.mkdtemp(prefix=".b_", dir=ROOT))
+        # A Unix socket path holds at most 103 characters on macOS, so a deep checkout (a worktree) uses the system temporary folder.
+        self.folder = Path(tempfile.mkdtemp(prefix=".b_", dir=ROOT if len(str(ROOT)) + len("/.b_12345678/s") <= SOCKET_PATH_LIMIT else None))
         self.path = self.folder / "s"
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(self.path))
