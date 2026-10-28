@@ -96,7 +96,14 @@ class AwsCli:
         self.runner = runner or run_argv
 
     def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict:
-        """Run a bounded project-scoped AWS command and return JSON or a sanitized storage error."""
+        """Run a project-scoped AWS command with the existing 180-second process limit."""
+        return self._call(service, operation, arguments, timeout=180)
+
+    def call_bounded(self, service: str, operation: str, arguments: list[str] | None = None, *, timeout: float) -> dict:
+        """Run a state operation within its remaining absolute deadline."""
+        return self._call(service, operation, arguments, timeout=timeout)
+
+    def _call(self, service: str, operation: str, arguments: list[str] | None, *, timeout: float) -> dict:
         from scripts.acquisition.redownload_controls import CURRENT
 
         if CURRENT.get() is not None and (service, operation) not in {("sts", "get-caller-identity"), ("secretsmanager", "get-secret-value")}:
@@ -123,7 +130,7 @@ class AwsCli:
         if service == "s3api":
             command += ["--bucket", settings["data_bucket_name"], "--expected-bucket-owner", settings["expected_account_id"]]
         try:
-            result = self.runner(command + (arguments or []), capture_output=True, text=True, env=environment, timeout=180)
+            result = self.runner(command + (arguments or []), capture_output=True, text=True, env=environment, timeout=timeout)
         except (OSError, TimeoutExpired):
             raise StorageError(operation, "request_unconfirmed") from None
         if result.returncode:

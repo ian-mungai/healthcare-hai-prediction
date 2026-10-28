@@ -13,6 +13,7 @@ from scripts.acquisition.bls_api_transport import QuotaPause, collection_lock, f
 from scripts.acquisition.capture import base_receipt, receipt_validator, validate_receipt
 from scripts.acquisition.collect_mmd_api import artifact
 from scripts.acquisition.collection_layout import load_routes, object_prefix
+from scripts.acquisition.collector_state import CollectorState, StateFile
 from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.process import run_command
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
@@ -191,14 +192,44 @@ def verify_storage(path: Path, receipt: dict, settings: dict) -> None:
     check_object(manifests[0]["object"], manifest_path, "capture_receipt")
 
 
-def execute(plan: dict, batch: dict, root: Path, allow_network: bool, upload: bool, client: AwsCli | None, outputs: dict, request: Any = None) -> dict:
+def checkpoint_completion(state: CollectorState, root: Path, receipt_path: Path, done_path: Path) -> None:
+    reconciliation_path = receipt_path.parent / "s3_collections_reconciliation.json"
+    reconciliation = read_json(reconciliation_path)
+    objects = [entry["object"] for entry in (*reconciliation["objects"], *reconciliation["manifests"])]
+    versions = tuple({"key": item["key"], "version_id": item["version_id"], "sha256": item["sha256"], "bytes": item["byte_count"]} for item in objects)
+    paths = (receipt_path, reconciliation_path, receipt_path.parent / "s3_collections/bls/manifest.json")
+    files = [StateFile(path.relative_to(root).as_posix(), path.read_bytes()) for path in paths]
+    files.append(StateFile(done_path.relative_to(root).as_posix(), done_path.read_bytes(), "completion", versions))
+    state.checkpoint(files)
+
+
+def execute(
+    plan: dict,
+    batch: dict,
+    root: Path,
+    allow_network: bool,
+    upload: bool,
+    client: AwsCli | None,
+    outputs: dict,
+    request: Any = None,
+    *,
+    state_backend: CollectorState | None = None,
+) -> dict:
     """Run the integrated capture/storage path; a valid completion performs no writes."""
+    if state_backend is not None:
+        state_backend.verify_active(root)
+        state_backend.hydrate()
     require(canonical_hash(plan) == canonical_hash(contract.load_plan()) and batch in plan["batches"], "BLS selected plan or batch differs")
     branch = root / "batches" / batch["id"]
     receipt_path = branch / "capture/receipt.json"
+    if state_backend is not None and receipt_path.exists():
+        receipt = read_json(receipt_path)
+        if any(not (receipt_path.parent / item["storage_path"]).exists() for item in receipt["artifacts"]):
+            envelope = fetch(plan, batch, root, False, client, request=request, state_backend=state_backend)
+            receipt_path = make_receipt(plan, batch, envelope, root)
     if not receipt_path.exists():
         contract.require_code()
-        envelope = fetch(plan, batch, root, allow_network, client, request=request)
+        envelope = fetch(plan, batch, root, allow_network, client, request=request, state_backend=state_backend)
         receipt_path = make_receipt(plan, batch, envelope, root)
     receipt = verify_local(receipt_path)
     lineage = json.loads(receipt["lineage"]["extraction_or_query"])
@@ -206,6 +237,8 @@ def execute(plan: dict, batch: dict, root: Path, allow_network: bool, upload: bo
         lineage["batch_id"] == batch["id"] and receipt["acquisition"]["request_parameters"] == contract.request_for(batch),
         "BLS selected batch differs from receipt",
     )
+    if state_backend is not None:
+        state_backend.checkpoint([StateFile(receipt_path.relative_to(root).as_posix(), receipt_path.read_bytes())])
     done_path = branch / "completed.json"
     if done_path.exists():
         done = read_json(done_path)
@@ -217,6 +250,8 @@ def execute(plan: dict, batch: dict, root: Path, allow_network: bool, upload: bo
         require(done["rows"] == receipt["schema_profile"]["row_count"], "BLS completion row count differs")
         settings = client.configuration if client is not None else load_configuration(REPO_ROOT / ".env")[0]
         verify_storage(receipt_path, receipt, settings)
+        if state_backend is not None:
+            checkpoint_completion(state_backend, root, receipt_path, done_path)
         return done
     result = {
         "batch_id": batch["id"],
@@ -237,6 +272,8 @@ def execute(plan: dict, batch: dict, root: Path, allow_network: bool, upload: bo
             status="stored", reconciliation_path=stored["reconciliation_path"], reconciliation_sha256=fingerprint(Path(stored["reconciliation_path"]))[0]
         )
         write_once(done_path, encoded_json(result))
+        if state_backend is not None:
+            checkpoint_completion(state_backend, root, receipt_path, done_path)
     return result
 
 
