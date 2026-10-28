@@ -36,6 +36,8 @@ PROBE_POLL_SECONDS = 2.0
 NETWORK_LIST = "networks.txt"
 CLEANUP_SECONDS = 2.0
 CLEANUP_UNCONFIRMED = "cleanup_unconfirmed.txt"
+# Removal and the stop of the running call each take at most CLEANUP_SECONDS, plus the kill and the file write.
+CLEANUP_CEILING_SECONDS = 3 * CLEANUP_SECONDS
 NETWORK_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 STATUS_LINE = re.compile(rb"HTTP/1\.[01] ([0-9]{3}) ")
 Observation = tuple[bool | None, bytes]
@@ -180,6 +182,15 @@ def wait_for_probe(folder: Path, *, deadline: float, poll: float = PROBE_POLL_SE
     return (folder / NETWORK_LIST).is_file()
 
 
+def wait_for_cleanup(folder: Path, *, deadline: float, poll: float = 0.2) -> bool:
+    """Wait until the owner's command has reported containers its cleanup could not confirm stopped; False when none is reported in time."""
+    while time.monotonic() < deadline:
+        if (folder / CLEANUP_UNCONFIRMED).is_file():
+            return True
+        time.sleep(max(0.0, min(poll, deadline - time.monotonic())))
+    return (folder / CLEANUP_UNCONFIRMED).is_file()
+
+
 def container_observation(folder: Path, nonce: str, ports: list[int]) -> Observation:
     """Observation 3: every listed Docker network has this run's result, made on that network with at least one target, and none reached a
     port; any gap is not observed."""
@@ -276,6 +287,9 @@ class LiveRouteProbe:
             " stops its own container at the same deadline.\n"
         )
         if not wait_for_probe(self.probe, deadline=wait_deadline):
+            # The owner's command stops its container within its own cleanup ceiling after the same deadline; keep the names it could not confirm.
+            if wait_for_cleanup(self.probe, deadline=time.monotonic() + CLEANUP_CEILING_SECONDS):
+                return container_observation(self.probe, self.nonce, ports)
             return None, evidence({"not_observed": "no container probe result before the deadline"})
         try:
             self.transport.check(deadline=deadline)

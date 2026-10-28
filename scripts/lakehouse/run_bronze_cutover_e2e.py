@@ -1459,6 +1459,37 @@ def owner_probe_deadline(folder: Path) -> dict[str, bool]:
 
 
 @offline
+def owner_probe_timeout_names(folder: Path) -> dict[str, bool]:
+    """Route acceptance, live wait: when the owner's command runs out of time, the recorded evidence still names every container its cleanup
+    could not confirm stopped, whether the cleanup file is there at the deadline or arrives within the cleanup ceiling after it."""
+    checks: dict[str, bool] = {}
+    for label, delay in (("already written at the deadline", 0.0), ("written just after the deadline", 1.0)):
+        probe = folder / label.replace(" ", "_")
+        probe.mkdir(parents=True)
+        live: Any = object.__new__(cutover_route.LiveRouteProbe)
+        live.probe, live.nonce, live.image, live.write = probe, "nonce1", "synthetic_image", lambda text: None
+        live.spec = SimpleNamespace(tunnel_port=18181, relay_port=18182)
+        live.transport = SimpleNamespace(check=lambda *, deadline: None)
+
+        def leave(target: Path = probe / cutover_route.CLEANUP_UNCONFIRMED, wait: float = delay) -> None:
+            time.sleep(wait)
+            target.write_text("hai_route_probe_nonce1_bridge\n")
+
+        if delay == 0.0:
+            leave()
+            writer = None
+        else:
+            writer = threading.Thread(target=functools.partial(leave), daemon=True)
+            writer.start()
+        observed, record = live.observe_containers(time.monotonic() + 0.3)
+        if writer is not None:
+            writer.join(5)
+        checks[f"a cleanup file {label} is not observed"] = observed is None
+        checks[f"a cleanup file {label} names the container in the evidence"] = b"hai_route_probe_nonce1_bridge" in record
+    return checks
+
+
+@offline
 def owner_probe_cleanup(folder: Path) -> dict[str, bool]:
     """Route acceptance, owner command: cleanup after the deadline has a fixed ceiling when removal hangs or the tool ignores SIGTERM."""
     checks: dict[str, bool] = {}
@@ -1665,6 +1696,7 @@ ALL_CASES = (
     mac_route_observations,
     owner_probe_deadline,
     owner_probe_cleanup,
+    owner_probe_timeout_names,
     register_and_verify,
     preflight_refusals,
     register_failures,
