@@ -1489,11 +1489,11 @@ def owner_probe_timeout_names(folder: Path) -> dict[str, bool]:
     stale = folder / "stale_report_from_another_run"
     stale.mkdir(parents=True)
     (stale / cutover_route.CLEANUP_UNCONFIRMED).write_text("hai_route_probe_oldnonce_bridge\n")
-    live: Any = object.__new__(cutover_route.LiveRouteProbe)
-    live.probe, live.nonce, live.image, live.write = stale, "nonce1", "synthetic_image", lambda text: None
-    live.spec = SimpleNamespace(tunnel_port=18181, relay_port=18182)
-    live.transport = SimpleNamespace(check=lambda *, deadline: None)
-    observed, record = live.observe_containers(time.monotonic() + 0.1)
+    other_run: Any = object.__new__(cutover_route.LiveRouteProbe)
+    other_run.probe, other_run.nonce, other_run.image, other_run.write = stale, "nonce1", "synthetic_image", lambda text: None
+    other_run.spec = SimpleNamespace(tunnel_port=18181, relay_port=18182)
+    other_run.transport = SimpleNamespace(check=lambda *, deadline: None)
+    observed, record = other_run.observe_containers(time.monotonic() + 0.1)
     checks["a cleanup report from another run's nonce is not observed"] = observed is None
     checks["a cleanup report from another run's nonce is not taken as this run's evidence"] = b"oldnonce" not in record
     return checks
