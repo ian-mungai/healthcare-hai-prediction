@@ -79,5 +79,13 @@
   "secret_names": [],
   "task_role_id": "AROASYNTHETIC",
   "template": "pipeline_dbt",
-  "try_id": "hai_synthetic_attempt_1_0123456789abcdef"
+  "try_id": "hai_synthetic_attempt_1_0123456789abcdef",
+  "controller_binding": {
+    "registry_id": "synthetic_registry",
+    "controller_owner": "aws",
+    "controller_epoch": 2,
+    "controller_transfer_id": "synthetic_transfer",
+    "controller_state_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "catalog_epoch": null
 }

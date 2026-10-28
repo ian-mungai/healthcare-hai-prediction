@@ -23,7 +23,9 @@
     "dbt_tree_sha256",
     "declaration_source",
     "expected_outputs",
-    "max_record_bytes"
+    "max_record_bytes",
+    "controller_binding",
+    "catalog_epoch"
   ],
   "properties": {
     "schema_version": {
@@ -210,6 +212,48 @@
         }
       },
       "description": "Required by the verified runtime entry point. Preparation examples without archives are not executable jobs."
+    },
+    "controller_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registry_id",
+        "controller_owner",
+        "controller_epoch",
+        "controller_transfer_id",
+        "controller_state_digest"
+      ],
+      "properties": {
+        "registry_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"
+        },
+        "controller_owner": {
+          "enum": [
+            "mac",
+            "aws"
+          ]
+        },
+        "controller_epoch": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "controller_transfer_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"
+        },
+        "controller_state_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"
+        }
+      }
+    },
+    "catalog_epoch": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
     }
   },
   "allOf": [

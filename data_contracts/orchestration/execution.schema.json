@@ -11,6 +11,7 @@
     "queued_at": {"type": "number", "minimum": 0},
     "deadline_utc": {"type": "integer", "minimum": 1},
     "catalog_epoch": {"type": ["integer", "null"], "minimum": 1},
+    "controller_binding": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["registry_id", "controller_owner", "controller_epoch", "controller_transfer_id", "controller_state_digest"], "properties": {"registry_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"}, "controller_owner": {"enum": ["mac", "aws"]}, "controller_epoch": {"type": "integer", "minimum": 1}, "controller_transfer_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"}, "controller_state_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"}}}, {"type": "null"}]},
     "live_try": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
     "placements": {
       "type": "array",
@@ -31,6 +32,7 @@
           "storage_gib": {"type": "integer", "minimum": 21, "maximum": 200},
           "task_arn": {"type": ["string", "null"], "pattern": "^arn:aws:ecs:[a-z0-9-]+:[0-9]{12}:task/[A-Za-z0-9_/-]+$(?![\\s\\S])"},
           "started": {"type": "boolean"},
+          "controller_binding": {"type": "object", "additionalProperties": false, "required": ["registry_id", "controller_owner", "controller_epoch", "controller_transfer_id", "controller_state_digest"], "properties": {"registry_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"}, "controller_owner": {"enum": ["mac", "aws"]}, "controller_epoch": {"type": "integer", "minimum": 1}, "controller_transfer_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"}, "controller_state_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"}}},
           "fenced_at": {"type": "number", "minimum": 0},
           "no_start": {"type": "boolean"},
           "cap_before": {

@@ -22,6 +22,7 @@ from typing import Any
 from unittest import mock
 
 from orchestration import launcher, worker_protocol
+from orchestration.controller_latch import DispatchLatch
 from orchestration.controller_tokens import SecureRunTokens
 from orchestration.interface import SubmissionRequest
 from scripts.lakehouse import run_lock
@@ -371,7 +372,8 @@ def retry_restart(folder: Path) -> None:
 
 def cleanup_timeout_shutdown(folder: Path) -> None:
     remote = Parameters()
-    config = configured(folder, remote)
+    latch_service = mock.Mock(spec=DispatchLatch)
+    config = replace(configured(folder, remote), controller_latch=latch_service)
     provider = secure_provider(config)
     with running(config) as controller:
         handle = controller.server.lock_handle
@@ -385,11 +387,16 @@ def cleanup_timeout_shutdown(folder: Path) -> None:
 
         try:
             with (
-                mock.patch.object(provider.client, "close", side_effect=unconfirmed),
+                mock.patch.object(provider.client, "close", side_effect=unconfirmed) as close_client,
                 mock.patch.object(controller.server, "drain_seals", wraps=controller.server.drain_seals) as drain,
                 mock.patch.object(controller.server.pool, "shutdown", wraps=controller.server.pool.shutdown) as stop_pool,
             ):
                 controller.close()
+                require(latch_service.close.call_count == 1, "token cleanup timeout skipped latch close")
+                require(
+                    latch_service.close.call_args.kwargs["deadline"] == close_client.call_args.kwargs["deadline"],
+                    "launcher cleanup restarted its deadline",
+                )
                 require(drain.call_count == 1, "token cleanup timeout skipped seal drain")
                 require(stop_pool.call_count == 1, "token cleanup timeout skipped pool shutdown")
                 require(handle.closed, "token cleanup timeout kept the launcher lock open")

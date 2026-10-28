@@ -674,16 +674,25 @@ def verified_command(folder: Path, command: Path | None = None) -> None:
     from orchestration.ecs_stage import stage_job
     from services.hai.bootstrap.transfer import Transfer
 
+    dispatch = {"controller_binding": job["controller_binding"], "catalog_epoch": job["catalog_epoch"]}
     model = FakeS3(PREFIX)
-    staged = stage_job(job, Transfer(Storage(model)), (), {}, folder, deadline)
+    staged = stage_job(job, Transfer(Storage(model)), (), {}, folder, deadline, dispatch=dispatch)
     require(staged.path == "job.json" and staged.key == PREFIX + "tries/" + job["try_id"] + "/job.json", "staged_job_identity")
-    refused("unknown_secret_name", lambda: stage_job(dict(job, secret_names=["UNDECLARED_SECRET"]), Transfer(Storage(model)), (), {}, folder, deadline))
-    refused("input_map_digest", lambda: stage_job(dict(job, input_map_sha256="0" * 64), Transfer(Storage(FakeS3(PREFIX))), (), {}, folder, deadline))
+    refused(
+        "unknown_secret_name",
+        lambda: stage_job(dict(job, secret_names=["UNDECLARED_SECRET"]), Transfer(Storage(model)), (), {}, folder, deadline, dispatch=dispatch),
+    )
+    refused(
+        "input_map_digest",
+        lambda: stage_job(dict(job, input_map_sha256="0" * 64), Transfer(Storage(FakeS3(PREFIX))), (), {}, folder, deadline, dispatch=dispatch),
+    )
     marker_value = "synthetic_marker_in_job"
     clean_model = FakeS3(PREFIX)
     refused(
         "secret_in_output",
-        lambda: stage_job(dict(job, attempt_id=marker_value), Transfer(Storage(clean_model)), (), {"synthetic": marker_value}, folder, deadline),
+        lambda: stage_job(
+            dict(job, attempt_id=marker_value), Transfer(Storage(clean_model)), (), {"synthetic": marker_value}, folder, deadline, dispatch=dispatch
+        ),
     )
     require(not clean_model._objects, "secret_job_unstored")
     raw = integrity.canonical(job)
@@ -708,6 +717,16 @@ def verified_command(folder: Path, command: Path | None = None) -> None:
         job["try_id"],
         "--template",
         job["template"],
+        "--controller-registry-id",
+        job["controller_binding"]["registry_id"],
+        "--controller-owner",
+        job["controller_binding"]["controller_owner"],
+        "--controller-epoch",
+        str(job["controller_binding"]["controller_epoch"]),
+        "--controller-transfer-id",
+        job["controller_binding"]["controller_transfer_id"],
+        "--controller-state-digest",
+        job["controller_binding"]["controller_state_digest"],
         "--timeout-seconds",
         "10",
     ]

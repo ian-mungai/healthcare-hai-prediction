@@ -140,7 +140,7 @@ def row_for(jobs: Mapping[str, Any], template: str, params: Mapping[str, Any], j
     return None
 
 
-def initialize(attempt: dict[str, Any], requested: str, now: float, catalog_epoch: int | None) -> None:
+def initialize(attempt: dict[str, Any], requested: str, now: float, catalog_epoch: int | None, controller_binding: Mapping[str, Any] | None = None) -> None:
     """Bind per-job intent once without changing replay identity or the fixed deadline."""
     if requested not in TARGETS:
         raise PlacementError("target must be auto, ecs or docker")
@@ -155,6 +155,7 @@ def initialize(attempt: dict[str, Any], requested: str, now: float, catalog_epoc
         "queued_at": now,
         "deadline_utc": attempt["deadline_utc"],
         "catalog_epoch": catalog_epoch,
+        "controller_binding": dict(controller_binding) if controller_binding is not None else None,
         "live_try": None,
         "placements": [],
     }
@@ -255,6 +256,8 @@ def reserve(attempt: dict[str, Any], size: Size, decision: Decision, now: float,
         "started": False,
         "cap_before": usage_record(usage),
     }
+    if execution.get("controller_binding") is not None:
+        placement["controller_binding"] = dict(execution["controller_binding"])
     execution["placements"].append(placement)
     execution["live_try"] = try_id
     return placement
@@ -319,6 +322,8 @@ def validate_execution(execution: Mapping[str, Any]) -> None:
     active = [item["try_id"] for item in placements if item["state"] not in TERMINAL_PLACEMENTS]
     if len(identities) != len(set(identities)) or active != ([] if execution["live_try"] is None else [execution["live_try"]]):
         raise PlacementError("execution record has inconsistent live placement authority")
+    if execution.get("controller_binding") is not None and any(item.get("controller_binding") != execution["controller_binding"] for item in placements):
+        raise PlacementError("controller binding differs from dispatch intent")
     if any(item["deadline_utc"] != execution["deadline_utc"] for item in placements):
         raise PlacementError("a placement changed the attempt deadline")
 

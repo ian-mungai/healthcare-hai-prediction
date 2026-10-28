@@ -500,6 +500,41 @@
                     "minimum": 0
                   }
                 }
+              },
+              "controller_binding": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "registry_id",
+                  "controller_owner",
+                  "controller_epoch",
+                  "controller_transfer_id",
+                  "controller_state_digest"
+                ],
+                "properties": {
+                  "registry_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"
+                  },
+                  "controller_owner": {
+                    "enum": [
+                      "mac",
+                      "aws"
+                    ]
+                  },
+                  "controller_epoch": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "controller_transfer_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"
+                  },
+                  "controller_state_digest": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"
+                  }
+                }
               }
             },
             "allOf": [
@@ -558,6 +593,48 @@
               }
             ]
           }
+        },
+        "controller_binding": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "registry_id",
+                "controller_owner",
+                "controller_epoch",
+                "controller_transfer_id",
+                "controller_state_digest"
+              ],
+              "properties": {
+                "registry_id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"
+                },
+                "controller_owner": {
+                  "enum": [
+                    "mac",
+                    "aws"
+                  ]
+                },
+                "controller_epoch": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "controller_transfer_id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"
+                },
+                "controller_state_digest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },

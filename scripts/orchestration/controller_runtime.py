@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
+from orchestration.controller_latch import DispatchLatch, ObjectClient
 from orchestration.controller_tokens import ParameterClient, SecureRunTokens
 from orchestration.ecs_api import EcsApi, WorkerConfig
 from orchestration.lineage import CompletionWorker
@@ -35,12 +36,23 @@ def load_config(path: Path, *, test_registry: str | None = None) -> launcher.Con
     return launcher.resolve_config(test_registry, controller_config=path)
 
 
-def secure_config(config: launcher.Config, *, region: str, parameter_client: ParameterClient | None = None) -> launcher.Config:
+def secure_config(
+    config: launcher.Config,
+    *,
+    region: str,
+    parameter_client: ParameterClient | None = None,
+    latch_bucket: str | None = None,
+    latch_client: ObjectClient | None = None,
+) -> launcher.Config:
     """Connect the AWS token provider to an injected client or isolated workers using ECS container credentials."""
     if config.local_backend != "disabled":
         raise launcher.LauncherError("secure controller configuration requires the local backend disabled", "config")
     client = parameter_client if parameter_client is not None else EcsApi(WorkerConfig(region, container_credentials=True), config.registry.path)
-    return replace(config, token_provider=SecureRunTokens(config.registry, client))
+    service = None
+    if latch_bucket is not None:
+        objects = latch_client if latch_client is not None else EcsApi(WorkerConfig(region, container_credentials=True), config.registry.path)
+        service = DispatchLatch(objects, latch_bucket)
+    return replace(config, token_provider=SecureRunTokens(config.registry, client), controller_latch=service)
 
 
 class Controller:
@@ -138,6 +150,7 @@ class Controller:
         with contextlib.suppress(OSError):
             os.write(self.server.wake_write, b"x")
         errors = []
+        cleanup_error: TimeoutError | None = None
         if self.worker is not None:
             try:
                 self.worker.stop()
@@ -153,8 +166,18 @@ class Controller:
                 errors.append("launcher did not stop")
         else:
             if self.config.token_provider is not None:
-                self.config.token_provider.close(deadline=deadline)
+                try:
+                    self.config.token_provider.close(deadline=deadline)
+                except TimeoutError as error:
+                    cleanup_error = error
+            if self.config.controller_latch is not None:
+                try:
+                    self.config.controller_latch.close(deadline=deadline)
+                except TimeoutError as error:
+                    cleanup_error = cleanup_error or error
             self.server.pool.shutdown(wait=False, cancel_futures=True)
+        if cleanup_error is not None:
+            raise cleanup_error
         if errors:
             raise TimeoutError(f"controller cleanup exceeded {STOP_SECONDS:g} seconds: {', '.join(errors)}")
         if self.broker is not None:
@@ -170,6 +193,7 @@ def main(argv: list[str] | None = None) -> int:
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("--config", type=Path, required=True, help="absolute registry, run and artifact roots")
     cli.add_argument("--region", required=True, help="reviewed AWS Region for the ECS container credential provider")
+    cli.add_argument("--latch-bucket", required=True, help="reviewed bucket holding the immutable first-dispatch latch")
     cli.add_argument("--test-registry", help="a disposable test registry matching registry_root")
     cli.add_argument("--broker-port", type=int, default=18790)
     cli.add_argument("--lineage-port", type=int)
@@ -186,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         stopping.set()
 
     try:
-        controller = Controller(secure_config(load_config(args.config, test_registry=args.test_registry), region=args.region))
+        controller = Controller(secure_config(load_config(args.config, test_registry=args.test_registry), region=args.region, latch_bucket=args.latch_bucket))
         for number in (signal.SIGINT, signal.SIGTERM):
             previous[number] = signal.signal(number, stop)
         view: Mapping[str, Any] = controller.start(broker_token=token, port=args.broker_port, lineage_port=args.lineage_port)

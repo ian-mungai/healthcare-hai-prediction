@@ -10,7 +10,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from services.hai.bootstrap.integrity import MAX_RECORD, StageError, canonical, digest_descriptor, held_file, protected_path, run_prefix, safe_path, try_prefix
+from services.hai.bootstrap.integrity import (
+    MAX_RECORD,
+    StageError,
+    canonical,
+    check_job_binding,
+    digest_descriptor,
+    held_file,
+    protected_path,
+    run_prefix,
+    safe_path,
+    try_prefix,
+)
 from services.hai.bootstrap.outputs import Declaration
 from services.hai.bootstrap.redaction import scan_file
 from services.hai.bootstrap.transfer import FileRef, Transfer
@@ -143,13 +154,21 @@ def validate_contract(name: str, value: Mapping[str, Any], code: str) -> None:
 
 
 def stage_job(
-    job: Mapping[str, Any], transfer: Transfer, allowed_secret_names: Sequence[str], secret_values: Mapping[str, str], spool: Path, deadline: float
+    job: Mapping[str, Any],
+    transfer: Transfer,
+    allowed_secret_names: Sequence[str],
+    secret_values: Mapping[str, str],
+    spool: Path,
+    deadline: float,
+    *,
+    dispatch: Mapping[str, Any],
 ) -> FileRef:
     """Validate and stage one immutable, scanned job description under its exact try."""
     requested = job.get("secret_names")
     if not isinstance(requested, list) or not all(isinstance(name, str) for name in requested) or not set(requested) <= set(allowed_secret_names):
         raise StageError("unknown_secret_name")
     validate_contract("ecs_job", job, "invalid_job")
+    check_job_binding(dict(job), dict(dispatch))
     archives = job.get("archives")
     if not isinstance(archives, dict) or set(archives) != {"code", "dbt"}:
         raise StageError("archive_contract")

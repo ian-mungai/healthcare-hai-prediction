@@ -34,6 +34,35 @@ class StageError(RuntimeError):
         self.exit_code = exit_code
 
 
+def controller_binding(value: object) -> dict[str, Any]:
+    """Validate the immutable controller identity supplied independently to job staging and bootstrap."""
+    fields = {"registry_id", "controller_owner", "controller_epoch", "controller_transfer_id", "controller_state_digest"}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise StageError("controller_binding", 71)
+    if value["controller_owner"] not in ("mac", "aws") or type(value["controller_epoch"]) is not int or value["controller_epoch"] < 1:
+        raise StageError("controller_binding", 71)
+    if any(
+        not isinstance(value[field], str) or re.fullmatch(r"[A-Za-z0-9_-]{1,100}", value[field]) is None for field in ("registry_id", "controller_transfer_id")
+    ):
+        raise StageError("controller_binding", 71)
+    if not isinstance(value["controller_state_digest"], str) or SHA256.fullmatch(value["controller_state_digest"]) is None:
+        raise StageError("controller_binding", 71)
+    return dict(value)
+
+
+def check_job_binding(job: dict[str, Any], dispatch: dict[str, Any]) -> None:
+    """Refuse a job whose controller or catalog epoch differs from its approved dispatch record."""
+    binding = controller_binding(job.get("controller_binding"))
+    expected = controller_binding(dispatch.get("controller_binding"))
+    if binding != expected:
+        raise StageError("controller_binding", 71)
+    for value in (job, dispatch):
+        if "catalog_epoch" not in value or value["catalog_epoch"] is not None and (type(value["catalog_epoch"]) is not int or value["catalog_epoch"] < 1):
+            raise StageError("catalog_binding", 71)
+    if job["catalog_epoch"] != dispatch["catalog_epoch"]:
+        raise StageError("catalog_binding", 71)
+
+
 def check_deadline(deadline: float) -> None:
     """Refuse work after the caller's absolute monotonic deadline."""
     if not math.isfinite(deadline) or time.monotonic() >= deadline:
