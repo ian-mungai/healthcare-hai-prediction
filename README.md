@@ -122,8 +122,9 @@ After fixing the cause, rerun the same command.
 Without `--repair-tables`, `--bootstrap-all` updates metadata without loading source files.
 
 The bronze cutover registers the bronze metadata on the AWS catalog and switches write authority, one owner step at a
-time (`dry-run`, `freeze`, `fence`, `capture`, `refresh`, `register`, `verify`, `switch` or `rollback`). The steps,
-their checks and the rollback are in `docs/lakehouse_usage.md` under "Bronze cutover to the AWS catalog":
+time (`dry-run`, `freeze`, `fence`, `capture`, `refresh`, `route-check`, `register`, `verify`, `switch` or
+`rollback`). The steps, their checks and the rollback are in `docs/lakehouse_usage.md` under "Bronze cutover to the
+AWS catalog":
 
 ```sh
 .venv/bin/python -m scripts.lakehouse.bronze_cutover status

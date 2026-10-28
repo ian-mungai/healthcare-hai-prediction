@@ -281,8 +281,9 @@ line and the owner types it back:
 .venv/bin/python -m scripts.lakehouse.bronze_cutover fence         # waits until no Mac write is queued or running
 .venv/bin/python -m scripts.lakehouse.bronze_cutover capture       # writes the inventory and its SHA-256 once
 .venv/bin/python -m scripts.lakehouse.bronze_cutover refresh
-.venv/bin/python -m scripts.lakehouse.bronze_cutover register --inventory <INVENTORY_FILE> --sha256 <DIGEST> --instance <HOST_INSTANCE_ID>
-.venv/bin/python -m scripts.lakehouse.bronze_cutover verify --instance <HOST_INSTANCE_ID>
+.venv/bin/python -m scripts.lakehouse.bronze_cutover route-check   # records the native route observations of the host
+.venv/bin/python -m scripts.lakehouse.bronze_cutover register --inventory <INVENTORY_FILE> --sha256 <DIGEST>
+.venv/bin/python -m scripts.lakehouse.bronze_cutover verify
 .venv/bin/python -m scripts.lakehouse.bronze_cutover switch        # AWS becomes the writer with every layer off
 .venv/bin/python -m scripts.lakehouse.bronze_cutover rollback      # before any AWS writer was admitted
 .venv/bin/python -m scripts.lakehouse.run_bronze_cutover_e2e       # stand-ins only, report: data/e2e/bronze_cutover/
@@ -307,9 +308,16 @@ metadata object in S3, which must be byte-identical. It writes `bronze_inventory
 once, mode 0600, in the cutover folder. A second capture must give the same digest.
 
 `register` and `verify` reach the AWS catalog only through the Session Manager tunnel to the host's private port 8181
-behind an owned loopback relay (`orchestration/catalog_transport.py`). Before the tunnel starts, the network acceptance
-check requires local tunnel and relay ports other than the Mac Polaris port 8181 (defaults 18181 and 18182) and one
-running host instance without a public address. A lost route fails the step and is never reopened inside an operation.
+behind an owned loopback relay (`orchestration/catalog_transport.py`). The host is never typed by the owner: each step
+binds the one in-service instance of the approved host group named by the platform outputs. `route-check` records the
+native route observations of that host once, write-once under `route_checks/` in the cutover folder. Lakehouse jobs
+must reach the approved catalog and S3. Offline jobs must not reach the catalog. Both classes must be refused Redis,
+unrelated hosts and the internet. A Mac container must not reach the cutover's tunnel or relay. `register` and `verify`
+refuse to open the route unless the newest check passed for the same host. The receipt records the check's digest. In this checkout the live
+observations have no probe yet, so `route-check` refuses and `register` stays blocked until the attended session
+supplies them. Before the tunnel starts, the network acceptance check requires local tunnel and relay ports other than
+the Mac Polaris port 8181 (defaults 18181 and 18182) and a running project host without a public address. A lost route
+fails the step and is never reopened inside an operation.
 Each Polaris request ends at its absolute deadline, also while a slow peer is still sending headers or body: the client
 closes the connection and the step fails with the `deadline` cause.
 `register` first checks that the AWS catalog `hai_lakehouse` exists with the lakehouse base location and no credential

@@ -8,8 +8,9 @@ Run from the repository root, one step at a time, at a terminal (each authority 
     .venv/bin/python -m scripts.lakehouse.bronze_cutover fence
     .venv/bin/python -m scripts.lakehouse.bronze_cutover capture
     .venv/bin/python -m scripts.lakehouse.bronze_cutover refresh
-    .venv/bin/python -m scripts.lakehouse.bronze_cutover register --inventory <FILE> --sha256 <DIGEST> --instance <HOST_INSTANCE_ID>
-    .venv/bin/python -m scripts.lakehouse.bronze_cutover verify --instance <HOST_INSTANCE_ID>
+    .venv/bin/python -m scripts.lakehouse.bronze_cutover route-check
+    .venv/bin/python -m scripts.lakehouse.bronze_cutover register --inventory <FILE> --sha256 <DIGEST>
+    .venv/bin/python -m scripts.lakehouse.bronze_cutover verify
     .venv/bin/python -m scripts.lakehouse.bronze_cutover switch
     .venv/bin/python -m scripts.lakehouse.bronze_cutover rollback
 
@@ -18,7 +19,9 @@ catalog writes outside ``mac_writer``. Each command body is stored write-once un
 is sent, so repeating a step after a lost reply sends the identical command and gets the stored record back.
 
 The AWS catalog is reached only through ``orchestration.catalog_transport.CatalogTransport``: a Session Manager tunnel to the host's private
-port 8181 behind an owned loopback relay, after the network acceptance check. Every dependent call runs once through ``Route.execute``; a lost
+port 8181 behind an owned loopback relay. The host is the one in-service instance of the approved host group from the platform outputs.
+``register`` and ``verify`` refuse to open the route without a passing native route check of that host (``route-check``) and run the network
+acceptance check before the tunnel starts. Every dependent call runs once through ``Route.execute``; a lost
 route fails visibly and is never reopened inside an operation. Registration uses ``register_aws_catalog.register_exact_metadata`` per table
 with its own deadline, so a rerun with the same inventory adopts done tables as ``unchanged`` and never overwrites a different table. The
 Polaris root credential registers (owner decision for this one attended run; the receipt records it) and the AWS reader pair verifies. Both
@@ -98,8 +101,22 @@ def check_ports(spec: TransportSpec) -> None:
         raise reg.RegistrationError("network", f"the tunnel and relay ports must differ from the Mac Polaris port {MAC_POLARIS_PORT}")
 
 
-def network_acceptance(spec: TransportSpec, aws: AwsCli, *, deadline: float, clock: reg.Clock = time.monotonic) -> None:
-    """Accept the route only to one running host with no public address on the instance or any interface; the catalog stays private."""
+def bind_target(aws: AwsCli, group: str, *, deadline: float, clock: reg.Clock = time.monotonic) -> str:
+    """The catalog host: the one in-service instance of the approved host group named by the platform outputs, never an owner-typed ID."""
+    reg.check_deadline(deadline, clock)
+    try:
+        described = aws.call_bounded("autoscaling", "describe-auto-scaling-groups", ["--auto-scaling-group-names", group], timeout=deadline - clock())
+    except StorageError as error:
+        raise reg.RegistrationError("network", f"describing the approved host group failed ({error.code})") from None
+    groups = described.get("AutoScalingGroups") or []
+    serving = [item for found in groups for item in found.get("Instances") or [] if item.get("LifecycleState") == "InService"]
+    if len(groups) != 1 or len(serving) != 1 or not isinstance(serving[0].get("InstanceId"), str):
+        raise reg.RegistrationError("network", f"the approved host group has {len(serving)} in-service hosts; the cutover needs exactly one")
+    return str(serving[0]["InstanceId"])
+
+
+def network_acceptance(spec: TransportSpec, aws: AwsCli, project_tag: str, *, deadline: float, clock: reg.Clock = time.monotonic) -> None:
+    """Accept the route only to one running project host with no public address on the instance or any interface; the catalog stays private."""
     check_ports(spec)
     reg.check_deadline(deadline, clock)
     try:
@@ -112,8 +129,76 @@ def network_acceptance(spec: TransportSpec, aws: AwsCli, *, deadline: float, clo
         or (instances[0].get("State") or {}).get("Name") != "running"
         or instances[0].get("PublicIpAddress")
         or any((interface.get("Association") or {}).get("PublicIp") for interface in instances[0].get("NetworkInterfaces") or [])
+        or {"Key": "Project", "Value": project_tag} not in (instances[0].get("Tags") or [])
     ):
-        raise reg.RegistrationError("network", "the catalog host is not one running instance without a public address")
+        raise reg.RegistrationError("network", "the catalog host is not one running project instance without a public address")
+
+
+# The native route observations the cutover needs before its route is used: (origin, destination, must reach). Lakehouse jobs reach the
+# approved catalog and S3, offline jobs do not reach the catalog, both are refused Redis, unrelated hosts and the internet, and a Mac container
+# cannot reach the cutover's tunnel or relay (docs/ecs_real_runs.md, "Identity and actual reads").
+ROUTE_MATRIX: tuple[tuple[str, str, bool], ...] = (
+    ("lakehouse", "catalog", True),
+    ("lakehouse", "s3", True),
+    ("lakehouse", "redis", False),
+    ("lakehouse", "unrelated_host", False),
+    ("lakehouse", "internet", False),
+    ("offline", "catalog", False),
+    ("offline", "redis", False),
+    ("offline", "unrelated_host", False),
+    ("offline", "internet", False),
+    ("mac_container", "catalog_route", False),
+)
+ROUTE_CHECKS = "route_checks"
+
+
+class RouteProbe(Protocol):
+    def observe(self, origin: str, destination: str, *, deadline: float) -> bool | None:
+        """True when the origin reached the destination, False when it was refused, None when the observation could not run."""
+        ...
+
+
+def route_check(probe: RouteProbe, instance: str, folder: Path, *, deadline: float, stamp: str, clock: reg.Clock = time.monotonic) -> dict[str, Any]:
+    """Observe every pair of the route matrix once for the bound host and record the result write-once, passing or not."""
+    observations = []
+    for origin, destination, reach in ROUTE_MATRIX:
+        reg.check_deadline(deadline, clock)
+        observed = probe.observe(origin, destination, deadline=deadline)
+        observations.append({"origin": origin, "destination": destination, "expected": reach, "observed": observed})
+    document = {"schema": 1, "instance": instance, "time": stamp, "observations": observations, "passed": route_problem(observations) is None}
+    durable_directory(folder / ROUTE_CHECKS)
+    bronze_inventory.write_new(folder / ROUTE_CHECKS / f"{stamp}.json", reg.canonical(document))
+    return document
+
+
+def route_problem(observations: object) -> str | None:
+    """The first observation that differs from the route matrix, or None when every pair was observed as required."""
+    found = (
+        {(item.get("origin"), item.get("destination")): item.get("observed") for item in observations if isinstance(item, dict)}
+        if isinstance(observations, list)
+        else {}
+    )
+    for origin, destination, reach in ROUTE_MATRIX:
+        observed = found.get((origin, destination))
+        if observed is not reach:
+            state = "not observed" if observed is None else "reached" if observed else "refused"
+            return f"{origin} to {destination} was {state}; it must be {'reached' if reach else 'refused'}"
+    return None
+
+
+def require_route(folder: Path, instance: str) -> str:
+    """The SHA-256 of the newest route check; refuse when none exists, when it names another host or when any observation differs."""
+    checks = sorted((folder / ROUTE_CHECKS).glob("*.json")) if (folder / ROUTE_CHECKS).exists() else []
+    if not checks:
+        raise CutoverError("no native route check is recorded for this cutover; run route-check first")
+    raw = checks[-1].read_bytes()
+    document = json.loads(raw)
+    if document.get("instance") != instance:
+        raise CutoverError("the newest route check names another catalog host; run route-check again")
+    problem = route_problem(document.get("observations"))
+    if problem:
+        raise CutoverError(f"the newest route check failed: {problem}; run route-check again once the route holds")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def read_parameter(aws: AwsCli, name: str, *, deadline: float, clock: reg.Clock = time.monotonic) -> str:
@@ -297,6 +382,14 @@ class Services(Protocol):
         """The project bucket as the storage identity of AWS read jobs sees it."""
         ...
 
+    def target(self, *, deadline: float) -> str:
+        """The catalog host bound from the approved host group."""
+        ...
+
+    def route_probe(self, instance: str, *, deadline: float) -> RouteProbe:
+        """The native route observations of the bound host."""
+        ...
+
     def remote(self, instance: str, *, deadline: float) -> contextlib.AbstractContextManager[Remote]:
         """Open the accepted route for the duration of one step and close it after."""
         ...
@@ -352,10 +445,25 @@ class LiveServices:
         )
         return bronze_scan.RoleStorage(self.settings, session)
 
+    @functools.cached_property
+    def platform(self) -> tuple[str, str]:
+        """The approved host group and the project tag from the platform outputs."""
+        from scripts.infrastructure.host_session import output_value
+        from scripts.infrastructure.render_platform_config import PLATFORM_DIRECTORY, terraform_document
+
+        outputs = terraform_document(PLATFORM_DIRECTORY, ["output", "-json"], self.settings, "The platform outputs could not be read.")
+        return str(output_value(outputs, "host_autoscaling_group_name", str)), str(output_value(outputs, "project_tag", str))
+
+    def target(self, *, deadline: float) -> str:
+        return bind_target(self.aws, self.platform[0], deadline=deadline)
+
+    def route_probe(self, instance: str, *, deadline: float) -> RouteProbe:
+        raise CutoverError("no native route probe is available in this checkout; the class-network observations run in the attended session")
+
     @contextlib.contextmanager
     def remote(self, instance: str, *, deadline: float) -> Iterator[Remote]:
         spec = TransportSpec(instance, self.settings["aws_profile"], self.settings["aws_region"], *self.ports)
-        network_acceptance(spec, self.aws, deadline=deadline)
+        network_acceptance(spec, self.aws, self.platform[1], deadline=deadline)
         names = secret_store.variable_names(REPO_ROOT / secret_store.VARIABLES)
         root = self.secret(secret_store.POLARIS_ROOT_SECRET, deadline)
         reader_id = self.secret(names["AWS_POLARIS_READER_CLIENT_ID_NAME"], deadline)
@@ -518,7 +626,21 @@ def step_dry_run(services: Services, terminal: Terminal, seconds: float, per_tab
     return inventory.sha256
 
 
-def step_register(services: Services, terminal: Terminal, inventory_path: Path, sha256: str, instance: str, seconds: float, per_table: float) -> dict[str, Any]:
+def step_route_check(services: Services, terminal: Terminal, seconds: float) -> dict[str, Any]:
+    """Bind the catalog host and record the native route observations before the route is used; a failed check refuses register and verify."""
+    record = require_state("refreshing")
+    folder = folder_of(services, record["cutover_id"])
+    deadline = time.monotonic() + seconds
+    instance = services.target(deadline=deadline)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    document = route_check(services.route_probe(instance, deadline=deadline), instance, folder, deadline=deadline, stamp=stamp)
+    terminal.write(f"route check: {'passed' if document['passed'] else 'failed'}; record: {folder / ROUTE_CHECKS / (stamp + '.json')}\n")
+    if not document["passed"]:
+        raise CutoverError(f"the route check failed: {route_problem(document['observations'])}")
+    return {"passed": True, "observations": len(document["observations"])}
+
+
+def step_register(services: Services, terminal: Terminal, inventory_path: Path, sha256: str, seconds: float, per_table: float) -> dict[str, Any]:
     """Register every pinned table through the accepted route; a rerun with the same digest adopts done tables (R1 to R10)."""
     record = require_state("refreshing")
     folder = folder_of(services, record["cutover_id"])
@@ -526,6 +648,8 @@ def step_register(services: Services, terminal: Terminal, inventory_path: Path, 
         raise CutoverError("the inventory must be the one frozen for the current cutover")
     inventory = bronze_inventory.read_inventory(inventory_path, sha256, services.required)
     deadline = time.monotonic() + seconds
+    instance = services.target(deadline=deadline)
+    require_route(folder, instance)
     with services.remote(instance, deadline=deadline) as remote:
         preflight(remote.request, services.bucket, deadline=deadline, execute=remote.execute)
         outcomes = register_tables(
@@ -537,13 +661,15 @@ def step_register(services: Services, terminal: Terminal, inventory_path: Path, 
     return {key: len(value) for key, value in outcomes.items()}
 
 
-def step_verify(services: Services, terminal: Terminal, instance: str, seconds: float, per_table: float) -> str:
+def step_verify(services: Services, terminal: Terminal, seconds: float, per_table: float) -> str:
     """Verify through the reader identity, recompare the Mac tables and write the receipt once (V1 to V3)."""
     record = require_state("refreshing")
     folder = folder_of(services, record["cutover_id"])
     digest = (folder / bronze_inventory.DIGEST_NAME).read_text().strip()
     inventory = bronze_inventory.read_inventory(folder / bronze_inventory.INVENTORY_NAME, digest, services.required)
     deadline = time.monotonic() + seconds
+    instance = services.target(deadline=deadline)
+    route = require_route(folder, instance)
     with services.remote(instance, deadline=deadline) as remote:
         facts = verify_tables(
             remote.reader,
@@ -556,7 +682,7 @@ def step_verify(services: Services, terminal: Terminal, instance: str, seconds: 
             per_table=per_table,
             execute=remote.execute,
         )
-    receipt = write_receipt(folder, record["cutover_id"], inventory.sha256, facts)
+    receipt = write_receipt(folder, record["cutover_id"], inventory.sha256, {**facts, "route_check_sha256": route})
     terminal.write(f"verified {facts['reader_tables']} tables; receipt sha256 {receipt}\n")
     return receipt
 
@@ -614,14 +740,12 @@ def parser() -> argparse.ArgumentParser:
     cli.add_argument("--seconds", type=float, default=7200, help="the deadline of the whole step")
     cli.add_argument("--per-table-seconds", type=float, default=120)
     steps = cli.add_subparsers(dest="step", required=True)
-    for name in ("status", "dry-run", "fence", "capture", "refresh", "switch", "rollback"):
+    for name in ("status", "dry-run", "fence", "capture", "refresh", "route-check", "verify", "switch", "rollback"):
         steps.add_parser(name)
     steps.add_parser("freeze").add_argument("--cutover", required=True)
     register = steps.add_parser("register")
     register.add_argument("--inventory", type=Path, required=True)
     register.add_argument("--sha256", required=True)
-    register.add_argument("--instance", required=True)
-    steps.add_parser("verify").add_argument("--instance", required=True)
     return cli
 
 
@@ -644,10 +768,12 @@ def run(args: argparse.Namespace, services: Services, terminal: Terminal) -> Any
         if not (folder / bronze_inventory.DIGEST_NAME).exists():
             raise CutoverError("refresh needs the frozen inventory; run capture first")
         return authority_step(services, terminal, "refresh", "refreshing", "bronze inventory frozen; AWS registration may start")
+    if args.step == "route-check":
+        return step_route_check(services, terminal, seconds)
     if args.step == "register":
-        return step_register(services, terminal, args.inventory, args.sha256, args.instance, seconds, per_table)
+        return step_register(services, terminal, args.inventory, args.sha256, seconds, per_table)
     if args.step == "verify":
-        return step_verify(services, terminal, args.instance, seconds, per_table)
+        return step_verify(services, terminal, seconds, per_table)
     if args.step == "switch":
         return step_switch(services, terminal)
     return step_rollback(services, terminal, seconds, per_table)

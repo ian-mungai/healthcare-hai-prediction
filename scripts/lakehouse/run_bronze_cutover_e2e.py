@@ -1009,13 +1009,23 @@ def tunnel_route(folder: Path) -> dict[str, bool]:
     )
     settings = {"aws_profile": "synthetic", "aws_region": "us-east-1", "data_bucket_name": BUCKET, "expected_account_id": "synthetic_account"}
     spec = TransportSpec("i-0123456789abcdef0", "synthetic", "us-east-1", 18181, 18182)
+    tags = [{"Key": "Project", "Value": "synthetic_project"}]
     for label, instance, expected in (
-        ("a running private host passes", {"State": {"Name": "running"}, "NetworkInterfaces": [{}]}, ""),
-        ("a public address is refused", {"State": {"Name": "running"}, "PublicIpAddress": "192.0.2.1", "NetworkInterfaces": [{}]}, "network"),
-        ("a stopped host is refused", {"State": {"Name": "stopped"}, "NetworkInterfaces": [{}]}, "network"),
+        ("a running private host of the project passes", {"State": {"Name": "running"}, "NetworkInterfaces": [{}], "Tags": tags}, ""),
+        (
+            "a public address is refused",
+            {"State": {"Name": "running"}, "PublicIpAddress": "192.0.2.1", "NetworkInterfaces": [{}], "Tags": tags},
+            "network",
+        ),
+        ("a stopped host is refused", {"State": {"Name": "stopped"}, "NetworkInterfaces": [{}], "Tags": tags}, "network"),
         (
             "a public interface association is refused",
-            {"State": {"Name": "running"}, "NetworkInterfaces": [{"Association": {"PublicIp": "192.0.2.1"}}]},
+            {"State": {"Name": "running"}, "NetworkInterfaces": [{"Association": {"PublicIp": "192.0.2.1"}}], "Tags": tags},
+            "network",
+        ),
+        (
+            "a host without the project tag is refused",
+            {"State": {"Name": "running"}, "NetworkInterfaces": [{}], "Tags": [{"Key": "Project", "Value": "other"}]},
             "network",
         ),
     ):
@@ -1024,8 +1034,91 @@ def tunnel_route(folder: Path) -> dict[str, bool]:
         def runner(command: list[str], reply: str = reply, **_: Any) -> SimpleNamespace:
             return SimpleNamespace(returncode=0, stdout=reply, stderr="")
 
-        code, _ = code_of(lambda: bronze_cutover.network_acceptance(spec, AwsCli(settings, runner=runner), deadline=time.monotonic() + 10))
+        code, _ = code_of(lambda: bronze_cutover.network_acceptance(spec, AwsCli(settings, runner=runner), "synthetic_project", deadline=time.monotonic() + 10))
         checks[f"network acceptance: {label}"] = code == expected
+    return checks
+
+
+class RouteProbe:
+    """Native route observations as stand-ins: each origin and destination pair answers as the approved class networks would, unless changed."""
+
+    def __init__(self) -> None:
+        self.answers: dict[tuple[str, str], bool | None] = {(origin, destination): expected for origin, destination, expected in bronze_cutover.ROUTE_MATRIX}
+        self.calls: list[tuple[str, str]] = []
+
+    def observe(self, origin: str, destination: str, *, deadline: float) -> bool | None:
+        self.calls.append((origin, destination))
+        return self.answers.get((origin, destination))
+
+
+def group_runner(instances: list[dict[str, Any]], groups: int = 1) -> Callable[..., SimpleNamespace]:
+    reply = json.dumps({"AutoScalingGroups": [{"Instances": instances} for _ in range(groups)]})
+
+    def runner(command: list[str], **_: Any) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout=reply, stderr="")
+
+    return runner
+
+
+@offline
+def route_binding_and_evidence(folder: Path) -> dict[str, bool]:
+    """R9 and route acceptance: the host comes from the approved host group, and register needs a passing native route check of that host."""
+    checks: dict[str, bool] = {}
+    settings = {"aws_profile": "synthetic", "aws_region": "us-east-1", "data_bucket_name": BUCKET, "expected_account_id": "synthetic_account"}
+    service = {"InstanceId": "i-0123456789abcdef0", "LifecycleState": "InService"}
+    bound = bronze_cutover.bind_target(AwsCli(settings, runner=group_runner([service])), "synthetic_group", deadline=time.monotonic() + 10)
+    checks["the host is the one in-service instance of the approved host group"] = bound == "i-0123456789abcdef0"
+    for label, runner in (
+        ("an empty host group", group_runner([])),
+        ("two in-service hosts", group_runner([service, {**service, "InstanceId": "i-0fedcba9876543210"}])),
+        ("a host that is not in service", group_runner([{**service, "LifecycleState": "Pending"}])),
+        ("two matching groups", group_runner([service], groups=2)),
+    ):
+        code, _ = code_of(lambda runner=runner: bronze_cutover.bind_target(AwsCli(settings, runner=runner), "synthetic_group", deadline=time.monotonic() + 10))
+        checks[f"binding refuses {label}"] = code == "network"
+    cutover = folder / "cutover" / "cut1"
+    refusal = code_of_cutover(lambda: bronze_cutover.require_route(cutover, bound))
+    checks["register is refused before any route check"] = "route-check" in refusal
+    probe = RouteProbe()
+    clock = registration_e2e.Clock()
+    passed = bronze_cutover.route_check(probe, bound, cutover, deadline=clock() + 100, clock=clock, stamp="20261028T000000000000Z")
+    checks["the route check observes every pair of the matrix once"] = sorted(probe.calls) == sorted((o, d) for o, d, _ in bronze_cutover.ROUTE_MATRIX)
+    checks["the matrix covers both classes, the catalog, S3, Redis, unrelated hosts, the internet and the Mac container"] = {
+        (o, d) for o, d, _ in bronze_cutover.ROUTE_MATRIX
+    } >= {
+        ("lakehouse", "catalog"),
+        ("lakehouse", "s3"),
+        ("offline", "catalog"),
+        *((origin, target) for origin in ("lakehouse", "offline") for target in ("redis", "unrelated_host", "internet")),
+        ("mac_container", "catalog_route"),
+    }
+    evidence = cutover / bronze_cutover.ROUTE_CHECKS / "20261028T000000000000Z.json"
+    checks["a passing check is recorded write-once with the bound host"] = (
+        passed["passed"] is True and json.loads(evidence.read_text())["instance"] == bound and stat.S_IMODE(evidence.stat().st_mode) == 0o600
+    )
+    checks["register is allowed with the passing check of the same host"] = code_of_cutover(lambda: bronze_cutover.require_route(cutover, bound)) == ""
+    checks["a check of another host does not count"] = "another" in code_of_cutover(lambda: bronze_cutover.require_route(cutover, "i-0fedcba9876543210"))
+    for number, (label, pair, answer) in enumerate(
+        (
+            ("an offline job that reaches the catalog", ("offline", "catalog"), True),
+            ("a lakehouse job that cannot reach S3", ("lakehouse", "s3"), False),
+            ("a lakehouse job that reaches Redis", ("lakehouse", "redis"), True),
+            ("an offline job that reaches the internet", ("offline", "internet"), True),
+            ("a Mac container that reaches the catalog route", ("mac_container", "catalog_route"), True),
+            ("an observation that could not run", ("lakehouse", "catalog"), None),
+        ),
+        1,
+    ):
+        probe = RouteProbe()
+        probe.answers[pair] = answer
+        failed = bronze_cutover.route_check(probe, bound, cutover, deadline=clock() + 100, clock=clock, stamp=f"20261028T00000{number}000000Z")
+        refusal = code_of_cutover(lambda: bronze_cutover.require_route(cutover, bound))
+        checks[f"{label} fails the check and register is refused"] = failed["passed"] is False and pair[1] in refusal
+    tampered = cutover / bronze_cutover.ROUTE_CHECKS / "20261028T000009000000Z.json"
+    document = json.loads(evidence.read_text())
+    document["observations"] = document["observations"][1:]
+    tampered.write_bytes(reg.canonical(document))
+    checks["a recorded check that misses an observation is refused"] = "route" in code_of_cutover(lambda: bronze_cutover.require_route(cutover, bound))
     return checks
 
 
@@ -1038,6 +1131,14 @@ class StandInServices:
         self.required = REQUIRED
         self.bucket = BUCKET
         self.routes = 0
+        self.probe = RouteProbe()
+        self.instance = "i-0123456789abcdef0"
+
+    def target(self, *, deadline: float) -> str:
+        return self.instance
+
+    def route_probe(self, instance: str, *, deadline: float) -> RouteProbe:
+        return self.probe
 
     def source(self, *, deadline: float) -> bronze_inventory.Source:
         return bronze_inventory.SourceCatalog(self.cut.lake.source.request, "hai_lakehouse")
@@ -1114,14 +1215,24 @@ def owner_cli_sequence(env: Env) -> dict[str, bool]:
     owner.typed = None
     checks["step 4: refresh"] = owner.run("refresh")["state"] == "refreshing"
     inventory = str(folder / bronze_inventory.INVENTORY_NAME)
-    counts = owner.run("register", "--inventory", inventory, "--sha256", digest, "--instance", "i-0123456789abcdef0")
+    checks["register is refused before a route check and opens no route"] = (
+        "route-check" in code_of_cutover(lambda: owner.run("register", "--inventory", inventory, "--sha256", digest)) and services.routes == 0
+    )
+    services.probe.answers[("offline", "catalog")] = True
+    checks["a failing route check is refused"] = "catalog" in code_of_cutover(lambda: owner.run("route-check"))
+    services.probe.answers[("offline", "catalog")] = False
+    checks["step 5a: the route check passes and is recorded"] = owner.run("route-check")["passed"] is True
+    counts = owner.run("register", "--inventory", inventory, "--sha256", digest)
     checks["step 5: every table is registered"] = counts == {"registered": len(REQUIRED), "unchanged": 0}
-    again = owner.run("register", "--inventory", inventory, "--sha256", digest, "--instance", "i-0123456789abcdef0")
+    again = owner.run("register", "--inventory", inventory, "--sha256", digest)
     checks["R5: a second register run gives unchanged"] = again == {"registered": 0, "unchanged": len(REQUIRED)}
     checks["I8: register refuses another digest"] = "inventory" in code_of_cutover(
-        lambda: owner.run("register", "--inventory", inventory, "--sha256", "0" * 64, "--instance", "i-0123456789abcdef0")
+        lambda: owner.run("register", "--inventory", inventory, "--sha256", "0" * 64)
     )
-    receipt = owner.run("verify", "--instance", "i-0123456789abcdef0")
+    services.instance = "i-0fedcba9876543210"
+    checks["verify is refused when the approved host changed after the route check"] = "another" in code_of_cutover(lambda: owner.run("verify"))
+    services.instance = "i-0123456789abcdef0"
+    receipt = owner.run("verify")
     switched = owner.run("switch")
     checks["step 7: switch records aws_writer at P4 with layers off and the receipt digest in the reason"] = (
         switched["state"] == "aws_writer"
@@ -1192,6 +1303,7 @@ ALL_CASES = (
     polaris_http,
     http_absolute_deadline,
     role_storage_reads,
+    route_binding_and_evidence,
     register_and_verify,
     preflight_refusals,
     register_failures,
