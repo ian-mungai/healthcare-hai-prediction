@@ -43,7 +43,7 @@ NUMERIC_RESULT_KEYS = ("element_count", "unexpected_count", "unexpected_percent"
 PLACEHOLDER = re.compile(r"<<([a-z0-9_.]+)>>")
 
 
-def engine_config() -> dict[str, str]:
+def engine_config() -> dict[str, str | bool | int | float | list[str]]:
     """DuckDB's memory and thread limits from the launch plan, the same settings a dbt build gets."""
     settings = {"memory_limit": os.environ.get("DUCKDB_MEMORY_LIMIT", ""), "threads": os.environ.get("JOB_THREADS", "")}
     return {**{name: value for name, value in settings.items() if value}, **duckdb_temp_settings()}

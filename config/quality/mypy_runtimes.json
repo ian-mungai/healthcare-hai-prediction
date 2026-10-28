@@ -36,17 +36,9 @@
       "runtime": "spark",
       "reason": "Library stubs not installed for \"openpyxl\"; Library stubs not installed for \"xlrd\"; Cannot find implementation or library stub for module named \"pyreadstat\"; Cannot find implementation or library stub for module named \"pdfplumber\""
     },
-    "scripts/lakehouse/gold_export.py": {
-      "runtime": "quality",
-      "reason": "Cannot find implementation or library stub for module named \"duckdb\""
-    },
-    "scripts/lakehouse/gold_reconcile.py": {
-      "runtime": "quality",
-      "reason": "Cannot find implementation or library stub for module named \"duckdb\""
-    },
     "scripts/lakehouse/pipeline_build.py": {
       "runtime": "analytics",
-      "reason": "Skipping analyzing \"dbt.cli.main\": module is installed, but missing library stubs or py.typed marker; Cannot find implementation or library stub for module named \"duckdb\""
+      "reason": "Skipping analyzing \"dbt.cli.main\": module is installed, but missing library stubs or py.typed marker"
     },
     "scripts/lakehouse/run_bronze_e2e.py": {
       "runtime": "spark",
@@ -58,7 +50,7 @@
     },
     "scripts/lakehouse/silver_quality.py": {
       "runtime": "quality",
-      "reason": "Cannot find implementation or library stub for module named \"duckdb\"; Cannot find implementation or library stub for module named \"great_expectations\"; Cannot find implementation or library stub for module named \"great_expectations.expectations\"; Cannot find implementation or library stub for module named \"great_expectations.execution_engine\""
+      "reason": "Cannot find implementation or library stub for module named \"great_expectations\"; Cannot find implementation or library stub for module named \"great_expectations.expectations\"; Cannot find implementation or library stub for module named \"great_expectations.execution_engine\""
     },
     "scripts/orchestration/db_dump.py": {
       "runtime": "orchestration_image",
