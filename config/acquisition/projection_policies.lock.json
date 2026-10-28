@@ -1,0 +1,11 @@
+{
+  "entries": {
+    "r1_bls_laus_api": "sha256:a3dec003f1d4ddb7a186c3ac20394f71baab7f80e4a7288993305c4d072b4b6e",
+    "r2_census_acs_profile_api": "sha256:317b8f8623490664a6c42d28e12135af81dcc34fa9778ccc77440682d8815045",
+    "r3_census_acs_detailed_api": "sha256:e4477b220f7cdfd94a67c7e601c0064472758c0687ffd2fbd6fa9623b7a44ac2",
+    "r4_hud_usps_crosswalk_api": "sha256:0eb75c4cbad83365c518f74976706e28d5016182b3349aedc5261cbf8783b345",
+    "r5_hud_zip_county_workbook": "sha256:f1bf78cba7c69987d58919098b4ccbc56b412a212ba20bacbdb53fe9611848e4",
+    "r6_wonder_county_year": "sha256:38b8521560b7800a1f5b9abb355f8d33809e8790ef3d4dd58a12694645e2c0fd"
+  },
+  "policies_sha256": "sha256:2447a87a44c5c10a6b09f2c57832ecbad4e2c146a5cc5ac752d11d15a242f712"
+}
