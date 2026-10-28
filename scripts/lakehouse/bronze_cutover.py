@@ -63,10 +63,8 @@ FENCE_POLL_SECONDS = 10.0
 TEST_REGISTRY: str | None = None
 
 
-class Execute(Protocol):
-    def __call__[R](self, operation: Callable[[], R], /) -> R:
-        """Run one dependent catalog operation exactly once."""
-        ...
+# Runs one dependent catalog operation exactly once and returns its result.
+Execute = Callable[[Callable[[], Any]], Any]
 
 
 def direct[R](operation: Callable[[], R], /) -> R:

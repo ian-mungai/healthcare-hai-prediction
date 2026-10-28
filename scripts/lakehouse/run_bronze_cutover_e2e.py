@@ -766,6 +766,7 @@ class Owner:
         bronze_cutover.TEST_REGISTRY = str(env.registry)
 
     def read(self, prompt: str) -> str:
+        self.lines.append(prompt)
         shown = next(line for line in reversed(self.lines) if line.startswith("Type this line to confirm: "))
         return self.typed if self.typed is not None else shown.removeprefix("Type this line to confirm: ").strip()
 
@@ -873,10 +874,30 @@ def run_offline(name: str, report: Path) -> tuple[dict[str, bool], str]:
             return {}, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()[-1500:]}"
 
 
+ALL_CASES = (
+    freeze_gate_and_fence,
+    queued_write_fenced,
+    rollback_paths,
+    inventory_capture,
+    inventory_identity,
+    s3_metadata_reads,
+    polaris_http,
+    register_and_verify,
+    preflight_refusals,
+    register_failures,
+    verify_failures,
+    tunnel_route,
+    owner_cli_sequence,
+    owner_cli_rollback,
+)
+
+
 def run_cases(selected: list[str]) -> int:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     report = OUT / stamp
     report.mkdir(parents=True)
+    if {function.__name__ for function in ALL_CASES} != {*OFFLINE, *CASES}:
+        raise SystemExit("ALL_CASES differs from the registered cases")
     results: list[dict[str, Any]] = []
     for name in selected or [*OFFLINE, *CASES]:
         started = time.monotonic()
