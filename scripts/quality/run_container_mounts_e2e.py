@@ -475,7 +475,9 @@ def snapshot(deadline: float) -> dict[str, str]:
                 raise ValueError(f"{name}: source symlinks are not supported")
             files[name] = (ROOT / path).read_text(encoding="utf-8")
     files[".pre-commit-config.yaml"] = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
-    files["config/quality/ci_groups.json"] = (ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8")
+    # The terraform_checks body copies these files into every stack it checks.
+    for name in ("config/quality/ci_groups.json", "config/lakehouse/bronze_tables.json", "config/lakehouse/aws_bronze_grants.json"):
+        files[name] = (ROOT / name).read_text(encoding="utf-8")
     files[".gitignore"] = ".venv/\n.cache/\n"
     return files
 
