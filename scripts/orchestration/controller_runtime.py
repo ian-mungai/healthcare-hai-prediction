@@ -1,7 +1,7 @@
 """Run the launcher, broker and completion worker together without a local container backend.
 
 The deployment supplies absolute nonsecret roots and injects CONTROLLER_BROKER_TOKEN in memory.
-Secure-token publication and the nonblocking ECS facade must be connected before dispatch is available.
+Secure tokens use isolated Parameter Store calls. The nonblocking ECS facade must be connected before dispatch is available.
 """
 
 from __future__ import annotations
@@ -15,21 +15,32 @@ import sys
 import threading
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
+from orchestration.controller_tokens import ParameterClient, SecureRunTokens
+from orchestration.ecs_api import EcsApi, WorkerConfig
 from orchestration.lineage import CompletionWorker
 from scripts.lakehouse import run_lock
 from scripts.orchestration.broker import Broker, BrokerPaths, Listener, load_templates
 
-START_SECONDS = 10.0
+START_SECONDS = 35.0
 STOP_SECONDS = 30.0
 
 
 def load_config(path: Path, *, test_registry: str | None = None) -> launcher.Config:
     """Load explicit controller roots without Docker, Mac home resolution or deployment-variable reads."""
     return launcher.resolve_config(test_registry, controller_config=path)
+
+
+def secure_config(config: launcher.Config, *, region: str, parameter_client: ParameterClient | None = None) -> launcher.Config:
+    """Connect the AWS token provider to an injected client or isolated workers using ECS container credentials."""
+    if config.local_backend != "disabled":
+        raise launcher.LauncherError("secure controller configuration requires the local backend disabled", "config")
+    client = parameter_client if parameter_client is not None else EcsApi(WorkerConfig(region, container_credentials=True), config.registry.path)
+    return replace(config, token_provider=SecureRunTokens(config.registry, client))
 
 
 class Controller:
@@ -53,6 +64,8 @@ class Controller:
     def _serve(self) -> None:
         try:
             self.result = self.server.serve()
+            if self.result == launcher.REFUSED_EXIT:
+                self.failure = self.server.startup_error
         except (launcher.LauncherError, launcher.ClientError, OSError, run_lock.RegistryError) as error:
             self.failure = error
         finally:
@@ -139,6 +152,8 @@ class Controller:
             if self.thread.is_alive():
                 errors.append("launcher did not stop")
         else:
+            if self.config.token_provider is not None:
+                self.config.token_provider.close(deadline=deadline)
             self.server.pool.shutdown(wait=False, cancel_futures=True)
         if errors:
             raise TimeoutError(f"controller cleanup exceeded {STOP_SECONDS:g} seconds: {', '.join(errors)}")
@@ -151,9 +166,10 @@ class Controller:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the foreground controller. Deployment integration supplies its secure-token and ECS providers."""
+    """Run the foreground controller. The token provider uses ECS credentials. Deployment integration supplies the ECS dispatch provider."""
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("--config", type=Path, required=True, help="absolute registry, run and artifact roots")
+    cli.add_argument("--region", required=True, help="reviewed AWS Region for the ECS container credential provider")
     cli.add_argument("--test-registry", help="a disposable test registry matching registry_root")
     cli.add_argument("--broker-port", type=int, default=18790)
     cli.add_argument("--lineage-port", type=int)
@@ -170,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
         stopping.set()
 
     try:
-        controller = Controller(load_config(args.config, test_registry=args.test_registry))
+        controller = Controller(secure_config(load_config(args.config, test_registry=args.test_registry), region=args.region))
         for number in (signal.SIGINT, signal.SIGTERM):
             previous[number] = signal.signal(number, stop)
         view: Mapping[str, Any] = controller.start(broker_token=token, port=args.broker_port, lineage_port=args.lineage_port)

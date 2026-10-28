@@ -3043,6 +3043,7 @@ METHODS: dict[str, MethodSpec] = {
     "plan": MethodSpec(("any",), mutating=False),
     "image": MethodSpec(("any",), mutating=False),
     "acquire": MethodSpec(("any",)),
+    "token_recover": MethodSpec(("any",), owner_flag=True),
     "allocate": MethodSpec(("any",)),
     "release_allocation": MethodSpec(("alloc",)),
     "submit": MethodSpec(("run", "alloc")),
@@ -3184,6 +3185,7 @@ class Launcher:
         self.registry_id = ""
         self.key = b""
         self.status = "starting"
+        self.startup_error: LauncherError | None = None
         self.degraded_reason = ""
         self.docker_ok = False
         self.epoch = 0
@@ -3278,6 +3280,7 @@ class Launcher:
             "plan": self.m_plan,
             "image": self.m_image,
             "acquire": self.m_acquire,
+            "token_recover": self.m_token_recover,
             "allocate": self.m_allocate,
             "release_allocation": self.m_release_allocation,
             "submit": self.m_submit,
@@ -3528,6 +3531,8 @@ class Launcher:
             self.write_diagnostic_owner()
             self.load_bound()
             self.repair_pending()
+            if self.cfg.local_backend == "disabled" and self.cfg.token_provider is not None:
+                self.cfg.token_provider.start(self)
             self.sweep_copies()
             self.open_socket()
             self.main_checkout = run_lock.main_checkout(self.cfg.root) if self.registry.kind == "real" and self.cfg.local_backend == "docker" else self.cfg.root
@@ -3539,6 +3544,7 @@ class Launcher:
                     state["launcher"].update(status="serving", local_backend="disabled", docker_state="disabled", degraded_reason="")
             self.loop()
         except LauncherError as error:
+            self.startup_error = error
             sys.stderr.write(f"launcher: {error}\n")
             return REFUSED_EXIT
         finally:
@@ -3576,6 +3582,12 @@ class Launcher:
             with contextlib.suppress(OSError):
                 self.listener.close()
         self.cfg.socket_path.unlink(missing_ok=True)
+        token_cleanup_error: TimeoutError | None = None
+        if self.cfg.local_backend == "disabled" and self.cfg.token_provider is not None:
+            try:
+                self.cfg.token_provider.close(deadline=time.monotonic() + 20)
+            except TimeoutError as error:
+                token_cleanup_error = error
         self.drain_seals()
         self.pool.shutdown(wait=False, cancel_futures=True)
         try:
@@ -3586,6 +3598,8 @@ class Launcher:
             pass
         if self.lock_handle is not None:
             self.lock_handle.close()
+        if token_cleanup_error is not None:
+            raise token_cleanup_error
 
     # -- the loop --------------------------------------------------------------------------------------------------
 
@@ -3780,6 +3794,8 @@ class Launcher:
         principal = dict(request.get("principal") or {"kind": "any"})
         if not isinstance(params, dict):
             raise LauncherError("params must be an object", "protocol")
+        if method == "token_recover" and (self.cfg.local_backend != "disabled" or self.cfg.token_provider is None):
+            raise LauncherError("secure token recovery requires the AWS controller provider", "token_provider")
         if self.cfg.local_backend == "disabled":
             if method in controller_backend.LOCAL_METHODS or principal.get("kind") == "alloc":
                 raise LauncherError("local backend is disabled", "local_backend")
@@ -3800,7 +3816,7 @@ class Launcher:
             raise Degraded(f"degraded: {self.degraded_reason}")
         if principal.get("kind") not in spec.kinds:
             raise LauncherError(f"{method} is not callable by principal {principal.get('kind')!r}", "principal")
-        if spec.owner_flag and method in ("docker_restart", "shutdown", "recover") and not principal.get("owner") and not params.get("owner"):
+        if spec.owner_flag and method in ("docker_restart", "shutdown", "recover", "token_recover") and not principal.get("owner") and not params.get("owner"):
             raise LauncherError(f"{method} needs --owner", "principal")
         with self.tx(write=spec.mutating) as state:
             key = self.authenticate(conn, principal, request_id, method, state)
@@ -3834,6 +3850,8 @@ class Launcher:
                     }
                     if stored is not None:
                         result = {**result, **stored}
+                if self.cfg.local_backend == "disabled" and principal.get("kind") == "run":
+                    state["requests"][key]["token_sha256"] = state["runs"][principal["run_id"]]["token_sha256"]
             return result
 
     def authenticate(self, conn: Conn, principal: dict[str, Any], request_id: str, method: str, state: dict[str, Any]) -> str:
@@ -3846,7 +3864,15 @@ class Launcher:
             token = str(principal.get("token", ""))
             if run is None or not token or not secrets.compare_digest(run_lock.digest(token), run["token_sha256"]):
                 raise LauncherError("token does not match the run", "principal")
-            return f"run:{run['run_id']}|{method}|{request_id}"
+            key = f"run:{run['run_id']}|{method}|{request_id}"
+            if self.cfg.local_backend == "disabled":
+                if run["state"] in {"acquire_pending", "acquire_unconfirmed"}:
+                    raise LauncherError("run token acquisition is unconfirmed", "principal")
+                if run["state"] == "released" and METHODS[method].mutating:
+                    replay = state["requests"].get(key, {})
+                    if replay.get("state") != "done" or replay.get("token_sha256") != run["token_sha256"]:
+                        raise LauncherError("released run accepts only exact completed-request replay", "principal")
+            return key
         if kind == "alloc":
             allocation = state["allocations"].get(str(principal.get("alloc_id")))
             if allocation is None:
@@ -4093,6 +4119,8 @@ class Launcher:
             if now > waiter.deadline:
                 self.waiters.remove(waiter)
                 self.finish_wait(waiter, timed_out=True)
+        if self.cfg.local_backend == "disabled" and self.cfg.token_provider is not None:
+            self.cfg.token_provider.tick(self)
         self.session_timers(now)
         self.maintenance(now)
 
@@ -5796,7 +5824,16 @@ class Launcher:
             present = container_id in self.inventory and self.inventory[container_id].get("state") != "absent"
             if record.get("attempt") in attempts and not present:
                 moved.append(("containers", container_id, record))
-        moved += [("requests", key, record) for key, record in state["requests"].items() if record["state"] == "done" and old(record.get("at"))]
+        pending_token_requests = {
+            run["secure_token"]["request_key"]
+            for run in state["runs"].values()
+            if self.cfg.local_backend == "disabled" and run["state"] in {"acquire_pending", "acquire_unconfirmed"} and "secure_token" in run
+        }
+        moved += [
+            ("requests", key, record)
+            for key, record in state["requests"].items()
+            if key not in pending_token_requests and record["state"] == "done" and old(record.get("at"))
+        ]
         moved += [
             ("reservation_history", f"{event.get('reservation_id')}@{event.get('at')}", event) for event in state["reservation_history"] if old(event.get("at"))
         ]
@@ -6119,6 +6156,13 @@ class Launcher:
         ctx.state["runs"][run_id]["token_file"] = str(path)
         return {"run_id": run_id, "token_file": str(path), "_not_stored": {"token": token}}
 
+    def m_token_recover(self, ctx: Ctx) -> dict[str, Any]:
+        """Run an explicitly authorized recovery against a durable secure-token intent."""
+        provider = self.cfg.token_provider
+        if provider is None:
+            raise LauncherError("secure token provider is not integrated", "token_provider")
+        return provider.recover(self, ctx)
+
     def run_entry(self, ctx: Ctx) -> dict[str, Any]:
         """The run the request's token names."""
         return dict(ctx.state["runs"][ctx.principal["run_id"]])
@@ -6211,6 +6255,8 @@ class Launcher:
             if not self.controller_run_clear(ctx.state, run_id):
                 raise LauncherError(f"run {run_id}: complete ECS reconciliation is unavailable or work remains", "refused")
             run_lock.set_state(ctx.state, run_id, "released")
+            if self.cfg.token_provider is not None:
+                self.cfg.token_provider.release(self, ctx)
             return {"state": "released"}
         key = f"runlist:{ctx.key}"
         self.spawn(key, "runlist", lambda: self.docker.containers(label=f"{LABEL_RUN}={run_id}"))

@@ -50,6 +50,10 @@ SERVICE_CODES = frozenset(
         "ServiceUnavailable",
         "ServiceUnavailableException",
         "ParameterNotFound",
+        "ParameterAlreadyExists",
+        "ParameterLimitExceeded",
+        "TooManyUpdates",
+        "InternalServerError",
         "ParameterVersionNotFound",
         "NoSuchKey",
         "NoSuchVersion",
@@ -64,7 +68,7 @@ SERVICE_CODES = frozenset(
         "ResourceNotFoundException",
     }
 )
-THROTTLE_CODES = frozenset({"Throttling", "ThrottlingException", "SlowDown", "TooManyRequestsException"})
+THROTTLE_CODES = frozenset({"Throttling", "ThrottlingException", "SlowDown", "TooManyRequestsException", "TooManyUpdates"})
 
 
 class Refused(ValueError):
@@ -135,9 +139,10 @@ class Sdk:
 
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
-        self.clients: dict[str, Any] = {}
+        self.clients: dict[tuple[str, str | None, float, float], Any] = {}
         self.session: Any = None
         self.profile_checked = False
+        self.call_budget = 20.0
 
     def _session(self) -> Any:
         import boto3
@@ -147,6 +152,13 @@ class Sdk:
                 self.session = boto3.Session("synthetic_access_key", "synthetic_secret_key", region_name=self.args.region)
             else:
                 self.session = boto3.Session(profile_name=self.args.profile, region_name=self.args.region)
+        if getattr(self.args, "container_credentials", False) and not self.args.test_endpoint:
+            if not os.environ.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"):
+                raise Refused("container_credentials_missing")
+            credentials = self.session.get_credentials()
+            if credentials is None or credentials.method != "container-role":
+                raise Refused("container_credentials_required")
+            return self.session
         if not self.profile_checked:
             profiles = self.session._session.full_config.get("profiles", {})
             profile = self.session.profile_name
@@ -171,13 +183,20 @@ class Sdk:
             else "sts"
             if operation in {"assume_role", "caller_identity"}
             else "ssm"
-            if operation == "get_parameter"
+            if operation == "get_parameter" or operation.startswith("controller_")
             else "logs"
             if operation == "logs_get_events"
             else "ecs"
         )
         endpoint = self.args.test_control_endpoint if self.args.test_control_endpoint and operation in protocol.CONTROL_OPERATIONS else self.args.test_endpoint
-        config = Config(retries={"total_max_attempts": 1, "mode": "standard"}, connect_timeout=3, read_timeout=30, s3={"addressing_style": "path"})
+        connect_timeout, read_timeout = 3.0, 30.0
+        config = Config(
+            retries={"total_max_attempts": 1, "mode": "standard"}, connect_timeout=connect_timeout, read_timeout=read_timeout, s3={"addressing_style": "path"}
+        )
+        if operation.startswith("controller_"):
+            limit = max(0.001, self.call_budget / 2)
+            connect_timeout, read_timeout = min(3, limit), min(5, limit)
+            config = Config(retries={"total_max_attempts": 1, "mode": "standard"}, connect_timeout=connect_timeout, read_timeout=read_timeout)
         session = params.get("session")
         if session:
             expiration = datetime.fromisoformat(session["expiration_utc"].replace("Z", "+00:00"))
@@ -191,20 +210,23 @@ class Sdk:
                 aws_secret_access_key=session["secret_access_key"],
                 aws_session_token=session["session_token"],
             )
-        key = service + (endpoint or "")
+        if operation.startswith("controller_"):
+            return self._session().client(service, endpoint_url=endpoint, config=config)
+        key = (service, endpoint, connect_timeout, read_timeout)
         if key not in self.clients:
             self.clients[key] = self._session().client(service, endpoint_url=endpoint, config=config)
         return self.clients[key]
 
-    def call(self, operation: str, params: Mapping[str, Any]) -> dict[str, Any]:
+    def call(self, operation: str, params: Mapping[str, Any], *, budget_s: float = 20.0) -> dict[str, Any]:
         """Run exactly one SDK request using the validated closed operation."""
         self.request_entered = False
+        self.call_budget = budget_s
         client = self._client(operation, params)
         try:
             try:
                 return self._execute(client, operation, params)
             finally:
-                if "session" in params:
+                if "session" in params or operation.startswith("controller_"):
                     client.close()
         except (OSError, ValueError, KeyError, TypeError, OverflowError):
             if self.request_entered and operation in protocol.MUTATING:
@@ -267,6 +289,17 @@ class Sdk:
         if operation == "caller_identity":
             response = self._request(client, "get_caller_identity")
             return {"account": response["Account"], "arn": response["Arn"], "user_id": response["UserId"], "date_utc": _date(response)}
+        if operation == "controller_get_parameter":
+            row = self._request(client, "get_parameter", Name=p["name"], WithDecryption=True)["Parameter"]
+            if row.get("Name") != p["name"] or row.get("Type") != "SecureString":
+                raise protocol.ProtocolError("controller_parameter_identity_mismatch")
+            return {"name": row["Name"], "version": row["Version"], "value": row["Value"]}
+        if operation == "controller_put_parameter":
+            result = self._request(client, "put_parameter", Name=p["name"], Value=p["value"], Type="SecureString", Overwrite=False, Tier="Standard")
+            return {"version": result["Version"]}
+        if operation == "controller_delete_parameter":
+            self._request(client, "delete_parameter", Name=p["name"])
+            return {"deleted": True}
         if operation == "get_parameter":
             row = self._request(client, "get_parameter", Name=p["name"], WithDecryption=True)["Parameter"]
             name, version = p["name"].rsplit(":", 1)
@@ -506,10 +539,13 @@ def main() -> int:
     parser.add_argument("--hai-worker", required=True)
     parser.add_argument("--region", required=True)
     parser.add_argument("--profile")
+    parser.add_argument("--container-credentials", action="store_true")
     parser.add_argument("--test-endpoint", type=_endpoint)
     parser.add_argument("--test-control-endpoint", type=_endpoint)
     parser.add_argument("--one-shot", action="store_true")
     args = parser.parse_args()
+    if args.container_credentials and args.profile:
+        return 70
     if args.test_control_endpoint and not args.test_endpoint:
         return 70
     monitor = Monitor()
@@ -522,7 +558,7 @@ def main() -> int:
         operation = request["op"]
         request_id = request["id"]
         try:
-            result = sdk.call(operation, request["params"])
+            result = sdk.call(operation, request["params"], budget_s=request["budget_s"])
             reply = {"id": request_id, "ok": True, "result": result}
             protocol.validate(reply, operation, request_id)
         except ClientError as error:

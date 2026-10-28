@@ -971,6 +971,230 @@
       },
       "required": ["id", "ok", "result"]
     },
+    "controller_get_parameter_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"
+        },
+        "op": {
+          "const": "controller_get_parameter"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^(/healthcare_hai_prediction/controller_signing_key|/healthcare_hai_prediction/controller_run_tokens/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/[A-Za-z0-9][A-Za-z0-9_.-]{0,127})$(?![\\s\\S])",
+              "maxLength": 2048
+            }
+          },
+          "required": [
+            "name"
+          ]
+        },
+        "budget_s": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 20
+        }
+      },
+      "required": [
+        "id",
+        "op",
+        "params",
+        "budget_s"
+      ]
+    },
+    "controller_get_parameter_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"
+        },
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^/[A-Za-z0-9_./-]+$(?![\\s\\S])"
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          "required": [
+            "name",
+            "version",
+            "value"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "ok",
+        "result"
+      ]
+    },
+    "controller_put_parameter_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"
+        },
+        "op": {
+          "const": "controller_put_parameter"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^/healthcare_hai_prediction/controller_run_tokens/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$(?![\\s\\S])",
+              "maxLength": 2048
+            },
+            "value": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{32,128}$(?![\\s\\S])"
+            }
+          },
+          "required": [
+            "name",
+            "value"
+          ]
+        },
+        "budget_s": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 20
+        }
+      },
+      "required": [
+        "id",
+        "op",
+        "params",
+        "budget_s"
+      ]
+    },
+    "controller_put_parameter_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"
+        },
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          "required": [
+            "version"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "ok",
+        "result"
+      ]
+    },
+    "controller_delete_parameter_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"
+        },
+        "op": {
+          "const": "controller_delete_parameter"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^/healthcare_hai_prediction/controller_run_tokens/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$(?![\\s\\S])",
+              "maxLength": 2048
+            }
+          },
+          "required": [
+            "name"
+          ]
+        },
+        "budget_s": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 20
+        }
+      },
+      "required": [
+        "id",
+        "op",
+        "params",
+        "budget_s"
+      ]
+    },
+    "controller_delete_parameter_reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"
+        },
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "deleted": {
+              "const": true
+            }
+          },
+          "required": [
+            "deleted"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "ok",
+        "result"
+      ]
+    },
     "get_parameter_request": {
       "type": "object",
       "additionalProperties": false,
@@ -1029,6 +1253,9 @@
     {"$ref": "#/$defs/s3_mpu_list_request"},
     {"$ref": "#/$defs/s3_delete_request"},
     {"$ref": "#/$defs/logs_get_events_request"},
+    {"$ref": "#/$defs/controller_get_parameter_request"},
+    {"$ref": "#/$defs/controller_put_parameter_request"},
+    {"$ref": "#/$defs/controller_delete_parameter_request"},
     {"$ref": "#/$defs/get_parameter_request"},
     {"$ref": "#/$defs/error_reply"},
     {
@@ -1051,6 +1278,9 @@
         {"$ref": "#/$defs/s3_mpu_list_reply"},
         {"$ref": "#/$defs/s3_delete_reply"},
         {"$ref": "#/$defs/logs_get_events_reply"},
+        {"$ref": "#/$defs/controller_get_parameter_reply"},
+        {"$ref": "#/$defs/controller_put_parameter_reply"},
+        {"$ref": "#/$defs/controller_delete_parameter_reply"},
         {"$ref": "#/$defs/get_parameter_reply"}
       ]
     }

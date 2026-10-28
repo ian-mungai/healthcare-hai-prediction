@@ -308,7 +308,19 @@ def check_cross_domain(state: dict[str, Any], domain: str, write_prefixes: list[
                 raise Refused(f"write prefix {prefix} overlaps {pinned}, pinned by transform run {holder['run_id']}")
 
 
-def new_run(state: dict[str, Any], domain: str, run_id: str, mode: str, holder: str, pid: int, pid_start: str, write_prefixes: list[str], checkout: str) -> str:
+def new_run(
+    state: dict[str, Any],
+    domain: str,
+    run_id: str,
+    mode: str,
+    holder: str,
+    pid: int,
+    pid_start: str,
+    write_prefixes: list[str],
+    checkout: str,
+    *,
+    token: str | None = None,
+) -> str:
     """Add a held run to ``state`` and return its token; every lock predicate is checked here [757] [768]."""
     current = active(state, domain)
     if current is not None:
@@ -317,7 +329,7 @@ def new_run(state: dict[str, Any], domain: str, run_id: str, mode: str, holder: 
         raise Refused(f"run ID {run_id} was used before; a retry with new inputs needs a new run ID")
     check_prefixes(write_prefixes, "declared write prefix")
     check_cross_domain(state, domain, write_prefixes)
-    token = secrets.token_urlsafe(32)
+    token = secrets.token_urlsafe(32) if token is None else token
     state["runs"][run_id] = {
         "run_id": run_id,
         "domain": domain,

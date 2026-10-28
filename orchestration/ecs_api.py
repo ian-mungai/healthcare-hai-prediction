@@ -73,6 +73,8 @@ class EcsApi:
                 name, version = request["params"]["name"].rsplit(":", 1)
                 if reply["result"]["name"] != name or reply["result"]["version"] != int(version):
                     raise ProtocolError("parameter_version_mismatch")
+            if reply["ok"] and operation == "controller_get_parameter" and reply["result"]["name"] != request["params"]["name"]:
+                raise ProtocolError("controller_parameter_identity_mismatch")
             if reply["ok"] and operation == "s3_download":
                 result = reply["result"]
                 expected = request["params"]
