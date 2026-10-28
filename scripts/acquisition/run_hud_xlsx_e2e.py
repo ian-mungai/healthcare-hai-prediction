@@ -23,6 +23,7 @@ from scripts.acquisition.process import CompletedProcess, run_command
 from scripts.acquisition.run_bls_api_e2e import inventory
 from scripts.acquisition.s3_store import encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import canonical_hash, read_json, require
+from scripts.acquisition.store_hud_xlsx import CODE_ENTRY as STORE_ENTRY
 from scripts.acquisition.store_hud_xlsx import execute, run_all, verify_local
 from scripts.acquisition.tests.test_s3_store import OUTPUTS, FakeS3
 
@@ -154,7 +155,7 @@ def exercise(root: Path) -> list[dict]:
     plan_path, versions = root / "plan.json", root / "versions.json"
     write_once(plan_path, encoded_json(plan))
     write_once(plan_path.with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(plan)}))
-    write_once(versions, encoded_json({"versions": [{"code_sha256": api_contract.code_hashes()}]}))
+    write_once(versions, encoded_json({"versions": [{"code_sha256": api_contract.collector_code_hashes(STORE_ENTRY)}]}))
     decision_path = root / "repeat_decision.json"
     decision = build_repeat_decision(plan, 2014, 2, REPEATS)
     write_once(decision_path, encoded_json(decision))
@@ -244,7 +245,7 @@ def exercise(root: Path) -> list[dict]:
         scenario("plan_tampering_rejected", tampered_plan, "plan lock differs")
 
         def unreviewed_current() -> None:
-            with patch.object(api_contract, "code_hashes", return_value={"changed": "0" * 64}):
+            with patch.object(api_contract, "collector_code_hashes", return_value={"changed": "0" * 64}):
                 execute(plan, batches[(2010, 2)], root / "unreviewed", downloads, True, client, OUTPUTS)
 
         scenario("unreviewed_current_code_before_effects", unreviewed_current, "Unreviewed HUD")
@@ -515,7 +516,7 @@ def main() -> None:
         "feature": "HUD ZIP-COUNTY workbook capture (2010 Q1 to 2020 Q4 manual downloads) through versioned S3 storage",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
-        "code_sha256": api_contract.code_hashes(),
+        "code_sha256": api_contract.collector_code_hashes(STORE_ENTRY),
         "dependency_sha256": api_contract.digest(Path("requirements.txt").read_bytes()),
         "reproduce": f".venv/bin/python -m scripts.acquisition.run_hud_xlsx_e2e --output {args.output}",
         "boundary": "Synthetic workbooks written to a temporary folder with real macOS origin attributes; fake versioned S3; no live HUD or AWS access.",
