@@ -32,6 +32,17 @@
       }
     },
     {
+      "Sid": "PassE2eWriterRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_write_e2e_task_${ENVIRONMENT}",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
+    },
+    {
       "Sid": "PassReadJobRoles",
       "Effect": "Allow",
       "Action": "iam:PassRole",

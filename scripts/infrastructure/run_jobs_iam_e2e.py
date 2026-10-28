@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from infra.iam.scripts.render_policy import load_documents, non_whitespace_length, render_template, terraform_names
+from scripts.infrastructure import job_writer_policy_cases
 from scripts.infrastructure.policy_evaluator import Request, decide
 from scripts.infrastructure.secret_store import terraform_variables
 
@@ -161,6 +162,11 @@ def main() -> int:
         REPO / "infra/iam/scripts/render_policy.py",
         REPO / "scripts/infrastructure/policy_evaluator.py",
         REPO / "scripts/infrastructure/secret_store.py",
+        REPO / "scripts/infrastructure/job_writer_policy_cases.py",
+        REPO / "infra/iam/job_writer.tf",
+        REPO / "infra/iam/job_writer_variables.tf",
+        REPO / "infra/iam/tests/job_writer.tftest.hcl",
+        *(directory / f"{name}.json" for name in job_writer_policy_cases.POLICIES),
     ]
     before = {str(path.relative_to(REPO)): hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None for path in paths}
     report: dict[str, Any] = {
@@ -227,9 +233,12 @@ def main() -> int:
             failures = [item["case"] for item in evaluate(changed) if not item["passed"]]
             (output / f"defect_{label}.json").write_text(json.dumps(changed[policy], indent=2) + "\n", encoding="utf-8")
             defects.append({"defect": label, "caught": bool(failures), "failed_cases": failures})
+        writer_checks, writer_defects = job_writer_policy_cases.verify(REPO, documents, output)
+        checks.extend(writer_checks)
+        defects.extend(writer_defects)
         for name, document in documents.items():
             (output / f"{name}.json").write_text(json.dumps(document, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-        after = {str(path.relative_to(REPO)): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+        after = {str(path.relative_to(REPO)): hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None for path in paths}
         report.update(
             {
                 "assertions": checks,

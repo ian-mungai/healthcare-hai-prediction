@@ -158,6 +158,12 @@
       ]
     },
     {
+      "Sid": "ReadCatalogMetadataVersions",
+      "Effect": "Allow",
+      "Action": "s3:GetObjectVersion",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/*/metadata/*.metadata.json"
+    },
+    {
       "Sid": "ReadStageVersions",
       "Effect": "Allow",
       "Action": "s3:GetObjectVersion",
