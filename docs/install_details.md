@@ -101,8 +101,9 @@ Named manual steps. These are the only setup steps no script performs:
    (no charge; a value holds at most 4 KB) and encrypted with the AWS managed
    key `aws/ssm`. Each holds its value as plain text. The Airflow administrator
    password is `/healthcare_hai_prediction/airflow_admin`
-   (`airflow_admin_secret_name`; the username is `admin`): a person creates it,
-   and the project profile may read it and may not write it. The other 14 are
+   (`airflow_admin_secret_name`; the username is `admin`): a person creates it
+   once under the project profile (clone step below), which may read it and may
+   create it but never overwrite it. The other 14 are
    managed: no person creates them by hand. They hold the local catalog,
    workflow, lineage and feature store credentials, each as plain text:
    `postgres_password`, `polaris_root_secret`, `polaris_reader_client_id`,
@@ -151,9 +152,12 @@ Named manual steps. These are the only setup steps no script performs:
 
    **Clone the Airflow administrator password to Parameter Store (the owner, once).**
    If `healthcare-hai-prediction/airflow-admin` was created by hand in Secrets
-   Manager, copy it with one command; run it only after the IAM apply and
-   only when the owner says so, with an administrator profile that may read that
-   secret and write that parameter. The value stays in a shell variable and goes to
+   Manager, copy it with one command under the project profile; run it only after
+   the IAM apply of the `secretsmanager` and `ssm` policies and only when the owner
+   says so. The project policies allow exactly this: reading that one secret
+   (`CloneLegacyAirflowAdminPassword`) and creating the parameter without
+   overwrite (`CreateAirflowAdminPasswordOnce`, condition `ssm:Overwrite` false).
+   The administrator profile only grants permissions. The value stays in a shell variable and goes to
    the AWS CLI on standard input (`file://` prefix: [loading a parameter from a
    file](https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-parameters-file.html)),
    so it is in no file and in no process argument. The subshell stops at the
@@ -161,14 +165,15 @@ Named manual steps. These are the only setup steps no script performs:
    comparison of the readback:
 
    ```sh
-   ( set -eu; P=<ADMIN_PROFILE>; R=<REGION>; OLD=healthcare-hai-prediction/airflow-admin; NEW=/healthcare_hai_prediction/airflow_admin
+   ( set -eu; P=<PROJECT_PROFILE>; R=<REGION>; OLD=healthcare-hai-prediction/airflow-admin; NEW=/healthcare_hai_prediction/airflow_admin
      v=$(aws secretsmanager get-secret-value --profile "$P" --region "$R" --secret-id "$OLD" --query SecretString --output text)
      printf %s "$v" | aws ssm put-parameter --profile "$P" --region "$R" --name "$NEW" --type SecureString --tier Standard --value file:///dev/stdin >/dev/null
      [ "$(aws ssm get-parameter --profile "$P" --region "$R" --name "$NEW" --with-decryption --query Parameter.Value --output text)" = "$v" ] && echo "cloned and verified" )
    ```
 
    Without `--overwrite` the command refuses an existing parameter, so a rerun
-   changes nothing. After the check the owner may delete the old secret by hand.
+   changes nothing. After the check the owner may delete the old secret by hand;
+   then remove the two clone statements from the policies in the next IAM change.
    First read after the IAM apply: if reading a parameter fails with
    `AccessDeniedException` on `kms:Decrypt`, the key policy of `aws/ssm` does not
    admit the profile; report it instead of widening the grant.
