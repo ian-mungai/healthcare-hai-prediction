@@ -1337,7 +1337,7 @@ def mac_route_observations(folder: Path) -> dict[str, bool]:
     started = time.monotonic()
     waited = cutover_route.wait_for_probe(folder / "probes" / "never", deadline=time.monotonic() + 0.3, poll=0.05)
     checks["the wait for the container probe ends at its deadline"] = waited is False and time.monotonic() - started < 2
-    command = cutover_route.probe_command(Path("data/lakehouse/cutover/cut1/route_checks/s1.probe"), "nonce1", ports, "hai/analytics-dbt:pinned")
+    command = cutover_route.probe_command(Path("data/lakehouse/cutover/cut1/route_checks/s1.probe"), "nonce1", ports, "hai/analytics-dbt:pinned", 4102444800)
     checks["the documented probe command covers every Docker network, never pulls and runs the probe from standard input"] = all(
         part in command
         for part in (
@@ -1350,6 +1350,41 @@ def mac_route_observations(folder: Path) -> dict[str, bool]:
             "networks.txt",
         )
     )
+    return checks
+
+
+# The owner's tool as a shell stand-in: the command text names the tool once per call, so only the tool name is replaced and no Docker
+# binary can run. A probe container is a background sleep whose process ID `rm -f` stops, as Docker stops a named container.
+STAND_IN_TOOL = """stand_in_tool() {
+  case "$1" in
+    network) printf '%s\\n' bridge ;;
+    run) /bin/sleep "$RUN_SECONDS" & echo $! > "$probe/container.pid"; wait $!
+         printf '%s\\n' '{"nonce":"nonce1","ports":[18181,18182],"network":"bridge","targets":["127.0.0.1"],"reached":[]}' ;;
+    rm) echo "$*" >> "$probe/stopped"; kill "$(cat "$probe/container.pid")" 2>/dev/null ;;
+  esac
+}
+"""
+
+
+@offline
+def owner_probe_deadline(folder: Path) -> dict[str, bool]:
+    """Route acceptance, owner command: it ends at the step's deadline and stops its own container then; in time it writes the network list."""
+    checks: dict[str, bool] = {}
+    for label, run_seconds, seconds, finished in (("a probe that outlasts the deadline", 30, 1, False), ("a probe within the deadline", 0, 30, True)):
+        probe = folder / label.replace(" ", "_")
+        probe.mkdir(parents=True)
+        command = cutover_route.probe_command(probe, "nonce1", [18181, 18182], "synthetic_image", int(time.time()) + seconds)
+        started = time.monotonic()
+        script = STAND_IN_TOOL.replace("$RUN_SECONDS", str(run_seconds)) + command.replace("docker ", "stand_in_tool ")
+        result = run_command("/bin/sh", ["-c", script], cwd=ROOT, env={"PATH": "/usr/bin:/bin"}, timeout=20)
+        elapsed = time.monotonic() - started
+        stopped = (probe / "stopped").read_text() if (probe / "stopped").exists() else ""
+        if finished:
+            checks[f"{label} writes the network list and exits 0"] = result.returncode == 0 and (probe / cutover_route.NETWORK_LIST).is_file()
+        else:
+            checks[f"{label} exits nonzero by the deadline"] = result.returncode != 0 and elapsed < seconds + 3
+            checks[f"{label} stops its own container"] = "-f hai_route_probe_nonce1_bridge" in stopped
+            checks[f"{label} writes no network list"] = not (probe / cutover_route.NETWORK_LIST).exists()
     return checks
 
 
@@ -1538,6 +1573,7 @@ ALL_CASES = (
     role_storage_reads,
     route_binding_and_evidence,
     mac_route_observations,
+    owner_probe_deadline,
     register_and_verify,
     preflight_refusals,
     register_failures,

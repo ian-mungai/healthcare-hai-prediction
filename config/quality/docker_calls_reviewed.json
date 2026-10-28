@@ -308,6 +308,32 @@
       ]
     },
     {
+      "path": "scripts/lakehouse/run_bronze_cutover_e2e.py",
+      "line": 1379,
+      "code_sha256": "8b5da4909c1eebcd42416e8cf0ea10c01c9bfd0c9d0f3603b6f870adf3fea76c",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "41409ee6f899e67c37c189d0b672024c4a442955226ee72727f5700acb114145",
+      "dependencies": {
+        "orchestration/catalog_authority.py": "sha256:d95f4d288a2e775fda4a1514ba91cf01db12950df93e3f601a6485dcfc066bf4",
+        "orchestration/catalog_transport.py": "sha256:b8e63d2e51d5022d03f7fe3b653f3f35fbdf479b03d2a5459483ec16e5e621a0",
+        "orchestration/launcher.py": "sha256:bad4485161d6c08f6a50963092489083de8c403925372897d28371e6787014e0",
+        "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
+        "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
+        "scripts/lakehouse/bronze_cutover.py": "sha256:fc95f5831a3c934020430b63573e4e4f281b0229791c3f5d22564c9801375f07",
+        "scripts/lakehouse/bronze_inventory.py": "sha256:6a7507d5855c4f24a20ab22c8c39d99020626e38c66648d05179126cd4470fa8",
+        "scripts/lakehouse/bronze_scan.py": "sha256:4a1eb178be3d7ac5dbebf6649639861548b23652ae9fdd3072e2a95dec739c74",
+        "scripts/lakehouse/cutover_route.py": "sha256:9a4d187434a115e520c9103f6dc99156132ba28ad0e0e1f36fd42640f3fa329a",
+        "scripts/lakehouse/mac_route_probe.py": "sha256:32233ee8f47f7fa2933c3b6a9c11e3d86c8619666bb509b6120a3ac421d08b52",
+        "scripts/lakehouse/register_aws_catalog.py": "sha256:517c5c0320e329bce1aff3ca3a691a0f6d4cffc587c7bf498d8e8db0425e2f90",
+        "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:17c2671f748b729688fa72f3f330287ee3537b4976301373c9d7ce4d95c4fb32",
+        "scripts/lakehouse/run_gold_publish_launcher_cases.py": "sha256:5af80ef76101a1cc28be668fc7588a7362712da1067adcfcebb671afc84c3743",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:cb21950e286520df29689146af9759188aa66e9ebe44010f3f821a25bb22c48e",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "reason": "Runs the owner's route probe command text from cutover_route.probe_command with /bin/sh in a scratch folder, after replacing every 'docker ' with the shell function stand_in_tool defined in STAND_IN_TOOL. The stand-in prints a network name, sleeps or records an rm call and kills its own sleep. PATH is /usr/bin:/bin and the timeout is 20 seconds. It does not call Docker."
+    },
+    {
       "path": "scripts/lakehouse/run_duckdb_view_e2e.py",
       "line": 131,
       "code_sha256": "88432a3f83e57e001fe36539e237a20c74565aaccba25626c7e248ccab7083ef",

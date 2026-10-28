@@ -324,7 +324,8 @@ SHA-256 of its sanitized evidence (kept beside it as `<STAMP>.<NAME>.evidence`, 
    `route-check` never runs Docker. It prints a command. The owner runs it in a second terminal at the repository
    root. The command runs `scripts/lakehouse/mac_route_probe.py` from standard input once on every network that
    `docker network ls` lists, with `--pull=never` and the local image given by `--probe-image` (it needs `python3`). It
-   writes `networks.txt` last. `route-check` waits up to 900 seconds for that file. A missing, stale or unreadable
+   writes `networks.txt` last. `route-check` waits up to 900 seconds for that file. The command ends at the same
+   deadline: it then removes its own named probe container and writes no `networks.txt`. A missing, stale or unreadable
    result counts as not observed. So does a result that tried no target or names another network than its own.
 
 `route-check` writes `route_checks/<STAMP>.attempt` before the first observation. `register` and `verify` refuse to

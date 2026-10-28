@@ -114,16 +114,36 @@ def port_observation(spec: TransportSpec, status: int, processes: int) -> Observ
     return accepted, evidence(facts)
 
 
-def probe_command(folder: Path, nonce: str, ports: list[int], image: str) -> str:
-    """The owner's command: run the container probe once on every Mac Docker network, then write the network list that ends the wait."""
+def probe_command(folder: Path, nonce: str, ports: list[int], image: str, expires: int) -> str:
+    """The owner's command: run the container probe once on every Mac Docker network, then write the network list that ends the wait.
+
+    The command ends at ``expires`` (seconds since the epoch), the deadline of the step that waits for it: every Docker call runs in the
+    background and, when the deadline passes first, the command removes its own named probe container, stops and writes no network list.
+    """
     arguments = f'{nonce} {ports[0]} {ports[1]} "$network"'
     return (
         f"probe='{folder}'\n"
-        "for network in $(docker network ls --format '{{.Name}}'); do\n"
-        f'  docker run --rm -i --pull=never --network "$network" --entrypoint python3 {image} -I - {arguments}'
+        f"deadline={expires}\n"
+        "bounded() {\n"
+        '  name=$1; shift; "$@" & pid=$!\n'
+        '  while kill -0 "$pid" 2>/dev/null; do\n'
+        '    if [ "$(date +%s)" -ge "$deadline" ]; then\n'
+        '      [ -z "$name" ] || docker rm -f "$name" >/dev/null 2>&1\n'
+        '      kill "$pid" 2>/dev/null; wait "$pid"\n'
+        '      echo "route probe: the step deadline passed; no network list written" >&2; exit 1\n'
+        "    fi\n"
+        "    sleep 0.2\n"
+        "  done\n"
+        '  wait "$pid"\n'
+        "}\n"
+        "bounded '' docker network ls --format '{{.Name}}' > \"$probe/networks.before\" || exit 1\n"
+        'for network in $(cat "$probe/networks.before"); do\n'
+        f'  bounded "hai_route_probe_{nonce}_$network" docker run --rm -i --pull=never --name "hai_route_probe_{nonce}_$network"'
+        f' --network "$network" --entrypoint python3 {image} -I - {arguments}'
         ' < scripts/lakehouse/mac_route_probe.py > "$probe/$network.json"\n'
         "done\n"
-        'docker network ls --format \'{{.Name}}\' > "$probe/networks.txt.partial" && mv "$probe/networks.txt.partial" "$probe/networks.txt"\n'
+        "bounded '' docker network ls --format '{{.Name}}' > \"$probe/networks.txt.partial\" || exit 1\n"
+        'mv "$probe/networks.txt.partial" "$probe/networks.txt"\n'
     )
 
 
@@ -220,12 +240,15 @@ class LiveRouteProbe:
             return None, evidence({"not_observed": "the route is not open"})
         durable_directory(self.probe)
         ports = [self.spec.tunnel_port, self.spec.relay_port]
+        wait_deadline = min(deadline, time.monotonic() + PROBE_SECONDS)
+        expires = int(time.time() + (wait_deadline - time.monotonic()))
         self.write(
             "Run this in another terminal at the repository root now, with an image that is already local and has python3 (no pull):\n\n"
-            + probe_command(self.probe, self.nonce, ports, self.image)
-            + f"\nroute-check waits up to {int(PROBE_SECONDS)} seconds for {self.probe / NETWORK_LIST}.\n"
+            + probe_command(self.probe, self.nonce, ports, self.image, expires)
+            + f"\nroute-check waits up to {int(wait_deadline - time.monotonic())} seconds for {self.probe / NETWORK_LIST}; the command"
+            " stops its own container at the same deadline.\n"
         )
-        if not wait_for_probe(self.probe, deadline=min(deadline, time.monotonic() + PROBE_SECONDS)):
+        if not wait_for_probe(self.probe, deadline=wait_deadline):
             return None, evidence({"not_observed": "no container probe result before the deadline"})
         try:
             self.transport.check(deadline=deadline)
