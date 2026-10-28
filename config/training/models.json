@@ -1,0 +1,151 @@
+{
+  "bootstrap": {
+    "mediation": {
+      "confidence_level": 0.95,
+      "draws": 5000,
+      "generator": "numpy.random.default_rng",
+      "interval_method": "percentile",
+      "paired": true,
+      "unit": "hospital"
+    },
+    "nested_comparison": {
+      "confidence_level": 0.95,
+      "draws": 5000,
+      "generator": "numpy.random.default_rng",
+      "interval_method": "percentile",
+      "paired": true,
+      "unit": "hospital"
+    }
+  },
+  "budgets": {
+    "bootstrap_seconds": 1200,
+    "fit_seconds": 10800,
+    "shap_seconds": 600
+  },
+  "cross_validation": {
+    "folds": 5,
+    "groups": "ccn",
+    "method": "GroupKFold",
+    "panel_method": "time_ordered",
+    "shuffle": true
+  },
+  "defaults_note": "The seed, tuning grids, minimum row counts, fold count, permutations and slot budgets are editable implementation defaults. Primary analysis rules are fixed by their schemas.",
+  "master_seed": 42,
+  "minimum_rows": {
+    "holdout": 30,
+    "training": 100
+  },
+  "moran": {
+    "global_seed_immediately_before_call": true,
+    "p_value": "p_sim",
+    "permutations": 999,
+    "row_standardized": true
+  },
+  "schema": 1,
+  "seed_derivation": "sha256:<master>|<hai_type>|<purpose>:first_32_bits",
+  "shap": {
+    "sample_cap": 128
+  },
+  "slots": {
+    "m1_ols": {
+      "budget_seconds": 1200,
+      "estimator": "ols",
+      "feature_list": "m1_ols.json",
+      "forced_references": [],
+      "grid": {},
+      "registrable": true
+    },
+    "m2_elastic_net": {
+      "budget_seconds": 1200,
+      "estimator": "elastic_net",
+      "feature_list": "m2_elastic_net.json",
+      "forced_references": [
+        "feature_matrix_hospital_window:cmi"
+      ],
+      "grid": {
+        "alpha": [
+          0.01,
+          0.1,
+          1.0,
+          10.0
+        ],
+        "l1_ratio": [
+          0.1,
+          0.5,
+          0.9
+        ]
+      },
+      "registrable": true
+    },
+    "m3_mixed": {
+      "budget_seconds": 1200,
+      "estimator": "mixed_effects",
+      "feature_list": "m3_mixed.json",
+      "forced_references": [
+        "feature_matrix_hospital_window:cmi"
+      ],
+      "grid": {},
+      "registrable": false
+    },
+    "m4_boosting": {
+      "budget_seconds": 1200,
+      "check": {
+        "estimator": "random_forest",
+        "grid": {
+          "max_depth": [
+            10,
+            20
+          ],
+          "n_estimators": [
+            200
+          ]
+        },
+        "registrable": false
+      },
+      "estimator": "xgboost",
+      "feature_list": "m4_boosting.json",
+      "forced_references": [
+        "feature_matrix_hospital_window:cmi"
+      ],
+      "grid": {
+        "learning_rate": [
+          0.05,
+          0.1
+        ],
+        "max_depth": [
+          3,
+          6
+        ],
+        "n_estimators": [
+          100,
+          300
+        ]
+      },
+      "registrable": true
+    },
+    "m5_spatial": {
+      "budget_seconds": 1200,
+      "estimator": "spatial",
+      "feature_list": "m5_spatial.json",
+      "forced_references": [
+        "feature_matrix_hospital_window:cmi"
+      ],
+      "grid": {},
+      "registrable": false
+    },
+    "m6_fixed_effects": {
+      "budget_seconds": 1200,
+      "estimator": "fixed_effects",
+      "feature_list": "m6_fixed_effects.json",
+      "forced_references": [
+        "feature_matrix_hospital_window:cmi"
+      ],
+      "grid": {},
+      "registrable": false
+    }
+  },
+  "thresholds": {
+    "max_missing_fraction": 0.5,
+    "significance_level": 0.05
+  }
+}
