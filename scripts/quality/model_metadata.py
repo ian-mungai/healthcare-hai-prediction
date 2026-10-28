@@ -56,6 +56,7 @@ DBT_PATHS = (
     ("macro-paths", "macros"),
     ("snapshot-paths", "snapshots"),
 )
+DISABLED_MODEL = re.compile(r"\{\{-?\s*config\([^)]*\benabled\s*=\s*false\b")
 NUMERIC_TYPES = frozenset({"TINYINT", "SMALLINT", "INTEGER", "INT", "BIGINT", "HUGEINT", "FLOAT", "REAL", "DOUBLE", "DECIMAL"})
 OTHER_TYPES = frozenset({"VARCHAR", "BOOLEAN", "DATE", "TIMESTAMP", "TIME"})
 DATE_PARTS = frozenset(
@@ -1393,7 +1394,10 @@ def load(root: Path) -> Project:
             problems.append(Problem("duplicate-entry", where, 1, f"model {path.stem} has more than one SQL file ({models[path.stem].path})"))
             continue
         is_fact = path.stem.startswith("fct_") and "gold" in path.relative_to(root / DBT_DIRECTORY).parts
-        models[path.stem] = Model(path.stem, where, path.read_text(), is_fact, properties.models.get(path.stem))
+        text = path.read_text()
+        if DISABLED_MODEL.search(text):
+            continue
+        models[path.stem] = Model(path.stem, where, text, is_fact, properties.models.get(path.stem))
     variables = dict(project_data.get("vars") or {})
     scoped = variables.get(project_data["name"])
     variables.update(scoped if isinstance(scoped, dict) else {})

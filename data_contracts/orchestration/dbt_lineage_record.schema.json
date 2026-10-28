@@ -91,7 +91,10 @@
           "then": {
             "properties": {
               "template": {
-                "const": "pin_silver"
+                "enum": [
+                  "pin_silver",
+                  "pin_gold"
+                ]
               }
             }
           }

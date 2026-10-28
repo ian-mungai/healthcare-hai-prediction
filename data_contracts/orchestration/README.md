@@ -7,7 +7,7 @@ and do not change them; a needed change goes to the repository owner first. Chec
 
 | File | Contract |
 | --- | --- |
-| `submission_request.schema.json` | What a caller may send (version 2): template, run ID, mode, attempt and the caller identity (`dag_id`, `task_id`, `dag_run_id`), plus `input_run_id` for `pin_silver` only, nothing else |
+| `submission_request.schema.json` | What a caller may send (version 2): template, run ID, mode, attempt and the caller identity (`dag_id`, `task_id`, `dag_run_id`), plus `input_run_id` for `pin_silver` or `pin_gold` only, nothing else |
 | `launch_spec.schema.json` | The launch specification of every container template (`config/orchestration/job_templates.json`) |
 | `ledger_line.schema.json` | One line of a run's ledger |
 | `examples/job_templates.json` | One complete specification per template (13 templates, placeholder image digests) |
@@ -63,7 +63,7 @@ package tests.
 
 A broker template row can name an action the broker performs on the launcher's run methods instead of forwarding a
 container. The request is the same version 2 request as for any other template: the four selection fields, the caller
-identity and `input_run_id` only for `pin_silver`. The actions are idempotent, so a repeated request or a task retry
+identity and `input_run_id` only for `pin_silver` or `pin_gold`. The actions are idempotent, so a repeated request or a task retry
 ends in the same state. The six rows below exist for mode `fixture`. `acquire_run`, `run_record`, `release_accepted` and
 `release_rejected` also exist for `publish_fixture` and `real`. The final gate rows of the split DAGs (below) exist for
 `publish_fixture` and `real`.

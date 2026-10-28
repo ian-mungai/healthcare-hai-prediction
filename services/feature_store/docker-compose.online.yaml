@@ -1,0 +1,24 @@
+# The launcher-managed online feature store (design section 4.2). Only the launcher renders this file (orchestration/online_store.py holds its
+# closed shape); it is never run with docker compose. The network is the launcher's internal online-store network: no host port, no egress.
+name: hai-online-store
+
+services:
+  online-store:
+    # redis 8.10.1, linux/arm64 manifest, pinned by digest (Docker Hub registry API, read on 2026-10-23).
+    image: redis:8.10.1@sha256:2e940b1efbe5bae595d9cc7c4f5ecdc84497a63b2a8e1bfe7624a0fae2f05127
+    entrypoint: [sh, -c, 'exec redis-server /usr/local/etc/redis/redis.conf --requirepass "$REDIS_PASSWORD" --maxmemory "$REDIS_MAXMEMORY"']
+    user: "999:999"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_MAXMEMORY: ${HAI_ONLINE_MAXMEMORY}
+    mem_limit: ${HAI_ONLINE_MEM}
+    volumes:
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks: [online]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli -n 2 ping | grep -qx PONG']
+      interval: 5s
+      timeout: 2s
+      retries: 20

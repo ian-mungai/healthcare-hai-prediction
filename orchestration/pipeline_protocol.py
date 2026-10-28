@@ -14,7 +14,9 @@ from typing import Any
 
 from scripts.lakehouse.gold_publish_record import IDENT_MAX, RUN_ID, SHA256, PublishError, accept_consumer
 
-LAYERS = ("silver", "gold")
+LAYERS = ("silver", "gold", "features")
+# The namespaces a pin of each source layer may name, by run mode: a consumer pins only committed sets of its own source layer.
+PIN_NAMESPACES = {"silver": {"publish_fixture": "silver_e2e", "real": "silver"}, "gold": {"publish_fixture": "gold_e2e", "real": "gold"}}
 MAX_RECORD = 8 << 20
 COPY_SECONDS = 600.0
 
@@ -78,7 +80,7 @@ def digest_file(path: Path) -> str:
 
 
 def fixed_layer(layer: str) -> str:
-    """Require one of the two supported publication layers."""
+    """Require one of the supported publication layers."""
     if layer not in LAYERS:
         raise PipelineError("the publication layer is unknown")
     return layer
@@ -229,18 +231,20 @@ def accept_export(state: Mapping[str, Any], run_id: str, layer: str, attempt_id:
     return {"attempt_id": attempt_id, "sha256": digest, "sealed_sha256": completion["sha256"], "generation": completion["generation"]}
 
 
-def check_pin(record: Mapping[str, Any], run_id: str, mode: str, tables: set[str]) -> None:
-    """Require a complete silver pin for one consumer, mode and committed producer."""
-    wanted = "silver_e2e" if mode == "publish_fixture" else "silver"
+def check_pin(record: Mapping[str, Any], run_id: str, mode: str, tables: set[str], source: str = "silver") -> None:
+    """Require a complete pin of the ``source`` layer (silver or gold) for one consumer, mode and committed producer."""
+    if source not in PIN_NAMESPACES or mode not in PIN_NAMESPACES[source]:
+        raise PipelineError("the pinned source layer or mode is unknown")
+    wanted = PIN_NAMESPACES[source][mode]
     if set(record) != {"schema", "run_id", "mode", "namespace", "source_run_id", "snapshot_set"} or record.get("schema") != 1:
-        raise PipelineError("the silver pin has an unsupported shape")
+        raise PipelineError(f"the {source} pin has an unsupported shape")
     if record["run_id"] != run_id or record["mode"] != mode or record["namespace"] != wanted or not RUN_ID.fullmatch(str(record["source_run_id"])):
-        raise PipelineError("the silver pin identity does not match this consumer")
+        raise PipelineError(f"the {source} pin identity does not match this consumer")
     snapshots = record["snapshot_set"]
     if not isinstance(snapshots, dict) or set(snapshots) != tables:
-        raise PipelineError("the silver pin does not name exactly the publication tables")
+        raise PipelineError(f"the {source} pin does not name exactly the publication tables")
     if any(type(value) is not int or not 0 < value <= 9223372036854775807 for value in snapshots.values()):
-        raise PipelineError("the silver pin contains an invalid snapshot ID")
+        raise PipelineError(f"the {source} pin contains an invalid snapshot ID")
 
 
 def safe_name(value: str) -> str:

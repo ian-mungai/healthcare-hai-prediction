@@ -5,7 +5,8 @@ A broker template row with a ``control`` object names an action the broker perfo
 Each action is idempotent, so a repeated request, a task retry and a broker restart all end in the same state:
 
 - ``acquire``: take the run's lock through the launcher (a definite refusal ends the submission), make the run folder with the row's empty folders and copy
-  the row's seed into it once.
+  the row's seed into it once. A real run of a DAG that needs the owner's approval (``broker.APPROVAL_SCOPES``) is refused before the launcher is asked
+  unless its approval record is in place.
 - ``record``: write the durable run record (state ``finalizing``) and move the run to ``finalizing``.
 - ``gate_accepted`` and ``gate_rejected``: write the gate's result into the run record. An accepted result needs a finalizing run.
 - ``release_accepted``: after the recorded result is ``accepted``, stop the run's open attempts, delete the row's build files and release the lock.
@@ -35,6 +36,7 @@ from scripts.orchestration.broker import (
     REQUIRES_INPUT,
     VALIDATED_BY_INPUT,
     VALIDATED_SHA_INPUT,
+    ApprovalRefused,
     Broker,
     LauncherUnavailable,
     request_id_of,
@@ -59,6 +61,9 @@ ACTIONS = (
     "seal_gold",
     "fixture_pin",
     "fixture_verify",
+    "reserve_gold",
+    "seal_features",
+    "online_store_up",
 )
 REQUIRED_PARAMS = {
     "acquire": (),
@@ -75,6 +80,9 @@ REQUIRED_PARAMS = {
     "seal_gold": (),
     "fixture_pin": (),
     "fixture_verify": (),
+    "reserve_gold": (),
+    "seal_features": (),
+    "online_store_up": (),
 }
 OPTIONAL_PARAMS = {"acquire": ("seed", "folders")}
 SEEDED_MARKER = ".seeded"
@@ -138,6 +146,10 @@ def run_folder(broker: Broker, request: SubmissionRequest) -> Path:
 
 
 def acquire(broker: Broker, request: SubmissionRequest, action: str, params: dict[str, Any]) -> dict[str, Any]:
+    try:
+        broker.require_approval(request)
+    except ApprovalRefused as error:
+        raise ControlRefused(str(error)) from None
     seed = checked_seed(broker, Path(str(params["seed"]))) if params.get("seed") else None
     held = True
     try:

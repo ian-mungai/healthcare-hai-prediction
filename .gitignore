@@ -44,8 +44,8 @@ mlruns/
 # The reviewed dbt seeds are committed; repo_checks.py declares their folder.
 !dbt/seeds/*.csv
 !dbt/seeds/gold/*.csv
-# Formula recipes of the gold control split are committed.
-!features/recipes/*.csv
+# Formula recipes of the gold control split are committed as seeds of the feature phase.
+!dbt/seeds/features/*.csv
 # The approved identity classification list (codes, classes, statuses and public citations only) is committed.
 !config/lakehouse/identity_classification.csv
 *.jsonl

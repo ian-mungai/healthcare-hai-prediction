@@ -217,7 +217,10 @@
             "seal_silver",
             "seal_gold",
             "fixture_pin",
-            "fixture_verify"
+            "fixture_verify",
+            "reserve_gold",
+            "seal_features",
+            "online_store_up"
           ]
         },
         "params": {

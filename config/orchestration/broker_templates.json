@@ -29,7 +29,8 @@
                 "quality_silver",
                 "quality_gold",
                 "quality_cross",
-                "publish"
+                "publish",
+                "quality_features"
               ],
               "seed": "{checkout}/data/orchestration/fixture_seed"
             }
@@ -45,7 +46,8 @@
                 "quality_silver",
                 "quality_gold",
                 "quality_cross",
-                "publish"
+                "publish",
+                "quality_features"
               ]
             }
           }
@@ -1507,7 +1509,9 @@
               "--select",
               "path:models/gold",
               "--indirect-selection",
-              "cautious"
+              "cautious",
+              "--exclude",
+              "tag:features"
             ],
             "params": {
               "case_host": "{run_dir}",
@@ -4202,6 +4206,777 @@
                 "catalog_release": "success"
               }
             }
+          }
+        }
+      }
+    },
+    "reserve_gold": {
+      "purpose": "Reserve gold discovery for this run before the gold pin, so gold maintenance protects the set (features step 4)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "reserve_gold"
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "reserve_gold"
+          }
+        }
+      }
+    },
+    "pin_gold": {
+      "purpose": "Pin the committed gold snapshot set once, latest or the selected gold run (features step 5)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "pin_gold",
+              "source_run": "{input_run_id}"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "pin_gold",
+              "source_run": "{input_run_id}"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "read_gold": {
+      "purpose": "Export exactly the pinned gold snapshots with a digest manifest (features step 6)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "read_gold"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "read_gold"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "features_build": {
+      "purpose": "Build the feature models with dbt build on the pinned gold input (features step 7)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_dbt",
+            "args": [],
+            "params": {
+              "layer": "features"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_dbt",
+            "args": [],
+            "params": {
+              "layer": "features"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "features_validate": {
+      "purpose": "Validate the feature build before any catalog write and record its SHA-256 (features step 8)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_validate_features",
+            "args": [],
+            "params": {
+              "database": "{run_dir}/staging.duckdb",
+              "build_root": "{run_dir}",
+              "suites_host": "{checkout}/data_contracts/great_expectations/features",
+              "baselines_host": "{checkout}/data_contracts/great_expectations/fixture_baselines.json",
+              "out_host": "{run_dir}/quality_features"
+            },
+            "timeout_seconds": 3600,
+            "records_build_file": "{run_dir}/staging.duckdb",
+            "build_file_result": "{run_dir}/quality_features/result.json",
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_validate_features",
+            "args": [],
+            "params": {
+              "database": "{run_dir}/staging.duckdb",
+              "build_root": "{run_dir}",
+              "suites_host": "{checkout}/data_contracts/great_expectations/features",
+              "baselines_host": "{checkout}/data_contracts/great_expectations/baselines.json",
+              "out_host": "{run_dir}/quality_features"
+            },
+            "timeout_seconds": 3600,
+            "records_build_file": "{run_dir}/staging.duckdb",
+            "build_file_result": "{run_dir}/quality_features/result.json",
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "seal_features": {
+      "purpose": "Seal the validated feature build (features step 9)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "seal_features"
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "seal_features"
+          }
+        }
+      }
+    },
+    "features_export": {
+      "purpose": "Export only the accepted sealed feature build (features step 10)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_export",
+            "args": [],
+            "params": {
+              "layer": "features"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_export",
+            "args": [],
+            "params": {
+              "layer": "features"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "features_candidates": {
+      "purpose": "Write each feature table with MERGE INTO on its branch and record the candidate snapshots (features step 11)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "features",
+              "step": "candidates"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "features",
+              "step": "candidates"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "features_reconcile": {
+      "purpose": "Compare counts and fingerprints of exactly the candidate snapshots with the export (features step 12)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "features",
+              "step": "reconcile"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "features",
+              "step": "reconcile"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "features_backup": {
+      "purpose": "Write the features catalog backup and read it back (features step 13)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "features",
+              "step": "backup"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "features",
+              "step": "backup"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "features_commit": {
+      "purpose": "Fast-forward each feature table and write the publish_runs row last (features step 14)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "features",
+              "step": "commit"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_write",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_publish",
+            "args": [],
+            "params": {
+              "layer": "features",
+              "step": "commit"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "record_features_snapshot": {
+      "purpose": "Record the committed feature set against the commit artifact (features step 15)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "record_features_snapshot"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_spark",
+            "args": [],
+            "params": {
+              "job": "record_features_snapshot"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "feast_apply": {
+      "purpose": "Apply the Feast repository after the schema and head checks (features step 17)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_feast",
+            "args": [],
+            "params": {
+              "step": "apply"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_feast",
+            "args": [],
+            "params": {
+              "step": "apply"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "feast_materialize": {
+      "purpose": "Materialize the predictor views into the online store under the writer protocol (features step 18)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_feast",
+            "args": [],
+            "params": {
+              "step": "materialize"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        },
+        "real": {
+          "class": "lakehouse_read",
+          "no_op": false,
+          "launcher": {
+            "template": "pipeline_feast",
+            "args": [],
+            "params": {
+              "step": "materialize"
+            },
+            "timeout_seconds": 3600,
+            "lineage": {
+              "version": 1,
+              "inputs": [],
+              "outputs": []
+            }
+          }
+        }
+      }
+    },
+    "features_final_gate_accepted": {
+      "purpose": "Check every required features task before the terminal release",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "snapshot_project": "success",
+                "reserve_gold": "success",
+                "pin_gold": "success",
+                "read_gold": "success",
+                "features_build": "success",
+                "features_validate": "success",
+                "seal_features": "success",
+                "features_export": "success",
+                "features_candidates": "success",
+                "features_reconcile": "success",
+                "features_backup": "success",
+                "features_commit": "success",
+                "record_features_snapshot": "success",
+                "online_store_up": "success",
+                "feast_apply": "success",
+                "feast_materialize": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "snapshot_project": "success",
+                "reserve_gold": "success",
+                "pin_gold": "success",
+                "read_gold": "success",
+                "features_build": "success",
+                "features_validate": "success",
+                "seal_features": "success",
+                "features_export": "success",
+                "features_candidates": "success",
+                "features_reconcile": "success",
+                "features_backup": "success",
+                "features_commit": "success",
+                "record_features_snapshot": "success",
+                "online_store_up": "success",
+                "feast_apply": "success",
+                "feast_materialize": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "features_final_gate_rejected": {
+      "purpose": "Check every required features task before the terminal release",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "snapshot_project": "success",
+                "reserve_gold": "success",
+                "pin_gold": "success",
+                "read_gold": "success",
+                "features_build": "success",
+                "features_validate": "success",
+                "seal_features": "success",
+                "features_export": "success",
+                "features_candidates": "success",
+                "features_reconcile": "success",
+                "features_backup": "success",
+                "features_commit": "success",
+                "record_features_snapshot": "success",
+                "online_store_up": "success",
+                "feast_apply": "success",
+                "feast_materialize": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "snapshot_project": "success",
+                "reserve_gold": "success",
+                "pin_gold": "success",
+                "read_gold": "success",
+                "features_build": "success",
+                "features_validate": "success",
+                "seal_features": "success",
+                "features_export": "success",
+                "features_candidates": "success",
+                "features_reconcile": "success",
+                "features_backup": "success",
+                "features_commit": "success",
+                "record_features_snapshot": "success",
+                "online_store_up": "success",
+                "feast_apply": "success",
+                "feast_materialize": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "feature_store_final_gate_accepted": {
+      "purpose": "Check every required feature store task before the terminal release",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "online_store_up": "success",
+                "feast_apply": "success",
+                "feast_materialize": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_accepted",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "online_store_up": "success",
+                "feast_apply": "success",
+                "feast_materialize": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "feature_store_final_gate_rejected": {
+      "purpose": "Check every required feature store task before the terminal release",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "online_store_up": "success",
+                "feast_apply": "success",
+                "feast_materialize": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "gate_rejected",
+            "params": {
+              "record_file": "{checkout}/data/e2e/gold/{run_id}/run.json",
+              "expected_states": {
+                "acquire_run": "success",
+                "catalog_up": "success",
+                "online_store_up": "success",
+                "feast_apply": "success",
+                "feast_materialize": "success",
+                "run_record": "success",
+                "catalog_release": "success"
+              }
+            }
+          }
+        }
+      }
+    },
+    "online_store_up": {
+      "purpose": "Start the launcher-managed online store if it is down and wait until Redis is healthy; Feast jobs then join its network (features step 16)",
+      "modes": {
+        "publish_fixture": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "online_store_up"
+          }
+        },
+        "real": {
+          "class": "offline",
+          "no_op": false,
+          "control": {
+            "action": "online_store_up"
           }
         }
       }

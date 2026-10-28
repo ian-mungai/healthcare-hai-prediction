@@ -194,6 +194,17 @@ services:
       - ./scripts:/workspace/scripts:ro
       - ./data/analytics/dbt:/workspace/build:ro
 
+  feature-store:
+    image: hai-feature-store:feast0.66.0
+    build:
+      context: ./services/feature_store
+      additional_contexts:
+        hai: ./services/hai
+    profiles: [query]
+    # Feast jobs run only through the launcher's pipeline_feast template, which sets the network, mounts and environment of each job.
+    network_mode: none
+    working_dir: /workspace
+
   analytics-ui:
     image: hai-analytics:duckdb1.5.6-dbt1.11.15
     profiles: [query]
