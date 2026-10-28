@@ -25,4 +25,4 @@ defusedxml==0.7.1
 jinja2==3.1.6
 # The bronze cutover's verification decodes one Parquet row group per namespace (scripts/lakehouse/bronze_scan.py); the version the
 # analytics and quality images pin.
-duckdb==1.5.6
+duckdb==1.5.6  # tool: strict typecheck of the DuckDB modules (gold_export, gold_reconcile) on the host
