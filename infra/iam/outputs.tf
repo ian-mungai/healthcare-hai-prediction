@@ -58,15 +58,16 @@ output "lakehouse_role_arns" {
 }
 
 output "project_secret_names" {
-  description = "The names the project user's policy files grant: the shared API keys in Secrets Manager (read only), the project parameters in Parameter Store (read) and the managed ones among them (written)."
+  description = "The names the project user's policy files grant: the shared API keys in Secrets Manager (read only), the project parameters in Parameter Store (read), the managed ones among them (written) and the hand-made Airflow password secret (read once to clone it)."
   value = {
     shared_secrets     = local.shared_secret_names
     read_parameters    = local.read_parameter_names
     managed_parameters = local.managed_parameter_names
+    clone_secrets      = [var.airflow_admin_legacy_secret_name]
   }
 
   precondition {
-    condition     = length(distinct(concat(local.shared_secret_names, local.read_parameter_names))) == length(local.shared_secret_names) + length(local.read_parameter_names)
+    condition     = length(distinct(concat(local.shared_secret_names, [var.airflow_admin_legacy_secret_name], local.read_parameter_names))) == length(local.shared_secret_names) + 1 + length(local.read_parameter_names)
     error_message = "Each secret name must be different."
   }
 }
