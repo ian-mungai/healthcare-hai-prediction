@@ -3178,6 +3178,18 @@ original_spawn = os.posix_spawnp
 
 def delayed_spawn(*args, **kwargs):
     time.sleep(config.get("spawn_delay", 0))
+    if config.get("stderr_flush_exit"):
+        class ExitingStderr:
+            def write(self, text):
+                return len(text)
+
+            def flush(self):
+                raise SystemExit(73)
+
+        sys.stderr = ExitingStderr()
+        raise RuntimeError("stderr flush exits")
+    if config.get("spawn_fault"):
+        raise RuntimeError(config["spawn_fault"])
     return original_spawn(*args, **kwargs)
 
 os.posix_spawnp = delayed_spawn
@@ -3221,6 +3233,8 @@ def run_deadline_case(
     deny_signals: list[int] | None = None,
     transient_eperm_probes: int = 0,
     spawn_delay: float = 0.0,
+    spawn_fault: str = "",
+    stderr_flush_exit: bool = False,
     startup_delay: float = 0.0,
     bracket_delay: float = 0.0,
     valid_sample: bool = False,
@@ -3241,6 +3255,8 @@ def run_deadline_case(
         "deny_signals": [int(n) for n in deny_signals or []],
         "transient_eperm_probes": transient_eperm_probes,
         "spawn_delay": spawn_delay,
+        "spawn_fault": spawn_fault,
+        "stderr_flush_exit": stderr_flush_exit,
         "startup_delay": startup_delay,
         "bracket_delay": bracket_delay,
         "valid_sample": valid_sample,
@@ -3340,6 +3356,38 @@ def deadline_startup_delay(env: Env) -> dict[str, bool]:
         and unsampled["wall_calls"] == 10
         and not sample_marker.exists(),
         "a delay after the deadline is fixed still refuses the command at the original cutoff": expired["exit"] == 124 and not marker.exists(),
+    }
+
+
+@case("deadline_relay_child_fault")
+def deadline_relay_child_fault(env: Env) -> dict[str, bool]:
+    """A relay child that raises before it starts the command names the exception on stderr and still exits 125."""
+    plain = env.work / "not_executable"
+    plain.write_text("#!/bin/sh\n")
+    plain.chmod(0o644)
+    deep = env.work
+    for part in ("a" * 200, "b" * 200):
+        deep = deep / part
+        deep.mkdir()
+    long_name = deep / "not_executable"
+    long_name.write_text("#!/bin/sh\n")
+    long_name.chmod(0o644)
+    short = run_deadline_case(env, "child_fault", deadline_in=30, command=[str(plain)])
+    long = run_deadline_case(env, "child_fault_long", deadline_in=30, command=[str(long_name)])
+    folded = run_deadline_case(env, "child_fault_lines", deadline_in=30, spawn_fault="first line\nsecond line", command=["true"])
+    flush_exit = run_deadline_case(env, "child_fault_flush_exit", deadline_in=30, stderr_flush_exit=True, command=["true"])
+    lines = (env.work / "deadline_child_fault" / "wrapper_stderr.txt").read_text().splitlines()
+    long_lines = (env.work / "deadline_child_fault_long" / "wrapper_stderr.txt").read_text().splitlines()
+    folded_lines = (env.work / "deadline_child_fault_lines" / "wrapper_stderr.txt").read_text().splitlines()
+    return {
+        "a relay child that raises before the command exits 125": short["exit"] == 125 and long["exit"] == 125 and folded["exit"] == 125,
+        "the command never starts": short["exec"] is None and long["exec"] is None,
+        "stderr is one line that names the exception type and message": len(lines) == 1
+        and lines[0].startswith("deadline_run: relay child failed: PermissionError: ")
+        and "Permission denied" in lines[0],
+        "a long message is cut to one bounded line": len(long_lines) == 1 and "Permission denied" in long_lines[0] and len(long_lines[0]) <= 300,
+        "a stderr whose flush exits still leaves the child exit at 125": flush_exit["exit"] == 125,
+        "a message with a line break stays one line": folded_lines == ["deadline_run: relay child failed: RuntimeError: first line second line"],
     }
 
 
@@ -9078,6 +9126,7 @@ ALL_CASES = (
     effective_spec_digest,
     deadline_acceptance,
     deadline_startup_delay,
+    deadline_relay_child_fault,
     deadline_spec,
     start_after_deadline_refused,
     launcher_enforces_deadline,
