@@ -318,6 +318,59 @@
           ]
         }
       }
+    },
+    "dispatch_contract": {
+      "sensitive": false,
+      "type": [
+        "object",
+        {}
+      ],
+      "value": {
+        "assign_public_ip": "DISABLED",
+        "propagate_tags": "TASK_DEFINITION",
+        "capacity_providers": [
+          "FARGATE_SPOT",
+          "FARGATE"
+        ],
+        "class_networks": {
+          "lakehouse_read": "lakehouse",
+          "offline": "offline",
+          "seal": "offline"
+        },
+        "class_capacity_providers": {
+          "offline": [
+            "FARGATE_SPOT",
+            "FARGATE"
+          ],
+          "seal": [
+            "FARGATE_SPOT",
+            "FARGATE"
+          ],
+          "lakehouse_read": [
+            "FARGATE_SPOT",
+            "FARGATE"
+          ]
+        },
+        "definition_classes": {
+          "analytics_offline": "offline",
+          "analytics_read": "lakehouse_read",
+          "quality_offline": "offline",
+          "seal": "seal",
+          "spark_read": "lakehouse_read"
+        },
+        "cloud_limits": {
+          "max_memory_gib": 120,
+          "max_tasks": 3,
+          "max_vcpu": 16
+        },
+        "deadlines": {
+          "budget_alert_is_spend_stop": false,
+          "cleanup_seconds": 120,
+          "hard_stop_required": true,
+          "pending_seconds": 600,
+          "stop_grace_seconds": 90
+        }
+      }
     }
   },
   "platform_outputs": {

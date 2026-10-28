@@ -26,6 +26,7 @@ SOURCES = (
     "scripts/infrastructure/render_project_config.py",
     "scripts/infrastructure/render_ecs_target.py",
     "scripts/infrastructure/render_jobs_config.py",
+    "scripts/infrastructure/run_jobs_preparation_e2e.py",
     "data_contracts/infrastructure/jobs_preparation.schema.json",
 )
 
@@ -100,6 +101,45 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
     checks["reviewed_preparation_is_private"] = stat.S_IMODE(output.stat().st_mode) == 0o600
     checks["reviewed_preparation_repeats"] = invoke(document).returncode == 0 and output.read_bytes() == original
     checks["reviewed_preparation_check"] = invoke(document, "--check").returncode == 0
+    layers = ("e2e", "silver", "gold", "features", "bronze")
+    writer_documents = {}
+    for selected in (*(tuple([layer]) for layer in layers), layers):
+        label = "all" if len(selected) > 1 else selected[0]
+        writer_document = document | {
+            "variables": document["variables"]
+            | {
+                "enabled_definitions": ["spark_write_" + layer for layer in selected],
+                "job_role_arns": {"execution": "arn:aws:iam::111111111111:role/example_project_job_execution_dev"}
+                | {"write_" + layer + "_task": "arn:aws:iam::111111111111:role/example_project_job_write_" + layer + "_task_dev" for layer in selected},
+                "writer_parameter_names": {
+                    "write_" + layer + "_task": ["/example_project/aws_polaris_" + layer + "_client_" + suffix for suffix in ("id", "secret")]
+                    for layer in selected
+                },
+                "images": {"spark": "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_spark_dev@sha256:" + "c" * 64},
+                "task_resources": {"spark_write_" + layer: {"cpu": 2048, "memory": 4096, "ephemeral_storage_gib": 21} for layer in selected},
+            }
+        }
+        result = invoke(writer_document)
+        rendered = values | writer_document["variables"] | {"enabled_definitions": sorted(writer_document["variables"]["enabled_definitions"])}
+        checks[label + "_writer_inputs_render"] = result.returncode == 0 and json.loads(output.read_text()) == rendered
+        writer_documents[label] = writer_document
+    for index, layer in enumerate(layers):
+        other = layers[(index + 1) % len(layers)]
+        for field, replacement in (
+            ("job_role_arns", {"write_" + layer + "_task": "arn:aws:iam::111111111111:role/example_project_job_write_" + other + "_task_dev"}),
+            (
+                "writer_parameter_names",
+                {"write_" + layer + "_task": ["/example_project/aws_polaris_" + other + "_client_" + suffix for suffix in ("id", "secret")]},
+            ),
+        ):
+            altered = copy.deepcopy(writer_documents[layer])
+            altered["variables"][field] = replacement
+            before = output.read_bytes()
+            result = invoke(altered)
+            checks[layer + "_writer_refuses_swapped_" + field] = (
+                result.returncode == 2 and "preparation contract" in result.stderr and output.read_bytes() == before
+            )
+    checks["reader_inputs_reset_after_writer_cases"] = invoke(document).returncode == 0 and output.read_bytes() == original
     unused_writer = document | {
         "variables": document["variables"] | {"job_role_arns": {"try_writer": "arn:aws:iam::111111111111:role/example_project_job_try_writer_dev"}}
     }

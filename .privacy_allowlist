@@ -20,3 +20,4 @@ aws-account scripts/infrastructure/run_ecs_render_e2e.py -- synthetic all-zero a
 aws-account infra/jobs/tests/jobs.tftest.hcl -- synthetic all-ones and all-twos account IDs in read definition refusal cases; not the project account
 aws-account infra/jobs/identity_probe/tests/probe.tftest.hcl -- synthetic all-ones and all-twos account IDs in identity probe refusal cases; not the project account
 aws-account scripts/infrastructure/run_jobs_preparation_e2e.py -- synthetic all-ones account IDs in inert preparation renderer fixtures; not the project account
+aws-account infra/jobs/tests/writers.tftest.hcl -- synthetic all-ones account IDs in writer definition plans and refusal cases. These are not the project account.

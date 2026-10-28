@@ -19,14 +19,30 @@ The renderer accepts explicit JSON files. It executes no cloud command. Each Ter
 | `--storage-outputs` | `bucket_name` | Storage root |
 | `--platform-outputs` | `cluster_arn`, `project_tag`, `public_subnet_ids`, `ecr_repository_urls`, `log_group_names.jobs` | Platform root |
 | `--iam-outputs` | `job_roles`, `job_network` | IAM job outputs |
-| `--jobs-outputs` | `task_definition_arns`, `container_definitions`, `task_definition_settings`, `execution_digests` | Proposed jobs export |
+| `--jobs-outputs` | `task_definition_arns`, `container_definitions`, `task_definition_settings`, `execution_digests`, `dispatch_contract`. Writer captures also require `writer_dispatch_contracts` | Jobs export |
 | `--image-measurements` | `schema_version`, `platform`, `images` | Recorded image measurements |
 
-IAM role keys stay `execution`, `offline_task`, `seal_task`, `read_task` and `try_writer`. Each record retains its `name`, `arn` and `unique_id`. The network retains `subnet_id`, `security_group_ids.offline`, `security_group_ids.lakehouse` and `endpoints_enabled`. These output names are consumed unchanged.
+IAM role keys require `execution`, `offline_task`, `seal_task`, `read_task` and `try_writer`. Optional writer keys are `write_e2e_task`, `write_silver_task`, `write_gold_task`, `write_features_task` and `write_bronze_task`. Each record retains its `name`, `arn` and `unique_id`. The network retains `subnet_id`, `security_group_ids.offline`, `security_group_ids.lakehouse` and `endpoints_enabled`. These output names are consumed unchanged.
 
-The jobs export follows the control-plane conventions. Its first three maps contain exactly `analytics_offline`, `quality_offline`, `seal`, `analytics_read` and `spark_read`. `container_definitions` contains Terraform's JSON string for each task. `task_definition_settings` contains the complete configured task attributes used by the existing execution-pin module. `execution_digests` contains that module's unchanged `task_name/container_name` keys. The renderer consumes those pins. It does not create another execution-pin algorithm.
+The jobs export follows the control-plane conventions. Its first three maps require `analytics_offline`, `quality_offline`, `seal`, `analytics_read` and `spark_read`. They permit only five additional definitions: `spark_write_e2e`, `spark_write_silver`, `spark_write_gold`, `spark_write_features` and `spark_write_bronze`. Each selected writer requires its matching role. Prepared writer roles can exist before their definitions. `container_definitions` contains Terraform's JSON string for each task. `task_definition_settings` contains the complete configured task attributes used by the existing execution-pin module. `execution_digests` contains that module's unchanged `task_name/container_name` keys. The renderer consumes those pins. It does not create another execution-pin algorithm.
 
-The jobs export and its five logical keys require infrastructure review. The interface does not assert that the jobs root exists or that a definition is active. The dispatch caller must describe the active fixed revision and compare its execution pin before `RunTask`.
+The jobs export and its selected logical keys require infrastructure review. The interface does not assert that the jobs root exists or that a definition is active. The dispatch caller must describe the active fixed revision and compare its execution pin before `RunTask`.
+
+## Optional writer definitions
+
+Writer definitions use the digest-pinned Spark image and the same fixed bootstrap, execution role and execution-pin module as the readers. Selection stays empty by default. Registration creates no task, schedule, catalog grant or layer activation.
+
+`writer_parameter_names` maps each `write_<layer>_task` role key to a two-name list. The first name is `aws_polaris_<layer>_client_id`. The second is `aws_polaris_<layer>_client_secret`. Each name uses its reviewed Parameter Store path. The values never enter Terraform. Obtain the test pair from `job_writer_e2e_contract` and production pairs from `job_writer_layer_contract.parameter_names`. Consume role ARNs from `job_roles`.
+
+Each container injects only its own pair as `POLARIS_CLIENT_ID` and `POLARIS_CLIENT_SECRET`. The test definition binds `write_e2e_task` and the e2e pair. Reader definitions retain the reader pair. Role and parameter swaps between layers are refused.
+
+The jobs export adds one `writer_dispatch_contracts` record for each selected writer. Each record fixes `job_class`, `task_role_key`, `parameter_names`, `capacity_providers`, `network` and `assign_public_ip`. The capacity list is exactly `["FARGATE"]`. The network is `lakehouse` and public IPs are `DISABLED`. The target renderer checks the complete contract against the actual container bindings before writing. The general `dispatch_contract` carries the exact selected `definition_classes`, `class_networks` and `class_capacity_providers` maps. The renderer validates them and retains both class placement maps in the target. The general `capacity_providers` list describes readers only.
+
+The target requires `class_capacity_providers`. Offline, seal and read classes retain `["FARGATE_SPOT", "FARGATE"]` in that order. Every selected writer requires `lakehouse_write: ["FARGATE"]`. A missing writer strategy or any writer Spot entry invalidates the target. The target also requires `assign_public_ip: "DISABLED"`. Refresh captures and render the target before use when either required field is absent.
+
+The dispatcher must validate the target before submitting a task. For `lakehouse_write`, it must submit `capacityProviderStrategy = [{ capacityProvider = "FARGATE", weight = 1 }]` explicitly and disable public IP assignment. It must refuse an omitted strategy or any Spot entry. The cluster default is not a writer strategy. Writer dispatch must remain disabled until that request enforcement is integrated and verified.
+
+Test admission remains limited to the closed `aws_qualify` binding. Production writers need accepted test qualification, separate layer activation and exact run approval. Task registration proves none of those runtime conditions. The target retains all five read definitions when any writer is added.
 
 ## Image measurements
 
@@ -42,7 +58,7 @@ The read proposal permits the project-prefixed `aws_polaris_reader_client_id` an
 
 Without a binding, `catalog` is null. The selector must refuse every lakehouse job with a null catalog. A non-null binding still requires the registration and native network checks in the [real-run procedure](ecs_real_runs.md). A record's presence does not prove service readiness.
 
-`class_networks` maps offline and seal jobs to the exported offline group. It maps read jobs to the exported lakehouse group. The groups must differ. The endpoint subnet must belong to the platform output. Every application request disables public IPs. The definition checks require ARM64 Linux, Fargate compatibility, the fixed bootstrap, private scratch volumes, a non-root user, dropped capabilities and a 90-second stop timeout.
+`class_networks` maps offline and seal jobs to the exported offline group. It maps read jobs to the exported lakehouse group. A target with writer definitions also maps `lakehouse_write` to that group. The groups must differ. The endpoint subnet must belong to the platform output. Every application request disables public IPs. The definition checks require ARM64 Linux, Fargate compatibility, the fixed bootstrap, private scratch volumes, a non-root user, dropped capabilities and a 90-second stop timeout.
 
 Catalog-dependent Mac preparation remains disabled in this proposal. Its transport label records the approved Session Manager route with an owned relay. The lead must supply native class-network acceptance before a separate change enables that route. No public catalog route is introduced.
 
@@ -78,9 +94,9 @@ bash scripts/infrastructure/terraform.sh --jobs validate
 
 An apply requires approval for that exact saved plan. The renderer supplies six environment-derived base inputs: `aws_profile`, `aws_region`, `data_bucket_name`, `environment`, `expected_account_id` and `project_name`.
 
-The `infra/jobs/` root registers the five read definitions. Its default plan creates no resources. Registration requires `jobs_enabled = true`, selected `enabled_definitions`, digest-pinned images, merged job role ARNs, reviewed task resources, the existing jobs log group and the fixed cloud cap. The root creates no services or running tasks. Its dispatch output requires private class networks and hard stops. The dispatcher must enforce admission and confirm task stops.
+The `infra/jobs/` root registers the five read definitions and any explicitly selected writer definitions. Its default plan creates no resources. Registration requires `jobs_enabled = true`, selected `enabled_definitions`, digest-pinned images, merged job role ARNs, reviewed task resources, the existing jobs log group and the fixed cloud cap. The root creates no services or running tasks. Its dispatch output requires private class networks and hard stops. The dispatcher must enforce admission and confirm task stops.
 
-Prepare a nonsecret JSON file that follows the [preparation schema](../data_contracts/infrastructure/jobs_preparation.schema.json). Its envelope contains `schema_version: 1`, `root: "jobs"` and `variables`. The schema lists the allowed prepared variables. Base identity settings cannot appear in that map. Read registration accepts only `execution`, `offline_task`, `seal_task` and `read_task` under `job_role_arns`. The IAM capture retains `try_writer` for the runtime grant contract, but registration inputs refuse that unused key. Record the file's SHA-256 during review. Supply the same path and reviewed digest for planning and saved-plan inspection:
+Prepare a nonsecret JSON file that follows the [preparation schema](../data_contracts/infrastructure/jobs_preparation.schema.json). Its envelope contains `schema_version: 1`, `root: "jobs"` and `variables`. The schema lists the allowed prepared variables. Base identity settings cannot appear in that map. Read registration accepts `execution`, `offline_task`, `seal_task` and `read_task` under `job_role_arns`. Writer registration also accepts the five dedicated writer keys and requires their matching `writer_parameter_names` pairs. The preparation schema permits only the same closed definition, role and resource inventories. The IAM capture retains `try_writer` for the runtime grant contract, but registration inputs refuse that unused key. Record the file's SHA-256 during review. Supply the same path and reviewed digest for planning and saved-plan inspection:
 
 ```bash
 bash scripts/infrastructure/terraform.sh --jobs \
@@ -106,4 +122,4 @@ The fixed probe command uses a 60-second timeout. It compares task metadata with
 .venv/bin/python -m scripts.infrastructure.run_jobs_preparation_e2e --output <NEW_DIRECTORY>
 ```
 
-The artifact under `data/e2e/ecs_target/` records source hashes and every command case. The suite runs the native renderer commands. Its wrapper and plan-reader executables are inert captures. It contacts no cloud service. AWS authorization, Terraform plans, images, catalog readiness and integrated launcher behavior require their separate lead-run checks.
+The artifact under `data/e2e/ecs_target/` records source hashes and every command case. The suites run the native renderer commands. Writer cases cover each definition, role and pair swaps, Spot refusal, exported class rules, private placement, pins and preservation of the five required readers. The real-run preparation command rejects writer targets with missing or Spot capacity rules and missing or enabled public-IP settings. Its wrapper and plan-reader executables are inert captures. It contacts no cloud service. AWS authorization, Terraform plans, images, catalog readiness and integrated launcher behavior require their separate lead-run checks.
