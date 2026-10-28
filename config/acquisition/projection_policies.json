@@ -1,0 +1,2548 @@
+{
+  "entries": [
+    {
+      "consumers": {
+        "bronze_table": "bls_laus",
+        "dropped_bronze_tables": [],
+        "paths": [
+          "dbt/models/silver/staging/stg_bls_laus.sql",
+          "dbt/models/silver/intermediate/int_bls_county_series.sql"
+        ]
+      },
+      "disposition": "project",
+      "evidence": {
+        "derivative_sha256_field": "derivative_sha256",
+        "forbidden": [
+          "body",
+          "body_hex",
+          "raw"
+        ],
+        "path": "evidence/request_response.json",
+        "raw_sha256_field": "response_sha256",
+        "request_function": "request_for",
+        "required": [
+          "bytes",
+          "derivative_sha256",
+          "endpoint",
+          "http_status",
+          "request",
+          "response_sha256",
+          "retrieved_at_utc",
+          "sha256",
+          "statistics"
+        ],
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "bytes": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "derivative_sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "endpoint": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "http_status": {
+              "const": 200
+            },
+            "request": {
+              "additionalProperties": false,
+              "properties": {
+                "annualaverage": {
+                  "const": true
+                },
+                "aspects": {
+                  "const": false
+                },
+                "calculations": {
+                  "const": false
+                },
+                "catalog": {
+                  "const": false
+                },
+                "endyear": {
+                  "maxLength": 4,
+                  "pattern": "^[0-9]{4}$",
+                  "type": "string"
+                },
+                "seriesid": {
+                  "items": {
+                    "maxLength": 20,
+                    "pattern": "^LAUCN[0-9]{15}$",
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                "startyear": {
+                  "maxLength": 4,
+                  "pattern": "^[0-9]{4}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "annualaverage",
+                "aspects",
+                "calculations",
+                "catalog",
+                "endyear",
+                "seriesid",
+                "startyear"
+              ],
+              "type": "object"
+            },
+            "response_sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "retrieved_at_utc": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "statistics": {
+              "additionalProperties": false,
+              "properties": {
+                "availability_holds": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "message": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "series_id": {
+                        "maxLength": 20,
+                        "pattern": "^LAUCN[0-9]{15}$",
+                        "type": "string"
+                      },
+                      "status": {
+                        "const": "availability_hold"
+                      },
+                      "year": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "message",
+                      "series_id",
+                      "status"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 1000,
+                  "type": "array"
+                },
+                "available_series": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "footnoted_rows": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "missing_value_rows": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "model_eligible": {
+                  "const": false
+                },
+                "requested_series": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "rows": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "availability_holds",
+                "available_series",
+                "footnoted_rows",
+                "missing_value_rows",
+                "requested_series",
+                "rows"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "bytes",
+            "derivative_sha256",
+            "endpoint",
+            "http_status",
+            "request",
+            "response_sha256",
+            "retrieved_at_utc",
+            "sha256",
+            "statistics"
+          ],
+          "type": "object"
+        }
+      },
+      "extraction_map": {
+        "plans": [
+          {
+            "path": "config/acquisition/bls_api_plan.json",
+            "plan_sha256": "c29dea5cd556649e102c6d7b61406585a41ada52d8e3c71e793e82b196801e00"
+          }
+        ]
+      },
+      "family_check": "bls_laus",
+      "files": [
+        {
+          "key": [
+            "seriesID",
+            "year",
+            "period"
+          ],
+          "layouts": [
+            {
+              "columns": [
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "LAUCN[0-9]{5}000000000[3-6]"
+                  },
+                  "input": "seriesID",
+                  "null_token": null,
+                  "output": "seriesID",
+                  "type": "identifier"
+                },
+                {
+                  "derivation": "seriesID[5:10]",
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{5}"
+                  },
+                  "input": "seriesID",
+                  "null_token": null,
+                  "output": "county_fips",
+                  "type": "identifier"
+                },
+                {
+                  "derivation": "seriesID[-2:]",
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "0[3-6]"
+                  },
+                  "input": "seriesID",
+                  "null_token": null,
+                  "output": "measure_code",
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{4}",
+                    "range": [
+                      1990,
+                      2025
+                    ]
+                  },
+                  "input": "year",
+                  "null_token": null,
+                  "output": "year",
+                  "type": "integer"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "M(0[1-9]|1[0-3])"
+                  },
+                  "input": "period",
+                  "null_token": null,
+                  "output": "period",
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "allow_empty": false,
+                    "kind": "text",
+                    "max_length": 64
+                  },
+                  "input": "periodName",
+                  "null_token": null,
+                  "output": "periodName",
+                  "type": "text"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?",
+                    "tokens": [
+                      "-"
+                    ]
+                  },
+                  "input": "value",
+                  "null_token": null,
+                  "output": "value",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "footnotes"
+                  },
+                  "input": "footnotes",
+                  "null_token": null,
+                  "output": "footnotes",
+                  "type": "json"
+                }
+              ],
+              "name": "bls_laus_v1"
+            }
+          ],
+          "max_bytes": 16777216,
+          "max_rows": 100000,
+          "order": [
+            "seriesID",
+            "year",
+            "period"
+          ],
+          "path": "derived/observations.csv",
+          "role": "table"
+        }
+      ],
+      "id": "r1_bls_laus_api",
+      "input": {
+        "encoding": "utf-8",
+        "format": "json",
+        "max_bytes": 33554432
+      },
+      "parser": {
+        "function": "validate_response",
+        "module": "scripts.acquisition.bls_api_contract",
+        "version": 1
+      },
+      "recipe": "R1",
+      "source": {
+        "command": "collect_bls_api",
+        "family": "BLS Local Area Unemployment Statistics API v2",
+        "layout": "county series LAUCN..03 to 06, monthly values and annual average",
+        "route": "https://api.bls.gov/publicAPI/v2/timeseries/data/"
+      }
+    },
+    {
+      "consumers": {
+        "bronze_table": "acs_api_profile",
+        "dropped_bronze_tables": [],
+        "paths": []
+      },
+      "disposition": "project",
+      "evidence": {
+        "derivative_sha256_field": "derivative_sha256",
+        "forbidden": [
+          "body",
+          "body_hex",
+          "raw"
+        ],
+        "path": "evidence/request_response.json",
+        "raw_sha256_field": "response_sha256",
+        "request_function": "request_for",
+        "required": [
+          "bytes",
+          "derivative_sha256",
+          "endpoint",
+          "http_status",
+          "request",
+          "response_sha256",
+          "retrieved_at_utc",
+          "sha256",
+          "statistics"
+        ],
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "bytes": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "derivative_sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "endpoint": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "http_status": {
+              "const": 200
+            },
+            "request": {
+              "additionalProperties": false,
+              "properties": {
+                "for": {
+                  "const": "county:*"
+                },
+                "get": {
+                  "maxLength": 16,
+                  "pattern": "^group\\([A-Z0-9]{3,8}\\)$",
+                  "type": "string"
+                },
+                "in": {
+                  "maxLength": 9,
+                  "pattern": "^state:[0-9*]{1,3}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "for",
+                "get",
+                "in"
+              ],
+              "type": "object"
+            },
+            "response_sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "retrieved_at_utc": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "statistics": {
+              "additionalProperties": false,
+              "properties": {
+                "columns": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "model_eligible": {
+                  "const": false
+                },
+                "negative_tokens": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "nonempty_annotations": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "null_cells": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "puerto_rico_counties": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "rows": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "columns",
+                "negative_tokens",
+                "nonempty_annotations",
+                "null_cells",
+                "puerto_rico_counties",
+                "rows"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "bytes",
+            "derivative_sha256",
+            "endpoint",
+            "http_status",
+            "request",
+            "response_sha256",
+            "retrieved_at_utc",
+            "sha256",
+            "statistics"
+          ],
+          "type": "object"
+        }
+      },
+      "extraction_map": {
+        "plans": [
+          {
+            "path": "config/acquisition/census_acs_api_plan.json",
+            "plan_sha256": "ac4951f94a5f236bc0776a781cc434924477cabb120a0af46ee84a5414cfff3e"
+          },
+          {
+            "path": "config/acquisition/census_acs_api_plan_dp02pr.json",
+            "plan_sha256": "ea3ae6242634d3f0221815d867350d5e22b5023394689f0b33e91ad06e71fa92"
+          }
+        ]
+      },
+      "family_check": "census_profile",
+      "files": [
+        {
+          "key": [
+            "state",
+            "county"
+          ],
+          "layouts": [
+            {
+              "bound_batches": [
+                {
+                  "headers_sha256": "1bd137dcf9be3e6ebac5f579622444f5a7b0b2fbae0bfd34c10435596b2f5d6a",
+                  "id": "9e6858311e1f0b3a18fa3aaa147227665a575ee9a558741c190e753e85d10303",
+                  "table": "DP02"
+                },
+                {
+                  "headers_sha256": "0bcc2ca0a8171d87bd1cbdc9766348e7315060be501ed08135dc3e0e5eda50b1",
+                  "id": "dd334a052e18d5f49cfca2ae4b475c020a0655c2e1403e480a38d20d0bc9a733",
+                  "table": "DP03"
+                },
+                {
+                  "headers_sha256": "7bbdc39a7473b05a123aac144969a0e5e2b2a40669a60c3c2ca667e387ece4fb",
+                  "id": "6a38a76ec1a653e2196e71d01926f2fdb6cfaaac736aacb9a8b1ae32bd188808",
+                  "table": "DP04"
+                },
+                {
+                  "headers_sha256": "53f0d5cf739cc9a5af2b213861b197b0d132dc97fd927cf3830b1f05cbd46a18",
+                  "id": "201368bf118972fa573b76dfd9c2b4eabc0abd782f329da45660871ef78dc863",
+                  "table": "DP05"
+                },
+                {
+                  "headers_sha256": "080f285ac84cdedbfd445c715274ffd3904113e6b83024aa2a99e7356cf2ea8c",
+                  "id": "a384c23fe30d3d68749a0214ad5a25eb19615ec751fb7df185e9449f3a98e5d0",
+                  "table": "DP02PR"
+                }
+              ],
+              "name": "census_profile_locked_headers",
+              "rules": [
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "0500000US[0-9]{5}"
+                  },
+                  "name": "geo_id",
+                  "name_pattern": "GEO_ID",
+                  "null_token": null,
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "allow_empty": false,
+                    "kind": "text",
+                    "max_length": 256
+                  },
+                  "name": "name",
+                  "name_pattern": "NAME",
+                  "null_token": null,
+                  "type": "text"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{2}"
+                  },
+                  "name": "state",
+                  "name_pattern": "state",
+                  "null_token": null,
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{3}"
+                  },
+                  "name": "county",
+                  "name_pattern": "county",
+                  "null_token": null,
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "allow_empty": true,
+                    "kind": "text",
+                    "max_length": 64
+                  },
+                  "name": "estimate",
+                  "name_pattern": "[A-Z0-9]+_[0-9]{3,4}(E|M|PE|PM)",
+                  "null_token": "\\N",
+                  "type": "text"
+                },
+                {
+                  "domain": {
+                    "allow_empty": true,
+                    "kind": "text",
+                    "max_length": 64
+                  },
+                  "name": "annotation",
+                  "name_pattern": "[A-Z0-9]+_[0-9]{3,4}(EA|MA|PEA|PMA)",
+                  "null_token": "\\N",
+                  "type": "text"
+                }
+              ]
+            }
+          ],
+          "max_bytes": 67108864,
+          "max_rows": 3300,
+          "order": [
+            "state",
+            "county"
+          ],
+          "path": "derived/observations.csv",
+          "role": "table"
+        }
+      ],
+      "id": "r2_census_acs_profile_api",
+      "input": {
+        "encoding": "utf-8",
+        "format": "json",
+        "max_bytes": 67108864
+      },
+      "parser": {
+        "function": "validate_response",
+        "module": "scripts.acquisition.census_acs_api_contract",
+        "version": 1
+      },
+      "recipe": "R2",
+      "source": {
+        "command": "collect_census_acs_api",
+        "family": "Census ACS 2005-2009 five-year profile API",
+        "layout": "group(DP02..DP05) and group(DP02PR) county tables",
+        "route": "https://api.census.gov/data/2009/acs/acs5/profile"
+      }
+    },
+    {
+      "consumers": {
+        "bronze_table": "acs_api_detailed",
+        "dropped_bronze_tables": [],
+        "paths": []
+      },
+      "disposition": "project",
+      "evidence": {
+        "derivative_sha256_field": "derivative_sha256",
+        "forbidden": [
+          "body",
+          "body_hex",
+          "raw"
+        ],
+        "path": "evidence/request_response.json",
+        "raw_sha256_field": "sha256",
+        "request_function": "request_for",
+        "required": [
+          "bytes",
+          "derivative_sha256",
+          "endpoint",
+          "http_status",
+          "request",
+          "retrieved_at_utc",
+          "sha256",
+          "statistics"
+        ],
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "bytes": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "derivative_sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "endpoint": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "http_status": {
+              "const": 200
+            },
+            "request": {
+              "additionalProperties": false,
+              "properties": {
+                "for": {
+                  "const": "county:*"
+                },
+                "get": {
+                  "maxLength": 16,
+                  "pattern": "^group\\([A-Z0-9]{3,8}\\)$",
+                  "type": "string"
+                },
+                "in": {
+                  "maxLength": 9,
+                  "pattern": "^state:[0-9*]{1,3}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "for",
+                "get",
+                "in"
+              ],
+              "type": "object"
+            },
+            "retrieved_at_utc": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "statistics": {
+              "additionalProperties": false,
+              "properties": {
+                "columns": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "model_eligible": {
+                  "const": false
+                },
+                "puerto_rico_counties": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "rows": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "columns",
+                "puerto_rico_counties",
+                "rows"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "bytes",
+            "derivative_sha256",
+            "endpoint",
+            "http_status",
+            "request",
+            "retrieved_at_utc",
+            "sha256",
+            "statistics"
+          ],
+          "type": "object"
+        }
+      },
+      "extraction_map": {
+        "plans": [
+          {
+            "path": "config/acquisition/census_acs_detailed_plan.json",
+            "plan_sha256": "eac13965cbe066616b65feaa4124140a3f929ad9a438176f482e1fd595b8dbb0"
+          }
+        ]
+      },
+      "family_check": "census_detailed",
+      "files": [
+        {
+          "key": [
+            "state",
+            "county"
+          ],
+          "layouts": [
+            {
+              "bound_batches": [
+                {
+                  "headers_sha256": "1e8e0eb7d9a0c2e03ec2e4ff26f81487a712de0253d115e1baebdcbc29114703",
+                  "id": "147e04346307edabeff593304168e1c9073e7523736884bb2d977c3b1da487df",
+                  "table": "B17001",
+                  "year": 2010
+                },
+                {
+                  "headers_sha256": "1e8e0eb7d9a0c2e03ec2e4ff26f81487a712de0253d115e1baebdcbc29114703",
+                  "id": "89d51d2c30268a7c8e71fc0cc52bcd2036d0011ee080feed2975b0be4b36c261",
+                  "table": "B17001",
+                  "year": 2011
+                },
+                {
+                  "headers_sha256": "1e8e0eb7d9a0c2e03ec2e4ff26f81487a712de0253d115e1baebdcbc29114703",
+                  "id": "25507adb2f145ef0cadc9ec03cbb1b9893e954667acf7bd84e1c8fae6a96cb99",
+                  "table": "B17001",
+                  "year": 2012
+                },
+                {
+                  "headers_sha256": "1e8e0eb7d9a0c2e03ec2e4ff26f81487a712de0253d115e1baebdcbc29114703",
+                  "id": "83444b3baba64f7b40b75c06a41ad12089d7dfa92b4afe7345fff82c84da889a",
+                  "table": "B17001",
+                  "year": 2013
+                },
+                {
+                  "headers_sha256": "1e8e0eb7d9a0c2e03ec2e4ff26f81487a712de0253d115e1baebdcbc29114703",
+                  "id": "7febe055e85153a13e857bd0b60962f2ff3ce379ad078575c4a961fc3cc588ce",
+                  "table": "B17001",
+                  "year": 2014
+                },
+                {
+                  "headers_sha256": "1e8e0eb7d9a0c2e03ec2e4ff26f81487a712de0253d115e1baebdcbc29114703",
+                  "id": "8d7a9cc9207f21dd8859a939b965852047d4fd8668fd62e1bf595b3801761ecc",
+                  "table": "B17001",
+                  "year": 2015
+                },
+                {
+                  "headers_sha256": "1e8e0eb7d9a0c2e03ec2e4ff26f81487a712de0253d115e1baebdcbc29114703",
+                  "id": "f9824e25d534e55efb269f0a74acf6e82978f01cc9408b9ec1c38fbd27141ee6",
+                  "table": "B17001",
+                  "year": 2016
+                },
+                {
+                  "headers_sha256": "eb632d6dd3458cfb731400da8cdfc658536308b1b7e8fcbe3f08e12f5586b5c4",
+                  "id": "e7af2dc3137852e4ada7e62450c1a47f291dd3b9ce56dc3e42ce13daa614c2d8",
+                  "table": "B16001",
+                  "year": 2009
+                },
+                {
+                  "headers_sha256": "eb632d6dd3458cfb731400da8cdfc658536308b1b7e8fcbe3f08e12f5586b5c4",
+                  "id": "ff3344d9341c1952ad7256934fc9d750a2cd26c106ddd4274311f7ae6bb51064",
+                  "table": "B16001",
+                  "year": 2010
+                },
+                {
+                  "headers_sha256": "eb632d6dd3458cfb731400da8cdfc658536308b1b7e8fcbe3f08e12f5586b5c4",
+                  "id": "b0efe1f2d21a10881762b46edfae9174936d035d8fc718ed7154020ea79526da",
+                  "table": "B16001",
+                  "year": 2011
+                },
+                {
+                  "headers_sha256": "eb632d6dd3458cfb731400da8cdfc658536308b1b7e8fcbe3f08e12f5586b5c4",
+                  "id": "3736c1b678112b616610ae823156bad8430c6252a1811fe451f25d3504601700",
+                  "table": "B16001",
+                  "year": 2012
+                },
+                {
+                  "headers_sha256": "eb632d6dd3458cfb731400da8cdfc658536308b1b7e8fcbe3f08e12f5586b5c4",
+                  "id": "3c01517ff758bbd53ff5a2739591aec4efea9a1af8c2b028821a7a8d93e94a6d",
+                  "table": "B16001",
+                  "year": 2013
+                },
+                {
+                  "headers_sha256": "eb632d6dd3458cfb731400da8cdfc658536308b1b7e8fcbe3f08e12f5586b5c4",
+                  "id": "e72e503e1e49c4f38300b9046dc24b449d05da0f9773b2c877cca353301b4cc5",
+                  "table": "B16001",
+                  "year": 2014
+                },
+                {
+                  "headers_sha256": "eb632d6dd3458cfb731400da8cdfc658536308b1b7e8fcbe3f08e12f5586b5c4",
+                  "id": "8ca5638e657169190a77c1bd0474f8b8c8621a3974a1da9bd071b5be376dcea2",
+                  "table": "B16001",
+                  "year": 2015
+                },
+                {
+                  "headers_sha256": "e7d3aca7b32ff5b80df2b0711ff304f39fed34df6b24408d2706e70604cd49e7",
+                  "id": "d7233ef6c915d1756385ddb2290c7ec1a81e7117f9687161326b9c4aad272be2",
+                  "table": "B16004",
+                  "year": 2009
+                },
+                {
+                  "headers_sha256": "e7d3aca7b32ff5b80df2b0711ff304f39fed34df6b24408d2706e70604cd49e7",
+                  "id": "d5eb1e0c0d633698d14d4973540ec06a00db0246aaf564ff3230b4f53c85c825",
+                  "table": "B16004",
+                  "year": 2010
+                },
+                {
+                  "headers_sha256": "e7d3aca7b32ff5b80df2b0711ff304f39fed34df6b24408d2706e70604cd49e7",
+                  "id": "001a8ce1704e26be0679d64e98c46a54f1229fcf87842ba89e5be06214f16fa5",
+                  "table": "B16004",
+                  "year": 2011
+                },
+                {
+                  "headers_sha256": "e7d3aca7b32ff5b80df2b0711ff304f39fed34df6b24408d2706e70604cd49e7",
+                  "id": "c096b441a283975af0747e65a2c8c7d5bb1a11fb90d700edf5a4215bdcc467b3",
+                  "table": "B16004",
+                  "year": 2012
+                },
+                {
+                  "headers_sha256": "e7d3aca7b32ff5b80df2b0711ff304f39fed34df6b24408d2706e70604cd49e7",
+                  "id": "9b580757a04916b65d461e89639a17a1e9435e6b79baae8dcbf3f489a14cec8b",
+                  "table": "B16004",
+                  "year": 2013
+                },
+                {
+                  "headers_sha256": "e7d3aca7b32ff5b80df2b0711ff304f39fed34df6b24408d2706e70604cd49e7",
+                  "id": "50f790b9c092d27ff074f9f607c4ef2bbfedc6bcdbc2a4048deb765e6a3d9030",
+                  "table": "B16004",
+                  "year": 2014
+                },
+                {
+                  "headers_sha256": "e7d3aca7b32ff5b80df2b0711ff304f39fed34df6b24408d2706e70604cd49e7",
+                  "id": "9666a6c2b5597670072250bed7474445017d575155a9fd6200871fe21769c6a9",
+                  "table": "B16004",
+                  "year": 2015
+                }
+              ],
+              "name": "census_detailed_locked_headers",
+              "rules": [
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "0500000US[0-9]{5}"
+                  },
+                  "name": "geo_id",
+                  "name_pattern": "GEO_ID",
+                  "null_token": null,
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "allow_empty": false,
+                    "kind": "text",
+                    "max_length": 256
+                  },
+                  "name": "name",
+                  "name_pattern": "NAME",
+                  "null_token": null,
+                  "type": "text"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{2}"
+                  },
+                  "name": "state",
+                  "name_pattern": "state",
+                  "null_token": null,
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{3}"
+                  },
+                  "name": "county",
+                  "name_pattern": "county",
+                  "null_token": null,
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "allow_empty": true,
+                    "kind": "text",
+                    "max_length": 64
+                  },
+                  "name": "estimate",
+                  "name_pattern": "[A-Z0-9]+_[0-9]{3,4}(E|M|PE|PM)",
+                  "null_token": "\\N",
+                  "type": "text"
+                },
+                {
+                  "domain": {
+                    "allow_empty": true,
+                    "kind": "text",
+                    "max_length": 64
+                  },
+                  "name": "annotation",
+                  "name_pattern": "[A-Z0-9]+_[0-9]{3,4}(EA|MA|PEA|PMA)",
+                  "null_token": "\\N",
+                  "type": "text"
+                }
+              ]
+            }
+          ],
+          "max_bytes": 67108864,
+          "max_rows": 3300,
+          "min_rows": 3100,
+          "order": [
+            "state",
+            "county"
+          ],
+          "path": "derived/observations.csv",
+          "role": "table"
+        }
+      ],
+      "id": "r3_census_acs_detailed_api",
+      "input": {
+        "encoding": "utf-8",
+        "format": "json",
+        "max_bytes": 67108864
+      },
+      "parser": {
+        "function": "validate_response",
+        "module": "scripts.acquisition.census_acs_detailed_contract",
+        "version": 1
+      },
+      "recipe": "R3",
+      "source": {
+        "command": "collect_census_acs_detailed",
+        "family": "Census ACS five-year detailed tables API",
+        "layout": "group(B17001, B16001, B16004) county tables, 21 table-year batches",
+        "route": "https://api.census.gov/data/{year}/acs/acs5"
+      }
+    },
+    {
+      "consumers": {
+        "bronze_table": "hud_zip_county",
+        "dropped_bronze_tables": [],
+        "paths": [
+          "dbt/models/silver/staging/stg_hud_zip_county.sql",
+          "dbt/models/silver/intermediate/int_hud_zip_county_quarters.sql",
+          "dbt/models/silver/intermediate/int_hud_zip_county_holds.sql"
+        ]
+      },
+      "disposition": "project",
+      "evidence": {
+        "derivative_sha256_field": "derivative_sha256",
+        "forbidden": [
+          "body",
+          "body_hex",
+          "raw"
+        ],
+        "path": "evidence/request_response.json",
+        "raw_sha256_field": "sha256",
+        "request_function": "request_for",
+        "required": [
+          "bytes",
+          "derivative_sha256",
+          "endpoint",
+          "http_status",
+          "request",
+          "retrieved_at_utc",
+          "sha256",
+          "statistics"
+        ],
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "bytes": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "derivative_sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "endpoint": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "http_status": {
+              "const": 200
+            },
+            "request": {
+              "additionalProperties": false,
+              "properties": {
+                "quarter": {
+                  "maxLength": 1,
+                  "pattern": "^[1-4]$",
+                  "type": "string"
+                },
+                "query": {
+                  "const": "All"
+                },
+                "type": {
+                  "maxLength": 1,
+                  "pattern": "^[0-9]$",
+                  "type": "string"
+                },
+                "year": {
+                  "maxLength": 4,
+                  "pattern": "^[0-9]{4}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "quarter",
+                "query",
+                "type",
+                "year"
+              ],
+              "type": "object"
+            },
+            "retrieved_at_utc": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "statistics": {
+              "additionalProperties": false,
+              "properties": {
+                "counties": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "direction": {
+                  "const": "zip_to_county"
+                },
+                "model_eligible": {
+                  "const": false
+                },
+                "ratio_sums": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "bus_ratio": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "zips_outside_tolerance": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_summing_to_one": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_with_zero_weight": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "zips_outside_tolerance",
+                        "zips_summing_to_one",
+                        "zips_with_zero_weight"
+                      ],
+                      "type": "object"
+                    },
+                    "oth_ratio": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "zips_outside_tolerance": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_summing_to_one": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_with_zero_weight": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "zips_outside_tolerance",
+                        "zips_summing_to_one",
+                        "zips_with_zero_weight"
+                      ],
+                      "type": "object"
+                    },
+                    "res_ratio": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "zips_outside_tolerance": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_summing_to_one": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_with_zero_weight": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "zips_outside_tolerance",
+                        "zips_summing_to_one",
+                        "zips_with_zero_weight"
+                      ],
+                      "type": "object"
+                    },
+                    "tot_ratio": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "zips_outside_tolerance": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_summing_to_one": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_with_zero_weight": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "zips_outside_tolerance",
+                        "zips_summing_to_one",
+                        "zips_with_zero_weight"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "bus_ratio",
+                    "oth_ratio",
+                    "res_ratio",
+                    "tot_ratio"
+                  ],
+                  "type": "object"
+                },
+                "rows": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "states_and_territories": {
+                  "items": {
+                    "maxLength": 2,
+                    "pattern": "^[0-9]{2}$",
+                    "type": "string"
+                  },
+                  "maxItems": 100,
+                  "type": "array"
+                },
+                "zips": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "counties",
+                "direction",
+                "ratio_sums",
+                "rows",
+                "states_and_territories",
+                "zips"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "bytes",
+            "derivative_sha256",
+            "endpoint",
+            "http_status",
+            "request",
+            "retrieved_at_utc",
+            "sha256",
+            "statistics"
+          ],
+          "type": "object"
+        }
+      },
+      "extraction_map": {
+        "plans": [
+          {
+            "path": "config/acquisition/hud_api_plan.json",
+            "plan_sha256": "aead13b4dee39d121c01c662fe7a4606aa3114b84a24d8747c27ad4468691a36"
+          },
+          {
+            "path": "config/acquisition/hud_api_plan_2021q2_2025q4.json",
+            "plan_sha256": "3a80c87941498fd6f2d3607764779e2a4fcf09ced6ad8f51f290b6bac5be402e"
+          }
+        ]
+      },
+      "family_check": "hud_crosswalk",
+      "files": [
+        {
+          "key": [
+            "zip",
+            "geoid"
+          ],
+          "layouts": [
+            {
+              "columns": [
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?([Ee][-+]?[0-9]+)?",
+                    "range": [
+                      0,
+                      1
+                    ]
+                  },
+                  "input": "bus_ratio",
+                  "null_token": null,
+                  "output": "bus_ratio",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "allow_empty": true,
+                    "kind": "text",
+                    "max_length": 200
+                  },
+                  "input": "city",
+                  "null_token": null,
+                  "output": "city",
+                  "type": "text"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{5}|60|64|68|70"
+                  },
+                  "input": "geoid",
+                  "null_token": null,
+                  "output": "geoid",
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?([Ee][-+]?[0-9]+)?",
+                    "range": [
+                      0,
+                      1
+                    ]
+                  },
+                  "input": "oth_ratio",
+                  "null_token": null,
+                  "output": "oth_ratio",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?([Ee][-+]?[0-9]+)?",
+                    "range": [
+                      0,
+                      1
+                    ]
+                  },
+                  "input": "res_ratio",
+                  "null_token": null,
+                  "output": "res_ratio",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "allow_empty": true,
+                    "kind": "text",
+                    "max_length": 64
+                  },
+                  "input": "state",
+                  "null_token": null,
+                  "output": "state",
+                  "type": "text"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?([Ee][-+]?[0-9]+)?",
+                    "range": [
+                      0,
+                      1
+                    ]
+                  },
+                  "input": "tot_ratio",
+                  "null_token": null,
+                  "output": "tot_ratio",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{5}"
+                  },
+                  "input": "zip",
+                  "null_token": null,
+                  "output": "zip",
+                  "type": "identifier"
+                }
+              ],
+              "name": "hud_api_eight_field"
+            },
+            {
+              "columns": [
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?([Ee][-+]?[0-9]+)?",
+                    "range": [
+                      0,
+                      1
+                    ]
+                  },
+                  "input": "bus_ratio",
+                  "null_token": null,
+                  "output": "bus_ratio",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{5}|60|64|68|70"
+                  },
+                  "input": "geoid",
+                  "null_token": null,
+                  "output": "geoid",
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?([Ee][-+]?[0-9]+)?",
+                    "range": [
+                      0,
+                      1
+                    ]
+                  },
+                  "input": "oth_ratio",
+                  "null_token": null,
+                  "output": "oth_ratio",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?([Ee][-+]?[0-9]+)?",
+                    "range": [
+                      0,
+                      1
+                    ]
+                  },
+                  "input": "res_ratio",
+                  "null_token": null,
+                  "output": "res_ratio",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?([Ee][-+]?[0-9]+)?",
+                    "range": [
+                      0,
+                      1
+                    ]
+                  },
+                  "input": "tot_ratio",
+                  "null_token": null,
+                  "output": "tot_ratio",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{5}"
+                  },
+                  "input": "zip",
+                  "null_token": null,
+                  "output": "zip",
+                  "type": "identifier"
+                }
+              ],
+              "name": "hud_api_six_field"
+            }
+          ],
+          "max_bytes": 67108864,
+          "max_rows": 250000,
+          "order": [
+            "zip",
+            "geoid"
+          ],
+          "path": "derived/crosswalk.csv",
+          "role": "table"
+        }
+      ],
+      "id": "r4_hud_usps_crosswalk_api",
+      "input": {
+        "encoding": "utf-8",
+        "format": "json",
+        "max_bytes": 268435456
+      },
+      "parser": {
+        "function": "validate_response",
+        "module": "scripts.acquisition.hud_api_contract",
+        "version": 1
+      },
+      "recipe": "R4",
+      "source": {
+        "command": "collect_hud_api",
+        "family": "HUD USPS ZIP-to-county crosswalk API",
+        "layout": "type 2 zip-county, query All, 2021 Q1 to 2025 Q4",
+        "route": "https://www.huduser.gov/hudapi/public/usps"
+      }
+    },
+    {
+      "consumers": {
+        "bronze_table": "hud_zip_county",
+        "dropped_bronze_tables": [
+          "hud_zip_county_sheet_rows"
+        ],
+        "paths": [
+          "dbt/models/silver/staging/stg_hud_zip_county.sql",
+          "dbt/models/silver/intermediate/int_hud_zip_county_quarters.sql",
+          "dbt/models/silver/intermediate/int_hud_zip_county_holds.sql"
+        ]
+      },
+      "disposition": "project",
+      "evidence": {
+        "derivative_sha256_field": "derivative_sha256",
+        "forbidden": [
+          "body",
+          "body_hex",
+          "raw"
+        ],
+        "origin_urls": [
+          "https://www.huduser.gov/"
+        ],
+        "path": "evidence/download_proof.json",
+        "raw_sha256_field": "sha256",
+        "required": [
+          "bytes",
+          "created_at_utc",
+          "derivative_sha256",
+          "file_name",
+          "origin_urls",
+          "sha256",
+          "statistics"
+        ],
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "bytes": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "created_at_utc": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "derivative_sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "file_name": {
+              "maxLength": 256,
+              "type": "string"
+            },
+            "origin_urls": {
+              "items": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "maxItems": 1,
+              "type": "array"
+            },
+            "saved_by": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "statistics": {
+              "additionalProperties": false,
+              "properties": {
+                "counties": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "direction": {
+                  "const": "zip_to_county"
+                },
+                "exact_repeat_rows_dropped": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "model_eligible": {
+                  "const": false
+                },
+                "ratio_sums": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "bus_ratio": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "zips_outside_tolerance": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_summing_to_one": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_with_zero_weight": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "zips_outside_tolerance",
+                        "zips_summing_to_one",
+                        "zips_with_zero_weight"
+                      ],
+                      "type": "object"
+                    },
+                    "oth_ratio": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "zips_outside_tolerance": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_summing_to_one": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_with_zero_weight": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "zips_outside_tolerance",
+                        "zips_summing_to_one",
+                        "zips_with_zero_weight"
+                      ],
+                      "type": "object"
+                    },
+                    "res_ratio": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "zips_outside_tolerance": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_summing_to_one": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_with_zero_weight": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "zips_outside_tolerance",
+                        "zips_summing_to_one",
+                        "zips_with_zero_weight"
+                      ],
+                      "type": "object"
+                    },
+                    "tot_ratio": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "zips_outside_tolerance": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_summing_to_one": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "zips_with_zero_weight": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "zips_outside_tolerance",
+                        "zips_summing_to_one",
+                        "zips_with_zero_weight"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "bus_ratio",
+                    "oth_ratio",
+                    "res_ratio",
+                    "tot_ratio"
+                  ],
+                  "type": "object"
+                },
+                "rows": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "states_and_territories": {
+                  "items": {
+                    "maxLength": 2,
+                    "pattern": "^[0-9]{2}$",
+                    "type": "string"
+                  },
+                  "maxItems": 100,
+                  "type": "array"
+                },
+                "zips": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "counties",
+                "direction",
+                "ratio_sums",
+                "rows",
+                "states_and_territories",
+                "zips"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "bytes",
+            "created_at_utc",
+            "derivative_sha256",
+            "file_name",
+            "origin_urls",
+            "sha256",
+            "statistics"
+          ],
+          "type": "object"
+        }
+      },
+      "extraction_map": {
+        "decision": {
+          "decision_sha256": "acf86f2f9129c53254b40ade7de87a958319bb461cbed78b3360841ac8d2b451",
+          "path": "config/acquisition/hud_xlsx_exact_repeats_2014q2.json"
+        },
+        "plans": [
+          {
+            "path": "config/acquisition/hud_xlsx_plan_2010q1_2020q4.json",
+            "plan_sha256": "d62b7e758752d4c6deda376cd5d45edc443d284e3851a2113ad67a99dd093668"
+          }
+        ]
+      },
+      "family_check": "hud_workbook",
+      "files": [
+        {
+          "key": [
+            "zip",
+            "geoid"
+          ],
+          "layouts": [
+            {
+              "columns": [
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?([Ee][-+]?[0-9]+)?",
+                    "range": [
+                      0,
+                      1
+                    ]
+                  },
+                  "input": "bus_ratio",
+                  "null_token": null,
+                  "output": "bus_ratio",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{5}"
+                  },
+                  "input": "geoid",
+                  "null_token": null,
+                  "output": "geoid",
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?([Ee][-+]?[0-9]+)?",
+                    "range": [
+                      0,
+                      1
+                    ]
+                  },
+                  "input": "oth_ratio",
+                  "null_token": null,
+                  "output": "oth_ratio",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?([Ee][-+]?[0-9]+)?",
+                    "range": [
+                      0,
+                      1
+                    ]
+                  },
+                  "input": "res_ratio",
+                  "null_token": null,
+                  "output": "res_ratio",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?([Ee][-+]?[0-9]+)?",
+                    "range": [
+                      0,
+                      1
+                    ]
+                  },
+                  "input": "tot_ratio",
+                  "null_token": null,
+                  "output": "tot_ratio",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{5}"
+                  },
+                  "input": "zip",
+                  "null_token": null,
+                  "output": "zip",
+                  "type": "identifier"
+                }
+              ],
+              "name": "hud_workbook_six_field"
+            }
+          ],
+          "max_bytes": 16777216,
+          "max_rows": 250000,
+          "order": [
+            "zip",
+            "geoid"
+          ],
+          "path": "derived/crosswalk.csv",
+          "role": "table"
+        }
+      ],
+      "id": "r5_hud_zip_county_workbook",
+      "input": {
+        "encoding": "utf-8",
+        "format": "xlsx",
+        "max_bytes": 16777216
+      },
+      "parser": {
+        "function": "validate_workbook",
+        "module": "scripts.acquisition.hud_xlsx_contract",
+        "version": 1
+      },
+      "recipe": "R5",
+      "source": {
+        "command": "store_hud_xlsx",
+        "family": "HUD USPS ZIP-COUNTY crosswalk workbooks",
+        "layout": "one worksheet, six columns, 2010 Q1 to 2020 Q4",
+        "route": "https://www.huduser.gov/apps/public/uspscrosswalk/home"
+      }
+    },
+    {
+      "consumers": {
+        "bronze_table": "wonder_county_mortality",
+        "dropped_bronze_tables": [
+          "wonder_exports_text_lines"
+        ],
+        "paths": [
+          "dbt/models/silver/staging/stg_wonder_county_mortality.sql",
+          "dbt/models/silver/intermediate/int_wonder_county_deaths.sql"
+        ]
+      },
+      "disposition": "project",
+      "evidence": {
+        "derivative_sha256_field": "derivative_sha256",
+        "forbidden": [
+          "body",
+          "body_hex",
+          "raw"
+        ],
+        "origin_urls": [
+          "https://wonder.cdc.gov/controller/datarequest/{database}"
+        ],
+        "path": "evidence/download_proof.json",
+        "raw_sha256_field": "sha256",
+        "required": [
+          "bytes",
+          "created_at_utc",
+          "derivative_sha256",
+          "file_name",
+          "notes_sha256",
+          "origin_urls",
+          "query",
+          "sha256",
+          "statistics"
+        ],
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "bytes": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "created_at_utc": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "derivative_sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "file_name": {
+              "maxLength": 256,
+              "type": "string"
+            },
+            "notes_sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "origin_urls": {
+              "items": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "maxItems": 1,
+              "type": "array"
+            },
+            "query": {
+              "additionalProperties": false,
+              "properties": {
+                "citation": {
+                  "maxLength": 1000,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "dataset": {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                "parameters": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "Calculate Rates Per": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "Group By": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "Rate Options": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "Show Suppressed": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "Show Totals": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "Show Zero Values": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "Year/Month": {
+                      "maxLength": 400,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "Calculate Rates Per",
+                    "Group By",
+                    "Rate Options",
+                    "Show Suppressed",
+                    "Show Totals",
+                    "Show Zero Values"
+                  ],
+                  "type": "object"
+                },
+                "query_date": {
+                  "maxLength": 64,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "citation",
+                "dataset",
+                "parameters",
+                "query_date"
+              ],
+              "type": "object"
+            },
+            "saved_by": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "sha256": {
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "statistics": {
+              "additionalProperties": false,
+              "properties": {
+                "counties_per_year": {
+                  "additionalProperties": false,
+                  "patternProperties": {
+                    "^[0-9]{4}$": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "flags": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "Crude Rate": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "Missing": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Not Available": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Suppressed": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Unreliable": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
+                    "Crude Rate Lower 95% Confidence Interval": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "Missing": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Not Available": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Suppressed": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Unreliable": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
+                    "Crude Rate Standard Error": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "Missing": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Not Available": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Suppressed": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Unreliable": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
+                    "Crude Rate Upper 95% Confidence Interval": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "Missing": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Not Available": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Suppressed": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Unreliable": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
+                    "Deaths": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "Missing": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Not Available": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Suppressed": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Unreliable": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    },
+                    "Population": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "Missing": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Not Available": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Suppressed": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "Unreliable": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [],
+                      "type": "object"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "model_eligible": {
+                  "const": false
+                },
+                "query": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "citation": {
+                      "maxLength": 1000,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "dataset": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "parameters": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "Calculate Rates Per": {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        "Group By": {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        "Rate Options": {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        "Show Suppressed": {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        "Show Totals": {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        "Show Zero Values": {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        "Year/Month": {
+                          "maxLength": 400,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "Calculate Rates Per",
+                        "Group By",
+                        "Rate Options",
+                        "Show Suppressed",
+                        "Show Totals",
+                        "Show Zero Values"
+                      ],
+                      "type": "object"
+                    },
+                    "query_date": {
+                      "maxLength": 64,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "citation",
+                    "dataset",
+                    "parameters",
+                    "query_date"
+                  ],
+                  "type": "object"
+                },
+                "rows": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "years": {
+                  "items": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxItems": 100,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "counties_per_year",
+                "flags",
+                "query",
+                "rows",
+                "years"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "bytes",
+            "created_at_utc",
+            "derivative_sha256",
+            "file_name",
+            "notes_sha256",
+            "origin_urls",
+            "query",
+            "sha256",
+            "statistics"
+          ],
+          "type": "object"
+        }
+      },
+      "extraction_map": {
+        "plans": [
+          {
+            "path": "config/acquisition/wonder_export_plan.json",
+            "plan_sha256": "8930dc82d21baf7dda930318c1b6058c2d3f57227e44e122910612da9b6d5e4f"
+          }
+        ]
+      },
+      "family_check": "wonder_county_year",
+      "files": [
+        {
+          "key": [
+            "County Code",
+            "Year Code"
+          ],
+          "layouts": [
+            {
+              "columns": [
+                {
+                  "domain": {
+                    "kind": "enum",
+                    "values": [
+                      ""
+                    ]
+                  },
+                  "input": "Notes",
+                  "null_token": null,
+                  "output": "Notes",
+                  "type": "text"
+                },
+                {
+                  "domain": {
+                    "allow_empty": false,
+                    "kind": "text",
+                    "max_length": 256
+                  },
+                  "input": "County",
+                  "null_token": null,
+                  "output": "County",
+                  "type": "text"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{5}"
+                  },
+                  "input": "County Code",
+                  "null_token": null,
+                  "output": "County Code",
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{4} ?"
+                  },
+                  "input": "Year",
+                  "null_token": null,
+                  "output": "Year",
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]{4}"
+                  },
+                  "input": "Year Code",
+                  "null_token": null,
+                  "output": "Year Code",
+                  "type": "identifier"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+",
+                    "refuse_range": [
+                      1,
+                      9
+                    ],
+                    "tokens": [
+                      "Suppressed",
+                      "Missing"
+                    ]
+                  },
+                  "input": "Deaths",
+                  "null_token": null,
+                  "output": "Deaths",
+                  "type": "integer"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+",
+                    "tokens": [
+                      "Not Available",
+                      "Missing"
+                    ]
+                  },
+                  "input": "Population",
+                  "null_token": null,
+                  "output": "Population",
+                  "type": "integer"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?",
+                    "tokens": [
+                      "Suppressed",
+                      "Unreliable",
+                      "Not Available",
+                      "Missing"
+                    ]
+                  },
+                  "input": "Crude Rate",
+                  "null_token": null,
+                  "output": "Crude Rate",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?",
+                    "tokens": [
+                      "Suppressed",
+                      "Not Available",
+                      "Missing"
+                    ]
+                  },
+                  "input": "Crude Rate Lower 95% Confidence Interval",
+                  "null_token": null,
+                  "output": "Crude Rate Lower 95% Confidence Interval",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?",
+                    "tokens": [
+                      "Suppressed",
+                      "Not Available",
+                      "Missing"
+                    ]
+                  },
+                  "input": "Crude Rate Upper 95% Confidence Interval",
+                  "null_token": null,
+                  "output": "Crude Rate Upper 95% Confidence Interval",
+                  "type": "decimal"
+                },
+                {
+                  "domain": {
+                    "kind": "pattern",
+                    "pattern": "[0-9]+(\\.[0-9]+)?",
+                    "tokens": [
+                      "Suppressed",
+                      "Not Available",
+                      "Missing"
+                    ]
+                  },
+                  "input": "Crude Rate Standard Error",
+                  "null_token": null,
+                  "output": "Crude Rate Standard Error",
+                  "type": "decimal"
+                }
+              ],
+              "name": "wonder_county_year_v1"
+            }
+          ],
+          "max_bytes": 67108864,
+          "max_rows": 250000,
+          "order": [
+            "County Code",
+            "Year Code"
+          ],
+          "path": "derived/county_year.csv",
+          "role": "table"
+        },
+        {
+          "max_bytes": 1048576,
+          "path": "derived/export_notes.txt",
+          "role": "notes"
+        }
+      ],
+      "id": "r6_wonder_county_year",
+      "input": {
+        "encoding": "utf-8",
+        "format": "tsv_with_notes",
+        "max_bytes": 67108864
+      },
+      "parser": {
+        "function": "validate_export",
+        "module": "scripts.acquisition.wonder_export_contract",
+        "version": 1
+      },
+      "query": {
+        "databases": {
+          "D158": "Underlying Cause of Death, 2018-2024, Single Race",
+          "D76": "Underlying Cause of Death, 1999-2020"
+        },
+        "fixed_parameters": {
+          "Calculate Rates Per": "100,000",
+          "Group By": "County; Year",
+          "Rate Options": "Default intercensal populations for years 2001-2009 (except Infant Age Groups)",
+          "Show Suppressed": "True",
+          "Show Totals": "Disabled",
+          "Show Zero Values": "True"
+        }
+      },
+      "recipe": "R6",
+      "source": {
+        "command": "store_wonder_export",
+        "family": "CDC WONDER underlying cause of death county exports",
+        "layout": "county and year, deaths, population, crude rate with limits and standard error",
+        "route": "https://wonder.cdc.gov/controller/datarequest/{database}"
+      }
+    }
+  ],
+  "version": 1
+}
