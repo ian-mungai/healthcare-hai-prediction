@@ -131,6 +131,7 @@
       "^config/",
       "^infra/",
       "^\\.env\\.example$",
+      "^scripts/lakehouse/(aws_catalog_setup|run_aws_catalog_setup_e2e|principal_credentials)\\.py$",
       "^scripts/ci/groups/configuration_checks\\.sh$"
     ],
     "sql_style": [
