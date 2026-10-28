@@ -663,20 +663,23 @@ summary as a table of command, start, end, seconds and exit code. When a work ba
 ### Worker deadlines
 
 `scripts/run_ci.sh` runs each work item as a worker: a check group, a gold unit, a feature shard, a hook partition, an acquisition shard or a combining step. Every worker starts in its own
-process group and has a deadline. The deadline is the timeout of the hosted job that runs the same work, from `worker_limits` in `config/quality/ci_groups.json` (the kind of the item
+session and has a deadline. The deadline is the timeout of the hosted job that runs the same work, from `worker_limits` in `config/quality/ci_groups.json` (the kind of the item
 without a trailing shard number, in minutes). `run_ci_groups_e2e` keeps each value equal to the timeout of its job in `.github/workflows/ci.yml` and requires a limit for every kind. A kind
 without a limit stops the run before its workers start. `CI_WORKER_LIMIT_SECONDS` replaces every limit for one run. The dispatcher polls its workers every half second. Bash counts whole
-seconds, so a worker is overdue only when the whole seconds since its start exceed the limit: it is never stopped before its limit and at most about 1.5 seconds after it. Each worker
-gets a private registry of owned process groups in the dispatcher's scratch folder (see Process launcher deadline), so a program that the worker starts through `scripts/process.py`, which
-leads a group of its own, is recorded there. At a deadline the dispatcher sends TERM to the worker's process group and to every recorded group, KILL after `CI_WORKER_GRACE_SECONDS`
-(5 by default) and confirms that no process of those groups is left. Groups that have already ended count as stopped. It prints the worker, its check group and the limit,
-fails the run with `Local CI failed in: <worker> (deadline <seconds> s)` and keeps the worker's partial log. The other workers keep their result. An exit, Ctrl-C, TERM or HUP of the
-dispatcher stops every live worker group and its recorded groups the same way (2 seconds after TERM). The dispatcher also records each worker group in the registries it inherited, so the
-deadline of `scripts/quality/pre_push.py` (which stops the dispatcher through `scripts/process.py`) leaves no worker even if the dispatcher is killed. A process that starts its own session
-without the launcher is outside every group. `.venv/bin/python -m scripts.quality.run_worker_deadline_e2e` (in `repository_code_checks`) runs the real dispatcher in a scratch folder with a
-worker that never ends and a child that ignores TERM. It also runs a worker that starts its program through the launcher and workers that start late in a wall-clock second (one ends 0.25 seconds
-before its limit and must pass; one never ends and must get TERM only after its limit). It plants a dispatcher without a deadline, one that stops the direct process only, one with the
-old whole-second comparison and one that ignores the worker's registry. A plant counts as caught only when the intended check of its case fails.
+seconds, so a worker is overdue only when the whole seconds since its start exceed the limit: it is never stopped before its limit and at most about 1.5 seconds after it. A bash subshell
+cannot call `setsid`, so a short Python step starts each worker: it calls `setsid`, resets SIGINT and SIGQUIT, sets `PROCESS_LAUNCH_SESSION=1` and runs a new bash. That bash reads the
+dispatcher's functions and the variables that workers use from a private state file (mode 600 in the scratch folder). A program that the worker starts through `scripts/process.py` stays in
+the worker's session (see Process launcher deadline). At a deadline the dispatcher stops every member of the worker's session with `stop_sessions` of `scripts/process.py`: TERM, KILL after
+`CI_WORKER_GRACE_SECONDS` (5 by default), then a confirmation that no member is left. If the session cannot be listed, the worker's group still stops and the stop is reported as failed. It
+prints the worker, its check group and the limit, fails the run with `Local CI failed in: <worker> (deadline <seconds> s)` and keeps the worker's partial log. The other workers keep their
+result. An exit, Ctrl-C, TERM or HUP of the dispatcher stops every live worker session the same way (2 seconds after TERM). The exit trap ignores TERM, INT and HUP while it does so, because
+its stop step is a new process in the dispatcher's session that an outer stop would also signal. Worker sessions are not members of the dispatcher's session: the deadline of
+`scripts/quality/pre_push.py` reaches the workers through that exit trap, so a KILL of the dispatcher before its trap runs would leave them. A process that starts its own session without the
+launcher is outside the worker's session. `.venv/bin/python -m scripts.quality.run_worker_deadline_e2e` (in `repository_code_checks`) runs the real dispatcher in a scratch folder with a
+worker that never ends and a child that ignores TERM. It also runs a worker that starts its program through the launcher (once after removing the old registry, the review reproduction)
+and workers that start late in a wall-clock second (one ends 0.25 seconds before its limit and must pass; one never ends and must get TERM only after its limit). It plants a dispatcher
+without a deadline, one that stops the direct process only, one with the old whole-second comparison and one that stops the worker's process group only. A plant counts as caught only when
+the intended check of its case fails.
 
 ## Measured durations
 
@@ -786,24 +789,28 @@ tree, the reused run and the conclusion of each required job. `.venv/bin/python 
 
 ## Process launcher deadline
 
-`scripts/process.py` `run_command` starts each program in its own process group (`process_group=0`), so a stop never signals the caller. The whole group stops at the deadline
-and when the caller is interrupted while it waits (Ctrl-C): TERM first, then KILL after `STOP_GRACE_SECONDS` (5 s), then a check that no member is left (up to
-`CONFIRM_SECONDS`, 5 s). A caller whose own deadline must hold within a shorter bound passes `grace_seconds` (the reference-document download passes at most a quarter of its limit). The leader is reaped first, because an unreaped zombie keeps its group alive. A program that ends in time gives the same result as before. A deadline
-raises `TimeoutExpired` with the output so far. If a member survives KILL, the call raises `ProcessGroupSurvived`, a `TimeoutExpired` that names the group, so no timeout ends silently with a live
-process.
+`scripts/process.py` `run_command` starts each program in a new session (`setsid`), which the program leads, so a stop never signals the caller. Every member of that session stops
+at the deadline and when the caller is interrupted while it waits (Ctrl-C): TERM first, then KILL after `STOP_GRACE_SECONDS` (5 s), then a check that no member is left (up to
+`CONFIRM_SECONDS`, 5 s). A caller whose own deadline must hold within a shorter bound passes `grace_seconds` (the reference-document download passes at most a quarter of its limit). A
+program that ends in time gives the same result as before. A deadline raises `TimeoutExpired` with the output so far. If a member survives KILL or the session cannot be listed, the call
+raises `ProcessGroupSurvived`, a `TimeoutExpired` that names the session, so no timeout ends silently with a live process.
 
-A descendant that calls `run_command` itself (for example `scripts/quality/ci_hooks.py` under the dispatcher) starts its program in a new group, outside the caller's. So each call keeps a private
-registry of owned groups: a file with mode 600 in a folder with mode 700. The call names it to its child in `PROCESS_GROUP_REGISTRIES`, after the registries of its own ancestors (paths
-separated by `:`). Every launch appends its new group, one line, to each registry it inherited, so a registry lists every group that a descendant started at any depth. The stop at the deadline
-or on an interrupt covers the own group and every recorded group with the same TERM, grace, KILL and confirmation. It reads the registry again while it waits, for a group recorded during the
-stop. A group that has already ended counts as stopped. So does a recorded group ID that now belongs to another user (it is no descendant). A nested launch keeps its own, earlier deadline and stops its own recorded groups. The registry is removed when the call returns or
-raises. A nested registry folder is made inside its parent's, so a nested launcher that is killed before its cleanup leaves no folder. A write to a registry whose owner has returned is
-skipped. The registry keeps no record of a group that ended, so a recorded group ID that the system has reused for an unrelated program before the owner's stop would be signalled too. The stop
-runs only at the owner's deadline or interrupt. A member that starts its own session or group (`setsid`) without the launcher is outside every group and is not stopped. The API key reader
-starts its own session only when run by hand, because a group leader cannot call `setsid`. `.venv/bin/python -m scripts.quality.run_process_e2e` (in `repository_code_checks`) starts a child
-that starts a grandchild (once with TERM ignored and once without) and nested launchers one and two levels deep. It checks by process ID that none is left, that a nested launch keeps its
-own deadline, that the registry is private and removed and that a group that has already ended counts as stopped. It also plants four defects (stop the direct child only, send TERM without
-KILL, skip the confirmation, stop the own group only). Each plant takes the real arguments of `stop_process_group` and counts as caught only when the intended check of its case fails.
+The stop lists every live process with `ps -A -o pid=,ppid=,stat=` (macOS `pgrep` has no session option and its `ps` shows the session as 0) and signals those whose `os.getsid` is the
+session. It lists again on every 50 ms poll, so a member that starts during the stop is signalled too. Zombies are not counted. The leader is reaped only after the stop, so its pid, which is
+the session id, cannot be reused while the stop runs. A pid that ends and is reused in the moment between its listing and its signal is the remaining race. The listing fails when `ps` is missing,
+fails, times out (5 s) or prints a line that is not a process. It also fails when a session cannot be read. Then the stop still sends TERM and KILL to the leader's group (its id is the
+session id) and the call fails as a survivor. The stop refuses the caller's own session.
+
+The launcher names its session to the program with `PROCESS_LAUNCH_SESSION=1`. A descendant that calls `run_command` itself (for example `scripts/quality/ci_hooks.py` under the
+dispatcher) is a nested launch: it stays in that session, starts its program in a new process group and stops only that group at its own, earlier deadline. The outer stop reaches every
+nested group at any depth as a session member. It also reaches a descendant that moved to another group. A nested deadline does not reach the groups that its own nested launches started. The
+outer session stop does. A member that starts its own session (`setsid`) without the launcher is outside the session and is not stopped. A program in a new session has no controlling
+terminal, so an open of `/dev/tty` fails at once. The API key reader starts its own session only when run by hand, because a group leader cannot call `setsid`.
+`.venv/bin/python -m scripts.quality.run_process_e2e` (in `repository_code_checks`) starts a child that starts a grandchild (once with TERM ignored and once without) and nested
+launchers one and two levels deep. It checks by process ID that none is left, that a nested launch stays in the outer session and keeps its own deadline, that a descendant in a new group
+stops, that a descendant cannot hide by changing the old registry (the review reproductions), that an unrelated command is never signalled and that a failed listing fails visibly. It also
+plants four defects (stop the direct child only, send TERM without KILL, skip the confirmation, stop the leader's group only). Each plant takes the real arguments of `stop_launch` and
+counts as caught only when the intended check of its case fails.
 
 ## Practice
 

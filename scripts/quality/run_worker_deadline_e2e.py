@@ -1,20 +1,21 @@
-"""E2E for the deadline on the workers of scripts/run_ci.sh (WV3-032): a worker that never ends is stopped with its process group and fails by name.
+"""E2E for the deadline on the workers of scripts/run_ci.sh (WV3-032): a worker that never ends is stopped with its session and fails by name.
 
 Run from the repository root: ``.venv/bin/python -m scripts.quality.run_worker_deadline_e2e``. Each case copies the real dispatcher,
-scripts/quality/timing.sh and config/quality/ci_groups.json into a scratch folder (a new Git repository, no worktree) with stand-in check groups and a
-stand-in Python launcher that answers the plan, so the dispatcher's own gates, parallel set, deadline wait and exit trap run unchanged. One stand-in
+scripts/quality/timing.sh, scripts/process.py (the session stop) and config/quality/ci_groups.json into a scratch folder (a new Git repository, no
+worktree) with stand-in check groups and a stand-in Python launcher that answers the plan, so the dispatcher's own gates, parallel set, deadline wait
+and exit trap run unchanged. One stand-in
 worker never ends and starts a child that ignores TERM.
 Cases: the run fails with the group's name and the deadline; the other worker keeps its result; no process of the stopped group is left (checked by
 process ID); a worker that also ignores TERM is killed after the grace period; a single worker (the streaming path) fails the same way; the deadline
 comes from ``worker_limits`` in the config when ``CI_WORKER_LIMIT_SECONDS`` is unset; a kind of worker without a limit stops the run before any
 worker starts; workers that end in time pass; a stop of the dispatcher itself through ``run_command`` (the pre-push deadline) leaves no worker; a
-worker that starts its program through ``scripts/process.py`` ``run_command`` (a nested process group, recorded in the worker's registry) leaves no
+worker that starts its program through ``scripts/process.py`` ``run_command`` (a nested launch: a new process group in the worker's session) leaves no
 process at the worker deadline or at a stop of the dispatcher; and a worker is never stopped before its limit (the start is aligned late in a
 wall-clock second, where whole-second timestamps fire up to a second early: a worker that ends 0.25 s before the limit passes and a worker that never
 ends gets TERM only after its limit).
 Planted defects run the cases against a changed copy of the dispatcher (no deadline, which is the plain wait; a stop of the direct process only; the
-old whole-second comparison; a stop of the worker group without its recorded groups). Each counts as caught only when the named check of its case is
-false and the case raised nothing.
+old whole-second comparison; a stop of the worker's process group without the rest of its session). Each counts as caught only when the named
+check of its case is false and the case raised nothing.
 The report goes to data/e2e/worker_deadline/<UTC>_<pid>/report.json with the revision and the SHA-256 of the files under test.
 """
 
@@ -92,6 +93,13 @@ open(sys.argv[2] + "/launcher.pid", "w").write(str(os.getpid()))
 run_command("bash", [sys.argv[2] + "/never_ends.sh"], timeout=600)
 ' {ROOT} "$STUB_DIR"
 """
+# The launcher worker, which first removes every registry that the old launcher named in PROCESS_GROUP_REGISTRIES (the review reproduction).
+HIDING_LAUNCHER = LAUNCHER.replace(
+    "from scripts.process import run_command\n",
+    "from scripts.process import run_command\n"
+    'for path in [path for path in os.environ.get("PROCESS_GROUP_REGISTRIES", "").split(":") if path]:\n'
+    "    os.path.exists(path) and os.unlink(path)\n",
+)
 # A worker that never ends and records, when TERM arrives, how long after its own start (monotonic) and at which wall-clock fraction it started.
 TERM_TIME = f"""#!/bin/bash
 exec {PYTHON} -B -c '
@@ -153,6 +161,7 @@ class Sandbox:
             dispatcher if dispatcher is not None else (ROOT / "scripts/run_ci.sh").read_text(encoding="utf-8"), encoding="utf-8"
         )
         shutil.copy2(ROOT / "scripts/quality/timing.sh", self.root / "scripts/quality/timing.sh")
+        shutil.copy2(ROOT / "scripts/process.py", self.root / "scripts/process.py")
         (self.root / "scripts/infrastructure/placeholder.sh").write_text("# empty\n", encoding="utf-8")
         for group, body in GROUP_BODIES.items():
             (self.root / f"scripts/ci/groups/{group}.sh").write_text(body, encoding="utf-8")
@@ -167,6 +176,7 @@ class Sandbox:
             ("stub/quick.sh", QUICK),
             ("stub/near.sh", NEAR),
             ("stub/launcher.sh", LAUNCHER),
+            ("stub/hiding_launcher.sh", HIDING_LAUNCHER),
             ("stub/term_time.sh", TERM_TIME),
         ):
             (self.root / path).write_text(text, encoding="utf-8")
@@ -248,7 +258,7 @@ def stopped_checks(sandbox: Sandbox, run: dict[str, Any], failed_line: str) -> d
         "exit_nonzero": run["exit"] not in (None, 0),
         "failure_line_names_the_group": f"Local CI failed in: {failed_line}" in text,
         "deadline_message_names_the_group_and_limit": f"(check group python_lint) ran past its deadline of {LIMIT_SECONDS} s" in text,
-        "stop_confirmed": "Stopped: no process of the group" in text,
+        "stop_confirmed": "Stopped: no process of the session" in text,
         "worker_gone": sandbox.gone("worker"),
         "child_that_ignores_term_gone": sandbox.gone("child"),
         "no_pass_line": "All local CI checks passed" not in text,
@@ -367,6 +377,18 @@ def launcher_worker(base: Path) -> dict[str, Any]:
     return case("worker_using_the_launcher_leaves_no_nested_group", base, body)
 
 
+def hiding_launcher_worker(base: Path) -> dict[str, Any]:
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        run = sandbox.run(STUB_PYTHON_LINT="hiding_launcher", CI_WORKER_LIMIT_SECONDS=str(LIMIT_SECONDS))
+        return {
+            **stopped_checks(sandbox, run, f"python_lint (deadline {LIMIT_SECONDS} s)"),
+            "launcher_started_the_nested_group": sandbox.pid("launcher") is not None and sandbox.pid("worker") is not None,
+            "nested_worker_gone": sandbox.gone("worker"),
+        }
+
+    return case("worker_that_removes_the_old_registry_leaves_no_process", base, body)
+
+
 def launcher_worker_dispatcher_stop(base: Path) -> dict[str, Any]:
     def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
         run = sandbox.run(timeout=8, STUB_PYTHON_LINT="launcher", CI_WORKER_LIMIT_SECONDS="600")
@@ -416,6 +438,7 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "stop_of_the_dispatcher_leaves_no_worker": dispatcher_stop,
     "worker_using_the_launcher_leaves_no_nested_group": launcher_worker,
     "stop_of_the_dispatcher_leaves_no_nested_group": launcher_worker_dispatcher_stop,
+    "worker_that_removes_the_old_registry_leaves_no_process": hiding_launcher_worker,
     "worker_is_not_stopped_before_its_limit": not_before_the_limit,
 }
 
@@ -427,10 +450,7 @@ PLANTS: dict[str, tuple[tuple[tuple[str, str], ...], dict[str, str]]] = {
         {"worker_that_never_ends_fails_with_the_group_name": "run_did_not_hang"},
     ),
     "direct_process_only": (
-        (
-            ('for pgid in "$@"; do kill -TERM -- "-$pgid" 2>/dev/null || true; done', 'for pgid in "$@"; do kill -TERM "$pgid" 2>/dev/null || true; done'),
-            ('for pgid in "$@"; do kill -KILL -- "-$pgid" 2>/dev/null || true; done', 'for pgid in "$@"; do kill -KILL "$pgid" 2>/dev/null || true; done'),
-        ),
+        (('stop_sessions "$worker_grace" "$pid"', '{ kill -TERM "$pid"; sleep 1; kill -KILL "$pid"; } 2>/dev/null'),),
         {"worker_that_ignores_term_is_killed_after_the_grace_period": "child_that_ignores_term_gone"},
     ),
     "deadline_one_second_early": (
@@ -438,12 +458,7 @@ PLANTS: dict[str, tuple[tuple[tuple[str, str], ...], dict[str, str]]] = {
         {"worker_is_not_stopped_before_its_limit": "term_not_before_the_limit"},
     ),
     "worker_group_only": (
-        (
-            (
-                """      if [[ "$line" =~ ^[1-9][0-9]*$ ]] && ((line > 1 && line != own_group)); then printf '%s\\n' "$line"; fi""",
-                "      :",
-            ),
-        ),
+        (('stop_sessions "$worker_grace" "$pid"', '{ kill -TERM -- "-$pid"; sleep 1; kill -KILL -- "-$pid"; } 2>/dev/null'),),
         {"worker_using_the_launcher_leaves_no_nested_group": "child_that_ignores_term_gone"},
     ),
 }
