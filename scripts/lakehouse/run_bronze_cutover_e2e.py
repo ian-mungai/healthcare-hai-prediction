@@ -13,6 +13,7 @@ import contextlib
 import copy
 import hashlib
 import json
+import socket
 import stat
 import sys
 import tempfile
@@ -540,6 +541,83 @@ def polaris_http(folder: Path) -> dict[str, bool]:
     return checks
 
 
+class SlowPeer:
+    """A loopback peer that accepts one connection at a time and then sends the given chunks with a pause between them, or nothing."""
+
+    def __init__(self, chunks: list[bytes], pause: float) -> None:
+        self.chunks, self.pause = chunks, pause
+        self.closed_early = threading.Event()
+        self.server = socket.create_server(("127.0.0.1", 0))
+        self.server.settimeout(0.2)
+        self.port = int(self.server.getsockname()[1])
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+
+    def serve(self) -> None:
+        while not self.stop.is_set():
+            try:
+                connection, _ = self.server.accept()
+            except TimeoutError:
+                continue
+            with connection:
+                connection.settimeout(0.2)
+                with contextlib.suppress(OSError):
+                    connection.recv(65536)
+                for chunk in self.chunks:
+                    if self.stop.wait(self.pause):
+                        break
+                    try:
+                        connection.sendall(chunk)
+                    except OSError:
+                        self.closed_early.set()
+                        break
+                if not self.chunks:
+                    self.stop.wait(5)
+
+    def close(self) -> None:
+        self.stop.set()
+        self.thread.join(5)
+        self.server.close()
+
+
+def http_outcome(client: bronze_inventory.PolarisHttp, deadline: float) -> str:
+    """The cause code of one bounded request, or the exception type when it was not a registration refusal."""
+    try:
+        client.send("GET", "/api/catalog/v1/config", None, {}, deadline)
+    except reg.RegistrationError as error:
+        return error.code
+    except Exception as error:
+        return type(error).__name__
+    return ""
+
+
+@offline
+def http_absolute_deadline(folder: Path) -> dict[str, bool]:
+    """R6: the bounded client stops at the absolute deadline during the header and body reads and closes the connection, for a silent peer and
+    for a peer that keeps sending a few bytes."""
+    checks: dict[str, bool] = {}
+    body = b"x" * 600
+    head = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 600\r\n\r\n"
+    for label, chunks in (
+        ("a silent peer", []),
+        ("a peer that trickles the headers", [head[index : index + 3] for index in range(0, len(head), 3)]),
+        ("a peer that trickles the body", [head, *(body[index : index + 3] for index in range(0, len(body), 3))]),
+    ):
+        peer = SlowPeer(chunks, 0.025)
+        try:
+            client = bronze_inventory.PolarisHttp("127.0.0.1", peer.port, client_id="synthetic_client", secret=hashlib.sha256(label.encode()).hexdigest())
+            started = time.monotonic()
+            code = http_outcome(client, started + 0.3)
+            elapsed = time.monotonic() - started
+            checks[f"R6: {label} fails with the deadline cause"] = code == "deadline"
+            checks[f"R6: {label} is stopped within the absolute deadline"] = elapsed < 0.45
+            checks[f"R6: the connection to {label} is closed at expiry"] = not chunks or peer.closed_early.wait(2)
+        finally:
+            peer.close()
+    return checks
+
+
 @offline
 def register_and_verify(folder: Path) -> dict[str, bool]:
     """R1, R3, R5, Q3: preflight, namespace creation, registration, verification and a write-once receipt; a rerun gives unchanged."""
@@ -882,6 +960,7 @@ ALL_CASES = (
     inventory_identity,
     s3_metadata_reads,
     polaris_http,
+    http_absolute_deadline,
     register_and_verify,
     preflight_refusals,
     register_failures,

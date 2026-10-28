@@ -307,6 +307,8 @@ once, mode 0600, in the cutover folder. A second capture must give the same dige
 behind an owned loopback relay (`orchestration/catalog_transport.py`). Before the tunnel starts, the network acceptance
 check requires local tunnel and relay ports other than the Mac Polaris port 8181 (defaults 18181 and 18182) and one
 running host instance without a public address. A lost route fails the step and is never reopened inside an operation.
+Each Polaris request ends at its absolute deadline, also while a slow peer is still sending headers or body: the client
+closes the connection and the step fails with the `deadline` cause.
 `register` first checks that the AWS catalog `hai_lakehouse` exists with the lakehouse base location and no credential
 vending, creates `bronze` and `bronze_dictionary` if absent (approved for this cutover ID only) and registers each table
 with its own deadline (`--per-table-seconds`). It stops at the first failure. It never overwrites a different table and

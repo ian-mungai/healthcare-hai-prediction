@@ -8,11 +8,14 @@ or to S3. Each table pin comes from ``register_aws_catalog.capture_table``: the 
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import http.client
 import json
 import os
+import socket
 import tempfile
+import threading
 import time
 import urllib.parse
 from collections.abc import Mapping, Set
@@ -92,15 +95,39 @@ class PolarisHttp:
         return f"PolarisHttp({self.host}:{self.port})"
 
     def send(self, method: str, path: str, data: bytes | None, headers: dict[str, str], deadline: float) -> tuple[int, object]:
+        """One request within the absolute deadline: a watchdog shuts the socket at expiry, so neither a silent peer nor one that keeps
+        sending a few bytes holds the header or body read past it."""
         timeout = deadline - self.clock()
         if timeout <= 0:
             raise reg.RegistrationError("deadline", "catalog registration exceeded its fixed deadline")
         connection = http.client.HTTPConnection(self.host, self.port, timeout=timeout)
+        expired = threading.Event()
+
+        def expire() -> None:
+            expired.set()
+            if connection.sock is not None:
+                with contextlib.suppress(OSError):
+                    connection.sock.shutdown(socket.SHUT_RDWR)
+
+        watchdog = threading.Timer(timeout, expire)
+        watchdog.daemon = True
+        watchdog.start()
         try:
-            connection.request(method, path, body=data, headers={"Accept": "application/json", "Polaris-Realm": self.realm, **headers})
-            response = connection.getresponse()
-            raw = response.read(reg.MAX_RECORD + 1)
+            try:
+                connection.connect()
+                if expired.is_set():
+                    raise TimeoutError
+                connection.request(method, path, body=data, headers={"Accept": "application/json", "Polaris-Realm": self.realm, **headers})
+                response = connection.getresponse()
+                raw = response.read(reg.MAX_RECORD + 1)
+            except (OSError, http.client.HTTPException):
+                if expired.is_set() or self.clock() >= deadline:
+                    raise reg.RegistrationError("deadline", "catalog registration exceeded its fixed deadline") from None
+                raise
+            if expired.is_set():
+                raise reg.RegistrationError("deadline", "catalog registration exceeded its fixed deadline")
         finally:
+            watchdog.cancel()
             connection.close()
         if response.status >= 400:
             return response.status, None
