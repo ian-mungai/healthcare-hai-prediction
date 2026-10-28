@@ -9,7 +9,8 @@ Run from the repository root:
 `config/training/targets.json` names the six HAI SIRs as target candidates and the same SIRs from an earlier period as
 earlier-outcome candidates (owner decision, Oct 22 2026). Each listed control must map, in the bridge, to exactly one row
 of fact `fct_hai_hospital_window`, measure key `<hai_type>_SIR` and value column `score`; each of the six types has
-exactly one control in each list and no control is in both. The check reads files only and writes nothing.
+exactly one control in each list and no control is in both. Each list holds exactly the owner's approved controls for its
+role, because the bridge row is the same for both periods (T10). The check reads files only and writes nothing.
 """
 
 from __future__ import annotations
@@ -26,6 +27,10 @@ BRIDGE = REPO_ROOT / "dbt/seeds/gold/hai_outcome_measures_bridge.csv"
 HAI_TYPES = tuple(f"HAI_{number}" for number in range(1, 7))
 LISTS = ("target_candidates", "earlier_outcome_candidates")
 ENTRY_FIELDS = {"control", "hai_type", "label"}
+APPROVED_CONTROLS = {
+    "target_candidates": tuple(f"C{number}" for number in range(269, 275)),
+    "earlier_outcome_candidates": tuple(f"C{number}" for number in range(275, 281)),
+}
 FACT = "fct_hai_hospital_window"
 VALUE_COLUMN = "score"
 
@@ -45,6 +50,15 @@ def load_targets(path: Path) -> tuple[dict[str, list[dict[str, str]]], list[str]
         if not isinstance(entries, list) or not all(isinstance(entry, dict) and set(entry) == ENTRY_FIELDS for entry in entries):
             problems.append(f"{path.name}: {name} must be a list of entries with exactly {', '.join(sorted(ENTRY_FIELDS))}")
             continue
+        bad_values = [
+            f"{path.name}: {name} entry {index}: {field} must be a non-empty string"
+            for index, entry in enumerate(entries, start=1)
+            for field in sorted(ENTRY_FIELDS)
+            if not isinstance(entry[field], str) or not entry[field]
+        ]
+        if bad_values:
+            problems.extend(bad_values)
+            continue
         lists[name] = entries
     return lists, problems
 
@@ -58,6 +72,9 @@ def check(targets: Path = TARGETS, bridge: Path = BRIDGE) -> list[str]:
         types = [entry["hai_type"] for entry in entries]
         if sorted(types) != sorted(HAI_TYPES):
             problems.append(f"{name}: each of {', '.join(HAI_TYPES)} needs exactly one control (found {', '.join(sorted(types))})")
+        controls = sorted(entry["control"] for entry in entries)
+        if controls != sorted(APPROVED_CONTROLS[name]):
+            problems.append(f"{name}: needs exactly the approved controls {', '.join(APPROVED_CONTROLS[name])} (found {', '.join(controls)})")
     overlap = {entry["control"] for entry in lists["target_candidates"]} & {entry["control"] for entry in lists["earlier_outcome_candidates"]}
     if overlap:
         problems.append(f"controls in both lists: {', '.join(sorted(overlap))}")

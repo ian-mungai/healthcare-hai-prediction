@@ -97,11 +97,26 @@ def main() -> int:
         def extra_field(document: dict[str, Any]) -> None:
             document["target_candidates"][0]["weight"] = "1"
 
+        def swap_roles(document: dict[str, Any]) -> None:
+            document["target_candidates"], document["earlier_outcome_candidates"] = (
+                document["earlier_outcome_candidates"],
+                document["target_candidates"],
+            )
+
+        def null_type(document: dict[str, Any]) -> None:
+            document["target_candidates"][0]["hai_type"] = None
+
+        def list_control(document: dict[str, Any]) -> None:
+            document["earlier_outcome_candidates"][2]["control"] = []
+
         list_cases: dict[str, tuple[Callable[[dict[str, Any]], None], str]] = {
             "T4 one type twice and one type missing": (duplicate_type, "each of HAI_1"),
             "T5 the same control in both lists": (overlap, "controls in both lists: C269"),
             "T6 a missing list": (missing_list, "needs exactly the keys"),
             "T6 an entry with an extra field": (extra_field, "must be a list of entries with exactly"),
+            "T10 the two lists with their roles swapped": (swap_roles, "target_candidates: needs exactly the approved controls C269, C270"),
+            "T11 an entry whose type is null": (null_type, "target_candidates entry 1: hai_type must be a non-empty string"),
+            "T11 an entry whose control is a list": (list_control, "earlier_outcome_candidates entry 3: control must be a non-empty string"),
         }
         for name, (list_change, expected) in list_cases.items():
             problems = targets.check(targets_copy(folder, name.split()[0], list_change), targets.BRIDGE)
