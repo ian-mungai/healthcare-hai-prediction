@@ -40,7 +40,14 @@ from scripts.process import run_command
 
 CONFIG = Path("config/quality/ci_groups.json")
 SCOPES = ("full", "staged", "range", "paths")
-LAYER_PARTS = {"bronze": "lakehouse_bronze", "silver": "lakehouse_silver", "gold": "lakehouse_gold", "features": "lakehouse_features"}
+LAYER_PARTS = {
+    "bronze": "lakehouse_bronze",
+    "silver": "lakehouse_silver",
+    "gold": "lakehouse_gold",
+    "features": "lakehouse_features",
+    "feature_sources": "lakehouse_features",
+    "feature_columns": "lakehouse_features",
+}
 PARTS = {"all", "core", "launcher", "gates", *LAYER_PARTS}
 
 
@@ -70,7 +77,7 @@ def groups_of(part: str, config: dict[str, Any]) -> list[str]:
     elif part in LAYER_PARTS:
         wanted = {LAYER_PARTS[part]}
     else:
-        wanted = known - ({"launcher", "acquisition", *LAYER_PARTS.values()} if part == "core" else set())
+        wanted = known - ({"launcher", *config["full_only"], *LAYER_PARTS.values()} if part == "core" else set())
     return [group for group in order(config) if group in wanted]
 
 

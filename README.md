@@ -8,7 +8,7 @@ Predicts hospital healthcare-associated infection rates from public CMS, Census,
 
 Prerequisites: macOS on Apple silicon or Linux AMD64, Python 3.12, Git,
 Terraform 1.16.1, AWS CLI v2 and Node.js 22 or later for Markdown checks. Google Chrome renders the
-architecture diagram. The lakehouse runs in Docker Desktop; the launcher (`orchestration/launcher.py`) computes a
+architecture diagram. The lakehouse runs in Docker Desktop. The launcher (`orchestration/launcher.py`) computes a
 memory plan for every job from what Docker and the Mac have free and stops a launch whose container budget is below
 4 GiB. Native quality tools install into the ignored `.tools/` at versions and publisher SHA-256 values pinned in
 `config/quality_tools.json`.
@@ -24,7 +24,7 @@ PRE_COMMIT_HOME="$PWD/.tools/pre_commit_cache" .venv/bin/python -m pre_commit in
 cp .env.example .env
 ```
 
-Fill every value in `.env`; the file stays out of Git. `AWS_PROFILE` is the
+Fill every value in `.env`. The file stays out of Git. `AWS_PROFILE` is the
 project profile, named `<PROJECT_NAME>_<ENVIRONMENT>` after its same-named IAM
 user. IAM changes use a separate administrator profile that is never stored in
 `.env`. No secret belongs in `.env` or in any other file on the host: every project secret
@@ -33,7 +33,7 @@ lives in AWS Systems Manager Parameter Store and the four shared API keys in AWS
 The project profile holds only the permissions of the approved list, as one policy file per AWS service in
 `infra/iam/policies/` (`healthcare_hai_prediction_<service>_policy.json`, with `${AWS_REGION}`, `${AWS_ACCOUNT_ID}`,
 `${PROJECT_NAME}`, `${ENVIRONMENT}` and `${DATA_BUCKET_NAME}` placeholders). The owner applies them with the administrator
-profile; the policy scripts read the values from `.env`. The secret and parameter names are not in the files: they are the
+profile. The policy scripts read the values from `.env`. The secret and parameter names are not in the files: they are the
 defaults of the secret-name root variables in `infra/iam/variables.tf`, which `render_policy` reads. Render to review, plan
 (changes nothing), then apply with the confirmation word:
 
@@ -47,7 +47,7 @@ The apply creates or updates the policies, attaches them to two groups and adds 
 the earlier grouped policies. `infra.iam.scripts.export_policies` writes the policies in IAM back as templates, to see
 drift. The roles, the network, the host launch template and Auto Scaling group and the cost budget stay in the IAM
 Terraform stack (`bash scripts/infrastructure/terraform.sh --iam --admin-profile <ADMIN_PROFILE>`), which the owner applies
-first; the project profile then applies the platform stack (`--platform`). The order and the checks are in
+first. The project profile then applies the platform stack (`--platform`). The order and the checks are in
 `docs/infrastructure_controls.md`.
 
 After the foundation is applied and the image digests are recorded, create a services plan with the project profile.
@@ -67,12 +67,12 @@ bash scripts/infrastructure/terraform.sh --services apply services.tfplan
 
 The first-start order and one-shot tasks are in `docs/aws_control_plane.md`.
 
-The services are defined in `docker-compose.yaml`, which the launcher reads as its service model; the launcher, not
+The services are defined in `docker-compose.yaml`, which the launcher reads as its service model. The launcher, not
 Compose, starts every container:
 
 - PostgreSQL and Apache Polaris 1.8.0 use digest-pinned images.
 - The Spark 4.1.2 (Iceberg 1.11.0), DuckDB 1.5.6 analytics, Great Expectations quality and Polaris bootstrap images are
-  built from `services/`, with their Python packages hash-pinned; each job image carries the deadline entrypoint.
+  built from `services/`, with their Python packages hash-pinned. Each job image carries the deadline entrypoint.
 
 The launcher uses local images only and never pulls or builds one. Before the first catalog command, pull the two pinned
 images and build the others once:
@@ -105,12 +105,12 @@ project bucket. `down` stops the containers and keeps the catalog database.
 | Gold | Atomic facts, dimensions and bridges in Iceberg | Trigger `gold_transform_dag` by hand (`scripts.orchestration.trigger_dag`) to select a committed silver snapshot set, build and validate gold, then publish it. |
 | Features | Models in `dbt/models/features/` and formula recipes in `dbt/seeds/features/` | Build research joins, alignments and derived ratios from gold as views when the feature phase needs them. |
 
-Publication verification is pending. Fixture runs use a test registry and local Iceberg catalog. Silver and gold writes follow the run mode. `publish_fixture` runs write only under `lakehouse/silver_e2e/` and `lakehouse/gold_e2e/`. `real` runs write only under `lakehouse/silver/` and `lakehouse/gold/`. The launcher refuses any other silver or gold write. Local builds use DuckDB; Athena access through an AWS Glue catalog mirror belongs to the final AWS migration stage. Asset scheduling stays disabled. `gold_maintenance_dag` retains registered snapshot sets when maintaining gold.
+Publication verification is pending. Fixture runs use a test registry and local Iceberg catalog. Silver and gold writes follow the run mode. `publish_fixture` runs write only under `lakehouse/silver_e2e/` and `lakehouse/gold_e2e/`. `real` runs write only under `lakehouse/silver/` and `lakehouse/gold/`. The launcher refuses any other silver or gold write. Local builds use DuckDB. Athena access through an AWS Glue catalog mirror belongs to the final AWS migration stage. Asset scheduling stays disabled. `gold_maintenance_dag` retains registered snapshot sets when maintaining gold.
 
 ## Usage
 
 Run the full local CI, which the pre-commit hooks and GitHub Actions also run, without AWS credentials. Run it before
-every push; a commit runs only the check groups its staged paths touch:
+every push. A commit runs only the check groups its staged paths touch:
 
 ```sh
 env PYTHON_BIN="$PWD/.venv/bin/python" \
@@ -118,7 +118,7 @@ env PYTHON_BIN="$PWD/.venv/bin/python" \
   /bin/bash scripts/run_ci.sh
 ```
 
-The E2E runners can also run on their own; each needs a new output directory:
+The E2E runners can also run on their own. Each needs a new output directory:
 
 ```sh
 .venv/bin/python -m scripts.infrastructure.run_e2e --output-directory <new_directory>

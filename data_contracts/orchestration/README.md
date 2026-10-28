@@ -1,7 +1,7 @@
-# Orchestration Contracts
+# Orchestration contracts
 
 The frozen contracts that the launchers, the host job broker and the Airflow DAGs share. Packages code against them
-and do not change them; a needed change goes to the repository owner first. Check them with
+and do not change them. A needed change goes to the repository owner first. Check them with
 `.venv/bin/python -m scripts.orchestration.run_contracts_e2e`, whose report under
 `data/e2e/orchestration_contracts/` lists the SHA-256 of every file here.
 
@@ -17,7 +17,7 @@ and do not change them; a needed change goes to the repository owner first. Chec
 The submission interface itself is `orchestration/interface.py`. `orchestration/fake.py` implements it in memory for
 package tests.
 
-## Run Identity
+## Run identity
 
 - **Run ID:** `<UTC start as YYYYMMDDTHHMMSSZ>-<8 hex characters>`, for example `20261011T090000Z-0a1b2c3d`. A retry
   with different code, specification or inputs is a new run with a new run ID.
@@ -30,14 +30,14 @@ package tests.
   and `hai.attempt`. A container that still carries the earlier `hai.run_id` label blocks a registry migration until
   it is removed.
 
-## Run Directory and Build File
+## Run directory and build file
 
 - **Run directory:** `data/analytics/dbt/runs/<run_id>/`, the only folder a job may write. It holds the build file
   `build.duckdb`, dbt's `target/silver/` and `target/gold/` and the logs `logs/silver/` and `logs/gold/`, plus
   `pins.json` (the pinned bronze snapshot IDs).
 - **Build file:** silver and gold are built into the same `build.duckdb`. Silver validation records its SHA-256 and the
   gold build checks it again before it starts.
-- **Run record:** `data/e2e/gold/<run_id>/run.json`, written by the run's record step; the lock is released only after
+- **Run record:** `data/e2e/gold/<run_id>/run.json`, written by the run's record step. The lock is released only after
   it exists. The build file is deleted only after an accepted run.
 - **Fixture mode:** the run directory is also the dbt case folder, mounted at `/workspace/out/case`. The `acquire_run`
   step copies the seed folder `data/orchestration/fixture_seed` into it once (built by
@@ -47,12 +47,12 @@ package tests.
 ## Ledger
 
 - **Location:** `data/orchestration/ledger/<run_id>.jsonl` in the main checkout, beside the run registry.
-- **Durability:** the broker appends one line, then fsyncs the file before the action the line announces; the folder is
+- **Durability:** the broker appends one line, then fsyncs the file before the action the line announces. The folder is
   fsynced when a ledger is created. Lines are never rewritten.
 - **Order per submission:** `intent` (before the launcher is asked), then `started` once the launcher's attempt has a
   container, then `finished` when the attempt ended. `failed_closed` stops the submission for the owner when the broker
   template row changed since the intent was written or the created container differs from its specification. The
-  ledger format still accepts `adopted`; the broker does not write it.
+  ledger format still accepts `adopted`. The broker does not write it.
 - **Recovery:** before any dispatch the broker reconciles every unfinished intent through the launcher's authenticated
   `submission` lookup by the request ID it sent. A found attempt is reconciled before the row can end the submission.
   Not found means the launcher never accepted it: the row decides, then the submission is sent once. A launcher that
@@ -120,9 +120,9 @@ different SHA-256 ends the submission with exit code 125 and no container starts
 `quality_reconcile`: the silver and gold suites plus the per-fact row and content reconciliation of every gold fact
 with its silver model, on the same private copy.
 
-## Modes and Classes
+## Modes and classes
 
-`fixture` runs offline on synthetic data; `pin_bronze` and `verify_bronze` are recorded no-ops in that mode. The split
+`fixture` runs offline on synthetic data. `pin_bronze` and `verify_bronze` are recorded no-ops in that mode. The split
 DAGs accept `publish_fixture` and `real` only. `publish_fixture` writes only the `silver_e2e` and `gold_e2e`
 namespaces. `real` writes `silver` and `gold`. The write prefix of each layer follows the mode: `publish_fixture` writes
 only under `lakehouse/silver_e2e/` and `lakehouse/gold_e2e/`. `real` writes only under `lakehouse/silver/` and

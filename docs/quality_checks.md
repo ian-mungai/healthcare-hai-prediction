@@ -58,7 +58,7 @@ last_updated: 2026-10-25
   DuckDB dot-command lines in `resources.sql` are replaced with comments in temporary lint copies, preserving line numbers and source
   bytes. Only the two `getenv` SET lines in `services/analytics/resources.sql` ignore PRS because the pinned parser
   cannot parse that valid DuckDB syntax. A style error elsewhere still fails. Other parse errors remain failures.
-- **Secrets and credential files:** gitleaks scans the staged index; `.env`
+- **Secrets and credential files:** gitleaks scans the staged index. `.env`
   (but not `.env.example`), Terraform state and saved plans, keys and cloud
   credential files are blocked.
 - **Data files:** `.csv`, `.tsv`, `.parquet`, `.xlsx`, `.xls`, `.jsonl`,
@@ -67,20 +67,20 @@ last_updated: 2026-10-25
   dbt seeds (file labels and checksums from the S3 manifests, no source values),
   and as the one named file
   `config/lakehouse/identity_classification.csv` (codes, classes and public
-  source citations; a path that only starts with that name is blocked). Any file over 5 MB is blocked
+  source citations). A path that only starts with that name is blocked. Any file over 5 MB is blocked
   unless Git LFS stores it. Acquired data stays in S3 and ignored local folders.
   Git LFS stores two acquisition config files over the limit,
   `config/acquisition/source_registry.json` and
   `config/acquisition/planning_v1/acquisition_plans_v1.json` (listed in
-  `.gitattributes`); a clone needs `git lfs install` to fetch them.
+  `.gitattributes`). A clone needs `git lfs install` to fetch them.
 - **Privacy scan:** every tracked or untracked non-ignored file, not only the
   diff, is scanned for home-directory and machine temporary paths, email
   addresses outside reserved domains (`example.invalid`, `.test`), phone
   numbers, AWS account IDs (including those in ARNs) and values of identifying keys in `.env`.
   Findings give file, line and type, never the value. Files that cannot be read
-  as text are listed as unreviewed; inspect them before publishing. Intentional
+  as text are listed as unreviewed. Inspect them before publishing. Intentional
   values go in `.privacy_allowlist` as `<type> <path glob> -- <reason>`,
-  matched by type and path only; an entry without a reason is itself a finding.
+  matched by type and path only. An entry without a reason is itself a finding.
   The synthetic account IDs in the Terraform, infrastructure and configuration
   tests are listed there. The hook runs
   `.venv/bin/python -m scripts.quality.repo_checks privacy-scan --all`, where
@@ -94,7 +94,7 @@ last_updated: 2026-10-25
   words `currently`, `recently`, `soon`, `eventually`, `as of this writing`,
   `at present`, `in the future` and `for now`. Files declared with
   `--articles <glob>` are also checked for em dashes. Exceptions go in
-  `.writing_allowlist` as `<type> <path glob> -- <reason>`; an entry without a
+  `.writing_allowlist` as `<type> <path glob> -- <reason>`. An entry without a
   reason is itself a finding. It blocks: the existing prose was corrected before
   each rule was enabled. Run it with
   `.venv/bin/python -m scripts.quality.repo_checks writing-check` (`--warn`
@@ -109,7 +109,7 @@ last_updated: 2026-10-25
   name, so `semicolon docs/*.md -- <reason>` keeps the semicolons of those
   files. In a declared article an em dash is one `em dash in article text`
   finding, not also a `dash` warning. The hook and the local CI command pass
-  `--block dash --block slash`, so dashes and slashes block there and semicolons warn. A whole-repository run without
+  `--block dash --block slash --block semicolon`, so dashes, slashes and semicolons block there. A whole-repository run without
   `--block` lists them, one `WARN` line each.
 - **Markdown syntax:** `markdownlint-cli2` checks every staged Markdown file
   outside `data/` against the Conventional Docs baseline in
@@ -123,10 +123,10 @@ last_updated: 2026-10-25
   `requirements.txt`. It blocks: a whole-project run was clean when it was added.
 - **Commit messages:** Conventional Commits and no AI attribution, checked in
   the full message by the `commit-msg` hook and, in GitHub Actions, for every
-  pushed commit. AI credit and agent-session lines are rejected; human
+  pushed commit. AI credit and agent-session lines are rejected. Human
   co-authors and factual tool mentions are allowed. Detection uses an explicit
   agent and vendor list, so new forms need a failing sample before the check is
-  extended. Review pull request text separately; a Git hook cannot read it.
+  extended. Review pull request text separately. A Git hook cannot read it.
 - **Docs match the code:** every environment variable the code reads is listed
   in `.env.example` and every variable listed there is read by code, a script,
   a workflow or a template. Local commits require an ignored `.documentation_review.json`, a per-document
@@ -140,27 +140,27 @@ last_updated: 2026-10-25
   Once released, read in full every changed or new document and every unchanged one that the staged change affects.
   After a staged change, `prepare --refresh --carry-forward` keeps the
   outcome of each document whose staged content is unchanged and whose earlier entry is valid, with the earlier
-  review time in its note; set it back to `pending` if the change affects it. Never stage
+  review time in its note. Set it back to `pending` if the change affects it. Never stage
   this record. The local hook validates its freshness against the index and rejects
   tracked or unignored evidence. GitHub Actions checks that the record is untracked and ignored and runs
-  synthetic hook tests; it cannot verify the private local review itself.
+  synthetic hook tests. It cannot verify the private local review itself.
 - **Removed names:** a name the staged change removes is no longer referenced:
   a deleted script, a command-line flag, an environment variable, a top-level
   Python function or class, a config key with `_`, `-` or camelCase, a Terraform
   variable, output, module, resource or data source, a deleted dbt model or a
   dependency that leaves every requirements file. Code names are searched in
-  code and config and in the code spans and fences of Markdown, not in prose;
+  code and config and in the code spans and fences of Markdown, not in prose.
   `CHANGELOG.md` is history and is not searched. GitHub Actions runs the same
   check over every pushed range. A reference that must stay goes in
-  `.cleanup_allowlist` as `<kind> <path glob> -- <reason>`; an entry without a
+  `.cleanup_allowlist` as `<kind> <path glob> -- <reason>`. An entry without a
   reason is itself a finding. It blocks: a replay over every earlier commit
   found only deliberate references (a removed config key that the bronze loader
   refuses by name).
 - **Unused code, dependencies and files:** vulture 2.16 (60%
-  confidence) reports functions, classes and variables nothing uses; deptry
+  confidence) reports functions, classes and variables nothing uses. Deptry
   0.25.1 reports requirements nothing imports and imports no requirements file
-  declares; `orphan-files` reports tracked files no other file names by path,
-  file name, folder or import (including `python -m`); tflint (`terraform_unused_declarations`, each
+  declares. `orphan-files` reports tracked files no other file names by path,
+  file name, folder or import (including `python -m`). TFLint (`terraform_unused_declarations`, each
   folder that holds a tracked `.tf` file) reports unused Terraform declarations. vulture and deptry are pinned
   in `requirements.txt`. They block. deptry checks each runtime on its
   own code and requirements, as `config/quality/dependency_runtimes.json` maps
@@ -168,10 +168,10 @@ last_updated: 2026-10-25
   Spark jobs, the analytics image and the SQLFluff tools (no project code). A
   package a runtime gets outside pip, such as PySpark, is listed there with its
   source. A hash-locked requirements file also pins transitive packages, so only
-  its missing imports are reported; a file two runtimes share reports a package
+  its missing imports are reported. A file two runtimes share reports a package
   as unused only when neither imports it. Exceptions go in `.cleanup_allowlist` with a
   reason, under the kinds `unused-code`, `unused-dependencies`, `orphan` and
-  `terraform-unused`; dbt's folder-loaded models and macros are listed there.
+  `terraform-unused`. Dbt's folder-loaded models and macros are listed there.
   A name used in a way vulture cannot see (a parser callback, a pytest autouse
   fixture, a field written out through `dataclasses.asdict`) goes in
   `scripts/quality/vulture_whitelist.py`, one name per entry with its reason, so
@@ -181,7 +181,7 @@ last_updated: 2026-10-25
   `.venv/bin/python -m scripts.quality.repo_checks unused-code` (`--warn`
   reports without failing).
 - **Lint settings:** Ruff keeps rule sets `E`, `F`, `I`, `B`, `UP`, `S`, `SIM`
-  and `T20` at line length 160 with no ignore or exclude settings; MyPy keeps
+  and `T20` at line length 160 with no ignore or exclude settings. MyPy keeps
   `--check-untyped-defs` and `--disallow-untyped-defs`. The settings check covers every nonignored MyPy TOML and
   INI profile, module overrides and literal command flags. A command cannot select a generated or dynamic profile.
   `scripts/quality/typecheck.py` checks every host-compatible Python source. Dependency-bound leaves and their required
@@ -195,8 +195,8 @@ last_updated: 2026-10-25
   Run a declared runtime with
   `.venv/bin/python -m scripts.quality.typecheck --runtime <name> --check-untyped-defs --disallow-untyped-defs`
   in its compatible environment. The only allowed
-  suppression is Ruff `S603` in `scripts/process.py`, the one process launcher;
-  other scripts start programs through it and run as modules
+  suppression is Ruff `S603` in `scripts/process.py`, the one process launcher.
+  Other scripts start programs through it and run as modules
   (`.venv/bin/python -m scripts.quality.scan_secrets`). Tests use
   `tests/support.py` `check()` instead of `assert`.
 
@@ -209,37 +209,37 @@ registry validation, the acquisition regression tests and every offline E2E
 suite twice, with a 90% coverage gate that also counts collector command lines
 run as child processes. They take about 20 minutes on this machine (the recorded profile estimate), so they run only
 when acquisition code, configuration or their dependencies change: through the
-`acquisition-checks` pre-commit hook, which is one unsharded run and in GitHub Actions, where the pytest run is two shard jobs
-and a combining job (see Sharded acquisition tests below; LFS checkout, pinned Terraform). The CI jobs use the
+`acquisition-checks` pre-commit hook, which is one unsharded run and in GitHub Actions, where the pytest run is four shard jobs
+and a combining job (see Sharded acquisition tests below), with LFS checkout and pinned Terraform. The CI jobs use the
 hook's own path pattern through `scripts/acquisition/run_checks_ci.sh`, which also
-matches the CI workflow; a manual run, a push with no earlier commit or rewritten
+matches the CI workflow. A manual run, a push with no earlier commit or rewritten
 history runs every check. `bash scripts/acquisition/run_checks_ci_e2e.sh` tests
-that gate. CI runs on every pull request, on every push to `main` and on a manual dispatch; a push to any other
+that gate. CI runs on every pull request, on every push to `main` and on a manual dispatch. A push to any other
 branch runs no CI, because its pull request run checks the same commits. Each push to `main` gets its own run, so a newer
 push never cancels the check of an earlier range. They need no AWS credentials and no
 collected `data/`. Off macOS, the HUD workbook and WONDER suites substitute only the
 macOS browser-download metadata (the "downloaded from" attribute and file creation
-time); on a Mac the real reads run. When the private archive is absent (as in CI), the
+time). On a Mac the real reads run. When the private archive is absent (as in CI), the
 registry-additions suite skips its single legacy-archive check and the code-version suite its archived-original
-checks; both record the skips. Each gate run writes `run.json` beside the suite outcomes in `data/e2e/acquisition_checks/`
-with the seconds of every suite and a hash of the acquisition code and configuration; a change during the run fails it. Every command of
+checks. Both record the skips. Each gate run writes `run.json` beside the suite outcomes in `data/e2e/acquisition_checks/`
+with the seconds of every suite and a hash of the acquisition code and configuration. A change during the run fails it. Every command of
 the gate prints its start, end and seconds (see Command timings below).
 `ACQUISITION_E2E_MODE=iteration` runs each offline suite once instead of twice for a faster loop and marks the run
-"not commit evidence"; the hook and CI always run the full mode. The coverage gate leaves out
-the tools in `scripts/acquisition/one_off/`, which ran once and are evidenced by their run records; a
-gate test loads every committed collector plan through its contract; it needs the collected `data/`, so CI
+"not commit evidence". The hook and CI always run the full mode. The coverage gate leaves out
+the tools in `scripts/acquisition/one_off/`, which ran once and are evidenced by their run records. A
+gate test loads every committed collector plan through its contract. It needs the collected `data/`, so CI
 skips it.
 
 Each check has a bad and a good sample run through the real `pre-commit` entry
 point (`scripts/quality/run_checks_e2e.py` and
-`scripts/quality/run_documentation_review_e2e.py`); both run in local CI.
+`scripts/quality/run_documentation_review_e2e.py`). Both run in local CI.
 The source lint cases also run through `scripts/quality/run_lint_coverage_e2e.py`, which retains complete positive and
 negative hook logs under `data/e2e/lint_coverage/`. Its `--mutant` mode verifies that a dispatcher which does no checking
 fails the same cases. The samples are synthetic. No script body, SQL statement or container runs in that suite.
 The repository policy checks were run on the whole repository before they were enabled,
 with no false positives, so they block from the start. The writing check blocked
 only after the existing prose was corrected. Its dash and slash kinds block since the prose was corrected on
-Oct 15 2026. Its semicolon kind warns until a whole-repository run has no semicolon finding. The unused code, dependency and file
+Oct 15 2026. Its semicolon kind also blocks after the whole-repository prose cleanup. The unused code, dependency and file
 checks blocked only after their findings were deleted or listed with a reason.
 
 ## Model metadata
@@ -292,8 +292,8 @@ Declared columns resolve before earlier aliases. An earlier alias also retains t
 one candidate relation adds its unknown-column policy. Several candidates add their combined confidential origins.
 An unknown name with one candidate relation uses that relation's policy:
 a Public source contributes no confidential origin, an explicit-list source protects only listed names and an all-column source protects every publisher name.
-For the two ONC sources, loader lineage `_object_key` and `_member_sha256` are exempt under A273. The exemption applies at the source boundary;
-a publisher field renamed to either loader name retains its confidential origins.
+For the two ONC sources, loader lineage `_object_key` and `_member_sha256` are exempt under A273. The exemption applies at the source boundary.
+A publisher field renamed to either loader name retains its confidential origins.
 An unknown model or CTE output retains the union of that relation's confidential output origins. With several candidate relations and no declared match,
 an unknown name retains their combined confidential origins for that reference. Registering both a table name and its alias does not duplicate the relation.
 A two-part reference without a local relation qualifier uses the first part as its struct-column name. Correlated references used only in WHERE, HAVING or JOIN ON do not contribute to output origins.
@@ -318,7 +318,7 @@ in emitted paths, including lowercase keys that look like identifiers. Nested un
 An inventory is a JSON object with a nonempty `tables` list of `collection` and `table` pairs. Duplicate pairs or a missing inventoried table make the scan incomplete.
 Without `--inventory`, `complete` confirms only that the listed files were read. It does not prove that every table was listed.
 Only listed files are scanned. Supply the full approved export inventory to assess a collection. Unsupported or unreadable files make the report incomplete.
-The scanner cannot read Parquet, spreadsheets, PDFs, binary documents, archives or database table storage directly; they need a supported local text export.
+The scanner cannot read Parquet, spreadsheets, PDFs, binary documents, archives or database table storage directly. They need a supported local text export.
 Findings contain column paths, pattern kinds, their basis and counts. No stored value is emitted. The patterns flag possible names, addresses, identifiers,
 dates of birth, emails and phone numbers in text or column names. They can flag organizational text and can miss personal data without a supported pattern.
 A result with no matches is a pattern result, not formal anonymization or collection-wide clearance. The scanner refuses symlink exports and report paths that overlap inputs.
@@ -338,7 +338,7 @@ scanning, repository checks, configuration, secret store and quality E2E, retain
 safeguards, Terraform mock tests, TFLint, Checkov and `trivy config` (its
 embedded checks only, run offline). Pre-commit scans the actual staged index,
 including changes hidden by a clean working copy, before local CI. The source
-scan excludes ignored acquisition data; neither scan sends files to an external
+scan excludes ignored acquisition data. Neither scan sends files to an external
 service. Secret values and matching source fragments are omitted from scanner
 diagnostics.
 
@@ -348,9 +348,7 @@ enforce these repository rules at the pinned versions. On a commit the
 set (`.venv/bin/pre-commit run --all-files --hook-stage manual`, whose
 `local_ci` hook runs the full local CI) runs before every release or push.
 GitHub CI runs the manual stage on every pull request and push to `main` as parallel
-jobs after a quick plan job (see Main-run reuse below): the hooks without `local_ci` (file-based hooks check the changed files of
-the range), then `scripts/run_ci.sh` as `CI_PART=core`, one job for each lakehouse
-layer (`CI_PART=bronze`, `silver`, `gold` or `features`, see Lakehouse layers below), a job for the
+jobs after a quick plan job (see Main-run reuse below): three hook partitions without `local_ci` (file-based hooks check the changed files of the range), `scripts/run_ci.sh` as `CI_PART=core`, one job each for bronze, silver and gold (`CI_PART=bronze`, `silver` or `gold`, see Lakehouse layers below), eight feature-source shards and four feature-column shards (`CI_PART=feature_sources` or `feature_columns`, `FEATURE_SHARD=K/N`), a feature evidence combining job and a job for the
 gold model metadata E2E (`CI_PART=gold` with `CI_UNITS=model_metadata_e2e`), the launcher E2E in two shards
 (`CI_PART=launcher`, `LAUNCHER_SHARD=K/2`) and the acquisition shards with their combining job, each for the groups the range
 touches (`CI_SCOPE=range`). Every checkout of a pull request run is the head commit of the pull request, not GitHub's merge of the
@@ -358,13 +356,11 @@ head into the base, so the tree a pull request run checks is the tree that Main-
 of a branch or rewritten history) every check runs. A job whose group the range does not reach
 reports success and writes the reason to its job summary. Each job caches only what a
 lock file or hash checks again before use (npm packages, Terraform providers,
-the dbt package archive and the SQLFluff packages); the Python environment is
+the dbt package archive and the SQLFluff packages). The Python environment is
 built fresh from `requirements.txt` without a pip cache. Each job's timeout is about
 twice its measured time (see Measured durations below). Locally `scripts/run_ci.sh` runs every part the way the GitHub jobs do: the gates
 first, then the launcher E2E, then the units that run alone (the gold writer set-up) and then the independent check groups and units, which run
-concurrently: Local CI Core, the four lakehouse layers, the gold model metadata E2E with its workers and the four acquisition shards. After them the
-combining step of the acquisition gate merges the four shard folders and enforces the 90% coverage gate. The full local CI is expected to take about 60 minutes. The launcher E2E takes about 13 minutes and the feature checks take about 40 minutes, with gates and setup added. This is an estimate until the first full local run on this layout measures it. A separate measured trial runs the
-launcher E2E in the parallel set five times on this Mac (16 cores, 48 GiB). Only if all five runs pass does the launcher join the parallel set, which would remove the launcher time from the serial path. The exception to the run alone rule is recorded with the evidence. Until then the launcher stays alone, first. The commit hook
+concurrently: Local CI Core, bronze, silver and gold, eight feature-source shards, four feature-column shards, the three hook partitions, the gold model metadata E2E with its workers and the four acquisition shards. The feature combining steps require every numbered report and exactly one passing result for every expected case. After them the acquisition combining step merges the four acquisition shard folders and enforces the 90% coverage gate. The hosted target is about 15 to 20 minutes. The new feature and hook durations are estimates until a complete hosted run measures them. The local launcher E2E takes about 13 minutes and remains serial before the parallel set. Its time, the alone writer set-up and the final acquisition combine add to the parallel critical path, so this layout does not establish the 15 to 20 minute local target. A separate measured trial runs the launcher E2E in the parallel set five times on this Mac (16 cores, 48 GiB). Only if all five runs pass does the launcher join the parallel set. The exception to the run alone rule is recorded with the evidence. Until then the launcher stays alone, first. The commit hook
 (`CI_SCOPE=staged`) always runs the groups the staged paths select and reuses no earlier result. The run prints each group's seconds and each command's
 start, end and seconds (GitHub CI adds both to the job summary). In the full set gitleaks scans every outgoing source file instead of
 the staged index. The acquisition checks
@@ -405,8 +401,8 @@ Each CI run retains configuration evidence under `data/e2e/configuration/` and
 quality evidence under `data/e2e/quality/`. The secret store E2E writes its report under `data/e2e/secret_store/` and the gold writer set-up
 check under `data/e2e/gold_publish/`. E2E reports include source hashes,
 expected and observed process outcomes, repeat commands and tested limits.
-GitHub Actions uploads the configuration, quality, broker and feature evidence and retains it for 14 days. The feature job retains `data/e2e/feature_sources/` and `data/e2e/feature_columns/`. The secret store and gold set-up reports stay on the runner and are not uploaded. Local TFLint
-needs permission to start its bundled plugin; a sandbox denial is a blocked
+GitHub Actions uploads the configuration, quality, broker and feature evidence and retains it for 14 days. Feature shards retain their reports under `data/e2e/quality/feature_shards/<suite>/shard_<index>/`. The combining job retains both combined reports and their input shard reports. Hook partitions retain their logs and report under `data/e2e/hooks/`. The secret store and gold set-up reports stay on the runner and are not uploaded. Local TFLint
+needs permission to start its bundled plugin. A sandbox denial is a blocked
 check, not a passing result.
 
 Before every commit, stage the intended files by name, then draft, complete and
@@ -448,8 +444,7 @@ launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no fi
   GitHub CI (`repository_code_checks`, command "CI groups selection E2E"), whose runner has Bash 5. The job log names the Bash version they used.
 - To add a group, add its entry to `groups` in `config/quality/ci_groups.json` (the order of the file is the run order) with the pattern
   `^scripts/ci/groups/<group>\.sh$`. Add the file `scripts/ci/groups/<group>.sh` with a function named exactly like the group, because the dispatcher calls it by
-  that name. The two exceptions are the launcher (`launcher_e2e`) and the gold layer (one function `lakehouse_gold_<unit>` for each unit in `gold_units` of the
-  dispatcher). Helper functions are allowed. Add the group's expected selection to the body-file cases of `run_ci_groups_e2e` and its job to the workflow.
+  that name. The exceptions are the launcher (`launcher_e2e`), the gold layer (one function `lakehouse_gold_<unit>` for each unit in `gold_units` of the dispatcher) and features (`lakehouse_features_sources`, `lakehouse_features_columns` and `lakehouse_features_combine`). Helper functions are allowed. Add the group's expected selection to the body-file cases of `run_ci_groups_e2e` and its job to the workflow.
 - `run_ci_groups_e2e` proves the selection of each body file, plants drift for every guard rule and runs the dispatcher with a `timed` that only prints the
   command. These dry runs prove that a missing body file stops a run, that the full local plan names the same groups, gold units and acquisition shards as the
   GitHub jobs and that each of 15 hostile group files leaves the shell state of the other groups and of the dispatcher unchanged. Before the move the plans (`CI_LIST_ONLY=1`) and command lists of every part
@@ -458,7 +453,7 @@ launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no fi
 ## Lakehouse layers
 
 The lakehouse checks are four groups in `config/quality/ci_groups.json`: `lakehouse_bronze`, `lakehouse_silver`, `lakehouse_gold` and `lakehouse_features`, listed in
-`layers` from upstream to downstream. Each group has its own path list and its own GitHub job (`CI_PART=bronze`, `silver`, `gold` or `features`). The bronze list is the
+`layers` from upstream to downstream. Each group has its own path list. Bronze, silver and gold have one GitHub job each (`CI_PART=bronze`, `silver` or `gold`). Features have source and column shard jobs that both select the `lakehouse_features` group. The bronze list is the
 broad lakehouse list. It holds the code every layer shares: the launcher, memory plan, provenance, lock and compose file, the dbt project, macros and tests.
 The silver, gold and feature lists name only the files that belong to that layer. Each file is listed for the layer that reads it first. No later layer's pattern
 may match it. A file that an upstream layer's checks read although a later layer's list also matches it is named in `upstream_inputs` for the
@@ -469,14 +464,22 @@ of them. A changed path selects its layer and every layer downstream of it. A br
 gates never skip. `lakehouse_bronze` runs the platform checks (resource limits, run lock, provenance, storage single copy and contracts), `lakehouse_silver` runs the silver
 suite check and `lakehouse_gold` runs the gold reference seeds, identity and label checks, gold suites, the gold publish contract check, the gold and silver writer set-up check against a stand-in Polaris, the model metadata check and the model metadata E2E, as three units (see Gold units below).
 
-`lakehouse_features` runs the feature-phase source check (`feature_sources --check` and its E2E `run_feature_sources_e2e`: a text pass, then a build and a bind of every feature model and test on a DuckDB file that holds only the gold tables of the contract (without the raw bridge), the feature seeds, the live seeds and the filter results, so a read of silver, bronze or a retired seed fails however it is spelled; the bridge is read in two stages: the check builds 15 filter tables itself in DuckDB, each `bridge_measure_control` filtered to one `source_seed` (the 15 filter models, pinned to one template, must compile to that query); every other feature model and test is built and bound on a database that holds the filter tables and no `bridge_measure_control`, so any other read of it fails; every selected node is bound or rejected by name; a hook, a macro that overrides dbt and a relation added or rewritten by the run fail (rows compared by digest); an enforced column contract on every feature model; before anything builds (the check stops at the first admission problem, with E2E cases that record the process starts to prove that rejected code never ran), a closed allow list of the Jinja constructs and calls, the dbt macros, the config keys and values, the YAML Jinja strings, the hooks, the `dbt_project.yml` keys that the feature build may use and the `ref()` targets that `dbt/models/features/_feature_inputs.json` pins for each model and test (a direct read is bound on the pinned relations only), plus the pinned SHA-256 of the two run-hook macros and the project macros they reach, so SQL outside the compiled query of a node fails by content: `run_query`, `statement`, `adapter.execute`, `sql_header`, `persist_docs`, a changed hook body), the feature column check (`feature_columns --check` and its E2E `run_feature_columns_e2e`: every output column of a feature model documented with its data type and description, compared on empty gold tables without the dbt contract).
+`lakehouse_features` runs the feature-phase source check (`feature_sources --check` and its E2E `run_feature_sources_e2e`) with these rules:
+
+- A text pass precedes a build and a bind of every feature model and test on a DuckDB file that holds only the gold tables of the contract (without the raw bridge), the feature seeds, the live seeds and the filter results. A read of silver, bronze or a retired seed fails however it is spelled. The bridge is read in two stages. The check builds 15 filter tables itself in DuckDB, each `bridge_measure_control` filtered to one `source_seed`. The 15 filter models, pinned to one template, must compile to that query. Every other feature model and test is built and bound on a database that holds the filter tables and no `bridge_measure_control`, so any other read of it fails.
+- Every selected node is bound or rejected by name. A hook, a macro that overrides dbt and a relation added or rewritten by the run fail (rows compared by digest). Every feature model has an enforced column contract.
+- Before anything builds, the check stops at the first admission problem. E2E cases record the process starts to prove that rejected code never ran. A closed allow list covers the Jinja constructs and calls, the dbt macros, the config keys and values, the YAML Jinja strings, the hooks and the `dbt_project.yml` keys that the feature build may use.
+- The allow list also covers the `ref()` targets that `dbt/models/features/_feature_inputs.json` pins for each model and test. A direct read is bound on the pinned relations only. The SHA-256 of the two run-hook macros and the project macros they reach is pinned too.
+- SQL outside the compiled query of a node fails by content: `run_query`, `statement`, `adapter.execute`, `sql_header`, `persist_docs` or a changed hook body.
+
+The group also runs the feature column check (`feature_columns --check` and its E2E `run_feature_columns_e2e`). Every output column of a feature model is documented with its data type and description, compared on empty gold tables without the dbt contract.
 
 The `orchestration_checks` group also lists `scripts/lakehouse/`, `dbt/`, `data_contracts/lakehouse/` and `data_contracts/great_expectations/`, because its publish contract and pipeline
 checks read them, so a change to those paths runs it beside the layers. Put a new check in the most downstream layer whose files it reads. `.venv/bin/python -m scripts.quality.run_ci_groups_e2e` checks selection for each layer and shared changes
 and the real inputs. It also requires `configuration_checks` to start `scripts.infrastructure.run_secret_store_e2e` and `lakehouse_gold` to start
 `scripts.lakehouse.run_gold_publish_e2e --mode writer_setup`. The sources of those two offline checks must select their group. It reads the source of the modules each layer's function starts (and of the gold checks the silver suite check calls and of the storage
 metadata comparison the bronze storage runner calls) and requires every tracked file they name to select that layer. A name is a module-level
-constant, a path string or a `/` join inside a function or an f-string whose placeholders are strings of the module; a folder that a function
+constant, a path string or a `/` join inside a function or an f-string whose placeholders are strings of the module. A folder that a function
 only creates is not a read. A path built from a variable the scan cannot resolve is not seen, so a new reader of another layer's file needs an
 `upstream_inputs` entry written by hand. It requires every file the runner copies to select
 `repository_code_checks`. A check whose inputs no path list can name
@@ -487,14 +490,13 @@ completely belongs in `always` in `config/quality/ci_groups.json`.
 `scripts/quality/timing.sh` wraps every check command of `scripts/run_ci.sh` and the acquisition scripts in `timed <label> <command>`. The log gets
 `[timing] start <label> at <UTC time>` and `[timing] end <label> at <UTC time>: <seconds> s, exit <code>` and the command keeps its own exit code. Each
 command adds a row to a file of its own unit and when the run ends the rows of the gates, the launcher E2E and every unit are listed in the job
-summary as a table of command, start, end, seconds and exit code. In a unit that runs in the background the log is shown when the unit has ended; the
-times in it are those of the command. A wrapped function holds one command or one pipeline, because a shell function that runs under `||` ignores
+summary as a table of command, start, end, seconds and exit code. When a work batch contains one item, including a hosted lakehouse job or feature shard, its output streams to the job log while the item runs. The same output is retained in the per-item log and its duration remains in the summary. Batches with several parallel items retain separate logs and print them in order after every item finishes, so their output does not interleave. Feature-source and feature-column shards also print and flush a timing line when each case starts and ends. The times in each line are those of the case or command. A wrapped function holds one command or one pipeline, because a shell function that runs under `||` ignores
 `set -e`. `scripts/quality/run_ci_groups_e2e.py` checks the wrapper, the failing and the interrupted command and the rows of parallel units.
 
 ## Measured durations
 
 The longest hosted time of each job over six hosted runs and the job's timeout, in minutes. A timeout is between 1.5
-and 2.6 times the measured time (at least 5 minutes). A job marked "estimate" has no hosted measurement yet; resize it from its first complete hosted run. The
+and 2.6 times the measured time (at least 5 minutes). A job marked "estimate" has no hosted measurement yet. Resize it from its first complete hosted run. The
 CI-groups E2E compares this table with `.github/workflows/ci.yml`. The seconds of every command are in the job summary of each run. The longest commands are the 258 cases of the model
 metadata E2E (about 39 minutes one after another) and the 38 offline workflow tests of the acquisition gate (about 39 minutes in one process).
 
@@ -502,12 +504,26 @@ metadata E2E (about 39 minutes one after another) and the 38 offline workflow te
 | --- | ---: | ---: | --- |
 | CI Plan | 1 | 5 | estimate |
 | Quick Gates of a Reused Result | 4 | 10 | estimate |
-| Repository Hooks | 20.7 | 45 | hosted, with all hooks |
-| Local CI Core | 14.1 | 30 | hosted |
+| Repository Hooks (privacy) | 5 | 12 | estimate, secret and data checks |
+| Repository Hooks (documentation) | 12 | 30 | estimate, prose, Markdown and review checks |
+| Repository Hooks (code) | 18 | 40 | estimate, remaining manual hooks |
+| Local CI Core | 15 | 30 | hosted, supplied run duration |
 | Lakehouse Bronze Checks | 8.9 | 20 | hosted |
 | Lakehouse Silver Checks | 2.4 | 5 | hosted |
-| Lakehouse Gold Checks | 30 | 60 | estimate |
-| Lakehouse Features Checks | 130 | 260 | estimate, three times local command time plus setup and gates |
+| Lakehouse Gold Checks | 11 | 25 | hosted, supplied 10 to 11 minute range |
+| Feature Sources (Shard 1 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 2 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 3 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 4 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 5 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 6 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 7 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Sources (Shard 8 of 8) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Columns (Shard 1 of 4) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Columns (Shard 2 of 4) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Columns (Shard 3 of 4) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Columns (Shard 4 of 4) | 14 | 30 | estimate, case-list partition plus setup and gates |
+| Feature Combined Evidence | 4 | 10 | estimate, setup and report validation |
 | Lakehouse Gold Model Metadata E2E | 14 | 30 | estimate |
 | Launcher E2E (Shard 1 of 2) | 8.4 | 20 | hosted |
 | Launcher E2E (Shard 2 of 2) | 9 | 20 | hosted |
@@ -517,12 +533,20 @@ metadata E2E (about 39 minutes one after another) and the 38 offline workflow te
 | Acquisition Checks (Shard 4 of 4) | 13 | 30 | estimate |
 | Acquisition Checks | 4 | 10 | estimate |
 
-The four feature commands took 2,402 seconds on the Mac. The feature estimate assumes hosted execution is three times slower. It adds 10 minutes for checkout, setup and shared gates, giving about 130 minutes. The 260-minute limit is about twice that estimate. Resize it from the first complete hosted run. The gold job keeps its 60-minute limit.
+The source runner has 157 cases, including 104 admission or resolved cases and one built-view checksum case. Eight strided shards have 19 or 20 cases each and distribute the build cases across all eight workers. The column runner has 12 cases. Four strided shards each have two documented-column cases and one extra-column, contract, admission or filter-hook case. A shard builds a base database only when its selected cases require one. The source check and column check each run once, in shard 1 of their suite. The counts are in `feature_shards` of `config/quality/ci_groups.json`. The 14-minute estimate allows repeated base setup and the shared gates. Resize it from the first complete hosted run.
+
+## Feature shards and repository hooks
+
+`run_feature_sources_e2e` and `run_feature_columns_e2e` accept `--shard K/N` (one-based) and `--list-cases`. The optional `--only` substring filter applies before striding. Listing cases starts no build. `config/quality/feature_cases.json` preserves the complete expected case inventory independently of the runners. Each shard report records the selected and executed cases, the full inventory and hashes of the feature implementation and dbt inputs. Inputs changing during a run fail it. `scripts.lakehouse.feature_shards combine` requires every numbered shard, the same candidate, successful outcomes and exact membership. Missing, repeated, failed or foreign cases fail the combining gate. The hosted gate requires both shard matrices to succeed and uses range selection to skip combining when the feature group is not selected. Its downloads are limited to this run and attempt. After a shard fails, choose **Re-run all jobs**. **Re-run failed jobs** does not recreate artifacts for the shards that passed in the earlier attempt, so the feature evidence job cannot pass. The acquisition combining job has the same full-rerun requirement.
+
+The `hook_groups` mapping in `config/quality/ci_groups.json` partitions every manual-stage hook exactly once, except the separate `local_ci` aggregate. Privacy covers secrets, credential files, data files, environment declarations and the privacy scan. Documentation covers writing, front matter, Markdown, the local-record tracking check and documentation-review E2E. Code holds all remaining manual hooks. `scripts.quality.ci_hooks` validates that partition before running any hook. It invokes each unchanged hook ID through the pinned pre-commit with its original range or all-files selection, manual stage and failure diff. It continues after ordinary hook failures and returns a failed group verdict. Each group deadline comes from its hosted job timeout with two minutes reserved for evidence upload. The first job step records `JOB_STARTED` before checkout. The hook runner subtracts elapsed checkout, setup and commit-check time from its budget. Privacy stops by minute 10 of its 12-minute job. Documentation stops by minute 28 of 30. Code stops by minute 38 of 40. An exhausted budget writes failed evidence without starting a hook. Local runs without `JOB_STARTED` count from the hook invocation with the same margin. A hook that exceeds the group deadline stops the partition, retains its partial stdout and stderr in the hook log and writes a failed report naming the hook and deadline. Full local CI runs the same three partitions in its parallel set. Commit-range messages and removed-name checks run in the hosted privacy partition, with the reused-run path retaining its own checks.
+
+`run_ci_groups_e2e --sharding-only` runs light case-list, synthetic report combination, recording hook-entry and print-only dispatcher cases. It checks the timestamp from the first job step, budgets after setup and hook timeout evidence. Deadline cases cover local invocation and exhausted admission. Further cases check named failures for incomplete partitions after moving a hook between groups. Output cases check live output from one item, buffered parallel output and case timing with substituted feature builds. It runs no feature build and labels the report as iteration evidence. The full E2E also covers unconditional gates in both new feature parts. Planted cases prove that a missing shard, repeated case, missing hook and failed parallel item cannot produce a combined pass.
 
 ## Gold units
 
 The gold layer runs as three units that share no scratch folder, report folder, port or process (each writes `data/e2e/<its own name>/<UTC
-second>` and the gold publish modes add the mode to the folder name). `CI_UNITS` selects units; the default is all three.
+second>` and the gold publish modes add the mode to the folder name). `CI_UNITS` selects units. The default is all three.
 
 - `checks`: the reference seeds, identity splits and source labels checks, the gold suites
   check, the gold publish contract E2E and the model metadata check. The job summary of each run gives each command's time.
@@ -543,7 +567,7 @@ In GitHub CI the acquisition pytest run is four jobs ("Acquisition Checks (Shard
 Checks"). The local hook and `bash scripts/acquisition/run_checks.sh` stay one unsharded run with the same 90% gate.
 
 - `scripts/acquisition/shards.py` gives every collected test to exactly one shard: tests in order of falling weight, each to the shard with the least
-  weight so far. The weights are the seconds of the long tests in `config/acquisition/shard_weights.json`; a test without a weight counts 0.1 second. A wrong
+  weight so far. The weights are the seconds of the long tests in `config/acquisition/shard_weights.json`. A test without a weight counts 0.1 second. A wrong
   weight changes the balance only, never which tests run. Each shard writes a manifest (its tests, their outcomes, the hash of all collected test ids, the
   pytest exit status and the CI run) and its coverage data and enforces no coverage target. A shard whose pytest run, plugin or coverage data fails writes a failed
   manifest and its own job fails. Coverage leaves out `registry_additions_probe.py`, the changed copy of the registry validator that a boundary case loads
@@ -566,11 +590,11 @@ Checks"). The local hook and `bash scripts/acquisition/run_checks.sh` stay one u
 ## Main-run reuse
 
 The first job of the workflow, "CI Plan", runs `python3 -m scripts.quality.ci_reuse` with a read-only token. The run after a merge to `main` skips its jobs only
-when all of this holds: the push is to `main`; exactly one merged pull request has the pushed commit as its merge commit; the tree of the pushed commit (from the API and from the
-checkout) is byte-identical to the tree of the head commit of that pull request; and the latest completed pull request run of `ci.yml` for that head commit succeeded,
+when all of this holds: the push is to `main`. Exactly one merged pull request has the pushed commit as its merge commit. The tree of the pushed commit (from the API and from the
+checkout) is byte-identical to the tree of the head commit of that pull request. The latest completed pull request run of `ci.yml` for that head commit succeeded,
 with every job listed in `config/quality/ci_jobs.json` present once and successful and no other job failed, cancelled or skipped (except the reuse job). Any other result and any
 error of the API, runs every job. A push to `main` without a pull request runs in full. Pull request runs check out the head commit, so the tree that their jobs checked is the tree
-compared. When the run is reused, the jobs of the workflow are skipped; "Quick Gates of a Reused Result" runs the commit-message and removed-names checks of the pushed range and
+compared. When the run is reused, the jobs of the workflow are skipped. "Quick Gates of a Reused Result" runs the commit-message and removed-names checks of the pushed range and
 `CI_PART=gates` (the privacy, secret, credential, data-file, writing, Markdown, documentation and source gates). The plan job's summary names the pull request, the head commit, the
 tree, the reused run and the conclusion of each required job. `.venv/bin/python -m scripts.quality.run_ci_reuse_e2e` checks the reuse and every case that must run in full.
 
@@ -585,7 +609,7 @@ in every scope, so each edit runs all the checks. Put a check command in the bod
 These runners add a scratch Git worktree of HEAD: `run_ci_groups_e2e` and `run_checks_ci_e2e.sh`. Each removes it on every exit path: a pass or a failed case, an exception, an interrupt or a deadline.
 The Python runner adds the worktree through `scripts/quality/scratch_worktree.py`, which turns SIGTERM, SIGHUP and SIGALRM (the deadline wrapper's signal) into an exit that runs the removal.
 The removal runs `git worktree remove --force` and `git worktree prune`. If the removal fails, the folder is deleted instead. The report notes it.
-While the removal and the check of the registered worktrees run, the helper and the shell runner hold SIGINT (Ctrl-C) and those three signals, also for the Git processes they start;
-one that arrives then takes effect when the cleanup is done. The case `scratch_worktree_cleanup_holds_an_interrupt_until_it_is_done` of `run_ci_groups_e2e` checks it.
+While the removal and the check of the registered worktrees run, the helper and the shell runner hold SIGINT (Ctrl-C) and those three signals, also for the Git processes they start.
+One that arrives then takes effect when the cleanup is done. The case `scratch_worktree_cleanup_holds_an_interrupt_until_it_is_done` of `run_ci_groups_e2e` checks it.
 Each run lists the registered worktrees (`git worktree list --porcelain`) before and after. A difference fails the run with the paths named. The report keeps both lists.
 A SIGKILL cannot be handled. A worktree left by one shows in the next run's list as the starting state. Clear it with `git worktree remove --force` and `git worktree prune`.

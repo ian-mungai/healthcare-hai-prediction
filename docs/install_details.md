@@ -1,10 +1,10 @@
 ---
-title: Install Details
+title: Install details
 description: Resource limits, pinned tools, the native installer and the manual setup steps behind the README's Install.
-last_updated: 2026-10-22
+last_updated: 2026-10-25
 ---
 
-# Install Details
+# Install details
 
 ## Resources
 
@@ -31,52 +31,52 @@ The analytics SQL settings are read-only Compose mounts and need no image rebuil
 When Polaris or PostgreSQL starts, `scripts/lakehouse/catalog.py` gives it a
 container limit of 25% or 10% of the available budget (at least 1 GiB or 256 MiB).
 Those limits stay fixed for that container's lifetime. A service-derived job limit
-in the private Compose env file lets catalog-only commands render inactive profiles;
-every job launcher overrides it with its fresh plan. Use the launch scripts to run jobs.
+in the private Compose env file lets catalog-only commands render inactive profiles.
+Every job launcher overrides it with its fresh plan. Use the launch scripts to run jobs.
 Close containers and apps you no longer use before a heavy run.
 Docker's VM keeps a heavy build's memory, much of it compressed by macOS, so
 `.venv/bin/python -m scripts.lakehouse.catalog release` stops this project's containers and
-restarts Docker Desktop; it restarts nothing while another project's container runs.
+restarts Docker Desktop. It restarts nothing while another project's container runs.
 The staging E2E calls it after each real build. `run_staging_e2e --real-only` runs the
 real builds and their checks without the fixture cases, for changes that touch no fixture.
 
 Run the non-Docker resource contracts with
 `.venv/bin/python -m scripts.lakehouse.run_resource_checks`.
 The artifact under `data/e2e/resource_limits/` records synthetic resource readings,
-repeated CLI results and configuration checks. It does not prove live container limits;
-verify those through Docker inspection and engine settings before declaring runtime
+repeated CLI results and configuration checks. It does not prove live container limits.
+Verify those through Docker inspection and engine settings before declaring runtime
 resource conformance complete.
 
 ## Tools
 
 Run from this repository's root with its existing Python 3.12 `.venv`.
-Dependencies are shared across development and production in `requirements.txt`;
-a requirement used only as a command carries `# tool: <use>` and one imported by
+Dependencies are shared across development and production in `requirements.txt`.
+A requirement used only as a command carries `# tool: <use>` and one imported by
 name carries `# dynamic: <where>`, so the dependency check reads them correctly.
-Gitleaks, TFLint and trivy are installed only in ignored `.tools/`; versions and
+Gitleaks, TFLint and trivy are installed only in ignored `.tools/`. Versions and
 publisher SHA-256 values are pinned in `config/quality_tools.json`. The markdownlint
 hook's `markdownlint-cli2` is installed into `.tools/markdownlint-cli2` with `npm ci`
 from the lockfile in `scripts/quality/markdownlint/`, which pins each package's
-integrity hash; it needs Node.js 22 or later. The `sqlfluff` hook's SQLFluff and
+integrity hash. It needs Node.js 22 or later. The `sqlfluff` hook's SQLFluff and
 its dbt templater are installed into `.tools/sqlfluff` from the hash-pinned
-`scripts/quality/sqlfluff/requirements.txt`; the same command installs the dbt
+`scripts/quality/sqlfluff/requirements.txt`. The same command installs the dbt
 packages from `dbt/package-lock.yml` into the ignored `data/analytics/dbt/dbt_packages`. The launcher's `dbt_deps`
 job installs the same packages without network from a local archive: `scripts.lakehouse.dbt_package_archive fetch`
 downloads the tarballs named in `config/lakehouse/dbt_package_archive.json`, rebuilds the archive under the ignored
 `data/analytics/dbt/package_archive/` and refuses any byte that differs from the record. The schema-review tools in
 `scripts/review/` need the hash-pinned packages in `requirements-review.txt`,
-installed into the ignored `.review_dependencies/` (Apple silicon only); the file's
+installed into the ignored `.review_dependencies/` (Apple silicon only). The file's
 header gives the command.
 
-## Native Installer
+## Native installer
 
 The native installer supports macOS ARM64 and Linux AMD64. Repeating a verified
-installation preserves bytes and modification times; an unexpected existing
+installation preserves bytes and modification times. An unexpected existing
 binary is rejected rather than overwritten. `--archive-directory` supports
 offline installation from the exact pinned release filenames. Do not replace
 the shared system tools to satisfy this project.
 
-## Named Manual Steps
+## Named manual steps
 
 Named manual steps. These are the only setup steps no script performs:
 
@@ -87,7 +87,7 @@ Named manual steps. These are the only setup steps no script performs:
    `bls_api_key` (`bls_secret_name`, the BLS API key), `hud_api_key`
    (`hud_secret_name`, the HUD USPS crosswalk token) and `jev_api_key`
    (`jev_secret_name`, the TypeSafe Jev API key). Every secret holds its value
-   as plain text, with no JSON; the HUD secret holds the token alone, with no
+   as plain text, with no JSON. The HUD secret holds the token alone, with no
    `Bearer` prefix (the collector adds the header). The BLS, Census and HUD
    collectors read the plain-text value with boto3. The keys are shared by
    several projects, so they are created by hand outside Terraform. The
@@ -98,11 +98,11 @@ Named manual steps. These are the only setup steps no script performs:
    Every project secret is an AWS Systems Manager Parameter Store SecureString
    parameter in the configured region, named
    `/healthcare_hai_prediction/<name_with_underscores>`, on the standard tier
-   (no charge; a value holds at most 4 KB) and encrypted with the AWS managed
-   key `aws/ssm`. Each holds its value as plain text. The Airflow administrator
+   (no charge) and encrypted with the AWS managed
+   key `aws/ssm`. A value holds at most 4 KB. Each holds its value as plain text. The Airflow administrator
    password is `/healthcare_hai_prediction/airflow_admin`
-   (`airflow_admin_secret_name`; the username is `admin`): a person creates it,
-   and the project profile may read it and may not write it. The other 14 are
+   (`airflow_admin_secret_name`). The username is `admin`. A person creates it.
+   The project profile may read it and may not write it. The other 14 are
    managed: no person creates them by hand. They hold the local catalog,
    workflow, lineage and feature store credentials, each as plain text:
    `postgres_password`, `polaris_root_secret`, `polaris_reader_client_id`,
@@ -122,12 +122,12 @@ Named manual steps. These are the only setup steps no script performs:
    `GetParametersByPath` and no wildcard. A parameter ARN is
    `arn:aws:ssm:<region>:<account>:parameter/<name without its leading slash>`.
    Terraform never creates or reads a secret, a secret version or a parameter,
-   so no value enters a plan or the state; the saved-plan check
+   so no value enters a plan or the state. The saved-plan check
    (`render_project_config.py --check-plan`) refuses any plan that holds a
    Secrets Manager or Parameter Store resource or data source (the one exception
    is a data source of a public AWS parameter under `/aws/service/`). The saved-plan check accepts only the committed names.
    The names appear once: the defaults of those variables. The policy files hold
-   no name; `render_policy` repeats the list elements that hold
+   no name. `render_policy` repeats the list elements that hold
    `${SHARED_SECRET_NAME}`, `${READ_PARAMETER_NAME}` and `${MANAGED_PARAMETER_NAME}`
    once per name, taking the names from the variable defaults through
    `scripts/infrastructure/secret_store.py`. The `sts` policy file takes the two
@@ -137,21 +137,20 @@ Named manual steps. These are the only setup steps no script performs:
    variable with its name as default to `infra/iam/variables.tf` and add it to
    the matching list in `infra/iam/main.tf` (the output `project_secret_names`
    checks that every name differs) and to the names in `secret_store.py` (a new
-   shared key also needs its variable in `SHARED_VARIABLES`); the policy files
+   shared key also needs its variable in `SHARED_VARIABLES`). The policy files
    follow the default. `run_policy_e2e` and `run_secret_store_e2e` fail until the
    lists agree. The setup code
    (`scripts.lakehouse.catalog up`, the writer principal setup, the orchestration
    supervisor and the launcher) generates or reads each value in memory through
-   `scripts/infrastructure/secret_store.py`, stores it in Parameter Store (a
-   create never overwrites; every write is read back) and passes it to a
-   container through its environment. No file on the host holds a secret. State
+   `scripts/infrastructure/secret_store.py`, stores it in Parameter Store and passes it to a
+   container through its environment. A create never overwrites. Every write is read back. No file on the host holds a secret. State
    that already exists keeps the value it was created with: the code refuses to
    generate a replacement next to an existing database or catalog realm, so copy
    the current value to the same parameter name first.
 
    **Clone the Airflow administrator password to Parameter Store (the owner, once).**
    If `healthcare-hai-prediction/airflow-admin` was created by hand in Secrets
-   Manager, copy it with one command; run it only after the IAM apply and
+   Manager, copy it with one command. Run it only after the IAM apply and
    only when the owner says so, with an administrator profile that may read that
    secret and write that parameter. The value stays in a shell variable and goes to
    the AWS CLI on standard input (`file://` prefix: [loading a parameter from a
@@ -171,6 +170,6 @@ Named manual steps. These are the only setup steps no script performs:
    changes nothing. After the check the owner may delete the old secret by hand.
    First read after the IAM apply: if reading a parameter fails with
    `AccessDeniedException` on `kms:Decrypt`, the key policy of `aws/ssm` does not
-   admit the profile; report it instead of widening the grant.
+   admit the profile. Report it instead of widening the grant.
 2. **Administrator profile.** Configure an AWS CLI profile with IAM permissions
    for the IAM stack and the policy scripts. It is passed on the command line, never stored in `.env`.

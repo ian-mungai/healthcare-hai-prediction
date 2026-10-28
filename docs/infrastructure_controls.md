@@ -1,13 +1,13 @@
 ---
-title: Infrastructure Controls
+title: Infrastructure controls
 description: Environments, the AWS stacks and project policies, bucket lifecycle rules, the lifecycle permission, deferred controls.
-last_updated: 2026-10-24
+last_updated: 2026-10-25
 ---
 
-# Infrastructure Controls
+# Infrastructure controls
 
 **Environments.** All three stacks tag resources with `Environment = dev`. A `prod`
-environment and an `infra/modules/` layout are deferred; the platform stack keeps
+environment and an `infra/modules/` layout are deferred. The platform stack keeps
 one file per component in a single root.
 
 **Who applies what.** Three things build the AWS runtime. The owner runs the first two with the administrator profile.
@@ -29,7 +29,7 @@ The project profile runs the third.
    groups `<PROJECT_NAME>_data_<ENVIRONMENT>` and `<PROJECT_NAME>_platform_<ENVIRONMENT>`, attaches each policy to
    its group, adds the project user to both groups, detaches the policies that were attached to the user directly and
    detaches and deletes the retired grouped policies (`secrets`, `lakehouse`, `platform_network`, `platform_services` and
-   `platform_tags`) unless something else holds one. Groups keep the user under the quota of 10 managed policies per user; the user holds no direct attachment.
+   `platform_tags`) unless something else holds one. Groups keep the user under the quota of 10 managed policies per user. The user holds no direct attachment.
    Before any change, `plan` and `apply` read both groups and stop when a group has a member other than the project
    user, a managed policy outside its intended set (compared by ARN, so an AWS-managed policy with an intended name does
    not pass) or any inline policy. A retired policy on a group also stops them, because `apply` attaches the new policies
@@ -47,7 +47,7 @@ The project profile runs the third.
    (`scripts/infrastructure/render_platform_config.py`). Before an apply, the saved plan's `.env` inputs must match
    and every other variable must keep its committed default.
 
-The control-plane services stack (`infra/services/`) runs on the platform's container host after these three; its inputs,
+The control-plane services stack (`infra/services/`) runs on the platform's container host after these three. Its inputs,
 secrets, images and the Mac launcher changes are in `docs/aws_control_plane.md`.
 
 The order is: the IAM stack, the policy scripts (`plan`, then `apply`), the platform stack, then the project user turns
@@ -61,19 +61,19 @@ Scaling and ECS. The account may already hold them: `aws iam get-role --role-nam
 
 | Service | What the project profile can do | Scope |
 | --- | --- | --- |
-| `s3` | Read and write the bucket settings Terraform manages; read, write and delete objects; multipart uploads | The project bucket only; the write-prefix denies and the conditional single-copy create stay; delete only under `lakehouse/` |
+| `s3` | Read and write the bucket settings Terraform manages. Read, write and delete objects. Multipart uploads | The project bucket only. The write-prefix denies and the conditional single-copy create stay. Delete only under `lakehouse/` |
 | `sts` | `AssumeRole` | The lakehouse reader and writer roles, plus the job try-writer role only with a `hai_try_*` session name |
-| `ssm` | Read the 15 control-plane parameters and the AWS Polaris reader pair, write the 14 managed ones (not the Airflow administrator password or the AWS reader pair), read AWS's public `/aws/service/ecs/*` parameters, start a Session Manager port-forwarding session to the project host, resume and end its own sessions | Exact parameter ARNs, taken from the defaults of the secret-name variables in `infra/iam/variables.tf` (the file lists none); no `DescribeParameters`, no path read |
+| `ssm` | Read the 15 control-plane parameters and the AWS Polaris reader pair, write the 14 managed ones (not the Airflow administrator password or the AWS reader pair), read AWS's public `/aws/service/ecs/*` parameters, start a Session Manager port-forwarding session to the project host, resume and end its own sessions | Exact parameter ARNs, taken from the defaults of the secret-name variables in `infra/iam/variables.tf` (the file lists none). No `DescribeParameters`, no path read |
 | `secretsmanager` | `GetSecretValue` and `DescribeSecret` | The four shared API keys only, named by the defaults of their variables in `infra/iam/variables.tf` |
 | `ecr` | Log in, push and pull images, create, delete, describe and set the lifecycle of repositories | `<PROJECT_NAME>_*_<ENVIRONMENT>` repositories |
-| `ecs` | Create, update, delete and describe the cluster, the capacity provider and services; register and describe task definitions; run, stop, describe and list tasks; describe container instances | The project cluster, services, task definition families, tasks and container instances (`container-instance/<cluster>/*`); no deregistering of task definitions |
-| `autoscaling` | `SetDesiredCapacity`, describe calls; `CreateOrUpdateTags` with the `AmazonECSManaged` key only, which ECS adds while it creates the capacity provider | The host group only |
-| `ec2` | Describe calls; create and delete the data volume; allocate and release the Elastic IP; tag them while creating | Volumes and addresses with the exact `Project` tag; no launch, template, network, image, snapshot or copy action |
+| `ecs` | Create, update, delete and describe the cluster, the capacity provider and services. Register and describe task definitions. Run, stop, describe and list tasks. Describe container instances | The project cluster, services, task definition families, tasks and container instances (`container-instance/<cluster>/*`). No deregistering of task definitions |
+| `autoscaling` | `SetDesiredCapacity`, describe calls. `CreateOrUpdateTags` with the `AmazonECSManaged` key only, which ECS adds while it creates the capacity provider | The host group only |
+| `ec2` | Describe calls. Create and delete the data volume. Allocate and release the Elastic IP. Tag them while creating | Volumes and addresses with the exact `Project` tag. No launch, template, network, image, snapshot or copy action |
 | `dlm` | Create, update, delete and read the snapshot schedule | Schedules tagged `Project` |
-| `logs` | Create, delete and set the retention of log groups; read log events | `<PROJECT_NAME>_*_<ENVIRONMENT>` log groups |
+| `logs` | Create, delete and set the retention of log groups. Read log events | `<PROJECT_NAME>_*_<ENVIRONMENT>` log groups |
 | `cloudwatch` | Put, delete and describe alarms | `<PROJECT_NAME>_*_<ENVIRONMENT>` alarms |
 | `sns` | Create, delete and set the attributes of the topic | The topic `<PROJECT_NAME>_alerts_<ENVIRONMENT>` only, not the budget's topic |
-| `iam` | `PassRole` | The task execution and two control-plane task roles, plus the four read-job roles, to `ecs-tasks.amazonaws.com` only; the snapshot role to `dlm.amazonaws.com` |
+| `iam` | `PassRole` | The task execution and two control-plane task roles, plus the four read-job roles, to `ecs-tasks.amazonaws.com` only. The snapshot role to `dlm.amazonaws.com` |
 
 The profile has no instance launch, launch template, host group create, update or refresh, network, image, snapshot-copy or
 budget permission. A load balancer policy waits for the demo package. `*` stays only for describe and list calls and
@@ -140,14 +140,14 @@ the first deploy.
 - Boot sets `kernel.core_pattern = core` and `fs.suid_dumpable = 0` in
   `/etc/sysctl.d/90-platform-core-dumps.conf`, which sorts after the image's
   systemd-coredump pipe handler. A pipe handler receives core dumps even when a
-  container's core limit is zero; a plain file pattern does not. Boot reads both
+  container's core limit is zero. A plain file pattern does not. Boot reads both
   settings back and stops before joining the cluster when either differs.
 - The host role holds only what the ECS agent and the boot script call. It
   covers registration and state reports for the project cluster, the poll
   endpoint and Session Manager registration and channels. It also attaches the
   project's Elastic IP and data volume, found by their `Name` and `Project` tags
   with `ec2:DescribeVolumes` and `ec2:DescribeAddresses` (limited to the project
-  region; the boot script requires exactly one of each, because the owner's Auto
+  region. The boot script requires exactly one of each, because the owner's Auto
   Scaling group cannot carry IDs of resources that the platform stack creates
   later). Image pulls and
   log writes use the execution role, which every task definition names. The boot
@@ -169,7 +169,7 @@ the first deploy.
   launches the host from the template that the IAM stack owns, with the group at a template version that is a number
   (`tostring(latest_version)`, never `$Latest` or `$Default`), a minimum size of 0 and a maximum size of 1. The group also carries the `AmazonECSManaged` tag that ECS adds when it creates the capacity provider. The IAM stack declares it as ECS sets it, so the IAM plan shows no drift. The project
   user has two Auto Scaling permissions on that one group. `autoscaling:SetDesiredCapacity` turns the host on (1) and off
-  (0); the group's maximum size keeps the count at 0 or 1, because Auto Scaling has no capacity condition key.
+  (0). The group's maximum size keeps the count at 0 or 1, because Auto Scaling has no capacity condition key.
   `autoscaling:CreateOrUpdateTags` allows the `AmazonECSManaged` key only, which ECS adds with the project user's
   permissions while it creates the capacity provider.
   Terraform ignores the desired capacity after creation. A new template version (a resize, a new image or a new boot
@@ -207,12 +207,12 @@ the first deploy.
   returns. A boot with `Requires=` moved into `[Service]` runs in the same
   suite and must be reported and shown unsafe, which proves the check fires.
   The boot cases include missing, duplicated, malformed and failed searches for
-  the data volume and the Elastic IP by tag. The stand-ins model the kernel and systemd; neither is exercised. The runner
+  the data volume and the Elastic IP by tag. The stand-ins model the kernel and systemd. Neither is exercised. The runner
   uses GNU `timeout` when one is on `PATH` and a stand-in with the same TERM,
   KILL and exit-status behavior otherwise.
 - At boot the host finds its Elastic IP and data volume by tag, associates the
   address, attaches the volume and mounts it at `/data`. It joins the cluster only after the volume is mounted. The data
-  volume survives a replaced or resized instance; a new template version or a
+  volume survives a replaced or resized instance. A new template version or a
   changed tag replaces the instance through an instance refresh.
 - Every resource of both stacks carries `Project` set to the project name as it is,
   the value the data bucket carries too. So the $150 budget (an IAM stack resource, which the project user cannot change) filters on that tag
@@ -221,7 +221,7 @@ the first deploy.
   Amazon Elastic Load Balancing, AmazonCloudWatch and Amazon EC2 Container
   Registry (ECR). Separate filters combine with AND, so S3 and Secrets Manager
   stay outside the budget. The service names are the Cost Explorer SERVICE
-  dimension names; the first deploy must confirm that Budgets accepts them. The
+  dimension names. The first deploy must confirm that Budgets accepts them. The
   tag counts only once it is an active cost allocation tag in Billing. The
   budget is quarterly so that one amount covers the whole October to November
   build. The budget's alerts go to its own topic in the IAM stack and the run-failure alerts go to the
@@ -232,7 +232,7 @@ the first deploy.
   <PROJECT_NAME>_host_<ENVIRONMENT> --desired-capacity 0` and deletes what is no longer needed.
 - `allow_destructive_teardown` lets a destroy delete ECR repositories that still
   hold images. The data volume has no final snapshot, because the project user cannot
-  create one; the snapshots that the schedule made remain after a destroy and the
+  create one. The snapshots that the schedule made remain after a destroy and the
   catalog backups in S3 hold the catalog. Turn the host off before a destroy: the
   project user cannot disassociate the Elastic IP, but an instance that ends releases it. The snapshot role tags a
   snapshot only in the call that creates it and deletes only snapshots that
@@ -243,16 +243,16 @@ the first deploy.
 initiation, with no expiration or transition of completed objects, historical
 versions or delete markers. One exception covers only `lakehouse/`, where
 Iceberg replaces and deletes its own table files: replaced versions there expire
-30 days after they are replaced and orphaned delete markers are removed; current
+30 days after they are replaced and orphaned delete markers are removed. Current
 lakehouse files and everything outside `lakehouse/` never expire. Local mock-plan tests, source-shape checks and live
 configuration readback pass. The seven-day scheduler itself has not been
 observed in a timed test and no deliberately incomplete upload was created for
 verification.
 
 The project's IAM policy grants only bucket-scoped
-`s3:PutLifecycleConfiguration` for lifecycle changes; the storage stack
-holds only the rules above. IAM administration is used only for policy updates;
-storage deployment uses the project profile. This permission can change the
+`s3:PutLifecycleConfiguration` for lifecycle changes. The storage stack
+holds only the rules above. IAM administration is used only for policy updates.
+Storage deployment uses the project profile. This permission can change the
 bucket's entire lifecycle configuration, so future changes still require full
 plan review and preservation of existing rules. Private plans and live
 verification evidence remain untracked under
@@ -285,8 +285,8 @@ with the steps in [Switching on single-copy storage](lakehouse_usage.md#switchin
 is untested against real AWS.
 
 **Deferred controls.** Apply the project's engineering requirements when
-development reaches the relevant stage. Future requirements guide later work;
-deferral does not mean a control is implemented. The following
+development reaches the relevant stage. Future requirements guide later work.
+Deferral does not mean a control is implemented. The following
 acquisition-stage deferrals apply to `aws_s3_bucket.data` only. Checkov
 and trivy evidence retain each exception, resource and reason.
 
@@ -295,7 +295,7 @@ and trivy evidence retain each exception, resource and reason.
 | Event notifications (`CKV2_AWS_62`) | No event consumer exists. | Implementing an event consumer. |
 | Cross-region replication (`CKV_AWS_144`) | Recovery objectives and a destination are not established. | Recovery design, before production. |
 | KMS (`CKV_AWS_145`, trivy `AWS-0132`) | Acquisition uses SSE-S3/AES256. | Coordinated ingestion and IAM migration, before production. |
-| Access logging (`CKV_AWS_18`, trivy `AWS-0089`) | Acquisition-stage deferral of a separate logging destination; the request-audit gap is accepted for this stage. | Before additional user or service access, production or new sensitive-data use. |
+| Access logging (`CKV_AWS_18`, trivy `AWS-0089`) | Acquisition-stage deferral of a separate logging destination. The request-audit gap is accepted for this stage. | Before additional user or service access, production or new sensitive-data use. |
 
 The platform stack's exceptions keep the owner-accepted budget design. Each is
 recorded beside its resource and reported in the checkov and trivy evidence.
@@ -303,12 +303,12 @@ recorded beside its resource and reported in the checkov and trivy evidence.
 | Exception | Resource | Reason |
 | --- | --- | --- |
 | Flow logs (`CKV2_AWS_11`, trivy `AWS-0178`) | `aws_vpc.platform` (IAM stack) | Kept within the CloudWatch free allowance. |
-| Default security group (`CKV2_AWS_12`) | `aws_vpc.platform` | Nothing uses it; adopting it needs permission on an untagged group. |
-| Internet egress (trivy `AWS-0104`) | host and task HTTPS egress rules (IAM stack) | No NAT gateway; AWS endpoints and registries are reached over HTTPS. |
+| Default security group (`CKV2_AWS_12`) | `aws_vpc.platform` | Nothing uses it. Adopting it needs permission on an untagged group. |
+| Internet egress (trivy `AWS-0104`) | host and task HTTPS egress rules (IAM stack) | No NAT gateway. AWS endpoints and registries are reached over HTTPS. |
 | Unattached task group (`CKV2_AWS_5`) | `aws_security_group.task` (IAM stack) | Run tasks attach it when they start. |
 | Public IP at launch (`CKV_AWS_88`) | `aws_launch_template.host` (IAM stack) | Needed to reach AWS before boot associates the Elastic IP. |
 | Unattached Elastic IP (`CKV2_AWS_19`) | `aws_eip.host` | The host associates it at boot. |
-| Customer-managed keys (`CKV_AWS_189`, `CKV_AWS_136`, `CKV_AWS_158`, `CKV_AWS_26`; trivy `AWS-0027`, `AWS-0033`, `AWS-0017`, `AWS-0095`) | data volume, ECR repositories, log groups, alert topic, budget topic (IAM stack) | AWS-managed or default encryption. A customer-managed key adds cost. AWS Budgets cannot publish to a topic encrypted with the AWS-managed key. |
+| Customer-managed keys (`CKV_AWS_189`, `CKV_AWS_136`, `CKV_AWS_158`, `CKV_AWS_26` and trivy `AWS-0027`, `AWS-0033`, `AWS-0017`, `AWS-0095`) | data volume, ECR repositories, log groups, alert topic, budget topic (IAM stack) | AWS-managed or default encryption. A customer-managed key adds cost. AWS Budgets cannot publish to a topic encrypted with the AWS-managed key. |
 | Container Insights (`CKV_AWS_65`, trivy `AWS-0034`) | `aws_ecs_cluster.platform` | Paid custom metrics. |
 | Log retention under a year (`CKV_AWS_338`) | `aws_cloudwatch_log_group.platform` | Seven days keeps logs within the free allowance. |
 

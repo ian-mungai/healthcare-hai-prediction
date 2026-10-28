@@ -23,12 +23,14 @@ import json
 import shutil
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from scripts.lakehouse import feature_columns as columns
+from scripts.lakehouse import feature_shards
 
 Docs = dict[str, dict[str, dict[str, str]]]
 MODEL = "int_spine_hospital_measures"
@@ -141,82 +143,126 @@ def hooked_filter_case(folder: Path) -> dict[str, Any]:
     }
 
 
-def run(output: Path) -> dict[str, Any]:
-    """Run every case and return the report."""
+def case_names() -> list[str]:
+    """List the complete column case inventory without building a database."""
+    return [name for name, _, _ in cases()] + [
+        "model_gives_an_extra_column",
+        "contract_stops_the_build_on_an_extra_column",
+        "column_check_does_not_build_a_rejected_project",
+        "post_hook_on_a_filter_model_leaves_its_table_alone",
+    ]
+
+
+def run(output: Path, only: list[str] | None = None, shard: str = "") -> dict[str, Any]:
+    """Run the selected cases and return their report with exact shard membership."""
+    inventory = case_names()
+    selected = feature_shards.select(inventory, shard, only)
+    before = feature_shards.snapshot("columns")
     results: list[dict[str, Any]] = []
     models = columns.sql_models(columns.REPO_ROOT)
     docs = columns.documented(columns.REPO_ROOT / columns.MODELS_YAML)
     with tempfile.TemporaryDirectory(prefix="feature_columns_e2e_") as folder:
         base = Path(folder) / "base"
         base.mkdir()
-        built = columns.read_columns(columns.build_database(columns.REPO_ROOT, base), models)
-        for name, damage, expected in cases():
-            planted: Docs = copy.deepcopy(docs)
-            damage(planted)
-            problems = columns.compare(models, built, planted)
-            if expected is None:
-                results.append({"case": name, "expected": "no problem", "problems": problems[:3], "ok": not problems})
-            else:
+        documented_cases = [case for case in cases() if case[0] in selected]
+        built = columns.read_columns(columns.build_database(columns.REPO_ROOT, base), models) if documented_cases else {}
+        for name, damage, expected in documented_cases:
+            with feature_shards.timed_case("columns", name) as started:
+                planted: Docs = copy.deepcopy(docs)
+                damage(planted)
+                problems = columns.compare(models, built, planted)
+                if expected is None:
+                    results.append({"case": name, "expected": "no problem", "problems": problems[:3], "ok": not problems})
+                else:
+                    matched = [problem for problem in problems if expected in problem]
+                    results.append(
+                        {"case": name, "expected": expected, "matched": matched[:1], "problems": len(problems), "ok": len(matched) == 1 and len(problems) == 1}
+                    )
+                results[-1]["seconds"] = round(time.monotonic() - started, 3)
+        if {"model_gives_an_extra_column", "contract_stops_the_build_on_an_extra_column"}.intersection(selected):
+            root = scratch_root(Path(folder))
+        if "model_gives_an_extra_column" in selected:
+            with feature_shards.timed_case("columns", "model_gives_an_extra_column") as started:
+                problems, counts = columns.check(root)
+                expected = f"{MODEL}.planted_extra_column (integer) is an output column that the YAML does not document"
                 matched = [problem for problem in problems if expected in problem]
                 results.append(
-                    {"case": name, "expected": expected, "matched": matched[:1], "problems": len(problems), "ok": len(matched) == 1 and len(problems) == 1}
+                    {
+                        "case": "model_gives_an_extra_column",
+                        "expected": expected,
+                        "matched": matched[:1],
+                        "problems": len(problems),
+                        "counts": counts,
+                        "ok": len(matched) == 1,
+                    }
                 )
-        root = scratch_root(Path(folder))
-        problems, counts = columns.check(root)
-        expected = f"{MODEL}.planted_extra_column (integer) is an output column that the YAML does not document"
-        matched = [problem for problem in problems if expected in problem]
-        results.append(
-            {
-                "case": "model_gives_an_extra_column",
-                "expected": expected,
-                "matched": matched[:1],
-                "problems": len(problems),
-                "counts": counts,
-                "ok": len(matched) == 1,
-            }
-        )
-        contract_folder = Path(folder) / ("contract_" + "long_working_path_" * 10)
-        contract_folder.mkdir()
-        try:
-            columns.build_database(root, contract_folder, contract=True)
-            results.append({"case": "contract_stops_the_build_on_an_extra_column", "expected": "dbt contract error", "ok": False, "error": "the build passed"})
-        except columns.BuildError as error:
-            message = str(error)
-            diagnostic = message.removeprefix("dbt run tag:features failed: ")
-            results.append(
-                {
-                    "case": "contract_stops_the_build_on_an_extra_column",
-                    "expected": "dbt run fails with a bounded contract error naming planted_extra_column despite a long working path",
-                    "error": message,
-                    "diagnostic_characters": len(diagnostic),
-                    "working_path_characters": len(str(contract_folder)),
-                    "ok": "planted_extra_column" in message and "contract" in message.lower() and len(diagnostic) <= 1200,
-                }
-            )
-        results.append(rejected_project_case(Path(folder)))
-        results.append(hooked_filter_case(Path(folder)))
+                results[-1]["seconds"] = round(time.monotonic() - started, 3)
+        if "contract_stops_the_build_on_an_extra_column" in selected:
+            with feature_shards.timed_case("columns", "contract_stops_the_build_on_an_extra_column") as started:
+                contract_folder = Path(folder) / ("contract_" + "long_working_path_" * 10)
+                contract_folder.mkdir()
+                try:
+                    columns.build_database(root, contract_folder, contract=True)
+                    results.append(
+                        {"case": "contract_stops_the_build_on_an_extra_column", "expected": "dbt contract error", "ok": False, "error": "the build passed"}
+                    )
+                except columns.BuildError as error:
+                    message = str(error)
+                    diagnostic = message.removeprefix("dbt run tag:features failed: ")
+                    results.append(
+                        {
+                            "case": "contract_stops_the_build_on_an_extra_column",
+                            "expected": "dbt run fails with a bounded contract error naming planted_extra_column despite a long working path",
+                            "error": message,
+                            "diagnostic_characters": len(diagnostic),
+                            "working_path_characters": len(str(contract_folder)),
+                            "ok": "planted_extra_column" in message and "contract" in message.lower() and len(diagnostic) <= 1200,
+                        }
+                    )
+                results[-1]["seconds"] = round(time.monotonic() - started, 3)
+        if "column_check_does_not_build_a_rejected_project" in selected:
+            with feature_shards.timed_case("columns", "column_check_does_not_build_a_rejected_project") as started:
+                results.append(rejected_project_case(Path(folder)))
+                results[-1]["seconds"] = round(time.monotonic() - started, 3)
+        if "post_hook_on_a_filter_model_leaves_its_table_alone" in selected:
+            with feature_shards.timed_case("columns", "post_hook_on_a_filter_model_leaves_its_table_alone") as started:
+                results.append(hooked_filter_case(Path(folder)))
+                results[-1]["seconds"] = round(time.monotonic() - started, 3)
     report: dict[str, Any] = {
         "written_utc": datetime.now(UTC).isoformat(),
+        "mode": "iteration" if only else "full",
+        "note": "not commit evidence" if only else "complete assigned shard",
         "committed_counts": {"models": len(models), "columns": sum(len(value) for value in built.values())},
         "cases": results,
         "status": "pass" if all(result["ok"] for result in results) else "fail",
     }
-    output.mkdir(parents=True, exist_ok=True)
-    (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-    return report
+    return feature_shards.finish(output, "columns", shard, inventory, selected, before, report)
 
 
 def main() -> int:
     """Run the cases, write the artifact and fail when a case does not behave as expected."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--output-directory", type=Path, default=columns.REPO_ROOT / "data/e2e/feature_columns" / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"))
+    parser.add_argument("--output-directory", type=Path, default=None)
+    parser.add_argument("--only", action="append", help="run only cases whose name contains this text (repeatable)")
+    parser.add_argument("--shard", default="", help="run every Nth case as K/N, with 1 <= K <= N")
+    parser.add_argument("--list-cases", action="store_true", help="print the selected case names as JSON without running them")
     args = parser.parse_args()
-    report = run(args.output_directory)
+    try:
+        selected = feature_shards.select(case_names(), args.shard, args.only)
+    except ValueError as error:
+        parser.error(str(error))
+    if args.list_cases:
+        sys.stdout.write(json.dumps(selected) + "\n")
+        return 0
+    if args.output_directory is None:
+        label = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + ("_shard" + args.shard.replace("/", "of") if args.shard else "")
+        args.output_directory = columns.REPO_ROOT / "data/e2e/feature_columns" / label
+    report = run(args.output_directory, args.only, args.shard)
     failed = [result["case"] for result in report["cases"] if not result["ok"]]
     sys.stdout.write(f"feature columns e2e: {report['status']}; artifact {args.output_directory / 'report.json'}\n")
     if failed:
         sys.stderr.write(f"feature columns e2e: failed cases {failed}\n")
-    return 1 if failed else 0
+    return int(report["status"] != "pass")
 
 
 if __name__ == "__main__":

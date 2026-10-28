@@ -73,7 +73,7 @@ CLEAN_WRITING = (
     f"Dates read Sep 30 2026; code keeps `{ISO_DATE}`, `a`, `b` and [the log](https://example.invalid/{ISO_DATE}).\n"
     f"An em dash {EM_DASH} allowed outside articles.\n\n```text\nrun {ISO_DATE}, and done\n```\n"
 )
-CLEAN_WRITING_HOOK = CLEAN_WRITING.replace(f"An em dash {EM_DASH} allowed outside articles.\n", "")
+CLEAN_WRITING_HOOK = CLEAN_WRITING.replace(f"An em dash {EM_DASH} allowed outside articles.\n", "").replace("Sep 30 2026; code", "Sep 30 2026. Code")
 CLAUSE_COMMA = "Secrets never go into logs or commits" + ", and a privacy scan runs on every commit.\n"
 SERIAL_COMMA = "The check reads Markdown, articles" + ", and commit messages.\n"
 NOR_COMMA = "It is not fast" + ", nor is it cheap.\n"
@@ -470,7 +470,7 @@ CASES = [
     Case("writing finding blocked by the hook", "writing-check", False, {"notes.md": SERIAL_COMMA}),
     Case("time-bound word blocked by the hook", "writing-check", False, {"notes.md": "The loader currently reads S3.\n"}),
     Case("procedural soon passes the hook", "writing-check", True, {"notes.md": "Run it as soon as the load ends.\n"}),
-    Case("warn-first kinds warn through the hook", "writing-check", True, {"notes.md": "Rules help; checks enforce them.\n"}),
+    Case("semicolon blocked by the hook", "writing-check", False, {"notes.md": "Rules help; checks enforce them.\n"}),
     Case(
         "valid front matter passes",
         "front-matter",
@@ -575,7 +575,7 @@ BLOCK_REASONS = {
     "allowlist entry with unknown type": ".privacy_allowlist:{line}: allowlist entry with an unknown type",
     "writing finding blocked by the hook": "notes.md:1: comma before a final 'and', 'or' or 'nor'",
     "time-bound word blocked by the hook": "notes.md:1: time-bound word in prose",
-    "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
+    "semicolon blocked by the hook": "notes.md:1: semicolon in prose",
     "star bullet blocked by markdownlint": "MD004",
     "missing front matter blocked": "docs/guide.md:1: no front matter",
     "title different from the H1 blocked": "title does not match the H1",
@@ -589,7 +589,6 @@ BLOCK_REASONS = {
 # Good cases that must also print a marker, so a skipped check cannot pass silently.
 PASS_MARKERS = {
     "unreadable file listed": "docs/diagram.png: unreviewed: cannot be read as text",
-    "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
 }
 
 

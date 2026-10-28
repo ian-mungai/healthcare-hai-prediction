@@ -1,7 +1,7 @@
 ---
 title: AWS control plane
 description: Control-plane services on the AWS container host, with inputs, secrets, images and the Mac launcher changes.
-last_updated: 2026-10-24
+last_updated: 2026-10-25
 audience: [developer]
 ---
 
@@ -35,7 +35,7 @@ Services that bind every interface by default and how each is held to loopback (
 | Listener | Default | Setting |
 | --- | --- | --- |
 | Scheduler health server (8974) | every interface (`[scheduler] scheduler_health_check_server_host`) | `AIRFLOW__SCHEDULER__SCHEDULER_HEALTH_CHECK_SERVER_HOST=127.0.0.1` |
-| Scheduler and triggerer log servers (8793, 8794) | every interface, no host option (`serve_logs` passes `host=""` to uvicorn) | `--skip-serve-logs`; task logs are read from the shared `<data>/airflow/logs` volume |
+| Scheduler and triggerer log servers (8793, 8794) | every interface, no host option (`serve_logs` passes `host=""` to uvicorn) | `--skip-serve-logs`. Task logs are read from the shared `<data>/airflow/logs` volume |
 | Polaris management interface (8182) | Quarkus management default | `QUARKUS_MANAGEMENT_HOST=127.0.0.1` |
 | Marquez API and admin connectors (5000, 5001) | every interface (Dropwizard) | `bindHost: 127.0.0.1` in the generated configuration |
 | Marquez web (3000) | every interface (`app.listen(port)`) | the arm64 build edits the listen call to use `WEB_HOST` (default 127.0.0.1) |
@@ -51,7 +51,7 @@ Services that bind every interface by default and how each is held to loopback (
 | `control_plane_task_role_arn` | No data permission. Used by the other services |
 | `log_group_names` | Map with `postgres`, `redis`, `polaris`, `airflow`, `marquez` (groups may repeat) |
 | `ecr_repository_urls` | Map with `postgres`, `redis`, `polaris`, `polaris_admin` and `airflow`, plus `marquez` and `marquez_web` when Marquez is on |
-| `project_tag` | The foundation `project_tag` output: the project name, the same `Project` tag value as the data bucket. Every task definition and service carries it; the budget counts the tagged costs of the services the AWS-first design adds |
+| `project_tag` | The foundation `project_tag` output: the project name, the same `Project` tag value as the data bucket. Every task definition and service carries it. The budget counts the tagged costs of the services the AWS-first design adds |
 | `data_mount_path` | Absolute mount path of the data volume on the host |
 | `image_digests` | Written by `scripts/infrastructure/push_images.py record` |
 
@@ -90,20 +90,20 @@ A plan test (`infra/services/tests/flow`) reads every command line of a containe
 How each secret reaches its program without a command line or a file:
 
 - **Airflow database URL.** Airflow's `_CMD` option runs `bash -c 'printf %s "...$AIRFLOW_DB_PASSWORD..."'`. The shell expands the variable inside the `printf` builtin, so no argument holds the password.
-- **Database role passwords.** The `postgres_databases` container feeds `psql` a here-document on standard input. `\getenv` ([PostgreSQL 17 psql](https://www.postgresql.org/docs/17/app-psql.html)) copies each password from the environment into a psql variable. `:'name'` quotes it into `ALTER ROLE`. The script first sets `log_statement = 'none'`, `log_min_error_statement = 'panic'` and `log_min_duration_statement = -1` for the session and sets `VERBOSITY terse`, so neither the statement log nor an error report repeats the statement. Checked on a local PostgreSQL 14 server: with `log_statement = 'ddl'` the unprotected script logged `ALTER ROLE airflow PASSWORD '...'`; the protected script logged nothing, also for a failing statement. `\getenv` itself is not in version 14; it is documented for 17. Residual: while the statement runs, a superuser can see it in `pg_stat_activity`.
+- **Database role passwords.** The `postgres_databases` container feeds `psql` a here-document on standard input. `\getenv` ([PostgreSQL 17 psql](https://www.postgresql.org/docs/17/app-psql.html)) copies each password from the environment into a psql variable. `:'name'` quotes it into `ALTER ROLE`. The script first sets `log_statement = 'none'`, `log_min_error_statement = 'panic'` and `log_min_duration_statement = -1` for the session and sets `VERBOSITY terse`, so neither the statement log nor an error report repeats the statement. Checked on a local PostgreSQL 14 server: with `log_statement = 'ddl'` the unprotected script logged `ALTER ROLE airflow PASSWORD '...'`. The protected script logged nothing, also for a failing statement. `\getenv` itself is not in version 14. It is documented for 17. Residual: while the statement runs, a superuser can see it in `pg_stat_activity`.
 - **Redis.** `redis-server -` reads its configuration from standard input. The script builds the lines with the `printf` builtin inside a bash process substitution (`< <(...)`, a pipe) and quotes the password for the configuration parser. Checked with a local Redis 8.10 and a password that holds a quote, a backslash and a space: `CONFIG GET requirepass` returned it, standard input was a pipe, no process argument held it and no file under the working folder held it. The `requirepass` command form was rejected: a started server accepts connections without a password until the command runs.
 - **Polaris bootstrap.** `polaris-admin-tool bootstrap` takes `--credential realm,id,secret` (a command argument) or `--credentials-file` ([admin tool](https://polaris.apache.org/releases/1.8.0/admin-tool/)). The task passes `--credentials-file /dev/stdin` and writes the JSON credential through the `printf` builtin to a pipe. The file option opens `uri.toURL().openStream()` ([RootCredentialsSet](https://github.com/apache/polaris/blob/apache-polaris-1.8.0/polaris-core/src/main/java/org/apache/polaris/core/persistence/bootstrap/RootCredentialsSet.java)), which reads a pipe once. Not run: it needs the image. Verify at the first run that the task finishes with exit 0.
-- **Airflow sign-in.** The Simple auth manager reads passwords only from a JSON file (`SimpleAuthManager.get_passwords()` opens `simple_auth_manager_passwords_file`; the login service calls that static method, so a subclass cannot replace it; [auth manager guide](https://airflow.apache.org/docs/apache-airflow/3.3.2/core-concepts/auth-manager/simple/index.html), [source](https://github.com/apache/airflow/blob/3.3.2/airflow-core/src/airflow/api_fastapi/auth/managers/simple/services/login.py)). It has no in-memory option, so the stack sets `AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS=true`. This is the accepted access control: the API server listens on 127.0.0.1 only. The only way in is a Session Manager port-forwarding session, which IAM authenticates. The Airflow administrator password (`/healthcare_hai_prediction/airflow_admin`) is not injected. The alternative that keeps a password is the FAB auth manager (the provider is in the image constraints): it stores a password hash in the metadata database, but its first-user step needs a verified in-memory path and a running host, so it is not chosen here.
+- **Airflow sign-in.** The Simple auth manager reads passwords only from a JSON file. `SimpleAuthManager.get_passwords()` opens `simple_auth_manager_passwords_file`. The login service calls that static method, so a subclass cannot replace it ([auth manager guide](https://airflow.apache.org/docs/apache-airflow/3.3.2/core-concepts/auth-manager/simple/index.html), [source](https://github.com/apache/airflow/blob/3.3.2/airflow-core/src/airflow/api_fastapi/auth/managers/simple/services/login.py)). It has no in-memory option, so the stack sets `AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS=true`. This is the accepted access control: the API server listens on 127.0.0.1 only. The only way in is a Session Manager port-forwarding session, which IAM authenticates. The Airflow administrator password (`/healthcare_hai_prediction/airflow_admin`) is not injected. The alternative that keeps a password is the FAB auth manager (the provider is in the image constraints): it stores a password hash in the metadata database, but its first-user step needs a verified in-memory path and a running host, so it is not chosen here.
 
 ## Needs from the foundation and the secret store
 
 | Need | Who | Why |
 | --- | --- | --- |
-| `ssm:GetParameters` for the execution role on the eight parameter ARNs in the secrets table (`output.parameter_arns_used`) and no other action: no `kms:Decrypt` (the AWS managed key `aws/ssm` needs none; a customer managed key would), no Secrets Manager action | Foundation IAM | The task definitions inject the parameters; [task execution role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html#task-execution-secrets) |
-| Parameters `/healthcare_hai_prediction/redis_password` and `/healthcare_hai_prediction/polaris_root_secret` | Secret store (the project profile, through `secret_store.MANAGED`) | Both are new; a task that injects a missing parameter does not start |
+| `ssm:GetParameters` for the execution role on the eight parameter ARNs in the secrets table (`output.parameter_arns_used`) and no other action: no `kms:Decrypt` (the AWS managed key `aws/ssm` needs none. A customer managed key would need it), no Secrets Manager action | Foundation IAM | The task definitions inject the parameters. [task execution role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html#task-execution-secrets) |
+| Parameters `/healthcare_hai_prediction/redis_password` and `/healthcare_hai_prediction/polaris_root_secret` | Secret store (the project profile, through `secret_store.MANAGED`) | Both are new. A task that injects a missing parameter does not start |
 | Host security group closed to the internet, with 8181 and 6379 open only to the job security group | Foundation network | These are the only non-loopback listeners |
 | `ecs:RegisterTaskDefinition`, `ecs:CreateService`, `ecs:UpdateService`, `ecs:DescribeServices`, `ecs:TagResource` and `iam:PassRole` on the three roles | Foundation IAM | The apply creates the task definitions and services |
-| Host firewall rule that blocks the instance metadata service for every non-root user | Foundation host | Keeps the containers away from the host role's credentials; see "Users" |
+| Host firewall rule that blocks the instance metadata service for every non-root user | Foundation host | Keeps the containers away from the host role's credentials. See "Users" |
 | `kernel.core_pattern` set to a plain file path that does not start with a pipe character (for example a root-only directory), with `fs.suid_dumpable=0` | Foundation host | Every container sets hard and soft `core` ulimits of 0, but Linux ignores that limit when the pattern pipes the dump to a program. A native or JVM crash must not write injected credentials from memory to a file |
 | ECS agent with host-network task roles enabled (`ECS_ENABLE_TASK_IAM_ROLE_NETWORK_HOST`, believed to default to true, not verified) | Foundation host | Task roles must work under host networking |
 | Repositories `polaris_admin` (and `marquez`, `marquez_web` when Marquez is on) | Foundation registry | They already exist in the foundation's list |
@@ -155,7 +155,7 @@ The silver, gold and maintenance DAGs only call the job broker over HTTP (`orche
 - Jobs reach Polaris at the host's private address on 8181, read their catalog credentials from Parameter Store through the task definition and reach S3 through the task role.
 - Each run needs shared storage for its run folder (the build database, seals and run record), which the Mac keeps on local disk. The interface decision is open (see below).
 
-## What is tied to the Mac
+## What is tied to the mac
 
 | Where | Tied to | Change |
 | --- | --- | --- |
@@ -170,7 +170,7 @@ The silver, gold and maintenance DAGs only call the job broker over HTTP (`orche
 
 ## Launching a one-shot task
 
-Both the services and the one-shot tasks must start with the `Project` tag, which only the launch call can pass on: IAM has no condition key that requires it. Every `aws_ecs_service` sets `propagate_tags = "TASK_DEFINITION"` and `enable_ecs_managed_tags = true`. Every `run-task` call passes both options ([RunTask: propagateTags and enableECSManagedTags](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_RunTask.html)). The output `one_shot_run_task` lists the arguments per task; a plan test fails when a service lacks the option or the output does.
+Both the services and the one-shot tasks must start with the `Project` tag, which only the launch call can pass on: IAM has no condition key that requires it. Every `aws_ecs_service` sets `propagate_tags = "TASK_DEFINITION"` and `enable_ecs_managed_tags = true`. Every `run-task` call passes both options ([RunTask: propagateTags and enableECSManagedTags](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_RunTask.html)). The output `one_shot_run_task` lists the arguments per task. A plan test fails when a service lacks the option or the output does.
 
 ```sh
 aws ecs run-task --profile <PROJECT_PROFILE> --region <REGION> --cluster <cluster_name> --task-definition <task_definition> \
@@ -184,7 +184,7 @@ aws ecs run-task --profile <PROJECT_PROFILE> --region <REGION> --cluster <cluste
 ## Open choices
 
 - **How the DAG code reaches the host** (decided): a checkout of the merged `main` commit at `dag_code_path`, mounted read-only, like the local Compose files. Baking the code into the Airflow image by digest is not needed now.
-- **Run-folder storage for jobs** (P7b, decided): S3 staging under the lakehouse prefix; no EFS.
+- **Run-folder storage for jobs** (P7b, decided): S3 staging under the lakehouse prefix. No EFS.
 - **Airflow sign-in.** All-admins on a loopback-only API server (this package) or the FAB auth manager with a password hash in the database. See the secrets section.
 - **Option names that need a running host.** `simple_auth_manager_all_admins`, `scheduler_health_check_server_host` and `--skip-serve-logs` (on the scheduler and triggerer) come from the 3.3.2 sources and documentation. Verify them at the first deploy with `ss -ltn` on the host: only 6379 and 8181 may show a non-loopback address.
 - **Host networking and the instance metadata service** (decided): host networking stays, because ECS port mappings have no host address field and bridge networking could not keep a published port on 127.0.0.1. The foundation blocks the metadata service for non-root users with a host firewall rule. Every long-running container runs as a non-root user (see "Users").

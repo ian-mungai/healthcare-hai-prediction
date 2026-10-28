@@ -58,6 +58,11 @@ COPIED = (
     ".yamllint",
     "README.md",
     "config/quality/ci_groups.json",
+    "config/quality/feature_cases.json",
+    "scripts/lakehouse/feature_shards.py",
+    "scripts/lakehouse/run_feature_sources_e2e.py",
+    "scripts/lakehouse/run_feature_columns_e2e.py",
+    "scripts/quality/ci_hooks.py",
     "config/quality/docker_calls_reviewed.json",
     "config/quality/mypy_runtimes.json",
     "config/quality_tools.json",
@@ -140,8 +145,10 @@ PART_GROUPS = {
     "silver": LAYERS[1:2],
     "gold": LAYERS[2:3],
     "features": LAYERS[3:],
+    "feature_sources": LAYERS[3:],
+    "feature_columns": LAYERS[3:],
     "core+layers": WITH_LAYERS,
-    "all": [*WITH_LAYERS, "launcher", "acquisition"],
+    "all": [*WITH_LAYERS, "launcher", "acquisition", "repository_hooks"],
 }
 PASS_LINES = {part: "All local CI checks passed" for part in PART_GROUPS} | {"launcher": "The launcher part passed."}
 LAKEHOUSE_SCRIPT = ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks"]
@@ -207,15 +214,26 @@ def selection_case(work: Path, name: str, args: list[str], want_run: list[str], 
     return {"case": name, "passed": passed, "exit": code, "run": run, "want_run": want_run, "reason": reason, "error": error[-400:]}
 
 
+def gate_documents() -> list[str]:
+    """The candidate Markdown files required by the unconditional gates in every scratch run."""
+    return sorted(set(git(ROOT, "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.md").splitlines()))
+
+
+def gate_document_case(work: Path) -> dict[str, Any]:
+    different = [name for name in gate_documents() if sha256_of(ROOT / name) != sha256_of(work / name)]
+    return {"case": "scratch_gates_read_the_candidate_documents", "passed": not different, "different": different}
+
+
 def install_copies(work: Path) -> None:
-    for path in COPIED:
+    copied = [*COPIED, *gate_documents()]
+    for path in copied:
         if (ROOT / path).exists():
             (work / path).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / path, work / path)
     if not (ROOT / "dags/transform_dag.py").exists():
         (work / "dags/transform_dag.py").unlink(missing_ok=True)
     tracked = set(git(work, "ls-files").splitlines())
-    new_files = [path for path in COPIED if (work / path).exists() and path not in tracked]
+    new_files = sorted({path for path in copied if (work / path).exists() and path not in tracked})
     if new_files:
         git(work, "add", "--intent-to-add", "--", *new_files)
 
@@ -433,6 +451,8 @@ def list_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
         "silver": "run lakehouse_silver",
         "gold": "run lakehouse_gold",
         "features": "run lakehouse_features",
+        "feature_sources": "run lakehouse_features",
+        "feature_columns": "run lakehouse_features",
     }.get(part, "run launcher")
     checks = {
         "exit_zero": code == 0,
@@ -559,7 +579,7 @@ def inherited_context_cases(work: Path, out: Path, scratch: Path) -> list[dict[s
 
 
 def code_identity(work: Path) -> dict[str, Any]:
-    files = [*COPIED, "scripts/process.py"]
+    files = [*COPIED, *gate_documents(), "scripts/process.py"]
     versions = {
         "python": run_command(str(PYTHON), ["--version"], timeout=60).stdout.strip(),
         "git": run_command("git", ["--version"], timeout=60).stdout.strip(),
@@ -940,6 +960,7 @@ def reader_coverage_cases(work: Path) -> list[dict[str, Any]]:
 
 def selection_cases(work: Path) -> list[dict[str, Any]]:
     cases = [
+        gate_document_case(work),
         selection_case(
             work,
             "docs_fixture_range_selects_reader_checks",
@@ -1160,11 +1181,11 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
 
 def real_run_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
-    for part in ("all", "core", "launcher", "bronze", "silver", "gold", "features"):
+    for part in ("all", "core", "launcher", "bronze", "silver", "gold", "features", "feature_sources", "feature_columns"):
         cases.append(list_only_case(work, out, part))
-    for part in ("core", "all", "launcher", "gold", "features"):
+    for part in ("core", "all", "launcher", "gold", "features", "feature_sources", "feature_columns"):
         cases.append(docs_only_case(work, out, part))
-    for part in ("core", "all", "launcher", "silver", "features"):
+    for part in ("core", "all", "launcher", "silver", "features", "feature_sources", "feature_columns"):
         cases.append(gate_failure_case(work, out, part))
     cases.append(layer_skip_case(work, out))
     cases.append(gates_before_launcher_case(work, out, "launcher", gate_fails=False))
@@ -1231,8 +1252,9 @@ def function_text(text: str, name: str) -> str | None:
 def timed_commands(body: str) -> list[str]:
     """The commands that a function starts through ``timed``, without the label, the python launcher and the worker setting."""
     commands: list[str] = []
-    for line in re.findall(r'^\s*timed "[^"]+" (.+)$', body, re.MULTILINE):
+    for line in re.findall(r'^\s*timed "[^"]+" (.+)$', re.sub(r"\\\n\s*", " ", body), re.MULTILINE):
         command = re.sub(r'^"\$python_bin" -m ', "", line)
+        command = re.sub(r' --shard "\$shard"\s+--output-directory "[^"]+"', "", command)
         commands.append(re.sub(r' --workers "\$\{MODEL_METADATA_WORKERS:-auto\}"', "", command).strip())
     return commands
 
@@ -1387,7 +1409,7 @@ def gold_unit_cases() -> list[dict[str, Any]]:
 
 def feature_split_cases() -> list[dict[str, Any]]:
     text = ci_script()
-    feature_commands = timed_commands(function_text(text, "lakehouse_features") or "")
+    feature_commands = [command for suite in ("sources", "columns") for command in timed_commands(function_text(text, f"lakehouse_features_{suite}") or "")]
     gold_commands = [command for name in GOLD_UNIT_FUNCTIONS for command in timed_commands(function_text(text, name) or "")]
     sources = (
         "scripts/lakehouse/feature_allowlist.py",
@@ -1421,23 +1443,27 @@ def feature_split_cases() -> list[dict[str, Any]]:
                 "error": error,
             }
         )
-    definition = workflow_document()["jobs"]["lakehouse"]
-    entries = [entry for entry in matrix_entries(definition) if entry.get("part") == "features"]
-    steps = [step for step in definition["steps"] if step.get("run") == "bash scripts/run_ci.sh"]
-    cases.append(
-        {
-            "case": "feature_job_uses_range_selection_and_the_plan_reuse_condition",
-            "passed": len(entries) == 1
-            and definition.get("needs") == "plan"
-            and definition.get("if") == "${{ needs.plan.outputs.reuse != 'true' }}"
-            and len(steps) == 1
-            and steps[0].get("env", {}).get("CI_PART") == "${{ matrix.part }}"
-            and steps[0].get("env", {}).get("CI_SCOPE") == "range"
-            and steps[0].get("env", {}).get("RANGE_START") == "${{ github.event.pull_request.base.sha || github.event.before }}"
-            and steps[0].get("env", {}).get("RANGE_END") == "${{ github.event.pull_request.head.sha || github.sha }}",
-            "feature_matrix_entries": entries,
-        }
-    )
+    for suite in ("sources", "columns"):
+        definition = workflow_document()["jobs"][f"feature_{suite}"]
+        steps = [step for step in definition["steps"] if step.get("run") == "bash scripts/run_ci.sh"]
+        cases.append(
+            {
+                "case": f"feature_{suite}_job_uses_range_selection_and_the_plan_reuse_condition",
+                "passed": definition.get("needs") == "plan"
+                and definition.get("if") == "${{ needs.plan.outputs.reuse != 'true' }}"
+                and len(steps) == 1
+                and steps[0].get("env", {}).get("CI_PART") == f"feature_{suite}"
+                and steps[0].get("env", {}).get("CI_SCOPE") == "range"
+                and steps[0].get("env", {}).get("RANGE_START") == "${{ github.event.pull_request.base.sha || github.event.before }}"
+                and steps[0].get("env", {}).get("RANGE_END") == "${{ github.event.pull_request.head.sha || github.sha }}",
+            }
+        )
+        for path in sources:
+            cases.append(
+                selection_case(
+                    ROOT, f"{suite}_part_selects_{Path(path).stem}", ["--scope", "paths", "--part", f"feature_{suite}", "--path", path], ["lakehouse_features"]
+                )
+            )
     return cases
 
 
@@ -1553,8 +1579,601 @@ def unit_refusal_case(work: Path, out: Path) -> dict[str, Any]:
     }
 
 
+def feature_combination_cases(scratch: Path) -> list[dict[str, Any]]:
+    """Use synthetic case outcomes to exercise the real combiner's complete membership and candidate checks."""
+    results = []
+    for suite, count in (("sources", 8), ("columns", 4)):
+        plan = run_command(str(PYTHON), ["-m", "scripts.lakehouse.feature_shards", "plan", "--suite", suite, "--count", str(count)], cwd=ROOT, timeout=60)
+        if plan.returncode != 0:
+            results.append({"case": f"feature_{suite}_combine_plan", "passed": False, "error": plan.stderr[-400:]})
+            continue
+        manifest = json.loads(plan.stdout)
+        folder = scratch / f"feature_{suite}_reports"
+        reports = {}
+        for index in range(1, count + 1):
+            shard = f"{index}/{count}"
+            names = manifest["shards"][shard]
+            reports[index] = {
+                "suite": suite,
+                "shard": shard,
+                "case_inventory": manifest["case_inventory"],
+                "selected_cases": names,
+                "source_hashes": manifest["source_hashes"],
+                "problems": [],
+                "status": "pass",
+                "cases": [{"case": name, "ok": True} for name in names],
+            }
+        mutations = ("control", "dropped_shard", "duplicate_case", "missing_case", "failed_shard", "other_candidate")
+        for mutation in mutations:
+            for index, report in reports.items():
+                path = folder / f"shard_{index}" / "report.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(report))
+            target = folder / "shard_2/report.json"
+            damaged = copy.deepcopy(reports[2])
+            if mutation == "dropped_shard":
+                target.unlink()
+            elif mutation == "duplicate_case":
+                damaged["cases"].append(copy.deepcopy(damaged["cases"][0]))
+            elif mutation == "missing_case":
+                damaged["cases"].pop()
+            elif mutation == "failed_shard":
+                damaged["status"] = "fail"
+            elif mutation == "other_candidate":
+                damaged["source_hashes"] = {}
+            if mutation != "dropped_shard":
+                target.write_text(json.dumps(damaged))
+            run = run_command(
+                str(PYTHON),
+                ["-m", "scripts.lakehouse.feature_shards", "combine", "--suite", suite, "--count", str(count), "--directory", str(folder)],
+                cwd=ROOT,
+                timeout=60,
+            )
+            combined = json.loads((folder / "combined.json").read_text())
+            intended = {
+                "control": "",
+                "dropped_shard": "missing or invalid shard 2/",
+                "duplicate_case": "repeated",
+                "missing_case": "missing",
+                "failed_shard": "did not pass",
+                "other_candidate": "candidate or case inventory differs",
+            }[mutation]
+            passed = run.returncode == 0 and combined["status"] == "pass" and len(combined["cases"]) == len(manifest["case_inventory"])
+            if mutation != "control":
+                passed = run.returncode != 0 and combined["status"] == "fail" and any(intended in problem for problem in combined["problems"])
+            results.append(
+                {
+                    "case": f"feature_{suite}_combine_{mutation}",
+                    "passed": passed,
+                    "exit": run.returncode,
+                    "problems": combined["problems"],
+                    "evidence": "synthetic outcomes, real CLI",
+                }
+            )
+    return results
+
+
+HOOK_DEADLINE_PROGRAM = """
+import json
+import sys
+from pathlib import Path
+from unittest.mock import patch
+from scripts.quality import ci_hooks
+starts = Path(sys.argv[sys.argv.index('--root') + 1]) / 'process_starts.jsonl'
+original_run = ci_hooks.run_command
+def recorded_run(executable, *args, **kwargs):
+    with starts.open('a') as handle:
+        handle.write(json.dumps(executable) + '\\n')
+    return original_run(executable, *args, **kwargs)
+ci_hooks.run_command = recorded_run
+with patch.object(ci_hooks.time, 'time', return_value=1000):
+    raise SystemExit(ci_hooks.main())
+"""
+
+
+HOOK_TIMEOUT_PROGRAM = """
+from unittest.mock import patch
+from scripts.quality import ci_hooks
+with patch.object(ci_hooks, 'group_deadline_seconds', return_value=1):
+    raise SystemExit(ci_hooks.main())
+"""
+
+
+def hook_timeout_case(scratch: Path) -> dict[str, Any]:
+    """A real hook process times out after partial output, and the CLI must retain failed evidence and stop the group."""
+    root = scratch / "hung_hook"
+    for name in ("config/quality/ci_groups.json", ".pre-commit-config.yaml", ".github/workflows/ci.yml"):
+        target = root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, target)
+    config = json.loads((root / "config/quality/ci_groups.json").read_text())
+    hook = config["hook_groups"]["code"][0]
+    binary = root / ".venv/bin/pre-commit"
+    binary.parent.mkdir(parents=True)
+    binary.write_text(
+        f"#!{PYTHON}\nimport sys,time\nsys.stdout.write('hook partial stdout\\n');sys.stdout.flush()\n"
+        "sys.stderr.write('hook partial stderr\\n');sys.stderr.flush()\ntime.sleep(60)\n"
+    )
+    binary.chmod(0o755)
+    output = root / "output"
+    result = run_command(
+        str(PYTHON), ["-c", HOOK_TIMEOUT_PROGRAM, "--root", str(root), "--group", "code", "--output-directory", str(output)], cwd=ROOT, timeout=10
+    )
+    report_path = output / "report.json"
+    report = json.loads(report_path.read_text()) if report_path.exists() else {}
+    log_path = output / f"{hook}.log"
+    log = log_path.read_text() if log_path.exists() else ""
+    rows = report.get("hooks", [])
+    checks = {
+        "failed_exit": result.returncode != 0,
+        "failed_report": report.get("status") == "fail",
+        "only_hung_hook_recorded": len(rows) == 1 and rows[0]["hook"] == hook and rows[0]["exit"] == 1,
+        "partial_output_retained": "hook partial stdout" in log and "hook partial stderr" in log,
+        "visible_remaining_budget": "remaining" in log and "budget" in log and "remaining" in result.stderr and "budget" in result.stderr,
+        "bounded_test_deadline": report.get("deadline_seconds") == 1,
+        "no_traceback": "Traceback" not in result.stderr,
+    }
+    return {
+        "case": "hung_hook_retains_partial_output_and_failed_report",
+        "passed": all(checks.values()),
+        "checks": checks,
+        "exit": result.returncode,
+        "error": result.stderr[-1200:],
+        "evidence": "real hook CLI and process, group deadline shortened to one second",
+    }
+
+
+def dispatcher_output_cases(base: Path, scratch: Path) -> list[dict[str, Any]]:
+    """Observe the real dispatcher's stdout before acknowledging a single item, and reject interleaved parallel output."""
+    results = []
+    for label, part, shard, fail in (
+        ("bronze", "bronze", "", False),
+        ("silver", "silver", "", False),
+        ("gold", "gold", "", False),
+        ("source_shard", "feature_sources", "2/8", False),
+        ("column_shard", "feature_columns", "2/4", False),
+        ("failed_shard", "feature_sources", "2/8", True),
+        ("parallel", "features", "", False),
+    ):
+        tree = scratch / f"output_{label}"
+        shutil.copytree(base, tree)
+        quality = tree / "quality"
+        ack = quality / "output_ack"
+        ack.mkdir(parents=True)
+        parallel = label == "parallel"
+        body = '  local key="${1:-layer}"\n  key="${key//\\//_}"\n  printf \'OUTPUT first @ENTRY@_%s\\n\' "$key"\n'
+        signal = f"{ack}/@ENTRY@_$key"
+        body += f"  local deadline=$((SECONDS + {'2' if parallel else '4'}))\n"
+        body += f'  while [[ ! -f "{signal}" && $SECONDS -lt $deadline ]]; do sleep 0.02; done\n'
+        if parallel:
+            body += f"  if [[ -f \"{signal}\" ]]; then printf 'parallel output interleaved\\n' >&2; return 3; fi\n"
+        else:
+            body += f"  if [[ ! -f \"{signal}\" ]]; then printf 'output acknowledgment deadline exceeded\\n' >&2; return 3; fi\n"
+        body += "  printf 'OUTPUT last @ENTRY@_%s\\n' \"$key\"\n" + ("  return 3\n" if fail else "")
+        group = "lakehouse_features" if part.startswith("feature") else f"lakehouse_{part}"
+        entries = (
+            ["lakehouse_features_sources", "lakehouse_features_columns", "lakehouse_features_combine"]
+            if group == "lakehouse_features"
+            else ["lakehouse_gold_checks" if part == "gold" else group]
+        )
+        (tree / GROUP_FILES / f"{group}.sh").write_text(
+            "#!/usr/bin/env bash\n" + "\n".join(f"{entry}() {{\n{body.replace('@ENTRY@', entry)}}}\n" for entry in entries)
+        )
+        dispatcher = tree / "scripts/run_ci.sh"
+        dispatcher.write_text(
+            dispatcher.read_text().replace(
+                '  rm -rf "$scratch"',
+                '  mkdir -p "$quality_output/saved_item_logs"\n  cp "$scratch"/*.log "$quality_output/saved_item_logs/"\n  rm -rf "$scratch"',
+                1,
+            )
+        )
+        summary = tree / "summary.md"
+        env = {
+            **os.environ,
+            "CI_SCOPE": "full",
+            "CI_PART": part,
+            "CI_UNITS": "checks",
+            "FEATURE_SHARD": shard,
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_STEP_SUMMARY": str(summary),
+            "PYTHON_BIN": str(PYTHON),
+            "QUALITY_ARTIFACT_DIR": str(quality),
+            "E2E_ARTIFACT_DIR": str(tree / "e2e"),
+        }
+        observer = (
+            'set -o pipefail; bash scripts/run_ci.sh | while IFS= read -r line; do printf "%s\\n" "$line"; '
+            'case "$line" in "OUTPUT first "*) : > "$QUALITY_ARTIFACT_DIR/output_ack/${line#OUTPUT first }" ;; esac; done'
+        )
+        run = run_command("bash", ["-c", observer], cwd=tree, env=env, timeout=30)
+        log = run.stdout + run.stderr
+        (scratch / f"output_{label}.log").write_text(log)
+        saved = sorted((quality / "saved_item_logs").glob("*.log"))
+        outputs = [line for line in run.stdout.splitlines() if line.startswith("OUTPUT ")]
+        retained = [line for path in saved for line in path.read_text().splitlines() if line.startswith("OUTPUT ")]
+        expected_count = 14 if parallel else 1
+        checks = {
+            "expected_exit": (run.returncode != 0) == fail,
+            "acknowledged_output": len(list(ack.iterdir())) == expected_count,
+            "no_output_deadline": "output acknowledgment deadline exceeded" not in log,
+            "parallel_output_buffered": "parallel output interleaved" not in log,
+            "one_pair_per_item": len(outputs) == expected_count * 2
+            and all(first.replace("OUTPUT first ", "") == last.replace("OUTPUT last ", "") for first, last in zip(outputs[::2], outputs[1::2], strict=True)),
+            "item_logs_retained": len(saved) == expected_count and sorted(retained) == sorted(outputs),
+            "summary_retained": summary.exists()
+            and "| Step | Seconds |" in summary.read_text()
+            and all(f"| {path.stem} |" in summary.read_text() for path in saved),
+            "failure_propagates": not fail or ("Local CI failed in: lakehouse_features_sources_2" in log and PASS_LINES["all"] not in log),
+        }
+        results.append(
+            {
+                "case": f"dispatcher_output_{label}",
+                "passed": all(checks.values()),
+                "checks": checks,
+                "exit": run.returncode,
+                "evidence": "real dispatcher and stdout observer, stand-in group bodies",
+            }
+        )
+    return results
+
+
+FEATURE_TIMING_PROGRAM = """
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from scripts.lakehouse import run_feature_sources_e2e as source
+from scripts.lakehouse import run_feature_columns_e2e as column
+class ProgressOutput:
+    pending = False
+    def write(self, value):
+        if value.startswith('[timing]'):
+            self.pending = True
+        return sys.__stdout__.write(value)
+    def flush(self):
+        self.pending = False
+        sys.__stdout__.flush()
+progress = ProgressOutput()
+sys.stdout = progress
+def ready(value=None):
+    if progress.pending:
+        raise RuntimeError('case timing output was not flushed before case work or completion')
+    return value
+suite = sys.argv.pop(1)
+if suite == 'sources':
+    source.admission_cases = lambda: [('light_admission', lambda root: None, None)]
+    source.resolved_cases = lambda: [('light_resolved', lambda root: None, None)]
+    source.cases = lambda: [('light_static', lambda root: None, None)]
+    source.pass_cases = lambda: []
+    source.shell.build_shell = lambda *args, **kwargs: Path()
+    source.run_resolved = lambda *args, **kwargs: ready(([], ['dbt run tag:features', 'dbt compile tag:features']))
+    source.copy_scratch = lambda root: None
+    source.sources.check = lambda root: ready(([], {}))
+    source.shell.run_features = lambda *args, **kwargs: ready(SimpleNamespace(database=Path(), relations={}))
+    source.shell.step = lambda *args: None
+    source.shell.read_relations = lambda *args: {f'main.synthetic_{i}': '1 rows, md5 ' + 'a' * 32 for i in range(23)}
+    relation_problems = source.sources.relation_problems
+    source.sources.relation_problems = lambda *args: ready(relation_problems(*args))
+    result = source.main()
+else:
+    docs = {column.MODEL: {column.COLUMN: {'data_type': 'varchar', 'description': 'Synthetic column.'}}}
+    column.columns.sql_models = lambda root: {column.MODEL}
+    column.columns.documented = lambda root: docs
+    column.columns.read_columns = lambda *args: {column.MODEL: [(column.COLUMN, 'varchar')]}
+    def build(*args, **kwargs):
+        ready()
+        if kwargs.get('contract'):
+            raise column.columns.BuildError('dbt run tag:features failed: contract planted_extra_column')
+        return Path()
+    column.columns.build_database = build
+    column.scratch_root = lambda folder: folder
+    column.columns.check = lambda root: ready(([f'{column.MODEL}.planted_extra_column (integer) is an output column that the YAML does not document'], {}))
+    column.rejected_project_case = lambda folder: ready({'case': 'column_check_does_not_build_a_rejected_project', 'ok': True})
+    column.hooked_filter_case = lambda folder: ready({'case': 'post_hook_on_a_filter_model_leaves_its_table_alone', 'ok': True})
+    compare = column.columns.compare
+    column.columns.compare = lambda *args: ready(compare(*args))
+    result = column.main()
+ready()
+raise SystemExit(result)
+"""
+
+
+def feature_case_timing_cases(scratch: Path) -> list[dict[str, Any]]:
+    """Run every case control path with substituted feature builds and observe one flushed timing pair per selected case."""
+    results = []
+    inventories = json.loads((ROOT / "config/quality/feature_cases.json").read_text())
+    for suite in ("sources", "columns"):
+        output = scratch / f"timing_{suite}"
+        selected = (
+            [
+                "light_admission",
+                "light_resolved",
+                "all_feature_views_have_checksums",
+                "unreadable_relation_fails_after",
+                "unreadable_relation_fails_before",
+                "light_static",
+            ]
+            if suite == "sources"
+            else inventories[suite]
+        )
+        args = ["-c", FEATURE_TIMING_PROGRAM, suite, "--output-directory", str(output), "--shard", "1/1"]
+        if suite == "sources":
+            for name in ("light_admission", "light_resolved", "light_static", "unreadable_relation_fails", "all_feature_views_have_checksums"):
+                args += ["--only", name]
+        run = run_command(str(PYTHON), args, cwd=ROOT, timeout=30)
+        report = json.loads((output / "report.json").read_text()) if (output / "report.json").exists() else {}
+        starts = re.findall(rf"^\[timing\] start feature {suite} case (\w+) at \S+$", run.stdout, re.MULTILINE)
+        ends = re.findall(rf"^\[timing\] end feature {suite} case (\w+) at \S+: [0-9.]+ s$", run.stdout, re.MULTILINE)
+        checks = {
+            "successful_control_run": run.returncode == 0,
+            "one_start_per_case": starts == selected,
+            "one_end_per_case": ends == selected,
+            "case_seconds_recorded": bool(report.get("cases")) and all("seconds" in row for row in report["cases"]),
+        }
+        results.append(
+            {
+                "case": f"feature_{suite}_prints_each_case_start_and_end",
+                "passed": all(checks.values()),
+                "checks": checks,
+                "starts": starts,
+                "ends": ends,
+                "exit": run.returncode,
+                "error": run.stderr[-1200:],
+                "evidence": "real runner CLI, substituted feature builds",
+            }
+        )
+    return results
+
+
+def hook_partition_cases(scratch: Path) -> list[dict[str, Any]]:
+    """The real hook runner rejects missing and repeated gates and preserves hook-stage and range arguments."""
+    root = scratch / "hook_partition"
+    (root / "config/quality").mkdir(parents=True)
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
+    shutil.copy2(ROOT / ".pre-commit-config.yaml", root / ".pre-commit-config.yaml")
+    (root / ".github/workflows").mkdir(parents=True)
+    shutil.copy2(ROOT / ".github/workflows/ci.yml", root / ".github/workflows/ci.yml")
+    target = root / "config/quality/ci_groups.json"
+    job = workflow_document()["jobs"]["hooks"]
+    marker = root / "github_env"
+    before = int(datetime.now(UTC).timestamp())
+    recorded = run_command("bash", ["-c", job["steps"][0].get("run", "")], cwd=root, env={**os.environ, "GITHUB_ENV": str(marker)}, timeout=10)
+    after = int(datetime.now(UTC).timestamp())
+    values = dict(line.split("=", 1) for line in marker.read_text().splitlines()) if marker.exists() else {}
+    value = values.get("JOB_STARTED", "")
+    results = [{"case": "hook_job_records_start_before_checkout", "passed": recorded.returncode == 0 and value.isdigit() and before <= int(value) <= after}]
+    for label in ("control", "missing_hook", "repeated_hook", "moved_hook_control", "moved_hook_missing_hook"):
+        damaged = copy.deepcopy(config)
+        if label.startswith("moved_hook"):
+            source = next(group for group, hooks in damaged["hook_groups"].items() if "writing-check" in hooks)
+            destination = next(group for group in damaged["hook_groups"] if group not in {source, "documentation"})
+            damaged["hook_groups"][source].remove("writing-check")
+            damaged["hook_groups"][destination].append("writing-check")
+        if label.endswith("missing_hook"):
+            next(hooks for hooks in damaged["hook_groups"].values() if "writing-check" in hooks).remove("writing-check")
+        if label == "repeated_hook":
+            damaged["hook_groups"]["code"].append("writing-check")
+        target.write_text(json.dumps(damaged))
+        run = run_command(str(PYTHON), ["-m", "scripts.quality.ci_hooks", "--root", str(root), "--group", "privacy", "--list"], cwd=ROOT, timeout=60)
+        wanted = "missing=['writing-check']" if label.endswith("missing_hook") else "repeated or unknown=['writing-check']"
+        passed = run.returncode == 0 if label.endswith("control") else run.returncode != 0 and wanted in run.stderr
+        results.append({"case": f"hook_partition_{label}", "passed": passed, "exit": run.returncode, "error": run.stderr[-400:]})
+        if label.endswith("control") and not passed:
+            return results
+    target.write_text(json.dumps(config))
+    binary = root / ".venv/bin/pre-commit"
+    binary.parent.mkdir(parents=True)
+    calls = root / "calls.jsonl"
+    body = (
+        f"#!{PYTHON}\nimport json,sys\nfrom pathlib import Path\np=Path({str(calls)!r})\n"
+        "with p.open('a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')\n"
+        f"sys.exit(3 if sys.argv[2] == 'ruff' and Path({str(root / 'fail')!r}).exists() else 0)\n"
+    )
+    binary.write_text(body)
+    binary.chmod(0o755)
+    timeout_seconds = next(int(row["timeout"]) * 60 for row in job["strategy"]["matrix"]["include"] if row["group"] == "code")
+    scenarios = (
+        ("runs_the_unchanged_manual_entries", False, "700", timeout_seconds - 120 - 300),
+        ("continues_and_fails_after_a_bad_hook", True, "700", timeout_seconds - 120 - 300),
+        ("local_without_job_start_uses_invocation_budget", False, None, timeout_seconds - 120),
+        ("exhausted_budget_refuses_hook", False, str(1000 - timeout_seconds), 0),
+    )
+    for label, failed_hook, job_started, expected_budget in scenarios:
+        calls.unlink(missing_ok=True)
+        starts = root / "process_starts.jsonl"
+        starts.unlink(missing_ok=True)
+        (root / "fail").unlink(missing_ok=True)
+        if failed_hook:
+            (root / "fail").touch()
+        output = root / label
+        environment = {key: value for key, value in os.environ.items() if key != "JOB_STARTED"}
+        if job_started is not None:
+            environment["JOB_STARTED"] = job_started
+        run = run_command(
+            str(PYTHON),
+            ["-c", HOOK_DEADLINE_PROGRAM, "--root", str(root), "--group", "code", "--output-directory", str(output)],
+            cwd=ROOT,
+            env=environment,
+            timeout=120,
+        )
+        actual = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+        processes = [json.loads(line) for line in starts.read_text().splitlines()] if starts.exists() else []
+        expected = (
+            [["run", hook, "--all-files", "--hook-stage", "manual", "--show-diff-on-failure"] for hook in config["hook_groups"]["code"]]
+            if expected_budget
+            else []
+        )
+        report_path = output / "report.json"
+        report = json.loads(report_path.read_text()) if report_path.exists() else {}
+        failed = failed_hook or expected_budget == 0
+        checks = {
+            "all_hooks_reached": actual == expected,
+            "admitted_processes_match": processes == [str(binary)] * len(expected),
+            "status_matches": report.get("status") == ("fail" if failed else "pass"),
+            "workflow_deadline_with_margin": report.get("deadline_seconds") == expected_budget,
+            "exit_matches": (run.returncode != 0) == failed,
+            "intended_failure": not failed_hook or any(row["hook"] == "ruff" and row["exit"] == 3 for row in report.get("hooks", [])),
+            "exhausted_admission_message": expected_budget != 0 or ("no time left for hook" in run.stderr and "budget is exhausted" in run.stderr),
+            "no_traceback": "Traceback" not in run.stderr,
+        }
+        results.append(
+            {
+                "case": f"hook_group_{label}",
+                "passed": all(checks.values()),
+                "checks": checks,
+                "evidence": "recording pre-commit stand-in, real group CLI",
+            }
+        )
+    return results
+
+
+def parallel_plan_cases(scratch: Path) -> list[dict[str, Any]]:
+    """Dry-run the real dispatcher using print-only commands in a minimal tree, without checking out data or running gates."""
+    base = scratch / "parallel_plan_base"
+    names = ["scripts/run_ci.sh", "scripts/process.py", "scripts/quality/ci_groups.py", "config/quality/ci_groups.json", *BODY_FILES]
+    names += [path.relative_to(ROOT).as_posix() for path in (ROOT / "scripts/infrastructure").glob("*.sh")]
+    for name in names:
+        target = base / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, target)
+    (base / TIMING).write_text(DRY_TIMING)
+    gate = base / "scripts/acquisition/run_checks.sh"
+    gate.parent.mkdir(parents=True)
+    gate.write_text(DRY_ACQUISITION.replace("@FAIL@", "").replace("@SKIP@", ""))
+    results = []
+    normal: dict[str, Any] = {}
+    for label in ("control", "repeat", "feature_shard_failure", "hook_failure"):
+        tree = scratch / f"parallel_plan_{label}"
+        shutil.copytree(base, tree)
+        if label == "feature_shard_failure":
+            path = tree / GROUP_FILES / "lakehouse_features.sh"
+            text = path.read_text().replace('  local shard="${1:?}"', '  local shard="${1:?}"\n  if [[ "$shard" == 2/8 ]]; then return 3; fi', 1)
+            path.write_text(text)
+        if label == "hook_failure":
+            path = tree / "scripts/run_ci.sh"
+            path.write_text(path.read_text().replace("hook_code() { hook_partition code; }", "hook_code() { return 3; }"))
+        code, log, _ = run_entry(
+            tree,
+            scratch,
+            f"parallel_{label}",
+            {"CI_SCOPE": "full", "CI_PART": "all", "QUALITY_ARTIFACT_DIR": str(tree / "quality"), "E2E_ARTIFACT_DIR": str(tree / "e2e")},
+        )
+        local = local_plan_of(log)
+        if label == "control":
+            normal = local
+            differences = mirror_differences(github_plan_of(workflow_document()), local)
+            results.append(
+                {
+                    "case": "parallel_local_plan_matches_all_hosted_feature_shards_and_hook_groups",
+                    "passed": code == 0 and not differences,
+                    "differences": differences,
+                    "exit": code,
+                }
+            )
+            planted = {name: mirror_differences(github_plan_of(document), local) for name, document in planted_workflows().items()}
+            results.append({"case": "parallel_plan_catches_dropped_feature_shard_and_hook_group", "passed": all(planted.values()), "differences": planted})
+        elif label == "repeat":
+            differences = mirror_differences(normal, local)
+            results.append({"case": "parallel_local_plan_is_repeatable", "passed": code == 0 and not differences, "differences": differences})
+        else:
+            intended = "lakehouse_features_sources_2" if label == "feature_shard_failure" else "hook_code"
+            checks = {
+                "exit_nonzero": code != 0,
+                "names_failed_item": f"Local CI failed in: {intended}" in log,
+                "no_feature_combine": "TIMED lakehouse_features: combine" not in log,
+                "no_pass": PASS_LINES["all"] not in log,
+            }
+            results.append({"case": f"parallel_{label}_prevents_a_combined_pass", "passed": all(checks.values()), "checks": checks, "exit": code})
+        (scratch / f"parallel_{label}.log").write_text(log)
+    return [*results, *dispatcher_output_cases(base, scratch)]
+
+
+def feature_listing(suite: str, *arguments: str) -> tuple[int, list[str], str]:
+    if suite == "sources":
+        result = run_command(str(PYTHON), ["-m", "scripts.lakehouse.run_feature_sources_e2e", "--list-cases", *arguments], cwd=ROOT, timeout=60)
+    else:
+        result = run_command(str(PYTHON), ["-m", "scripts.lakehouse.run_feature_columns_e2e", "--list-cases", *arguments], cwd=ROOT, timeout=60)
+    try:
+        names = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        names = []
+    return result.returncode, names, result.stderr
+
+
+def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
+    """List the real feature runners without builds and verify complete, disjoint hosted shards and manual hooks."""
+    inventory = json.loads((ROOT / "config/quality/feature_cases.json").read_text())
+    workflow = workflow_document()
+    results: list[dict[str, Any]] = []
+    for suite, count in (("sources", 8), ("columns", 4)):
+        all_code, names, all_error = feature_listing(suite)
+        shards: list[list[str]] = []
+        for index in range(1, count + 1):
+            listed_code, listed_names, _ = feature_listing(suite, "--shard", f"{index}/{count}")
+            shards.append(listed_names if listed_code == 0 else [])
+        flattened = [name for shard in shards for name in shard]
+        definition = workflow["jobs"].get(f"feature_{suite}", {})
+        configured = definition.get("strategy", {}).get("matrix", {}).get("shard", [])
+        results.append(
+            {
+                "case": f"feature_{suite}_shards_cover_every_original_case_once",
+                "passed": all_code == 0
+                and names == inventory[suite]
+                and bool(names)
+                and sorted(flattened) == sorted(names)
+                and len(flattened) == len(set(flattened))
+                and configured == list(range(1, count + 1)),
+                "listed": len(names),
+                "expected": len(inventory[suite]),
+                "shard_sizes": [len(shard) for shard in shards],
+                "workflow_shards": configured,
+                "error": all_error[-400:],
+            }
+        )
+        for invalid in ("0/2", "3/2", "1/0", "one/two"):
+            refused_code, _, refused_error = feature_listing(suite, "--shard", invalid)
+            results.append(
+                {
+                    "case": f"feature_{suite}_refuses_invalid_shard_{invalid}",
+                    "passed": refused_code != 0 and "1 <= K <= N" in refused_error,
+                    "exit": refused_code,
+                    "error": refused_error[-300:],
+                }
+            )
+    hook_document = load_yaml((ROOT / ".pre-commit-config.yaml").read_text())
+    if not isinstance(hook_document, dict):
+        raise ValueError(".pre-commit-config.yaml must contain a mapping")
+    hooks = hook_document["repos"][0]["hooks"]
+    expected = sorted(hook["id"] for hook in hooks if "manual" in hook.get("stages", ["pre-commit", "manual"]) and hook["id"] != "local_ci")
+    actual: list[str] = []
+    exits = []
+    for group in ("privacy", "documentation", "code"):
+        listed = run_command(str(PYTHON), ["-m", "scripts.quality.ci_hooks", "--group", group, "--list"], cwd=ROOT, timeout=60)
+        exits.append(listed.returncode)
+        try:
+            actual.extend(json.loads(listed.stdout))
+        except json.JSONDecodeError:
+            actual.append("<invalid hook list>")
+    results.append(
+        {
+            "case": "hook_groups_cover_every_manual_hook_exactly_once",
+            "passed": exits == [0, 0, 0] and sorted(actual) == expected,
+            "missing": sorted(set(expected) - set(actual)),
+            "repeated": sorted(name for name in set(actual) if actual.count(name) > 1),
+            "exits": exits,
+        }
+    )
+    return [*results, *feature_combination_cases(scratch), *hook_partition_cases(scratch), hook_timeout_case(scratch), *feature_case_timing_cases(scratch)]
+
+
 def speed_static_cases(scratch: Path) -> list[dict[str, Any]]:
-    return [*single_command_cases(), *timing_function_cases(scratch), *gold_unit_cases(), *feature_split_cases(), *acquisition_script_cases(), *timeout_cases()]
+    return [
+        *parallel_ci_cases(scratch),
+        *single_command_cases(),
+        *timing_function_cases(scratch),
+        *gold_unit_cases(),
+        *feature_split_cases(),
+        *acquisition_script_cases(),
+        *timeout_cases(),
+    ]
 
 
 STUB_UNIT = """#!/usr/bin/env bash
@@ -1961,7 +2580,7 @@ def guard_cases() -> list[dict[str, Any]]:
     def drop_feature_job(tree: Path) -> None:
         path = tree / ".github/workflows/ci.yml"
         source = path.read_text(encoding="utf-8")
-        source = re.sub(r"          - layer: Features\n(?:            [^\n]*\n)+", "", source)
+        source = re.sub(r"^  feature_(?:sources|columns):\n.*?(?=^  [a-z_]+:\n|\Z)", "", source, flags=re.MULTILINE | re.DOTALL)
         path.write_text(source, encoding="utf-8")
 
     def rename_launcher(tree: Path) -> None:
@@ -2070,7 +2689,11 @@ def local_plan_of(log: str) -> dict[str, Any]:
         if item.startswith("lakehouse_gold_"):
             groups.add("lakehouse_gold")
             units.add(item.removeprefix("lakehouse_gold_"))
-        elif not item.startswith("acquisition_"):
+        elif item.startswith("lakehouse_features_"):
+            groups.add("lakehouse_features")
+        elif item.startswith("hook_"):
+            groups.add("repository_hooks")
+        elif not item.startswith(("acquisition_", "combine_feature_")):
             groups.add(item)
     shards = re.findall(r"^ACQ part=shard shard=(\d+/\d+) ", log, re.MULTILINE)
     combines = re.findall(r"^ACQ part=combine shard= count=(\d+) ", log, re.MULTILINE)
@@ -2078,6 +2701,14 @@ def local_plan_of(log: str) -> dict[str, Any]:
         groups.add("acquisition")
     return {
         "items": items,
+        "feature_shards": set(
+            f"{suite}:{shard}"
+            for suite, shard in re.findall(r"^TIMED lakehouse_features: feature (sources|columns) E2E .* --shard (\d+/\d+)", log, re.MULTILINE)
+        ),
+        "feature_combines": set(
+            f"{suite}:{count}" for suite, count in re.findall(r"^TIMED lakehouse_features: combine (sources|columns)/(\d+) ", log, re.MULTILINE)
+        ),
+        "hook_groups": set(re.findall(r"^TIMED repository hooks: (\w+) ", log, re.MULTILINE)),
         "groups": groups,
         "units": units,
         "shards": set(shards),
@@ -2089,34 +2720,56 @@ def local_plan_of(log: str) -> dict[str, Any]:
 
 
 def github_plan_of(workflow: dict[str, Any]) -> dict[str, Any]:
-    """The groups, gold units, acquisition shards and combining steps that the jobs of the workflow run, in the full range."""
+    """Expand the real jobs into groups, units, feature and acquisition shards and hook partitions."""
     config = ci_groups.load()
     groups: set[str] = set()
     units: set[str] = set()
     shards: set[str] = set()
     combine_counts: set[str] = set()
+    feature_shards: set[str] = set()
+    feature_combines: set[str] = set()
+    hook_groups: set[str] = set()
     for definition in workflow["jobs"].values():
         for entry in matrix_entries(definition):
             for step in definition.get("steps", []):
                 env = {key: fill_matrix(str(value), entry) for key, value in step.get("env", {}).items()}
-                if step.get("run") == "bash scripts/run_ci.sh" and env.get("CI_PART") not in {None, "gates"}:
+                command = fill_matrix(str(step.get("run", "")), entry)
+                if command == "bash scripts/run_ci.sh" and env.get("CI_PART") not in {None, "gates"}:
                     part = env["CI_PART"]
                     groups |= set(ci_groups.groups_of(part, config)) - {"acquisition"}
                     if part == "gold":
                         units |= set((env.get("CI_UNITS") or " ".join(GOLD_UNITS)).split())
-                elif step.get("run") == "bash scripts/acquisition/run_checks_ci.sh" and env.get("ACQUISITION_PART") == "shard":
+                    if part in {"feature_sources", "feature_columns"}:
+                        feature_shards.add(f"{part.removeprefix('feature_')}:{env.get('FEATURE_SHARD', '')}")
+                elif command == "bash scripts/acquisition/run_checks_ci.sh" and env.get("ACQUISITION_PART") == "shard":
                     groups.add("acquisition")
                     shards.add(env["ACQUISITION_SHARD"])
-                elif step.get("run") == "bash scripts/acquisition/run_checks_ci.sh" and env.get("ACQUISITION_PART") == "combine":
+                elif command == "bash scripts/acquisition/run_checks_ci.sh" and env.get("ACQUISITION_PART") == "combine":
                     combine_counts.add(env["ACQUISITION_SHARD_COUNT"])
-    return {"groups": groups, "units": units, "shards": shards, "combine_counts": combine_counts}
+                if command.startswith(".venv/bin/python -m scripts.quality.ci_hooks "):
+                    found = re.search(r"--group '([^']+)'", command)
+                    if found:
+                        groups.add("repository_hooks")
+                        hook_groups.add(found[1])
+                feature_combines |= {
+                    f"{suite}:{count}" for suite, count in re.findall(r"feature_shards combine --suite (sources|columns) --count (\d+)", command)
+                }
+    return {
+        "groups": groups,
+        "units": units,
+        "shards": shards,
+        "combine_counts": combine_counts,
+        "feature_shards": feature_shards,
+        "feature_combines": feature_combines,
+        "hook_groups": hook_groups,
+    }
 
 
 def mirror_differences(github: dict[str, Any], local: dict[str, Any]) -> dict[str, Any]:
     """What differs between the GitHub jobs and the full local run; empty when the local run mirrors GitHub."""
     differences = {
         name: {"github": sorted(github[name]), "local": sorted(local[name])}
-        for name in ("groups", "units", "shards", "combine_counts")
+        for name in ("groups", "units", "shards", "combine_counts", "feature_shards", "feature_combines", "hook_groups")
         if github[name] != local[name]
     }
     if local["shard_runs"] != len(local["shards"]) or local["combine_runs"] != 1:
@@ -2137,9 +2790,14 @@ def planted_workflows() -> dict[str, dict[str, Any]]:
     unit["jobs"]["lakehouse"]["strategy"]["matrix"]["include"][2]["units"] = "checks"
     drifts["gold_unit"] = unit
     feature = copy.deepcopy(workflow_document())
-    entries = feature["jobs"]["lakehouse"]["strategy"]["matrix"]["include"]
-    feature["jobs"]["lakehouse"]["strategy"]["matrix"]["include"] = [entry for entry in entries if entry["part"] != "features"]
+    del feature["jobs"]["feature_sources"]
     drifts["feature_job"] = feature
+    shard = copy.deepcopy(workflow_document())
+    shard["jobs"]["feature_sources"]["strategy"]["matrix"]["shard"].pop()
+    drifts["feature_shard"] = shard
+    hooks = copy.deepcopy(workflow_document())
+    hooks["jobs"]["hooks"]["strategy"]["matrix"]["include"].pop()
+    drifts["hook_group"] = hooks
     return drifts
 
 
@@ -2261,6 +2919,7 @@ def isolation_cases(work: Path, out: Path) -> list[dict[str, Any]]:
 STAND_IN_ENTRIES = {
     "lakehouse_gold": ["lakehouse_gold_checks", "lakehouse_gold_writer_setup", "lakehouse_gold_model_metadata_e2e"],
     "launcher": ["launcher_e2e"],
+    "lakehouse_features": ["lakehouse_features_sources", "lakehouse_features_columns", "lakehouse_features_combine"],
 }
 # A stand-in group file reads every variable that run_group passes to a group, so an unbound variable stops the run, and runs one real timed command.
 STAND_IN_BODY = """#!/usr/bin/env bash
@@ -2271,7 +2930,7 @@ STAND_IN_BODY = """#!/usr/bin/env bash
 """
 PYTHON_FILTER = """#!/usr/bin/env bash
 # Stand-in for the interpreter of the gates: only the group selection runs for real.
-if [[ "$*" == *scripts.quality.ci_groups* ]]; then
+if [[ "$*" == *scripts.quality.ci_groups* || "$*" == *config/quality/ci_groups.json* ]]; then
   exec {python} "$@"
 fi
 exit 0
@@ -2319,12 +2978,16 @@ def stand_in_run(work: Path, out: Path, name: str, extra: dict[str, str], expect
 
 def variable_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     everything = [entry for group in BODY_SELECTION for entry in STAND_IN_ENTRIES.get(group, [group])]
-    core = [entry for entry in everything if entry not in {"launcher_e2e", *STAND_IN_ENTRIES["lakehouse_gold"], *LAYERS}]
+    core = [
+        entry for entry in everything if entry not in {"launcher_e2e", *STAND_IN_ENTRIES["lakehouse_gold"], *STAND_IN_ENTRIES["lakehouse_features"], *LAYERS}
+    ]
     layers = {
         "bronze": ["lakehouse_bronze"],
         "silver": ["lakehouse_silver"],
         "gold": ["lakehouse_gold_checks", "lakehouse_gold_writer_setup", "lakehouse_gold_model_metadata_e2e"],
-        "features": ["lakehouse_features"],
+        "features": STAND_IN_ENTRIES["lakehouse_features"],
+        "feature_sources": ["lakehouse_features_sources", "lakehouse_features_combine"],
+        "feature_columns": ["lakehouse_features_columns", "lakehouse_features_combine"],
     }
     cases = [
         stand_in_run(work, out, "full_all", {"CI_SCOPE": "full", "CI_PART": "all"}, everything),
@@ -2349,6 +3012,21 @@ def variable_cases(work: Path, out: Path) -> list[dict[str, Any]]:
 
 def main() -> int:
     clear_git_environment()
+    if "--sharding-only" in sys.argv[1:]:
+        with tempfile.TemporaryDirectory(prefix="ci_sharding_e2e.") as folder:
+            shard_results = parallel_ci_cases(Path(folder)) + parallel_plan_cases(Path(folder))
+        out = ROOT / "data/e2e/ci_groups" / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{os.getpid()}"
+        out.mkdir(parents=True)
+        shard_report = {
+            "mode": "iteration",
+            "note": "not commit evidence",
+            "code": code_identity(ROOT),
+            "cases": shard_results,
+            "failed": [row["case"] for row in shard_results if not row["passed"]],
+        }
+        (out / "report.json").write_text(json.dumps(shard_report, indent=2) + "\n")
+        sys.stdout.write(json.dumps(shard_report, indent=2) + "\n")
+        return int(bool(shard_report["failed"]))
     selection_only = "--selection-only" in sys.argv[1:]
     speed_only = "--speed-only" in sys.argv[1:]
     out = ROOT / "data" / "e2e" / "ci_groups" / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{os.getpid()}"
