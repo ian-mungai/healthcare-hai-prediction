@@ -1,7 +1,0 @@
-tiny:
-  target: fixture
-  outputs:
-    fixture:
-      type: duckdb
-      path: "{{ env_var('STAGING_E2E_CASE') }}/staging.duckdb"
-      threads: 1
