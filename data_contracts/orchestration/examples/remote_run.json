@@ -1,0 +1,406 @@
+{
+  "classification": "Synthetic",
+  "status": "preparation only, not cloud evidence",
+  "valid": {
+    "object_ref": {
+      "key": "lakehouse/run_stage/20261024T000000Z-01234567/g1/tries/hai_fixture_1/out/staging.duckdb",
+      "version_id": "synthetic_version_1",
+      "sha256": "d52b7fdfb1c9888861f8c5716a3a66ba62dce117e60a1ac6dc719430c1aed3de",
+      "size": 22,
+      "try_id": "hai_fixture_1"
+    },
+    "record": {
+      "key": "lakehouse/run_stage/20261024T000000Z-01234567/g1/tries/hai_fixture_1/out/target/manifest.json",
+      "version_id": "synthetic_version_1",
+      "sha256": "d52b7fdfb1c9888861f8c5716a3a66ba62dce117e60a1ac6dc719430c1aed3de",
+      "size": 33554432,
+      "try_id": "hai_fixture_1",
+      "path": "target/manifest.json"
+    },
+    "input_map": [
+      {
+        "key": "lakehouse/run_stage/20261024T000000Z-01234567/g1/tries/hai_fixture_1/out/staging.duckdb",
+        "version_id": "synthetic_version_1",
+        "sha256": "d52b7fdfb1c9888861f8c5716a3a66ba62dce117e60a1ac6dc719430c1aed3de",
+        "size": 22,
+        "path": "staging.duckdb"
+      }
+    ],
+    "seal": {
+      "run_id": "20261024T000000Z-01234567",
+      "layer": "silver",
+      "generation": 1,
+      "sha256": "d52b7fdfb1c9888861f8c5716a3a66ba62dce117e60a1ac6dc719430c1aed3de",
+      "size": 22,
+      "source_key": "lakehouse/run_stage/20261024T000000Z-01234567/g1/tries/hai_fixture_1/out/staging.duckdb",
+      "source_version_id": "synthetic_version_1",
+      "validation_attempt": "validation_fixture_1"
+    },
+    "catalog_inventory": {
+      "schema": 1,
+      "source_catalog": "mac",
+      "destination_catalog": "aws",
+      "publications": [
+        {
+          "layer": "silver",
+          "run_id": "20261024T010000Z-00000001",
+          "receipt_sha256": "3354fbca82f261becae2815d9cdfe8e31a4bc1532f69c24ff48d110394246aa5",
+          "reservation": "synthetic_aws_reader:silver"
+        },
+        {
+          "layer": "gold",
+          "run_id": "20261024T020000Z-00000002",
+          "receipt_sha256": "ab5ee6a01dc9d0d101ea193dbdf45d1b1325a489e3584e1d6148b08dcb96db11",
+          "reservation": "synthetic_aws_reader:gold"
+        }
+      ],
+      "tables": [
+        {
+          "namespace": "bronze",
+          "name": "source_table",
+          "table_uuid": "00000000-0000-4000-8000-000000000001",
+          "location": "s3://synthetic-bucket/lakehouse/bronze/source_table",
+          "metadata_location": "s3://synthetic-bucket/lakehouse/bronze/source_table/metadata/catalog_confirmed.json",
+          "metadata_version": "version_1",
+          "metadata_sha256": "4365307c508e2e9439932037f8933eb15705dbc85ce538c3c0359798dbac4c52",
+          "metadata_size": 968,
+          "snapshot_id": 202,
+          "current_snapshot_id": 202
+        },
+        {
+          "namespace": "gold",
+          "name": "gold_table",
+          "table_uuid": "00000000-0000-4000-8000-000000000002",
+          "location": "s3://synthetic-bucket/lakehouse/gold/gold_table",
+          "metadata_location": "s3://synthetic-bucket/lakehouse/gold/gold_table/metadata/catalog_confirmed.json",
+          "metadata_version": "version_1",
+          "metadata_sha256": "6c2ed131b80f39617d08ffc4dfc40fdb947973d9d2370e8847c25f61e8feacbe",
+          "metadata_size": 956,
+          "snapshot_id": 101,
+          "current_snapshot_id": 202
+        },
+        {
+          "namespace": "gold",
+          "name": "publish_runs",
+          "table_uuid": "00000000-0000-4000-8000-000000000003",
+          "location": "s3://synthetic-bucket/lakehouse/gold/publish_runs",
+          "metadata_location": "s3://synthetic-bucket/lakehouse/gold/publish_runs/metadata/catalog_confirmed.json",
+          "metadata_version": "version_1",
+          "metadata_sha256": "255e2082f5e27375088b2623c3f0926509206f426a16b29f8fb313d01cd4ad8e",
+          "metadata_size": 962,
+          "snapshot_id": 202,
+          "current_snapshot_id": 202
+        },
+        {
+          "namespace": "silver",
+          "name": "publish_runs",
+          "table_uuid": "00000000-0000-4000-8000-000000000004",
+          "location": "s3://synthetic-bucket/lakehouse/silver/publish_runs",
+          "metadata_location": "s3://synthetic-bucket/lakehouse/silver/publish_runs/metadata/catalog_confirmed.json",
+          "metadata_version": "version_1",
+          "metadata_sha256": "9dbf07f1877b5af273805a716e0313cd8626dbf7cbc984c9f79540fd8bbfa0d4",
+          "metadata_size": 968,
+          "snapshot_id": 202,
+          "current_snapshot_id": 202
+        },
+        {
+          "namespace": "silver",
+          "name": "silver_table",
+          "table_uuid": "00000000-0000-4000-8000-000000000005",
+          "location": "s3://synthetic-bucket/lakehouse/silver/silver_table",
+          "metadata_location": "s3://synthetic-bucket/lakehouse/silver/silver_table/metadata/catalog_confirmed.json",
+          "metadata_version": "version_1",
+          "metadata_sha256": "d8c7cd5a12b3f9e784a29c3fe103247a51520a8e07a331effe0b10f58d32789a",
+          "metadata_size": 968,
+          "snapshot_id": 101,
+          "current_snapshot_id": 202
+        }
+      ]
+    },
+    "run_map": {
+      "schema": 1,
+      "run_id": "20261024T000000Z-01234567",
+      "generation": 1,
+      "live_try_id": "hai_fixture_1",
+      "objects": {
+        "staging.duckdb": {
+          "key": "lakehouse/run_stage/20261024T000000Z-01234567/g1/tries/hai_fixture_1/out/staging.duckdb",
+          "version_id": "synthetic_version_1",
+          "sha256": "d52b7fdfb1c9888861f8c5716a3a66ba62dce117e60a1ac6dc719430c1aed3de",
+          "size": 22,
+          "try_id": "hai_fixture_1"
+        }
+      }
+    }
+  },
+  "invalid": [
+    {
+      "name": "version required",
+      "definition": "object_ref",
+      "value": {
+        "key": "lakehouse/run_stage/20261024T000000Z-01234567/g1/tries/hai_fixture_1/out/staging.duckdb",
+        "sha256": "d52b7fdfb1c9888861f8c5716a3a66ba62dce117e60a1ac6dc719430c1aed3de",
+        "size": 22,
+        "try_id": "hai_fixture_1"
+      },
+      "validator": "required",
+      "path": [],
+      "guard_path": [
+        "object_ref",
+        "required"
+      ],
+      "weakened_guard": [
+        "key",
+        "sha256",
+        "size",
+        "try_id"
+      ]
+    },
+    {
+      "name": "null version refused",
+      "definition": "object_ref",
+      "value": {
+        "key": "lakehouse/run_stage/20261024T000000Z-01234567/g1/tries/hai_fixture_1/out/staging.duckdb",
+        "version_id": "null",
+        "sha256": "d52b7fdfb1c9888861f8c5716a3a66ba62dce117e60a1ac6dc719430c1aed3de",
+        "size": 22,
+        "try_id": "hai_fixture_1"
+      },
+      "validator": "not",
+      "path": [
+        "version_id"
+      ],
+      "guard_path": [
+        "object_ref",
+        "properties",
+        "version_id",
+        "not"
+      ],
+      "weakened_guard": false
+    },
+    {
+      "name": "record over 32 MiB",
+      "definition": "record",
+      "value": {
+        "key": "lakehouse/run_stage/20261024T000000Z-01234567/g1/tries/hai_fixture_1/out/target/manifest.json",
+        "version_id": "synthetic_version_1",
+        "sha256": "d52b7fdfb1c9888861f8c5716a3a66ba62dce117e60a1ac6dc719430c1aed3de",
+        "size": 33554433,
+        "try_id": "hai_fixture_1",
+        "path": "target/manifest.json"
+      },
+      "validator": "maximum",
+      "path": [
+        "size"
+      ],
+      "guard_path": [
+        "record",
+        "properties",
+        "size",
+        "maximum"
+      ],
+      "weakened_guard": 33554433
+    },
+    {
+      "name": "parent path refused",
+      "definition": "record",
+      "value": {
+        "key": "lakehouse/run_stage/20261024T000000Z-01234567/g1/tries/hai_fixture_1/out/target/manifest.json",
+        "version_id": "synthetic_version_1",
+        "sha256": "d52b7fdfb1c9888861f8c5716a3a66ba62dce117e60a1ac6dc719430c1aed3de",
+        "size": 33554432,
+        "try_id": "hai_fixture_1",
+        "path": "../result.json"
+      },
+      "validator": "not",
+      "path": [
+        "path"
+      ],
+      "guard_path": [
+        "record",
+        "properties",
+        "path",
+        "not"
+      ],
+      "weakened_guard": false
+    },
+    {
+      "name": "generation positive",
+      "definition": "seal",
+      "value": {
+        "run_id": "20261024T000000Z-01234567",
+        "layer": "silver",
+        "generation": 0,
+        "sha256": "d52b7fdfb1c9888861f8c5716a3a66ba62dce117e60a1ac6dc719430c1aed3de",
+        "size": 22,
+        "source_key": "lakehouse/run_stage/20261024T000000Z-01234567/g1/tries/hai_fixture_1/out/staging.duckdb",
+        "source_version_id": "synthetic_version_1",
+        "validation_attempt": "validation_fixture_1"
+      },
+      "validator": "minimum",
+      "path": [
+        "generation"
+      ],
+      "guard_path": [
+        "seal",
+        "properties",
+        "generation",
+        "minimum"
+      ],
+      "weakened_guard": 0
+    },
+    {
+      "name": "validation attempt required",
+      "definition": "seal",
+      "value": {
+        "run_id": "20261024T000000Z-01234567",
+        "layer": "silver",
+        "generation": 1,
+        "sha256": "d52b7fdfb1c9888861f8c5716a3a66ba62dce117e60a1ac6dc719430c1aed3de",
+        "size": 22,
+        "source_key": "lakehouse/run_stage/20261024T000000Z-01234567/g1/tries/hai_fixture_1/out/staging.duckdb",
+        "source_version_id": "synthetic_version_1"
+      },
+      "validator": "required",
+      "path": [],
+      "guard_path": [
+        "seal",
+        "required"
+      ],
+      "weakened_guard": [
+        "run_id",
+        "layer",
+        "generation",
+        "sha256",
+        "size",
+        "source_key",
+        "source_version_id"
+      ]
+    },
+    {
+      "name": "both publishes required",
+      "definition": "catalog_inventory",
+      "value": {
+        "schema": 1,
+        "source_catalog": "mac",
+        "destination_catalog": "aws",
+        "publications": [
+          {
+            "layer": "silver",
+            "run_id": "20261024T010000Z-00000001",
+            "receipt_sha256": "3354fbca82f261becae2815d9cdfe8e31a4bc1532f69c24ff48d110394246aa5",
+            "reservation": "synthetic_aws_reader:silver"
+          },
+          {
+            "layer": "silver",
+            "run_id": "20261024T020000Z-00000002",
+            "receipt_sha256": "ab5ee6a01dc9d0d101ea193dbdf45d1b1325a489e3584e1d6148b08dcb96db11",
+            "reservation": "synthetic_aws_reader:gold"
+          }
+        ],
+        "tables": [
+          {
+            "namespace": "bronze",
+            "name": "source_table",
+            "table_uuid": "00000000-0000-4000-8000-000000000001",
+            "location": "s3://synthetic-bucket/lakehouse/bronze/source_table",
+            "metadata_location": "s3://synthetic-bucket/lakehouse/bronze/source_table/metadata/catalog_confirmed.json",
+            "metadata_version": "version_1",
+            "metadata_sha256": "4365307c508e2e9439932037f8933eb15705dbc85ce538c3c0359798dbac4c52",
+            "metadata_size": 968,
+            "snapshot_id": 202,
+            "current_snapshot_id": 202
+          },
+          {
+            "namespace": "gold",
+            "name": "gold_table",
+            "table_uuid": "00000000-0000-4000-8000-000000000002",
+            "location": "s3://synthetic-bucket/lakehouse/gold/gold_table",
+            "metadata_location": "s3://synthetic-bucket/lakehouse/gold/gold_table/metadata/catalog_confirmed.json",
+            "metadata_version": "version_1",
+            "metadata_sha256": "6c2ed131b80f39617d08ffc4dfc40fdb947973d9d2370e8847c25f61e8feacbe",
+            "metadata_size": 956,
+            "snapshot_id": 101,
+            "current_snapshot_id": 202
+          },
+          {
+            "namespace": "gold",
+            "name": "publish_runs",
+            "table_uuid": "00000000-0000-4000-8000-000000000003",
+            "location": "s3://synthetic-bucket/lakehouse/gold/publish_runs",
+            "metadata_location": "s3://synthetic-bucket/lakehouse/gold/publish_runs/metadata/catalog_confirmed.json",
+            "metadata_version": "version_1",
+            "metadata_sha256": "255e2082f5e27375088b2623c3f0926509206f426a16b29f8fb313d01cd4ad8e",
+            "metadata_size": 962,
+            "snapshot_id": 202,
+            "current_snapshot_id": 202
+          },
+          {
+            "namespace": "silver",
+            "name": "publish_runs",
+            "table_uuid": "00000000-0000-4000-8000-000000000004",
+            "location": "s3://synthetic-bucket/lakehouse/silver/publish_runs",
+            "metadata_location": "s3://synthetic-bucket/lakehouse/silver/publish_runs/metadata/catalog_confirmed.json",
+            "metadata_version": "version_1",
+            "metadata_sha256": "9dbf07f1877b5af273805a716e0313cd8626dbf7cbc984c9f79540fd8bbfa0d4",
+            "metadata_size": 968,
+            "snapshot_id": 202,
+            "current_snapshot_id": 202
+          },
+          {
+            "namespace": "silver",
+            "name": "silver_table",
+            "table_uuid": "00000000-0000-4000-8000-000000000005",
+            "location": "s3://synthetic-bucket/lakehouse/silver/silver_table",
+            "metadata_location": "s3://synthetic-bucket/lakehouse/silver/silver_table/metadata/catalog_confirmed.json",
+            "metadata_version": "version_1",
+            "metadata_sha256": "d8c7cd5a12b3f9e784a29c3fe103247a51520a8e07a331effe0b10f58d32789a",
+            "metadata_size": 968,
+            "snapshot_id": 101,
+            "current_snapshot_id": 202
+          }
+        ]
+      },
+      "validator": "contains",
+      "path": [
+        "publications"
+      ],
+      "guard_path": [
+        "catalog_inventory",
+        "properties",
+        "publications",
+        "allOf",
+        1,
+        "contains"
+      ],
+      "weakened_guard": {}
+    },
+    {
+      "name": "input hash required",
+      "definition": "input_map",
+      "value": [
+        {
+          "key": "lakehouse/run_stage/20261024T000000Z-01234567/g1/tries/hai_fixture_1/out/staging.duckdb",
+          "version_id": "synthetic_version_1",
+          "size": 22,
+          "path": "staging.duckdb"
+        }
+      ],
+      "validator": "required",
+      "path": [
+        0
+      ],
+      "guard_path": [
+        "input_map",
+        "items",
+        "required"
+      ],
+      "weakened_guard": [
+        "key",
+        "version_id",
+        "size",
+        "path"
+      ]
+    }
+  ]
+}
