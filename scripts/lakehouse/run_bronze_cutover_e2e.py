@@ -930,6 +930,12 @@ def owner_cli_rollback(env: Env) -> dict[str, bool]:
     restored = owner.run("rollback")
     checks["B2: the rollback then returns to mac_writer"] = restored["state"] == "mac_writer" and restored["phase"] == "P1"
     checks["B3: the rollback makes no AWS call"] = services.routes == 0
+    retried: list[Any] = []
+    refusal = code_of_cutover(lambda: retried.append(owner.run("rollback")))
+    checks["B4: a repeated rollback replays the stored command and returns the stored record"] = refusal == "" and retried == [restored]
+    checks["B4: the repeated rollback leaves authority and epoch unchanged"] = (
+        authority(env)["state"] == "mac_writer" and authority(env)["epoch"] == restored["epoch"]
+    )
     checks["F5: a freeze that reuses the cutover ID is refused"] = "already used" in code_of_cutover(lambda: owner.run("freeze", "--cutover", "cut1"))
     checks["a new cutover ID freezes again"] = owner.run("freeze", "--cutover", "cut2")["state"] == "freezing"
     return checks

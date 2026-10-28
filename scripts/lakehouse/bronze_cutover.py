@@ -555,7 +555,17 @@ def step_switch(services: Services, terminal: Terminal) -> dict[str, Any]:
 
 
 def step_rollback(services: Services, terminal: Terminal, seconds: float, per_table: float) -> dict[str, Any]:
-    """Return to Mac authority before any AWS writer was admitted; from P2 to P4 the Mac source is recompared first (B1 to B4)."""
+    """Return to Mac authority before any AWS writer was admitted; from P2 to P4 the Mac source is recompared first (B1 to B4).
+
+    A repeat after the rollback already restored ``mac_writer`` resends this cutover's stored final command, as a repeated switch does, so a lost
+    reply gets the stored record back instead of a state refusal.
+    """
+    current = current_authority()
+    if current is not None and current["state"] == "mac_writer" and current["cutover_id"] != INITIAL_CUTOVER:
+        cutover = str(current["cutover_id"])
+        final = folder_of(services, cutover) / "commands" / f"{cutover}_mac_writer.json"
+        if final.exists():
+            return send(terminal, dict(json.loads(final.read_bytes())))
     record = require_state("freezing", "source_fenced", "refreshing", "aws_writer", "rollback_pending", "source_verify")
     cutover = record["cutover_id"]
     if record["state"] not in ("rollback_pending", "source_verify"):

@@ -323,6 +323,8 @@ layer writes anywhere until AWS writers qualify. Mac reads are stale until the r
 through `source_verify`, which recaptures the Mac catalog and requires the frozen inventory digest. AWS registrations
 stay in place and are adopted as `unchanged` by a later retry. The launcher refuses a rollback once an AWS writer was
 admitted (P5).
+Repeating `rollback` after it restored `mac_writer` resends this cutover's stored final command and returns the stored
+record, with authority and epoch unchanged.
 
 The E2E uses a launcher test registry with fake Docker, in-memory catalog and object stand-ins, a loopback Polaris
 stand-in and the real owned relay process. It makes no AWS, Session Manager or Docker call, so the tunnel start, the
