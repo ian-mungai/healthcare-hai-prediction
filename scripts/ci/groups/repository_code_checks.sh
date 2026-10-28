@@ -17,5 +17,6 @@ repository_code_checks() {
   timed "repository_code_checks: check samples E2E" "$python_bin" -m scripts.quality.run_checks_e2e
   timed "repository_code_checks: documentation review E2E" "$python_bin" -m scripts.quality.run_documentation_review_e2e
   timed "repository_code_checks: CI groups selection E2E" "$python_bin" -m scripts.quality.run_ci_groups_e2e --selection-only
+  timed "repository_code_checks: scratch worktree E2E" "$python_bin" -m scripts.quality.run_scratch_worktree_e2e
   timed "repository_code_checks: CI reuse E2E" "$python_bin" -m scripts.quality.run_ci_reuse_e2e
 }

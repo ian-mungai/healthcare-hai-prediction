@@ -1283,6 +1283,19 @@
       "path": "scripts/lakehouse/storage_metadata_comparison.py",
       "problem": "whose program the check cannot prove",
       "reason": "duckdb_binary() resolves only ROOT/.tools/bin/duckdb and checks the committed 1.5.6 pin. This call uses -readonly on the retained local database, -json, -init /dev/null and metadata-only SQL. Timeout is 60 seconds. No shell, Docker command, socket or Engine API is used."
+    },
+    {
+      "path": "scripts/quality/run_scratch_worktree_e2e.py",
+      "line": 142,
+      "code_sha256": "930ba1acb68f1d905d4be5b7a78587309476a3874b5d40c6f896a97b3238558d",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "88a26edf954fd75951e8e3fc7fa6fcdca839e844b760e3197d585eaf2f68bb5b",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
+        "scripts/quality/scratch_worktree.py": "sha256:dfeeb949842f5643170c9c9203ffee6b28c5496bf717e04e8e942b529450a347"
+      },
+      "reason": "The literal bash program runs SHELL_HARNESS, which extracts only scratch declarations and cleanup from scripts/acquisition/run_checks_ci_e2e.sh. Its fixed actions use Git, chmod and removal in throwaway repositories and start no container."
     }
   ]
 }

@@ -6,7 +6,7 @@ of known content, unusable ranges, staged changes (a deletion and a rename inclu
 invalid input. Real runs of the CI entry check that the unconditional gates run in every part (also with an empty selection)
 and before the launcher E2E, that a failing gate fails every part, that the full Markdown lint runs as a gate in every scope
 and that the entry plan alone (``CI_LIST_ONLY=1``) runs nothing.
-A static case requires the group functions in scripts/ci/groups/ to start the secret store E2E and the gold writer set-up mode.
+A static case requires the group functions in scripts/ci/groups/ to start the secret store E2E, the gold writer set-up mode and the scratch worktree E2E.
 Body-file cases: a staged edit to each body file selects its group (and the layers downstream of it) and the repository group, never another group;
 the pull request template selects none and the dispatcher, the workflow and the setup action select every group; planted drift for each rule of the guard
 scripts/quality/ci_group_files.py fails with the file and group named. Dry-run cases run the dispatcher with a stand-in ``timed`` that only prints the
@@ -109,6 +109,8 @@ COPIED = (
     "tests/orchestration/fixtures/combined_dag.py",
     RUNNER,
     "scripts/quality/scratch_worktree.py",
+    "scripts/quality/run_scratch_worktree_e2e.py",
+    "scripts/acquisition/run_checks_ci_e2e.sh",
     "scripts/quality/run_documentation_review_e2e.py",
     "scripts/quality/typecheck.py",
     "scripts/run_ci.sh",
@@ -846,6 +848,12 @@ def reader_scan_case(tracked: set[str]) -> dict[str, Any]:
 
 
 HOSTED_ENTRY_POINTS = {
+    "repository_code_checks": (
+        (
+            "scripts.quality.run_scratch_worktree_e2e",
+            ("scripts/quality/run_scratch_worktree_e2e.py", "scripts/quality/scratch_worktree.py", "scripts/acquisition/run_checks_ci_e2e.sh"),
+        ),
+    ),
     "configuration_checks": (
         ("scripts.infrastructure.run_secret_store_e2e", ("scripts/infrastructure/run_secret_store_e2e.py", "scripts/infrastructure/secret_store.py")),
     ),
