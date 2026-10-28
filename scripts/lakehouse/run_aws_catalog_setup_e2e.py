@@ -26,11 +26,12 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from orchestration import ecs_target
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.infrastructure import secret_store
 from scripts.infrastructure.secret_store_stand_in import CIPHERTEXT_MARKER, StandIn
 from scripts.lakehouse import aws_catalog_setup as setup
-from scripts.lakehouse import catalog, polaris_writer, principal_credentials
+from scripts.lakehouse import catalog, polaris_writer, principal_credentials, run_lock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUCKET = "example-lakehouse-bucket"
@@ -175,6 +176,11 @@ class Polaris:
             return 201, None, False
         if path.startswith(f"{roles}/") and method == "GET":
             return (200, {"name": path.rsplit("/", 1)[1]}, False) if path.rsplit("/", 1)[1] in self.grants else (404, None, False)
+        if path.startswith(f"{management}/principal-roles/") and path.endswith(f"/catalog-roles/{setup.CATALOG}") and method == "GET":
+            name = path.removeprefix(f"{management}/principal-roles/").split("/")[0]
+            if name not in self.principal_roles:
+                return 404, None, False
+            return 200, {"roles": [{"name": role} for role in sorted(self.principal_roles[name])]}, False
         if path.startswith(f"{management}/principal-roles/") and path.endswith(f"/catalog-roles/{setup.CATALOG}") and method == "PUT":
             name = path.removeprefix(f"{management}/principal-roles/").split("/")[0]
             if name not in self.principal_roles or body["catalogRole"]["name"] not in self.grants:
@@ -193,6 +199,8 @@ class Polaris:
                 return 404, None, False
             if len(rest) == 1 and method == "GET":
                 return 200, {"name": name}, False
+            if rest[1:] == ["principal-roles"] and method == "GET":
+                return 200, {"roles": [{"name": role} for role in sorted(self.assigned.get(name, set()))]}, False
             if rest[1:] == ["reset"] and method == "POST":
                 return 200, {"credentials": self.issue(name)}, False
             if rest[1:] == ["principal-roles"] and method == "PUT":
@@ -230,6 +238,7 @@ class Services:
         self.state = state or STATE_ROOT / secrets.token_hex(6)
         self.approvals = self.state / "namespace_approvals"
         self.locks = self.state / "principal_locks"
+        self.registry = run_lock.Registry(self.state / "registry", "test")
         self.decryption: list[bool] = []
         self.closed: list[bool] = []
 
@@ -778,6 +787,52 @@ def case_check_grants(_: Path) -> dict[str, bool]:
         }
 
 
+def seed_registry(services: Services, live: bool) -> None:
+    """A test launcher registry with one attempt whose cloud try is live, or confirmed complete."""
+    now = int(time.time())
+    attempt: dict[str, Any] = {"id": "a1", "deadline_utc": now + 3600}
+    ecs_target.initialize(attempt, "ecs", now, 1)
+    placement = ecs_target.reserve(
+        attempt, ecs_target.Size(1024, 2048, 21), ecs_target.Decision("dispatch", "ecs", "aws_first", "FARGATE"), now, ecs_target.Usage()
+    )
+    if not live:
+        ecs_target.fenced(attempt, str(placement["try_id"]), now, no_start=True)
+    folder = services.registry.path
+    folder.mkdir(parents=True, exist_ok=True)
+    registry_id = secrets.token_hex(8)
+    (folder / "registry_id").write_text(json.dumps({"registry_id": registry_id, "kind": "test"}) + "\n")
+    state = run_lock.empty_state(registry_id, run_lock.LAUNCHER_SCHEMA)
+    state["attempts"] = {"a1": attempt}
+    (folder / "registry.json").write_text(json.dumps(state) + "\n")
+
+
+def case_live_writer_try(_: Path) -> dict[str, bool]:
+    """P5: while the launcher registry holds a cloud try without a confirmed end, or cannot prove there is none, a rerun that would reset the
+    pair stops before any reset; the live pair keeps working. With every try confirmed ended the reset goes ahead."""
+    with catalog_world() as (ssm, polaris, root):
+        polaris.namespaces |= set(setup.namespace_set("bronze"))
+        services = Services(ssm, polaris)
+        first = principal(services, root, "bronze")
+        held = live_pair(polaris, "bronze")
+        del ssm.values[setup.configured_pairs()["bronze"][1]]
+        seed_registry(services, live=True)
+        live = principal(services, root, "bronze")
+        kept = live_pair(polaris, "bronze") == held
+        (services.registry.path / "registry.json").write_text("{not json")
+        unreadable = principal(services, root, "bronze")
+        kept = kept and live_pair(polaris, "bronze") == held
+        seed_registry(services, live=False)
+        ended = principal(services, root, "bronze")
+        return {
+            "the first run succeeds": first[0] == 0,
+            "a live cloud try stops the rerun": live[0] == 1 and "(writer_try)" in live[2] and "without a confirmed end" in live[2],
+            "an unreadable registry stops the rerun": unreadable[0] == 1 and "(writer_try)" in unreadable[2],
+            "the live pair was never reset": kept,
+            "with every try ended the pair is reset": ended[0] == 0 and (outcome(ended[1]) or {}).get("credentials") == "credentials reset",
+            "the stored pair is then the live pair": stored_pair(ssm, "bronze") == live_pair(polaris, "bronze"),
+        }
+
+
 CASES: dict[str, Case] = {
     "catalog_created": case_catalog_created,
     "catalog_rerun": case_catalog_rerun,
@@ -807,6 +862,7 @@ CASES: dict[str, Case] = {
     "catalog_missing": case_catalog_missing,
     "principal_lock": case_principal_lock,
     "check_grants": case_check_grants,
+    "live_writer_try": case_live_writer_try,
 }
 
 
@@ -850,6 +906,7 @@ MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[A
     ),
     "the approval is not recorded": ("namespace_approval", lambda: mock.patch.object(setup, "record_approval", lambda folder, approval: None)),
     "a working pair is always reset": ("rerun_keeps_pair", lambda: mock.patch.object(principal_credentials, "pair_accepted", lambda *a: False)),
+    "live writer tries are not checked": ("live_writer_try", lambda: mock.patch.object(setup, "no_live_writer_try", lambda *a, **k: contextlib.nullcontext())),
 }
 
 
