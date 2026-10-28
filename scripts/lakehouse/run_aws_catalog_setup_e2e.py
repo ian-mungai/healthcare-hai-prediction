@@ -1027,6 +1027,67 @@ def case_stored_pair_mismatch(_: Path) -> dict[str, bool]:
         }
 
 
+def case_late_server_write(_: Path) -> dict[str, bool]:
+    """P4 and P5, the review's reproduction with the real SDK timeouts: both attempts of a secret write are held on the server past their client
+    read timeout, a rerun stores a working pair, and the held writes then commit. Inspection detects the replaced pair and a rerun repairs it."""
+    secret_name = setup.configured_pairs()["reader"][1]
+    args = ["principal", "--identity", "reader", "--instance", INSTANCE]
+    release, condition = threading.Event(), threading.Condition()
+    held: list[bool] = []
+    finished: list[bool] = []
+    armed = [True]
+
+    class DelayedWrites(StandInHandler):
+        def do_POST(self) -> None:
+            payload = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            body = json.loads(payload or b"{}")
+            delayed = armed[0] and self.headers.get("X-Amz-Target", "").endswith(".PutParameter") and body.get("Name") == secret_name
+            if delayed:
+                with condition:
+                    held.append(True)
+                    condition.notify_all()
+                release.wait(CASE_SECONDS)
+            original, self.rfile = self.rfile, io.BytesIO(payload)
+            try:
+                super().do_POST()
+            finally:
+                self.rfile = original
+                if delayed:
+                    with condition:
+                        finished.append(True)
+                        condition.notify_all()
+
+    with catalog_world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        principal(services, root, "reader")
+        del ssm.values[secret_name]
+        before = ssm.server.RequestHandlerClass
+        ssm.server.RequestHandlerClass = DelayedWrites
+        try:
+            first = run_main(["--seconds", "30", *args], services)
+            armed[0] = False
+            second = principal(services, root, "reader")
+            release.set()
+            end = time.monotonic() + STALL_SECONDS
+            with condition:
+                while len(finished) < len(held) and time.monotonic() < end:
+                    condition.wait(end - time.monotonic())
+        finally:
+            release.set()
+            ssm.server.RequestHandlerClass = before
+        replaced = stored_pair(ssm, "reader") != live_pair(polaris, "reader")
+        inspected = outcome(call(["inspect", "--instance", INSTANCE], services, root)[1]) or {}
+        repaired = principal(services, root, "reader")
+        return {
+            "the first run fails after its client timeouts": first[0] == 1 and len(held) == 2,
+            "the rerun succeeds before the held writes commit": second[0] == 0,
+            "the held writes commit late and replace the pair": len(finished) == len(held) and replaced,
+            "inspection reports the late write as a stored pair mismatch": (inspected.get("principals") or {}).get("reader") == "differs"
+            and (inspected.get("causes") or {}).get("reader") == "stored_pair_mismatch",
+            "a rerun repairs the pair": repaired[0] == 0 and stored_pair(ssm, "reader") == live_pair(polaris, "reader"),
+        }
+
+
 @contextlib.contextmanager
 def slow_peer(kind: str) -> Iterator[int]:
     """A loopback peer that reads the request, sends the headers of its ``SLOW_REPLIES`` entry at once, then the rest one byte every 0.04 s."""
@@ -1161,6 +1222,7 @@ CASES: dict[str, Case] = {
     "request_expiry": case_request_expiry,
     "late_credential_write": case_late_credential_write,
     "stored_pair_mismatch": case_stored_pair_mismatch,
+    "late_server_write": case_late_server_write,
     "missing_role_assignment": case_missing_role_assignment,
     "lock_before_changes": case_lock_before_changes,
     "check_never_decrypts": case_check_never_decrypts,
