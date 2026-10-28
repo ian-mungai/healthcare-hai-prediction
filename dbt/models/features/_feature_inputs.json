@@ -44,6 +44,11 @@
   "assert_operations_measures_as_of_start": ["int_spine_operations_measures"],
   "assert_registry_controls_identity": ["cost_report_measures_recipe", "feature_bridge_acs_svi_measures", "feature_bridge_cost_report_measures", "feature_bridge_county_health_measures", "feature_bridge_geography_measures", "feature_bridge_hai_outcome_measures", "feature_bridge_hhs_onc_measures", "feature_bridge_impact_measures", "feature_bridge_income_labor_measures", "feature_bridge_mmd_conditions", "feature_bridge_mup_measures", "feature_bridge_occmix_measures", "feature_bridge_ownership_measures", "feature_bridge_registry_measure_sources", "feature_bridge_shortage_measures", "feature_bridge_validation_measures", "frozen_registry_controls", "hhs_onc_measures_recipe", "impact_measures_recipe", "mmd_conditions_recipe", "mup_measures_recipe", "occmix_measures_recipe", "shortage_measures_recipe"],
   "assert_spine_as_of_window_start": ["int_hospital_spine"],
+  "assert_spine_classification_as_of_start": ["fct_pos_snapshot", "int_hospital_spine"],
+  "assert_spine_county_as_of_start": ["bridge_zip_county", "fct_pos_snapshot", "int_hospital_spine"],
+  "assert_spine_planning_region_as_of_start": ["bridge_zip_county", "int_hospital_spine"],
+  "assert_spine_state_as_of_start": ["fct_enrollment_release", "fct_pos_snapshot", "int_hospital_spine"],
+  "assert_spine_zip_as_of_start": ["fct_enrollment_release", "fct_pos_snapshot", "int_hospital_spine"],
   "assert_validation_control_identity": ["dim_measure", "feature_bridge_validation_measures", "frozen_validation_controls", "int_spine_validation_measures"],
   "assert_validation_measures_overlap": ["int_spine_validation_measures"]
  }
