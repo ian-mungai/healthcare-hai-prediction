@@ -79,16 +79,20 @@ def cases() -> list[Case]:
         add(f"execution excludes single parameter {name}", "execution", "ssm:GetParameter", PARAMETER + name, False)
         for actor in ("writer", "reader"):
             add(f"{actor} cannot fetch parameter {name}", actor, "ssm:GetParameters", PARAMETER + name, False)
+    # The AWS catalog setup runs under the project user: it writes and reads back each configured AWS Polaris pair name, one name at a time.
     for name in ("aws_reader_id", "aws_reader_secret"):
-        add(f"project reads reader only {name}", "project", "ssm:GetParameter", PARAMETER + name, True)
+        add(f"project reads reader {name}", "project", "ssm:GetParameter", PARAMETER + name, True)
         add(f"project cannot bulk-read reader {name}", "project", "ssm:GetParameters", PARAMETER + name, False)
-        add(f"project cannot write reader {name}", "project", "ssm:PutParameter", PARAMETER + name, False)
+        add(f"project writes reader {name}", "project", "ssm:PutParameter", PARAMETER + name, True)
     for principal in ("e2e", "silver", "gold", "features", "bronze"):
         for suffix in ("client_id", "client_secret"):
             name = f"aws_polaris_{principal}_{suffix}"
             for folder in (PARAMETER, "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/"):
+                configured = principal != "features" and folder.endswith("/healthcare_hai_prediction/")
                 for action in ("ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:PutParameter"):
-                    add(f"project excludes writer {folder.rsplit('/', 2)[-2]} {name} {action}", "project", action, folder + name, False)
+                    allowed = configured and action in ("ssm:GetParameter", "ssm:PutParameter")
+                    label = "sets up" if allowed else "excludes"
+                    add(f"project {label} writer {folder.rsplit('/', 2)[-2]} {name} {action}", "project", action, folder + name, allowed)
             if principal != "e2e":
                 add(f"execution excludes production {name}", "execution", "ssm:GetParameters", PARAMETER + name, False)
     for resource in (

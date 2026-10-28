@@ -402,3 +402,123 @@ variable "aws_polaris_reader_client_secret_name" {
     error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }
+
+variable "aws_polaris_e2e_client_id_name" {
+  description = "Name of the dedicated AWS qualification client ID parameter. The owner issues its value outside Terraform."
+  type        = string
+  default     = "/healthcare_hai_prediction/aws_polaris_e2e_client_id"
+  nullable    = false
+
+  validation {
+    condition = (
+      length(var.aws_polaris_e2e_client_id_name) <= 512 &&
+      can(regex("^/(?:[A-Za-z0-9_]+/){0,14}aws_polaris_e2e_client_id$", var.aws_polaris_e2e_client_id_name)) &&
+      !can(regex("^/(?i:aws|ssm)", var.aws_polaris_e2e_client_id_name))
+    )
+    error_message = "Use the dedicated aws_polaris_e2e_client_id parameter path with at most 15 underscore-compatible parts and 512 characters."
+  }
+}
+
+variable "aws_polaris_e2e_client_secret_name" {
+  description = "Name of the dedicated AWS qualification client secret parameter. No secret value enters Terraform."
+  type        = string
+  default     = "/healthcare_hai_prediction/aws_polaris_e2e_client_secret"
+  nullable    = false
+
+  validation {
+    condition = (
+      length(var.aws_polaris_e2e_client_secret_name) <= 512 &&
+      can(regex("^/(?:[A-Za-z0-9_]+/){0,14}aws_polaris_e2e_client_secret$", var.aws_polaris_e2e_client_secret_name)) &&
+      !can(regex("^/(?i:aws|ssm)", var.aws_polaris_e2e_client_secret_name))
+    )
+    error_message = "Use the dedicated aws_polaris_e2e_client_secret parameter path with at most 15 underscore-compatible parts and 512 characters."
+  }
+}
+
+variable "aws_polaris_bronze_client_id_name" {
+  description = "Name of the bronze writer client ID parameter. The owner issues its value outside Terraform."
+  type        = string
+  default     = "/healthcare_hai_prediction/aws_polaris_bronze_client_id"
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^/[A-Za-z0-9_]+(/[A-Za-z0-9_]+)*/aws_polaris_bronze_client_id$", var.aws_polaris_bronze_client_id_name))
+    error_message = "Use the dedicated aws_polaris_bronze_client_id parameter name."
+  }
+}
+
+variable "aws_polaris_bronze_client_secret_name" {
+  description = "Name of the bronze writer client secret parameter. No secret value enters Terraform."
+  type        = string
+  default     = "/healthcare_hai_prediction/aws_polaris_bronze_client_secret"
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^/[A-Za-z0-9_]+(/[A-Za-z0-9_]+)*/aws_polaris_bronze_client_secret$", var.aws_polaris_bronze_client_secret_name))
+    error_message = "Use the dedicated aws_polaris_bronze_client_secret parameter name."
+  }
+}
+
+variable "aws_polaris_silver_client_id_name" {
+  description = "Name of the AWS silver writer client ID parameter, separate from the Mac polaris_silver_* pair. The owner issues its value through the catalog setup."
+  type        = string
+  default     = "/healthcare_hai_prediction/aws_polaris_silver_client_id"
+  nullable    = false
+
+  validation {
+    condition = (
+      length(var.aws_polaris_silver_client_id_name) <= 512 &&
+      can(regex("^/(?:[A-Za-z0-9_]+/){0,14}aws_polaris_silver_client_id$", var.aws_polaris_silver_client_id_name)) &&
+      !can(regex("^/(?i:aws|ssm)", var.aws_polaris_silver_client_id_name))
+    )
+    error_message = "Use the dedicated aws_polaris_silver_client_id parameter path with at most 15 underscore-compatible parts and 512 characters."
+  }
+}
+
+variable "aws_polaris_silver_client_secret_name" {
+  description = "Name of the AWS silver writer client secret parameter, separate from the Mac polaris_silver_* pair. No secret value enters Terraform."
+  type        = string
+  default     = "/healthcare_hai_prediction/aws_polaris_silver_client_secret"
+  nullable    = false
+
+  validation {
+    condition = (
+      length(var.aws_polaris_silver_client_secret_name) <= 512 &&
+      can(regex("^/(?:[A-Za-z0-9_]+/){0,14}aws_polaris_silver_client_secret$", var.aws_polaris_silver_client_secret_name)) &&
+      !can(regex("^/(?i:aws|ssm)", var.aws_polaris_silver_client_secret_name))
+    )
+    error_message = "Use the dedicated aws_polaris_silver_client_secret parameter path with at most 15 underscore-compatible parts and 512 characters."
+  }
+}
+
+variable "aws_polaris_gold_client_id_name" {
+  description = "Name of the AWS gold writer client ID parameter, separate from the Mac polaris_gold_* pair. The owner issues its value through the catalog setup."
+  type        = string
+  default     = "/healthcare_hai_prediction/aws_polaris_gold_client_id"
+  nullable    = false
+
+  validation {
+    condition = (
+      length(var.aws_polaris_gold_client_id_name) <= 512 &&
+      can(regex("^/(?:[A-Za-z0-9_]+/){0,14}aws_polaris_gold_client_id$", var.aws_polaris_gold_client_id_name)) &&
+      !can(regex("^/(?i:aws|ssm)", var.aws_polaris_gold_client_id_name))
+    )
+    error_message = "Use the dedicated aws_polaris_gold_client_id parameter path with at most 15 underscore-compatible parts and 512 characters."
+  }
+}
+
+variable "aws_polaris_gold_client_secret_name" {
+  description = "Name of the AWS gold writer client secret parameter, separate from the Mac polaris_gold_* pair. No secret value enters Terraform."
+  type        = string
+  default     = "/healthcare_hai_prediction/aws_polaris_gold_client_secret"
+  nullable    = false
+
+  validation {
+    condition = (
+      length(var.aws_polaris_gold_client_secret_name) <= 512 &&
+      can(regex("^/(?:[A-Za-z0-9_]+/){0,14}aws_polaris_gold_client_secret$", var.aws_polaris_gold_client_secret_name)) &&
+      !can(regex("^/(?i:aws|ssm)", var.aws_polaris_gold_client_secret_name))
+    )
+    error_message = "Use the dedicated aws_polaris_gold_client_secret parameter path with at most 15 underscore-compatible parts and 512 characters."
+  }
+}

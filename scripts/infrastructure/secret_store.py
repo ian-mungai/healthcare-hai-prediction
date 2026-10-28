@@ -60,6 +60,11 @@ SHARED = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")
 SHARED_VARIABLES = ("census_secret_name", "bls_secret_name", "hud_secret_name", "jev_secret_name")
 READ_ONLY_VARIABLES = ("airflow_admin_secret_name",)
 JOB_READER_VARIABLES = ("aws_polaris_reader_client_id_name", "aws_polaris_reader_client_secret_name")
+# The ten AWS Polaris pair names: outside the 14 managed names, written only by the AWS catalog setup (scripts/lakehouse/aws_catalog_setup.py).
+AWS_POLARIS_VARIABLES = (
+    *JOB_READER_VARIABLES,
+    *(f"aws_polaris_{identity}_client_{part}_name" for identity in ("e2e", "bronze", "silver", "gold") for part in ("id", "secret")),
+)
 ROLE_VARIABLES = ("lakehouse_reader_role_name", "lakehouse_writer_role_name")
 LEGACY_VARIABLES = ("airflow_admin_legacy_secret_name",)
 DEPLOYMENT = "infra/deployment.auto.tfvars.json"
@@ -113,7 +118,7 @@ def terraform_variables(variables: Path) -> dict[str, str]:
     """The string default of every root variable in a ``variables.tf``, by variable name, in file order; a variable without a string default is left out."""
     text = variables.read_text()
     found: dict[str, str] = {}
-    for block in re.finditer(r'^variable "([a-z_]+)" \{\n(.*?)^\}', text, flags=re.DOTALL | re.MULTILINE):
+    for block in re.finditer(r'^variable "([a-z0-9_]+)" \{\n(.*?)^\}', text, flags=re.DOTALL | re.MULTILINE):
         default = re.search(r'^\s*default\s*=\s*"([^"]*)"', block.group(2), flags=re.MULTILINE)
         if default:
             found[block.group(1)] = default.group(1)
@@ -122,11 +127,11 @@ def terraform_variables(variables: Path) -> dict[str, str]:
 
 def terraform_defaults(root: Path) -> list[str]:
     """The default of every secret variable in ``infra/iam/variables.tf`` that is under the project prefix, in file order, without the
-    shared administrator password and the AWS reader pair, which the project only reads."""
+    shared administrator password, which the project only reads, and the ten AWS Polaris pair names, which have their own statements."""
     return [
         value
         for name, value in terraform_variables(root / VARIABLES).items()
-        if value.startswith(PREFIX) and name not in (*READ_ONLY_VARIABLES, *JOB_READER_VARIABLES)
+        if value.startswith(PREFIX) and name not in (*READ_ONLY_VARIABLES, *AWS_POLARIS_VARIABLES)
     ]
 
 
@@ -134,14 +139,14 @@ def policy_names(variables: Path) -> dict[str, list[str]]:
     """The names the project user's policy files grant, read from the variable defaults and sorted: the placeholder name of each list.
 
     ``SHARED_SECRET_NAME`` is the four Secrets Manager keys (read only), ``READ_PARAMETER_NAME`` the 15 parameters the user may read and
-    ``MANAGED_PARAMETER_NAME`` the 14 it may also put. The AWS reader pair has its own read-only statement and single-name placeholders.
+    ``MANAGED_PARAMETER_NAME`` the 14 it may also put. The ten AWS Polaris pair names have their own statements and single-name placeholders.
     These variable defaults are the only source of the names: no policy file lists one.
     """
     defaults = terraform_variables(variables)
     missing = [name for name in (*SHARED_VARIABLES, *READ_ONLY_VARIABLES) if name not in defaults]
     if missing:
         raise SecretStoreError(f"{variables.name} has no default for: {', '.join(missing)}")
-    managed = [value for name, value in defaults.items() if value.startswith(PREFIX) and name not in (*READ_ONLY_VARIABLES, *JOB_READER_VARIABLES)]
+    managed = [value for name, value in defaults.items() if value.startswith(PREFIX) and name not in (*READ_ONLY_VARIABLES, *AWS_POLARIS_VARIABLES)]
     names = {
         "SHARED_SECRET_NAME": sorted(defaults[name] for name in SHARED_VARIABLES),
         "READ_PARAMETER_NAME": sorted([*(defaults[name] for name in READ_ONLY_VARIABLES), *managed]),
@@ -160,10 +165,10 @@ def variable_names(variables: Path) -> dict[str, str]:
     stack passes the same variables to its own policy templates, so the Python checks and Terraform read one default per name.
     """
     defaults = terraform_variables(variables)
-    missing = [name for name in (*ROLE_VARIABLES, *JOB_READER_VARIABLES, *LEGACY_VARIABLES) if name not in defaults]
+    missing = [name for name in (*ROLE_VARIABLES, *AWS_POLARIS_VARIABLES, *LEGACY_VARIABLES) if name not in defaults]
     if missing:
         raise SecretStoreError(f"{variables.name} has no default for: {', '.join(missing)}")
-    wanted = [name for name, value in defaults.items() if name in (*ROLE_VARIABLES, *JOB_READER_VARIABLES, *LEGACY_VARIABLES) or value.startswith(PREFIX)]
+    wanted = [name for name, value in defaults.items() if name in (*ROLE_VARIABLES, *AWS_POLARIS_VARIABLES, *LEGACY_VARIABLES) or value.startswith(PREFIX)]
     return {name.upper(): defaults[name] for name in wanted}
 
 

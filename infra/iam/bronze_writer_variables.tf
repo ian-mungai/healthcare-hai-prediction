@@ -23,27 +23,3 @@ variable "bronze_qualification_collection" {
     error_message = "Use a mapped publisher/collection name or leave the unprepared candidate empty."
   }
 }
-
-variable "aws_polaris_bronze_client_id_name" {
-  description = "Name of the bronze writer client ID parameter. The owner issues its value outside Terraform."
-  type        = string
-  default     = "/healthcare_hai_prediction/aws_polaris_bronze_client_id"
-  nullable    = false
-
-  validation {
-    condition     = can(regex("^/[A-Za-z0-9_]+(/[A-Za-z0-9_]+)*/aws_polaris_bronze_client_id$", var.aws_polaris_bronze_client_id_name))
-    error_message = "Use the dedicated aws_polaris_bronze_client_id parameter name."
-  }
-}
-
-variable "aws_polaris_bronze_client_secret_name" {
-  description = "Name of the bronze writer client secret parameter. No secret value enters Terraform."
-  type        = string
-  default     = "/healthcare_hai_prediction/aws_polaris_bronze_client_secret"
-  nullable    = false
-
-  validation {
-    condition     = can(regex("^/[A-Za-z0-9_]+(/[A-Za-z0-9_]+)*/aws_polaris_bronze_client_secret$", var.aws_polaris_bronze_client_secret_name))
-    error_message = "Use the dedicated aws_polaris_bronze_client_secret parameter name."
-  }
-}

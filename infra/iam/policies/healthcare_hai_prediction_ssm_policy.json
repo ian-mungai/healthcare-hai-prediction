@@ -64,12 +64,23 @@
       "Resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:session/${aws:username}-*"
     },
     {
-      "Sid": "ReadAwsReaderPair",
+      "Sid": "SetUpAwsPolarisPairs",
       "Effect": "Allow",
-      "Action": "ssm:GetParameter",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:PutParameter"
+      ],
       "Resource": [
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_READER_CLIENT_ID_NAME}",
-        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_READER_CLIENT_SECRET_NAME}"
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_READER_CLIENT_SECRET_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_E2E_CLIENT_ID_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_E2E_CLIENT_SECRET_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_BRONZE_CLIENT_ID_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_BRONZE_CLIENT_SECRET_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SILVER_CLIENT_ID_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_SILVER_CLIENT_SECRET_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_GOLD_CLIENT_ID_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AWS_POLARIS_GOLD_CLIENT_SECRET_NAME}"
       ]
     },
     {
