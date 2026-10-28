@@ -26,7 +26,7 @@ namespace set before it creates anything; for ``bronze`` and ``e2e`` the approva
 grants the tool lists the catalog role's grants and compares them with the plan; any extra, missing or duplicate grant stops it before the
 catalog role is assigned (P7). The issued pair goes from the Polaris reply straight to Parameter Store (``principal_credentials``), so a
 stored pair that Polaris accepts is kept, and a missing, half-written or refused pair is reset (P3 to P5). Updates of one principal run one at
-a time under a lock in the main checkout (P11).
+a time under a lock in the main checkout, taken within the step's deadline before any change (P11).
 """
 
 from __future__ import annotations
@@ -136,6 +136,25 @@ def writable_names() -> frozenset[str]:
 
 class PairVault(secret_store.SecretStore):
     """Parameter Store through the project profile: writes only the ten AWS Polaris pair names and reads those and the Polaris root secret."""
+
+    def __init__(self, parameters: Any, deadline: float | None = None, clock: Clock = time.monotonic) -> None:
+        super().__init__(parameters)
+        self.deadline, self.clock = deadline, clock
+
+    def bounded(self, deadline: float, clock: Clock = time.monotonic) -> PairVault:
+        """The same store with every pair read and write held to the absolute deadline."""
+        return PairVault(self.parameters, deadline, clock)
+
+    def within_deadline[T](self, call: Callable[[], T], what: str) -> T:
+        if self.deadline is None:
+            return call()
+        return secret_store.within(min(SECRET_SECONDS, check_deadline(self.deadline, self.clock)), call, what)
+
+    def find(self, name: str) -> str | None:
+        return self.within_deadline(lambda: secret_store.SecretStore.find(self, name), f"reading {name}")
+
+    def put(self, name: str, value: str) -> None:
+        self.within_deadline(lambda: secret_store.SecretStore.put(self, name, value), f"writing {name}")
 
     @staticmethod
     def check(name: str, write: bool = False) -> None:
@@ -662,7 +681,13 @@ def ensure_principal(
     try:
         with no_live_writer_try(registry, deadline=hold, clock=request.clock):
             outcome = principal_credentials.ensure_credentials(
-                principal=role, names=configured_pairs()[identity], vault=vault, request=request.bounded(hold), access=access, check=check, lock_path=lock_path
+                principal=role,
+                names=configured_pairs()[identity],
+                vault=vault.bounded(hold, request.clock),
+                request=request.bounded(hold),
+                access=access,
+                check=check,
+                lock_path=lock_path,
             )
     except principal_credentials.CredentialError as error:
         raise SetupError("credentials", str(error)) from None
@@ -679,20 +704,40 @@ def ensure_principal(
 
 
 def step_principal(services: Services, identity: str, instance: str, approval_id: str | None, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
-    """Set up one AWS identity through the route; the approval is checked against the record before any request."""
+    """Set up one AWS identity through the route; the approval is checked against the record before any request.
+
+    The principal's lock is taken first, within the step's deadline, so no approval, namespace, role, assignment or pair changes before it
+    (P11). The credential step's own lock is then always free.
+    """
     if identity not in PRINCIPALS:
         raise SetupError("principal", f"unknown identity {identity}")
     deadline = clock() + seconds
     approval = approval_for(services.approvals, identity, approval_id)
-    vault = services.vault()
-    secret = read_root(vault, min(SECRET_SECONDS, check_deadline(deadline, clock)))
-    with services.remote(instance, deadline=deadline) as remote:
-        request = TunnelRequest(remote.port, deadline=deadline, execute=remote.execute, clock=clock)
-        access = root_token(request, secret)
-        lock_path = services.locks / f"aws_{PRINCIPALS[identity]}.lock"
-        return ensure_principal(
-            request, access, identity, approval, vault, bucket=services.bucket, lock_path=lock_path, approvals=services.approvals, registry=services.registry
-        )
+    role = PRINCIPALS[identity]
+    held = contextlib.ExitStack()
+    try:
+        wait = min(principal_credentials.LOCK_WAIT_SECONDS, check_deadline(deadline, clock))
+        held.enter_context(principal_credentials.serialized(services.locks / f"aws_{role}.lock", role, wait))
+    except principal_credentials.CredentialError as error:
+        raise SetupError("credentials", str(error)) from None
+    with held:
+        vault = services.vault().bounded(deadline, clock)
+        secret = read_root(vault, min(SECRET_SECONDS, check_deadline(deadline, clock)))
+        with services.remote(instance, deadline=deadline) as remote:
+            request = TunnelRequest(remote.port, deadline=deadline, execute=remote.execute, clock=clock)
+            access = root_token(request, secret)
+            lock_path = services.locks / f"aws_{role}.credentials.lock"
+            return ensure_principal(
+                request,
+                access,
+                identity,
+                approval,
+                vault,
+                bucket=services.bucket,
+                lock_path=lock_path,
+                approvals=services.approvals,
+                registry=services.registry,
+            )
 
 
 def check_principals(request: Request, access: str, approvals: Path) -> dict[str, str]:
