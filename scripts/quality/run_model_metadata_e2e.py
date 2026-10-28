@@ -1053,6 +1053,15 @@ def make_cases() -> list[Case]:
             "reference_unresolved_variable", "{% set parent = var('missing_var') %}\nselect * from {{ ref(parent) }}\n", "var 'missing_var' is not set"
         ),
         unresolved_case("reference_missing_model", "select * from {{ ref('stg_typo') }}\n", "no model or seed named 'stg_typo'"),
+        Case(
+            "reference_missing_model_disabled", code=0, files=mixed_read("{{ config(enabled=false) }}\nselect * from {{ ref('stg_typo') }}\n", "Confidential")
+        ),
+        Case(
+            "reference_missing_model_config_without_disable",
+            "[unresolved-reference]",
+            "no model or seed named 'stg_typo'",
+            files=mixed_read("{{ config(materialized='view') }}\nselect * from {{ ref('stg_typo') }}\n", "Confidential"),
+        ),
         unresolved_case("reference_package_unsupported", "select * from {{ ref('other_pkg', 'stg_raw_owner') }}\n", "package 'other_pkg' is not this project"),
         Case(
             "model_lower_via_qualified_ref",

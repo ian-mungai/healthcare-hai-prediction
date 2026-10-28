@@ -115,6 +115,12 @@ lakehouse_gold() {
   "$python_bin" -m scripts.lakehouse.identity_splits --check
   "$python_bin" -m scripts.lakehouse.source_labels --check
   "$python_bin" -m scripts.lakehouse.run_identity_seeds_e2e
+  # The feature phase reads gold only, and the gold build selections leave it out.
+  "$python_bin" -m scripts.lakehouse.feature_sources --check
+  "$python_bin" -m scripts.lakehouse.run_feature_sources_e2e
+  # Every output column of a feature model is documented with its data type, checked without the dbt contract that also enforces it.
+  "$python_bin" -m scripts.lakehouse.feature_columns --check
+  "$python_bin" -m scripts.lakehouse.run_feature_columns_e2e
   # The gold Great Expectations suites must match the gold contract they are generated from.
   "$python_bin" -m scripts.lakehouse.gold_checks check-suites
   "$python_bin" -m scripts.lakehouse.run_gold_publish_e2e --mode contract
