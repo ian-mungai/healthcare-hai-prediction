@@ -442,6 +442,27 @@ run "host_launch_template" {
     error_message = "Boot must set a plain-file core pattern and disable set-user-ID dumps, persisted in sysctl.d, and check both before joining the cluster."
   }
 
+  # Every line the boot script writes also reaches the serial console with a fixed prefix, so the project user can read it
+  # after the instance ends (ec2:GetConsoleOutput). A separate process copies the log, so a console that fails or blocks
+  # cannot stop a step, and the exit handler states success or the failing status, line and step. The AWS CLI calls whose
+  # JSON would reach the console print nothing. The configuration E2E runs these cases with a broken and a blocked console.
+  assert {
+    condition = (
+      alltrue([
+        for text in [
+          "console_device=\"/dev/console\"", "console_prefix=\"platform_boot:\"", "console_flush_seconds=4",
+          "copy_log_to_console </dev/null >/dev/null 2>&1 &", "trap 'finish $LINENO' EXIT",
+          "log \"finished: every step succeeded and ECS_CLUSTER is written.\"",
+          "log \"FAILED: exit status $status at line $line during: $current_step\"",
+          "log \"starting: $step (limit $seconds seconds)\"", "--allow-reassociation >/dev/null", "--device /dev/xvdf >/dev/null"
+        ] : strcontains(base64decode(aws_launch_template.host.user_data), text)
+      ]) &&
+      length(split("trap 'finish $LINENO' EXIT", base64decode(aws_launch_template.host.user_data))[0]) <
+      length(split("Applying the core dump settings", base64decode(aws_launch_template.host.user_data))[0])
+    )
+    error_message = "Boot must copy every log line to the console with the platform_boot prefix, state success or the failing status at the end and print no AWS CLI output."
+  }
+
   # Each command that can stall runs under a deadline through the run_within helper; none starts a line on its own. GNU
   # timeout kills a command that ignores TERM 10 seconds after the deadline, and the helper reports it.
   assert {

@@ -10,6 +10,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import stat
 import sys
 import tempfile
@@ -133,6 +134,7 @@ BOOT_TEMPLATE = "infra/iam/host_boot.sh.tftpl"
 # The host paths the boot script names in its first lines, moved under a temporary root for each run.
 BOOT_PATHS = {
     "log_file": "boot.log",
+    "console_device": "console.log",
     "fstab_file": "fstab",
     "ecs_config_file": "ecs.config",
     "device_directory": "devices",
@@ -151,6 +153,10 @@ BOOT_VALUES = {
 }
 # The host finds its data volume and Elastic IP by their Name and Project tags; the aws stand-in answers the two describe calls with these IDs.
 BOOT_IDS = {"volume": "vol-0123456789abcdef0", "allocation": "eipalloc-0123456789abcdef0"}
+# The metadata stand-in returns this value for the token request; it must reach neither the log nor the console.
+BOOT_METADATA_SENTINEL = "example_metadata_token_do_not_print"
+# Each console line starts with this prefix; the console is a file in the temporary root, so the runner can read what the script copied.
+CONSOLE_PREFIX = "platform_boot: "
 # Stand-in system commands: each succeeds at once unless a case replaces it with one that stalls.
 BOOT_STUBS = {
     "dnf": "exit 0",
@@ -160,6 +166,8 @@ BOOT_STUBS = {
     "mountpoint": "exit 1",
     "blkid": 'case "$1" in -p) exit 2 ;; *) echo 00000000-0000-0000-0000-000000000000 ;; esac',
 }
+# The longest a boot may take to end when the console never accepts a write: the script's own wait for the copy plus the other steps.
+CONSOLE_FLUSH_LIMIT = 10
 STALL = "exec /bin/sleep 45"
 STALL_IGNORING_TERM = "trap '' TERM; exec /bin/sleep 45"
 # Stateful stand-ins, in Python, for the commands whose effect later steps read back. They keep their state in
@@ -184,7 +192,11 @@ if arguments[:2] == ["ec2", "describe-volumes"]:
 elif arguments[:2] == ["ec2", "describe-addresses"]:
     wanted = {"Name=tag:Name,Values=" + os.environ["BOOT_ADDRESS_NAME"], "Name=tag:Project,Values=" + os.environ["BOOT_PROJECT_TAG"]}
     print(os.environ.get("BOOT_ALLOCATION_RESULT", ids["allocation"]) if filters == wanted else "", end="")
-elif arguments[:2] not in (["ec2", "associate-address"], ["ec2", "attach-volume"]):
+elif arguments[:2] == ["ec2", "associate-address"]:
+    print(json.dumps({"AssociationId": "eipassoc-0123456789abcdef0"}))
+elif arguments[:2] == ["ec2", "attach-volume"]:
+    print(json.dumps({"State": "attaching", "VolumeId": ids["volume"], "InstanceId": "i-0123456789abcdef0", "Device": "/dev/xvdf"}))
+else:
     sys.exit(f"aws stand-in: unsupported arguments {arguments}")
 """,
     "nft": """
@@ -249,6 +261,9 @@ if url:
         sys.exit(28)
     if "/tags/instance/" in url:
         sys.exit(22)
+    if url.endswith("/latest/api/token"):
+        print(os.environ.get("BOOT_TOKEN", ""), end="")
+        sys.exit(0)
 print("i-0123456789abcdef0", end="")
 """,
     "setpriv": """
@@ -962,8 +977,11 @@ def misplace_dependency(template: str) -> str:
     return template.replace(correct, misplaced)
 
 
-def prepare_host_root(root: Path, template: str, stub_overrides: dict[str, str]) -> Path:
-    """Create a temporary host root with stand-in commands, a data volume device and the image's kernel defaults."""
+def prepare_host_root(root: Path, template: str, stub_overrides: dict[str, str], console: str = "file") -> Path:
+    """Create a temporary host root with stand-in commands, a data volume device, the image's kernel defaults and a console.
+
+    The console is a writable file, a directory (the script cannot open it) or a named pipe with no reader (opening it for writing blocks).
+    """
     tools = root / "tools"
     for directory in (tools, root / "devices", root / "systemd", root / "state" / "sysctl"):
         directory.mkdir(parents=True)
@@ -981,6 +999,12 @@ def prepare_host_root(root: Path, template: str, stub_overrides: dict[str, str])
         (root / "state" / "sysctl" / key).write_text(value, encoding="utf-8")
     (root / "devices" / f"nvme-Amazon_Elastic_Block_Store_{BOOT_IDS['volume'].replace('-', '')}").touch()
     (root / "fstab").touch()
+    if console == "file":
+        (root / BOOT_PATHS["console_device"]).touch()
+    elif console == "directory":
+        (root / BOOT_PATHS["console_device"]).mkdir()
+    else:
+        os.mkfifo(root / BOOT_PATHS["console_device"])
     script = root / "host_boot.sh"
     script.write_text(render_host_boot(template, root), encoding="utf-8")
     return script
@@ -1166,11 +1190,18 @@ def run_planted_dependency_defect(evidence: Evidence, root: Path, environment: d
 
 
 def boot_host(
-    evidence: Evidence, bash: str, name: str, template: str, stub_overrides: dict[str, str], case_environment: dict[str, str], gnu_timeout: str
+    evidence: Evidence,
+    bash: str,
+    name: str,
+    template: str,
+    stub_overrides: dict[str, str],
+    case_environment: dict[str, str],
+    gnu_timeout: str,
+    console: str = "file",
 ) -> tuple[Path, dict[str, str], dict[str, Any], Any]:
     """Run the boot script once in its own temporary host root and return the root, the stand-in environment, the step and the result."""
     root = evidence.temporary / name
-    script = prepare_host_root(root, template, stub_overrides)
+    script = prepare_host_root(root, template, stub_overrides, console)
     environment = {
         "PATH": f"{root / 'tools'}:/usr/bin:/bin",
         "BOOT_TIMEOUT_LOG": str(root / "deadlines.log"),
@@ -1181,6 +1212,7 @@ def boot_host(
         "BOOT_STATE": str(root / "state"),
         "BOOT_SYSTEMD": str(root / "systemd"),
         "BOOT_IDS": json.dumps(BOOT_IDS),
+        "BOOT_TOKEN": BOOT_METADATA_SENTINEL,
         "BOOT_DATA_VOLUME_NAME": BOOT_VALUES["data_volume_name"],
         "BOOT_ADDRESS_NAME": BOOT_VALUES["address_name"],
         "BOOT_PROJECT_TAG": BOOT_VALUES["project_tag"],
@@ -1189,6 +1221,148 @@ def boot_host(
     }
     step, result = evidence.run(name, [bash, str(script)], root, {**environment, **case_environment})
     return root, environment, step, result
+
+
+def console_copy_problems(root: Path, returncode: int | None, duration: float, message: str | None, flush_limit: float) -> list[str]:
+    """Compare what the boot script wrote to the log with what reached the console; return one sentence per difference.
+
+    A boot with a console that cannot be read passes ``flush_limit`` only; every other boot passes the whole comparison.
+    """
+    problems = []
+    log = read_lines(root / BOOT_PATHS["log_file"])
+    text = "\n".join(log)
+    copy_process = re.search(r"\(process (\d+)\)", text)
+    if copy_process is None:
+        problems.append("the log does not name the console copy process")
+    else:
+        try:
+            os.kill(int(copy_process.group(1)), 0)
+        except ProcessLookupError:
+            pass
+        else:
+            problems.append("the console copy process was still running after the script exited")
+            os.kill(int(copy_process.group(1)), signal.SIGKILL)
+    if duration >= flush_limit:
+        problems.append(f"the script took {duration:.1f} seconds, not under {flush_limit} seconds")
+    if BOOT_METADATA_SENTINEL in text or "AssociationId" in text or '"State"' in text:
+        problems.append("a token or AWS CLI output reached the log")
+    console_path = root / BOOT_PATHS["console_device"]
+    if not console_path.is_file():
+        return problems
+    console = read_lines(console_path)
+    if BOOT_METADATA_SENTINEL in "\n".join(console) or "AssociationId" in "\n".join(console) or '"State"' in "\n".join(console):
+        problems.append("a token or AWS CLI output reached the console")
+    if any(not line.startswith(CONSOLE_PREFIX) for line in console):
+        problems.append("a console line lacks the prefix")
+    if [line.removeprefix(CONSOLE_PREFIX) for line in console] != log:
+        problems.append("the console lines differ from the log lines")
+    final = console[-1] if console else ""
+    if returncode == 0:
+        if "finished: every step succeeded and ECS_CLUSTER is written" not in final:
+            problems.append("the last console line does not report success")
+        if any("FAILED" in line for line in console):
+            problems.append("a successful boot reports a failure")
+    else:
+        if f"FAILED: exit status {returncode} " not in final:
+            problems.append("the last console line does not report the failure and its exit status")
+        if any("finished: every step succeeded" in line for line in console):
+            problems.append("a failed boot reports success")
+    if message is not None and not any(message in line for line in console):
+        problems.append("the failure reason is not on the console")
+    if message is not None and " did not finish within" in message:
+        step = message.split(" did not finish within")[0]
+        started = [index for index, line in enumerate(console) if f"starting: {step} " in line]
+        if not started:
+            problems.append("the console does not name the step that stalled")
+    return problems
+
+
+def run_console_copy_cases(evidence: Evidence, bash: str, template: str, gnu_timeout: str) -> None:
+    """A console that cannot be opened or never accepts a write must not stop or hold the boot; each planted defect must be reported."""
+    for name, console in (("boot_console_not_writable", "directory"), ("boot_console_blocks", "fifo")):
+        root, _, step, result = boot_host(evidence, bash, name, template, {}, {}, gnu_timeout, console)
+        problems = console_copy_problems(root, result.returncode, step["duration_seconds"], None, CONSOLE_FLUSH_LIMIT)
+        step["console_problems"] = problems
+        evidence.check(step, "boot_succeeded", result.returncode == 0)
+        evidence.check(step, "console_problems_none", not problems)
+        evidence.check(
+            step, "cluster_joined_last", (root / "ecs.config").read_text(encoding="utf-8").rstrip("\n").endswith(f"ECS_CLUSTER={BOOT_VALUES['cluster_name']}")
+        )
+    planted = {
+        "boot_with_console_copy_not_flushed": (
+            "the last console line does not report success",
+            lambda text: replace_once(text, "  stop_console_copy\n}", '  kill -KILL "$copy_pid" 2>/dev/null || :\n}'),
+            "file",
+            {},
+            {},
+        ),
+        "boot_with_console_copy_left_running": (
+            "the console copy process was still running after the script exited",
+            lambda text: replace_once(text, "  stop_console_copy\n}", "  :\n}"),
+            "file",
+            {},
+            {},
+        ),
+        "boot_with_unprefixed_console": (
+            "a console line lacks the prefix",
+            lambda text: replace_once(text, 'console_prefix="platform_boot:"', 'console_prefix=""'),
+            "file",
+            {},
+            {},
+        ),
+        "boot_with_aws_output_on_console": (
+            "a token or AWS CLI output reached the log",
+            lambda text: replace_once(text, "--allow-reassociation >/dev/null", "--allow-reassociation"),
+            "file",
+            {},
+            {},
+        ),
+        "boot_with_token_on_console": (
+            "a token or AWS CLI output reached the log",
+            lambda text: replace_once(
+                text,
+                '|| { echo "The instance ID could not be read."; exit 1; }',
+                '|| { echo "The instance ID could not be read."; exit 1; }\nlog "token $token"',
+            ),
+            "file",
+            {},
+            {},
+        ),
+        "boot_with_console_wait_unbounded": (
+            "the script took",
+            lambda text: replace_once(text, "console_flush_seconds=4", "console_flush_seconds=15"),
+            "fifo",
+            {},
+            {},
+        ),
+        "boot_with_success_after_failure": (
+            "a failed boot reports success",
+            lambda text: replace_once(text, 'if [ "$status" -eq 0 ]; then\n    log "finished', 'if true; then\n    log "finished'),
+            "file",
+            {},
+            {"BOOT_VOLUME_RESULT": ""},
+        ),
+        "boot_with_no_step_markers": (
+            "the console does not name the step that stalled",
+            lambda text: replace_once(text, '  log "starting: $step (limit $seconds seconds)"\n', ""),
+            "file",
+            {"mount": STALL},
+            {},
+        ),
+    }
+    for name, (expected, change, console, stub_overrides, case_environment) in planted.items():
+        root, _, step, result = boot_host(evidence, bash, name, change(template), stub_overrides, case_environment, gnu_timeout, console)
+        stalled = "Mounting the data volume did not finish within 120 seconds." if "mount" in stub_overrides else None
+        problems = console_copy_problems(root, result.returncode, step["duration_seconds"], stalled, CONSOLE_FLUSH_LIMIT)
+        step["console_problems"] = problems
+        evidence.check(step, "planted_console_defect_is_reported", any(expected in problem for problem in problems))
+
+
+def replace_once(text: str, old: str, new: str) -> str:
+    """Plant a defect: replace one exact piece of the boot template, or stop the run when the template no longer holds it."""
+    if text.count(old) != 1:
+        raise CheckFailed(f"The boot template must hold this text once for the planted defect: {old[:60]!r}")
+    return text.replace(old, new)
 
 
 def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
@@ -1256,6 +1430,9 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         step["boot_log"] = evidence.redact(log)
         step["requested_deadlines"] = [evidence.redact(line) for line in deadlines]
         step["metadata_requests"] = metadata
+        console_problems = console_copy_problems(root, result.returncode, 0.0, message, CONSOLE_FLUSH_LIMIT)
+        step["console_problems"] = console_problems
+        evidence.check(step, "console_copy_matches_log", not console_problems)
         evidence.check(step, "every_deadline_kills_after_a_grace_period", all(line.startswith("--kill-after=") for line in deadlines))
         rule_checked_first = "65534 dropped" in metadata and metadata.index("65534 dropped") < metadata.index("0 reached") if "0 reached" in metadata else True
         evidence.check(step, "no_root_metadata_read_before_the_rule", rule_checked_first)
@@ -1309,6 +1486,7 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
             evidence.check(step, "failure_reported", message in log)
             evidence.check(step, "stopped_within_deadline", step["duration_seconds"] < 15)
             evidence.check(step, "cluster_not_joined", "ECS_CLUSTER=" not in config)
+    run_console_copy_cases(evidence, bash, template, gnu_timeout)
 
 
 def run_suite(evidence: Evidence) -> None:
