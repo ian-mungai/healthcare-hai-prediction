@@ -22,4 +22,5 @@ repository_code_checks() {
   timed "repository_code_checks: CI groups selection E2E" "$python_bin" -m scripts.quality.run_ci_groups_e2e --selection-only
   timed "repository_code_checks: scratch worktree E2E" "$python_bin" -m scripts.quality.run_scratch_worktree_e2e
   timed "repository_code_checks: CI reuse E2E" "$python_bin" -m scripts.quality.run_ci_reuse_e2e
+  timed "repository_code_checks: process group stop E2E" "$python_bin" -m scripts.quality.run_process_e2e
 }
