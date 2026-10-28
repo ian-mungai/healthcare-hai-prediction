@@ -885,7 +885,7 @@ def pre_load_successor_guard(root: Path) -> bool:
         patch.setattr(bronze, "prune", mutate)
         patch.setattr(bronze, "write_copies", lambda *_args: 0)
         patch.setattr(bronze, "verify", lambda *_args: {"preload": {"passed": True}})
-        patch.setattr(dictionary, "build", lambda *_args: {})
+        patch.setattr(dictionary, "build", lambda *_args, **_kwargs: {})
         patch.setattr(bronze_metadata, "publish", publish)
         code = bronze.main()
     return code == 1 and not mutations

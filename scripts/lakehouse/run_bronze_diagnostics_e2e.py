@@ -195,7 +195,7 @@ def command_case(
         patch.setitem(sys.modules, "scripts.lakehouse.session", session)
         patch.setattr(bronze, "DEPLOYMENT", deployment)
         patch.setattr(bronze, "REPORT_ROOT", output)
-        patch.setattr(bronze, "S3Storage", lambda: storage)
+        patch.setattr(bronze, "S3Storage", lambda *, task_role=False: storage)
         patch.setattr(bronze, "load_table_map", lambda: {"namespace": "synthetic", "tables": tables or [TABLE]})
         patch.setattr(bronze, "load_retired", bronze.RetiredObjects)
         if ownership is not None:
@@ -667,7 +667,7 @@ def bootstrap_repair_case(
         events.append(("verify", chosen))
         return {name: {"passed": contents[name]} for name in chosen}
 
-    def dictionaries(_spark: Any, _config: Any, chosen: Any, *_args: Any) -> Any:
+    def dictionaries(_spark: Any, _config: Any, chosen: Any, *_args: Any, **_kwargs: Any) -> Any:
         events.append(("dictionary", list(chosen)))
         return dict.fromkeys(chosen, 1)
 
@@ -682,7 +682,7 @@ def bootstrap_repair_case(
         patch.setitem(sys.modules, "scripts.lakehouse.session", session)
         patch.setattr(bronze, "DEPLOYMENT", deployment)
         patch.setattr(bronze, "REPORT_ROOT", output)
-        patch.setattr(bronze, "S3Storage", lambda: storage)
+        patch.setattr(bronze, "S3Storage", lambda *, task_role=False: storage)
         patch.setattr(bronze, "load_table_map", lambda: config)
         patch.setattr(bronze, "load_retired", bronze.RetiredObjects)
         patch.setattr(bronze_metadata, "read", lambda *_args: [])
