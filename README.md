@@ -127,6 +127,7 @@ The E2E runners can also run on their own; each needs a new output directory:
 .venv/bin/python -m scripts.quality.run_checks_e2e
 .venv/bin/python -m scripts.quality.run_documentation_review_e2e
 .venv/bin/python -m scripts.infrastructure.run_secret_store_e2e
+.venv/bin/python -m scripts.infrastructure.run_host_session_e2e
 ```
 
 Each run writes its report under `data/e2e/` (the configuration E2E under `data/e2e/configuration/`, the policy E2E under

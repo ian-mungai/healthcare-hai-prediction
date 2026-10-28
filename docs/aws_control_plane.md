@@ -125,7 +125,15 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
 
 1. The owner applies the foundation. The lead runs the printed `push_images plan` commands and records the digests.
 2. Place a checkout of the repository at `dag_code_path` (default `<data>/repo`). Airflow mounts the DAGs, the broker client and the lineage configuration from it read-only.
-3. Turn the host on before the first services apply. Use the project profile and the foundation's host group name:
+3. Turn the host on before the first services apply:
+
+   ```sh
+   .venv/bin/python -m scripts.infrastructure.host_session start
+   ```
+
+   The entry point reads the cluster, host group, capacity provider, service names and task families from the platform and services Terraform outputs, so it runs only once the services stack exists. For the very first registration check before that stack exists, use the CLI fallback below. It sets the desired capacity to 1 and waits up to 10 minutes for one `ACTIVE`, agent-connected container instance. Then it runs step 5 and the service restarts. Any failure stops the host and verifies it, unless you pass `--keep-on` to keep the host on for diagnosis. `host_session status` shows the host and service counts without changing anything. `host_session stop` sets the desired capacity to 0 and waits up to 15 minutes for the instance to terminate.
+
+   CLI fallback, with the project profile and the foundation's host group name:
 
    ```sh
    aws autoscaling set-desired-capacity --profile <PROJECT_PROFILE> --region <REGION> --auto-scaling-group-name <HOST_GROUP_NAME> --desired-capacity 1
@@ -151,7 +159,9 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
 
    Before apply, the wrapper verifies the project identity and refuses a saved plan whose project inputs, foundation
    outputs, image digests or other variables differ from the current sources or committed defaults.
-5. Run `host_prepare` with the explicit Project tag shown under "Launching a one-shot task". Require an empty `failures` list from RunTask. Save its task ARN, wait for it to stop and inspect its exit status:
+5. `host_session start` runs this step and the restarts below. It launches `host_prepare` with the tagged RunTask (it first checks for a running task of the same family and never starts a second one) and requires exit code 0. Then it forces a new deployment of every project service at once, postgres first, without waiting for the scheduler's backoff. It waits, with a deadline, until each service shows one `COMPLETED` deployment, its running count and no pending task. A `FAILED` rollout stops the wait at once. The manual steps follow as the fallback.
+
+   Run `host_prepare` with the explicit Project tag shown under "Launching a one-shot task". Require an empty `failures` list from RunTask. Save its task ARN, wait for it to stop and inspect its exit status:
 
    ```sh
    aws ecs wait tasks-stopped --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --tasks <TASK_ARN>
@@ -171,6 +181,8 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
    ```
 
    The stable waiter checks every 15 seconds, for at most 40 attempts ([services-stable](https://docs.aws.amazon.com/cli/latest/reference/ecs/wait/services-stable.html)). If it times out, inspect the deployment reason before another update. Require no failures, the desired running count, zero pending tasks and a `COMPLETED` deployment. The existing `ManageProjectServices` grant allows this update only for project service ARNs. Keep the circuit breaker and tag propagation enabled.
+
+   Run `.venv/bin/python -m scripts.infrastructure.host_session bootstrap` once. It requires the postgres and polaris services to be stable, runs `polaris_bootstrap` with the same tagged launch and exit-code check and refuses a second run (marker `data/host_session/polaris_bootstrap.launched`) unless you pass `--again`. The manual form:
 
    Run `polaris_bootstrap` once after Postgres is ready: its service passes the stable waiter above with a `COMPLETED` deployment and one running task. Use the same tagged launch, `tasks-stopped` waiter and exit-code checks. It is not restarted on failure: a second run reports that the realm exists. Then create the catalog and principals (see the next section).
 
