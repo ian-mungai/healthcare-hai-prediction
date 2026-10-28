@@ -15,23 +15,41 @@ mkdir -p "$out"
 results="$out/results.txt"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/acquisition_ci_gate.XXXXXX")"
 work="$scratch/worktree"
+# The removal and the folder check use the resolved path (on macOS /var is /private/var).
+work_resolved="$(cd "$scratch" && pwd -P)/worktree"
+# The registered worktrees are listed for the report only; nothing decides on them.
 registered() { git worktree list --porcelain | sed -n 's/^worktree //p' | sort; }
-before="$(registered)"
+before="$(registered)" || before="(git worktree list failed)"
 shielded() ( trap '' INT TERM HUP ALRM; "$@" )
 cleanup() {
-  local status=$? after interrupted=0
+  local status=$? after interrupted=0 failed=0
   trap 'interrupted=1' INT TERM HUP ALRM
-  shielded git worktree remove --force "$work" >/dev/null 2>&1 || shielded rm -rf "$work"
-  shielded git worktree prune || echo "scratch worktree: git worktree prune failed" >&2
-  shielded rm -rf "$scratch"
-  after="$(shielded registered)"
+  # Only Git's own answers about this run's worktree count, because other agents add and remove their own worktrees in the same repository meanwhile.
+  if ! shielded git worktree remove --force "$work_resolved" >/dev/null 2>"$out/worktree_remove.err"; then
+    echo "FAIL scratch_worktree_removed: git worktree remove failed for $work; see $out/worktree_remove.err" | tee -a "$results" >&2
+    failed=1
+    # A failed deletion must not stop the cleanup under set -e: the folder check below reports what is left.
+    shielded rm -rf "$work_resolved" || true
+  fi
+  if ! shielded git worktree prune; then
+    echo "FAIL scratch_worktree_removed: git worktree prune failed" | tee -a "$results" >&2
+    failed=1
+  fi
+  if [[ -e "$work_resolved" ]]; then
+    echo "FAIL scratch_worktree_removed: the folder of this run's worktree $work still exists" | tee -a "$results" >&2
+    failed=1
+  fi
+  shielded rm -rf "$scratch" || echo "scratch worktree: could not delete $scratch" >&2
+  after="$(shielded registered)" || after="(git worktree list failed)"
   printf '%s\n' "$before" >"$out/worktrees_before.txt"
   printf '%s\n' "$after" >"$out/worktrees_after.txt"
-  if [[ "$after" == "$before" ]]; then
-    echo "PASS scratch_worktree_removed" | tee -a "$results"
-  else
-    echo "FAIL scratch_worktree_removed: the registered worktrees changed during the run; see $out/worktrees_before.txt and $out/worktrees_after.txt" | tee -a "$results" >&2
+  if ((failed)); then
     status=1
+  else
+    echo "PASS scratch_worktree_removed" | tee -a "$results"
+    if [[ "$after" != "$before" ]]; then
+      echo "NOTE the registered worktrees changed during the run (other runs add and remove their own; report only); see $out/worktrees_before.txt and $out/worktrees_after.txt" | tee -a "$results"
+    fi
   fi
   if ((interrupted)) && [[ "$status" == 0 ]]; then status=130; fi
   exit "$status"
