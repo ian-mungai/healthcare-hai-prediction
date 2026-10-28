@@ -990,6 +990,43 @@ def case_late_credential_write(_: Path) -> dict[str, bool]:
     return checks
 
 
+def case_stored_pair_mismatch(_: Path) -> dict[str, bool]:
+    """P4 and P5: a pair write that lands late (after its client gave up) replaces the stored pair with one Polaris refuses. A run it lands in
+    fails with ``stored_pair_mismatch`` and leaves no mark, inspection reports the identity as differing with that cause, and a rerun resets and
+    verifies the pair."""
+    role = setup.PRINCIPALS["reader"]
+    secret_name = setup.configured_pairs()["reader"][1]
+    stale = "late-" + secrets.token_hex(12)
+    ensure = principal_credentials.ensure_credentials
+
+    def late_write(**kwargs: Any) -> str:
+        found = ensure(**kwargs)
+        ssm.values[secret_name] = stale
+        return found
+
+    with catalog_world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        principal(services, root, "reader")
+        ssm.values[secret_name] = stale
+        inspected = call(["inspect", "--instance", INSTANCE], services, root)
+        report = outcome(inspected[1]) or {}
+        repaired = principal(services, root, "reader")
+        with mock.patch.object(principal_credentials, "ensure_credentials", late_write):
+            ssm.values[secret_name] = stale
+            landed = principal(services, root, "reader")
+        rerun = principal(services, root, "reader")
+        return {
+            "inspection reports the late write as differing": (report.get("principals") or {}).get("reader") == "differs",
+            "inspection names the stored pair mismatch": (report.get("causes") or {}).get("reader") == "stored_pair_mismatch",
+            "a rerun after the late write resets and verifies the pair": repaired[0] == 0
+            and (outcome(repaired[1]) or {}).get("credentials") == "credentials reset"
+            and stored_pair(ssm, "reader") != (None, stale),
+            "a late write inside a run fails it with the named cause": landed[0] == 1 and "(stored_pair_mismatch)" in landed[2],
+            "the failed run leaves no pending mark": not setup.pending_write_mark(services.locks, role).exists(),
+            "the next rerun repairs the pair": rerun[0] == 0 and stored_pair(ssm, "reader") == live_pair(polaris, "reader"),
+        }
+
+
 @contextlib.contextmanager
 def slow_peer(kind: str) -> Iterator[int]:
     """A loopback peer that reads the request, sends the headers of its ``SLOW_REPLIES`` entry at once, then the rest one byte every 0.04 s."""
@@ -1123,6 +1160,7 @@ CASES: dict[str, Case] = {
     "extra_role_membership": case_extra_role_membership,
     "request_expiry": case_request_expiry,
     "late_credential_write": case_late_credential_write,
+    "stored_pair_mismatch": case_stored_pair_mismatch,
     "missing_role_assignment": case_missing_role_assignment,
     "lock_before_changes": case_lock_before_changes,
     "check_never_decrypts": case_check_never_decrypts,
@@ -1187,6 +1225,10 @@ MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[A
         lambda: mock.patch.object(
             setup.PairVault, "put", lambda self, name, value: self.within_deadline(lambda: secret_store.SecretStore.put(self, name, value), name)
         ),
+    ),
+    "the stored pair is not verified": (
+        "stored_pair_mismatch",
+        lambda: mock.patch.multiple(setup, verify_stored_pair=lambda *a, **k: None, stored_pair_causes=lambda *a, **k: {}),
     ),
     "live writer tries are not checked": ("live_writer_try", lambda: mock.patch.object(setup, "no_live_writer_try", lambda *a, **k: contextlib.nullcontext())),
 }
