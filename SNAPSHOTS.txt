@@ -1,0 +1,9 @@
+# At-risk backup snapshots (worktree, snapshot commit)
+feature-store a3d3581964a48ed4d80efd2e5d098c6c5d79bd21
+feature-store-feast 6a7ddafe7ade6e1226c99013959a0c1a0c843c7a
+feature-store-launcher 6cf946fddba34cc31f4d08cf683acf2d63e74bff
+spine-leak ffa86abd69ea65cde45075413e0b2ce90c90ca17
+t3-8feb4bc0 28e87fc55137b3279bd9b209ba50bdb21fbacb9b
+t3-e42a3191 e2fa9f4d6a359df9cdd38b2f72aa923e2a01feff
+t3-0a977a05 66b42e17b4ad12065b8457ed03152bec0415e80b
+chain-20261028 a03ce2dfdb36560c71a7689a966c1d6db0fb0bab
