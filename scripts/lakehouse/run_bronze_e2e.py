@@ -1931,12 +1931,83 @@ def metadata_commit_scenarios(spark: Any, original: list[dict], updated: list[di
     return results
 
 
+def bootstrap_repair_scenarios(spark: Any, root: Path) -> dict[str, bool]:
+    """Repair missing synthetic files through bronze.main while retaining an untouched native table."""
+    from scripts.lakehouse import session
+
+    namespace = "bootstrap_repair"
+    names = ["repair_first", "repair_second", "retained"]
+    storage = FakeStorage()
+    tables = []
+    for name in names:
+        collection = "synthetic/" + name
+        tables.append({"table": name, "collection": collection, "format": "csv", "encodings": ["utf-8"], "roles": ["data"], "dataset_ids": [name]})
+        members: list[tuple[list[str] | None, str, bytes]] = [(["data.csv"], "data.csv", csv_bytes(["value"], [[name]]))]
+        if name == "repair_first":
+            members.append((["missing.csv"], "missing.csv", csv_bytes(["value"], [["missing"]])))
+        store(storage, collection, name, "capture", members)
+    config = {"namespace": namespace, "tables": tables}
+    inputs, _excluded = bronze.discover(storage, BUCKET, config, names)
+    retained = [item for item in inputs if item["table"] == "retained"]
+    bronze.load_objects(spark, retained, storage, namespace, root / "retained")
+    preloaded = [item for item in inputs if item["table"] == "repair_first" and item["file_name"] == "data.csv"]
+    bronze.load_objects(spark, preloaded, storage, namespace, root / "preloaded")
+    before_repair = spark.table(f"{namespace}.repair_first").collect()
+    retained_refs = "SELECT snapshot_id FROM bootstrap_repair.retained.refs WHERE name = 'main'"
+    retained_snapshot = spark.sql(retained_refs).collect()[0]["snapshot_id"]
+    deployment = root / "repair_deployment.json"
+    deployment.write_text(json.dumps({"data_bucket_name": BUCKET}))
+    report_root = root / "repair_report"
+    original_stop = spark.stop
+    codes: list[int] = []
+    with (
+        patch.object(session, "spark_session", lambda *_args, **_kwargs: spark),
+        patch.object(session, "job_memory", lambda: "synthetic"),
+        patch.object(spark, "stop", lambda: None),
+        patch.object(bronze, "DEPLOYMENT", deployment),
+        patch.object(bronze, "REPORT_ROOT", report_root),
+        patch.object(bronze, "SCRATCH", root / "repair_scratch"),
+        patch.object(bronze, "S3Storage", lambda: storage),
+        patch.object(bronze, "load_table_map", lambda: config),
+        patch.object(bronze, "load_retired", bronze.RetiredObjects),
+        patch.object(sys, "argv", ["bronze", "--bootstrap-all", "--repair-tables", "repair_first,repair_second"]),
+    ):
+        before_downloads = len(storage.downloads)
+        codes.append(bronze.main())
+        first_metadata = bronze_metadata.snapshot(spark, namespace)
+        first = {name: spark.table(f"{namespace}.{name}").orderBy("_object_key", "_row_number").collect() for name in names}
+        codes.append(bronze.main())
+        repeat = {name: spark.table(f"{namespace}.{name}").orderBy("_object_key", "_row_number").collect() for name in names}
+        loaded_paths = storage.downloads[before_downloads:]
+    rows = bronze_metadata.read(spark, namespace)
+    reports = [json.loads(path.read_text()) for path in report_root.glob("report_*.json")]
+    expected_keys = {item["object_key"] for item in inputs if item["table"] != "retained"}
+    return {
+        "native_bootstrap_repair_creates_first_full_generation": codes == [0, 0]
+        and {row["table_name"] for row in rows} == set(names)
+        and first_metadata is not None,
+        "native_bootstrap_repair_loads_only_named_objects": len(loaded_paths) == 6 and {path.stem for path in loaded_paths} == expected_keys,
+        "native_bootstrap_repair_adds_missing_file_without_losing_or_duplicating_rows": len(before_repair) == 1
+        and before_repair[0]["value"] == "repair_first"
+        and len(first["repair_first"]) == 2
+        and {row["_object_key"] for row in first["repair_first"]} == {item["object_key"] for item in inputs if item["table"] == "repair_first"}
+        and sorted(row["value"] for row in first["repair_first"]) == ["missing", "repair_first"],
+        "native_bootstrap_repair_preserves_untouched_snapshot": spark.sql(retained_refs).collect()[0]["snapshot_id"] == retained_snapshot,
+        "native_bootstrap_repair_repeat_has_equal_rows_and_metadata": first == repeat and bronze_metadata.snapshot(spark, namespace) == first_metadata,
+        "native_bootstrap_repair_checks_all_tables": bool(reports)
+        and all(set(report["checks"]) == set(names) and report["passed"] and not report["pruned"] for report in reports),
+        "native_bootstrap_repair_dictionary_scope": all(set(report["dictionaries"]) == set(names[:2]) for report in reports),
+        "native_bootstrap_repair_restores_session_stop": spark.stop == original_stop,
+    }
+
+
 def main() -> int:
     """Run the scenarios in a throwaway catalog and write an outcomes-only report."""
     root = Path(tempfile.mkdtemp(prefix="bronze_e2e_"))
     spark = spark_session("bronze-e2e", warehouse=root / "warehouse")
     try:
         results = scenarios(spark, root)
+        results.update(bootstrap_repair_scenarios(spark, root))
     finally:
         spark.stop()
         shutil.rmtree(root, ignore_errors=True)

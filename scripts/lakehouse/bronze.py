@@ -1077,16 +1077,24 @@ def main() -> int:
     choice = parser.add_mutually_exclusive_group(required=True)
     choice.add_argument("--group")
     choice.add_argument("--tables", help="comma-separated table names")
-    choice.add_argument("--bootstrap-all", action="store_true", help="publish copies and file metadata for the full table map without loading or pruning data")
+    choice.add_argument("--bootstrap-all", action="store_true", help="publish full-map metadata without pruning. Load data only with --repair-tables")
     choice.add_argument("--drop-removed", action="store_true", help="drop the tables in config/lakehouse/removed_tables.json")
     # Moving to one copy per file: tables whose kept copy is already loaded only need their copies listed and the other
     # copies pruned; verification still compares every table with its inputs, so a missing copy fails the run [211].
     parser.add_argument("--copies-only", action="store_true", help="list copies, prune and verify without loading objects")
     parser.add_argument("--diagnose", action="store_true", help="report bootstrap metadata conflicts without writing to the catalog or S3")
+    parser.add_argument("--repair-tables", help="with --bootstrap-all, load these comma-separated tables before full-map verification")
     args = parser.parse_args()
     if args.diagnose and (not args.bootstrap_all or args.copies_only):
         parser.error("--diagnose requires --bootstrap-all and excludes --copies-only")
+    if args.repair_tables is not None and (not args.bootstrap_all or args.copies_only or args.diagnose):
+        parser.error("--repair-tables requires --bootstrap-all and excludes --copies-only and --diagnose")
     config = load_table_map()
+    repair_names = args.repair_tables.split(",") if args.repair_tables is not None else []
+    if args.repair_tables is not None and (
+        len(repair_names) != len(set(repair_names)) or any(name not in {table["table"] for table in config["tables"]} for name in repair_names)
+    ):
+        parser.error("--repair-tables must name distinct tables from the committed table map")
     if args.drop_removed:
         return drop_removed_job(config)
     names = (
@@ -1125,13 +1133,15 @@ def main() -> int:
             return 0 if diagnostic["passed"] else 1
         metadata = bronze_metadata.build(names, inputs, unselected, previous, [table["table"] for table in config["tables"]])
         bronze_metadata.validate_successor(previous, metadata)
-        summary = {} if args.copies_only or args.bootstrap_all else load_objects(spark, inputs, storage, config["namespace"])
+        load_inputs = [item for item in inputs if item["table"] in repair_names] if repair_names else inputs
+        summary = {} if args.copies_only or (args.bootstrap_all and not repair_names) else load_objects(spark, load_inputs, storage, config["namespace"])
         pruned = {} if args.bootstrap_all else prune(spark, config, names, inputs, config["namespace"])
         copies = write_copies(spark, config["namespace"], names, inputs, unselected)
         checks = verify(spark, config, inputs, config["namespace"])
         # Dictionaries follow every passing load, so they never describe an older bronze table [91].
         if all(check["passed"] for check in checks.values()):
-            dictionaries = {} if args.bootstrap_all else dictionary.build(spark, config, sorted(checks), config["namespace"])
+            dictionary_names = sorted(set(repair_names) & checks.keys()) if args.bootstrap_all else sorted(checks)
+            dictionaries = dictionary.build(spark, config, dictionary_names, config["namespace"]) if dictionary_names else {}
             generation = bronze_metadata.publish(spark, config["namespace"], metadata)
             index_path = REPORT_ROOT / "object_index" / f"{generation}.json"
             index_sha256 = bronze_metadata.write_bootstrap(metadata, index_path)
@@ -1152,6 +1162,7 @@ def main() -> int:
         "run_at_utc": stamp,
         "mode": "bootstrap_all" if args.bootstrap_all else "copies_only" if args.copies_only else "load",
         "tables": names,
+        "repair_tables": repair_names,
         "inputs": len(inputs),
         "loaded": summary,
         "checks": checks,
