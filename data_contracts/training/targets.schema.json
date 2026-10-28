@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "earlier_outcome_candidates": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "control": {
+            "pattern": "^[A-Z][0-9]{3}$",
+            "type": "string"
+          },
+          "hai_type": {
+            "enum": [
+              "HAI_1",
+              "HAI_2",
+              "HAI_3",
+              "HAI_4",
+              "HAI_5",
+              "HAI_6"
+            ]
+          },
+          "label": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "control",
+          "hai_type",
+          "label"
+        ],
+        "type": "object"
+      },
+      "maxItems": 6,
+      "minItems": 6,
+      "type": "array"
+    },
+    "note": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "target_candidates": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "control": {
+            "pattern": "^[A-Z][0-9]{3}$",
+            "type": "string"
+          },
+          "hai_type": {
+            "enum": [
+              "HAI_1",
+              "HAI_2",
+              "HAI_3",
+              "HAI_4",
+              "HAI_5",
+              "HAI_6"
+            ]
+          },
+          "label": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "control",
+          "hai_type",
+          "label"
+        ],
+        "type": "object"
+      },
+      "maxItems": 6,
+      "minItems": 6,
+      "type": "array"
+    }
+  },
+  "required": [
+    "note",
+    "target_candidates",
+    "earlier_outcome_candidates"
+  ],
+  "title": "Targets",
+  "type": "object"
+}

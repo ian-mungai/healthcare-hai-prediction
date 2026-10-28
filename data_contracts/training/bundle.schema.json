@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "directory_template": {
+      "const": "bundles/bundle_{hai_type}"
+    },
+    "hai_types": {
+      "const": [
+        "HAI_1",
+        "HAI_2",
+        "HAI_3",
+        "HAI_4",
+        "HAI_5",
+        "HAI_6"
+      ]
+    },
+    "integrity": {
+      "const": {
+        "algorithm": "sha256",
+        "done_record": "fit.done.json",
+        "scope": "every_bundle_file"
+      }
+    },
+    "model_directory": {
+      "const": "model"
+    },
+    "optional_files": {
+      "const": [
+        "shap.json",
+        "diagnostics.json"
+      ]
+    },
+    "provenance_fields": {
+      "const": [
+        "run_id",
+        "timings",
+        "try",
+        "git_commit",
+        "git_dirty",
+        "code_digest",
+        "resolved_versions"
+      ]
+    },
+    "reproducibility": {
+      "const": {
+        "encoding": "canonical_json",
+        "exclude": [
+          "run_id",
+          "timings",
+          "try",
+          "model_uuid",
+          "utc_time_created"
+        ],
+        "file": "result.json",
+        "float_format": "repr",
+        "prediction_sort_key": "spine_key",
+        "prediction_value_type": "float64",
+        "separators": [
+          ",",
+          ":"
+        ],
+        "sort_keys": true
+      }
+    },
+    "required_files": {
+      "const": [
+        "result.json",
+        "provenance.json",
+        "holdout_predictions.parquet",
+        "feature_list.json"
+      ]
+    },
+    "result_fields": {
+      "const": [
+        "statuses",
+        "selection",
+        "fitted_parameters",
+        "holdout_metrics",
+        "test_statistics",
+        "p_values",
+        "counts",
+        "seeds",
+        "input_hashes",
+        "holdout_predictions_content_sha256"
+      ]
+    },
+    "schema": {
+      "const": 1
+    },
+    "slot_statuses": {
+      "const": [
+        "fitted",
+        "not_converged",
+        "not_estimable",
+        "not_run"
+      ]
+    },
+    "status_reason_required": {
+      "const": [
+        "not_converged",
+        "not_estimable",
+        "not_run"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "directory_template",
+    "hai_types",
+    "required_files",
+    "optional_files",
+    "model_directory",
+    "slot_statuses",
+    "status_reason_required",
+    "integrity",
+    "reproducibility",
+    "provenance_fields",
+    "result_fields"
+  ],
+  "title": "Bundle",
+  "type": "object"
+}

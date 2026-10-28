@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "scope": {
+            "const": "all"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "slot": {
+            "enum": [
+              "m1_ols",
+              "rq4_reduced"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "scope": {
+            "const": "cms_only"
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "references": {
+      "items": {
+        "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "schema": {
+      "const": 1
+    },
+    "scope": {
+      "enum": [
+        "cms_only",
+        "all"
+      ]
+    },
+    "slot": {
+      "enum": [
+        "m1_ols",
+        "m2_elastic_net",
+        "m3_mixed",
+        "m4_boosting",
+        "m5_spatial",
+        "m6_fixed_effects",
+        "rq4_reduced"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "slot",
+    "scope",
+    "references"
+  ],
+  "title": "Feature list",
+  "type": "object"
+}
