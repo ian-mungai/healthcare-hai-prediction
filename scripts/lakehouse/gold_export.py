@@ -82,9 +82,9 @@ def export_sealed(sealed: Path, expected_sha256: str, publish_dir: Path, plan: P
             missing = [column for column in key if column not in {c for c, _ in columns}]
             if missing:
                 raise PublishError(f"{name}: the merge key column {missing[0]} is not in the sealed table")
-            rows = int(connection.execute(DUCKDB_ROWS.format(table=duck_ident(name))).fetchone()[0])
+            rows = int(connection.execute(DUCKDB_ROWS.format(table=duck_ident(name))).fetchall()[0][0])
             pairs = ", ".join(f"{duck_ident(column)} := {duck_ident(column)}" for column in key)
-            distinct = int(connection.execute(DUCKDB_DISTINCT.format(pairs=pairs, table=duck_ident(name))).fetchone()[0])
+            distinct = int(connection.execute(DUCKDB_DISTINCT.format(pairs=pairs, table=duck_ident(name))).fetchall()[0][0])
             if distinct != rows:
                 raise PublishError(f"{name}: {rows - distinct} rows repeat the merge key {list(key)}")
             file = staging / f"{name}.parquet"

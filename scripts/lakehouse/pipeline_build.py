@@ -135,7 +135,7 @@ def main() -> int:
             if temporary.is_symlink() or (args.folder / "staging.duckdb").is_symlink():
                 raise PipelineError("the build destination is a symlink")
             temporary.unlink(missing_ok=True)
-            connection = duckdb.connect(str(temporary), config=settings)
+            connection = duckdb.connect(str(temporary), config={**settings})
             try:
                 connection.execute("SET memory_limit = ?", [os.environ["DUCKDB_MEMORY_LIMIT"]])
                 connection.execute("SET threads = ?", [int(os.environ["JOB_THREADS"])])

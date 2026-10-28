@@ -23,3 +23,6 @@ botocore==1.35.99
 defusedxml==0.7.1
 # The gold expression check (scripts/lakehouse/gold_sql.py) renders the dbt gold macros with Jinja; cloudsplaining needs the same version.
 jinja2==3.1.6
+# The bronze cutover's verification decodes one Parquet row group per namespace (scripts/lakehouse/bronze_scan.py); the version the
+# analytics and quality images pin.
+duckdb==1.5.6
