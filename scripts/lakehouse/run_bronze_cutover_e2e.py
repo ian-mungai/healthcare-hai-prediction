@@ -1173,6 +1173,51 @@ def route_binding_and_evidence(folder: Path) -> dict[str, bool]:
     document["observations"] = document["observations"][1:]
     tampered.write_bytes(reg.canonical(document))
     checks["a recorded check that misses an observation is refused"] = "route" in code_of_cutover(lambda: bronze_cutover.require_route(cutover, "cut1", bound))
+    checks.update(route_attempts(folder / "attempts", bound))
+    return checks
+
+
+class InterruptedProbe(RouteProbe):
+    """Observations whose step deadline passes between the second and third observation, after checking the attempt was persisted first."""
+
+    def __init__(self, clock: registration_e2e.Clock, attempt: Path) -> None:
+        super().__init__()
+        self.clock, self.attempt = clock, attempt
+        self.attempt_first = False
+
+    def observe(self, name: str, *, deadline: float) -> tuple[bool | None, bytes]:
+        if not self.calls:
+            self.attempt_first = self.attempt.is_file()
+        if name == "catalog_port_only":
+            self.clock.now = deadline + 1
+            self.calls.append(name)
+            return None, b"the route did not become ready before its deadline"
+        return super().observe(name, deadline=deadline)
+
+
+def route_attempts(folder: Path, bound: str) -> dict[str, bool]:
+    """Route proof: an incomplete newest attempt hides an older pass, and each evidence file must still match its recorded hash."""
+    checks: dict[str, bool] = {}
+    clock = registration_e2e.Clock()
+    checks_folder = folder / bronze_cutover.ROUTE_CHECKS
+    bronze_cutover.route_check(RouteProbe(), "cut1", bound, folder, deadline=clock() + 100, clock=clock, stamp="20261028T000000000000Z")
+    interrupted = InterruptedProbe(clock, checks_folder / "20261028T000001000000Z.attempt")
+    code, _ = code_of(
+        lambda: bronze_cutover.route_check(interrupted, "cut1", bound, folder, deadline=clock() + 10, clock=clock, stamp="20261028T000001000000Z")
+    )
+    checks["the route attempt is persisted before the first observation"] = interrupted.attempt_first
+    checks["an attempt that expires midway fails with the deadline cause"] = code == "deadline"
+    refusal = code_of_cutover(lambda: bronze_cutover.require_route(folder, "cut1", bound))
+    checks["an incomplete newest attempt refuses register even when an older check passed"] = "did not complete" in refusal
+    for label, change in (
+        ("a deleted evidence file", lambda path: path.unlink()),
+        ("a changed evidence file", lambda path: path.write_bytes(b"other evidence")),
+    ):
+        fresh = folder / label.replace(" ", "_")
+        bronze_cutover.route_check(RouteProbe(), "cut1", bound, fresh, deadline=clock() + 100, clock=clock, stamp="20261028T000002000000Z")
+        change(fresh / bronze_cutover.ROUTE_CHECKS / "20261028T000002000000Z.mac_containers_refused.evidence")
+        refusal = code_of_cutover(functools.partial(bronze_cutover.require_route, fresh, "cut1", bound))
+        checks[f"{label} refuses register"] = "evidence" in refusal
     return checks
 
 
@@ -1204,7 +1249,8 @@ def probe_folder(folder: Path, nonce: str, ports: list[int], results: Mapping[st
     folder.mkdir(parents=True)
     for network, result in results.items():
         if result is not None:
-            (folder / f"{network}.json").write_text(json.dumps({"nonce": nonce, "ports": ports, "targets": ["172.17.0.1"], "reached": [], **result}) + "\n")
+            document = {"nonce": nonce, "ports": ports, "network": network, "targets": ["172.17.0.1"], "reached": [], **result}
+            (folder / f"{network}.json").write_text(json.dumps(document) + "\n")
     (folder / "networks.txt").write_text("".join(f"{name}\n" for name in (listed if listed is not None else list(results))))
     return folder
 
@@ -1263,9 +1309,10 @@ def mac_route_observations(folder: Path) -> dict[str, bool]:
         listener.bind(("127.0.0.1", 0))
         listener.listen()
         open_port = listener.getsockname()[1]
-        report = mac_route_probe.report("nonce1", [open_port, closed], ["127.0.0.1"])
+        report = mac_route_probe.report("nonce1", [open_port, closed], ["127.0.0.1"], "bridge")
     reached = report["reached"]
     checks["the container probe reports a port it reached"] = reached == [["127.0.0.1", open_port]] and report["nonce"] == "nonce1"
+    checks["the container probe names the network it ran on"] = report.get("network") == "bridge"
     checks["the container probe reports refused ports as not reached"] = isinstance(reached, list) and ["127.0.0.1", closed] not in reached
     checks["outside a container the probe finds no host route to try"] = set(mac_route_probe.host_targets(folder / "absent_route_table")) <= {
         "127.0.0.1",
@@ -1281,6 +1328,8 @@ def mac_route_observations(folder: Path) -> dict[str, bool]:
         ("a result of another run", refused_all, None, "nonce2", None),
         ("no network listed", refused_all, [], "nonce1", None),
         ("a network name that is not a plain name", refused_all, ["../bridge"], "nonce1", None),
+        ("a result that tried no target", {**refused_all, "hai_offline": {"targets": []}}, None, "nonce1", None),
+        ("the bridge result copied as another network's result", {**refused_all, "hai_lakehouse": {"network": "bridge"}}, None, "nonce1", None),
     ):
         probe = probe_folder(folder / "probes" / label.replace(" ", "_"), "nonce1", ports, results, listed)
         result, evidence = cutover_route.container_observation(probe, nonce, ports)
@@ -1291,7 +1340,15 @@ def mac_route_observations(folder: Path) -> dict[str, bool]:
     command = cutover_route.probe_command(Path("data/lakehouse/cutover/cut1/route_checks/s1.probe"), "nonce1", ports, "hai/analytics-dbt:pinned")
     checks["the documented probe command covers every Docker network, never pulls and runs the probe from standard input"] = all(
         part in command
-        for part in ("docker network ls", '--network "$network"', "--pull=never", "-I -", "nonce1 18181 18182", "hai/analytics-dbt:pinned", "networks.txt")
+        for part in (
+            "docker network ls",
+            '--network "$network"',
+            "--pull=never",
+            "-I -",
+            'nonce1 18181 18182 "$network"',
+            "hai/analytics-dbt:pinned",
+            "networks.txt",
+        )
     )
     return checks
 

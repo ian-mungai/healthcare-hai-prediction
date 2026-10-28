@@ -54,16 +54,17 @@ def host_targets(route_table: Path = ROUTE_TABLE) -> list[str]:
     return found
 
 
-def report(nonce: str, ports: list[int], targets: list[str]) -> dict[str, object]:
-    """Try every target on every port once and name what was reached."""
-    return {"nonce": nonce, "ports": ports, "targets": targets, "reached": [[target, port] for target in targets for port in ports if reaches(target, port)]}
+def report(nonce: str, ports: list[int], targets: list[str], network: str) -> dict[str, object]:
+    """Try every target on every port once and name what was reached and the network the probe ran on."""
+    reached = [[target, port] for target in targets for port in ports if reaches(target, port)]
+    return {"nonce": nonce, "ports": ports, "network": network, "targets": targets, "reached": reached}
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3 or not all(value.isdecimal() and 0 < int(value) < 65536 for value in argv[1:]):
-        sys.stderr.write("usage: python -I - <NONCE> <TUNNEL_PORT> <RELAY_PORT>\n")
+    if len(argv) != 4 or not all(value.isdecimal() and 0 < int(value) < 65536 for value in argv[1:3]):
+        sys.stderr.write("usage: python -I - <NONCE> <TUNNEL_PORT> <RELAY_PORT> <NETWORK>\n")
         return 2
-    sys.stdout.write(json.dumps(report(argv[0], [int(argv[1]), int(argv[2])], host_targets())) + "\n")
+    sys.stdout.write(json.dumps(report(argv[0], [int(argv[1]), int(argv[2])], host_targets(), argv[3])) + "\n")
     return 0
 
 

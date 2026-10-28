@@ -116,7 +116,7 @@ def port_observation(spec: TransportSpec, status: int, processes: int) -> Observ
 
 def probe_command(folder: Path, nonce: str, ports: list[int], image: str) -> str:
     """The owner's command: run the container probe once on every Mac Docker network, then write the network list that ends the wait."""
-    arguments = f"{nonce} {ports[0]} {ports[1]}"
+    arguments = f'{nonce} {ports[0]} {ports[1]} "$network"'
     return (
         f"probe='{folder}'\n"
         "for network in $(docker network ls --format '{{.Name}}'); do\n"
@@ -137,7 +137,8 @@ def wait_for_probe(folder: Path, *, deadline: float, poll: float = PROBE_POLL_SE
 
 
 def container_observation(folder: Path, nonce: str, ports: list[int]) -> Observation:
-    """Observation 3: every listed Docker network has this run's result and none reached a port; any gap is not observed."""
+    """Observation 3: every listed Docker network has this run's result, made on that network with at least one target, and none reached a
+    port; any gap is not observed."""
     try:
         names = [line.strip() for line in (folder / NETWORK_LIST).read_text().splitlines() if line.strip()]
     except OSError:
@@ -155,9 +156,16 @@ def container_observation(folder: Path, nonce: str, ports: list[int]) -> Observa
             problem = problem or f"no readable result for network {name}"
             continue
         reached = result.get("reached") if isinstance(result, dict) else None
-        matches = isinstance(result, dict) and result.get("nonce") == nonce and result.get("ports") == ports and isinstance(result.get("targets"), list)
+        matches = (
+            isinstance(result, dict)
+            and result.get("nonce") == nonce
+            and result.get("ports") == ports
+            and result.get("network") == name
+            and isinstance(result.get("targets"), list)
+            and len(result["targets"]) > 0
+        )
         if not matches or not isinstance(reached, list):
-            problem = problem or f"the result of network {name} is not from this run"
+            problem = problem or f"the result of network {name} is not from this run on that network or tried no target"
         networks[name] = {
             "sha256": hashlib.sha256(raw).hexdigest(),
             "targets": len(result.get("targets") or []) if isinstance(result, dict) else 0,

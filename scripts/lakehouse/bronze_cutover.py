@@ -148,9 +148,14 @@ class RouteProbe(Protocol):
 def route_check(
     probe: RouteProbe, cutover_id: str, instance: str, folder: Path, *, deadline: float, stamp: str, clock: reg.Clock = time.monotonic
 ) -> dict[str, Any]:
-    """Make every route observation once for the bound host and record the results and evidence hashes write-once, passing or not."""
+    """Make every route observation once for the bound host and record the results and evidence hashes write-once, passing or not.
+
+    The attempt is persisted before the first observation, so an attempt that ends early (its deadline, an interruption) stays the newest
+    attempt and refuses register and verify instead of leaving an older passing record in force."""
     observations = []
     durable_directory(folder / ROUTE_CHECKS)
+    attempt = {"schema": 2, "cutover_id": cutover_id, "instance": instance, "time": stamp}
+    bronze_inventory.write_new(folder / ROUTE_CHECKS / f"{stamp}.attempt", reg.canonical(attempt))
     for name in ROUTE_OBSERVATIONS:
         reg.check_deadline(deadline, clock)
         passed, evidence = probe.observe(name, deadline=deadline)
@@ -181,11 +186,17 @@ def route_problem(observations: object) -> str | None:
 
 
 def require_route(folder: Path, cutover_id: str, instance: str) -> str:
-    """The SHA-256 of the newest route check; refuse when none exists, when it names another cutover or host or when any observation failed."""
-    checks = sorted((folder / ROUTE_CHECKS).glob("*.json")) if (folder / ROUTE_CHECKS).exists() else []
-    if not checks:
+    """The SHA-256 of the newest route check; refuse when none exists, when the newest attempt did not complete, when it names another
+    cutover or host, when any observation failed or when an evidence file is missing or no longer matches its recorded hash."""
+    checks_folder = folder / ROUTE_CHECKS
+    stamps = sorted({path.name.split(".", 1)[0] for path in checks_folder.iterdir()}) if checks_folder.exists() else []
+    if not stamps:
         raise CutoverError("no route check is recorded for this cutover; run route-check first")
-    raw = checks[-1].read_bytes()
+    newest = stamps[-1]
+    record = checks_folder / f"{newest}.json"
+    if not (checks_folder / f"{newest}.attempt").is_file() or not record.is_file():
+        raise CutoverError(f"the newest route check attempt {newest} did not complete (expired or interrupted); run route-check again")
+    raw = record.read_bytes()
     document = json.loads(raw)
     if document.get("schema") != 2 or document.get("cutover_id") != cutover_id:
         raise CutoverError("the newest route check belongs to another cutover; run route-check again")
@@ -194,6 +205,13 @@ def require_route(folder: Path, cutover_id: str, instance: str) -> str:
     problem = route_problem(document.get("observations"))
     if problem:
         raise CutoverError(f"the newest route check failed: {problem}; run route-check again once the route holds")
+    for item in document["observations"]:
+        try:
+            evidence = (checks_folder / f"{newest}.{item['name']}.evidence").read_bytes()
+        except OSError:
+            raise CutoverError(f"the evidence of {item['name']} in the newest route check is missing; run route-check again") from None
+        if hashlib.sha256(evidence).hexdigest() != item["evidence_sha256"]:
+            raise CutoverError(f"the evidence of {item['name']} no longer matches its recorded hash; run route-check again")
     return hashlib.sha256(raw).hexdigest()
 
 

@@ -325,10 +325,12 @@ SHA-256 of its sanitized evidence (kept beside it as `<STAMP>.<NAME>.evidence`, 
    root. The command runs `scripts/lakehouse/mac_route_probe.py` from standard input once on every network that
    `docker network ls` lists, with `--pull=never` and the local image given by `--probe-image` (it needs `python3`). It
    writes `networks.txt` last. `route-check` waits up to 900 seconds for that file. A missing, stale or unreadable
-   result counts as not observed.
+   result counts as not observed. So does a result that tried no target or names another network than its own.
 
-`register` and `verify` refuse to open the route unless the newest check passed for the same cutover and host. The
-receipt records the check's digest. This check does not observe the ECS class-network matrix: lakehouse tasks reach the
+`route-check` writes `route_checks/<STAMP>.attempt` before the first observation. `register` and `verify` refuse to
+open the route unless the newest attempt completed and passed for the same cutover and host. Every evidence file must
+still match its recorded SHA-256. An attempt that expired or was interrupted refuses them even when an older check
+passed. The receipt records the check's digest. This check does not observe the ECS class-network matrix: lakehouse tasks reach the
 catalog and S3, offline tasks do not reach the catalog and both fail to reach Redis, unrelated hosts and the internet.
 That matrix stays required, under [real AWS read verification](ecs_real_runs.md), before any ECS job uses the catalog.
 Before the tunnel starts, the network acceptance check requires local tunnel and relay ports other than
