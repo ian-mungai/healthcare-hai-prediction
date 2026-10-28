@@ -202,6 +202,7 @@
       "yamllint",
       "hadolint",
       "build-contexts",
+      "container-mounts",
       "gofmt",
       "go-vet",
       "model-metadata",
