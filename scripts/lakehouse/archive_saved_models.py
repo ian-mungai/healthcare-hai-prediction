@@ -14,6 +14,10 @@ functions and constants that hold them. Reference outputs of the 23 models are e
 fixture builds of that commit as Parquet into the ignored data/features/reference/ (owner decision W0-1, option A: the
 data-files check keeps data out of Git); the manifest records each export's SHA-256, rows and content fingerprint.
 Nothing is removed from the active project. Plan: plans/parallel_work_20261010/plan.md, wave 0 item 8.
+
+The feature phase later moved the models, macros and tests into dbt/models/features, dbt/macros/features and dbt/tests/features and rewrote them on gold.
+The manifest keeps their archived hashes and names the new path in ``moved_to``. ``check`` only looks for the file there. ``write`` refuses to run because
+dbt/ no longer equals the archived tree.
 """
 
 from __future__ import annotations
@@ -208,9 +212,15 @@ def write() -> dict[str, Any]:
 
 
 def check() -> dict[str, Any]:
-    """Every archived file and every reference export still has its recorded hash."""
+    """Every archived file still has its recorded hash or, once moved into the dbt project, exists at its new path; every reference export has its hash."""
     manifest = json.loads(MANIFEST.read_text())
-    problems = [path for path, entry in manifest["files"].items() if not (ROOT / path).is_file() or sha256((ROOT / path).read_bytes()) != entry["sha256"]]
+    moved = {path: entry["moved_to"] for path, entry in manifest["files"].items() if "moved_to" in entry}
+    problems = [
+        path
+        for path, entry in manifest["files"].items()
+        if path not in moved and (not (ROOT / path).is_file() or sha256((ROOT / path).read_bytes()) != entry["sha256"])
+    ]
+    problems += [path for path, target in moved.items() if not (ROOT / target).is_file()]
     missing_data = []
     for build in manifest["references"].values():
         for entry in build["files"].values():

@@ -1,0 +1,433 @@
+measure_control,retired_seeds,is_carried
+C001,cost_report_measures hhs_onc_measures impact_measures,true
+C002,cost_report_measures,true
+C003,cost_report_measures,true
+C006,impact_measures,true
+C021,impact_measures,true
+C022,impact_measures,true
+C023,cost_report_measures impact_measures,true
+C024,cost_report_measures impact_measures,true
+C025,impact_measures,true
+C026,impact_measures,true
+C027,cost_report_measures,true
+C028,cost_report_measures,true
+C029,cost_report_measures,true
+C030,occmix_measures,true
+C031,occmix_measures,true
+C032,occmix_measures,true
+C033,occmix_measures,true
+C034,occmix_measures,true
+C035,cost_report_measures,true
+C036,cost_report_measures,true
+C037,cost_report_measures,true
+C038,cost_report_measures impact_measures mup_measures,true
+C039,cost_report_measures,true
+C040,cost_report_measures hhs_onc_measures impact_measures,true
+C041,cost_report_measures,true
+C042,cost_report_measures mup_measures,true
+C043,occmix_measures,true
+C045,cost_report_measures,true
+C046,cost_report_measures,true
+C047,cost_report_measures,true
+C048,cost_report_measures,true
+C049,cost_report_measures,true
+C050,cost_report_measures,true
+C051,cost_report_measures,true
+C052,cost_report_measures,true
+C053,cost_report_measures,true
+C054,cost_report_measures,true
+C055,cost_report_measures,true
+C056,cost_report_measures,true
+C057,cost_report_measures,true
+C058,cost_report_measures,true
+C067,ownership_measures,true
+C068,ownership_measures,true
+C069,ownership_measures,true
+C070,ownership_measures,true
+C071,hhs_onc_measures,true
+C072,hhs_onc_measures,true
+C073,hhs_onc_measures,true
+C074,hhs_onc_measures,true
+C076,mup_measures,true
+C077,mup_measures,true
+C078,mup_measures,true
+C079,mup_measures,true
+C080,mup_measures,true
+C081,mup_measures,true
+C082,mup_measures,true
+C083,mup_measures,true
+C084,mup_measures,true
+C085,mup_measures,true
+C086,mup_measures,true
+C087,mup_measures,true
+C088,mup_measures,true
+C089,mup_measures,true
+C090,mup_measures,true
+C091,mup_measures,true
+C092,mup_measures,true
+C093,mup_measures,true
+C094,mup_measures,true
+C095,mup_measures,true
+C096,mup_measures,true
+C097,mup_measures,true
+C098,mup_measures,true
+C099,mup_measures,true
+C100,mup_measures,true
+C101,mup_measures,true
+C102,mup_measures,true
+C103,mup_measures,true
+C104,mup_measures,true
+C105,mup_measures,true
+C106,mup_measures,true
+C107,mup_measures,true
+C108,mup_measures,true
+C109,mup_measures,true
+C110,mup_measures,true
+C111,mup_measures,true
+C112,mup_measures,true
+C113,mup_measures,true
+C114,mup_measures,true
+C115,mup_measures,true
+C116,mup_measures,true
+C117,mup_measures,true
+C118,mup_measures,true
+C119,registry_measure_sources,true
+C120,registry_measure_sources,true
+C121,registry_measure_sources,true
+C122,registry_measure_sources,true
+C123,registry_measure_sources,true
+C124,registry_measure_sources,true
+C125,registry_measure_sources,true
+C126,registry_measure_sources,true
+C127,registry_measure_sources,true
+C128,registry_measure_sources,true
+C129,registry_measure_sources,true
+C130,registry_measure_sources,true
+C131,registry_measure_sources,true
+C132,registry_measure_sources,true
+C133,registry_measure_sources,true
+C134,registry_measure_sources,true
+C135,registry_measure_sources,true
+C136,registry_measure_sources,true
+C137,registry_measure_sources,true
+C138,registry_measure_sources,true
+C139,registry_measure_sources,true
+C140,registry_measure_sources,true
+C141,registry_measure_sources,true
+C142,registry_measure_sources,true
+C143,registry_measure_sources,true
+C144,registry_measure_sources,true
+C145,registry_measure_sources,true
+C146,registry_measure_sources,true
+C147,registry_measure_sources,true
+C148,registry_measure_sources,true
+C149,registry_measure_sources,true
+C150,registry_measure_sources,true
+C151,registry_measure_sources,true
+C152,registry_measure_sources,true
+C153,registry_measure_sources,true
+C154,registry_measure_sources,true
+C155,registry_measure_sources,true
+C156,registry_measure_sources,true
+C157,registry_measure_sources,true
+C158,registry_measure_sources,true
+C159,registry_measure_sources,true
+C160,registry_measure_sources,true
+C161,registry_measure_sources,true
+C162,registry_measure_sources,true
+C163,registry_measure_sources,true
+C164,registry_measure_sources,true
+C165,registry_measure_sources,true
+C166,registry_measure_sources,true
+C167,registry_measure_sources,true
+C168,registry_measure_sources,true
+C169,registry_measure_sources,true
+C170,registry_measure_sources,true
+C171,registry_measure_sources,true
+C172,registry_measure_sources,true
+C173,registry_measure_sources,true
+C174,registry_measure_sources,true
+C175,acs_svi_measures,true
+C175.01,acs_svi_measures,true
+C175.02,acs_svi_measures,true
+C176,acs_svi_measures,true
+C177,acs_svi_measures income_labor_measures,true
+C177.01,acs_svi_measures income_labor_measures,true
+C177.02,acs_svi_measures income_labor_measures,true
+C178,acs_svi_measures,true
+C179,acs_svi_measures,true
+C180,acs_svi_measures,true
+C180.01,acs_svi_measures,true
+C180.02,acs_svi_measures,true
+C181,acs_svi_measures,true
+C182,acs_svi_measures,true
+C183,acs_svi_measures,true
+C183.01,acs_svi_measures,true
+C183.02,acs_svi_measures,true
+C184,acs_svi_measures,true
+C185,acs_svi_measures,true
+C185.01,acs_svi_measures,true
+C185.02,acs_svi_measures,true
+C186,acs_svi_measures,true
+C186.01,acs_svi_measures,true
+C186.02,acs_svi_measures,true
+C187,acs_svi_measures,true
+C188,acs_svi_measures,true
+C189,acs_svi_measures,true
+C190,acs_svi_measures,true
+C191,acs_svi_measures,true
+C192,acs_svi_measures,true
+C192.01,acs_svi_measures,true
+C192.02,acs_svi_measures,true
+C192.03,acs_svi_measures,true
+C192.04,acs_svi_measures,true
+C192.05,acs_svi_measures,true
+C192.06,acs_svi_measures,true
+C192.07,acs_svi_measures,true
+C192.08,acs_svi_measures,true
+C192.09,acs_svi_measures,true
+C193,acs_svi_measures,true
+C194,acs_svi_measures,true
+C195,acs_svi_measures,true
+C196,acs_svi_measures,true
+C197,acs_svi_measures,true
+C198,geography_measures,true
+C199,geography_measures,true
+C199.01,geography_measures,true
+C199.02,geography_measures,true
+C199.03,geography_measures,true
+C200,income_labor_measures,true
+C201,income_labor_measures,true
+C202,income_labor_measures,true
+C203,county_health_measures,true
+C204,county_health_measures,true
+C205,county_health_measures,true
+C206,county_health_measures,true
+C207,county_health_measures,true
+C208,county_health_measures,true
+C209,county_health_measures,true
+C210,county_health_measures,true
+C211,county_health_measures,true
+C212,county_health_measures,true
+C213,county_health_measures,true
+C214,county_health_measures,true
+C215,county_health_measures,true
+C216,county_health_measures,true
+C217,county_health_measures,true
+C218,county_health_measures,true
+C219,county_health_measures,true
+C220,county_health_measures,true
+C221,county_health_measures,true
+C222,county_health_measures,true
+C223,county_health_measures,true
+C224,county_health_measures,true
+C225,county_health_measures,true
+C226,county_health_measures,true
+C227,county_health_measures,true
+C228,county_health_measures,true
+C229,county_health_measures,true
+C230,county_health_measures,true
+C231,county_health_measures,true
+C232,county_health_measures,true
+C233,county_health_measures,true
+C234,county_health_measures,true
+C235,county_health_measures,true
+C236,county_health_measures,true
+C237,county_health_measures,true
+C238,county_health_measures,true
+C239,county_health_measures,true
+C240,county_health_measures,true
+C241,county_health_measures,true
+C242,county_health_measures,true
+C242.01,county_health_measures,true
+C242.02,county_health_measures,true
+C243,county_health_measures,true
+C249,shortage_measures,true
+C250,shortage_measures,true
+C251,shortage_measures,true
+C252,county_health_measures,true
+C253,county_health_measures,true
+C254,county_health_measures,true
+C255,county_health_measures,true
+C256,county_health_measures,true
+C256.01,county_health_measures,true
+C256.02,county_health_measures,true
+C256.03,county_health_measures,true
+C257,county_health_measures,true
+C257.01,county_health_measures,true
+C257.02,county_health_measures,true
+C257.03,county_health_measures,true
+C258,shortage_measures,true
+C258.01,mmd_conditions shortage_measures,true
+C258.02,mmd_conditions shortage_measures,true
+C258.03,mmd_conditions shortage_measures,true
+C258.04,mmd_conditions shortage_measures,true
+C258.05,mmd_conditions shortage_measures,true
+C258.06,mmd_conditions shortage_measures,true
+C258.07,mmd_conditions shortage_measures,true
+C258.08,mmd_conditions shortage_measures,true
+C258.09,mmd_conditions shortage_measures,true
+C258.10,mmd_conditions shortage_measures,true
+C258.11,mmd_conditions shortage_measures,true
+C258.12,mmd_conditions shortage_measures,true
+C258.13,mmd_conditions shortage_measures,true
+C258.14,mmd_conditions shortage_measures,true
+C258.15,mmd_conditions shortage_measures,true
+C258.16,mmd_conditions shortage_measures,true
+C258.17,mmd_conditions shortage_measures,true
+C258.18,mmd_conditions shortage_measures,true
+C258.19,mmd_conditions shortage_measures,true
+C258.20,mmd_conditions shortage_measures,true
+C258.21,mmd_conditions shortage_measures,true
+C258.22,mmd_conditions shortage_measures,true
+C258.23,mmd_conditions shortage_measures,true
+C258.24,mmd_conditions shortage_measures,true
+C258.25,mmd_conditions shortage_measures,true
+C258.26,mmd_conditions shortage_measures,true
+C258.27,mmd_conditions shortage_measures,true
+C258.28,mmd_conditions shortage_measures,true
+C258.29,mmd_conditions shortage_measures,true
+C258.30,mmd_conditions shortage_measures,true
+C258.31,mmd_conditions shortage_measures,true
+C258.32,mmd_conditions shortage_measures,true
+C258.33,mmd_conditions shortage_measures,true
+C258.34,mmd_conditions shortage_measures,true
+C258.35,mmd_conditions shortage_measures,true
+C258.36,mmd_conditions shortage_measures,true
+C258.37,mmd_conditions shortage_measures,true
+C258.38,mmd_conditions shortage_measures,true
+C258.39,mmd_conditions shortage_measures,true
+C258.40,mmd_conditions shortage_measures,true
+C258.41,mmd_conditions shortage_measures,true
+C258.42,mmd_conditions shortage_measures,true
+C258.43,mmd_conditions shortage_measures,true
+C258.44,mmd_conditions shortage_measures,true
+C258.45,mmd_conditions shortage_measures,true
+C258.46,mmd_conditions shortage_measures,true
+C258.47,mmd_conditions shortage_measures,true
+C258.48,mmd_conditions shortage_measures,true
+C258.49,mmd_conditions shortage_measures,true
+C258.50,mmd_conditions shortage_measures,true
+C258.51,mmd_conditions shortage_measures,true
+C258.52,mmd_conditions shortage_measures,true
+C258.53,mmd_conditions shortage_measures,true
+C258.54,mmd_conditions shortage_measures,true
+C258.55,mmd_conditions shortage_measures,true
+C258.56,mmd_conditions shortage_measures,true
+C258.57,mmd_conditions shortage_measures,true
+C258.58,mmd_conditions shortage_measures,true
+C258.59,mmd_conditions shortage_measures,true
+C258.60,mmd_conditions shortage_measures,true
+C258.61,mmd_conditions shortage_measures,true
+C258.62,mmd_conditions shortage_measures,true
+C258.63,mmd_conditions shortage_measures,true
+C258.64,mmd_conditions shortage_measures,true
+C258.65,mmd_conditions shortage_measures,true
+C258.66,mmd_conditions shortage_measures,true
+C258.67,mmd_conditions shortage_measures,true
+C258.68,mmd_conditions shortage_measures,true
+C258.69,mmd_conditions shortage_measures,true
+C258.70,mmd_conditions shortage_measures,true
+C258.71,mmd_conditions shortage_measures,true
+C258.72,mmd_conditions shortage_measures,true
+C258.73,mmd_conditions shortage_measures,true
+C258.74,mmd_conditions shortage_measures,true
+C258.75,mmd_conditions shortage_measures,true
+C258.76,mmd_conditions shortage_measures,true
+C258.77,mmd_conditions shortage_measures,true
+C258.78,mmd_conditions shortage_measures,true
+C258.79,mmd_conditions shortage_measures,true
+C258.80,mmd_conditions shortage_measures,true
+C258.81,mmd_conditions shortage_measures,true
+C259,county_health_measures,true
+C260,hhs_onc_measures,true
+C261,hhs_onc_measures,true
+C262.01,hhs_onc_measures,true
+C262.02,hhs_onc_measures,true
+C262.03,hhs_onc_measures,true
+C262.04,hhs_onc_measures,true
+C262.05,hhs_onc_measures,true
+C262.06,hhs_onc_measures,true
+C263.01,hhs_onc_measures,true
+C263.02,hhs_onc_measures,true
+C263.03,hhs_onc_measures,true
+C263.04,hhs_onc_measures,true
+C263.05,hhs_onc_measures,true
+C263.06,hhs_onc_measures,true
+C269,hai_outcome_measures,true
+C270,hai_outcome_measures,true
+C271,hai_outcome_measures,true
+C272,hai_outcome_measures,true
+C273,hai_outcome_measures,true
+C274,hai_outcome_measures,true
+C275,hai_outcome_measures,true
+C276,hai_outcome_measures,true
+C277,hai_outcome_measures,true
+C278,hai_outcome_measures,true
+C279,hai_outcome_measures,true
+C280,hai_outcome_measures,true
+C281,hai_outcome_measures,true
+C282,hai_outcome_measures,true
+C283,hai_outcome_measures,true
+C283.benchmark_category,hai_outcome_measures,true
+C283.lower_limits,hai_outcome_measures,true
+C283.upper_limits,hai_outcome_measures,true
+C284,registry_measure_sources,true
+C285,validation_measures,true
+C286,validation_measures,true
+C287,validation_measures,true
+C288,validation_measures,true
+C288.payment_adjustment,validation_measures,false
+C288.total_performance,validation_measures,true
+C289,validation_measures,true
+C289.01,validation_measures,true
+C289.02,validation_measures,true
+C289.03,validation_measures,true
+C289.04,validation_measures,true
+C289.05,validation_measures,true
+C289.06,validation_measures,true
+C290,validation_measures,true
+C290.01,validation_measures,true
+C290.02,validation_measures,true
+C290.03,validation_measures,true
+C290.04,validation_measures,true
+C291,validation_measures,true
+C291.01,validation_measures,true
+C291.02,validation_measures,true
+C291.03,validation_measures,true
+C291.04,validation_measures,true
+C291.05,validation_measures,true
+C291.06,validation_measures,true
+E034.01,hhs_onc_measures,true
+E034.02,hhs_onc_measures,true
+E034.03,hhs_onc_measures,true
+E034.04,hhs_onc_measures,true
+E034.05,hhs_onc_measures,true
+E034.06,hhs_onc_measures,true
+E034.07,hhs_onc_measures,true
+E034.08,hhs_onc_measures,true
+E034.09,hhs_onc_measures,true
+E034.10,hhs_onc_measures,true
+E034.11,hhs_onc_measures,true
+E034.12,hhs_onc_measures,true
+E034.13,hhs_onc_measures,true
+E034.14,hhs_onc_measures,true
+E034.15,hhs_onc_measures,true
+E034.16,hhs_onc_measures,true
+E034.17,hhs_onc_measures,true
+E034.18,hhs_onc_measures,true
+E034.19,hhs_onc_measures,true
+E034.20,hhs_onc_measures,true
+E034.21,hhs_onc_measures,true
+E034.22,hhs_onc_measures,true
+E034.23,hhs_onc_measures,true
+E034.24,hhs_onc_measures,true
+E034.25,hhs_onc_measures,true
+E034.26,hhs_onc_measures,true
+E035.01,hhs_onc_measures,true
+E038,validation_measures,true
+E039,validation_measures,true
+L001,geography_measures,true
+L002,geography_measures,true
+L004,geography_measures,true
+L005,ownership_measures,true

@@ -17,7 +17,7 @@ A27); only the HAI state and national facts, which no bridge row names, keep the
 (a held or closed control such as the C258 definition hold) is not a published key: it is checked by ``assert_bridge_rows_complete``. An unsupported key
 stops the generator. The dbt tests of the bridge read these seeds because the dbt container sees only the project.
 
-``--check`` also validates each recipe in features/recipes/: the file header and a non-empty body, the recipe-group inventory (``recipe_groups.csv``,
+``--check`` also validates each recipe in dbt/seeds/features/: the file header and a non-empty body, the recipe-group inventory (``recipe_groups.csv``,
 every group with its count of inputs per role), group-level required metadata (period, grouping and suppression rules; geography level, source status
 and field mapping where the retired seeds required them), allowed rules and roles, contract columns, published-key predicates and the rule that every value
 input is a bridge row of the same control. The contract is not committed (it sits in the ignored plans folder), so a run without it needs
@@ -42,14 +42,13 @@ CONTRACT = REPO_ROOT / "data_contracts/lakehouse/gold_contract.json"
 REGISTRY = REPO_ROOT / "config/acquisition/source_registry.json"
 ADDITIONS = REPO_ROOT / "config/acquisition/registry_additions.json"
 GOLD_SEEDS = REPO_ROOT / "dbt/seeds/gold"
-RECIPES = REPO_ROOT / "features/recipes"
+RECIPES = REPO_ROOT / "dbt/seeds/features"
 SILVER_SEEDS = REPO_ROOT / "dbt/seeds"
 HAI_MACRO = REPO_ROOT / "dbt/macros/hai_outcome_columns.sql"
 DOMAIN_SEED = SILVER_SEEDS / "gold_measure_id_domains.csv"
 DOMAIN_COLUMNS = ("domain", "published_key", "published_headers", "source_table", "source_column", "first_release", "last_release")
 SVI_IDENTIFIER_MACRO = (REPO_ROOT / "dbt/macros/county_context_columns.sql", "svi_identifier_columns")
 GV_IDENTIFIER_MACRO = (REPO_ROOT / "dbt/macros/county_health_columns.sql", "gv_identifier_columns")
-ARCHIVED_COUNTY_CONTEXT = REPO_ROOT / "features/models/int_spine_county_context.sql"
 REGISTRY_REVISION = 3
 CONTRACT_COLUMNS = ("gold_model", "column_name", "footnote_column", "is_measure_key")
 CONTROL_COLUMNS = ("measure_control", "parent_control", "origin")
@@ -97,7 +96,7 @@ IDENTIFIER_MACROS = {"SVI": SVI_IDENTIFIER_MACRO, "GV": GV_IDENTIFIER_MACRO}
 EVIDENCE_FACTS = ("fct_acs_county_value", "fct_ipps_impact_value", "fct_hai_hospital_window", "fct_bls_county_series")
 # Long facts with no authoritative domain: the bridge test applies only its structural checks to their keys (no bridge row names a key of these today).
 STRUCTURAL_ONLY_FACTS = ("fct_hai_state_window", "fct_hai_national_window")
-# Reviewed BLS measures; the archived county-context model unnests exactly these (checked against its text).
+# Reviewed BLS measures; the income and labor bridge rows may name only these (the generator stops on any other key).
 BLS_MEASURES = ("unemployment_rate", "unemployed", "employed", "labor_force")
 KEY_SEPARATOR = "|"
 # The words of the message that reports skipped checks; a run with such a message is never a pass.
@@ -292,8 +291,6 @@ def hai_keys() -> set[str]:
 
 def key_domains() -> dict[str, tuple[str, set[str]]]:
     """Return the reviewed measure-key domains by fact: the basis name and the allowed keys."""
-    if not set(BLS_MEASURES) <= set(re.findall(r"'([a-z_]+)'", ARCHIVED_COUNTY_CONTEXT.read_text())):
-        raise ReferenceInputError("the archived county-context model no longer names the reviewed BLS measures")
     acs = {row["concept_id"] for row in read_rows(SILVER_SEEDS / "acs_variable_map.csv")}
     impact = {row["field"] for row in read_rows(SILVER_SEEDS / "impact_layout_columns.csv")}
     return {

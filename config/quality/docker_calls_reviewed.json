@@ -469,105 +469,105 @@
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 158,
+      "line": 113,
       "code_sha256": "f358f8cea2df557bf32cdaf6b4dc0246232da9aa20916194c11c4bbbbe384b12",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
+      "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
+        "scripts/quality/repo_checks.py": "sha256:f258370f0213da2a5571fb7212ca00fbef7c5c1a0beb37b39eea0f2c616b598e"
       },
       "reason": "runs a pinned native linter from .tools/bin (shellcheck, actionlint or hadolint, named from config/quality_tools.json) with its version flag"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 187,
+      "line": 142,
       "code_sha256": "965b2fb24fba80e1b4dc15abfb79a40639337d8a6bd307be3a3d50b9a3338de1",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
+      "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
+        "scripts/quality/repo_checks.py": "sha256:f258370f0213da2a5571fb7212ca00fbef7c5c1a0beb37b39eea0f2c616b598e"
       },
       "reason": "runs a declared shell interpreter (sh, bash, dash, zsh or ksh only, from the source's shebang or extension) with -n to check syntax"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 243,
+      "line": 187,
       "code_sha256": "fd40c94d9e9392559ff22762cc4cb941caae9d997df0daaab37ed1fdc83855f3",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
+      "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
+        "scripts/quality/repo_checks.py": "sha256:f258370f0213da2a5571fb7212ca00fbef7c5c1a0beb37b39eea0f2c616b598e"
       },
       "reason": "runs the pinned SQLFluff from .tools/sqlfluff/bin with lint arguments"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 258,
+      "line": 271,
       "code_sha256": "f8c56d974f57abe387f78f0bef9bbf3b8eef1ad258f002599ef6a36441d701a7",
       "problem": "whose program the check cannot prove",
       "occurrences": 2,
-      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
+      "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
+        "scripts/quality/repo_checks.py": "sha256:f258370f0213da2a5571fb7212ca00fbef7c5c1a0beb37b39eea0f2c616b598e"
       },
       "reason": "two calls whose first line is the same code: line 258 runs pinned dbt from .tools/sqlfluff/bin with parse to read the macro call graph; line 327 runs pinned SQLFluff from .tools/sqlfluff/bin on temporary masked copies of DuckDB CLI scripts"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 354,
+      "line": 298,
       "code_sha256": "d75274826882b437b689d5b81193a2f97388dbc7fe9fa2dfe757f94933685050",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
+      "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
+        "scripts/quality/repo_checks.py": "sha256:f258370f0213da2a5571fb7212ca00fbef7c5c1a0beb37b39eea0f2c616b598e"
       },
       "reason": "runs gofmt from the folder of the verified Go 1.27.3 program with -l"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 528,
+      "line": 472,
       "code_sha256": "cff80cdc4d10023eadcab151ee1587c2fa228a6a33f7ddf690876b575403b4b5",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
+      "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
+        "scripts/quality/repo_checks.py": "sha256:f258370f0213da2a5571fb7212ca00fbef7c5c1a0beb37b39eea0f2c616b598e"
       },
       "reason": "runs the private yamllint environment's Python, or the current interpreter, with -m yamllint --version"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 532,
+      "line": 476,
       "code_sha256": "1893430c33b623d1bbcc9424e6727d2ca17af3dc51718382c93583a4e8bbdef9",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
+      "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
+        "scripts/quality/repo_checks.py": "sha256:f258370f0213da2a5571fb7212ca00fbef7c5c1a0beb37b39eea0f2c616b598e"
       },
       "reason": "runs the private yamllint environment's Python, or the current interpreter, with -m yamllint on the selected sources"
     },
     {
       "path": "scripts/quality/lint_sources.py",
-      "line": 536,
+      "line": 480,
       "code_sha256": "5a40e40360800053230faed6c6757add11e7596eff8d6184c10034c5b8532ec0",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "ab3adc9fd9b6785d3af0634d698cc8da1fca33dc29d0f025f2a9dedf8ce3d188",
+      "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:c3825bd791ed3f1c33d4801a88548ecd0809dbd78ac32cf14a82d43d993be4ff"
+        "scripts/quality/repo_checks.py": "sha256:f258370f0213da2a5571fb7212ca00fbef7c5c1a0beb37b39eea0f2c616b598e"
       },
       "reason": "runs a pinned native linter from .tools/bin (shellcheck, actionlint or hadolint) on the selected sources"
     },

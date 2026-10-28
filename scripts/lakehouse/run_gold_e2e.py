@@ -44,7 +44,7 @@ from scripts.lakehouse import run_staging_e2e as staging
 REPO_ROOT = catalog.REPO_ROOT
 REPORTS = REPO_ROOT / "data/e2e/gold"
 BASELINES = REPO_ROOT / "data_contracts/great_expectations/baselines.json"
-GOLD_MODELS = "path:models/gold"
+GOLD_MODELS = "path:models/gold --exclude tag:features"
 BUILD_OK = ("success", "pass")
 RELEASE_COPY_TEST = "release_copy_consistency_dim_release"
 # dbt names a model-level generic test <test>_<model>_ (an empty column name leaves the trailing underscore); the lead names it without it.
@@ -674,6 +674,15 @@ def fixture_stage(run: Run, args: argparse.Namespace, contract: gold_checks.Cont
             summary = run_suites_offline(case, suites, plan)
             run.checks["fixture.gold_suites_pass"] = not summary["problems"]
             stage["details"]["suites"] = summary
+        run.enter("fixture:features")
+        # The feature models (tag features, left out of the default selection) build and pass their tests on the fixture gold.
+        features_code, features_tail, features_statuses = package_fixture.dbt(case, ["build", "--select", "tag:features"])
+        features_failed = not_passing(statuses_by_name(features_statuses))
+        run.checks["fixture.features_build_passes"] = features_code == 0 and bool(features_statuses) and not features_failed
+        stage["details"]["features_not_passing"] = features_failed[:30]
+        stage["details"]["features_nodes"] = len(features_statuses)
+        if not features_statuses:
+            stage["details"]["features_tail"] = features_tail[-400:]
         if args.self_test:
             run.enter("fixture:self_test")
             test = self_test(case, args.self_test, overlays, contract, backend, suites)

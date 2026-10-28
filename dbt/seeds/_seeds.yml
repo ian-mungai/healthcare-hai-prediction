@@ -129,7 +129,7 @@ seeds:
   - name: cost_report_measures_bridge
     description: >
       Cost report controls (family S01): one row per cost report column a control reads; the rule is in
-      features/recipes/cost_report_measures_recipe.csv.
+      dbt/seeds/features/cost_report_measures_recipe.csv.
     config:
       column_types:
         fact: varchar
@@ -164,7 +164,7 @@ seeds:
   - name: impact_measures_bridge
     description: >
       IPPS impact controls (family S04): one row per impact field a control reads, on the long impact value fact; the rule
-      is in features/recipes/impact_measures_recipe.csv.
+      is in dbt/seeds/features/impact_measures_recipe.csv.
     config:
       column_types:
         fact: varchar
@@ -199,7 +199,7 @@ seeds:
   - name: mup_measures_bridge
     description: >
       Medicare inpatient controls (family S08): one row per provider-summary column or DRG code a control reads, and one row
-      for each held or closed control; the rule is in features/recipes/mup_measures_recipe.csv.
+      for each held or closed control; the rule is in dbt/seeds/features/mup_measures_recipe.csv.
     config:
       column_types:
         fact: varchar
@@ -234,7 +234,7 @@ seeds:
   - name: occmix_measures_bridge
     description: >
       Occupational-mix controls (family S03): one row per survey column a control reads; C043 is closed and keeps one row
-      with no column. The formulas are in features/recipes/occmix_measures_recipe.csv.
+      with no column. The formulas are in dbt/seeds/features/occmix_measures_recipe.csv.
     config:
       column_types:
         fact: varchar
@@ -339,7 +339,7 @@ seeds:
   - name: hhs_onc_measures_bridge
     description: >
       HHS capacity and ONC controls (families S09 and S10): one row per column a control reads; C001 and C040 are closed for
-      the HHS part and keep one row with no column. Rules are in features/recipes/hhs_onc_measures_recipe.csv.
+      the HHS part and keep one row with no column. Rules are in dbt/seeds/features/hhs_onc_measures_recipe.csv.
     config:
       column_types:
         fact: varchar
@@ -551,7 +551,7 @@ seeds:
     description: >
       Medicare Multiple Chronic Conditions prevalence controls (family S27): the published condition label of each control.
       The unit is in the silver seed mmd_condition_units, the selection and component rule in
-      features/recipes/mmd_conditions_recipe.csv. C258 keeps one row with no label.
+      dbt/seeds/features/mmd_conditions_recipe.csv. C258 keeps one row with no label.
     config:
       column_types:
         fact: varchar
