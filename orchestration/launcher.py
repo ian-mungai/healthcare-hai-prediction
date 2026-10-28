@@ -60,7 +60,7 @@ from typing import Any, Literal, NamedTuple, NoReturn
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from orchestration import dbt_lineage, lineage_services, network_policy, pipeline_protocol, pipeline_render, pipeline_session
+from orchestration import dbt_lineage, ecs_target, lineage_services, network_policy, pipeline_protocol, pipeline_render, pipeline_session
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import dbt_package_archive, gold_publish_record, memory_budget, pins, run_lock
 from scripts.lakehouse import provenance as build_provenance
@@ -230,6 +230,7 @@ class Config:
     catalog_checkout: Path | None = None
     # A test registry may name the user ID the launcher treats as its own, so a test can show that a peer of another user is refused.
     expected_uid: int | None = None
+    ecs_runtime: ecs_target.Runtime | None = None
 
     @property
     def token_anchor(self) -> Path:
@@ -3144,6 +3145,8 @@ class Launcher:
 
     def __init__(self, config: Config) -> None:
         self.cfg = config
+        self.ecs_jobs = ecs_target.load_jobs(config.root)
+        self.ecs_runtime = config.ecs_runtime
         self.registry = config.registry
         self.docker = DockerApi(config.docker_socket, config.timings.docker_call_timeout)
         self.timings = config.timings
@@ -3680,6 +3683,16 @@ class Launcher:
         with self.tx(write=False) as state:
             return bool(state["launcher"].get("restart"))
 
+    def ecs_ready(self) -> bool:
+        return bool(self.ecs_jobs["enabled"] and self.ecs_runtime is not None)
+
+    def cloud_request(self, method: str, params: Mapping[str, Any]) -> bool:
+        if not self.ecs_ready():
+            return False
+        if method == "acquire":
+            return True
+        return method == "submit" and any(row["template"] == params.get("template") for row in self.ecs_jobs["jobs"])
+
     def dispatch(self, conn: Conn, request: dict[str, Any], request_id: str, method: str) -> Any:
         """Authenticate, check the request record and run the method in one transaction with its effect (D1 section 3)."""
         if request.get("v") != PROTOCOL:
@@ -3691,11 +3704,14 @@ class Launcher:
         principal = dict(request.get("principal") or {"kind": "any"})
         if not isinstance(params, dict):
             raise LauncherError("params must be an object", "protocol")
-        if self.restart_running() and method not in ("ping", "status"):
+        if method == "submit" and params.get("target") == "ecs" and not self.ecs_ready():
+            raise LauncherError("ECS is disabled or its runtime is not integrated", "refused")
+        cloud_request = self.cloud_request(method, params)
+        if self.restart_running() and method not in ("ping", "status") and not cloud_request:
             raise LauncherError("a Docker restart is running", "refused")
-        if self.status == "starting" and method not in ("ping", "status"):
+        if self.status == "starting" and method not in ("ping", "status") and not cloud_request:
             raise Degraded("the launcher is starting")
-        if self.status == "degraded" and method not in ("ping", "status", "shutdown", "cancel", "logs", "release_allocation", "recover"):
+        if self.status == "degraded" and method not in ("ping", "status", "shutdown", "cancel", "logs", "release_allocation", "recover") and not cloud_request:
             raise Degraded(f"degraded: {self.degraded_reason}")
         if principal.get("kind") not in spec.kinds:
             raise LauncherError(f"{method} is not callable by principal {principal.get('kind')!r}", "principal")
@@ -4176,11 +4192,13 @@ class Launcher:
                 return False
         else:
             return False
-        if state["launcher"].get("restart"):
+        if "execution" in attempt and not self.catalog_epoch_matches(state, attempt):
+            return False
+        if state["launcher"].get("restart") and "execution" not in attempt:
             return False
         if self.template_problem(state, owner, attempt["template"], attempt["params"]):
             return False
-        return not (TEMPLATES[attempt["template"]].needs_catalog and state["launcher"].get("barrier"))
+        return "execution" in attempt or not (TEMPLATES[attempt["template"]].needs_catalog and state["launcher"].get("barrier"))
 
     def intent_reason(self, attempt: Mapping[str, Any], default: str = "exited") -> str:
         """The recorded end reason for an attempt that was cancelled, timed out or fenced."""
@@ -4589,6 +4607,14 @@ class Launcher:
         """One pass over every open attempt and every owner: the state machine of D1 sections 4 to 6."""
         if self.status == "starting" and not self.docker_ok:
             self.expire_lineage_startup()
+            if self.ecs_ready():
+                cloud_actions: list[Callable[[], None]] = []
+                with self.tx() as state:
+                    for attempt in state["attempts"].values():
+                        if is_open(attempt) and "execution" in attempt:
+                            self.advance(state, attempt, cloud_actions)
+                for action in cloud_actions:
+                    action()
             return
         actions: list[Callable[[], None]] = []
         with self.tx() as state:
@@ -4608,6 +4634,19 @@ class Launcher:
 
     def advance(self, state: dict[str, Any], a: dict[str, Any], actions: list[Callable[[], None]]) -> None:
         """Move one attempt a step; every Docker side effect is an operation recorded before it is dispatched."""
+        execution = a.get("execution")
+        if execution and execution["live_try"]:
+            live = next(item for item in execution["placements"] if item["try_id"] == execution["live_try"])
+            if live["target"] == "ecs":
+                if not self.admissible(state, a) or not self.catalog_epoch_matches(state, a):
+                    a["cancel_intent"] = a.get("cancel_intent") or {"reason": "fenced", "at": utc_now()}
+                if self.ecs_runtime is not None:
+                    self.ecs_runtime.advance(state, a, time.time())
+                    if a["phase"] == "ended":
+                        if execution["live_try"] is not None:
+                            raise ecs_target.PlacementError("an unconfirmed cloud task cannot end its attempt")
+                        self.finish_attempt(state, a, str(a["reason"]))
+                return
         phase = a["phase"]
         if phase == "queued":
             self.advance_queued(state, a, actions)
@@ -4645,6 +4684,8 @@ class Launcher:
             if gone or (run is None and allocation is None and not owner.startswith(("service:", "stack:"))):
                 a["cancel_intent"] = {"reason": "owner_not_held", "at": utc_now()}
             return
+        if "execution" in a and self.advance_target(state, a, actions):
+            return
         if not self.docker_ok or self.status != "serving" and owner != DIAGNOSTIC_OWNER:
             return
         if a["template"] == "real_dbt" and owner.startswith("run:") and build_provenance.is_serialized(a["args"]):
@@ -4666,6 +4707,9 @@ class Launcher:
                 return
         elif owner.startswith("run:"):
             if a["plan_env"] is None:
+                if time.time() < float(a.get("capacity_retry_at") or 0):
+                    a["waiting_on"] = "the fresh Mac plan cannot fit the job"
+                    return
                 if self.heavy_holder(state) is not None:
                     a["waiting_on"] = "the machine"
                     return
@@ -4695,7 +4739,99 @@ class Launcher:
             building["build_state"] = "open"
             for key in ("completion", "seal_error", "build_attempt", "build_binding"):
                 building.pop(key, None)
+        if "execution" in a and a["execution"]["live_try"] is None:
+            if self.ecs_runtime is None:
+                return
+            decision = ecs_target.Decision(**a["placement_decision"])
+            size = self.ecs_runtime.size(a)
+            if int((a.get("plan_env") or {}).get("JOB_MEMORY_LIMIT", 0)) < size.memory_mib * 1024**2:
+                a["waiting_on"] = "the fresh Mac plan cannot fit the job"
+                a["capacity_retry_at"] = time.time() + self.CAPACITY_RETRY
+                if a.get("attempt_alloc"):
+                    state["allocations"][a["attempt_alloc"]]["state"] = "released"
+                    a.update(attempt_alloc=None, plan_env=None, prepared=False)
+                return
+            ecs_target.reserve(a, size, decision, time.time())
         self.start_create(state, a, actions)  # False: the image's defaults are being read; the attempt stays queued
+
+    def advance_target(self, state: dict[str, Any], attempt: dict[str, Any], actions: list[Callable[[], None]]) -> bool:
+        live_try = attempt["execution"]["live_try"]
+        if live_try is not None:
+            live = next(item for item in attempt["execution"]["placements"] if item["try_id"] == live_try)
+            return live["target"] != "docker"
+        if self.ecs_runtime is None:
+            attempt["waiting_on"] = "ECS runtime is not integrated"
+            return True
+        now = time.time()
+        owner = str(attempt["owner"]).partition(":")[2]
+        run = state["runs"].get(owner, {})
+        job_class = pipeline_render.job_class(attempt["template"], attempt["params"], str(run.get("mode", "real")))
+        if not self.catalog_epoch_matches(state, attempt):
+            self.finish_attempt(state, attempt, "create_failed", "catalog authority changed or is frozen")
+            return True
+        size = self.ecs_runtime.size(attempt)
+        usage = ecs_target.active_usage(state["attempts"].values())
+        evidence = self.ecs_runtime.availability(attempt, now)
+        view = replace(
+            evidence,
+            enabled=self.ecs_ready(),
+            usage=usage,
+            local_available=self.docker_ok and self.status == "serving",
+            local_free=self.heavy_holder(state, attempt.get("attempt_alloc")) is None,
+        )
+        decision = ecs_target.select(attempt, job_class, size, view, now)
+        attempt["waiting_on"] = decision.reason
+        if decision.action in ("expire", "refuse"):
+            self.finish_attempt(state, attempt, "timeout" if decision.action == "expire" else "create_failed", decision.reason)
+        elif decision.target == "ecs":
+            if attempt.get("preparing"):
+                return True
+            if attempt.get("attempt_alloc"):
+                state["allocations"][attempt["attempt_alloc"]]["state"] = "released"
+                attempt.update(attempt_alloc=None, plan_env=None, prepared=False)
+            placement = ecs_target.reserve(attempt, size, decision, now, usage)
+            attempt_id, try_id = str(attempt["id"]), str(placement["try_id"])
+            actions.append(lambda: self.dispatch_ecs(attempt_id, try_id))
+        elif decision.target == "docker":
+            attempt["placement_decision"] = {"action": decision.action, "target": decision.target, "reason": decision.reason, "provider": decision.provider}
+            return False
+        return True
+
+    @staticmethod
+    def catalog_epoch_matches(state: Mapping[str, Any], attempt: Mapping[str, Any]) -> bool:
+        epoch = attempt["execution"]["catalog_epoch"]
+        authority = state["launcher"].get("catalog_authority") or {}
+        return epoch is None or authority.get("epoch") == epoch and authority.get("frozen") is False and authority.get("target") == "aws"
+
+    def dispatch_ecs(self, attempt_id: str, try_id: str) -> None:
+        with self.tx() as state:
+            attempt = state["attempts"][attempt_id]
+            if attempt["execution"]["live_try"] != try_id:
+                return
+            placement = next(item for item in attempt["execution"]["placements"] if item["try_id"] == try_id)
+            if placement["state"] != "intent":
+                return
+            if (
+                attempt.get("cancel_intent")
+                or time.time() >= attempt["deadline_utc"]
+                or not self.admissible(state, attempt)
+                or not self.catalog_epoch_matches(state, attempt)
+            ):
+                ecs_target.fenced(attempt, try_id, time.time(), no_start=True)
+                self.finish_attempt(state, attempt, "fenced", "dispatch authority ended before submission")
+                return
+            placement["state"] = "unknown"
+            saved_attempt, saved_placement = json.loads(canonical(attempt)), dict(placement)
+        if self.ecs_runtime is not None:
+            try:
+                self.ecs_runtime.dispatch(saved_attempt, saved_placement)
+            except (ecs_target.PlacementError, OSError):
+                with self.tx() as state:
+                    attempt = state["attempts"][attempt_id]
+                    if attempt["execution"]["live_try"] == try_id:
+                        placement = next(item for item in attempt["execution"]["placements"] if item["try_id"] == try_id)
+                        placement["state"] = "unknown"
+                        attempt["waiting_on"] = "cloud dispatch requires reconciliation"
 
     CAPACITY_VALID = 10.0
     CAPACITY_RETRY = 2.0
@@ -5008,6 +5144,13 @@ class Launcher:
 
     def finish_attempt(self, state: dict[str, Any], a: dict[str, Any], reason: str, detail: str = "") -> None:
         """End an attempt: record the reason, release its attempt allocation and guards, update catalog service records."""
+        execution = a.get("execution")
+        if execution and execution["live_try"]:
+            live = next(item for item in execution["placements"] if item["try_id"] == execution["live_try"])
+            if live["target"] == "ecs":
+                raise ecs_target.PlacementError("an unconfirmed cloud task cannot end its attempt")
+            live["state"] = "complete"
+            execution["live_try"] = None
         a.update({"phase": "ended", "reason": reason, "ended_at": utc_now(), "detail": detail})
         self.secret_results.pop(a["id"], None)
         if a.get("attempt_alloc"):
@@ -5639,6 +5782,7 @@ class Launcher:
                 "status": self.status,
                 "degraded_reason": self.degraded_reason,
                 "docker_ok": self.docker_ok,
+                "ecs_ready": self.ecs_ready(),
                 "stream_epoch": self.epoch,
                 "pid": os.getpid(),
                 "registry_id": self.registry_id,
@@ -6166,6 +6310,9 @@ class Launcher:
         if "caller_identity" in params and list(caller_identity_validator(self.cfg.root).iter_errors(identity)):
             raise LauncherError("caller identity violates the request contract", "args")
         template_name = str(params.get("template"))
+        requested_target = params.get("target", "auto")
+        if requested_target not in ecs_target.TARGETS:
+            raise LauncherError("target must be auto, ecs or docker", "args")
         capture = params.get("capture_dbt_artifacts", False)
         if type(capture) is not bool or capture and (identity is None or template_name not in ("fixture_dbt", "real_dbt")):
             raise LauncherError("dbt artifact capture requires a dbt template and validated caller identity", "args")
@@ -6174,6 +6321,28 @@ class Launcher:
             raise LauncherError(f"template {template_name!r} cannot be submitted by a client", "refused")
         owner = self.owner_of(ctx)
         kind, _, ident = owner.partition(":")
+        run_mode = str(ctx.state["runs"].get(ident, {}).get("mode", "real"))
+        job_class = "offline"
+        if template_name.startswith("pipeline_"):
+            try:
+                job_class = pipeline_render.job_class(template_name, dict(params.get("params") or {}), run_mode)
+            except pipeline_protocol.PipelineError as error:
+                raise LauncherError(str(error), "args") from None
+        cloud_row = ecs_target.row_for(self.ecs_jobs, template_name, params.get("params") or {}, job_class)
+        cloud_managed = bool(self.ecs_jobs["enabled"] and cloud_row is not None)
+        if cloud_managed and self.ecs_runtime is None:
+            raise LauncherError("ECS placement is enabled but its runtime is not integrated", "refused")
+        if requested_target == "ecs" and (not self.ecs_ready() or cloud_row is None):
+            raise LauncherError("ECS is disabled, not integrated or this template is ineligible", "refused")
+        if self.ecs_jobs["enabled"] and template_name == "pipeline_publish" and job_class == "lakehouse_write":
+            raise LauncherError("AWS writers are not enabled in the read increment", "refused")
+        authority = ctx.state["launcher"].get("catalog_authority") or {}
+        if (
+            cloud_managed
+            and job_class.startswith("lakehouse_")
+            and (authority.get("target") != "aws" or authority.get("frozen") is not False or type(authority.get("epoch")) is not int or authority["epoch"] < 1)
+        ):
+            raise LauncherError("AWS lakehouse execution requires an unfrozen authoritative AWS catalog", "refused")
         if kind not in template.owners:
             raise LauncherError(f"template {template_name} is not available to {kind} owners", "refused")
         launch_id = str(params.get("launch_id", ""))
@@ -6207,11 +6376,11 @@ class Launcher:
             problem = self.template_problem(ctx.state, owner, template_name, dict(params.get("params") or {}))
             if problem:
                 raise LauncherError(problem, "refused")
-        if self.status != "serving":
+        if self.status != "serving" and not cloud_managed:
             raise Degraded(f"the launcher is {self.status}")
-        if self.foreign:
+        if self.foreign and not cloud_managed:
             raise LauncherError("foreign legacy containers exist; the owner reconciles them first", "refused")
-        if ctx.state["launcher"].get("restart"):
+        if ctx.state["launcher"].get("restart") and not cloud_managed:
             raise LauncherError("a Docker restart is running", "refused")
         if template_name == "lineage_dump":
             stack = ctx.state["launcher"].get("lineage") or {}
@@ -6221,7 +6390,7 @@ class Launcher:
                 raise LauncherError("lineage dump requires this registry's active lineage state and checkout", "refused")
         if template_name == "orchestration_dump" and (ctx.state["launcher"].get("orchestration") or {}).get("phase") != "up":
             raise LauncherError("the orchestration stack is not up; the dump needs its database", "refused")
-        if template.needs_catalog:
+        if template.needs_catalog and not cloud_managed:
             if ctx.state["launcher"].get("barrier"):
                 raise LauncherError("a catalog teardown barrier is held", "refused")
             if (ctx.state["launcher"].get("catalog") or {}).get("phase") != "up":
@@ -6245,6 +6414,8 @@ class Launcher:
         )
         protection = self.maintenance_protection(ctx.state) if fenced else []
         attempt = self.new_attempt(ctx.state, owner, template_name, launch_id, args, attempt_params, request=ctx.key, checkout=str(checkout), seconds=seconds)
+        if cloud_managed:
+            ecs_target.initialize(attempt, requested_target, time.time(), authority.get("epoch") if job_class.startswith("lakehouse_") else None)
         if identity is not None:
             attempt["caller_identity"] = dict(identity)
         capture = params.get("capture_dbt_artifacts", False)

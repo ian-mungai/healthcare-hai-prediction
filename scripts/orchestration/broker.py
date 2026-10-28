@@ -52,7 +52,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from orchestration import dbt_lineage, launcher
+from orchestration import dbt_lineage, ecs_target, launcher
 from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
 from orchestration.snapshots import SnapshotError, validate_input_record, validate_snapshot_record
 from scripts.lakehouse import run_lock
@@ -401,6 +401,8 @@ class Broker:
             payload["capture_dbt_artifacts"] = True
         if "timeout_seconds" in target:
             payload["timeout_seconds"] = target["timeout_seconds"]
+        if request.target is not None:
+            payload["target"] = request.target
         return payload
 
     def call(
@@ -694,8 +696,11 @@ class Broker:
             with self.ledger.locked(request.run_id):
                 lines = self.lines_of(request)
                 if lines:
-                    if submission_request(request.submission_id, lines[0]).identity() != request.identity():
+                    persisted = submission_request(request.submission_id, lines[0])
+                    if persisted.identity() != request.identity():
                         raise SubmissionRefused("caller identity differs from the persisted submission identity")
+                    if (persisted.target or "auto") != (request.target or "auto"):
+                        raise SubmissionRefused("target differs from the persisted submission target")
                     if lines[-1]["event"] not in ("finished", "failed_closed"):
                         self.advance_locked(request)
                     return handle
@@ -717,14 +722,14 @@ class Broker:
             raise SubmissionRefused(f"ledger: {error}") from None
         return handle
 
-    def require_serving(self) -> None:
+    def require_serving(self, *, allow_cloud: bool = False) -> bool:
         """The launcher must be serving: while it is degraded (Docker or its event stream is down) the broker states that instead of the last
-        phase the launcher recorded, which can be stale until the launcher has looked at Docker again."""
+        phase the launcher recorded, which can be stale until the launcher has looked at Docker again. Return whether only cloud execution is available."""
         deadline = time.monotonic() + START_WAIT_SECONDS
         while True:
             view = self.call("status", {"what": "launcher"})
-            if view.get("status") == "serving":
-                return
+            if view.get("status") == "serving" or allow_cloud and view.get("ecs_ready") is True:
+                return view.get("status") != "serving"
             if view.get("status") != "starting" or time.monotonic() > deadline:
                 raise LauncherUnavailable(f"the launcher is {view.get('status')}: {view.get('degraded_reason') or 'not serving'}")
             time.sleep(0.2)
@@ -739,13 +744,13 @@ class Broker:
         if self.recorded_as_control(lines[0]):
             self.complete_control(request, lines[0])
             return
-        self.require_serving()
+        cloud_only = self.require_serving(allow_cloud=request.target != "docker")
         forward = self.read_forward(request)
         if forward is None:
             forward = self.forward_locked(request, lines[0])
             if forward is None:
                 return
-        self.apply_attempt(request, forward)
+        self.apply_attempt(request, forward, cloud_only=cloud_only)
 
     def recorded_as_noop(self, request: SubmissionRequest, intent: dict[str, Any]) -> bool:
         """True when the intent line was written for a no-op: its identity is the no-op hash of the template, not a launcher payload's."""
@@ -893,12 +898,18 @@ class Broker:
         record: dict[str, Any] = self.call("status", {"what": "attempt", "id": forward["attempt_id"]}, principal)
         return record
 
-    def apply_attempt(self, request: SubmissionRequest, forward: dict[str, Any]) -> None:
+    def apply_attempt(self, request: SubmissionRequest, forward: dict[str, Any], *, cloud_only: bool = False) -> None:
         """Write the ledger lines the launcher's attempt has reached: ``started`` once it has a container, then ``finished`` or ``failed_closed``."""
         attempt = self.attempt_of(request, forward)
+        if "execution" in attempt:
+            self.require_serving(allow_cloud=attempt["execution"]["requested_target"] != "docker")
+        elif cloud_only:
+            self.require_serving()
         lines = self.lines_of(request)
         events = [line["event"] for line in lines]
         container_id = attempt.get("container_id")
+        execution = ecs_target.public_execution(attempt) if "execution" in attempt else None
+        live_task = next((item for item in (execution or {}).get("placements", []) if item["try_id"] == execution["live_try"]), None) if execution else None
         if attempt.get("caller_identity") != request.identity():
             self.append(
                 {
@@ -910,15 +921,22 @@ class Broker:
                 }
             )
             return
-        if container_id and not {"started", "adopted"} & set(events):
+        if execution is not None and forward.get("execution") != execution:
+            write_private(self.forward_file(request), json.dumps({**forward, "execution": execution}, sort_keys=True) + "\n")
+        task_arn = (live_task or {}).get("task_arn")
+        if (container_id or task_arn) and not {"started", "adopted"} & set(events):
             state = "created" if attempt["phase"] in ("creating", "created") else "exited" if attempt["phase"] in ("exiting", "ended") else "running"
+            placement = (
+                {"ecs_task_arn": task_arn, "ecs_task_state": "running" if live_task and live_task["started"] else "pending", "execution": execution}
+                if task_arn
+                else {"container_id": str(container_id), "container_state": state}
+            )
             self.append(
                 {
                     "event": "started",
                     "submission_id": request.submission_id,
                     **request.as_dict(),
-                    "container_id": str(container_id),
-                    "container_state": state,
+                    **placement,
                     "launcher_attempt": attempt["id"],
                 }
             )
@@ -960,7 +978,7 @@ class Broker:
             **models,
             "launcher": {
                 key: attempt.get(key)
-                for key in ("id", "template", "n", "phase", "reason", "exit_code", "container_name", "detail", "ended_at", "dbt_artifacts")
+                for key in ("id", "template", "n", "phase", "reason", "exit_code", "container_name", "detail", "ended_at", "dbt_artifacts", "execution")
             },
             "log_path": str(logs) if logs else None,
         }
@@ -977,6 +995,8 @@ class Broker:
                 exit_code, extra = 1, {"failed": True, "reason": self.redact(str(error))}
         if int(exit_code) == 0 and not cancelled and "input_pins" in lines[0]:
             extra = {**extra, "input_snapshot_record": {"version": 1, "invocation": request.as_dict(), "inputs": lines[0]["input_pins"]}}
+        if execution is not None:
+            extra["execution"] = execution
         self.finish(request, int(exit_code), record=summary, cancelled=cancelled, end_reason=reason, **extra)
 
     def validated_build(self, request: SubmissionRequest, attempt: dict[str, Any]) -> dict[str, Any]:
@@ -1051,15 +1071,20 @@ class Broker:
 
     def status(self, handle: Handle) -> Status:
         """The state the last ledger line implies, after reading the launcher's attempt."""
-        last = self.refresh(handle)[-1]
+        lines = self.refresh(handle)
+        last = lines[-1]
+        execution = last.get("execution")
+        if last["event"] not in ("finished", "failed_closed"):
+            request = submission_request(handle.submission_id, lines[0])
+            execution = (self.read_forward(request) or {}).get("execution")
         if last["event"] == "finished":
             if last.get("cancelled"):
-                return Status(handle, State.CANCELLED, last["exit_code"], last["record_path"])
+                return Status(handle, State.CANCELLED, last["exit_code"], last["record_path"], execution)
             state = State.NO_OP if last["no_op"] else State.SUCCEEDED if last["exit_code"] == 0 else State.FAILED
-            return Status(handle, state, last["exit_code"], last["record_path"])
+            return Status(handle, state, last["exit_code"], last["record_path"], execution)
         if last["event"] == "failed_closed":
             return Status(handle, State.FAILED_CLOSED, None, None)
-        return Status(handle, State.PENDING if last["event"] == "intent" else State.RUNNING, None, None)
+        return Status(handle, State.PENDING if last["event"] == "intent" else State.RUNNING, None, None, execution)
 
     def cancel(self, handle: Handle) -> Status:
         """Ask the launcher to cancel the submission's attempt and report what the launcher did; a finished submission is unchanged.
@@ -1079,7 +1104,7 @@ class Broker:
                     elif self.recorded_as_control(lines[0]):
                         self.complete_control(request, lines[0])
                     else:
-                        self.require_serving()
+                        self.require_serving(allow_cloud=request.target != "docker")
                         forward = self.read_forward(request) or self.forward_locked(request, lines[0])
                         if forward is not None:
                             self.call("cancel", {"attempt_id": forward["attempt_id"]}, self.principal(request.run_id))
@@ -1125,7 +1150,10 @@ def handle_for(payload: dict[str, Any]) -> Handle:
 
 def status_body(status: Status) -> dict[str, Any]:
     handle = {"submission_id": status.handle.submission_id, "container_name": status.handle.container_name}
-    return {"handle": handle, "state": status.state.value, "exit_code": status.exit_code, "record_path": status.record_path}
+    body = {"handle": handle, "state": status.state.value, "exit_code": status.exit_code, "record_path": status.record_path}
+    if status.execution is not None:
+        body["execution"] = status.execution
+    return body
 
 
 class Listener:

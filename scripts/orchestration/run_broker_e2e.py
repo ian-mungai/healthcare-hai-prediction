@@ -1900,6 +1900,51 @@ def launcher_refuses_changed_args(env: BrokerEnv) -> dict[str, bool]:
     }
 
 
+@case("switch_off_local_poll")
+def switch_off_local_poll(env: BrokerEnv) -> dict[str, bool]:
+    """A local poll retains its first attempt reply when later launcher requests become unavailable."""
+    env.hold_jobs()
+    env.start()
+    broker = env.new_broker()
+    broker.start()
+    request = env.request()
+    handle = broker.submit(request)
+    env.wait_state(broker, handle, (State.RUNNING,))
+    forward = broker.read_forward(request)
+    if forward is None:
+        raise RuntimeError("the local submission has no forward record")
+    env.wait_phase(forward["attempt_id"], ("started",))
+    checks = {
+        "the rollout switch is disabled and the attempt has no execution": env.client().call("status", {"what": "launcher"})["ecs_ready"] is False
+        and "execution" not in env.attempt(forward["attempt_id"])
+    }
+    reads: list[str] = []
+    limit = 2
+
+    def budget(method: str, params: dict[str, Any]) -> None:
+        if method == "status":
+            reads.append(str(params.get("what")))
+            if len(reads) > limit:
+                raise launcher.ClientError("synthetic launcher unavailable after the attempt reply", "unavailable")
+
+    client = wire(broker)
+    client.before = budget
+    status = None
+    try:
+        with contextlib.suppress(LauncherUnavailable):
+            status = broker.status(handle)
+        checks["local status uses its single attempt reply"] = (
+            status is not None and status.state == State.RUNNING and status.execution is None and reads == ["launcher", "attempt"]
+        )
+        reads.clear()
+        limit = 1
+        error = refusal_of(lambda: broker.apply_attempt(request, forward))
+        checks["applying a local attempt adds no launcher health request"] = error is None and reads == ["attempt"]
+    finally:
+        client.before = None
+    return checks
+
+
 @case("broker_templates_schema")
 def broker_templates_schema(env: BrokerEnv) -> dict[str, bool]:
     """930: the real file loads; each mutation of it is refused with a load error."""
@@ -2498,6 +2543,7 @@ ALL_CASES = (
     unmapped_template_refused,
     non_offline_class_refused,
     launcher_refuses_changed_args,
+    switch_off_local_poll,
     broker_templates_schema,
     listener_auth,
     listener_limits,

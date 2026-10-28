@@ -42,12 +42,15 @@ class SubmissionRequest:
     task_id: str
     dag_run_id: str
     input_run_id: str | None = None
+    target: str | None = None
 
     @classmethod
     def from_record(cls, record: dict[str, Any]) -> SubmissionRequest:
         """Recover a v2 caller request from its validated persisted fields."""
         if record.get("request_version") != 2:
             raise SubmissionRefused("request version 2 with caller identity is required")
+        if "target" in record and record["target"] not in ("auto", "ecs", "docker"):
+            raise SubmissionRefused("target must be auto, ecs or docker")
         try:
             return cls(
                 record["template"],
@@ -58,6 +61,7 @@ class SubmissionRequest:
                 record["task_id"],
                 record["dag_run_id"],
                 record.get("input_run_id"),
+                record.get("target"),
             )
         except KeyError:
             raise SubmissionRefused("request version 2 is missing caller identity") from None
@@ -89,6 +93,8 @@ class SubmissionRequest:
         }
         if self.input_run_id is not None:
             body["input_run_id"] = self.input_run_id
+        if self.target is not None:
+            body["target"] = self.target
         return body
 
 
@@ -108,6 +114,7 @@ class Status:
     state: State
     exit_code: int | None
     record_path: str | None
+    execution: dict[str, Any] | None = None
 
 
 class Submissions(Protocol):

@@ -106,6 +106,8 @@ def bare_launcher(status: str, docker_ok: bool, registry: Registry | None = None
     subject.inflight = set()
     subject.docker = NonCallableMock(spec_set=())
     subject.docker_ok = docker_ok
+    subject.ecs_jobs = {"enabled": False, "jobs": []}
+    subject.ecs_runtime = None
     subject.status = status
     subject.timings = launcher.Timings()
     subject.current = None
