@@ -1,5 +1,5 @@
 -- A renamed or held key keeps the label of its latest release: the latest ordering value, then the second ordering value, then the first label in order.
--- The latest label is found with a window function, not the model's distinct on, and must be the label of a row of the key [940].
+-- The latest label is found with a window function, not the model's distinct on, and must be the label of a row of the key.
 with
 
 kept_keys as (

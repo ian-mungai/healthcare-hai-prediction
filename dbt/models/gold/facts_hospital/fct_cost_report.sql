@@ -1,4 +1,4 @@
--- One row per int_cost_reports row, grain rpt_rec_num: every silver column unchanged, then the surrogate keys [743] [745].
+-- One row per int_cost_reports row, grain rpt_rec_num: every silver column unchanged, then the surrogate keys.
 {{
     gold_fact(
         silver_model='int_cost_reports',

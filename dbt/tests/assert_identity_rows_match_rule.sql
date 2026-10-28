@@ -1,7 +1,7 @@
 -- Each key of identity_splits has the identity count its rule gives: one row per distinct label for a split key and one row for a renamed or held key
 -- (one per value column for a measure). Which label and dates each split row carries is checked by assert_edition_bounds_match_silver, and the rule each row
 -- records by assert_identity_rule_matches_seed. A seed key that the loaded silver rows do not carry is not checked: the multi-label test finds a mistyped
--- key through the key it should have named [940] [941].
+-- key through the key it should have named.
 with
 
 silver_labels as (

@@ -1,5 +1,5 @@
 -- Fails for each gold bridge row whose registry control is not in the registry controls: the base registry of revision 3 or its
--- append-only additions (C258.80 and C258.81 are additions) [801].
+-- append-only additions (C258.80 and C258.81 are additions).
 {%- set bridge_seeds = [
     'registry_measure_sources_bridge',
     'cost_report_measures_bridge',

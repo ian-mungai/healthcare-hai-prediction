@@ -1,7 +1,7 @@
 -- One row per county, ACS vintage and mapped concept: the column the reviewed map names for that vintage, never a code
 -- assumed stable. Exports hold counties only; summary files hold every geography and only 0500000US rows are kept.
 -- Missing tokens and sentinels are null with the token kept; a top- or bottom-coded median keeps its cap and a flag.
--- Values stay in each vintage's own units and dollars (failure modes 420 to 426, 431).
+-- Values stay in each vintage's own units and dollars.
 {{ config(materialized='table') }}
 {%- for table in acs_tables() %}
 -- depends_on: {{ ref('stg_' ~ table) }}

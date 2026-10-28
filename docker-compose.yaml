@@ -37,8 +37,8 @@ services:
       retries: 15
 
   polaris-bootstrap:
-    # The pinned apache/polaris-admin-tool image plus the in-image deadline entrypoint, a static binary because the image has no Python
-    # (D1 section 5 item 1); services/lakehouse/polaris_admin/Dockerfile builds it.
+    # The pinned apache/polaris-admin-tool image plus the in-image deadline entrypoint, a static binary because the image has no Python.
+    # Built by services/lakehouse/polaris_admin/Dockerfile.
     image: hai-polaris-admin:1.8.0
     build:
       context: ./services/lakehouse/polaris_admin
@@ -46,7 +46,7 @@ services:
         hai: ./services/hai
     profiles: [setup]
     environment: *polaris-database
-    # The one-time bootstrap uses Polaris's computed limit [502].
+    # The one-time bootstrap uses Polaris's computed limit.
     mem_limit: ${POLARIS_MEMORY_LIMIT:?run through scripts/lakehouse/catalog.py}
     command:
       - bootstrap
@@ -105,7 +105,7 @@ services:
       JOB_THREADS: ${JOB_THREADS:-}
     volumes:
       - *aws-profile
-      # Narrowed from the repository root (D1 section 7 item 3): code and configuration read-only, then only the folders the jobs write.
+      # Narrowed from the repository root: code and configuration read-only, then only the folders the jobs write.
       # The launcher mounts per job the subset it needs (orchestration/launcher.py SPARK_JOBS); nothing here reaches data/lakehouse/secrets.
       - ./scripts:/workspace/scripts:ro
       - ./config:/workspace/config:ro

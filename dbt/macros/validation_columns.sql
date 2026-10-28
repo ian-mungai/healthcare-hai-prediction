@@ -1,17 +1,17 @@
 {% macro validation_tokens() %}
-{#- The published marks for a Care Compare validation value that is not given [510]. -#}
+{#- The published marks for a Care Compare validation value that is not given. -#}
 ('Not Available', 'Not Applicable', 'N/A', 'Too Few to Report')
 {% endmacro %}
 
 {% macro validation_reviewed_values() %}
-{#- Published values reviewed by the owner that stay text with no number [519]; the last two are hospital 330201's fiscal
+{#- Published values reviewed by the owner that stay text with no number; the last two are hospital 330201's fiscal
     year 2020 clinical outcomes domain scores (owner, Oct 11 2026). -#}
 ('24.083333333333(23)', '63.333333333333(23)', '15.833333333333(23)')
 {% endmacro %}
 
 {% macro validation_ccn(value) %}
 {#- The hospital ID as a 6-character CCN: a 5-digit ID is padded; any other ID that is not 6 digits or capital letters is
-    null, so the row is held as no_key and the published ID stays in the staging view (group B rule 370) [524]. -#}
+    null, so the row is held as no_key and the published ID stays in the staging view (group B rule 370). -#}
 case
     when regexp_full_match(trim({{ value }}), '[0-9]{5}') then lpad(trim({{ value }}), 6, '0')
     when regexp_full_match(trim({{ value }}), '[0-9A-Z]{6}') then trim({{ value }})
@@ -19,8 +19,7 @@ end
 {% endmacro %}
 
 {% macro validation_date(column) %}
-{#- A trimmed MM/DD/YYYY date text as a date; blank text and anything else give null, so a cast test can tell them apart
-    [787]. -#}
+{#- A trimmed MM/DD/YYYY date text as a date; blank text and anything else give null, so a cast test can tell them apart. -#}
 try_strptime(nullif(trim({{ column }}), ''), '%m/%d/%Y')::date
 {%- endmacro %}
 
@@ -28,8 +27,7 @@ try_strptime(nullif(trim({{ column }}), ''), '%m/%d/%Y')::date
 {#- The window rows of a CTE with the reviewed measure ID: the exact published ID wins; a reviewed alias of measure_id_aliases
     fills only a hospital and window the exact ID leaves empty. A renamed row keeps the ID as published in
     published_measure_id and its window_key carries the reviewed ID, so a second row for one reviewed ID fails the unique
-    test. numbers is a list of [number column, text column] pairs cast with strict_number (failure modes 629, 630, 785
-    and 786). -#}
+    test. numbers is a list of [number column, text column] pairs cast with strict_number. -#}
 select
     published.* replace (
         coalesce(aliases.measure_id, published.measure_id) as measure_id,

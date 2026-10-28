@@ -13,8 +13,7 @@ checkout's ignored data folder, so the command also runs in a linked worktree. A
 where the registry's exact field says so, otherwise a percentage. A label in two controls, a control twice or a control
 missing from the registry and its additions stops the run. The bridge (`dbt/seeds/gold/mmd_conditions_bridge.csv`) is
 only checked, never written: each plan label maps to its control exactly once, and the one other row is the C258 parent
-with no label. Failure modes: plans/group_c_20261006/failure_modes_c5.md and
-plans/wave1_20261011/gate/mmd_conditions_failure_modes.md.
+with no label.
 """
 
 from __future__ import annotations
@@ -96,7 +95,7 @@ def build() -> list[dict[str, str]]:
 
 
 def units_csv(rows: Iterable[Mapping[str, str]]) -> str:
-    """Return the units seed's CSV text: each label and its unit, in control order [895]."""
+    """Return the units seed's CSV text: each label and its unit, in control order."""
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=UNIT_COLUMNS, lineterminator="\n", extrasaction="ignore")
     writer.writeheader()
@@ -105,7 +104,7 @@ def units_csv(rows: Iterable[Mapping[str, str]]) -> str:
 
 
 def bridge_problems(rows: Iterable[Mapping[str, str]], bridge: Path = BRIDGE) -> list[str]:
-    """Each way the bridge's MMD rows differ from the plans' label-to-control pairs [896] [898]."""
+    """Each way the bridge's MMD rows differ from the plans' label-to-control pairs."""
     if not bridge.exists():
         return [f"{bridge.relative_to(REPO_ROOT)} is missing"]
     expected = {row["condition_label"]: row["measure_control"] for row in rows}
@@ -131,7 +130,7 @@ def bridge_problems(rows: Iterable[Mapping[str, str]], bridge: Path = BRIDGE) ->
 
 
 def main() -> int:
-    """Write the units seed, or check it and the bridge against the plans; the bridge is never written [899]."""
+    """Write the units seed, or check it and the bridge against the plans; the bridge is never written."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--check", action="store_true", help="compare the units seed and the bridge with the plans instead of writing the seed")
     args = parser.parse_args()

@@ -1,5 +1,5 @@
 -- Fails for each ONC attestation whose payment_year does not match its published text: a non-blank text that gives no
--- integer, an integer without its text, or an integer that differs from the text's value (failure mode 795).
+-- integer, an integer without its text, or an integer that differs from the text's value.
 select
     attestation_key,
     payment_year_text,

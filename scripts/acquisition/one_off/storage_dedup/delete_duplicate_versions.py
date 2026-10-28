@@ -1,4 +1,4 @@
-"""Permanently delete the listed duplicate S3 object versions after checking each kept twin (failure modes 212 to 217).
+"""Permanently delete the listed duplicate S3 object versions after checking each kept twin.
 
 Read-only by default: checks the account, that every listed version is live with its recorded size and SHA-256, and
 that its kept twin is live with the same SHA-256. ``--execute`` also needs ``--list-sha256`` (the reviewed list's

@@ -1,5 +1,5 @@
 -- Fails for a staged SAHIE file whose preamble does not define code 0 of each category as under 65, all races, both sexes
--- and all incomes, and for a county row whose year differs from its file's [438] [439].
+-- and all incomes, and for a county row whose year differs from its file's.
 with
 
 files as (

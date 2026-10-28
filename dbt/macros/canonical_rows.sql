@@ -1,5 +1,5 @@
 {% macro canonical_rows(table) %}
--- One copy of each stored file: the rows of its canonical object, with the file's label hold [166] [172].
+-- One copy of each stored file: the rows of its canonical object, with the file's label hold.
 with
 
 bronze as (

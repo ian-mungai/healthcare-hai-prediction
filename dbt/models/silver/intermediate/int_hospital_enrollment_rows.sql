@@ -2,8 +2,7 @@
 -- ownership_release_periods seed. The CCN is the published 6-character CCN or a 5-digit CCN padded to 6. A location
 -- suffix, a lost leading zero or a unit letter maps to the parent CCN when POS lists exactly one such parent in the row's
 -- state; any other value gives a null CCN. The published value is kept and ccn_source names the route. A flag is true
--- for Y and false for N; dates are typed; associate IDs that lost leading zeros are padded to 10 digits (failure modes 365,
--- 366, 369 to 371, 619 to 622 and 714).
+-- for Y and false for N; dates are typed; associate IDs that lost leading zeros are padded to 10 digits.
 {{ config(materialized='table') }}
 
 with
@@ -84,7 +83,7 @@ candidate_ccns as (
 ),
 
 parents as (
-    -- Exactly one parent that POS lists in the row's own state [619].
+    -- Exactly one parent that POS lists in the row's own state.
     select
         candidate_ccns.member_sha256,
         candidate_ccns.source_row_number,

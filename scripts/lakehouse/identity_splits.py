@@ -8,9 +8,10 @@ Run from the repository root:
 ``config/lakehouse/identity_classification.csv`` is the approved list: one row per code or measure whose label changed across releases, with its class,
 its approval status, the identity rule and the public sources that support the class. Each class has one rule: ``redefined`` gives ``split`` (one identity
 per edition), ``renamed`` gives ``single_latest`` (one identity with the latest label) and ``unresolved`` gives ``hold_single_latest`` (one identity with
-the latest label until an owner decision). A ``redefined`` or ``renamed`` row must be ``approved`` and an ``unresolved`` row must be ``owner_hold``; a
+the latest label until the repository owner resolves it). A ``redefined`` or ``renamed`` row must be ``approved`` and an ``unresolved`` row must be
+``owner_hold``; a
 ``proposed_for_approval`` row stops the generator, so an unapproved key cannot reach a model. The list holds codes, classes, statuses and public
-citations only: no approval dates and no owner decision records, because the repository is public.
+citations only: no approval dates or private decision records, because the repository is public.
 """
 
 from __future__ import annotations

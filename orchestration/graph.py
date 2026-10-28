@@ -1,11 +1,11 @@
-"""The graph rules of ``transform_dag`` (Airflow plan section 5), checked offline on a plain graph.
+"""The graph rules of ``transform_dag``, checked offline on a plain graph.
 
 The validator never imports Airflow: ``graph_from_dag`` reads any object shaped like an Airflow DAG (``task_dict``, and
 per task ``upstream_task_ids``, ``trigger_rule``, ``is_setup`` and ``is_teardown``), so the same rules run on the host
-against plain graphs and inside the pinned Airflow image against real DAG objects (failure modes 761, 766 and 823).
-Rules: no setup or teardown task; ``release_run`` is the only leaf; no cycle; exactly the section 5 tasks; each work
-task's upstream set follows the section 5 order with the default ``all_success`` rule; ``run_record``,
-``catalog_release``, ``final_gate`` and ``release_run`` have the section 5 trigger rules and upstream sets.
+against plain graphs and inside the pinned Airflow image against real DAG objects.
+Rules: no setup or teardown task; ``release_run`` is the only leaf; no cycle; exactly the reference tasks; each work
+task's upstream set follows the reference order with the default ``all_success`` rule; ``run_record``,
+``catalog_release``, ``final_gate`` and ``release_run`` have the reference trigger rules and upstream sets.
 """
 
 from __future__ import annotations
@@ -111,7 +111,7 @@ class Violation:
 
 
 def reference_graph(dag_id: str = "transform_dag") -> dict[str, TaskNode]:
-    """The section 5 graph itself; every rule accepts it."""
+    """The reference graph itself; every rule accepts it."""
     expected, rules = requirements(dag_id)
     return {task: TaskNode(upstream, rules.get(task, ALL_SUCCESS)) for task, upstream in expected.items()}
 
@@ -144,7 +144,7 @@ def cycle_members(graph: dict[str, TaskNode]) -> list[str]:
 
 
 def validate_transform_graph(graph: dict[str, TaskNode], dag_id: str = "transform_dag") -> list[Violation]:
-    """Every section 5 rule ``graph`` breaks; an empty list means the graph is accepted."""
+    """Every reference graph rule ``graph`` breaks; an empty list means the graph is accepted."""
     expected_upstream, expected_rules = requirements(dag_id)
     violations = [
         Violation("setup_or_teardown", task, "setup task" if node.is_setup else "teardown task")

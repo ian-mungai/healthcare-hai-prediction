@@ -1,5 +1,5 @@
 -- Fails for each field the income_labor_measures bridge names that is not a column of its gold model, so a registry control never points at a field gold does
--- not carry; a BLS control names its value column on the long fact and the measure in its key [446].
+-- not carry; a BLS control names its value column on the long fact and the measure in its key.
 select
     bridge.measure_control,
     bridge.fact,

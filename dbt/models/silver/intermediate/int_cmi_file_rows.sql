@@ -1,5 +1,5 @@
 -- Every row of the selected case-mix index files and sheets, split into fields: a tab-separated text line on tabs, any
--- other text line on runs of spaces, a sheet row by cell (failure modes 293, 295 and 299).
+-- other text line on runs of spaces, a sheet row by cell.
 {{ config(materialized='table') }}
 
 with
@@ -32,7 +32,7 @@ text_rows as (
 ),
 
 sheets as (
-    -- Only the sheets staging selects: a workbook's twin-covered sheets are read from their text file [299].
+    -- Only the sheets staging selects: a workbook's twin-covered sheets are read from their text file.
     select
         member_sha256,
         sheet_name

@@ -889,7 +889,7 @@ REJECTED_RESULTS: dict[str, dict[str, Any]] = {
 
 
 def rejected_result_commit(h: Harness) -> Check:
-    """858 and D1 section 10 item 6: a consumer result that the acceptance rule rejects reaches no step, also with the export files in place."""
+    """a consumer result that the acceptance rule rejects reaches no step, also with the export files in place."""
     committed_baseline(h)
     checks = h.begin()
     h.restore("r1")

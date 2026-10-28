@@ -1,7 +1,7 @@
 -- One Care Compare maternal health row per hospital, measure and measurement window, from the latest stored release; the
--- table has only facility_id, start_date and end_date (failure modes 318 to 322).
+-- table has only facility_id, start_date and end_date.
 -- A value that is a plain number (an optional minus sign and digits, with an optional decimal part) is also given as a number;
--- a category, token or other text stays text with a null number [327].
+-- a category, token or other text stays text with a null number.
 
 with
 

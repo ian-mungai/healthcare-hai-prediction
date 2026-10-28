@@ -1,5 +1,5 @@
 -- One row per IPPS and occupational-mix observation with its labels from the generated map: role, rule and data
--- fiscal years, identity year and rule stage, read from its names and stored container (failure modes 178 to 182).
+-- fiscal years, identity year and rule stage, read from its names and stored container.
 {{ config(materialized='table', pre_hook='{{ assert_original_label_keys() }}') }}
 
 with

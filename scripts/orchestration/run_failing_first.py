@@ -1,4 +1,4 @@
-"""Case-level failing-first evidence for the A1 runners (review round 1, finding 6; ``plans/wp/a1_failure_modes.md`` mode 934c).
+"""Case-level failing-first evidence for the orchestration runners.
 
 Run ``.venv/bin/python -m scripts.orchestration.run_failing_first [--runner NAME ...] [--case NAME ...]``, or with ``--check`` (a fast check in local CI that
 every mutant still matches the code and every case has its evidence). For every case of ``run_broker_e2e``,
@@ -11,7 +11,7 @@ kinds of run, each in a fresh copy of the source tree, and writes one log per ca
 
 A case is *failing-first verified* when its control passes and each of its mutants fails the intended check without an exception. The logs are
 ``<logs>/<runner>/<case>.log``; the summary is ``<logs>/summary.json`` and ``data/e2e/orchestration_failing_first/<UTC>/report.json``. The mutants are
-reconstructions of the code before each guard: the guards were written together with their cases in round 2, so no earlier version of the tree exists.
+reconstructions of the code before each guard: no earlier tree snapshot is available.
 Only fake Docker and test registries are used. The copies live under ``data/e2e/orchestration_failing_first/<UTC>/runs/`` (the cases mount folders of
 their report folder, which the launcher allows only under a ``data`` folder) and are removed after each run.
 """

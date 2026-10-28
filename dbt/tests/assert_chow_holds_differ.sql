@@ -1,5 +1,5 @@
 -- Fails for each change-of-ownership hold that int_change_of_ownership_holds is missing, has without cause or writes
--- differently from the hold derived here (decision 4, amendments A5 and A6; failure mode 799). Each release row of an event
+-- differently from the hold derived here. Each release row of an event
 -- other than the kept row is compared with the kept row field by field on the 23 published columns, through both rows'
 -- lineage to the staging rows (one long row per field, nulls kept). A row in the kept row's release is held as
 -- repeated_in_release; a row of another release is held as differs_from_latest_release when a published field differs.

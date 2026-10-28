@@ -1,5 +1,4 @@
-"""E2E of the orchestration stack on real Docker, started and stopped only through the launcher, in a test registry (failure modes 925, 931 to 934; Airflow
-plan modes 755, 763, 774 and 764).
+"""E2E of the orchestration stack on real Docker, started and stopped only through the launcher, in a test registry.
 
 Run ``.venv/bin/python -m scripts.orchestration.run_real_e2e`` from the repository root with Docker Desktop running, the pinned PostgreSQL image present
 and the Airflow image built (the command is in ``services/orchestration/Dockerfile``). It makes no Docker call: a launcher on a test registry under a

@@ -1,4 +1,4 @@
-"""Read-only logical dump of the Airflow metadata database for the sentinel scan (Airflow plan section 10; failure mode 932b).
+"""Read-only logical dump of the Airflow metadata database for the sentinel scan.
 
 It runs inside the thin Airflow image as a finite job of the ``orchestration_dump`` template, on the stack's network, with the repository file mounted
 read-only. The connection string comes from the job's environment, which the launcher fills from AWS Parameter Store, and is never printed.

@@ -1,4 +1,4 @@
--- One row per int_onc_attestation_rows row, grain attestation_key: every silver column unchanged, then the surrogate keys [743] [745].
+-- One row per int_onc_attestation_rows row, grain attestation_key: every silver column unchanged, then the surrogate keys.
 {{
     gold_fact(
         silver_model='int_onc_attestation_rows',

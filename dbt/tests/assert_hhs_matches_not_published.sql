@@ -1,4 +1,4 @@
--- Fails for each reviewed HHS match whose CCN also reports under its own published CCN, which would double-count weeks [683].
+-- Fails for each reviewed HHS match whose CCN also reports under its own published CCN, which would double-count weeks.
 select distinct matches.ccn
 from {{ ref('hhs_reviewed_ccn_matches') }} as matches
 inner join {{ ref('int_hhs_capacity_weeks') }} as weeks

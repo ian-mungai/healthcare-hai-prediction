@@ -1,7 +1,7 @@
 -- One row per county and Rural-Urban Continuum Code vintage: 2023 from the long CSV (one row per county and attribute)
 -- and 2013 from its declared workbook sheet. The code is a text category 1 to 9 ('2.0' in the workbook is '2'); a blank
 -- code is null, and a county without a code row keeps its population and description. The vintage is the reference year,
--- not the publication date (failure modes 400, 402, 410 and 411).
+-- not the publication date.
 {{ config(materialized='table') }}
 
 with

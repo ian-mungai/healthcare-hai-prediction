@@ -43,18 +43,18 @@
 {% endmacro %}
 
 {% macro yes_no(column) %}
-{#- Y is true and N is false; blank, null and anything else are null [366]. -#}
+{#- Y is true and N is false; blank, null and anything else are null. -#}
 case upper(trim({{ column }})) when 'Y' then true when 'N' then false end
 {%- endmacro %}
 
 {% macro month_day_year(column) %}
-{#- A date written M/D/YYYY, with one or two digits for month and day; anything else is null [369]. -#}
+{#- A date written M/D/YYYY, with one or two digits for month and day; anything else is null. -#}
 {%- set value = "nullif(trim(" ~ column ~ "), '')" -%}
 case when regexp_full_match({{ value }}, '[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}') then try_strptime({{ value }}, '%m/%d/%Y')::date end
 {%- endmacro %}
 
 {% macro published_ccn(column) %}
-{#- A CCN of 6 characters as published, or a 5-digit CCN that lost its leading zero padded to 6; anything else is null [370]. -#}
+{#- A CCN of 6 characters as published, or a 5-digit CCN that lost its leading zero padded to 6; anything else is null. -#}
 {%- set value = "upper(nullif(trim(" ~ column ~ "), ''))" -%}
 case
     when regexp_full_match({{ value }}, '[0-9]{5}') then lpad({{ value }}, 6, '0')
@@ -64,7 +64,7 @@ end
 
 {% macro associate_id(column) %}
 {#- A 10-digit PECOS associate ID; some releases drop its leading zeros, so 1 to 9 digits are padded to 10. Anything
-    else stays as published [714]. -#}
+    else stays as published. -#}
 {%- set value = "nullif(trim(" ~ column ~ "), '')" -%}
 case
     when regexp_full_match({{ value }}, '[0-9]{1,9}') then lpad({{ value }}, 10, '0')
@@ -73,12 +73,12 @@ end
 {%- endmacro %}
 
 {% macro associate_id_padded(column) %}
-{#- True when associate_id() padded the published value [714]. -#}
+{#- True when associate_id() padded the published value. -#}
 coalesce(regexp_full_match(nullif(trim({{ column }}), ''), '[0-9]{1,9}'), false)
 {%- endmacro %}
 
 {% macro ccn_parent_candidates(column) %}
-{#- The parent CCNs a suffixed or unit identifier can stand for, each with its route [619]; empty for any other shape. -#}
+{#- The parent CCNs a suffixed or unit identifier can stand for, each with its route; empty for any other shape. -#}
 {%- set value = "upper(nullif(trim(" ~ column ~ "), ''))" -%}
 case
     when regexp_full_match({{ value }}, '[0-9]{7}')
@@ -97,8 +97,8 @@ end
 
 {% macro change_of_ownership_release_rows() %}
 {#- Every change-of-ownership row of every stored release, typed, with its release period, CCN routes, event_key and
-    chow_row_key [365] [369] to [372] [619] to [622] [714]. int_change_of_ownership_rows keeps one row per event from it
-    and int_change_of_ownership_holds compares the releases (decision 4; failure modes 798 and 799). -#}
+    chow_row_key. int_change_of_ownership_rows keeps one row per event from it
+    and int_change_of_ownership_holds compares the releases. -#}
 with
 
 periods as (
@@ -185,7 +185,7 @@ candidate_ccns as (
 ),
 
 parents as (
-    -- Exactly one parent that POS lists in the party's enrollment state [619].
+    -- Exactly one parent that POS lists in the party's enrollment state.
     select
         candidate_ccns.member_sha256,
         candidate_ccns.source_row_number,

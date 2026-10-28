@@ -1,5 +1,5 @@
 -- Fails for a HUD ZIP code and quarter whose residential ratios sum to neither 0 (no residential addresses) nor 1, within
--- 0.01 for rounding. Held non-county rows count, since HUD's denominators include them [406].
+-- 0.01 for rounding. Held non-county rows count, since HUD's denominators include them.
 with
 
 ratios as (

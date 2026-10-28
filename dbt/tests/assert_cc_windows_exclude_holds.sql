@@ -1,4 +1,4 @@
--- Fails for each Care Compare window that is both selected and held: a held conflict never feeds the window models [322].
+-- Fails for each Care Compare window that is both selected and held: a held conflict never feeds the window models.
 with
 
 selected as (

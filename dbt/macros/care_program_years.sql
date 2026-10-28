@@ -1,5 +1,5 @@
 {% macro care_program_rows(table, ccn, fiscal_year, columns) %}
-{#- The rows of one Care Compare program table with their hospital and program fiscal year [514] [516]. -#}
+{#- The rows of one Care Compare program table with their hospital and program fiscal year. -#}
 select
     '{{ table }}' as bronze_table,
     nullif(trim({{ ccn }}), '') as ccn,
@@ -14,7 +14,7 @@ from {{ ref('stg_' ~ table) }} as stg
 {% endmacro %}
 
 {% macro care_program_candidates(table, ccn, fiscal_year, columns) %}
-{#- Usable rows with their file's latest publication date, ranked within each hospital and fiscal year [514]. -#}
+{#- Usable rows with their file's latest publication date, ranked within each hospital and fiscal year. -#}
 with
 
 program_rows as (
@@ -60,7 +60,7 @@ where release_date = latest_release_date
 {% endmacro %}
 
 {% macro care_program_years(table, ccn, fiscal_year, columns) %}
-{#- One row per hospital and program fiscal year from the latest dated file; conflicts are held instead [514]. -#}
+{#- One row per hospital and program fiscal year from the latest dated file; conflicts are held instead. -#}
 with
 
 candidates as (
@@ -85,8 +85,7 @@ where latest_row_count = 1
 {% macro care_program_holds(table, ccn, fiscal_year, columns) %}
 {#- The rows a program-year model leaves out, with the reason, row count, hold key and the sorted checksums of the files they
     come from. The hold key hashes the table, reason, ccn and fiscal year with every null written as '<null>' (the
-    hold-key encoding of the silver contract, where ccn takes the entity slot and the fiscal year the window-start slot)
-    [514] [523] [788]. -#}
+    hold-key encoding of the silver contract, where ccn takes the entity slot and the fiscal year the window-start slot). -#}
 with
 
 program_rows as (
@@ -177,8 +176,7 @@ from all_holds
 
 {% macro hac_program_columns() %}
 {#- The HAC columns staged: payment reduction, Total HAC Score with its number, PSI-90 under either name, the domain z-scores
-    and the four measurement dates as dates beside their published text; the republished HAI SIRs stay in bronze [516] [517]
-    [518] [787]. -#}
+    and the four measurement dates as dates beside their published text; the republished HAI SIRs stay in bronze. -#}
 {{ return([
     ['payment_reduction_published', 'stg.payment_reduction'],
     ['is_payment_reduced', "case trim(stg.payment_reduction) when 'Yes' then true when 'No' then false end"],
@@ -207,7 +205,7 @@ from all_holds
 {% macro vbp_program_columns() %}
 {#- Every published TPS domain score and the Total Performance Score, as published, each with its number when it is a plain
     number; clinical care and clinical outcomes stay separate columns. The registry names the safety domain and the total
-    only, but every score column is cast [520] [525] [786]. -#}
+    only, but every score column is cast. -#}
 {{ return([
     ['unweighted_normalized_clinical_care_domain_score', 'stg.unweighted_normalized_clinical_care_domain_score'],
     ['weighted_normalized_clinical_care_domain_score', 'stg.weighted_normalized_clinical_care_domain_score'],
@@ -235,7 +233,7 @@ from all_holds
 {% endmacro %}
 
 {% macro vbp_fiscal_year() %}
-{#- The published fiscal_year, or the reviewed year of a file that publishes none [515]. -#}
+{#- The published fiscal_year, or the reviewed year of a file that publishes none. -#}
 coalesce(
     try_cast(trim(stg.fiscal_year) as integer),
     (select reviewed.fiscal_year from {{ ref('vbp_file_fiscal_years') }} as reviewed where reviewed.file_name = stg._member_path)

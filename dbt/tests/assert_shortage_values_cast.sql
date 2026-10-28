@@ -1,5 +1,4 @@
--- Fails for each MMD value, HPSA score or date and MUA score or date that is published but does not cast [469] [478]
--- [479].
+-- Fails for each MMD value, HPSA score or date and MUA score or date that is published but does not cast.
 select
     'mmd' as checked_source,
     mmd_row_key as row_id,

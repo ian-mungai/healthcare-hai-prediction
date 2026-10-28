@@ -1,5 +1,5 @@
 -- One row per ZIP code, county and USPS quarter as HUD publishes it (hud_row_key), with every silver column unchanged: the ratios are as
--- published. [743]
+-- published.
 select
     member_sha256,
     source_row_number,

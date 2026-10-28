@@ -175,7 +175,7 @@ CARRIED = re.compile(r"^(?:Carried forward from the review at [^ ]+ \(blob uncha
 
 
 def carried(old: dict[str, object], path: str, blob: str) -> dict[str, str] | None:
-    """Return the old entry for an unchanged document, its notes prefixed with provenance, or None [702] to [705].
+    """Return the old entry for an unchanged document, its notes prefixed with provenance, or None.
 
     Only valid prior evidence carries: a record that passes the same header checks as ``check`` and an entry with exactly
     the four documented fields, a resolved outcome and nonblank notes of its own once every provenance prefix is removed.
@@ -273,7 +273,7 @@ def main() -> int:
         if git("ls-files", "--", RECORD).strip():
             raise ReviewError("review evidence must stay local; remove it from the index with git rm --cached -- .documentation_review.json")
         if run_command("git", ["check-ignore", "-q", "--", RECORD]).returncode:
-            # An ignored record cannot be staged by git add . [708].
+            # An ignored record cannot be staged by git add .
             raise ReviewError(f"review evidence must be ignored; add /{RECORD} to .gitignore")
         if args.command == "check-untracked":
             sys.stdout.write(

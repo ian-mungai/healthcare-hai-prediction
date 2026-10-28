@@ -1,6 +1,6 @@
 {% macro mup_provider_numeric_columns() %}
 {#- The numeric columns of the Medicare inpatient provider summary: every published column except the provider identity
-    and place columns (failure mode 359). -#}
+    and place columns. -#}
 {{ return([
     'tot_benes',
     'tot_submtd_cvrd_chrg',

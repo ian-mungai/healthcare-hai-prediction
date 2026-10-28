@@ -1,7 +1,7 @@
 -- One row per hospital (CCN) and Provider of Services snapshot: the snapshot period from the catalog, padded codes,
--- 5-character county FIPS, typed counts, switches and dates, and the flags the model population uses (failure modes 280
--- to 292). Every hospital row stays, terminated or outside the 50 states and DC; later models filter.
--- County fill (decision 1, silver section 7, owner decision A of Oct 11 2026; failure modes 796 and 797): a valid published
+-- 5-character county FIPS, typed counts, switches and dates, and the flags the model population uses. Every hospital row stays, terminated or outside
+-- the 50 states and DC; later models filter.
+-- County fill: a valid published
 -- county wins (county_source pos). A missing county, or one whose state part is not a US state, DC or territory or not the
 -- snapshot's state, takes the county of the snapshot's ZIP when the HUD quarter in force on the period end (the quarter
 -- whose start and end contain it) lists the ZIP with a residential ratio above 0 under the snapshot's state, in exactly one
@@ -20,7 +20,7 @@ periods as (
 ),
 
 hospitals as (
-    -- Provider category 01 is a hospital in every layout [282].
+    -- Provider category 01 is a hospital in every layout.
     select *
     from {{ ref('stg_cms_provider_of_services') }}
     where {{ pos_typed_value('prvdr_ctgry_cd', 'code', 2) }} = '01'
@@ -39,13 +39,13 @@ typed as (
         {%- for column, name, kind, width in pos_typed_columns() %}
         {{ pos_typed_value(column, kind, width) }} as {{ name }},
         {%- endfor %}
-        -- A CCN is 6 characters of digits and capital letters, never cast to a number [289].
+        -- A CCN is 6 characters of digits and capital letters, never cast to a number.
         case when regexp_full_match(trim(prvdr_num), '[0-9A-Z]{6}') then trim(prvdr_num) end as ccn
     from hospitals
 ),
 
 state_fips (state_code, state_fips) as (
-    -- The FIPS state code of each USPS code of the 50 states, DC and the territories [796].
+    -- The FIPS state code of each USPS code of the 50 states, DC and the territories.
     values
     ('AL', '01'), ('AK', '02'), ('AZ', '04'), ('AR', '05'), ('CA', '06'), ('CO', '08'), ('CT', '09'), ('DE', '10'),
     ('DC', '11'), ('FL', '12'), ('GA', '13'), ('HI', '15'), ('ID', '16'), ('IL', '17'), ('IN', '18'), ('IA', '19'),
@@ -63,12 +63,12 @@ snapshots as (
         periods.period_start,
         periods.period_end,
         coalesce(typed.ccn, typed.provider_number) || ':' || periods.period_end as snapshot_key,
-        -- A county needs both padded parts; either missing leaves it null [285].
+        -- A county needs both padded parts; either missing leaves it null.
         typed.fips_state_code || typed.fips_county_code as county_fips_published,
-        -- A published county is valid when its state part is the snapshot's state (a US state, DC or territory) [796].
+        -- A published county is valid when its state part is the snapshot's state (a US state, DC or territory).
         coalesce(left(typed.fips_state_code || typed.fips_county_code, 2) = state_fips.state_fips, false) as has_valid_county
     from typed
-    -- A file without a period keeps its rows with a null period, which the tests reject [281].
+    -- A file without a period keeps its rows with a null period, which the tests reject.
     left join periods on typed.member_sha256 = periods.member_sha256
     left join state_fips on typed.state_code = state_fips.state_code
 ),
@@ -110,7 +110,7 @@ to_fill as (
 ),
 
 zip_counties as (
-    -- The ZIP's residential counties in the quarter in force, split by state match and Connecticut code system [796].
+    -- The ZIP's residential counties in the quarter in force, split by state match and Connecticut code system.
     select
         to_fill.member_sha256,
         to_fill.source_row_number,

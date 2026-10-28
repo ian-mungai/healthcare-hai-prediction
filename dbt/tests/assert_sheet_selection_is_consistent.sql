@@ -1,5 +1,5 @@
 -- Fails for a workbook sheet whose status and selection disagree, or that is covered by a text intermediate models
--- cannot read: covered sheets need a covering text that is selected (failure modes 268, 273, 278).
+-- cannot read: covered sheets need a covering text that is selected.
 with
 
 sheets as (

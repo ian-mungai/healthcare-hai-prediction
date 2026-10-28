@@ -1,5 +1,5 @@
 -- Fails for each object bronze holds that the copies table does not list as loaded, and each loaded copy bronze does not
--- hold: bronze loads exactly the listed copies [168] [207].
+-- hold: bronze loads exactly the listed copies.
 with
 
 {% for table in var('copy_tables') %}

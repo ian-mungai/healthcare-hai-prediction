@@ -1,4 +1,4 @@
-"""Build the current-state successors of the locked acquisition plans and records (failure modes S1 to S5, S10, S15).
+"""Build the current-state successors of the locked acquisition plans and records.
 
 Each original is copied byte for byte into the private archive once; every run rebuilds the successors from those
 archived bytes, so a rerun writes identical files. Only decision wording in string values changes; plan chains, the
@@ -36,7 +36,7 @@ PLANS = [
     "onc_mu_hospital_plan.json",
     "wonder_export_plan.json",
 ]
-# Plan 2 names plan 1's hash; the successor pair is rebound together (failure mode S4).
+# Plan 2 names plan 1's hash; the successor pair is rebound together.
 CHAINS = {"census_acs_api_plan_dp02pr.json": "census_acs_api_plan.json", "hud_api_plan_2021q2_2025q4.json": "hud_api_plan.json"}
 DECISION = "hud_xlsx_exact_repeats_2014q2.json"
 DECISION_PLAN = "hud_xlsx_plan_2010q1_2020q4.json"
@@ -86,7 +86,7 @@ def encode(value: Any, name: str) -> bytes:
 
 
 def original(name: str) -> bytes:
-    """The archived original; on the first run the tracked file is archived first (failure mode S15)."""
+    """The archived original; on the first run the tracked file is archived first."""
     archived = ARCHIVE / "config/acquisition" / name
     if archived.is_file():
         return archived.read_bytes()
@@ -120,7 +120,7 @@ def build() -> tuple[dict[str, bytes], dict[str, bytes], dict]:
         listed = json.loads((CONFIG / name).read_bytes())["versions"]
         successors[name]["versions"].extend(listed[len(parsed[name]["versions"]) :])
     for name in names:
-        # Only string wording and the rebound hashes may differ (failure mode S1).
+        # Only string wording and the rebound hashes may differ.
         before = leaves(parsed[name])
         after = {key: value for key, value in leaves(successors[name]).items() if key in before or not name.endswith("_code_versions.json")}
         require(before.keys() == after.keys(), f"{name}: structure changed")

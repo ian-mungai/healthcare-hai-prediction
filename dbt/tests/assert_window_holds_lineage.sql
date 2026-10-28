@@ -1,5 +1,5 @@
 -- Fails for each HAI or Care Compare window hold whose member_sha256s or row_count differs from the rows it holds, and for
--- each expected hold that is missing or unexpected (failure mode 792). The held rows are rebuilt here from the staging
+-- each expected hold that is missing or unexpected. The held rows are rebuilt here from the staging
 -- rows (care_window_rows, with each window model's table, entity, measure, dates and columns) and the files' release
 -- dates: a row hold by the first reason that applies (no key, unparsed date, held label, undated release) and a window
 -- hold where the latest release date of a window holds more than one row. The checksums must be exactly the sorted

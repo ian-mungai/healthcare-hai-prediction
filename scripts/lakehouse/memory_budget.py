@@ -18,12 +18,11 @@ a build that follows another can reuse it without the Mac swapping.
 The container gets that budget. DuckDB gets 80%, rounded down to whole gigabytes (GB). Spark gets whole gibibytes (g),
 leaving its existing JVM overhead. The 4 GiB floor applies to the container, not the smaller engine budget.
 A budget below the floor, an unreadable Docker or an
-unknown size unit stops with the figures instead of falling back to a fixed value. Failure modes:
-plans/group_c_20261006/failure_modes_c4.md and plans/spark_memory_20261008/failure_modes.md.
+unknown size unit stops with the figures instead of falling back to a fixed value.
 
-Admission is an allocation in the launcher (D1 section 6): one heavy allocation holds the machine at a time, an E2E pool takes one
+Admission is an allocation in the launcher: one heavy allocation holds the machine at a time, an E2E pool takes one
 allocation for all its workers (``pool_plan`` splits it into equal shares) and each registered service's unused limit is held back as
-a growth reserve (``launch_plan``). Failure modes 759, 886 and 887 are in plans/wave0_20261010/failure_modes.md.
+a growth reserve (``launch_plan``).
 """
 
 from __future__ import annotations
@@ -39,20 +38,20 @@ from typing import Any
 from scripts.process import run_command
 
 GIB = 1024**3
-# Room for the dbt process itself, DuckDB's overshoot of its limit and the Docker VM [463]. Measured: a 30 GB
+# Room for the dbt process itself, DuckDB's overshoot of its limit and the Docker VM. Measured: a 30 GB
 # limit beside 5 GB of other containers was killed on a 37.8 GB VM, so the build overshot its limit by more than 2.7 GB.
 HEADROOM = 8 * GIB
-# Room left for macOS when the Mac's own free memory caps the limit [493].
+# Room left for macOS when the Mac's own free memory caps the limit.
 MAC_HEADROOM = 2 * GIB
-# The Docker VM's own resident memory with no container running: 1.9 GiB after a restart [543].
+# The Docker VM's own resident memory with no container running: 1.9 GiB after a restart.
 VM_BASE = 2 * GIB
-# Container floor; the engine receives less because some allocations bypass its memory setting [466] [497] [527].
+# Container floor; the engine receives less because some allocations bypass its memory setting.
 FLOOR = 4 * GIB
 VM_PROCESS = "com.apple.Virtualization.VirtualMachine"
 VM_STAT_PAGE = re.compile(r"page size of (\d+) bytes")
 VM_STAT_COUNTED = ("Pages free", "File-backed pages", "Pages purgeable")
 # Spark's documented driver overhead outside the heap: the larger of 10% of the heap or 384 MiB (fix for LKH-001;
-# the heap is the budget minus the JVM's own overhead) [492].
+# the heap is the budget minus the JVM's own overhead).
 SPARK_OVERHEAD_FACTOR = 0.10
 SPARK_MIN_OVERHEAD = 384 * 1024**2
 UNITS = {"B": 1, "KB": 1000, "KIB": 1024, "MB": 1000**2, "MIB": 1024**2, "GB": 1000**3, "GIB": 1024**3, "TB": 1000**4, "TIB": 1024**4}
@@ -70,17 +69,17 @@ class Budget:
     total: int
     used_by_containers: int
     headroom: int
-    # The Mac's free, file-backed and purgeable memory; None when the Docker VM already holds its memory [495].
+    # The Mac's free, file-backed and purgeable memory; None when the Docker VM already holds its memory.
     mac_available: int | None = None
     mac_headroom: int = MAC_HEADROOM
-    # Memory the Docker VM holds that no running container uses, less its base; counted with the Mac's memory [543].
+    # Memory the Docker VM holds that no running container uses, less its base; counted with the Mac's memory.
     vm_reusable: int = 0
-    # Registered services' limits minus their observed use, held back so they can grow [887].
+    # Registered services' limits minus their observed use, held back so they can grow.
     growth_reserve: int = 0
 
     @property
     def free(self) -> int:
-        """Return the smaller of Docker's free memory and the Mac's, each less its headroom, less the growth reserve [493] [887]."""
+        """Return the smaller of Docker's free memory and the Mac's, each less its headroom, less the growth reserve."""
         docker_free = self.total - self.used_by_containers - self.headroom
         if self.mac_available is not None:
             docker_free = min(docker_free, self.mac_available + self.vm_reusable - self.mac_headroom)
@@ -88,17 +87,17 @@ class Budget:
 
     @property
     def setting(self) -> str:
-        """Reserve 20% inside the container for allocations outside DuckDB's buffer limit [527]."""
+        """Reserve 20% inside the container for allocations outside DuckDB's buffer limit."""
         return f"{(self.free * 4 // 5) // 1000**3}GB"
 
     @property
     def spark_setting(self) -> str:
-        """Return Spark's heap: the free memory less the JVM's overhead, in whole GiB (Spark's g unit), rounded down [487] [492]."""
+        """Return Spark's heap: the free memory less the JVM's overhead, in whole GiB (Spark's g unit), rounded down."""
         heap = min(self.free / (1 + SPARK_OVERHEAD_FACTOR), self.free - SPARK_MIN_OVERHEAD)
         return f"{int(heap // GIB)}g"
 
     def record(self) -> dict[str, int | str | None]:
-        """Return the figures and the settings, for a report or the --explain output [463] [493]."""
+        """Return the figures and the settings, for a report or the --explain output."""
         return {
             "total": self.total,
             "used_by_containers": self.used_by_containers,
@@ -114,7 +113,7 @@ class Budget:
 
 @dataclass(frozen=True)
 class LaunchPlan:
-    """One resource snapshot shared by the container, engine and worker settings [533]."""
+    """One resource snapshot shared by the container, engine and worker settings."""
 
     budget: Budget
     threads: int
@@ -150,7 +149,7 @@ def positive_integer(text: str, source: str) -> int:
 
 
 def launch_plan(reader: DockerReader, growth: Mapping[str, int] | None = None) -> LaunchPlan:
-    """Read memory once and use the smaller host/Docker CPU capacity for this launch; ``growth`` names registered services' limits [531] [532] [887]."""
+    """Read memory once and use the smaller host/Docker CPU capacity for this launch; ``growth`` names registered services' limits."""
     budget = current(reader)
     host = run_command("sysctl", ["-n", "hw.ncpu"], timeout=60)
     if host.returncode:
@@ -166,13 +165,13 @@ def launch_plan(reader: DockerReader, growth: Mapping[str, int] | None = None) -
 
 
 def spark_heap(free: int) -> str:
-    """Spark's heap for a container of ``free`` bytes: the container less the JVM's overhead, in whole GiB, rounded down [487] [492]."""
+    """Spark's heap for a container of ``free`` bytes: the container less the JVM's overhead, in whole GiB, rounded down."""
     heap = min(free / (1 + SPARK_OVERHEAD_FACTOR), free - SPARK_MIN_OVERHEAD)
     return f"{int(heap // GIB)}g"
 
 
 def pool_plan(plan: LaunchPlan, workers: int) -> dict[str, Any]:
-    """One allocation for ``workers`` equal shares of the plan: each worker gets a share of the memory and of the threads [687] [688]."""
+    """One allocation for ``workers`` equal shares of the plan: each worker gets a share of the memory and of the threads."""
     record = plan.record()
     if workers == 1:
         return {"environment": plan.environment(), "record": record}
@@ -189,7 +188,7 @@ def pool_plan(plan: LaunchPlan, workers: int) -> dict[str, Any]:
 
 
 def parse_size(text: str) -> int:
-    """Return a Docker size such as 1.136GiB in bytes [464]."""
+    """Return a Docker size such as 1.136GiB in bytes."""
     match = SIZE.fullmatch(text)
     if not match or match.group(2).upper() not in UNITS:
         raise BudgetError(f"unknown Docker size {text!r}")
@@ -198,7 +197,7 @@ def parse_size(text: str) -> int:
 
 def compute(total: int, usages: list[int], mac_available: int | None = None, vm_held: int = 0) -> Budget:
     """Return the budget for a total, the running containers' use, the Mac's available memory (None: no Mac cap) and the
-    Docker VM's resident memory; too little free memory stops with every figure [463] [466] [493] [497] [543]."""
+    Docker VM's resident memory; too little free memory stops with every figure."""
     used = sum(usages)
     reusable = max(0, vm_held - used - VM_BASE)
     budget = Budget(total=total, used_by_containers=used, headroom=HEADROOM, mac_available=mac_available, vm_reusable=reusable)
@@ -217,13 +216,13 @@ def compute(total: int, usages: list[int], mac_available: int | None = None, vm_
 
 def service_limit(budget: Budget, share: float, minimum: int) -> int:
     """Return a long-running service's memory limit: its share of the plan's free memory, at least the minimum, in whole
-    MiB (Polaris 25% and at least 1 GiB, its database 10% and at least 256 MiB) [498] [503]."""
+    MiB (Polaris 25% and at least 1 GiB, its database 10% and at least 256 MiB)."""
     mib = 1024**2
     return max(minimum, int(budget.free * share)) // mib * mib
 
 
 def parse_vm_stat(text: str) -> int:
-    """Return the bytes vm_stat counts as free, file-backed or purgeable; compressed memory is not counted [494] [496]."""
+    """Return the bytes vm_stat counts as free, file-backed or purgeable; compressed memory is not counted."""
     page = VM_STAT_PAGE.search(text)
     if not page:
         raise BudgetError("vm_stat output has no page size")
@@ -239,7 +238,7 @@ def parse_vm_stat(text: str) -> int:
 
 
 def mac_available() -> int:
-    """Return the memory the Mac can give without swapping, from vm_stat [493] [496]."""
+    """Return the memory the Mac can give without swapping, from vm_stat."""
     result = run_command("vm_stat", [], timeout=60)
     if result.returncode:
         raise BudgetError(f"vm_stat failed: {result.stderr.strip()[-200:]}")
@@ -247,14 +246,14 @@ def mac_available() -> int:
 
 
 def vm_resident() -> int:
-    """Return the Docker VM process's resident memory in bytes, or 0 when it cannot be found, which keeps the Mac cap [495] [496]."""
+    """Return the Docker VM process's resident memory in bytes, or 0 when it cannot be found, which keeps the Mac cap."""
     result = run_command("ps", ["-axo", "rss=,comm="], timeout=60)
     sizes = [int(line.split(None, 1)[0]) * 1024 for line in result.stdout.splitlines() if line.strip().endswith(VM_PROCESS)]
     return max(sizes, default=0)
 
 
 def current(reader: DockerReader) -> Budget:
-    """Return the budget from Docker's total memory, every running container's current use and the Mac's available memory [467] [495]."""
+    """Return the budget from Docker's total memory, every running container's current use and the Mac's available memory."""
     total = positive_integer(str(reader.total_memory()), "Docker memory")
     usages = list(reader.usage_by_name().values())
     held = vm_resident()

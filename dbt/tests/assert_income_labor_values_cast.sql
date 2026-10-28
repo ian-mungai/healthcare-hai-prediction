@@ -1,5 +1,5 @@
 -- Fails for each SAIPE county field, SAHIE number or BLS value that is neither a number nor its published missing mark,
--- and each BLS measure code outside the four LAUS measures [435] [442] [445].
+-- and each BLS measure code outside the four LAUS measures.
 with
 
 saipe_lines as (

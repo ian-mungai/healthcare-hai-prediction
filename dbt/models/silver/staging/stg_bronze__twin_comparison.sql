@@ -1,5 +1,5 @@
 -- One row per text/workbook twin pair: the text layout, the workbook sheet that matches best, data rows on each side,
--- matched rows, and the pair's status and preferred file (failure modes 183 to 190). Data rows (rows with a number)
+-- matched rows, and the pair's status and preferred file. Data rows (rows with a number)
 -- align by position; fields are compared one by one, a text number within half a unit of its displayed decimals.
 {{ config(materialized='table') }}
 
@@ -110,7 +110,7 @@ final as (
 
 select
     final.*,
-    -- Owner decision: the text file where its layout parses, the workbook where only it parses; none when they differ.
+    -- Use the text file where its layout parses, the workbook where only it parses; none when they differ.
     case
         when final.twin_status = 'agree' then final.text_sha256
         when final.twin_status = 'not_compared' then final.workbook_sha256

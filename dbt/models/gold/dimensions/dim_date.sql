@@ -1,5 +1,5 @@
 -- One row per day from the earliest to the latest value of every source-date column of type DATE that the facts name (read from the kept silver
--- models), plus the unknown member. Year-only columns do not extend the range. The natural key is the date; date_sk is the md5 of its text [824].
+-- models), plus the unknown member. Year-only columns do not extend the range. The natural key is the date; date_sk is the md5 of its text.
 -- iso_year and iso_week follow ISO 8601 and the federal fiscal year starts on October 1 (three months later falls in the fiscal year).
 {%- set date_sources = [
     {'model': 'int_cc_complications_deaths_windows', 'columns': ['release_date', 'window_end', 'window_start']},

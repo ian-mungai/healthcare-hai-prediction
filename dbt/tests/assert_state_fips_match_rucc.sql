@@ -1,5 +1,5 @@
 -- state_fips is the first two characters of the county FIPS in the RUCC rows of the state, one to one. A state with no RUCC row keeps a null
--- state_fips, and the unknown member has none [942].
+-- state_fips, and the unknown member has none.
 with
 
 pairs as (

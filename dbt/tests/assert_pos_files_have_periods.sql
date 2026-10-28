@@ -1,5 +1,5 @@
 -- Fails for a POS file without exactly one period row, a period shared by two files or a period row naming no stored POS
--- file: every hospital snapshot has its catalog coverage [280] [281].
+-- file: every hospital snapshot has its catalog coverage.
 with
 
 files as (

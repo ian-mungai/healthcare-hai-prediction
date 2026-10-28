@@ -1,4 +1,4 @@
--- Fails for each repeated file checksum and row number in a staging view: one row per row of each distinct file [166].
+-- Fails for each repeated file checksum and row number in a staging view: one row per row of each distinct file.
 with
 
 {% for table in var('copy_tables') %}

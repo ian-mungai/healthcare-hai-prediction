@@ -1,4 +1,4 @@
-"""Exact-match scan of a set of folders for planted values (Airflow plan section 10; failure modes 755 and 932b).
+"""Exact-match scan of a set of folders for planted values.
 
 The scan reads every regular file under the roots, binary-safe, and looks for each value as written and as the hexadecimal text of its bytes (a
 database column of bytes is printed that way). An unreadable file, a file that vanishes while it is read and a special file (socket, FIFO, device) are

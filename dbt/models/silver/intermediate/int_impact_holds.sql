@@ -1,5 +1,5 @@
 -- One row per impact-file release and CCN held: the CCN appears in more than one row of the release, so none of its rows
--- is read (failure mode 351).
+-- is read.
 {{ config(materialized='table') }}
 
 select

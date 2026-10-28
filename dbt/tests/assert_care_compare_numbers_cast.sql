@@ -1,6 +1,6 @@
 -- Fails for each Care Compare number column that does not follow the plain-number rule: set from text that is not a plain
 -- number (a category, token, exponent, sign, thousands separator or percent sign), null from text that is, or unequal to
--- the text cast to a double. The published text columns stay beside the numbers [327].
+-- the text cast to a double. The published text columns stay beside the numbers.
 with
 
 numbers as (

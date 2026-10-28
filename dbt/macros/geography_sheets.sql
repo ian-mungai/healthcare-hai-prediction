@@ -1,7 +1,7 @@
 {% macro geography_sheet_rows(table) %}
 {#- The data rows of the declared workbook sheets of one table: rows after the sheet's exact header row, with the file's
     vintage from the period seed. A sheet without exactly one header row gives no rows and fails
-    assert_geography_layouts_known [412]. -#}
+    assert_geography_layouts_known. -#}
 with
 
 declared as (

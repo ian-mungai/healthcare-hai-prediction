@@ -1,5 +1,5 @@
 -- One row per distinct stored file: whether intermediate models may read it. A file is not selected while its labels
--- are held, or when a twin pair excludes it: the other twin is preferred, or the pair differs (failure modes 172, 187).
+-- are held, or when a twin pair excludes it: the other twin is preferred, or the pair differs.
 {{ config(materialized='table') }}
 
 with

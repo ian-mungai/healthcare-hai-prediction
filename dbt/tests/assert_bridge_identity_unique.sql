@@ -1,5 +1,5 @@
 -- Fails for a gold bridge identity that appears more than once across the bridge seeds: the same fact, measure key, value column and
--- vintage start for one registry control [802].
+-- vintage start for one registry control.
 {%- set bridge_seeds = [
     'registry_measure_sources_bridge',
     'cost_report_measures_bridge',

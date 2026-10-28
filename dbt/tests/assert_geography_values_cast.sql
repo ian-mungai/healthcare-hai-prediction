@@ -1,7 +1,7 @@
 -- Fails for each published C1 value that does not type: a HUD ZIP code or ratio (scientific notation is a number; a ratio
 -- must lie in 0 to 1), an adjacency county code, border length or 2010 line shape, a RUCC or RUCA code outside its
 -- published categories, a tract or ZIP identifier, and a service-area ZIP code or count that is neither a number nor the
--- suppression mark [405] [407] [411] [413].
+-- suppression mark.
 with
 
 hud as (

@@ -1,6 +1,6 @@
 -- Fails for a repeated grain: a PLACES release with two values for one county, measure, value type and data year; the
 -- geographic variation file with two values for one county, year, age level and field; a WONDER export with two rows for
--- one county and year [451] [454] [457].
+-- one county and year.
 select
     'places' as checked_source,
     member_sha256 || ':' || county_fips || ':' || measureid || ':' || datavaluetypeid || ':' || data_year as grain

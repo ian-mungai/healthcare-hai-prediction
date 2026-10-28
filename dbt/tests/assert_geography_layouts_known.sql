@@ -1,5 +1,5 @@
 -- Fails for a declared workbook sheet that is not loaded or has no single exact header row, and for a long RUCC file
--- without the code attribute of its reviewed vintage: a changed layout or a wrong vintage never yields codes [410] [412].
+-- without the code attribute of its reviewed vintage: a changed layout or a wrong vintage never yields codes.
 {%- set declared = var('geography_sheets') %}
 with
 

@@ -402,7 +402,7 @@ CREATES: tuple[tuple[str, str, dict[str, Any]], ...] = (
 
 
 def container_instance_cases() -> Iterator[Case]:
-    """DescribeContainerInstances acts on container-instance ARNs of the project cluster, not on the cluster ARN (review round 5 finding 6)."""
+    """DescribeContainerInstances acts on container-instance ARNs of the project cluster, not on the cluster ARN."""
     yield Case(
         "ecs:DescribeContainerInstances on the cluster ARN (wrong resource type)", request("ecs:DescribeContainerInstances", CLUSTER, region=None), False
     )

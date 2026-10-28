@@ -26,7 +26,7 @@ x-airflow: &airflow
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
     AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY}
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
-    # No schedule or asset trigger runs until the owner approves it (decision O3).
+    # No schedule or asset trigger runs until the owner approves it.
     AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: "false"
     AIRFLOW__OPENLINEAGE__NAMESPACE: hai-prediction-local
     AIRFLOW__OPENLINEAGE__CONFIG_PATH: /opt/hai/hai_lineage/openlineage.yml
@@ -60,7 +60,7 @@ services:
     # Computed by the launcher from the memory free when the stack starts; kept for its life.
     mem_limit: ${HAI_ORCH_MEM_POSTGRES:?run through scripts/orchestration/supervisor.py}
     volumes:
-      # Airflow's metadata lives in the ignored data/orchestration/ folder (decision O4), never in Polaris's database.
+      # Airflow's metadata lives in the ignored data/orchestration/ folder, never in Polaris's database.
       - ${HAI_ORCH_STATE}/postgres:/var/lib/postgresql/data
     security_opt:
       - no-new-privileges:true

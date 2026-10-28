@@ -1,5 +1,5 @@
 -- Fails for each mapped export column whose label in that vintage's file differs from the label the reviewed map
--- recorded, or that the file does not publish: a code that changes meaning never carries the concept [420].
+-- recorded, or that the file does not publish: a code that changes meaning never carries the concept.
 with
 
 variable_map as (

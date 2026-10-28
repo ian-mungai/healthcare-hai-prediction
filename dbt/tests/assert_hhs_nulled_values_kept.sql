@@ -1,9 +1,9 @@
 -- Fails for each HHS numeric field or row whose typed values or kept rejected texts differ from what the published text
--- requires (silver section 5; failure mode 793). For all 114 fields the expected typed value is the plain number of the
+-- requires. For all 114 fields the expected typed value is the plain number of the
 -- published text when it is 0 or more, else null; a non-blank published value other than -999999 whose expected value is
 -- null must appear in nulled_values_published under its field with the untrimmed published text; the object holds
 -- exactly those fields and is the text {} when there are none. Each kept value must be a JSON string: a number that converts
--- to the same text (-9 for "-9") is a different JSON value and fails (round 2 finding 2).
+-- to the same text (-9 for "-9") is a different JSON value and fails.
 with
 
 typed as (

@@ -1,5 +1,5 @@
--- Every dataset ID that bronze holds is placed by the registry or listed as unplaced in the source_labels seed; an ID in neither list fails the build
--- (failure mode 945). Only the end-to-end fixture target exempts a dataset: its synthetic bronze gives every stored copy the ID fixture_dataset, which the
+-- Every dataset ID that bronze holds is placed by the registry or listed as unplaced in the source_labels seed; an ID in neither list fails the build.
+-- Only the end-to-end fixture target exempts a dataset: its synthetic bronze gives every stored copy the ID fixture_dataset, which the
 -- registry does not list. The exemption follows the target, not a variable: the launcher's fixture_dbt template always passes --target fixture and the real
 -- build passes --target lakehouse, so a real build exempts nothing and a variable that names an exempt dataset on any other target is a compile error.
 {%- set synthetic = var('synthetic_dataset_ids', ['fixture_dataset'] if target.name == 'fixture' else []) %}

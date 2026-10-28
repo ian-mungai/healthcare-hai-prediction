@@ -1,6 +1,6 @@
 -- One row per workbook sheet in the IPPS and occupational-mix sheet tables: whether intermediate models may read it.
 -- A twin-excluded workbook keeps every sheet that no selected text file of the same release covers row for row; every
--- sheet of a selected workbook is selected and no sheet of a held workbook (failure modes 267 to 278).
+-- sheet of a selected workbook is selected and no sheet of a held workbook.
 {{ config(materialized='table') }}
 
 with
@@ -36,7 +36,7 @@ copies as (
     from {{ ref('stg_bronze__release_observations') }}
 ),
 
--- Only a selected text file that shares a release with a twin-excluded, unheld workbook can cover its sheets [268] [270].
+-- Only a selected text file that shares a release with a twin-excluded, unheld workbook can cover its sheets.
 candidates as (
     select distinct
         workbooks.member_sha256 as workbook_sha256,
@@ -90,7 +90,7 @@ text_counts as (
     group by _member_sha256
 ),
 
--- Only a text with as many data rows as the sheet, and more than none, can cover it [269] [277].
+-- Only a text with as many data rows as the sheet, and more than none, can cover it.
 pairs as (
     select
         candidates.workbook_sha256,
@@ -126,7 +126,7 @@ matches as (
         pairs.data_rows
 ),
 
--- The smallest covering checksum, so a rebuild gives the same answer [276].
+-- The smallest covering checksum, so a rebuild gives the same answer.
 coverage as (
     select
         workbook_sha256,
@@ -139,7 +139,7 @@ coverage as (
         sheet_name
 ),
 
--- The compared sheet of a twin pair that differs stays held, as the owner decided [271].
+-- The compared sheet of a twin pair that differs stays held, as the owner decided.
 differing as (
     select distinct
         workbook_sha256,

@@ -1,6 +1,6 @@
 -- Every row of dim_drg, dim_rurality_code and dim_measure carries exactly the identity rule that the approved identity_splits seed gives its key: a held
 -- key stays held, a renamed key stays single_latest, a split key stays split, and a key the seed does not list has no rule. A null, substituted or invented
--- rule fails, whatever the row count is: a held DRG presented as renamed keeps one row and the latest label, so the count test cannot see it [940].
+-- rule fails, whatever the row count is: a held DRG presented as renamed keeps one row and the latest label, so the count test cannot see it.
 with
 
 seed_rules as (

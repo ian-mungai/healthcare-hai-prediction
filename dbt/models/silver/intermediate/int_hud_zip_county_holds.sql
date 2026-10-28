@@ -1,6 +1,5 @@
 -- HUD ZIP-to-county rows whose code is not a county of the states, DC or territories: two-digit island codes and 99999.
--- They are removed from int_hud_zip_county_quarters and kept here so every bronze row is counted
--- (failure modes 401 and 419).
+-- They are removed from int_hud_zip_county_quarters and kept here so every bronze row is counted.
 {{ config(materialized='table') }}
 
 with

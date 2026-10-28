@@ -1,6 +1,6 @@
 -- One row per hospital, program year, performance period and certified product (CHPL ID) of the ONC Promoting
 -- Interoperability linkage. The criterion is true for Y and false for N; blank is null. Dates and the year are typed; the
--- CCN follows the B5a rule. The telephone column is left out (failure modes 380 to 382).
+-- CCN follows the B5a rule. The telephone column is left out.
 {{ config(materialized='table') }}
 
 with

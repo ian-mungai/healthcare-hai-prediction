@@ -2,9 +2,9 @@
 -- non-empty measure key, plus, for each long fact, every distinct published measure key of its silver model paired with each value column the
 -- fact's bridge rows name. A column no bridge row names is not an identity. measure_label is the silver model's measure_name where it has one;
 -- unit is the value_unit of int_mmd_prevalence; value_kind is the type class of the silver column (number, text, boolean or date; a list of text
--- counts as text); the vintage range comes from the seeds [824] [828]. A measure that the identity_splits seed lists as split (its published meaning
+-- counts as text); the vintage range comes from the seeds. A measure that the identity_splits seed lists as split (its published meaning
 -- changed) has one row per published name: edition_start and edition_end are the first and last release date that carry the name, and the identity text
--- and key add the edition start. Every other row has a null edition and keeps the identity text and key it had before editions existed [940] [941].
+-- and key add the edition start. Every other row has a null edition and keeps the identity text and key it had before editions existed.
 {%- set bridge_seeds = [
     'registry_measure_sources_bridge',
     'cost_report_measures_bridge',
@@ -322,7 +322,7 @@ names_published as (
 ),
 
 -- A measure published under more than one name keeps the name of its latest release (then the latest window, then the first name in order);
--- every published name stays on the fact rows (amendment A48).
+-- every published name stays on the fact rows.
 names as (
     select distinct on (fact, measure_key)
         fact,

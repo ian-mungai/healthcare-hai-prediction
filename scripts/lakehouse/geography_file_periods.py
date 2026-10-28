@@ -1,4 +1,4 @@
-"""Generate the vintages and periods of the county-context files that staging reads (failure modes 403, 410, 416 and 427).
+"""Generate the vintages and periods of the county-context files that staging reads.
 
 Run from the repository root with read-only S3 access and the local acquisition records:
 
@@ -14,8 +14,7 @@ capture receipt's release label names, as does a PLACES file; a WONDER file take
 from its receipt. SAIPE, SAHIE and MMD files take the year in their publisher file names (est23all.txt,
 sahie_2023.csv, mmd_ffs_county_c258_02_prevalence_2023.csv); the one MMD file named mmd_data.csv takes its reviewed year.
 A BLS capture takes its capture date, the revision vintage of the series it holds, and an HPSA or MUA capture its capture
-date, the day its statuses are as of. A loaded file with no period or vintage, or with two, stops the run. Failure modes:
-plans/group_c_20261006/failure_modes_c1.md to failure_modes_c5.md.
+date, the day its statuses are as of. A loaded file with no period or vintage, or with two, stops the run.
 """
 
 from __future__ import annotations
@@ -137,7 +136,7 @@ def receipt_quarters(root: Path = DATASETS) -> dict[str, tuple[str, str, str]]:
 
 
 def receipt_editions(root: Path = DATASETS) -> dict[str, str]:
-    """Return each SVI or PLACES capture's edition year from its receipt's release label, keyed by release ID [427] [453]."""
+    """Return each SVI or PLACES capture's edition year from its receipt's release label, keyed by release ID."""
     editions: dict[str, str] = {}
     for path in sorted(path for pattern in EDITION_RECEIPTS for path in root.glob(pattern)):
         receipt = json.loads(path.read_text())
@@ -152,7 +151,7 @@ def receipt_editions(root: Path = DATASETS) -> dict[str, str]:
 
 
 def receipt_databases(root: Path = DATASETS) -> dict[str, tuple[str, str, str]]:
-    """Return each WONDER capture's database (its publisher release label) and publisher-stated period, keyed by release ID [453]."""
+    """Return each WONDER capture's database (its publisher release label) and publisher-stated period, keyed by release ID."""
     databases: dict[str, tuple[str, str, str]] = {}
     for path in sorted(root.glob(DATABASE_RECEIPTS)):
         receipt = json.loads(path.read_text())
@@ -187,7 +186,7 @@ def file_row(
     editions: Mapping[str, str],
     databases: Mapping[str, tuple[str, str, str]],
 ) -> dict[str, str]:
-    """Return one loaded file's seed row; a file without a period or vintage stops the run [403] [410] [416] [427]."""
+    """Return one loaded file's seed row; a file without a period or vintage stops the run."""
     table, release, name = item["table"], item["release_id"], item["file_name"]
     row = {"member_sha256": item["sha256"], "bronze_table": table, "release_id": release, "file_name": name}
     if table == QUARTER_TABLE:

@@ -1,6 +1,5 @@
 -- Fails for each CMI row where one of the four operand numbers does not match the published text it is cast from: a
--- non-blank text that gives no number, a number without its text, or a number that differs from the text's value
--- (silver section 5; failure mode 794).
+-- non-blank text that gives no number, a number without its text, or a number that differs from the text's value.
 with
 
 pairs as (

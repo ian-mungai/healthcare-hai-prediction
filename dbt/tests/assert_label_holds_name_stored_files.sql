@@ -1,4 +1,4 @@
--- Fails for each label hold that names no stored file, so a stale hold is never kept silently [172].
+-- Fails for each label hold that names no stored file, so a stale hold is never kept silently.
 with
 
 holds as (

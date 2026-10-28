@@ -1,4 +1,4 @@
-"""Guard mutants: copies of the A1 code with one guard removed, for the case-level failing-first logs (review round 1, finding 6).
+"""Guard mutants: copies of the orchestration code with one guard removed, for the case-level failing-first logs.
 
 A mutant is a set of text edits to files of a copy of the source tree: a line removed, a check turned off, a safe call replaced by the naive one, or a
 function replaced by a shorter definition. ``apply`` makes the edits in a copy and returns a unified diff for the log. Each edit names the exact text it

@@ -1,6 +1,6 @@
 {% macro hhs_numeric_columns() %}
 {#- The HHS weekly numeric columns in bronze order: the 7-day averages, sums and coverage counts and the vaccination
-    counts. A count of 1 to 3 is published as -999999 (failure mode 375). -#}
+    counts. A count of 1 to 3 is published as -999999. -#}
 {{ return([
     'total_beds_7_day_avg',
     'all_adult_hospital_beds_7_day_avg',
@@ -121,12 +121,12 @@
 
 {% macro hhs_number(column) %}
 {#- A plain number of 0 or more; -999999 (suppressed), any other negative value and anything that is not a plain number
-    are null [375]. -#}
+    are null. -#}
 case when ({{ strict_number(column) }}) >= 0 then {{ strict_number(column) }} end
 {%- endmacro %}
 
 {% macro slash_date(column) %}
-{#- A date written YYYY/MM/DD; anything else is null [376]. -#}
+{#- A date written YYYY/MM/DD; anything else is null. -#}
 {%- set value = "nullif(trim(" ~ column ~ "), '')" -%}
 case when regexp_full_match({{ value }}, '[0-9]{4}/[0-9]{2}/[0-9]{2}') then try_strptime({{ value }}, '%Y/%m/%d')::date end
 {%- endmacro %}
@@ -137,11 +137,11 @@ case lower(trim({{ column }})) when 'true' then true when 'false' then false end
 {%- endmacro %}
 
 {% macro year_number(column) %}
-{#- A 4-digit year; anything else is null [381]. -#}
+{#- A 4-digit year; anything else is null. -#}
 case when regexp_full_match(trim({{ column }}), '[0-9]{4}') then trim({{ column }})::integer end
 {%- endmacro %}
 
 {% macro month_number(column) %}
-{#- A month from 1 to 12; anything else is null [381]. -#}
+{#- A month from 1 to 12; anything else is null. -#}
 case when regexp_full_match(trim({{ column }}), '0?[1-9]|1[0-2]') then trim({{ column }})::integer end
 {%- endmacro %}

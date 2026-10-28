@@ -1,5 +1,5 @@
 -- One row per 11-digit census tract GEOID, plus the unknown member: the RUCA rows of tract geography and the HPSA geography IDs that are 11
--- digits. Any other HPSA ID stays in the fact and takes the unknown member [824] [825].
+-- digits. Any other HPSA ID stays in the fact and takes the unknown member.
 with
 
 observed as (

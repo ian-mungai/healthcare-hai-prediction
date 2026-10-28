@@ -1,5 +1,5 @@
 -- One row per owner associate ID any fact's owner key carries, plus the unknown member. The value space is the 10-digit associate ID. Names and
--- flags stay on each release row. A value outside that space takes the unknown member in every fact [824] [825].
+-- flags stay on each release row. A value outside that space takes the unknown member in every fact.
 {%- set sources = [
     {'model': 'int_change_of_ownership_rows', 'column': 'associate_id_buyer'},
     {'model': 'int_change_of_ownership_rows', 'column': 'associate_id_seller'},

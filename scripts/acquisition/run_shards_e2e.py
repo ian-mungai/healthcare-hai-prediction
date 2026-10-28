@@ -9,7 +9,7 @@ Run from the repository root: ``.venv/bin/python -m scripts.acquisition.run_shar
   covers the target alone and the merge does, and one module runs only in a child process. Each negative case changes one thing (a missing shard, a
   failed test, a dropped test, a shard of another run, a swapped coverage file, a mixed skip) and passes only when the gate fails for that cause.
 
-Failure modes S1 to S14 (plans, local). The report goes to data/e2e/acquisition_shards_e2e/<UTC>_<pid>/report.json with the revision, the SHA-256 of
+The report goes to data/e2e/acquisition_shards_e2e/<UTC>_<pid>/report.json with the revision, the SHA-256 of
 the code under test and the tool versions.
 """
 

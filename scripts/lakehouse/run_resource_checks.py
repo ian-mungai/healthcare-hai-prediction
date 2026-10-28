@@ -3,7 +3,7 @@
 Run ``.venv/bin/python -m scripts.lakehouse.run_resource_checks``. Reports stay in data/e2e/resource_limits/.
 Each case starts a launcher on a test registry with a fake Docker daemon (scripts/lakehouse/fake_docker.py) and synthetic ``sysctl``,
 ``vm_stat`` and ``ps`` commands on ``PATH``; no Docker daemon, catalog or AWS service is contacted. These process-level contracts and
-configuration checks do not prove live container enforcement. Failure modes 526 to 543 are in plans/resource_limits_20261008/failure_modes.md.
+configuration checks do not prove live container enforcement.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def main() -> int:
             {"JOB_MEMORY_LIMIT": str(21 * GIB), "DUCKDB_MEMORY_LIMIT": "18GB", "SPARK_JOB_MEMORY": "19g", "JOB_THREADS": "6"},
         ),
         "container_floor": ({"mac_gib": 6}, {"JOB_MEMORY_LIMIT": str(4 * GIB), "DUCKDB_MEMORY_LIMIT": "3GB", "SPARK_JOB_MEMORY": "3g", "JOB_THREADS": "16"}),
-        # [543] Memory the VM already holds and no container uses is reusable: 6 + (14 - 1 - 2) - 2 = 15 GiB.
+        # Memory the VM already holds and no container uses is reusable: 6 + (14 - 1 - 2) - 2 = 15 GiB.
         "vm_holds_memory": (
             {"mac_gib": 6, "vm_gib": 14, "usage": 1 * GIB},
             {"JOB_MEMORY_LIMIT": str(15 * GIB), "DUCKDB_MEMORY_LIMIT": "12GB", "SPARK_JOB_MEMORY": "13g", "JOB_THREADS": "16"},
@@ -120,7 +120,7 @@ def main() -> int:
 
 
 def launch_contracts(folder: Path) -> dict[str, bool]:
-    """Exercise the launch scripts and attempts with synthetic metrics: the plan reaches the container, stale settings do not [534] [538]."""
+    """Exercise the launch scripts and attempts with synthetic metrics: the plan reaches the container, stale settings do not."""
     results: dict[str, bool] = {}
     for name in ("dbt", "query", "ui"):
         text = (ROOT / f"scripts/lakehouse/{name}.sh").read_text()
@@ -169,7 +169,7 @@ def launch_contracts(folder: Path) -> dict[str, bool]:
     results["low_memory_never_launches"] = (
         blocked.returncode != 0 and not blocked.stdout and "free for DuckDB or Spark" in blocked.stderr and not creates(env_low, "-blocked-")
     )
-    # A low reading must not prevent stopping the catalog (the old stack's stop needs no new budget) [535].
+    # A low reading must not prevent stopping the catalog (the old stack's stop needs no new budget).
     stopped = run_command(
         sys.executable, ["-m", "scripts.lakehouse.catalog", "--test-registry", str(env_low.registry), "down"], cwd=ROOT, env=low_env, timeout=120
     )

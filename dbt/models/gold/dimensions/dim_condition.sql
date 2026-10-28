@@ -1,6 +1,6 @@
 -- One row per (MMD condition code system, code) as published, plus the unknown member. code_system names the silver model and column; code_label
 -- is the paired label column where silver has one, else null. A code with two different labels appears twice and fails the uniqueness test; a code
--- with a label and a null label keeps the label [824] [750].
+-- with a label and a null label keeps the label.
 {%- set code_systems = [
     {'model': 'int_mmd_prevalence', 'code': 'condition_label', 'label': 'condition_label'},
 ] %}

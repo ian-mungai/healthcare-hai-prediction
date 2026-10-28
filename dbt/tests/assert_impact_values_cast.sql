@@ -1,4 +1,4 @@
--- Fails for each numeric impact-file value that is neither blank, a SAS missing dot nor a plain number [349].
+-- Fails for each numeric impact-file value that is neither blank, a SAS missing dot nor a plain number.
 select
     member_sha256,
     sheet_name,

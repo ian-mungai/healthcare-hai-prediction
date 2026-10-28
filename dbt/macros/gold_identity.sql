@@ -3,7 +3,7 @@
     The rows of bridge_measure_control from the control bridge seed rows and the editions of the split measures: a seed row of a measure with no
     editions keeps the key of its identity (fact, measure key and value column); a seed row of a split measure maps to every edition when its
     vintage range is empty and to the editions whose years overlap the range otherwise. editions holds one row per edition of a split identity
-    (fact, measure_key, value_column, edition_start, edition_end). The test bridge_edition_branches feeds it fixture rows [941].
+    (fact, measure_key, value_column, edition_start, edition_end). The test bridge_edition_branches feeds it fixture rows.
 -#}
 select
     seed_rows.measure_control,
@@ -28,7 +28,7 @@ left join {{ editions }} as editions
 {#-
     Runs gold_measure_control_rows over fixture rows and compares the result with literal rows: a measure with no editions, a split measure with an
     empty range (every edition), a range that overlaps the first edition only, a range that overlaps both and a range that overlaps neither (the
-    identity key without an edition, which the bridge's relationship test then refuses) [941].
+    identity key without an edition, which the bridge's relationship test then refuses).
 -#}
 with
 

@@ -1,5 +1,5 @@
 -- One row per Medicare inpatient provider summary (CCN) and file: the data and release years from the file name, the
--- place columns as published and every numeric column typed; a blank (suppressed) value is null (failure modes 355 to 359).
+-- place columns as published and every numeric column typed; a blank (suppressed) value is null.
 {{ config(materialized='table') }}
 
 with

@@ -131,7 +131,7 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
 
 ## How the workflows run on the host
 
-The silver, gold and maintenance DAGs only call the job broker over HTTP (`orchestration/client.py`). Nothing in the DAGs changes. The scheduler needs `/opt/hai/broker/client.json` and `broker_token`. On the host a broker service writes the endpoint and the token comes from a new Parameter Store secret. That service and the job path are package P7b. This package assumes:
+The silver, gold and maintenance DAGs only call the job broker over HTTP (`orchestration/client.py`). Nothing in the DAGs changes. The scheduler needs `/opt/hai/broker/client.json` and `broker_token`. On the host a broker service writes the endpoint and the token comes from a new Parameter Store secret. The broker service and job path are not part of this stack. This stack assumes:
 
 - The broker keeps its HTTP interface and its ledger. It replaces the launcher with an ECS target: one `RunTask` per launcher template (`pipeline_spark`, `pipeline_publish`, `fixture_dbt`, `quality_*`, `pipeline_export`), idempotent through a start token derived from the submission ID.
 - Status, cancel and logs come from `DescribeTasks`, `StopTask` and CloudWatch Logs. Light steps run on the host capacity provider. Heavy steps run on Fargate Spot with on-demand fallback.
@@ -164,10 +164,10 @@ aws ecs run-task --profile <PROJECT_PROFILE> --region <REGION> --cluster <cluste
 
 `terraform destroy` of `infra/services/` removes the services. The task definition revisions stay registered (`skip_destroy`, because the project user may not deregister them) and stay active until they are deregistered separately. The data volume, its snapshots, the secrets (parameters) and the ECR images belong to the foundation and stay until the foundation's own teardown names them. Stop the services before a destroy if the Postgres data must be consistent: scale each service to zero first.
 
-## Open choices
+## Deployment settings and open choices
 
-- **How the DAG code reaches the host** (decided): a checkout of the merged `main` commit at `dag_code_path`, mounted read-only, like the local Compose files. Baking the code into the Airflow image by digest is not needed now.
-- **Run-folder storage for jobs** (P7b, decided): S3 staging under the lakehouse prefix; no EFS.
+- **How the DAG code reaches the host**: a checkout of the merged `main` commit at `dag_code_path`, mounted read-only, like the local Compose files. Baking the code into the Airflow image by digest is not needed now.
+- **Run-folder storage for jobs**: S3 staging under the lakehouse prefix; no EFS.
 - **Airflow sign-in.** All-admins on a loopback-only API server (this package) or the FAB auth manager with a password hash in the database. See the secrets section.
 - **Option names that need a running host.** `simple_auth_manager_all_admins`, `scheduler_health_check_server_host` and `--skip-serve-logs` (on the scheduler and triggerer) come from the 3.3.2 sources and documentation. Verify them at the first deploy with `ss -ltn` on the host: only 6379 and 8181 may show a non-loopback address.
-- **Host networking and the instance metadata service** (decided): host networking stays, because ECS port mappings have no host address field and bridge networking could not keep a published port on 127.0.0.1. The foundation blocks the metadata service for non-root users with a host firewall rule. Every long-running container runs as a non-root user (see "Users").
+- **Host networking and the instance metadata service**: host networking stays, because ECS port mappings have no host address field and bridge networking could not keep a published port on 127.0.0.1. The foundation blocks the metadata service for non-root users with a host firewall rule. Every long-running container runs as a non-root user (see "Users").

@@ -1,16 +1,16 @@
 {% macro clean_field(field) -%}
 {#- A field trimmed, with surrounding double quotes removed and doubled quotes unescaped, then trimmed again: spaces
-    inside quotes are not data [184] [200]. -#}
+    inside quotes are not data. -#}
 trim(replace(regexp_replace(trim(coalesce({{ field }}, '')), '^"(.*)"$', '\1'), '""', '"'))
 {%- endmacro %}
 
 {% macro plain_number(field) -%}
-{#- The field's text without $ and thousands separators, as a text twin displays numbers [189]. -#}
+{#- The field's text without $ and thousands separators, as a text twin displays numbers. -#}
 replace(replace({{ clean_field(field) }}, '$', ''), ',', '')
 {%- endmacro %}
 
 {% macro field_number(field) -%}
-{#- The field as a number; a percentage is divided by 100 [191]. -#}
+{#- The field as a number; a percentage is divided by 100. -#}
 case
     when ends_with({{ plain_number(field) }}, '%') then try_cast(rtrim({{ plain_number(field) }}, '%') as double) / 100
     else try_cast({{ plain_number(field) }} as double)
@@ -18,19 +18,19 @@ end
 {%- endmacro %}
 
 {% macro field_decimals(field) -%}
-{#- Decimals the text displays; two more for a percentage [191]. -#}
+{#- Decimals the text displays; two more for a percentage. -#}
 length(regexp_extract(rtrim({{ plain_number(field) }}, '%'), '\.(\d+)$', 1))
     + case when ends_with({{ plain_number(field) }}, '%') then 2 else 0 end
 {%- endmacro %}
 
 {% macro field_matches(text_field, workbook_field) -%}
 {#- A text number with d decimals matches a workbook number within half a unit in the d-th decimal, plus 1e-13 of the
-    workbook value for floating-point error [189] [192]; other fields must be equal once cleaned. -#}
+    workbook value for floating-point error; other fields must be equal once cleaned. -#}
 case
     when {{ field_number(text_field) }} is not null and {{ field_number(workbook_field) }} is not null
         then abs({{ field_number(text_field) }} - {{ field_number(workbook_field) }})
             <= 0.5 * pow(10, -({{ field_decimals(text_field) }})) + 1e-9 + abs({{ field_number(workbook_field) }}) * 1e-13
-    -- A text date (m/d/yyyy) matches the same date in the workbook, as an ISO value or an Excel serial number [202].
+    -- A text date (m/d/yyyy) matches the same date in the workbook, as an ISO value or an Excel serial number.
     when {{ text_date(text_field) }} is not null and {{ workbook_date(workbook_field) }} is not null
         then {{ text_date(text_field) }} = {{ workbook_date(workbook_field) }}
     else {{ clean_field(text_field) }} = {{ clean_field(workbook_field) }}
@@ -59,14 +59,14 @@ list_bool_and(list_transform(
 {%- endmacro %}
 
 {% macro row_has_number(fields) -%}
-{#- True when any field is a number: such a row is a data row [185]. -#}
+{#- True when any field is a number: such a row is a data row. -#}
 coalesce(list_bool_or(list_transform({{ fields }}, lambda f: {{ field_number('f') }} is not null)), false)
 {%- endmacro %}
 
 {% macro twin_parsed_rows(text_shas, workbook_shas) -%}
 {#- The CTEs text_lines, sheet_rows, text_layouts, text_fields, text_data and sheet_data for the text and workbook
     checksums the two queries return. The twin comparison and the sheet selection share them, so both read files the
-    same way [275]. -#}
+    same way. -#}
 text_lines as (
     select
         _member_sha256,
@@ -112,9 +112,9 @@ text_layouts as (
     select
         _member_sha256,
         -- Comma-separated only when the header (first non-empty line) has a comma: fixed-width files carry commas in
-        -- their numbers [193].
+        -- their numbers.
         -- Tab-separated only when most non-blank lines hold a tab: a tab header over space-separated data is
-        -- fixed-width [201].
+        -- fixed-width.
         case
             when count(*) filter (where contains(line_text, chr(9))) * 2 > count(*) filter (where trim(line_text) <> '') then 'tab'
             when contains(arg_min(line_text, _row_number) filter (where trim(line_text) <> ''), ',') then 'comma'

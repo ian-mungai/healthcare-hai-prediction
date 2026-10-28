@@ -1,5 +1,5 @@
 -- Fails for each data file of a CMI snapshot whose family is neither read as CMI nor reviewed as not CMI, so a new CMI
--- file is never skipped silently [293].
+-- file is never skipped silently.
 with
 
 files as (

@@ -1,5 +1,5 @@
 -- Fails for each owner, enrollment or change-of-ownership column with a non-blank value that does not type: a flag other
--- than Y or N, a date that is not M/D/YYYY or a percentage that is not a plain number from 0 to 100 [366] [368] [369].
+-- than Y or N, a date that is not M/D/YYYY or a percentage that is not a plain number from 0 to 100.
 with
 
 owner_counts as (

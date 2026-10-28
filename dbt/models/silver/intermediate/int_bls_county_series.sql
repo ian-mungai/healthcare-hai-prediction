@@ -1,6 +1,6 @@
 -- One row per BLS LAUS county series value as captured: the measure named from its code, year and month (null for the
 -- annual average, M13), seasonal adjustment from the series ID, '-' null with the token kept and the footnote codes kept.
--- Each value keeps its capture date, the revision vintage; no capture replaces another (failure modes 442 to 445).
+-- Each value keeps its capture date, the revision vintage; no capture replaces another.
 {{ config(materialized='table') }}
 
 with

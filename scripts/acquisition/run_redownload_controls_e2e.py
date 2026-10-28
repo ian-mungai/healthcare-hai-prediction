@@ -444,7 +444,7 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
     scenario("each_run_reads_its_own_controls_and_review", run_records)
 
     def scoped(label: str) -> tuple[Any, dict, dict, Any]:
-        """Two sources in the queue; the run's scope file approves only ALPHA (failure modes 52-54)."""
+        """Two sources in the queue; the run's scope file approves only ALPHA."""
         base = root / label
         base.mkdir()
         fixture, web = fixture_type(base), web_type()

@@ -1,6 +1,6 @@
 -- One row per (SAHIE and Geographic Variation demographic group code system, code) as published, plus the unknown member. code_system names the
 -- silver model and column; code_label is the paired label column where silver has one, else null. A code with two different labels appears twice
--- and fails the uniqueness test; a code with a label and a null label keeps the label [824] [750].
+-- and fails the uniqueness test; a code with a label and a null label keeps the label.
 {%- set code_systems = [
     {'model': 'int_sahie_county_rows', 'code': 'agecat', 'label': ''},
     {'model': 'int_sahie_county_rows', 'code': 'racecat', 'label': ''},

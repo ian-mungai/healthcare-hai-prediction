@@ -1,5 +1,5 @@
--- fct_hsa_zip_cases: every column of int_hsa_zip_cases unchanged, then the surrogate keys release_sk, zip_sk [743] [745].
--- The grain is hsa_row_key; the YAML checks rows, content, keys, source dates and published text against silver [747] [748].
+-- fct_hsa_zip_cases: every column of int_hsa_zip_cases unchanged, then the surrogate keys release_sk, zip_sk.
+-- The grain is hsa_row_key; the YAML checks rows, content, keys, source dates and published text against silver.
 {{
     gold_fact(
         'int_hsa_zip_cases',

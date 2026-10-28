@@ -1,5 +1,5 @@
 -- One row per Medicare inpatient provider (CCN), DRG and file: the data and release years from the file name and the
--- published discharges and averages typed. Cells under 11 discharges are not published (failure modes 355, 356, 359, 362).
+-- published discharges and averages typed. Cells under 11 discharges are not published.
 {{ config(materialized='table') }}
 
 with

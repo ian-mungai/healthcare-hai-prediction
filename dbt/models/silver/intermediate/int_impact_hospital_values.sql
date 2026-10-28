@@ -1,5 +1,5 @@
 -- One row per impact-file release (file and sheet), hospital (CCN) and mapped field, from the hospital rows whose CCN
--- appears once in the release (failure modes 345 and 349 to 352). The published text is kept, with a SAS missing dot as
+-- appears once in the release. The published text is kept, with a SAS missing dot as
 -- text and no number; a number is set only for a plain number in a numeric field, or a plain number with a percent sign
 -- (divided by 100).
 {{ config(materialized='table') }}

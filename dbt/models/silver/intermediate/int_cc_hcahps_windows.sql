@@ -1,7 +1,7 @@
 -- One Care Compare HCAHPS row per hospital, HCAHPS measure and measurement window, from the latest stored release; each
--- value keeps its own column and footnote (failure modes 318 to 322).
+-- value keeps its own column and footnote.
 -- A value that is a plain number (an optional minus sign and digits, with an optional decimal part) is also given as a number;
--- a category, token or other text stays text with a null number [327].
+-- a category, token or other text stays text with a null number.
 
 with
 

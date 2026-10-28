@@ -1,5 +1,5 @@
 -- Fails for a concept without exactly one map row for a loaded vintage of its table, and for a map row naming no loaded
--- file: every concept and vintage is mapped or held with a reason, never silently missing [423].
+-- file: every concept and vintage is mapped or held with a reason, never silently missing.
 with
 
 variable_map as (

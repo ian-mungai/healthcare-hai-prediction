@@ -1,7 +1,7 @@
 -- One row per county, SAHIE year and published group (age, race, sex and income codes as published): counts, percents
 -- and margins of error typed, '.' null with its field listed in missing_fields. Only county rows (geocat 50). Groups are
 -- never combined; is_all_groups marks code 0 of every category, which each file's preamble must define as under 65, all
--- races, both sexes and all incomes (failure modes 438 to 442).
+-- races, both sexes and all incomes.
 {{ config(materialized='table') }}
 
 with

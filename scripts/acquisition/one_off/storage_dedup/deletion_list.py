@@ -1,4 +1,4 @@
-"""Read-only: build the S3 duplicate deletion list (failure modes 212 to 214) from the manifests and bronze's kept copies.
+"""Read-only: build the S3 duplicate deletion list from the manifests and bronze's kept copies.
 
 Kept: every object a bronze table loads, and for each other checksum the object with the smallest object key (a hash of
 snapshot and member chain, the bronze rule). Listed for deletion: every other current object with a kept twin.

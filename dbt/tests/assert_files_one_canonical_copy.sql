@@ -1,4 +1,4 @@
--- Fails for each file without exactly one canonical copy [167] [168].
+-- Fails for each file without exactly one canonical copy.
 select
     file_key,
     canonical_count

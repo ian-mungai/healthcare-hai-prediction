@@ -1,5 +1,5 @@
 {#-
-    The provenance values of a build (D1 section 10, failure modes 920 to 924). The launcher puts them in the environment of every real_dbt launch
+    The provenance values of a build. The launcher puts them in the environment of every real_dbt launch
     (scripts/lakehouse/provenance.py); a caller cannot set them. On a real build a missing or `unrecorded` value stops compilation. Fixture and lint
     builds are not required to carry them and read `unrecorded` for each value.
 -#}

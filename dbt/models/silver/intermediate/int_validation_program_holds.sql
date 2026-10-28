@@ -1,5 +1,5 @@
 -- HAC Reduction and VBP rows the program-year models leave out, with the reason, row count, hold key and the sorted checksums
--- of the files they come from (failure modes 514, 523, 524 and 788).
+-- of the files they come from.
 select * from ({{ care_program_holds(
     'cms_cc_hac_reduction_program_hospital',
     validation_ccn('stg.facility_id'),

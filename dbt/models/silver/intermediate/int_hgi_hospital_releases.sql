@@ -1,6 +1,6 @@
 -- One Hospital General Information row per hospital (CCN) and stored file, with the file's release date and the number of
--- files on that date; the overall rating and emergency services are typed, the published text kept (failure modes 328 and
--- 329). Choosing a release for a hospital-year waits for the alignment step.
+-- files on that date; the overall rating and emergency services are typed, the published text kept. Choosing a release for a hospital-year waits for
+-- the alignment step.
 {{ config(materialized='table') }}
 
 with

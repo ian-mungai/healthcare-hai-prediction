@@ -1,7 +1,6 @@
 -- Fails for each HHS or ONC column with a non-blank value that does not type: an HHS value that is not a plain number (a
 -- negative value types and is listed in negative_fields), a week that is not YYYY/MM/DD, a true/false flag, a Y/N
--- criterion, an ONC date that is not M/D/YYYY, a year that is not 4 digits or a month outside 1 to 12 [375] [376] [380]
--- [381].
+-- criterion, an ONC date that is not M/D/YYYY, a year that is not 4 digits or a month outside 1 to 12.
 with
 
 hhs_counts as (

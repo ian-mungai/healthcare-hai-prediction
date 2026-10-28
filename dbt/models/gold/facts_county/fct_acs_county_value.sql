@@ -1,5 +1,5 @@
--- fct_acs_county_value: every column of int_acs_county_values unchanged, then the surrogate keys county_sk, release_sk [743] [745].
--- The grain is acs_value_key; the YAML checks rows, content, keys, source dates and published text against silver [747] [748].
+-- fct_acs_county_value: every column of int_acs_county_values unchanged, then the surrogate keys county_sk, release_sk.
+-- The grain is acs_value_key; the YAML checks rows, content, keys, source dates and published text against silver.
 {{
     gold_fact(
         'int_acs_county_values',

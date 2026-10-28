@@ -1,5 +1,5 @@
 -- One row per enrollment ID any fact's enrollment key carries, plus the unknown member. The key is the published enrollment ID with no other
--- attribute. A value outside that space takes the unknown member in every fact [824] [825].
+-- attribute. A value outside that space takes the unknown member in every fact.
 {%- set sources = [
     {'model': 'int_change_of_ownership_rows', 'column': 'enrollment_id_buyer'},
     {'model': 'int_change_of_ownership_rows', 'column': 'enrollment_id_seller'},

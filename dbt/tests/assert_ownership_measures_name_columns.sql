@@ -1,5 +1,5 @@
 -- Fails for each field the ownership_measures bridge names that is not a column of its gold model, so a registry control never points at a field gold does
--- not carry; a control that names no value column passes [373].
+-- not carry; a control that names no value column passes.
 select
     bridge.measure_control,
     bridge.fact,

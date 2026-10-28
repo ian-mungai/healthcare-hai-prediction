@@ -1,5 +1,5 @@
 -- One row per 5-digit ZIP code any fact's ZIP key carries, plus the unknown member. The value space is five digits. A value outside that space
--- takes the unknown member in every fact [824] [825].
+-- takes the unknown member in every fact.
 {%- set sources = [
     {'model': 'int_cost_reports', 'column': 'zip_code'},
     {'model': 'int_hgi_hospital_releases', 'column': 'zip_code'},

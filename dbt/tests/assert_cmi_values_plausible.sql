@@ -1,4 +1,4 @@
--- Fails for each CMI row whose CMI is not above 0 and below 10, or whose published CMI does not cast [296] [303].
+-- Fails for each CMI row whose CMI is not above 0 and below 10, or whose published CMI does not cast.
 select
     cmi_row_key,
     cmi,

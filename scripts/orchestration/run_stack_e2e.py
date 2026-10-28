@@ -1,9 +1,7 @@
-"""End-to-end runs of the orchestration stack lifecycle and the image pull in the launcher, against a fake Docker Engine, in test registries
-(failure modes 925, 928, 933 and 934; ``plans/wp/a1_failure_modes.md``).
+"""End-to-end runs of the orchestration stack lifecycle and the image pull in the launcher, against a fake Docker Engine, in test registries.
 
-Run ``.venv/bin/python -m scripts.orchestration.run_stack_e2e [--case NAME ...]``. It needs ``plans/wp/proposed/launcher_orchestration.patch``
-applied to ``orchestration/launcher.py`` (``git apply plans/wp/proposed/launcher_orchestration.patch``); without the patch every case fails with
-the launcher's refusal of an unknown method. Each case uses the harness of ``scripts/lakehouse/run_launcher_e2e.py`` (its own test registry,
+Run ``.venv/bin/python -m scripts.orchestration.run_stack_e2e [--case NAME ...]``. The launcher must support the orchestration stack methods. Each
+case uses the harness of ``scripts/lakehouse/run_launcher_e2e.py`` (its own test registry,
 fake daemon and launcher process) and ends by checking that nothing of the case is left. No real Docker, catalog, AWS service or secret is
 used. The report is ``data/e2e/orchestration_stack/<UTC>/report.json``.
 """

@@ -1,6 +1,6 @@
 -- One row per 2-letter postal code any fact's state key carries, plus the unknown member. The value space is a 2-letter upper-case postal code. A
--- value outside that space takes the unknown member in every fact [824] [825]. state_fips is the first two characters of the county FIPS that
--- int_rucc_county_codes gives the state; a state with no RUCC row (CN and MX) keeps a null state_fips [942].
+-- value outside that space takes the unknown member in every fact. state_fips is the first two characters of the county FIPS that
+-- int_rucc_county_codes gives the state; a state with no RUCC row (CN and MX) keeps a null state_fips.
 {%- set sources = [
     {'model': 'int_cost_reports', 'column': 'state_code'},
     {'model': 'int_hai_state_windows', 'column': 'entity_id'},

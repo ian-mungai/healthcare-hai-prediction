@@ -1,4 +1,4 @@
-"""Contract-driven gold checks: SQL builders, verdicts and the Great Expectations gold suites (failure modes 838 to 842).
+"""Contract-driven gold checks: SQL builders, verdicts and the Great Expectations gold suites.
 
 Everything here reads ``data_contracts/lakehouse/gold_contract.json`` (facts, grains, columns, surrogate keys, source dates,
 text columns, dimensions and the expression allowlist) and ``silver_columns.json`` (the kept silver models). No fact list is
@@ -69,7 +69,7 @@ class Fact:
 
     @property
     def is_hold(self) -> bool:
-        """The contract names hold facts ``fct_*_hold``; they reconcile row for row (failure mode 749)."""
+        """The contract names hold facts ``fct_*_hold``; they reconcile row for row."""
         return self.name.endswith("_hold")
 
     @property
@@ -128,7 +128,7 @@ class Contract:
 
     @property
     def date_pairs(self) -> frozenset[tuple[str, str]]:
-        """(silver model, column) of every DATE source date of a fact: the only inputs of the dimensions' date aggregates (amendment A36 rule 2)."""
+        """(silver model, column) of every DATE source date of a fact: the only inputs of the dimensions' date aggregates."""
         return frozenset(
             (fact.silver_model, column.name) for fact in self.facts for column in fact.columns if column.name in fact.source_dates and column.type == "DATE"
         )
@@ -153,7 +153,7 @@ class Contract:
 
 
 class ContractError(ValueError):
-    """The contract is incomplete: a table definition with no columns is an error, never an empty schema (amendment A39)."""
+    """The contract is incomplete: a table definition with no columns is an error, never an empty schema."""
 
 
 class BridgeSchema(NamedTuple):
@@ -162,7 +162,7 @@ class BridgeSchema(NamedTuple):
     references: tuple[tuple[str, str], ...]
 
 
-# Amendment A39 item 1: the schema of bridge_measure_control as G2 built it, until the lead writes it into gold_contract.json.
+# Fallback schema of bridge_measure_control until gold_contract.json declares its columns.
 A39_BRIDGE_MEASURE_CONTROL = BridgeSchema(
     (
         ("measure_sk", "VARCHAR"),
@@ -179,7 +179,7 @@ A39_BRIDGE_MEASURE_CONTROL = BridgeSchema(
 
 
 def bridge_table(name: str, entry: dict[str, Any]) -> Table:
-    """A bridge from the contract's columns, or from the A39 constant where the contract still gives only a prose grain."""
+    """A bridge from the contract's columns, or from the fallback constant where the contract still gives only a prose grain."""
     inputs = tuple(entry.get("inputs", []))
     columns = tuple(Column(item["name"], item["silver_column"], item["type"]) for item in entry.get("columns", []))
     if name == "bridge_measure_control":
@@ -224,7 +224,7 @@ def load_contract(contract_path: Path = CONTRACT, silver_path: Path = SILVER_COL
 
 
 def contract_problems(contract: Contract) -> list[str]:
-    """Static reading of the contract against silver: each silver value column lands in one gold column (failure mode 744)."""
+    """Static reading of the contract against silver: each silver value column lands in one gold column."""
     problems: list[str] = []
     dimensions = {table.name for table in contract.dimensions}
     for fact in contract.facts:
@@ -233,7 +233,7 @@ def contract_problems(contract: Contract) -> list[str]:
             problems.append(f"{fact.name}: silver model {fact.silver_model} is not a kept silver model")
             continue
         mapped = [(column.silver_column, column.type) for column in fact.columns]
-        # Column order in silver_columns.json is not binding (owner, A52 item 2): names and types are compared.
+        # Column order in silver_columns.json is not binding: names and types are compared.
         if sorted(mapped) != sorted(silver):
             problems.append(f"{fact.name}: contract columns differ from {fact.silver_model} in silver_columns.json")
         names = [column.name for column in fact.columns] + [key.name for key in fact.keys]
@@ -301,7 +301,7 @@ def parse_relations(rows: list[list[str]]) -> Relations:
 
 
 def structure_problems(contract: Contract, relations: Relations) -> dict[str, list[str]]:
-    """Relations, column map, source dates and published text, from the build's column list (failure modes 838 and 841)."""
+    """Relations, column map, source dates and published text, from the build's column list."""
     problems: dict[str, list[str]] = {name: [] for name in ("gold_relations_present", "column_map", "source_dates_typed", "published_text_kept")}
     for fact in contract.facts:
         found = relations.get(fact.name)
@@ -315,7 +315,7 @@ def structure_problems(contract: Contract, relations: Relations) -> dict[str, li
             expected = next(column.type for column in fact.columns if column.name == name)
             if actual.get(name) != expected:
                 problems["source_dates_typed"].append(f"{fact.name}.{name}: expected {expected}, found {actual.get(name)}")
-        # Amendment A41: a listed column may be non-text (a BOOLEAN flag); the check is its presence and its contract type.
+        # A listed column may be non-text (a BOOLEAN flag); the check is its presence and its contract type.
         for name in fact.text_columns:
             expected = next(column.type for column in fact.columns if column.name == name)
             if actual.get(name) != expected:
@@ -469,7 +469,7 @@ def grain_problems(rows: list[list[str]], expected: Iterable[str]) -> list[str]:
 
 
 def hold_statements(facts: Iterable[Fact]) -> list[str]:
-    """Both multiset differences between a hold fact and its silver hold model (failure mode 749)."""
+    """Both multiset differences between a hold fact and its silver hold model."""
     statements = []
     for fact in facts:
         if not fact.is_hold:
@@ -571,7 +571,7 @@ def dimension_problems(rows: list[list[str]], expected: Iterable[str]) -> list[s
 
 
 def bridge_statements(bridges: Iterable[Table]) -> list[str]:
-    """Per bridge: rows, distinct grain combinations, null grain columns and references with no row in their dimension (failure mode 744)."""
+    """Per bridge: rows, distinct grain combinations, null grain columns and references with no row in their dimension."""
     statements = []
     for table in bridges:
         pack_sql = ", ".join(f"{ident(column)} := f.{ident(column)}" for column in table.grain_columns)
@@ -607,14 +607,14 @@ def bridge_problems(bridges: Iterable[Table], rows: list[list[str]]) -> dict[str
 
 
 def silver_row_statements(contract: Contract, relations: Relations) -> list[str]:
-    """Row count of each fact's silver model, whether or not its gold fact exists (amendment A39 item 2)."""
+    """Row count of each fact's silver model, whether or not its gold fact exists."""
     return [build(ROWS, label=literal(fact.name), source=relation(fact.silver_model)) for fact in contract.facts if fact.silver_model in relations]
 
 
 def coverage_problems(
     contract: Contract, silver_rows: dict[str, int], gold_rows: dict[str, int], allowed_empty: dict[str, str]
 ) -> tuple[list[str], dict[str, Any]]:
-    """Every fact needs a silver and a gold row, unless the caller names it with a reason; one non-empty hold fact proves row preservation (A39)."""
+    """Every fact needs a silver and a gold row, unless the caller names it with a reason; one non-empty hold fact proves row preservation."""
     problems: list[str] = []
     detail: dict[str, Any] = {}
     for fact in contract.facts:
@@ -634,7 +634,7 @@ def coverage_problems(
 
 
 def rebuild_statements(contract: Contract, relations: Relations) -> list[str]:
-    """Rows and content fingerprint of every gold relation over all its columns, to compare two builds (failure mode 750)."""
+    """Rows and content fingerprint of every gold relation over all its columns, to compare two builds."""
     statements = []
     for name in sorted(contract.model_names):
         columns = relations.get(name)
@@ -650,7 +650,7 @@ def rebuild_problems(first: list[list[str]], second: list[list[str]], expected: 
     return [f"{name}: fingerprint differs between the two builds" for name in expected if name not in one or one.get(name) != two.get(name)]
 
 
-# Lineage (failure mode 746): gold reads kept silver models, seeds and gold models only.
+# Lineage: gold reads kept silver models, seeds and gold models only.
 def gold_nodes(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """The manifest's models under ``models/gold``, by name."""
     return {node["name"]: node for node in manifest["nodes"].values() if node["resource_type"] == "model" and len(node["fqn"]) > 2 and node["fqn"][1] == "gold"}
@@ -713,7 +713,7 @@ def contract_models_problems(contract: Contract, manifest: dict[str, Any]) -> li
     return [f"{name}: no gold model" for name in sorted(wanted - nodes)] + [f"{name}: gold model outside the contract" for name in sorted(nodes - wanted)]
 
 
-# Expression check (failure modes 746 and 840), over DuckDB's parse of the compiled SQL (``json_serialize_sql``); the analysis is in gold_sql.py.
+# Expression check, over DuckDB's parse of the compiled SQL (``json_serialize_sql``); the analysis is in gold_sql.py.
 AGGREGATE_ROWS = "SELECT '__aggregate__', lower(function_name) FROM duckdb_functions() WHERE function_type = 'aggregate' GROUP BY 2;"
 CHECK_OF_FINDING = {"arithmetic": "expression_arithmetic", "case": "expression_case", "functions": "expression_functions", "lineage": "lineage"}
 
@@ -827,7 +827,7 @@ def expression_problems(
     return problems, reads
 
 
-# Great Expectations suites (failure modes 747, 748 and the key rules).
+# Great Expectations suites.
 def suite(name: str, description: str, expectations: list[dict[str, Any]]) -> dict[str, Any]:
     return {"name": name, "description": description, "expectations": expectations}
 

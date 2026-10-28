@@ -1,5 +1,5 @@
 -- Fails for each Hospital VBP Total Performance Score file that has neither a fiscal_year nor a reviewed year in
--- vbp_file_fiscal_years, so no program year is guessed [515].
+-- vbp_file_fiscal_years, so no program year is guessed.
 select distinct
     stg._member_sha256 as member_sha256,
     stg._member_path as member_path

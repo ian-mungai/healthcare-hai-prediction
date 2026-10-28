@@ -1,12 +1,12 @@
-"""End-to-end runs of the provenance package and the sealed build (D1 sections 10 and 15 row 914, failure modes 920 to 924).
+"""End-to-end runs of the provenance package and the sealed build.
 
 Run ``.venv/bin/python -m scripts.lakehouse.run_provenance_e2e [--launcher-patch] [--case NAME ...]``. Each case starts its own launcher process on its
 own test registry and fake Docker daemon (the harness of ``run_launcher_e2e``), drives it through the real client over the real socket and asserts the
 registry state, the files of the run folder and the create specifications the daemon received. The fake dbt container writes the build file and the
 dbt artifacts the way a build does; the fake consumer container runs the package's own check on the mount source it resolves when the container starts.
 
-The cases marked ``patched`` need the proposed launcher patch (``plans/wp/proposed/l1b_launcher.patch``: build state, write queue, seal step and the
-consumer template); run them with ``--launcher-patch``. Without that flag the runner runs the cases that need only the two interface bodies, and
+The cases marked ``patched`` require the launcher build state, write queue, seal step and consumer template. Select them with ``--launcher-patch``.
+Without that flag the runner runs the cases that need only the two interface bodies, and
 ``interface_frozen``, which checks that the launcher diff touches nothing else. No real Docker, catalog, AWS service, bronze table or secret is used.
 The macro cases run the pinned host dbt (``.tools/sqlfluff``) on the ``lint`` and ``lakehouse`` targets with an in-memory DuckDB: ``compile`` and
 ``run-operation`` only, no build.
@@ -579,7 +579,7 @@ def provenance_refusals(env: Env) -> dict[str, bool]:
 
 @case("provenance_selection_bypass")
 def provenance_selection_bypass(env: Env) -> dict[str, bool]:
-    """920 (L1 round 2 finding 1): without recorded pins no real_dbt launch is admitted, whatever its command or selection; with pins they are."""
+    """Without recorded pins no real_dbt launch is admitted, whatever its command or selection; with pins they are."""
     run, fakes = prepare(env, pinned=False, builds=[{"mode": "selected", "seconds": 0.2}] * 2)
     commands = {
         "selected build": ["build", "--select", "int_hai_state_windows"],
@@ -824,7 +824,7 @@ def warning_not_tolerated(env: Env) -> dict[str, bool]:
 
 
 def stale_artifacts(env: Env, second: list[str]) -> dict[str, bool]:
-    """A full build whose seal failed (a write-ahead log) leaves its artifacts; the next launch is ``second``. Review round 1 finding 2."""
+    """A full build whose seal failed (a write-ahead log) leaves its artifacts; the next launch is ``second``."""
     plan: dict[str, Any] = {"seconds": 0.3}
     run, fakes = prepare(env, builds=[{**plan, "mode": "wal"}, {**plan, "mode": "success"}])
     first = dbt_submit(env, run, "w1", ["build"])
@@ -853,25 +853,25 @@ def stale_artifacts(env: Env, second: list[str]) -> dict[str, bool]:
 
 @case("stale_artifacts_control", "patched")
 def stale_artifacts_control(env: Env) -> dict[str, bool]:
-    """923 control for finding 2: after the failed seal, a second full build seals and the completion names that build."""
+    """after the failed seal, a second full build seals and the completion names that build."""
     return stale_artifacts(env, ["build"])
 
 
 @case("stale_artifacts_debug", "patched")
 def stale_artifacts_debug(env: Env) -> dict[str, bool]:
-    """923 (review round 1 finding 2): after the failed seal, a successful ``debug`` writes no build artifacts and must not seal the older build."""
+    """after the failed seal, a successful ``debug`` writes no build artifacts and must not seal the older build."""
     return stale_artifacts(env, ["debug"])
 
 
 @case("stale_artifacts_test", "patched")
 def stale_artifacts_test(env: Env) -> dict[str, bool]:
-    """923 (review round 1 finding 2): a successful ``test`` is a task that writes its own artifacts; it is not a build and must not seal."""
+    """a successful ``test`` is a task that writes its own artifacts; it is not a build and must not seal."""
     return stale_artifacts(env, ["test"])
 
 
 @case("seal_invocation_mismatch", "unpatched")
 def seal_invocation_mismatch(env: Env) -> dict[str, bool]:
-    """923 (L1 round 1 finding R5): a build whose results and manifest name different invocations is not sealed; a later build of one invocation is."""
+    """A build whose results and manifest name different invocations is not sealed; a later build of one invocation is."""
     run, fakes = prepare(env, builds=[{"mode": "manifest", "seconds": 0.3}, {"mode": "success", "seconds": 0.3}])
     mismatched = dbt_submit(env, run, "m1", ["build"])
     env.wait_ended(mismatched["attempt_id"], 30)
@@ -889,7 +889,7 @@ def seal_invocation_mismatch(env: Env) -> dict[str, bool]:
 
 @case("seal_binding", "unpatched")
 def seal_binding(env: Env) -> dict[str, bool]:
-    """923 (finding 2): the interface seals only the attempt it is told wrote the build: a full build of the run's current generation."""
+    """the interface seals only the attempt it is told wrote the build: a full build of the run's current generation."""
     run, fakes = prepare(env, builds=[{"mode": "success", "seconds": 0.3}])
     reply = dbt_submit(env, run, "full", ["build"])
     env.wait_ended(reply["attempt_id"], 30)
@@ -928,7 +928,7 @@ def seal_binding(env: Env) -> dict[str, bool]:
 
 @case("snapshot_link_swap")
 def snapshot_link_swap(env: Env) -> dict[str, bool]:
-    """921 and 920 (D1 section 10 item 2, review round 1 finding 4): the snapshot is read through held directory descriptors, so a folder replaced by a link
+    """the snapshot is read through held directory descriptors, so a folder replaced by a link
     after the walk is not followed."""
     run, fakes = prepare(env)
     module = provenance()
@@ -986,7 +986,7 @@ def snapshot_link_swap(env: Env) -> dict[str, bool]:
 
 @case("seal_descriptor_traversal", "unpatched")
 def seal_descriptor_traversal(env: Env) -> dict[str, bool]:
-    """923 (D1 section 10 items 2 and 5, finding 4): sealing reads and writes the run folder only through held directory descriptors; the clone is the
+    """sealing reads and writes the run folder only through held directory descriptors; the clone is the
     checked build file."""
     run, fakes = prepare(env, builds=[{"mode": "success", "seconds": 0.3}])
     reply = dbt_submit(env, run, "full", ["build"])
@@ -1016,7 +1016,7 @@ def seal_descriptor_traversal(env: Env) -> dict[str, bool]:
 
 @case("artifacts_cleared", "unpatched")
 def artifacts_cleared(env: Env) -> dict[str, bool]:
-    """923 (finding 2): before a mutating launch the results of every earlier launch are removed, through held descriptors and without following a link."""
+    """before a mutating launch the results of every earlier launch are removed, through held descriptors and without following a link."""
     run, fakes = prepare(env, builds=[{"mode": "success", "seconds": 0.3}])
     reply = dbt_submit(env, run, "full", ["build"])
     env.wait_ended(reply["attempt_id"], 30)
@@ -1100,7 +1100,7 @@ def seal_resume(env: Env) -> dict[str, bool]:
 
 @case("seal_fence_control", "patched")
 def seal_fence_control(env: Env) -> dict[str, bool]:
-    """923 control for finding 8: a seal that is held and then released publishes the generation-matching completion; the run stays sealing meanwhile."""
+    """a seal that is held and then released publishes the generation-matching completion; the run stays sealing meanwhile."""
     run, fakes = prepare(env, builds=[{"mode": "success", "seconds": 0.3}])
     with seal_held(env):
         held = held_seal(env, run)
@@ -1119,7 +1119,7 @@ def seal_fence_control(env: Env) -> dict[str, bool]:
 
 @case("seal_fence_recovery", "patched")
 def seal_fence_recovery(env: Env) -> dict[str, bool]:
-    """923 (review delta 1 finding 8): a seal is owner work until its worker returns. Recovery and release during a seal cannot finish before the worker
+    """a seal is owner work until its worker returns. Recovery and release during a seal cannot finish before the worker
     does, and the older seal publishes nothing: no completion exists after the run is recovered and released, and no reader can use one."""
     run, fakes = prepare(env, builds=[{"mode": "success", "seconds": 0.3}])
     client = env.client()
@@ -1154,7 +1154,7 @@ def seal_fence_recovery(env: Env) -> dict[str, bool]:
 
 @case("seal_fence_restart", "patched")
 def seal_fence_restart(env: Env) -> dict[str, bool]:
-    """923 (finding 8, restart): a launcher that died after the recovery of a run that was sealing leaves no completion; the recovered run can be released."""
+    """a launcher that died after the recovery of a run that was sealing leaves no completion; the recovered run can be released."""
     run, fakes = prepare(env, builds=[{"mode": "success", "seconds": 0.3}])
     client = env.client()
     owner = client.principal_run(PINS_RUN, owner=True)
@@ -1193,7 +1193,7 @@ def sealed_names(env: Env) -> list[str]:
 
 @case("seal_graceful_stop", "patched")
 def seal_graceful_stop(env: Env) -> dict[str, bool]:
-    """923 (review delta 2 finding 9): a graceful stop keeps the registry lock and the seal's open-work protection until its worker has stopped.
+    """a graceful stop keeps the registry lock and the seal's open-work protection until its worker has stopped.
 
     A held seal is recorded, recovery advances the generation, the owner sends ``shutdown`` (the original process stays alive while its worker is held), a
     replacement launcher is started and the owner tries to finish the recovery and release. The run must not be released, and the seal record must not be
@@ -1262,7 +1262,7 @@ def seal_graceful_stop(env: Env) -> dict[str, bool]:
 
 @case("seal_graceful_stop_publishes", "patched")
 def seal_graceful_stop_publishes(env: Env) -> dict[str, bool]:
-    """923 (review delta 2 finding 9, control for the fix): a seal that still applies when the launcher is stopped gracefully is published by that launcher
+    """a seal that still applies when the launcher is stopped gracefully is published by that launcher
     before it exits. The owner stops the launcher with a held seal; the case then lets the worker go and reads the registry the moment the process has ended,
     before any replacement exists."""
     run, fakes = prepare(env, builds=[{"mode": "success", "seconds": 0.3}])
@@ -1303,7 +1303,7 @@ def seal_graceful_stop_publishes(env: Env) -> dict[str, bool]:
 
 @case("completion_of_live_build", "patched")
 def completion_of_live_build(env: Env) -> dict[str, bool]:
-    """924 (finding 8): a reader refuses a completion that is not the one of the run's live build: a sealed run that the owner recovered is generation 2, its
+    """a reader refuses a completion that is not the one of the run's live build: a sealed run that the owner recovered is generation 2, its
     completion is of generation 1."""
     run, fakes, entry = sealed_run(env)
     fakes.consumer["pins_json"] = (run_folder(env) / "pins.json").read_text()
@@ -1361,7 +1361,7 @@ def release_copy_warning_refused(env: Env) -> dict[str, bool]:
 
 @case("seal_concurrent", "unpatched")
 def seal_concurrent(env: Env) -> dict[str, bool]:
-    """WV3-015: two seals of one run at the same time (the launcher's seal worker and a direct caller) do not break each other. The second waits for the
+    """Two seals of one run at the same time (the launcher's seal worker and a direct caller) do not break each other. The second waits for the
     first and returns the same sealed copy. The first seal pauses between its copy and its rename: there an unlocked second seal removed the first's
     temporary copy or made the sealed folder read-only, so the first failed with FileNotFoundError or PermissionError."""
     run, fakes = prepare(env, builds=[{"mode": "success", "seconds": 0.3}])
@@ -1411,7 +1411,7 @@ def seal_concurrent(env: Env) -> dict[str, bool]:
 
 @case("seal_clone_replaced_path", "unpatched")
 def seal_clone_replaced_path(env: Env) -> dict[str, bool]:
-    """923 (D1 section 10 items 2 and 5, review delta 1 finding 4): once the seal holds its descriptors, a run folder or a sealed folder that is replaced by a
+    """once the seal holds its descriptors, a run folder or a sealed folder that is replaced by a
     link to another folder is not followed: nothing reads or writes through the link, and the other folder stays as it was. The swap happens when the seal
     starts to copy (the seal's own ``uuid`` call names the temporary copy), which is where a native copy would resolve both paths."""
     run, fakes = prepare(env, builds=[{"mode": "success", "seconds": 0.3}])
@@ -1666,7 +1666,7 @@ def read_with(session: AllocSession, completion: dict[str, Any], sql: str = "sel
 
 @case("reader_behind_consumer", "patched")
 def reader_behind_consumer(env: Env) -> dict[str, bool]:
-    """924 (D1 section 10 item 6, review round 1 finding 1): a reader of the sealed copy runs behind the fixed entrypoint's check of the object that reader
+    """a reader of the sealed copy runs behind the fixed entrypoint's check of the object that reader
     attached; its digest is in the result; a rejected result stops the caller."""
     run, fakes, entry = sealed_run(env)
     completion = entry["completion"]
@@ -1759,7 +1759,7 @@ def reader_behind_consumer(env: Env) -> dict[str, bool]:
 
 @case("quality_reader_behind_consumer", "patched")
 def quality_reader_behind_consumer(env: Env) -> dict[str, bool]:
-    """924 (finding 1): the validation of the sealed copy runs behind the same check in its own container, without the build folder."""
+    """the validation of the sealed copy runs behind the same check in its own container, without the build folder."""
     run, fakes, entry = sealed_run(env)
     completion = entry["completion"]
     sealed_file = run_folder(env) / "sealed" / f"{completion['sha256']}.duckdb"
@@ -1839,7 +1839,7 @@ class StubSession:
 
 @case("gold_wiring", "proposals")
 def gold_wiring(env: Env) -> dict[str, bool]:
-    """924 (finding 1): the proposed gold and silver changes read the sealed copy only through readers behind the entrypoint and stop at the first
+    """the proposed gold and silver changes read the sealed copy only through readers behind the entrypoint and stop at the first
     rejected check (needs every proposed patch applied: ``--proposals``)."""
     gold: Any = importlib.import_module("scripts.lakehouse.run_gold_e2e")
     silver: Any = importlib.import_module("scripts.lakehouse.silver")
@@ -2073,7 +2073,7 @@ def consumer_result_accepted(env: Env) -> dict[str, bool]:
 
 @case("no_token_exposure", "patched")
 def no_token_exposure(env: Env) -> dict[str, bool]:
-    """924 (D1 section 11 item 3): the run token appears in no container specification, registry record, log or file of the run folder."""
+    """the run token appears in no container specification, registry record, log or file of the run folder."""
     run, fakes, entry = sealed_run(env)
     token = str(run["token"])
     fakes.consumer["proceed"].set()
@@ -2267,7 +2267,7 @@ def marker_macros(env: Env) -> dict[str, bool]:
 
 @case("hook_command_coverage")
 def hook_command_coverage(env: Env) -> dict[str, bool]:
-    """922 (D1 section 10 items 4 and 5, review round 1 finding 3): for every dbt command the launcher admits, the launcher treats it as mutating exactly when
+    """for every dbt command the launcher admits, the launcher treats it as mutating exactly when
     dbt runs the hooks that drop the marker; the end hook writes the marker of an eligible build. Host dbt on a scratch project and a scratch DuckDB file
     (synthetic stub models; no real project, catalog or build)."""
     module = provenance()

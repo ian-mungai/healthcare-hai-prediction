@@ -1,5 +1,5 @@
 -- Fails for an adjacency edge between two different counties whose reverse edge is missing from the same file: Census
--- lists every neighbor pair both ways, so a one-way edge means a misread line or row [408].
+-- lists every neighbor pair both ways, so a one-way edge means a misread line or row.
 with
 
 edges as (

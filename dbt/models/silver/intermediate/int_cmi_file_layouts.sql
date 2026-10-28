@@ -1,6 +1,6 @@
 -- One row per case-mix index file or sheet: whether its first row is a header and the position of each field, found by
 -- exact header name from the reviewed layout seed; a headerless file has the fixed order CCN, cases, CMI, relative
--- weights (failure modes 294, 295 and 297).
+-- weights.
 {{ config(materialized='table') }}
 
 with
@@ -20,7 +20,7 @@ first_rows as (
 ),
 
 layouts as (
-    -- A first row whose first field starts with a digit is data: the file has no header [295].
+    -- A first row whose first field starts with a digit is data: the file has no header.
     select
         bronze_table,
         member_sha256,

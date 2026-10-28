@@ -1,5 +1,5 @@
 -- Fails for each Hospital General Information value that is not blank and does not fit its column: an overall rating
--- other than 1 to 5 or Not Available, or an emergency-services value other than Yes or No [329].
+-- other than 1 to 5 or Not Available, or an emergency-services value other than Yes or No.
 with
 
 hgi_rows as (

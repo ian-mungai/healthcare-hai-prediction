@@ -1,6 +1,6 @@
 -- One row per read impact file or sheet: its header row (the first of the first 5 rows that names a CCN column) and the
 -- position of each field, found by exact header name from the reviewed seed; a name tied to a rule year maps only in that
--- year (failure modes 343 to 347 and 352).
+-- year.
 {{ config(materialized='table') }}
 
 with

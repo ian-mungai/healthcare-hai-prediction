@@ -6,7 +6,7 @@
 
 python_suppressions() { git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks suppressions; }
 python_subprocess_imports() { git ls-files -z --cached --others --exclude-standard -- '*.py' | xargs -0 "$python_bin" -m scripts.quality.repo_checks subprocess-imports; }
-# Only orchestration/launcher.py may call Docker (D1 section 2 item 4).
+# Only orchestration/launcher.py may call Docker.
 process_start_guard() { git ls-files -z --cached --others --exclude-standard -- '*.py' '*.sh' | xargs -0 "$python_bin" -m scripts.quality.docker_calls; }
 
 repository_code_checks() {

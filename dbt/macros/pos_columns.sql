@@ -1,5 +1,5 @@
 {% macro pos_typed_columns() %}
-{#- The POS columns the hospital snapshots type: bronze column, model column, kind and code width [284] [287] [288] [292]. -#}
+{#- The POS columns the hospital snapshots type: bronze column, model column, kind and code width. -#}
 {{ return([
     ['prvdr_ctgry_sbtyp_cd', 'provider_subtype_code', 'code', 2],
     ['gnrl_cntl_type_cd', 'control_type_code', 'code', 2],

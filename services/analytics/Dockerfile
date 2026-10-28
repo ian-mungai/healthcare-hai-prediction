@@ -29,6 +29,6 @@ RUN duckdb -c "INSTALL iceberg; INSTALL httpfs; INSTALL avro; INSTALL aws; INSTA
 COPY --chown=root:root bronze.sql ui.sh ui_relay.py /opt/analytics/
 WORKDIR /workspace
 
-# The deadline entrypoint every finite job runs under (D1 section 5 item 1); the label lets the launcher refuse an image without it.
+# The deadline entrypoint every finite job runs under; the label lets the launcher refuse an image without it.
 COPY --from=deadline --chmod=0755 /deadline_run /opt/hai/deadline_run
 LABEL hai.deadline_entrypoint="1" hai.deadline_implementation="go"

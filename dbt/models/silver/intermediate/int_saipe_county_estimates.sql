@@ -1,7 +1,7 @@
 -- One row per county and SAIPE year: all-ages, age 0-17 and related age 5-17 poverty counts and percents with their 90%
 -- bounds, and median household income with its bounds, cut at the documented positions. Only the all-geography files
 -- are read; US and state rows (county code 0) are not county estimates. '.' is null and its field is listed in
--- missing_fields. Dollars are nominal for the reference year (failure modes 435 to 438, 442).
+-- missing_fields. Dollars are nominal for the reference year.
 {{ config(materialized='table') }}
 
 with

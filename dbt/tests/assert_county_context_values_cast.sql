@@ -1,5 +1,5 @@
 -- Fails for each ACS cell that is neither a number, a coded median nor a published missing token, and each SVI field that
--- is neither a number nor -999 [426] [428].
+-- is neither a number nor -999.
 select
     'int_acs_county_values' as checked_model,
     acs_value_key as row_id,

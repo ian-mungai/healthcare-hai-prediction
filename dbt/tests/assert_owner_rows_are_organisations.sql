@@ -1,5 +1,5 @@
 -- Fails for each staged owner row whose owner type is not O: the acquisition keeps organisation owners only, and staging
--- must never carry an individual owner [367].
+-- must never carry an individual owner.
 select
     member_sha256,
     source_row_number,

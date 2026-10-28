@@ -1,7 +1,7 @@
 """Case-level failing-first evidence for the transform broker runner (``run_transform_broker_e2e``).
 
 Run ``.venv/bin/python -m scripts.orchestration.run_transform_failing_first [--case NAME ...]``. For every case in ``GUARDS`` it makes two runs, each in a fresh
-copy of the source tree, and writes one log per case under ``plans/wp/a2_logs/failing_first/``:
+copy of the source tree, and writes one log per case in its local log folder:
 
 1. the **control**: the case in an unchanged copy. Every check must pass.
 2. the **mutant**: the same case in a copy with one guard removed (the text edit named in ``MUTANTS``, shown in the log as a diff). The case must fail the check

@@ -2,7 +2,7 @@
 -- error; Suppressed, Unreliable, Missing and Not Available are null with the token kept. Each row keeps its database
 -- (bridged race 1999 to 2020, single race 2018 to 2024); overlapping years stay apart. A county and year that a longer
 -- export of the same database repeats with identical values is held as repeated_in_wider_export
--- (3,142 rows). The year is year_code (failure modes 457 to 459).
+-- (3,142 rows). The year is year_code.
 {{ config(materialized='table') }}
 
 with

@@ -1,4 +1,4 @@
--- Fails for each HAI window that is both selected and held: a held conflict never feeds the window models [232].
+-- Fails for each HAI window that is both selected and held: a held conflict never feeds the window models.
 with
 
 selected as (

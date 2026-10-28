@@ -14,7 +14,7 @@ copies as (
 ),
 
 conflicts as (
-    -- Copies conflict when they disagree on role or identity year; differing rule stages are republications [180].
+    -- Copies conflict when they disagree on role or identity year; differing rule stages are republications.
     select
         bronze_table,
         member_sha256,

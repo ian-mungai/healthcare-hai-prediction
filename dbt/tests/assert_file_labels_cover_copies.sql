@@ -1,5 +1,5 @@
 -- Fails for an IPPS or occupational-mix copy without a label, a label of another checksum, or a label row naming no
--- loaded copy: the generated map must match storage [182].
+-- loaded copy: the generated map must match storage.
 with
 
 labelled as (

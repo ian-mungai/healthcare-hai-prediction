@@ -1,10 +1,10 @@
 -- One row per HHS hospital (hospital_pk) and collection week, with every weekly number typed. A count of 1 to 3 is published
 -- as -999999: it is null and its column is listed in suppressed_fields. The CCN follows the B5a rule; a hospital without
--- one keeps its hospital_pk and gets a CCN only from the reviewed matches seed (ccn_source, failure modes 681 to 683).
+-- one keeps its hospital_pk and gets a CCN only from the reviewed matches seed (ccn_source).
 -- Any other negative value, which a count or occupancy cannot be, is null and its column is
--- listed in negative_fields. is_corrected and the coverage counts are kept; nothing is filtered (failure modes 375 to 379).
+-- listed in negative_fields. is_corrected and the coverage counts are kept; nothing is filtered.
 -- nulled_values_published keeps the published text of every value hhs_number makes null other than -999999, as a JSON
--- object from field name to text ('{}' when none), so no rejected value is lost (failure mode 793).
+-- object from field name to text ('{}' when none), so no rejected value is lost.
 -- The geocoded point is left out; the ZIP and county code give the place.
 {{ config(materialized='table') }}
 

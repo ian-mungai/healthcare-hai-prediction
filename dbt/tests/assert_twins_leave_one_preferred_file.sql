@@ -1,5 +1,5 @@
 -- Fails for a twin pair that leaves the wrong number of files selected by the twin rule: one for an agreeing or
--- not-compared pair, none for a differing pair [187].
+-- not-compared pair, none for a differing pair.
 with
 
 comparisons as (

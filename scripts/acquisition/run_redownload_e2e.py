@@ -451,7 +451,7 @@ def exercise(root: Path) -> list[dict]:
     scenario("bls_budget_counts_old_and_new_ledgers_together", quota, "BLS rolling 24-hour budget reached")
 
     def report() -> None:
-        # Later scenarios refroze the shared queue's controls for their own roots; a report reads only the bound root (failure mode 63).
+        # Later scenarios refroze the shared queue's controls for their own roots; a report reads only the bound root.
         control_e2e.approve_fixture(run)
         document = harness.report(run)
         files = [read_json(p) for p in sorted((root / "state" / "outcomes").glob("*.json"))]
@@ -598,10 +598,10 @@ def real_private_adapter(scenario: Any, root: Path) -> None:
 
 # Stored and fresh bodies for the content scenarios: each fresh body differs from its stored body in the noted way. Only
 # the three fixed formats are compared by content: a Census table-notes member, a stored WONDER export and an Office
-# file's core properties [S34].
+# file's core properties.
 CENSUS_NOTES = "ACSST5Y2024.S1701-Table-Notes.txt"
 WONDER_EXPORT = "wonder_D158_2024_2024.txt"
-# The published layouts [S47] to [S49]: Census notes end with a Suggested Citation block between dividers; a WONDER
+# The published layouts to: Census notes end with a Suggested Citation block between dividers; a WONDER
 # export's trailer has dataset, help, Query Date and citation sections before its caveats.
 DIVIDER = b"-" * 109
 CITATION = (
@@ -654,7 +654,7 @@ def core(stamp: str, description: str = "Data") -> bytes:
 
 
 def content_scenarios(scenario: Any, root: Path) -> None:
-    """The same content downloaded on another date matches; any other difference stays a change; exclusions are named [S17 to S38]."""
+    """The same content downloaded on another date matches; any other difference stays a change; exclusions are named."""
     base = root / "content_base"
     base.mkdir()
     fixture, web = Fixture(base), Web()
@@ -671,7 +671,6 @@ def content_scenarios(scenario: Any, root: Path) -> None:
     latin = fixture.stored("PSI", "latin.txt", b"caf\xe9\nAccessed on February 10, 2026.\n", disposition="approved_manual")
     direct = fixture.stored("OMEGA", WONDER_EXPORT, b'd,1\n"---"\n' + NOTES)
     collected = fixture.stored("ALEPH", WONDER_EXPORT, b'k\n1\n"---"\n' + NOTES, disposition="api", mode="synthetic_collector")
-    # Review round 1 adversarial cases [S26 to S29].
     alt_text = fixture.stored("KAPH", "alt.html", page("Maps"), disposition="approved_manual")
     target = fixture.stored("LAMED", "target.html", page("Files"), disposition="approved_manual")
     data_script = fixture.stored("MEM", "data.html", page("Data"), disposition="approved_manual")
@@ -680,13 +679,12 @@ def content_scenarios(scenario: Any, root: Path) -> None:
     commented = fixture.stored("HE", "commented.zip", archive({"data.csv": b"h\n1\n"}, 2026, b"Footnote 1"), disposition="approved_manual")
     copied = fixture.stored("NUN", "nun.txt", b"n\n1\n", disposition="approved_manual")
     same_names = fixture.stored("SAMEKH", "samekh.zip", archive({"t.csv": b"s\n1\n"}, 2026), disposition="approved_manual")
-    # Review round 2 adversarial cases [S30 to S33].
     script_change = fixture.stored("QOPH", "script.html", page("Rates"), disposition="approved_manual")
     asset_change = fixture.stored("RESH", "asset.html", page("Assets"), disposition="approved_manual")
     link_case = fixture.stored("SHIN", "case.html", page("Links"), disposition="approved_manual")
     notes_csv = fixture.stored("TAV", "notes.csv", b"name,accessed\nx,U.S. Census Bureau. Accessed on February 10, 2026\n", disposition="approved_manual")
     other_path = fixture.stored("PE", "pe.txt", b"p\n1\n", disposition="approved_manual")
-    # Review round 5 adversarial cases [S44] [S45]: core properties keep comments, processing instructions and namespaces;
+    # Core properties keep comments, processing instructions and namespaces;
     # a stored copy edited after capture is never compared by content.
     commented_core = core("2026-09-23T05:46:17Z").replace(b"<dc:description>", b"<!-- v1 --><dc:description>")
     with_comment = fixture.stored("ZAYIN2", "comment.xlsx", archive({"docProps/core.xml": commented_core}, 2026), disposition="approved_manual")
@@ -696,7 +694,6 @@ def content_scenarios(scenario: Any, root: Path) -> None:
     namespaced = fixture.stored("QOPH2", "ns.xlsx", archive({"docProps/core.xml": core("2026-09-23T05:46:17Z")}, 2026), disposition="approved_manual")
     tampered = fixture.stored("RESH2", "tampered.txt", b"s\n1\n", disposition="approved_manual")
     (base / "stored" / tampered["snapshot_id"] / "raw" / "tampered.txt").write_bytes(b"s\n2\n")
-    # Review round 4 adversarial cases [S39 to S43].
     near_core = fixture.stored("BET2", "near.xlsx", archive({"notdocProps/core.xml": core("2026-09-23T05:46:17Z")}, 2026), disposition="approved_manual")
     dir_payload = fixture.stored("DALET", "dirdata.zip", archive({"notes/": b"", "d.csv": b"t\n1\n"}, 2026), disposition="approved_manual")
     appended = fixture.stored("HE2", "pagezip.html", b"<html>A</html>" + archive({"d.csv": b"a\n1\n"}, 2026), disposition="approved_manual")
@@ -706,9 +703,8 @@ def content_scenarios(scenario: Any, root: Path) -> None:
         archive({"docProps/core.xml": core("2026-09-23T05:46:17Z", '<dcterms:created xsi:type="dcterms:W3CDTF">2026-09-23T05:46:17Z</dcterms:created>')}, 2026),
         disposition="approved_manual",
     )
-    # Review round 3 adversarial cases [S34 to S37].
     caveat = fixture.stored("AYIN", WONDER_EXPORT, b'w,1\n"---"\n' + NOTES + b'"Caveat: data as of Sep 28, 2026."\n', disposition="approved_manual")
-    # Review round 7 adversarial cases [S47] to [S49]: a second stamp, a stamp outside its section, sections out of order
+    # A second stamp, a stamp outside its section, sections out of order
     # and changed citation wording; each download differs from the stored copy only where the old masking looked.
     second_citation = DATED.replace(b"sampling error.\n", b"sampling error.\n" + CITATION.replace(b"February 10", b"January 5") + b"\n")
     two_citations = fixture.stored("KAPH2", CENSUS_NOTES, second_citation, disposition="approved_manual")
@@ -727,7 +723,7 @@ def content_scenarios(scenario: Any, root: Path) -> None:
     citation_after_caveats = fixture.stored("AYIN2", WONDER_EXPORT, b'w,1\n"---"\n' + citation_last, disposition="approved_manual")
     query_extra = NOTES.replace(b'"Query Date: Sep 28, 2026 11:17:22 PM"\n', b'"Query Date: Sep 28, 2026 11:17:22 PM"\n"Note: revised"\n')
     query_section_extra = fixture.stored("PE3", WONDER_EXPORT, b'w,1\n"---"\n' + query_extra, disposition="approved_manual")
-    # Review round 8 adversarial cases [S51] [S52]: a note heading inside the citation section, a blank-prefixed caveat
+    # A note heading inside the citation section, a blank-prefixed caveat
     # section before the Query Date, and a byte-order mark added to notes, a notes member and Office core properties.
     caveat_in_citation = NOTES.replace(b'"Program. Accessed at', b'Caveats:\n"Program. Accessed at')
     citation_caveat = fixture.stored("TSADE2", WONDER_EXPORT, b'w,1\n"---"\n' + caveat_in_citation, disposition="approved_manual")
@@ -739,9 +735,9 @@ def content_scenarios(scenario: Any, root: Path) -> None:
     bom_plain = fixture.stored("SHIN3", CENSUS_NOTES, plain_notes, disposition="approved_manual")
     bom_member = fixture.stored("TAV3", "bom.zip", archive({"data.csv": b"c\n1\n", CENSUS_NOTES: plain_notes}, 2026), disposition="approved_manual")
     bom_core = fixture.stored("ALEPH3", "bom.xlsx", archive({"docProps/core.xml": core("2026-09-23T05:46:17Z")}, 2026), disposition="approved_manual")
-    # Review round 9 [S53]: a digit-shaped build time that is not a real UTC time is content.
+    # A digit-shaped build time that is not a real UTC time is content.
     not_a_time = fixture.stored("BETH3", "time.xlsx", archive({"docProps/core.xml": core("2026-13-45T05:46:17Z")}, 2026), disposition="approved_manual")
-    # Review round 10 [S54]: build times count only in Office core properties with the Office root and namespace bindings.
+    # Build times count only in Office core properties with the Office root and namespace bindings.
 
     def unofficial(stamp: str, variant: str) -> bytes:
         body = core(stamp)
@@ -854,12 +850,12 @@ def content_scenarios(scenario: Any, root: Path) -> None:
         set_origin(folder / name, [entry["url"]])
     (folder / "tract.html").write_bytes(page("Tract page"))
     set_origin(folder / "tract.html", [elsewhere["url"].replace("other.html", "tract.html")])
-    # Same host, other addresses: identical bytes, and a changed archive with the stored member names [S29].
+    # Same host, other addresses: identical bytes, and a changed archive with the stored member names.
     (folder / "nun_copy.txt").write_bytes(b"n\n1\n")
     set_origin(folder / "nun_copy.txt", [copied["url"].replace("nun.txt", "nun_copy.txt")])
     (folder / "samekh_other.zip").write_bytes(archive({"t.csv": b"s\n2\n"}, 2027))
     set_origin(folder / "samekh_other.zip", [same_names["url"].replace("samekh.zip", "samekh_other.zip")])
-    # Identical bytes from the unit's path with another ';' segment, and from another port [S32].
+    # Identical bytes from the unit's path with another ';' segment, and from another port.
     (folder / "pe_segment.txt").write_bytes(b"p\n1\n")
     set_origin(folder / "pe_segment.txt", [other_path["url"] + ";v=2"])
     (folder / "pe_zero_port.txt").write_bytes(b"p\n1\n")
@@ -875,7 +871,7 @@ def content_scenarios(scenario: Any, root: Path) -> None:
     scenario("same_content_on_another_date_matches_with_named_exclusions", matches)
 
     def dated_text_by_bytes() -> None:
-        # Census table notes and WONDER exports compare by bytes: a new access or query date is flagged for review [S53].
+        # Census table notes and WONDER exports compare by bytes: a new access or query date is flagged for review.
         for entry in (dated, zipped, direct, collected):
             result = recorded(run, entry["snapshot_id"])
             require(result["outcome"] == "changed_needs_review" and result["excluded_parts"] == [], f"Dated text not flagged: {result}")
@@ -885,7 +881,7 @@ def content_scenarios(scenario: Any, root: Path) -> None:
     scenario("census_notes_and_wonder_exports_with_a_new_date_are_flagged_for_review", dated_text_by_bytes)
 
     def changes() -> None:
-        # A saved page compares by bytes, so a changed tab state and review date are a change for review [S35].
+        # A saved page compares by bytes, so a changed tab state and review date are a change for review.
         for entry, name in ((saved, "page.html"), (edited, "edited.html"), (row, "rows.txt"), (latin, "latin.txt")):
             result = recorded(run, entry["snapshot_id"])
             require(result["outcome"] == "changed_needs_review" and result["differing_data_files"] == [name], f"Change not flagged: {result}")
@@ -966,7 +962,7 @@ def content_scenarios(scenario: Any, root: Path) -> None:
 
 
 def real_wonder_adapter(scenario: Any, root: Path) -> None:
-    """The real WONDER collector checks a fresh export under its own hash; only the query time may differ [S21]."""
+    """The real WONDER collector checks a fresh export under its own hash; only the query time may differ."""
     base = root / "wonder_base"
     base.mkdir()
     downloads = base / "downloads"
@@ -1014,7 +1010,7 @@ def real_wonder_adapter(scenario: Any, root: Path) -> None:
         def same() -> None:
             require(later != stored_body, "Fixture query time did not change")
             result = compare("same", later)
-            # The export compares by bytes, so a new query time is flagged; its parsed rows are unchanged [S53].
+            # The export compares by bytes, so a new query time is flagged; its parsed rows are unchanged.
             require(result["outcome"] == "changed_needs_review" and result["excluded_parts"] == [], f"Real WONDER outcome differs: {result}")
             require(result["differing_data_files"] == ["wonder_D158_2024_2024.txt"], f"Parsed rows changed with the query time: {result}")
             require(batch["sha256"] == harness.digest(stored_body), "The planned hash changed")

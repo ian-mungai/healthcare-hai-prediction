@@ -1,8 +1,7 @@
-"""End-to-end runs of the orchestration supervisor as a client of the launcher, against a fake Docker Engine, in test registries (failure modes 925
-and 933; ``plans/wp/a1_failure_modes.md``).
+"""End-to-end runs of the orchestration supervisor as a client of the launcher, against a fake Docker Engine, in test registries.
 
-Run ``.venv/bin/python -m scripts.orchestration.run_supervisor_e2e [--case NAME ...]``. It needs ``plans/wp/proposed/launcher_orchestration.patch``
-applied to the launcher. Each case uses the harness of ``run_stack_e2e`` (its own test registry, fake daemon and launcher process) and a small
+Run ``.venv/bin/python -m scripts.orchestration.run_supervisor_e2e [--case NAME ...]``. The launcher must support the orchestration stack methods.
+Each case uses the harness of ``run_stack_e2e`` (its own test registry, fake daemon and launcher process) and a small
 stand-in for Airflow's health endpoint on a free loopback port. A case ends by checking that nothing of it is left. The report is
 ``data/e2e/orchestration_supervisor/<UTC>/report.json``. No real Docker, catalog, AWS service or secret is used.
 """

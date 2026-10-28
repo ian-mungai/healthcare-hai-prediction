@@ -1,7 +1,5 @@
 """Synthetic E2E for correct_manifest_roles: corrected manifests written beside the originals in a fake S3, no AWS.
 
-Failure modes 242 to 248 (data/acquisition_planning/brz011_manifest_correction_20261004/failure_modes.md).
-
 .venv/bin/python -m scripts.acquisition.run_manifest_correction_e2e
 """
 
@@ -100,11 +98,11 @@ def main() -> int:
         spec = specification(root / "spec.json", manifest, data)
         spec_sha = fingerprint(spec)[0]
         before = dict(client.objects)
-        # [248] A dry run writes the corrected manifest locally and nothing to S3.
+        # A dry run writes the corrected manifest locally and nothing to S3.
         dry = correction.run(spec, client, root / "dry", store=False, spec_sha256=None)
         local = json.loads(Path(dry["corrections"][0]["local_path"]).read_text())
         results["dry_run_writes_nothing_to_s3"] = client.objects == before and not any(call[0] == "put-object" for call in client.calls)
-        # [243] Only the named role changes; the original is named by key, version and SHA-256.
+        # Only the named role changes; the original is named by key, version and SHA-256.
         old = json.loads(client.objects[manifest["key"]]["body"])
         roles = [item["role"] for item in local["objects"]]
         same = {key: value for key, value in local.items() if key not in {"objects", "supersedes", "correction"}} == {
@@ -117,11 +115,11 @@ def main() -> int:
         results["only_named_role_changes"] = roles == ["data", "transport_audit"] and same and unchanged
         results["supersedes_names_original"] = local["supersedes"] == {key: manifest[key] for key in ("key", "version_id", "sha256")}
         results["correction_recorded"] = local["correction"]["issue"] == "BRZ-011" and local["correction"]["changes"][0]["to_role"] == "data"
-        # [248] Writing needs the specification's SHA-256.
+        # Writing needs the specification's SHA-256.
         results["store_without_hash_refused"] = refused(lambda: correction.run(spec, client, root / "stored", store=True, spec_sha256=None), "SHA-256")
         results["store_with_wrong_hash_refused"] = refused(lambda: correction.run(spec, client, root / "stored", store=True, spec_sha256="0" * 64), "SHA-256")
         results["refusals_write_nothing"] = client.objects == before
-        # [242] [246] [247] The corrected manifest is a new content-addressed object, read back, and recorded locally.
+        # The corrected manifest is a new content-addressed object, read back, and recorded locally.
         first = correction.run(spec, client, root / "stored", store=True, spec_sha256=spec_sha)
         written = first["corrections"][0]["object"]
         prefix = manifest["key"].rsplit("/", 2)[0]
@@ -134,14 +132,14 @@ def main() -> int:
         )
         record = json.loads(Path(first["record_path"]).read_text())
         results["local_record_names_object"] = record["corrections"][0]["object"] == written and record["specification_sha256"] == spec_sha
-        # [245] A rerun finds the same key and verifies it instead of writing.
+        # A rerun finds the same key and verifies it instead of writing.
         second = correction.run(spec, client, root / "stored", store=True, spec_sha256=spec_sha)
         results["rerun_writes_nothing"] = (
             [call[0] for call in client.calls].count("put-object") == 1
             and second["corrections"][0]["object"] == written
             and not second["corrections"][0]["created"]
         )
-        # [244] The wrong manifest, a missing object or a different old role is refused before any write.
+        # The wrong manifest, a missing object or a different old role is refused before any write.
         bad = dict(manifest, sha256="1" * 64)
         results["wrong_manifest_hash_refused"] = refused(
             lambda: correction.run(specification(root / "bad_hash.json", bad, data), client, root / "bad1", store=False, spec_sha256=None), "SHA-256"

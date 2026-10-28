@@ -2,8 +2,7 @@
 -- limits, footnote symbol and population. The 2020 release publishes no county code; its rows take the code PLACES
 -- itself publishes for the same state and county name in its other releases (county_source). Rows with neither, such as
 -- the national rows, are not typed. is_all_states is true only where the release's county rows for that measure, value
--- type and year cover all 50 states and DC. Releases and value types are never mixed (failure modes 449 to 452 and 623
--- to 625).
+-- type and year cover all 50 states and DC. Releases and value types are never mixed.
 {{ config(materialized='table') }}
 
 with
@@ -17,7 +16,7 @@ periods as (
 ),
 
 names as (
-    -- County codes by state and county name, from the rows that publish both; a pair with two codes is dropped [623].
+    -- County codes by state and county name, from the rows that publish both; a pair with two codes is dropped.
     select
         trim(stateabbr) as state_abbr,
         trim(locationname) as location_name,

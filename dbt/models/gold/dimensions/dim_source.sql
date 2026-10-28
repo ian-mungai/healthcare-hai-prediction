@@ -1,8 +1,8 @@
 -- One row per stored dataset, plus the unknown member. The publisher and label of a dataset come from the source_labels seed, which
 -- scripts/lakehouse/source_labels.py generates from the source registry: a placed dataset takes its source's publisher and title, and a dataset the
--- registry lists as unplaced keeps a null publisher and label. A label is never guessed, and a dataset is never moved to the unknown member [945]. The
+-- registry lists as unplaced keeps a null publisher and label. A label is never guessed, and a dataset is never moved to the unknown member. The
 -- unknown member has no seed row, so its publisher and label are null. The bronze table and the source family are not attributes of a dataset: a
--- dataset can feed several bronze tables, so they stay on the stored-copy model [824].
+-- dataset can feed several bronze tables, so they stay on the stored-copy model.
 with
 
 observed as (

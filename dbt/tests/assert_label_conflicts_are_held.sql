@@ -1,4 +1,4 @@
--- Fails for a file whose copies' labels conflict without an owner hold, or a hold on a file without a conflict [181].
+-- Fails for a file whose copies' labels conflict without an owner hold, or a hold on a file without a conflict.
 select
     file_key,
     has_label_conflict,

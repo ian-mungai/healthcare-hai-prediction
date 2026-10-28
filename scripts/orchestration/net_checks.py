@@ -1,4 +1,4 @@
-"""Network reachability checks for the loopback-only listeners: which addresses of this Mac refuse a connection to a port (failure mode 931).
+"""Network reachability checks for the loopback-only listeners: which addresses of this Mac refuse a connection to a port.
 
 ``ifconfig`` is read once; every IPv4 and IPv6 address except the loopback is tried with a short timeout. A refused or timed-out connection counts as
 unreachable. A second device on the same network is not available to these checks (the report lists that as not run)."""

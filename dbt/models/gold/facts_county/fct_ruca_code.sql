@@ -1,5 +1,5 @@
--- fct_ruca_code: every column of int_ruca_codes unchanged, then the surrogate keys county_sk, release_sk [743] [745].
--- The grain is ruca_row_key; the YAML checks rows, content, keys, source dates and published text against silver [747] [748].
+-- fct_ruca_code: every column of int_ruca_codes unchanged, then the surrogate keys county_sk, release_sk.
+-- The grain is ruca_row_key; the YAML checks rows, content, keys, source dates and published text against silver.
 {{
     gold_fact(
         'int_ruca_codes',

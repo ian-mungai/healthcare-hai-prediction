@@ -1,6 +1,6 @@
 """The HTTP client a task uses to reach the host job broker; it implements orchestration.interface.Submissions.
 
-DAG code imports this module and the interface only (failure modes 771 and 823): it imports nothing but the standard
+DAG code imports this module and the interface only: it imports nothing but the standard
 library and the interface, so it carries no launcher, Docker or credential code. Inside the Airflow scheduler the
 supervisor mounts the session folder at ``/opt/hai/broker``: ``client.json`` names the broker URL and
 ``broker_token`` holds this session's token, which is sent only in the ``Authorization`` header and never logged.

@@ -1,7 +1,7 @@
 -- One row per hospital Medicare and Medicaid EHR incentive attestation, program years 2011 to 2017: a series apart from the
--- 2023 and 2024 CHPL linkage, with no registry control (failure mode 383). Years and months are typed; the CCN follows the
+-- 2023 and 2024 CHPL linkage, with no registry control. Years and months are typed; the CCN follows the
 -- B5a rule. payment_year is the program's payment-year number (1, 2, 3 and so on), the integer of any digits-only published
--- text in the INTEGER range, kept in payment_year_text (failure mode 795).
+-- text in the INTEGER range, kept in payment_year_text.
 {{ config(materialized='table') }}
 
 with
@@ -21,7 +21,7 @@ attestations as (
         {{ year_number('program_year') }} as program_year,
         nullif(trim(provider_stage_number), '') as provider_stage_number,
         -- Any digits-only text, leading zeros included (00003 is 3); a value outside the INTEGER range is null by try_cast,
-        -- never an error, and fails assert_onc_payment_year_cast [795].
+        -- never an error, and fails assert_onc_payment_year_cast.
         case when regexp_full_match(trim(payment_year), '[0-9]+') then try_cast(trim(payment_year) as integer) end as payment_year,
         {{ month_number('attestation_month') }} as attestation_month,
         {{ year_number('attestation_year') }} as attestation_year,

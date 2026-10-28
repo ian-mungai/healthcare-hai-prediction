@@ -1,7 +1,7 @@
 -- The retired-code attributes of dim_county are recomputed from the county lists per vintage (adjacency counties and neighbors, RUCC, ACS). A code is in
 -- the latest list when the adjacency list of the latest adjacency vintage names it; its last listed vintage is the latest vintage of any list that names
 -- it; its first unlisted vintage is the first vintage of any list after that, for a code outside the latest list. A code in no list has null vintages.
--- There is no successor column, so nothing is shown as a published successor [943].
+-- There is no successor column, so nothing is shown as a published successor.
 with
 
 lists as (

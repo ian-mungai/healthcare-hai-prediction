@@ -1,4 +1,4 @@
-"""E2E check of the gold star schema: facts, dimensions and bridges against their silver models (failure modes 838 to 843).
+"""E2E check of the gold star schema: facts, dimensions and bridges against their silver models.
 
 Run from the repository root with Docker running:
 
@@ -13,8 +13,8 @@ does, with the bronze pin around each build (``pinned_run``), and reads the fini
 
 Every check reads the fact list, grains, columns, surrogate keys, source dates, text columns and expression allowlist from the
 gold contract (``scripts/lakehouse/gold_checks.py``, ``gold_sql.py``). Verifying the runner before the gold models exist uses a smaller
-contract and stand-in models: ``--contract FILE --overlay DIR --suites DIR`` and ``--self-test DIR`` (see ``plans/wp/g1_synthetic/``).
-``--inject FAULT`` raises a fault in the fixture stage only, to show that the report is still written (failure mode 842).
+contract and stand-in models: ``--contract FILE --overlay DIR --suites DIR`` and ``--self-test DIR``.
+``--inject FAULT`` raises a fault in the fixture stage only, to show that the report is still written.
 
 The report goes to ``data/e2e/gold/report_<UTC>.json`` with the run ID, mode, phase, every check by name, per-fact row counts and the dbt
 tree hash; it holds counts and model names only, never data values or credentials. An interrupt, an exit or an error in any phase still
@@ -50,23 +50,23 @@ RELEASE_COPY_TEST = "release_copy_consistency_dim_release"
 # dbt names a model-level generic test <test>_<model>_ (an empty column name leaves the trailing underscore); the lead names it without it.
 RELEASE_COPY_NAMES = frozenset({RELEASE_COPY_TEST, RELEASE_COPY_TEST + "_"})
 RELEASE_MODEL = "dim_release"
-# Amendment A39 item 2: facts whose silver model holds no rows in the fixture build, each with the reason. A fact named here may be empty in the
+# Facts whose silver model holds no rows in the fixture build, each with the reason. A fact named here may be empty in the
 # fixture stage only; the real stage has no exceptions. The gate adds an entry only after its own fixture run lists the empty fact.
 FIXTURE_EMPTY_FACTS: dict[str, str] = {}
-# Amendment A48: in the real stage a hold fact may be empty, because a source with nothing held has no hold rows. Row reconciliation still
+# In the real stage a hold fact may be empty, because a source with nothing held has no hold rows. Row reconciliation still
 # requires gold to equal silver, and at least one non-empty hold fact must still prove row preservation.
 REAL_EMPTY_HOLD_REASON = "A48: nothing is held for this source in the real silver build"
 
 
 def real_empty_allowed(contract: gold_checks.Contract) -> dict[str, str]:
-    """The hold facts, each with the reason it may be empty in the real stage (amendment A48)."""
+    """The hold facts, each with the reason it may be empty in the real stage."""
     return {fact.name: REAL_EMPTY_HOLD_REASON for fact in contract.facts if fact.is_hold}
 
 
 FAULTS = ("interrupt", "exit", "error", "cleanup", "rebuild-empty", "real-setup-exit")
-# The real stage's outcome as it runs, so a stage that stops still reaches the report [842].
+# The real stage's outcome as it runs, so a stage that stops still reaches the report.
 REAL_PARTIAL: dict[str, Any] = {}
-# GX replaces the historical A45 report-only split: all expression findings count in the verdict.
+# All expression findings count in the verdict.
 # Lineage and analysis completeness remain independent counted checks.
 EXPRESSION_CHECKS = frozenset({"expression_arithmetic", "expression_case", "expression_functions"})
 # Analysis that may have skipped a relation read is still counted, as analysis_complete: an unsupported query node or expression kind, a
@@ -113,7 +113,7 @@ CHECK_NAMES = (
 
 @dataclass
 class Backend:
-    """Offline queries on a finished build file, read-only in a container with no network and no secrets [843]."""
+    """Offline queries on a finished build file, read-only in a container with no network and no secrets."""
 
     database: Path
     attach: Path | None
@@ -130,7 +130,7 @@ class Backend:
 @dataclass
 class SealedBackend(Backend):
     """Offline queries on the sealed copy of a run. Each query runs in a container whose entrypoint checks the copy that container attached before it runs
-    ``duckdb``; the rows come back only for an accepted check, and a rejected one raises (D1 section 10 item 6). No path of the copy is ever handed out."""
+    ``duckdb``; the rows come back only for an accepted check, and a rejected one raises. No path of the copy is ever handed out."""
 
     run_id: str = ""
     completion: dict[str, Any] = field(default_factory=dict)
@@ -171,7 +171,7 @@ class Results:
 
 @dataclass
 class Run:
-    """One run's state, kept so that any stop still produces a report with the run ID, the phase and the verdict so far (failure mode 842)."""
+    """One run's state, kept so that any stop still produces a report with the run ID, the phase and the verdict so far."""
 
     mode: str
     run_id: str = field(default_factory=lambda: f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}")
@@ -224,7 +224,7 @@ class Run:
 
 
 def parse_compiled(target: Path, manifest: dict[str, Any], models: list[str], plan: package_fixture.Session) -> tuple[dict[str, str | None], frozenset[str]]:
-    """Each gold model's compiled SQL as DuckDB's parse (JSON), None where no compiled file exists, and DuckDB's aggregate function names [840]."""
+    """Each gold model's compiled SQL as DuckDB's parse (JSON), None where no compiled file exists, and DuckDB's aggregate function names."""
     nodes = gold_checks.gold_nodes(manifest)
     paths = {}
     for name in models:
@@ -248,7 +248,7 @@ def run_checks(
     statuses: dict[str, str] | None,
     empty_allowed: dict[str, str],
 ) -> Results:
-    """Every contract-driven check on one build file and its dbt target folder; ``empty_allowed`` names facts that may hold no rows (A39)."""
+    """Every contract-driven check on one build file and its dbt target folder; ``empty_allowed`` names facts that may hold no rows."""
     results = Results({}, {})
     for name in CHECK_NAMES:
         results.add(name, [])
@@ -322,7 +322,7 @@ def run_checks(
         results.add("gold_nodes_pass", gold_node_problems(manifest, statuses, RELEASE_MODEL in contract.model_names))
     if suites is not None:
         results.add("suites_match_contract", gold_checks.suites_problems(contract, suites))
-    # A check that examined fewer models than the contract lists must not pass [843].
+    # A check that examined fewer models than the contract lists must not pass.
     results.add("coverage_complete", [f"{name}: {found} of {wanted}" for name, (found, wanted) in covered.items() if found < wanted])
     results.add("coverage_complete", ["the contract lists no facts"] if not contract.facts else [])
     results.details["coverage"] = {name: {"checked": found, "listed": wanted} for name, (found, wanted) in covered.items()}
@@ -403,7 +403,7 @@ def gold_node_problems(manifest: dict[str, Any], statuses: dict[str, str], requi
 
 
 def run_suites_offline(case: package_fixture.Case, suites: Path, plan: package_fixture.Session) -> dict[str, Any]:
-    """Great Expectations on the fixture build in the quality image: no network, build file and code read-only [843]."""
+    """Great Expectations on the fixture build in the quality image: no network, build file and code read-only."""
     out = case.folder / "ge_out"
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir()
@@ -425,7 +425,7 @@ def run_suites_offline(case: package_fixture.Case, suites: Path, plan: package_f
 
 
 def suite_summary(path: Path, exit_code: int) -> dict[str, Any]:
-    """Counts and failed expectation IDs from a quality result; zero expectations is a failure [841]."""
+    """Counts and failed expectation IDs from a quality result; zero expectations is a failure."""
     if not path.is_file():
         return {"exit_code": exit_code, "problems": ["the quality container wrote no result"], "expectations": 0}
     record = json.loads(path.read_text())
@@ -472,14 +472,14 @@ def dbt_run(case: package_fixture.Case, select: str) -> tuple[int, dict[str, str
 
 
 def rebuild_problems(code: int, statuses: dict[str, str], models: list[str]) -> list[str]:
-    """A rebuild counts only when dbt exited 0 and every contract model reports success; the fingerprints are not compared otherwise [750]."""
+    """A rebuild counts only when dbt exited 0 and every contract model reports success; the fingerprints are not compared otherwise."""
     problems = [f"dbt exited {code}"] if code else []
     problems += [f"{model}: {statuses.get(model, 'not run')} in the rebuild" for model in models if not accepted(model, statuses.get(model, "not run"))]
     return problems
 
 
 def gold_prints(contract: gold_checks.Contract, backend: Backend) -> list[list[str]]:
-    """Fingerprint every gold relation over all its columns, to compare two builds [750]."""
+    """Fingerprint every gold relation over all its columns, to compare two builds."""
     relations = gold_checks.parse_relations(backend.query(gold_checks.COLUMNS_SQL))
     return backend.run(gold_checks.rebuild_statements(contract, relations))
 
@@ -487,7 +487,7 @@ def gold_prints(contract: gold_checks.Contract, backend: Backend) -> list[list[s
 def rebuild_identical(
     case: package_fixture.Case, contract: gold_checks.Contract, backend: Backend, before: list[list[str]], select: str = GOLD_MODELS
 ) -> list[str]:
-    """Rebuild the gold models and compare their fingerprints with the earlier ones; the problems, empty when the builds are identical [750]."""
+    """Rebuild the gold models and compare their fingerprints with the earlier ones; the problems, empty when the builds are identical."""
     code, statuses = dbt_run(case, select)
     failed = rebuild_problems(code, statuses, contract.model_names)
     if failed:
@@ -525,7 +525,7 @@ def test_nodes(case: package_fixture.Case, tests: list[str], require_release_tes
 
 
 def contract_error_case(path: Path, fragment: str) -> dict[str, Any]:
-    """A contract with an incomplete table definition must be refused when it is read, never run as an empty schema (A39)."""
+    """A contract with an incomplete table definition must be refused when it is read, never run as an empty schema."""
     try:
         gold_checks.load_contract(path)
     except gold_checks.ContractError as error:
@@ -536,10 +536,10 @@ def contract_error_case(path: Path, fragment: str) -> dict[str, Any]:
 def self_test(
     case: package_fixture.Case, folder: Path, overlays: list[Path], contract: gold_checks.Contract, backend: Backend, suites: Path | None
 ) -> dict[str, Any]:
-    """Each mutation must fail exactly the checks ``expected.json`` names; the base must pass again at the end [843].
+    """Each mutation must fail exactly the checks ``expected.json`` names; the base must pass again at the end.
 
     An entry may name an overlay folder of the same name, a replacement ``contract``, ``sql`` run on the build file with the silver models in
-    ``restore`` rebuilt afterwards, ``allow_empty`` facts (a test of A39's named exception), ``suites`` and ``rebuild`` runs.
+    ``restore`` rebuilt afterwards, ``allow_empty`` facts (a test of the named empty-fact exception), ``suites`` and ``rebuild`` runs.
     """
     expected = json.loads((folder / "expected.json").read_text())["mutations"]
     project = case.folder / "project"
@@ -583,7 +583,7 @@ def self_test(
 
 
 def inject(run: Run, args: argparse.Namespace, point: str) -> None:
-    """Raise the fault chosen with ``--inject`` at its point (fixture stage only), to show that the report is still written [842]."""
+    """Raise the fault chosen with ``--inject`` at its point (fixture stage only), to show that the report is still written."""
     if args.inject == "interrupt" and point == "checks":
         raise KeyboardInterrupt
     if args.inject == "exit" and point == "checks":
@@ -632,7 +632,7 @@ def fixture_copy_conflict(case: package_fixture.Case) -> dict[str, bool]:
 
 
 def fixture_stage(run: Run, args: argparse.Namespace, contract: gold_checks.Contract) -> None:
-    """Build silver and gold on the fixture bronze and run every check; the whole stage holds one memory admission [843]."""
+    """Build silver and gold on the fixture bronze and run every check; the whole stage holds one memory admission."""
     overlays = [Path(item) for item in args.overlay]
     suites = args.suites
     stage: dict[str, Any] = {"details": {}}
@@ -685,7 +685,7 @@ def fixture_stage(run: Run, args: argparse.Namespace, contract: gold_checks.Cont
 
 
 def real_setup(run: Run, start: Callable[[], object], install: Callable[[], object], release: Callable[[], object]) -> None:
-    """Register the real cleanup before the first launch, then start the catalog and install the packages; a stop in either still releases [842]."""
+    """Register the real cleanup before the first launch, then start the catalog and install the packages; a stop in either still releases."""
     run.enter("real:setup")
     run.cleanups.append(("docker_release", release))
     run.enter("real:catalog")
@@ -709,7 +709,7 @@ def seal_check(build: str, run_id: str, outcome: dict[str, Any]) -> dict[str, An
 
 
 def real_stage(run: Run, contract: gold_checks.Contract, suites: Path, once: bool) -> None:
-    """Two real builds (one in an iteration run), each inside a bronze pin; checks on the last build file, read offline [842]."""
+    """Two real builds (one in an iteration run), each inside a bronze pin; checks on the last build file, read offline."""
     outcome: dict[str, Any] = {"checks": {}, "details": {}, "rebuild_checks_skipped": [], "docker_release": []}
     REAL_PARTIAL.clear()
     REAL_PARTIAL["outcome"] = outcome
@@ -815,7 +815,7 @@ def main() -> int:
     except Exception as error:
         run.stop(type(error).__name__, str(error))
     finally:
-        # A real stage that stopped keeps what ran and the run ID of any pin [842].
+        # A real stage that stopped keeps what ran and the run ID of any pin.
         if real and run.report.get("real") is None:
             run.report["real"] = REAL_PARTIAL.get("outcome") or {"checks": {}}
         real_checks = (run.report.get("real") or {}).get("checks", {})

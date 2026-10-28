@@ -1,5 +1,5 @@
 {#-
-    The hooks around the build marker (D1 section 10 items 4 and 5). They act only on a real build (hai_provenance_required): fixture and lint builds are not changed.
+    The hooks around the build marker. They act only on a real build (hai_provenance_required): fixture and lint builds are not changed.
     Register them in dbt_project.yml:
 
         on-run-start: ["{{ hai_drop_build_marker() }}"]
@@ -19,7 +19,7 @@
     {%- do run_query('drop table if exists ' ~ adapter.quote(target.schema) ~ '.' ~ adapter.quote('int_silver_build_marker')) -%}
 {% endmacro %}
 
-{#- The commands that run no model SQL and must leave the marker as it is, also when dbt runs the hooks for them (review delta 1, finding 3). -#}
+{#- The commands that run no model SQL and must leave the marker as it is, also when dbt runs the hooks for them. -#}
 {% macro hai_marker_untouched_commands() %}
     {{ return(['compile', 'debug', 'ls', 'parse']) }}
 {% endmacro %}
@@ -37,7 +37,7 @@
     {%- endif -%}
 {% endmacro %}
 
-{#- A build with no selection whose results are all success or pass (D1 section 10 item 5). No result may warn. -#}
+{#- A build with no selection whose results are all success or pass. No result may warn. -#}
 {% macro hai_build_eligible(results, which, selection) %}
     {%- if which != 'build' or selection | length > 0 or results | length == 0 -%}
         {{ return(false) }}

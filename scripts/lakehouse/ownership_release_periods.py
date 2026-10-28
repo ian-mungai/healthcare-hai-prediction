@@ -1,4 +1,4 @@
-"""Generate the release periods of the owner, enrollment and change-of-ownership files that staging reads (failure mode 365).
+"""Generate the release periods of the owner, enrollment and change-of-ownership files that staging reads.
 
 Run from the repository root with read-only S3 access and the local acquisition records:
 
@@ -7,8 +7,7 @@ Run from the repository root with read-only S3 access and the local acquisition 
 
 Each loaded file's period and release label are the publisher-stated catalog period its capture receipt records: the
 enrollment and change-of-ownership receipts in the acquisition job folders and the owner receipts in the owners batches.
-File names are never parsed. A loaded file whose release has no recorded period, or two, stops the run. Failure modes:
-plans/group_b_20261005/failure_modes_b5a.md.
+File names are never parsed. A loaded file whose release has no recorded period, or two, stops the run.
 """
 
 from __future__ import annotations
@@ -72,7 +71,7 @@ def receipt_periods(root: Path = DATASETS) -> dict[str, tuple[str, str, str]]:
 
 
 def rows_for(loaded: Iterable[Mapping[str, str]], periods: Mapping[str, tuple[str, str, str]]) -> list[dict[str, str]]:
-    """Return one seed row per loaded file, sorted by table and period; a file without a period stops the run [365]."""
+    """Return one seed row per loaded file, sorted by table and period; a file without a period stops the run."""
     rows = []
     for item in loaded:
         if item["release_id"] not in periods:

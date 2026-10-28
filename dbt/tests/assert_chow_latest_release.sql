@@ -1,5 +1,5 @@
 -- Fails for each change-of-ownership event whose kept row in int_change_of_ownership_rows is not the expected one, or
--- whose releases_listed is wrong (decision 4, amendment A6; failure mode 798). The expected row is derived step by step from
+-- whose releases_listed is wrong. The expected row is derived step by step from
 -- the staging rows and the release periods alone, with no macro or model that the checked model uses: the latest period end, then the
 -- highest release ID among the rows of that period end, then the lowest source row (and checksum) among the rows of that
 -- release. Duplicate kept rows are left to the unique test on event_key.

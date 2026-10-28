@@ -544,7 +544,7 @@ def error_of(action: Callable[[], Any]) -> str:
 
 
 def gold_consumer_acceptance(env: Env) -> dict[str, bool]:
-    """858 and D1 section 10 item 6: the launcher accepts the exact consumer result of the run's export attempt by one rule, records it, and admits the
+    """the launcher accepts the exact consumer result of the run's export attempt by one rule, records it, and admits the
     four publish steps only against that record; a rejected result, a changed result or no acceptance admits none of them."""
     with_writer(env)
     base.catalog_script(env, others_run_forever=False)

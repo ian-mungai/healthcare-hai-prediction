@@ -1,5 +1,5 @@
 -- Fails for a county and year that two exports of one WONDER database publish with different values: only an identical
--- repeat may be held, never a revision [457].
+-- repeat may be held, never a revision.
 select
     wonder_database,
     county_fips,

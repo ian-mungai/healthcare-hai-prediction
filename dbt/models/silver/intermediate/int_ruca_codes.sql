@@ -2,7 +2,7 @@
 -- codes from their CSVs, 2010 tracts from the declared workbook sheet. Primary (1 to 10) and secondary codes (the 22
 -- published labels such as 10.3) stay text categories; 99 (not coded) and blanks are null with the published value kept.
 -- ZIP codes are postal codes, never ZCTAs; a tract keeps its 2020 county and, for 2020, the 2023 county (Connecticut
--- planning regions). RUCA 2020 was published in 2025: the vintage is not a publication date (failure modes 400, 407, 410 and 411).
+-- planning regions). RUCA 2020 was published in 2025: the vintage is not a publication date.
 {{ config(materialized='table') }}
 
 with

@@ -2,7 +2,7 @@
 
 Run ``.venv/bin/python -m scripts.orchestration.run_contracts_e2e``. Reports stay in data/e2e/orchestration_contracts/.
 The report lists the SHA-256 of every contract file, so a package can confirm it codes against the frozen version
-(parallel plan section 2, items 3 to 5). No container, Docker or AWS service is used.
+No container, Docker or AWS service is used.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ SPEC_MUTATIONS: list[tuple[str, str, Callable[[dict[str, Any]], None]]] = [
     ("unknown mode", "modes", lambda spec: spec["modes"].update(production={"class": "offline", "no_op": False})),
     ("extra field", "network_mode", lambda spec: spec.update(network_mode="host")),
 ]
-# Ledger transitions the broker writes for one submission (Airflow plan section 7).
+# Ledger transitions the broker writes for one submission.
 NEXT_EVENTS = {None: {"intent"}, "intent": {"started", "adopted", "finished", "failed_closed"}, "started": {"finished", "adopted", "failed_closed"}}
 NEXT_EVENTS["adopted"] = {"finished", "failed_closed"}
 

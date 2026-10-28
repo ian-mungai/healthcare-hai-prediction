@@ -1,4 +1,4 @@
--- Fails where one publication release holds different files under one name: never collapsed, left for reconciliation [170] [173].
+-- Fails where one publication release holds different files under one name: never collapsed, left for reconciliation.
 select
     bronze_table,
     publication_release,

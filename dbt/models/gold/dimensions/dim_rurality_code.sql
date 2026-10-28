@@ -1,8 +1,8 @@
 -- One row per (rurality code system, code) as published, plus the unknown member. code_system names the silver model and column; code_label is the
--- paired label column where silver has one, else null. A code with two different labels keeps the label of its latest vintage (amendment A48); a
--- code with a label and a null label keeps the label [824] [750]. A code that the identity_splits seed lists as split (a RUCC code whose published meaning
+-- paired label column where silver has one, else null. A code with two different labels keeps the label of its latest vintage; a
+-- code with a label and a null label keeps the label. A code that the identity_splits seed lists as split (a RUCC code whose published meaning
 -- changed between editions) has one row per label: edition_start and edition_end are the first and last vintage that carry the label, and the key adds
--- the edition start. Every other row has a null edition and keeps the key it had before editions existed [940] [941].
+-- the edition start. Every other row has a null edition and keeps the key it had before editions existed.
 {%- set code_systems = [
     {'model': 'int_rucc_county_codes', 'code': 'rucc_code', 'label': 'description', 'order': 'vintage'},
     {'model': 'int_ruca_codes', 'code': 'primary_ruca', 'label': ''},
@@ -46,7 +46,7 @@ split_keys as (
 ),
 
 -- A code that is not split: published with more than one label, it keeps the label of its latest vintage (then the first label in order); every
--- published label stays on the fact rows (amendment A48).
+-- published label stays on the fact rows.
 single as (
     select
         observed.code_system,

@@ -1,7 +1,7 @@
 -- One row per HUD ZIP-to-county pair and USPS quarter, with the four address ratios typed. The quarter is the one the
 -- capture receipt records. Codes outside the states, DC and territories go to int_hud_zip_county_holds instead.
 -- Connecticut is kept and flagged. Each ratio type keeps its own denominator; has_residential_addresses is
--- false for a ZIP whose residential ratios are all 0, which gets no residential county (failure modes 400 to 407).
+-- false for a ZIP whose residential ratios are all 0, which gets no residential county.
 {{ config(materialized='table') }}
 
 with
@@ -55,7 +55,7 @@ scoped as (
     select
         *,
         {{ county_scope('county_fips') }} as county_scope,
-        -- Rounded so the parallel sum's last-digit noise cannot change a rebuild [418].
+        -- Rounded so the parallel sum's last-digit noise cannot change a rebuild.
         -- Exact decimals, so the sum does not depend on the order the engine adds the rows in.
         round(sum(res_ratio::decimal(38, 12)) over (partition by member_sha256, zip_code), 9)::double as zip_residential_ratio_sum
     from typed

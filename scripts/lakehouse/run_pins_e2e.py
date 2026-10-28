@@ -1,7 +1,7 @@
 """Check the pin step in a throwaway Iceberg catalog with synthetic tables; never the project's catalog or S3.
 
 Run ``.venv/bin/python -m scripts.lakehouse.catalog job pins_e2e``; it runs inside the Spark container. Reports stay in
-data/e2e/pins/. Failure modes 890 to 892 are in plans/wave1_20261011/gate/pins_failure_modes.md.
+data/e2e/pins/.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def refused(action: Callable[[], object], reason: str) -> bool:
 
 
 class RivalPublishes(Path):
-    """A pins path whose existence check passes, after which a rival writer publishes its own pins first [904]."""
+    """A pins path whose existence check passes, after which a rival writer publishes its own pins first."""
 
     def exists(self, *, follow_symlinks: bool = True) -> bool:
         absent = not super().exists(follow_symlinks=follow_symlinks)
@@ -45,7 +45,7 @@ class RivalPublishes(Path):
 
 
 def rival_keeps_its_pin(path: Path) -> bool:
-    """A writer that loses the race after its check is refused, the rival's pin stays and no temporary file is left [904]."""
+    """A writer that loses the race after its check is refused, the rival's pin stays and no temporary file is left."""
     racing = RivalPublishes(path)
     lost = refused(lambda: pins.write_once(racing, {"first": "2"}), "a run is pinned once")
     leftovers = [item.name for item in path.parent.iterdir() if item.name.endswith(".tmp")]

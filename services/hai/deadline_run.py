@@ -4,8 +4,7 @@
     HAI_DEADLINE_UTC=<epoch seconds> /opt/hai/deadline_run <command> [argument ...]
 
 The launcher fixes the absolute deadline in the container's create specification and runs this program in front of the
-template's command under ``--init``. The program is its own watchdog, armed before the command exists (D1 section 5
-item 1). It uses only the Python 3 standard library.
+template's command under ``--init``. The program is its own watchdog, armed before the command exists. It uses only the Python 3 standard library.
 
 1. A bracketed sample: monotonic ``M1``, wall ``W0``, monotonic ``M2``. A bracket wider than 50 ms is retried up to 10
    times and then the program exits 124 without starting the command. ``E = M1 + (D - S - W0)`` is the single absolute
@@ -111,7 +110,7 @@ def unconfirmed(group: int, what: str) -> int:
 
 
 def spawn(command: list[str], boundary: float, mono: Callable[[], float]) -> int:
-    """Fork the relay of the command and return its process ID (D1 section 5 item 1 steps 3 and 4).
+    """Fork the relay of the command and return its process ID.
 
     The child puts itself in a new process group, rechecks that the monotonic clock is before ``B`` immediately before it
     starts the command and exits 124 without running the command otherwise. The command joins the child's group, so the

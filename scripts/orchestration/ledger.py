@@ -1,10 +1,10 @@
-"""Append-only, fsynced submission ledgers: ``<ledger folder>/<run_id>.jsonl`` (Airflow plan section 7).
+"""Append-only, fsynced submission ledgers: ``<ledger folder>/<run_id>.jsonl``.
 
 Each line is validated against ``data_contracts/orchestration/ledger_line.schema.json`` and appended with an fsync before
 the action it announces; a new ledger file also publishes its folder (``publish_folder``). Lines are never rewritten. A ledger with an
 unparseable, invalid or out-of-order line stops every operation on that run with the line number; nothing repairs or
-truncates it (failure mode 820). One exclusive ``flock`` per run serializes the duplicate check, the intent and the
-container create of a submission (failure mode 819).
+truncates it. One exclusive ``flock`` per run serializes the duplicate check, the intent and the
+container create of a submission.
 """
 
 from __future__ import annotations

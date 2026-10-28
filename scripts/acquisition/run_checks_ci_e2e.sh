@@ -3,7 +3,7 @@
 #   bash scripts/acquisition/run_checks_ci_e2e.sh
 # It copies the working versions of the CI entry and .pre-commit-config.yaml into a scratch Git worktree at HEAD,
 # replaces run_checks.sh there with a stub that records each run, then runs the CI entry over committed ranges and
-# synthetic cases (failure modes in data/conformance/20261005/ci_path_filter_failure_modes.md). The stub keeps each case
+# synthetic cases. The stub keeps each case
 # under a few seconds; the real checks are not run. Results go to data/e2e/acquisition_ci_gate/<UTC>/results.txt.
 set -euo pipefail
 

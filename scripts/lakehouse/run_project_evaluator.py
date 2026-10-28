@@ -6,8 +6,7 @@ packages):
     .venv/bin/python -m scripts.lakehouse.run_project_evaluator
 
 It uses the dbt-core and dbt-duckdb versions of the analytics image from ``.tools/sqlfluff`` and the in-memory ``lint``
-target: the evaluator reads only the dbt graph, so no catalog or credentials are needed. Checks (failure modes 32 to 38
-in data/conformance/20261004/cleanup_checks_failure_modes.md): the packages install from the committed lock file without
+target: the evaluator reads only the dbt graph, so no catalog or credentials are needed. Checks: the packages install from the committed lock file without
 changing it, a default selection holds no evaluator node, and the evaluator's findings are warnings, not errors. The
 report, with the warning count of each evaluator rule, goes to data/e2e/dbt_evaluator/.
 """

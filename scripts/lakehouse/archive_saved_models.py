@@ -1,19 +1,18 @@
-"""Archive the silver models that leave silver under the October 10 2026 layer design, with their reference outputs.
+"""Archive the silver models that leave silver under the layer design, with their reference outputs.
 
 Run from the repository root:
 
     .venv/bin/python -m scripts.lakehouse.archive_saved_models write   # copy, export and write features/archive_manifest.json
     .venv/bin/python -m scripts.lakehouse.archive_saved_models check   # every archived file and reference export matches
 
-The 16 saved models (the hospital-window spine, the alignment steps AL1 to AL5, the HAI outcome values, the CMI year
+The 16 saved models (the hospital-window spine, the source alignments, the HAI outcome values, the CMI year
 choices and the three SCD2 histories) and the 7 emptied models (4 formula models and 3 control maps) are copied from commit beab859 (the last verified build)
 into features/ with their YAML entries, the macros only they use and their singular tests, plus the Great Expectations
-suites and baselines (owner decision 3, Oct 10 2026: "keep the files for now. If needed they will be recovered or
-reused"). The E2E expectations stay in the runners at beab859 and are recorded as blob pointers with the names of the
+suites and baselines for recovery or reuse. The E2E expectations stay in the runners at beab859 and are recorded as blob pointers with the names of the
 functions and constants that hold them. Reference outputs of the 23 models are exported read-only from the real and
-fixture builds of that commit as Parquet into the ignored data/features/reference/ (owner decision W0-1, option A: the
-data-files check keeps data out of Git); the manifest records each export's SHA-256, rows and content fingerprint.
-Nothing is removed from the active project. Plan: plans/parallel_work_20261010/plan.md, wave 0 item 8.
+fixture builds of that commit as Parquet into the ignored data/features/reference/; the data-files check keeps data out of Git; the manifest records
+each export's SHA-256, rows and content fingerprint.
+Nothing is removed from the active project.
 """
 
 from __future__ import annotations

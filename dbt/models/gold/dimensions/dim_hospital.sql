@@ -1,5 +1,5 @@
 -- One row per hospital CCN any fact's hospital key carries, plus the unknown member. A hospital key is a CCN or an entity ID read as 6-character
--- text; a value outside that space takes the unknown member in every fact [824] [825]. first_seen and last_seen are the earliest and latest DATE
+-- text; a value outside that space takes the unknown member in every fact. first_seen and last_seen are the earliest and latest DATE
 -- value of the source dates of the facts that carry the hospital's key, over the rows that carry it; they are null when none of those rows has a
 -- typed date.
 {%- set sources = [

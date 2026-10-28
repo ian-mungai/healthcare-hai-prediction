@@ -1,4 +1,4 @@
--- Fails for each Medicare inpatient numeric column with a non-blank value that is not a plain number [359].
+-- Fails for each Medicare inpatient numeric column with a non-blank value that is not a plain number.
 with
 
 provider_counts as (

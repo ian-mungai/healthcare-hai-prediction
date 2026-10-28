@@ -1,7 +1,7 @@
 -- One row per bridge seed row with a non-empty measure key: the many-to-many of a measure identity (with its value column), a vintage range and a
 -- registry control. A seed row of a measure that the identity_splits seed lists as split maps to every edition of the measure when its vintage range is
 -- empty and to the editions whose years overlap the range otherwise. It is the only gold model where registry controls meet the data. A closed control
--- with an empty measure key stays in dim_registry_control only [827] [744] [941].
+-- with an empty measure key stays in dim_registry_control only.
 {%- set bridge_seeds = [
     'registry_measure_sources_bridge',
     'cost_report_measures_bridge',

@@ -379,7 +379,7 @@ def run_case(scenario: str) -> tuple[bool, str]:
 
 
 def carry_forward_case(repo: Path, scenario: str, record: dict[str, object]) -> str | None:
-    """Draft with --refresh --carry-forward after a staged change; return a failure description or None [702] to [708]."""
+    """Draft with --refresh --carry-forward after a staged change; return a failure description or None."""
     python = str(repo / ".venv/bin/python")
     module = ["-m", "scripts.quality.documentation_review"]
     if scenario == "record_not_ignored":

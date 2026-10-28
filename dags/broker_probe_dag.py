@@ -1,8 +1,8 @@
 """A manual DAG that proves a LocalExecutor task reaches the host job broker with this session's token.
 
-Airflow plan section 8 (failure modes 774 and 817). The task calls only the broker's health operation through
+The task calls only the broker's health operation through
 ``orchestration.client``; it submits nothing and holds no credential. It has no schedule and starts paused, so it runs
-only when the owner triggers it (decision O3).
+only when the owner triggers it.
 """
 
 from __future__ import annotations

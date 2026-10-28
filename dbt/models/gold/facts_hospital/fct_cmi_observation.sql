@@ -1,4 +1,4 @@
--- One row per int_cmi_hospital_rows row, grain cmi_row_key: every silver column unchanged, then the surrogate keys [743] [745].
+-- One row per int_cmi_hospital_rows row, grain cmi_row_key: every silver column unchanged, then the surrogate keys.
 {{
     gold_fact(
         silver_model='int_cmi_hospital_rows',

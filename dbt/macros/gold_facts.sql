@@ -3,17 +3,17 @@
     The body of a gold fact: every column of the kept silver model unchanged and in its order, then one <dimension>_sk column per mapping in
     surrogate_keys, in the order given. A mapping is {'<key name>': {'dimension': 'dim_x', 'natural_key': '<silver column>'}}, as in the gold
     contract. The key is the md5 of the natural key's text, matched to the dimension's own surrogate key (the dimension named dim_x holds
-    x_sk); a null or unmatched natural key takes the unknown member, md5('<unknown>') [745]. Each mapping joins its own alias, so one
+    x_sk); a null or unmatched natural key takes the unknown member, md5('<unknown>'). Each mapping joins its own alias, so one
     dimension can serve two keys (hospital_buyer_sk and hospital_seller_sk on dim_hospital). The join cannot add or drop rows because every
     dimension holds one row per surrogate key. grain is the silver unique key column: the model's tests check it, and the macro stops a build
-    that names none [743].
+    that names none.
 -#}
 {{- gold_fact_select(ref(silver_model), silver_model, grain, surrogate_keys) }}
 {% endmacro %}
 
 
 {% macro gold_fact_select(source_relation, silver_model, grain, surrogate_keys) %}
-{#- The body of gold_fact over any relation; the key test gold_fact_keys feeds it a fixture relation to check the keys it emits [825]. -#}
+{#- The body of gold_fact over any relation; the key test gold_fact_keys feeds it a fixture relation to check the keys it emits. -#}
 {%- if not grain %}
     {{- exceptions.raise_compiler_error('gold_fact(' ~ silver_model ~ '): the grain column is required') }}
 {%- endif %}
@@ -34,7 +34,7 @@ left join {{ ref(mapping.dimension) }} as {{ key_name }}_dim
 
 
 {% macro gold_measure_rows(identities, names, units, value_kinds) %}
-{#- The ordinary rows of dim_measure from four relations of the model's steps; the test measure_attribute_branches feeds it fixture rows [828]. -#}
+{#- The ordinary rows of dim_measure from four relations of the model's steps; the test measure_attribute_branches feeds it fixture rows. -#}
 select
     md5(concat_ws('|', identities.fact, identities.measure_key, identities.value_column)) as measure_sk,
     concat_ws('|', identities.fact, identities.measure_key, identities.value_column) as measure_identity,
@@ -63,7 +63,7 @@ left join {{ value_kinds }} as value_kinds
 
 
 {% test unknown_member_once(model, column_name) %}
-{#- Fails unless the dimension holds exactly one unknown member row [824]. -#}
+{#- Fails unless the dimension holds exactly one unknown member row. -#}
 select count(*) as unknown_members
 from {{ model }}
 where {{ column_name }} = md5('<unknown>')
@@ -74,8 +74,8 @@ having count(*) <> 1
 {% test unknown_member_natural_key(model, column_name, natural_key, expected="'<unknown>'") %}
 {#-
     Fails for an unknown member row (key md5('<unknown>')) whose natural key is not the expected value: the text '<unknown>' for every
-    dimension. Amendment A40 item 1 allows one exception: dim_date, whose natural key is a DATE, passes expected="null" and holds a null
-    calendar_date on its unknown row [824].
+    dimension. The one exception is dim_date, whose natural key is a DATE, passes expected="null" and holds a null
+    calendar_date on its unknown row.
 -#}
 select *
 from {{ model }}
@@ -84,7 +84,7 @@ where {{ column_name }} = md5('<unknown>') and {{ natural_key }} is distinct fro
 
 
 {% test surrogate_key_matches_natural_key(model, column_name, natural_key) %}
-{#- Fails for an ordinary row whose key is not the md5 of its natural key's text (a wrong but unique hash passes unique and not_null) [824]. -#}
+{#- Fails for an ordinary row whose key is not the md5 of its natural key's text (a wrong but unique hash passes unique and not_null). -#}
 select
     {{ column_name }} as surrogate_key,
     {{ natural_key }} as natural_key
@@ -99,7 +99,7 @@ where
 {#-
     Fails for a natural key value that a source carries inside the dimension's value space and the dimension lacks, and for an ordinary
     dimension row that no source carries inside the space. sources is a list of {model, column, where} entries; space is a condition on the
-    column natural_key [824].
+    column natural_key.
 -#}
 with
 
@@ -151,7 +151,7 @@ from (
     Runs gold_fact_select over fixture rows (a known pair of hospitals and their swap, null keys, out-of-space values and unmatched values
     for the role-playing pair hospital_buyer_sk and hospital_seller_sk, and a known and an unmatched release) and compares every emitted key
     with a key computed without the macro: md5 of the text when the dimension holds the value, else md5('<unknown>'). Fails on any
-    difference and when the rows are not the fixture's rows [825] [826].
+    difference and when the rows are not the fixture's rows.
 -#}
 {%- set dimension_hospital = ref('dim_hospital') %}
 {%- set dimension_release = ref('dim_release') %}
@@ -269,7 +269,7 @@ where (select count(first_ccn) from known) = 0
 {% test dim_date_attributes(model) %}
 {#-
     Checks every ordinary day against attributes computed by another route (strftime: ISO year %G, ISO week %V, month, quarter, year and the
-    October 1 federal fiscal year), four fixed dates against literal values, and that the days have no gap [824].
+    October 1 federal fiscal year), four fixed dates against literal values, and that the days have no gap.
 -#}
 with
 
@@ -355,7 +355,7 @@ having count(*) <> date_diff('day', min(calendar_date), max(calendar_date)) + 1
 {% test hospital_seen_dates(model, sources) %}
 {#-
     Recomputes first_seen and last_seen per hospital by another route (the smallest and largest date of each source row with least and
-    greatest, then over the rows) and fails on any difference or when no hospital has a date [824].
+    greatest, then over the rows) and fails on any difference or when no hospital has a date.
 -#}
 with
 
@@ -422,8 +422,7 @@ where (select count(first_seen) from {{ model }}) = 0
 {% test measure_attribute_branches(model) %}
 {#-
     Runs gold_measure_rows over fixture rows with non-null names, units and kinds, and compares the result with literal rows: a labelled
-    identity, a labelled MMD identity with a unit, an identity with no name, a unit that only applies to MMD, and a column with no kind
-    [828].
+    identity, a labelled MMD identity with a unit, an identity with no name, a unit that only applies to MMD, and a column with no kind.
 -#}
 with
 
@@ -517,7 +516,7 @@ from (
 {% test measure_attributes_match_silver(model, silver_models) %}
 {#-
     Checks value_kind against the type of the silver column in the built database and unit against the silver value_unit of
-    int_mmd_prevalence. silver_models maps a fact or bridge to the silver model that holds its columns [828].
+    int_mmd_prevalence. silver_models maps a fact or bridge to the silver model that holds its columns.
 -#}
 {%- for silver_model in silver_models.values() | unique %}
     {%- do ref(silver_model) %}
@@ -592,7 +591,7 @@ where measures.fact is not null and measures.unit is distinct from silver_units.
 {#-
     Rebuilds the expected bridge rows from the control bridge seeds (a row with a non-empty measure_key; the measure key hash of the fact,
     key and value column, and, for a split measure, the edition start, the control key hash, the control, the vintage bounds and the seed provenance) and compares them with the bridge
-    in both directions with multiplicity, so a dropped, doubled or substituted mapping fails [827] [744].
+    in both directions with multiplicity, so a dropped, doubled or substituted mapping fails.
 -#}
 with
 

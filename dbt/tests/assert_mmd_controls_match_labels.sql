@@ -1,5 +1,5 @@
 -- Fails for an MMD condition label that the MMD bridge binds to more than one control, for an MMD control that the bridge binds to more than one
--- label, for an MMD row whose condition label the bridge does not name, and for a file named for one control that holds another control's label [468].
+-- label, for an MMD row whose condition label the bridge does not name, and for a file named for one control that holds another control's label.
 with
 
 labels as (

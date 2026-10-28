@@ -291,7 +291,7 @@ def route_scenarios(scenario: Any, root: Path) -> None:
 
 
 def held_reference_scenarios(scenario: Any, root: Path, extend: Any, boundaries: Any) -> None:
-    """A held source's reference document is planned and stored only with a binding its hold record releases (failure modes 1 to 5)."""
+    """A held source's reference document is planned and stored only with a binding its hold record releases."""
     terms_sha256 = hashlib.sha256(s3_store.TERMS_ACCEPTANCE_PATH.read_bytes()).hexdigest()
     hud = candidate("e2e-hud-reference", source_id="HUD", source_ids=["HUD"], release_binding="terms")
 
@@ -336,7 +336,7 @@ def held_reference_scenarios(scenario: Any, root: Path, extend: Any, boundaries:
 
 
 def release_scenarios(scenario: Any, extend: Any, execute: Any) -> None:
-    """New receipts bind the newest release record; receipts that bind an earlier record still verify (failure modes 15 to 18)."""
+    """New receipts bind the newest release record; receipts that bind an earlier record still verify."""
     paths = s3_store.ACCESS_RELEASE_PATHS
     newest, earliest = (hashlib.sha256(path.read_bytes()).hexdigest() for path in (paths[-1], paths[0]))
     hcai = candidate("e2e-hcai-reference", source_id="HCAI_UTIL", source_ids=["HCAI_UTIL"], release_binding="access_release")

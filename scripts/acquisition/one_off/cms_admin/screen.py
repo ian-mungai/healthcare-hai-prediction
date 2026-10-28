@@ -1,4 +1,4 @@
-"""Pre-storage screen for the locally captured CMS CHOW and Enrollments files (failure modes 1, 3-7).
+"""Pre-storage screen for the locally captured CMS CHOW and Enrollments files.
 
 Run from the repository root after ``capture_local.py``:
 

@@ -1,5 +1,4 @@
-"""End-to-end runs of the host job broker and its ledger as a client of the launcher, against a fake Docker Engine, in test registries (failure
-modes 925 to 932 and Airflow plan modes 755 to 777; ``plans/wp/a1_failure_modes.md``).
+"""End-to-end runs of the host job broker and its ledger as a client of the launcher, against a fake Docker Engine, in test registries.
 
 Run ``.venv/bin/python -m scripts.orchestration.run_broker_e2e [--case NAME ...] [--mutation NAME]``. Each case uses the harness of
 ``scripts/lakehouse/run_launcher_e2e.py`` (its own test registry, fake daemon and launcher process); the broker runs in the case's process, or as a
@@ -1364,7 +1363,7 @@ def lose_ledger_folder_during_read(marker: Path, ledger_file: Path, client: Inst
 
 @contextlib.contextmanager
 def replace_ledger_folder_while_marker_is_written(marker: Path, ledger_file: Path, spare: Path, seen: dict[str, Any]) -> Iterator[None]:
-    """Finding 17: while the broker's real marker writer runs, the ledger folder (it holds the intent and its lock) is moved aside and an empty folder
+    """while the broker's real marker writer runs, the ledger folder (it holds the intent and its lock) is moved aside and an empty folder
     takes its place. The unchanged writer publishes and flushes the marker in the replacement. Before the writer returns the replacement is moved aside
     intact and the original folder is put back, so the intent survives and the marker does not appear in the ledger folder. It happens once; nothing is
     faked and the writer's fsync calls run."""
@@ -1410,7 +1409,7 @@ def lookup_unanswerable(original: Callable[..., Any]) -> Callable[..., Any]:
 
 @case("cancel_after_marker_write_replacement")
 def cancel_after_marker_write_replacement(env: BrokerEnv) -> dict[str, bool]:
-    """929j (finding 17): the broker's marker writer publishes the marker in a replacement of the ledger folder, which is moved aside intact before the
+    """the broker's marker writer publishes the marker in a replacement of the ledger folder, which is moved aside intact before the
     writer returns, so the intent survives in the ledger folder and the marker does not. The launcher accepts the submit and its reply is lost. The
     inventory row then changes (other arguments, then no mapping) and the broker restarts. The authenticated lookup runs whatever the disk shows: the
     accepted attempt is reconciled, the ledger is not ended by the row and a cancel reaches the attempt (``cancel_intent`` set, container stopped), also

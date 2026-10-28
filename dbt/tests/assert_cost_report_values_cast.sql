@@ -1,4 +1,4 @@
--- Fails for each cost-report column holding a value that is not blank and does not cast to a number [336].
+-- Fails for each cost-report column holding a value that is not blank and does not cast to a number.
 with
 
 reports as (

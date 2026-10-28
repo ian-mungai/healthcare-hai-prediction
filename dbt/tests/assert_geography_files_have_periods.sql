@@ -1,6 +1,6 @@
 -- Fails for a loaded C1 geography file without exactly one period row, a HUD or service-area file without its period
 -- dates, or a period row naming no stored file: every file is dated by its receipt quarter, its job plan's catalog
--- coverage or its reviewed vintage [403] [410] [416]. The HUD workbooks are twins of the CSVs and need no period.
+-- coverage or its reviewed vintage. The HUD workbooks are twins of the CSVs and need no period.
 with
 
 files as (

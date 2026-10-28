@@ -1,5 +1,5 @@
 """A fake Docker Engine for the orchestration runners: the lakehouse fake daemon plus an image pull, the dropped capabilities and security options
-that a create request sets, and a service that never turns healthy (failure modes 933 and 934). It serves only test registries."""
+that a create request sets, and a service that never turns healthy. It serves only test registries."""
 
 from __future__ import annotations
 

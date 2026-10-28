@@ -1,5 +1,5 @@
 -- The editions of a split key never overlap, and every silver value of the key (its label at an ordering value) falls in exactly one edition. This is the
--- check that the range join of a fact finds exactly one edition for each of its rows [940].
+-- check that the range join of a fact finds exactly one edition for each of its rows.
 with
 
 split_keys as (

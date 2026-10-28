@@ -2,7 +2,7 @@
 -- year (the job plan's catalog coverage). 2015 suppresses whole rows (ZIP *, no counts); later years show the ZIP and
 -- publish suppressed counts as *: both become flags and null counts, never zeros, and suppressed mass is not inferred.
 -- The provider ID stays as published (letters and zeros kept); repeated suppressed rows are all kept. Weights and
--- ZIP-to-county allocation are later work (failure modes 413 to 416).
+-- ZIP-to-county allocation are later work.
 {{ config(materialized='table') }}
 
 with

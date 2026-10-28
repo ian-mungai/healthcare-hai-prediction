@@ -1,4 +1,4 @@
--- Fails for each Medicare inpatient file whose name carries no data year, so a row is never placed in a guessed year [355].
+-- Fails for each Medicare inpatient file whose name carries no data year, so a row is never placed in a guessed year.
 select distinct
     'provider' as file_kind,
     member_sha256,

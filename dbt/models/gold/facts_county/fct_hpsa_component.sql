@@ -1,5 +1,5 @@
--- fct_hpsa_component: every column of int_hpsa_components unchanged, then the surrogate keys county_sk, release_sk [743] [745].
--- The grain is hpsa_row_key; the YAML checks rows, content, keys, source dates and published text against silver [747] [748].
+-- fct_hpsa_component: every column of int_hpsa_components unchanged, then the surrogate keys county_sk, release_sk.
+-- The grain is hpsa_row_key; the YAML checks rows, content, keys, source dates and published text against silver.
 {{
     gold_fact(
         'int_hpsa_components',

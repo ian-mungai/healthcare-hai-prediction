@@ -1,10 +1,10 @@
-"""Checks that run inside the pinned Airflow image with no network (Airflow plan section 11.1; failure modes 814, 823).
+"""Checks that run inside the pinned Airflow image with no network.
 
 ``scripts/orchestration/offline_checks.py`` mounts ``dags/``, ``orchestration/``, this file and the constraints file
 read-only and runs ``python in_image_checks.py``. It prints one JSON object:
 
 - ``dags``: every file in the DAG folder imported by Airflow's DagBag; import errors and cycles are listed.
-- ``graph_cases``: synthetic DAGs built from real Airflow operators; the section 5 reference graph must pass the
+- ``graph_cases``: synthetic DAGs built from real Airflow operators; the reference graph must pass the
   ``transform_dag`` validator and each mutation must fail with its rule.
 - ``transform_graph``: the validator on the real ``transform_dag`` object that Airflow imported from the DAG folder.
 - ``constraints``: every installed distribution is either in the Airflow 3.3.2 constraints file at the pinned version, or one of the pip and uv build
@@ -76,7 +76,7 @@ def pipeline_graphs() -> dict[str, Any]:
 def build(
     dag_id: str, change: Callable[[dict[str, BaseOperator]], None] | None = None, rules: dict[str, str] | None = None, drop: tuple[str, str] | None = None
 ) -> DAG:
-    """The section 5 graph with real operators; ``rules`` overrides trigger rules, ``drop`` removes one edge, ``change``
+    """The reference graph with real operators; ``rules`` overrides trigger rules, ``drop`` removes one edge, ``change``
     edits the built tasks."""
     wanted = EXPECTED_RULES | (rules or {})
     with DAG(dag_id=dag_id, schedule=None) as dag:

@@ -1,7 +1,7 @@
 -- One row per organisation owner row and stored owner file (release), with the release label and catalog period from the
 -- ownership_release_periods seed. A flag is true for Y and false for N; a blank flag, and every flag of a file in the
 -- layout before April 2025, is null; flags_published says whether the file has the private-equity column. Dates and
--- shares are typed (failure modes 365 to 371). Associate IDs that lost leading zeros are padded to 10 digits [714].
+-- shares are typed. Associate IDs that lost leading zeros are padded to 10 digits.
 -- Choosing a release for a hospital-year waits for the alignment step.
 {{ config(materialized='table') }}
 

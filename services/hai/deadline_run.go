@@ -4,7 +4,7 @@
 //
 //	HAI_DEADLINE_UTC=<epoch seconds> /opt/hai/deadline_run <command> [argument ...]
 //
-// It keeps the contract of deadline_run.py (D1 section 5 item 1) and uses only the Go standard library; it is built static
+// It keeps the contract of deadline_run.py and uses only the Go standard library; it is built static
 // (CGO_ENABLED=0) by services/lakehouse/polaris_admin/Dockerfile.
 //
 //  1. A bracketed sample: monotonic M1, wall W0, monotonic M2. A bracket wider than 50 ms is retried up to 10 times and then

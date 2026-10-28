@@ -26,7 +26,7 @@ PRIVATE_MODES = {"cms_owners_org", "hcai_util_workbook", "onc_mu_hospital"}
 API_MODES = {"bls_api_v2", "census_acs_api", "census_acs_detailed", "mmd_api", "hud_api", "il_directory"}
 HTTP_EXPORT_SOURCES = {"IL", "CA", "PLACES", "HCAI_FINANCE"}
 CURRENT_ONLY = {"HPSA", "MUA"}
-# Privacy review finding F2 (Sep 27 2026): the CMS hospitals archives hold a table of named state contacts.
+# The CMS hospitals archives hold a table of named state contacts.
 CONTACT_TABLE_SOURCES = {"main-hai-pdc"}
 # The MMD browser exports moved to the API after parity checks on these two days (the flag value stays as recorded).
 MMD_PARITY = "parity_verified_20260925_20260926"

@@ -1,5 +1,5 @@
 -- Fails for an owner, enrollment or change-of-ownership file without exactly one period row, a period two files of one
--- table share or a period row naming no stored file: every release is dated by its recorded catalog period [365].
+-- table share or a period row naming no stored file: every release is dated by its recorded catalog period.
 with
 
 files as (

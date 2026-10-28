@@ -2,7 +2,7 @@
 -- nothing else. The tuple of a label is derived here from the silver rows of the key (the minimum and maximum ordering value that carry the label),
 -- independently of the models, and compared with the model rows in both directions at each measure's value-column grain: every value column of a measure
 -- has one row per tuple. A label that moves to the dates of another label, or a bound that moves inside a gap between editions, fails here although the
--- partition test still passes, because that test ignores the label [940].
+-- partition test still passes, because that test ignores the label.
 with
 
 split_keys as (

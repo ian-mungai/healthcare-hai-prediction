@@ -119,7 +119,7 @@ markdown_lint() {
 
 started=$SECONDS
 timed "gates: secret scan" "$python_bin" -m scripts.quality.scan_secrets
-# The local dataset folders moved into data/datasets/; an old folder that appears again would split the data (failure mode 227).
+# The local dataset folders moved into data/datasets/; an old folder that appears again would split the data.
 timed "gates: moved dataset folders" "$python_bin" -c 'import json, pathlib, sys; old = [p for p in json.load(open("config/data_paths.json"))["moved"] if pathlib.Path(p).exists()]; sys.exit("old dataset folders exist again: " + ", ".join(old) if old else 0)'
 # Repository checks over every file Git tracks or would track; the same checks run as pre-commit hooks.
 timed "gates: lint settings" "$python_bin" -m scripts.quality.repo_checks lint-settings

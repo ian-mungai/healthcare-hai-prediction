@@ -1,9 +1,9 @@
--- One row per change-of-ownership event and release that int_change_of_ownership_rows does not keep (decision 4; failure
--- mode 799): differs_from_latest_release for another release whose published values differ from the kept row, with the
+-- One row per change-of-ownership event and release that int_change_of_ownership_rows does not keep: differs_from_latest_release for another release
+-- whose published values differ from the kept row, with the
 -- differing fields; repeated_in_release for another row of the event in the kept row's release. Values are compared as
 -- published, through each row's lineage (member_sha256, source_row_number) to the staging row, so a correction that the
 -- cleansing hides (associate ID 123 against 0123) is still held. Each hold keeps the sorted checksums of its files and a
--- null-safe hold_key (contract amendments A5 and A6). A release with the same published values as the kept row is not held.
+-- null-safe hold_key. A release with the same published values as the kept row is not held.
 {{ config(materialized='table') }}
 
 {%- set published_columns = [

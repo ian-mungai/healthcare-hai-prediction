@@ -1,4 +1,4 @@
-"""Generate the Provider of Services (POS) file periods that staging reads (failure modes 280 and 281).
+"""Generate the Provider of Services (POS) file periods that staging reads.
 
 Run from the repository root with read-only S3 access and the local acquisition records:
 
@@ -7,7 +7,7 @@ Run from the repository root with read-only S3 access and the local acquisition 
 
 Each loaded POS file's period is the temporal coverage the data.cms.gov catalog gave its distribution, as the
 acquisition job plan recorded it; file names are never parsed. A loaded file whose release has no recorded coverage
-stops the run. Failure modes: plans/hospital_spine_20261005/failure_modes.md.
+stops the run.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def job_periods(jobs: Path = JOBS) -> dict[str, tuple[str, str]]:
 
 
 def rows_for(loaded: Iterable[Mapping[str, str]], periods: Mapping[str, tuple[str, str]]) -> list[dict[str, str]]:
-    """Return one seed row per loaded POS file, sorted by period; a file without coverage stops the run [281]."""
+    """Return one seed row per loaded POS file, sorted by period; a file without coverage stops the run."""
     rows = []
     for item in loaded:
         if item["release_id"] not in periods:

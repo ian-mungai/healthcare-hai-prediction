@@ -1,6 +1,6 @@
 -- One row per county, year, age level and published field of the Medicare Geographic Variation file, long: every field
 -- except the row identifiers, under its published name, for county rows at every age level; the age level is kept as
--- bene_age_lvl. '*' (suppressed) and 'NA' (not applicable) are null with the token kept (failure modes 454 to 456).
+-- bene_age_lvl. '*' (suppressed) and 'NA' (not applicable) are null with the token kept.
 {{ config(materialized='table') }}
 
 with

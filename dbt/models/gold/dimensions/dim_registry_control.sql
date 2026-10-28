@@ -1,6 +1,5 @@
 -- One row per registry control of revision 3 (the base registry and its append-only additions), plus the unknown member. The review decision is
--- read from the control bridge seeds and is null for a control with no bridge row. The family and the closeout decision are deferred (amendment
--- A36) [824] [827].
+-- read from the control bridge seeds and is null for a control with no bridge row. The family and the closeout decision are deferred.
 {%- set bridge_seeds = [
     'registry_measure_sources_bridge',
     'cost_report_measures_bridge',

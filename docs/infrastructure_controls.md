@@ -94,7 +94,7 @@ same tag permission when they are created with tags. DLM grants management by th
 `Project` tag, when present, to be the project name. These services allow other tags. An ECS service must carry `ecs:propagate-tags` of `SERVICE` or `TASK_DEFINITION`, a run task
 `TASK_DEFINITION`. A service update must not set `NONE`. A run task, a service create or an ECS tag request that sets its own
 `Project` tag to any other value is refused (a Deny on `aws:RequestTag/Project` that applies only when the tag is present).
-The policy does not restrict which definition a service propagates from. That open item is in `plans/full_scope_20261022/iam_least_privilege/hardening_backlog.md` (local record, not in the repository). The tasks then carry the tag of the service or the task
+The policy does not restrict which definition a service propagates from. The tasks then carry the tag of the service or the task
 definition, which carries it as well, so Fargate tasks reach the budget.
 
 The policy evaluator (`scripts/infrastructure/policy_evaluator.py`, cases in `scripts/infrastructure/policy_cases.py`, run by
@@ -136,7 +136,7 @@ the first deploy.
   The boot script also sets `ECS_DISABLE_PRIVILEGED=true` in the ECS agent configuration, so a task definition cannot ask for a
   privileged container, which could remove the rule. The configuration E2E asserts that the last value of the variable is
   `true` and shows that a boot without the line, with `false` or with `false` written after `true` is detected. Added Linux
-  capabilities and writable host mounts stay open (`plans/full_scope_20261022/iam_least_privilege/hardening_backlog.md`, local record, not in the repository).
+  capabilities and writable host mounts stay open.
 - Boot sets `kernel.core_pattern = core` and `fs.suid_dumpable = 0` in
   `/etc/sysctl.d/90-platform-core-dumps.conf`, which sorts after the image's
   systemd-coredump pipe handler. A pipe handler receives core dumps even when a

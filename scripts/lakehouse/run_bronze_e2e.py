@@ -5,11 +5,7 @@ Run from the repository root; the catalog script starts it inside the Spark cont
     .venv/bin/python -m scripts.lakehouse.catalog job bronze_e2e
 
 Every scenario uses synthetic manifests and files held by an in-memory stand-in for versioned S3 and a throwaway
-local Iceberg catalog under the container's scratch folder, so it never touches S3 or the real catalog. Failure modes
-are in plans/bronze_hai_20261002/ (1 to 35), bronze_manifest_20261002/ (36 to 53),
-bronze_ipps_occmix_20261002/ (68 to 82), bronze_dictionary_20261002/ (83 to 96), publisher_dictionaries_20261002/
-(97 to 112), bronze_county_20261002/ (113 to 131), bronze_remaining_20261003/ (132 to 149) and
-bronze_gaps_20261003/ (150 to 159) and bronze_utf16_20261003/ (194 to 198); numbers in brackets.
+local Iceberg catalog under the container's scratch folder, so it never touches S3 or the real catalog.
 The report under data/e2e/bronze/ holds outcomes only.
 """
 
@@ -37,7 +33,7 @@ from scripts.lakehouse.session import spark_session
 
 REPORT_ROOT = Path("data/e2e/bronze")
 BUCKET = "synthetic-bucket"
-# Edge cases Spark's CSV reader must keep exactly as Python's csv module reads them [43].
+# Edge cases Spark's CSV reader must keep exactly as Python's csv module reads them.
 EDGE_ROWS = [
     ["010001", "Hospital, Inc.", 'Say "hi"', "", "Not Available"],
     ["45005A", "Line one\r\nline two", "  padded  ", "--", "N/A"],
@@ -174,7 +170,7 @@ def expect_error(action: Callable[[], object], fragment: str) -> bool:
     return False
 
 
-# Workbook written with openpyxl; expected rows after dropping trailing empty cells [72] [73].
+# Workbook written with openpyxl; expected rows after dropping trailing empty cells.
 EXPECTED_SHEET_ROWS = [
     ("Data", 1, 1, ["PROV", "CMI", "FLAG", "DATE"], ["s", "s", "s", "s"]),
     ("Data", 1, 2, ["010001", "1.2345", "TRUE", "2026-01-02T00:00:00"], ["s", "n", "b", "d"]),
@@ -223,7 +219,7 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
     scratch.mkdir()
     hai = "(?:^|/)(?:Healthcare[ _]Associated[ _]Infections ?- ?Hospital|(?:[a-z0-9_]*_)?77hc[-_]ibv8)\\.csv$"
     layout_2019 = csv_bytes(["Provider ID", "Score"], [["010001", "Not Available"]])
-    # A different file in the 2019 layout: identical bytes would load once [204].
+    # A different file in the 2019 layout: identical bytes would load once.
     layout_2019_other = csv_bytes(["Provider ID", "Score"], [["010002", "Not Available"]])
     layout_2024 = csv_bytes(["Facility ID", "City/Town", "Score"], [["010001", "X", "--"], ["020002", "Y", "0.5"]])
     store(storage, "cms/hospitals", "legacy_hai", "snap_a", [(["h.zip", "Healthcare Associated Infections - Hospital.csv"], "h.csv", layout_2019)])
@@ -252,7 +248,7 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
     ]
     config = bronze.load_table_map(table_map(root / "map.json", tables))
 
-    # [37] [38] [39] Only manifest.json files under the mapped collection are read; unselected data objects are reported.
+    # Only manifest.json files under the mapped collection are read; unselected data objects are reported.
     inputs, unselected = bronze.discover(storage, BUCKET, config, ["hai_hospital", "provider_of_services"])
     hospital = [item for item in inputs if item["table"] == "hai_hospital"]
     results["manifests_select_named_and_id_only_files_and_skip_pch"] = len(hospital) == 3 and len(inputs) == 5
@@ -276,35 +272,35 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
         lambda: bronze.load_table_map(table_map(root / "bad.json", [{**tables[1], "format": "parquet"}])), "format"
     )
 
-    # [42] [43] [45] Spark reads the file; values and row numbers equal Python's csv module exactly.
+    # Spark reads the file; values and row numbers equal Python's csv module exactly.
     summary = bronze.load_objects(spark, inputs, storage, "bronze", scratch)
     edge = spark.table("bronze.provider_of_services").where("_snapshot_id = 'snap_d'").orderBy("_row_number").collect()
     loaded = [[row["facility_id"], row["facility_name"], row["note"], row["score"], row["footnote"]] for row in edge]
     results["spark_values_equal_python_csv"] = loaded == EDGE_ROWS and [row["_row_number"] for row in edge] == [1, 2, 3]
     results["row_counts_match_each_file"] = summary["provider_of_services"]["rows"] == 4 and summary["hai_hospital"]["rows"] == 4
 
-    # [19] [20] Header layouts form one table; a column a file lacks stays null, never an empty string.
+    # Header layouts form one table; a column a file lacks stays null, never an empty string.
     hai_rows = spark.table("bronze.hai_hospital").collect()
     results["header_layouts_union_with_nulls"] = sum(row["provider_id"] is not None for row in hai_rows) == 2 and all(
         row["city_town"] is None for row in hai_rows if row["provider_id"]
     )
 
-    # [46] Scratch copies are removed after each commit.
+    # Scratch copies are removed after each commit.
     results["scratch_files_removed"] = bool(storage.downloads) and not any(path.exists() for path in storage.downloads)
 
-    # [21] [22] [23] A rerun replaces each object's rows in place.
+    # A rerun replaces each object's rows in place.
     before = sorted(json.dumps(row.asDict(), sort_keys=True, default=str) for row in spark.table("bronze.provider_of_services").collect())
     bronze.load_objects(spark, inputs, storage, "bronze", scratch)
     after = sorted(json.dumps(row.asDict(), sort_keys=True, default=str) for row in spark.table("bronze.provider_of_services").collect())
     results["rerun_replaces_rows_without_duplicates"] = before == after
 
-    # [41] Verification compares distinct files and rows with the table map's expected counts.
+    # Verification compares distinct files and rows with the table map's expected counts.
     checks = bronze.verify(spark, config, inputs, "bronze")
     results["verification_matches_expected_counts"] = checks["hai_hospital"]["passed"] and checks["provider_of_services"]["passed"]
     strict = bronze.load_table_map(table_map(root / "strict.json", [{**tables[0], "expected_distinct_rows": 99}, tables[1]]))
     results["verification_reports_a_count_mismatch"] = not bronze.verify(spark, strict, inputs, "bronze")["hai_hospital"]["passed"]
 
-    # [9] [17] [18] [44] Checksums, ragged rows, invalid UTF-8 and byte-order marks fail before anything is written.
+    # Checksums, ragged rows, invalid UTF-8 and byte-order marks fail before anything is written.
     snapshots = spark.table("bronze.provider_of_services.snapshots").count()
     target = next(item for item in inputs if item["table"] == "provider_of_services")
     results["checksum_mismatch_stops_before_write"] = (
@@ -319,7 +315,7 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
         path = scratch / f"{name}.csv"
         path.write_bytes(data)
         results[f"validation_rejects_{name}"] = expect_error(partial(bronze.validate_csv, path), fragment)
-    # [50] [51] Windows-1252 decodes only where the table allows it; undefined bytes and UTF-8-only tables still fail by name.
+    # Windows-1252 decodes only where the table allows it; undefined bytes and UTF-8-only tables still fail by name.
     cp1252 = csv_bytes(["Facility Name", "Note"], [["Saint Mary\u2019s", "A \u2013 B"]]).decode().encode("cp1252")
     store(storage, "cms/hospital_ownership", "cms_chow", "snap_g", [(None, "CHOW.csv", cp1252)])
     store(storage, "cms/hospital_ownership", "enroll", "snap_h", [(None, "ENROLL.csv", cp1252)])
@@ -350,7 +346,7 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
         lambda: bronze.load_table_map(table_map(root / "enc_bad.json", [{**encoded[1], "encodings": ["latin-1"]}])), "encoding"
     )
 
-    # [52] A storage error while loading an object names the table, snapshot and file.
+    # A storage error while loading an object names the table, snapshot and file.
     class RefusingStorage(FakeStorage):
         def download(self, bucket: str, key: str, version_id: str, path: Path) -> None:
             raise OSError("refused")
@@ -361,7 +357,7 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
     results["storage_error_names_the_file"] = expect_error(
         lambda: bronze.load_objects(spark, [chow_item], refusing, "bronze", scratch), "chow snap_g CHOW.csv: OSError"
     )
-    # [68] [69] [70] [71] Text files load one row per line with its terminator and rebuild byte for byte.
+    # Text files load one row per line with its terminator and rebuild byte for byte.
     text_cp1252 = b"PROV  NAME\tX\r\n010001  Saint Mary\x92s \x96 East\r\n\r\nlone\rcarriage\n  padded  \x0c form feed\x1a"
     store(storage, "cms/file_formats", "text_a", "snap_t1", [(["IMPFIL94.TXT"], "IMPFIL94.TXT", text_cp1252)])
     store(storage, "cms/file_formats", "text_b", "snap_t2", [(["impact.csv"], "impact.csv", b"a,b\nc,d\n")])
@@ -395,14 +391,14 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
         lambda: bronze.load_objects(spark, [by_snapshot["snap_t3"]], storage, "bronze", scratch), "bad.txt: the file is not valid"
     )
     results["empty_text_file_refused"] = expect_error(lambda: bronze.load_objects(spark, [by_snapshot["snap_t4"]], storage, "bronze", scratch), "empty")
-    # [72] [73] Excel rows keep sheet, row position, each cell's stored value as text and its type.
+    # Excel rows keep sheet, row position, each cell's stored value as text and its type.
     sheet_rows = spark.table("bronze.file_sheet_rows").orderBy("_row_number").collect()
     seen = [(row["sheet_name"], row["sheet_index"], row["sheet_row"], trim(row["cells"]), trim_to(row["cell_types"], row["cells"])) for row in sheet_rows]
     results["excel_cells_keep_text_and_type"] = seen == EXPECTED_SHEET_ROWS
     results["colliding_headers_fail"] = expect_error(lambda: bronze.column_names(["Facility ID", "Facility_ID"]), "collide")
-    # [81] Headers that begin with an underscore (SAS automatic variables) map to u_ and never reach a lineage name.
+    # Headers that begin with an underscore (SAS automatic variables) map to u_ and never reach a lineage name.
     results["underscore_headers_map_clear_of_lineage"] = bronze.column_names(["_row_number", "_NAME_", "Name"]) == ["u_row_number", "u_name", "name"]
-    # [82] SAS names map by lowercasing only, so names that differ by a trailing underscore stay apart.
+    # SAS names map by lowercasing only, so names that differ by a trailing underscore stay apart.
     results["sas_names_keep_trailing_underscores"] = bronze.sas_column_names(["E_A_1", "E_A_1_", "_NAME_"]) == ["e_a_1", "e_a_1_", "u_name_"]
     results["underscore_collisions_refused"] = expect_error(lambda: bronze.column_names(["_NAME_", "u name"]), "collide")
     mapping = {(row["original_header"], row["column_name"]) for row in spark.table("bronze.column_map").collect()}
@@ -414,7 +410,7 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
     return results
 
 
-# Two editions of an owners-style dictionary with spacer columns, a page break, a repeated header and an en dash [102]-[106].
+# Two editions of an owners-style dictionary with spacer columns, a page break, a repeated header and an en dash.
 OWNERS_HEADER = ["", "Term Name", "", "Variable Name", "", "Description", "Type"]
 EDITION_OLD: list[dict[str, Any]] = [
     {
@@ -425,7 +421,7 @@ EDITION_OLD: list[dict[str, Any]] = [
         ]
     }
 ]
-# The newer edition uses the CMS three-cell layout: each header label sits one cell right of its row values [112].
+# The newer edition uses the CMS three-cell layout: each header label sits one cell right of its row values.
 SHIFTED_HEADER = ["", "Term Name", "", "", "Variable Name", "", "", "Description", "", "", "Type", ""]
 EDITION_NEW: list[dict[str, Any]] = [
     {
@@ -444,7 +440,7 @@ EDITION_NEW: list[dict[str, Any]] = [
         "lines": ["Page 2 of 2"],
     },
 ]
-# A Care Compare-style file table: types and column names, no per-column description [108].
+# A Care Compare-style file table: types and column names, no per-column description.
 CARE_COMPARE: list[dict[str, Any]] = [
     {
         "table": [
@@ -465,7 +461,7 @@ CARE_COMPARE: list[dict[str, Any]] = [
 
 
 def publisher_dictionary_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
-    """Dictionary PDFs load as published rows; descriptions come from the newest edition that defines a column [97] to [110]."""
+    """Dictionary PDFs load as published rows; descriptions come from the newest edition that defines a column."""
     results: dict[str, bool] = {}
     owners = csv_bytes(["ENROLLMENT ID", "ASSOCIATE ID", "NON PROFIT - OWNER", "EXTRA COLUMN"], [["1", "2", "Y", "x"]])
     store(storage, "cms/owners", "cms_owners", "snap_o1", [(None, "owners.csv", owners)], release="2026-02-01")
@@ -499,7 +495,7 @@ def publisher_dictionary_scenarios(spark: Any, root: Path, storage: FakeStorage,
         "2025-04-01",
         "reference",
     )
-    # [111] The same archive snapshot lists its dictionary in a second dataset's manifest under the same member path.
+    # The same archive snapshot lists its dictionary in a second dataset's manifest under the same member path.
     store(
         storage,
         "cms/hospitals",
@@ -553,21 +549,21 @@ def publisher_dictionary_scenarios(spark: Any, root: Path, storage: FakeStorage,
     by_table: dict[str, list[dict[str, Any]]] = {}
     for item in inputs:
         by_table.setdefault(item["table"], []).append(item)
-    # [101] Data tables never take dictionary objects; dictionary tables take only their roles.
+    # Data tables never take dictionary objects; dictionary tables take only their roles.
     results["data_table_skips_dictionary_roles"] = [item["file_name"] for item in by_table["owners"]] == ["owners.csv"]
-    # [99] [100] One copy per distinct file, chosen by content; a name without an extension is accepted.
+    # One copy per distinct file, chosen by content; a name without an extension is accepted.
     results["shared_member_across_manifests_loads_once"] = sum(item["snapshot_id"] == "snap_c1" for item in inputs) == 1
     results["identical_copies_load_once"] = len(by_table["care_dictionaries"]) == 1 and len(by_table["owners_dictionaries"]) == 3
     results["pdf_found_by_content_not_extension"] = "Owners_Data_Dictionary_no_extension" in {item["file_name"] for item in by_table["owners_dictionaries"]}
     summary = bronze.load_objects(spark, inputs, storage, "bronze", scratch)
     rows = spark.table("bronze.owners_dictionaries").where("_snapshot_id = 'snap_d2'").orderBy("_row_number").collect()
-    # [97] [110] Table rows and text lines are both kept, with the reader recorded.
+    # Table rows and text lines are both kept, with the reader recorded.
     kinds = {row["row_kind"] for row in rows}
     texts = [row["cells"][0] for row in rows if row["row_kind"] == "text"]
     results["pdf_tables_and_text_kept"] = kinds == {"table", "text"} and "Page 2 of 2" in texts and summary["owners_dictionaries"]["rows"] > 0
     results["en_dash_read_as_published"] = any("NON PROFIT \u2013 OWNER" in (cell or "") for row in rows for cell in row["cells"])
     results["reader_recorded"] = {row["reader"] for row in rows} == {"pdfplumber 0.11.10"}
-    # [98] Non-PDF and text-free files are refused by name.
+    # Non-PDF and text-free files are refused by name.
     store(storage, "cms/bad", "bad", "snap_b1", [(None, "bad_Data_Dictionary.pdf", b"hello")], "2022-01-01", "dictionary")
     store(storage, "cms/bad", "bad", "snap_b2", [(None, "scan_Data_Dictionary.pdf", pdf_document([{}]))], "2022-01-01", "dictionary")
     bad_map = bronze.load_table_map(table_map(root / "bad.json", [{**tables[1], "table": "bad_dictionaries", "collection": "cms/bad"}]))
@@ -579,7 +575,7 @@ def publisher_dictionary_scenarios(spark: Any, root: Path, storage: FakeStorage,
     results["text_free_pdf_refused"] = expect_error(
         lambda: bronze.load_objects(spark, [by_name["scan_Data_Dictionary.pdf"]], storage, "bronze", scratch), "no text"
     )
-    # [102] to [108] Descriptions from the newest edition, continuation joined, exact matches only, types kept apart.
+    # to Descriptions from the newest edition, continuation joined, exact matches only, types kept apart.
     dictionary.build(spark, config, ["owners", "hai_hospital"], "bronze")
     described = {row["column_name"]: row.asDict() for row in spark.table("bronze_dictionary.owners").collect()}
     enrollment = described["enrollment_id"]
@@ -594,7 +590,7 @@ def publisher_dictionary_scenarios(spark: Any, root: Path, storage: FakeStorage,
         "Char(6)",
         None,
     )
-    # [108] Types come from the HAI file's own section, not another file's column of the same name.
+    # Types come from the HAI file's own section, not another file's column of the same name.
     results["type_from_the_file_section"] = care_rows["score"]["publisher_type"] == "Char(13)"
     return results
 
@@ -607,7 +603,7 @@ GROUP_JSON = {"variables": {"DP02_0001E": {"label": "Estimate!!HOUSEHOLDS BY TYP
 
 
 def county_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
-    """County-context layouts: byte-order marks, label rows, pipes, preambles, capture selectors and CSV and JSON dictionaries [113] to [127]."""
+    """County-context layouts: byte-order marks, label rows, pipes, preambles, capture selectors and CSV and JSON dictionaries."""
     results: dict[str, bool] = {}
     export = BOM + csv_bytes(EXPORT_HEADER, [EXPORT_LABELS, ["0500000US01001", "Autauga County, Alabama", "22308"]])
     no_labels = BOM + csv_bytes(EXPORT_HEADER, [["0500000US01003", "Baldwin County, Alabama", "87190"]])
@@ -718,7 +714,7 @@ def county_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path
     by_table: dict[str, list[dict[str, Any]]] = {}
     for item in inputs:
         by_table.setdefault(item["table"], []).append(item)
-    # [119] Same-named files from different captures go to the table whose snapshot pattern matches.
+    # Same-named files from different captures go to the table whose snapshot pattern matches.
     results["snapshot_pattern_splits_same_named_files"] = [item["snapshot_id"] for item in by_table["acs_api_profile"]] == ["Census_API__e"] and [
         item["snapshot_id"] for item in by_table["acs_api_detailed"]
     ] == ["Census_Detailed__f"]
@@ -731,28 +727,28 @@ def county_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path
     failing = {"acs_dp03", "sahie"}
     loadable = [item for item in inputs if item["table"] not in failing and item["snapshot_id"] != "SAHIE__h"]
     bronze.load_objects(spark, loadable, storage, "bronze", scratch)
-    # [113] [114] The mark is removed, the label row becomes labels, and row numbers count data rows only.
+    # The mark is removed, the label row becomes labels, and row numbers count data rows only.
     rows = spark.table("bronze.acs_dp02").collect()
     results["byte_order_mark_removed_and_label_row_kept_as_labels"] = [(row["geo_id"], row["dp02_0001e"], row["_row_number"]) for row in rows] == [
         ("0500000US01001", "22308", 1)
     ]
     labels = {row["column_name"]: row["original_label"] for row in spark.table("bronze.column_map").where("table_name = 'acs_dp02'").collect()}
     results["labels_in_column_map"] = labels == dict(zip(["geo_id", "name", "dp02_0001e"], EXPORT_LABELS, strict=True))
-    # [115] A file without its label row is refused by name instead of losing a data row.
+    # A file without its label row is refused by name instead of losing a data row.
     dp03 = by_table["acs_dp03"]
     results["missing_label_row_refused"] = expect_error(lambda: bronze.load_objects(spark, dp03, storage, "bronze", scratch), "label row")
-    # [113] Without the declared option a byte-order mark is still refused.
+    # Without the declared option a byte-order mark is still refused.
     plain = bronze.load_table_map(table_map(root / "plain.json", [{**tables[0], "byte_order_mark": False, "label_row": first}]))
     plain_inputs, _ = bronze.discover(storage, BUCKET, plain, ["acs_dp02"])
     results["undeclared_byte_order_mark_refused"] = expect_error(
         lambda: bronze.load_objects(spark, plain_inputs, storage, "bronze", scratch), "byte-order mark"
     )
-    # [116] [120] Pipe files named .dat or .txt load as columns.
+    # Pipe files named .dat or .txt load as columns.
     summary_rows = spark.table("bronze.acs_summary_b16005").collect()
     results["pipe_dat_loads_columns"] = [(row["geo_id"], row["b16005_001e"], row["b16005_001m"]) for row in summary_rows] == [("0500000US01001", "100", "5")]
     adjacency = spark.table("bronze.county_adjacency").collect()
     results["pipe_txt_loads_columns"] = [(row["county_name"], row["county_geoid"]) for row in adjacency] == [("Autauga County, AL", "01001")]
-    # [117] [118] Preamble lines are stored with their numbers; the trailing empty header gets a positional name.
+    # Preamble lines are stored with their numbers; the trailing empty header gets a positional name.
     sahie = [item for item in by_table["sahie"] if item["snapshot_id"] == "SAHIE__g"]
     bronze.load_objects(spark, sahie, storage, "bronze", scratch)
     sahie_rows = spark.table("bronze.sahie").collect()
@@ -768,7 +764,7 @@ def county_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path
     missing = [item for item in by_table["sahie"] if item["snapshot_id"] == "SAHIE__h"]
     results["missing_header_after_preamble_refused"] = expect_error(lambda: bronze.load_objects(spark, missing, storage, "bronze", scratch), "header pattern")
     results["undeclared_empty_header_refused"] = expect_error(lambda: bronze.column_names(["year", ""]), "no letters or digits")
-    # [121] [123] HTML loads as text lines; CSV documents keep every row's cells, header included.
+    # HTML loads as text lines; CSV documents keep every row's cells, header included.
     html = spark.table("bronze.wonder_documents_text").collect()
     results["html_document_loads_as_text_lines"] = [row["line_text"] for row in html] == ["<html><body>Deaths</body></html>"]
     cells = [list(row["cells"]) for row in spark.table("bronze.places_documents_csv").orderBy("_row_number").collect()]
@@ -781,7 +777,7 @@ def county_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path
     bad_json = bronze.load_table_map(table_map(root / "bad_json.json", [{**tables[6], "collection": "census/bad_json"}]))
     bad_inputs, _ = bronze.discover(storage, BUCKET, bad_json, ["acs_documents_json"])
     results["json_without_variables_refused"] = expect_error(lambda: bronze.load_objects(spark, bad_inputs, storage, "bronze", scratch), "variables")
-    # [114] [124] [125] [127] Descriptions from label rows, CSV column metadata and JSON variable labels.
+    # Descriptions from label rows, CSV column metadata and JSON variable labels.
     dictionary.build(spark, config, ["acs_dp02", "acs_summary_b16005", "acs_api_profile"], "bronze")
     dp02 = {row["column_name"]: row.asDict() for row in spark.table("bronze_dictionary.acs_dp02").collect()}
     results["label_row_gives_description"] = (dp02["dp02_0001e"]["description"], dp02["dp02_0001e"]["description_source"]) == (
@@ -802,7 +798,7 @@ def county_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path
         GROUP_JSON["variables"]["DP02_0001E"]["label"],
         "int",
     )
-    # [130] Undoubled inner quotes in a label row and in a document line are read by the declared rule; data rows stay strict.
+    # Undoubled inner quotes in a label row and in a document line are read by the declared rule; data rows stay strict.
     s0601 = BOM + (b'"GEO_ID","S0601_C01_025E",\r\n"Geography","Total!!Speak English "very well"",\r\n"0500000US01001","12.5",\r\n')
     store(storage, "census/quotes", "acs_s0601", "ACS_EXPORT__m", [(["q.zip", "ACSST5Y2010.S0601-Data.csv"], "s.csv", s0601)])
     s0601_metadata = BOM + b'"Column Name","Label"\r\n"S0601_C01_025E","Total!!Speak English "very well""\r\n'
@@ -860,7 +856,7 @@ def county_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path
         'b "c"',
         "",
     ]
-    # [126] A data table may not link to a text-lines document table.
+    # A data table may not link to a text-lines document table.
     linked = [{**tables[9]}, {"table": "wonder", "group": "c", "collection": "cdc/wonder_mortality", "member_pattern": "\\.csv$", "format": "csv"}]
     linked[1]["dictionary"] = {"table": "wonder_documents_text", "file_pattern": "html"}
     results["text_dictionary_link_refused"] = expect_error(lambda: bronze.load_table_map(table_map(root / "linked.json", linked)), "dictionary")
@@ -868,7 +864,7 @@ def county_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path
 
 
 # A Word body: a paragraph with a tab and a line break, an empty paragraph, a two-row table (one cell holding two
-# paragraphs), a content control holding a paragraph, and tab stops in paragraph properties that are not text [133].
+# paragraphs), a content control holding a paragraph, and tab stops in paragraph properties that are not text.
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 DOCX_BODY = (
     '<w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr>'
@@ -902,13 +898,13 @@ def docx_bytes(body: str, doctype: str = "", part: str = "word/document.xml") ->
 
 
 def remaining_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
-    """Remaining sources: macro workbooks, Word documents, JSON documents, report PDFs, package parts, layouts and end-of-file markers [132]-[145]."""
+    """Remaining sources: macro workbooks, Word documents, JSON documents, report PDFs, package parts, layouts and end-of-file markers."""
     results: dict[str, bool] = {}
     workbook = root / "pivot.xlsm"
     write_workbook(workbook)
     upper = root / "upper.XLSX"
     write_workbook(upper)
-    # A different archive comment keeps the two workbooks distinct files; identical bytes would load once [204].
+    # A different archive comment keeps the two workbooks distinct files; identical bytes would load once.
     with zipfile.ZipFile(upper, "a") as archive:
         archive.comment = b"upper"
     store(
@@ -961,10 +957,10 @@ def remaining_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: P
     by_table: dict[str, list[str]] = {}
     for item in inputs:
         by_table.setdefault(item["table"], []).append(item["file_name"])
-    # [137] Package parts stay unselected and are listed by name; the whole workbook is selected.
+    # Package parts stay unselected and are listed by name; the whole workbook is selected.
     parts = sorted(entry["file_name"] for entry in unselected if entry["collection"] == "state/finance")
     results["package_parts_left_unselected"] = parts == ["[Content_Types].xml", "printerSettings1.bin", "workbook.xml.rels"]
-    # [132] [141] Macro-enabled and upper-case workbooks select and load as sheet rows, like .xlsx.
+    # Macro-enabled and upper-case workbooks select and load as sheet rows, like .xlsx.
     results["xlsm_and_upper_case_workbooks_selected"] = sorted(by_table.get("finance_sheet_rows", [])) == ["HPSA.XLSX", "pivot.xlsm"]
     bronze.load_objects(spark, inputs, storage, "bronze", scratch)
     sheet_rows = spark.table("bronze.finance_sheet_rows").where("_snapshot_id = 'CA__a'").collect()
@@ -975,12 +971,12 @@ def remaining_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: P
         ordered = sorted(by_file.get(name, []), key=lambda row: row["_row_number"])
         seen = [(row["sheet_name"], row["sheet_index"], row["sheet_row"], trim(row["cells"]), trim_to(row["cell_types"], row["cells"])) for row in ordered]
         results[f"{'xlsm' if name.endswith('xlsm') else 'upper_case_xlsx'}_cells_kept"] = seen == EXPECTED_SHEET_ROWS
-    # [133] Word paragraphs and table rows keep document order, tabs and breaks; tab stops and deleted text are not text.
+    # Word paragraphs and table rows keep document order, tabs and breaks; tab stops and deleted text are not text.
     docx_rows = spark.table("bronze.finance_documents_docx").orderBy("_row_number").collect()
     results["docx_blocks_kept_in_order"] = [
         (row["block_kind"], row["block_index"], row["table_index"], row["table_row"], list(row["cells"])) for row in docx_rows
     ] == EXPECTED_DOCX_ROWS
-    # [134] Non-packages, packages without a document part and DOCTYPE declarations are refused by name.
+    # Non-packages, packages without a document part and DOCTYPE declarations are refused by name.
     hostile = '<!DOCTYPE w:document [<!ENTITY x "y">]>'
     for label, data in (
         ("not_zip", b"PK-not-really"),
@@ -995,30 +991,30 @@ def remaining_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: P
         except file_readers.ReaderError as error:
             refused = {"not_zip": "not a Word package", "no_document_part": "word/document.xml", "doctype": "DOCTYPE"}[label] in str(error)
         results[f"docx_{label}_refused"] = refused
-    # [135] A JSON document that is not a variable list loads as text lines, as published.
+    # A JSON document that is not a variable list loads as text lines, as published.
     json_lines = spark.table("bronze.finance_text_lines").orderBy("_row_number").collect()
     results["json_document_loads_as_text_lines"] = [row["line_text"] for row in json_lines] == ["{", '  "name": "hafd",', '  "resources": []', "}"]
     methodology = spark.table("bronze.finance_documents_text").collect()
     results["json_methodology_loads_as_text_lines"] = [row["line_text"] for row in methodology] == ['[{"name": "beds"}]']
-    # [136] A report PDF held as data loads in a data-role PDF table with its table rows and text.
+    # A report PDF held as data loads in a data-role PDF table with its table rows and text.
     report_rows = spark.table("bronze.finance_reports_pdf").orderBy("_row_number").collect()
     results["report_pdf_loads_as_data"] = [list(row["cells"]) for row in report_rows if row["row_kind"] == "table"] == [
         ["Hospital", "RN FTE"],
         ["A", "12.5"],
     ] and any(row["cells"] == ["Hospital nurse staffing 2014"] for row in report_rows)
-    # [138] Two layouts in one dataset load to their own tables.
+    # Two layouts in one dataset load to their own tables.
     pages = spark.table("bronze.util_pages").collect()
     nonresponse = spark.table("bronze.util_nonresponse").collect()
     results["two_layouts_split_by_member_pattern"] = [(row["fac_id"], row["beds"]) for row in pages] == [("106010735", "120")] and [
         (row["fac_id"], row["reason"]) for row in nonresponse
     ] == [("106010739", "closed")]
-    # [139] A single-document manifest without an objects list stops discovery by name.
+    # A single-document manifest without an objects list stops discovery by name.
     storage.put("state/cdph/manifests/doc/manifest.json", json.dumps({"source_id": "CDPH", "role": "reference", "sha256": "0" * 64}).encode())
     cdph = bronze.load_table_map(
         table_map(root / "cdph.json", [{"table": "cdph", "group": "r", "collection": "state/cdph", "member_pattern": "\\.pdf$", "format": "pdf_rows"}])
     )
     results["single_document_manifest_refused"] = expect_error(lambda: bronze.discover(storage, BUCKET, cdph, ["cdph"]), "not a storage manifest")
-    # [145] A declared end-of-file marker on the last line is counted, not loaded; anywhere else it is refused.
+    # A declared end-of-file marker on the last line is counted, not loaded; anywhere else it is refused.
     hsa = csv_bytes(["MEDICARE_PROV_NUM", "TOTAL_CASES"], [["010001", "*"], ["010005", "12"]])
     store(storage, "cms/hsa", "hsa", "HSA__g", [(None, "Hospital_Service_Area_2024.csv", hsa + b"\x1a")])
     store(storage, "cms/hsa", "hsa", "HSA__h", [(None, "Hospital_Service_Area_2023.csv", hsa + b"\x1a\r\n010009,3\r\n")])
@@ -1068,7 +1064,7 @@ def retired_map(path: Path, entries: list[dict[str, str]]) -> Path:
 
 
 def retired_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
-    """Objects deleted for privacy but still listed in manifests: skipped only when listed, matched exactly [146] to [148]."""
+    """Objects deleted for privacy but still listed in manifests: skipped only when listed, matched exactly."""
     results: dict[str, bool] = {}
     kept = csv_bytes(["FAC_NO", "BEDS"], [["106010735", "120"]])
     gone = csv_bytes(["FAC_NO", "BEDS"], [["106010739", "80"]])
@@ -1078,23 +1074,23 @@ def retired_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Pat
     table = {"table": "retired_csv", "group": "r", "collection": "state/retired", "member_pattern": "\\.csv$", "format": "csv"}
     config = bronze.load_table_map(table_map(root / "retired.json", [table]))
     listed = bronze.load_retired(retired_map(root / "retired_list.json", [retired]))
-    # [146] A listed object is skipped and reported as retired; the rest loads.
+    # A listed object is skipped and reported as retired; the rest loads.
     inputs, unselected = bronze.discover(storage, BUCKET, config, ["retired_csv"], listed)
     results["retired_object_skipped"] = [item["file_name"] for item in inputs] == ["CA_file_001.csv"]
     results["retired_object_reported"] = [(entry["file_name"], entry.get("retired")) for entry in unselected] == [("CA_file_002.csv", True)]
     bronze.load_objects(spark, inputs, storage, "bronze", scratch)
     rows = spark.table("bronze.retired_csv").collect()
     results["rest_of_collection_loads"] = [(row["fac_no"], row["beds"]) for row in rows] == [("106010735", "120")]
-    # [146] Without the list the missing object is still selected, so the load would stop on it.
+    # Without the list the missing object is still selected, so the load would stop on it.
     plain, _ = bronze.discover(storage, BUCKET, config, ["retired_csv"])
     results["unlisted_missing_object_still_selected"] = sorted(item["file_name"] for item in plain) == ["CA_file_001.csv", "CA_file_002.csv"]
-    # [147] An entry whose SHA-256 differs from the manifest's is refused; malformed lists are refused before discovery.
+    # An entry whose SHA-256 differs from the manifest's is refused; malformed lists are refused before discovery.
     wrong = bronze.load_retired(retired_map(root / "retired_wrong.json", [{**retired, "sha256": "0" * 64}]))
     results["retired_checksum_mismatch_refused"] = expect_error(lambda: bronze.discover(storage, BUCKET, config, ["retired_csv"], wrong), "SHA-256")
     results["malformed_retired_list_refused"] = expect_error(
         lambda: bronze.load_retired(retired_map(root / "retired_bad.json", [{**retired, "sha256": "xyz"}])), "64 hex"
     ) and expect_error(lambda: bronze.load_retired(retired_map(root / "retired_twice.json", [retired, retired])), "repeats")
-    # [148] An entry under a discovered collection that matches no manifest object is refused; other collections are not checked.
+    # An entry under a discovered collection that matches no manifest object is refused; other collections are not checked.
     stale_entry = {**retired, "key": retired["key"].replace("CA_file_002", "CA_file_009")}
     stale = bronze.load_retired(retired_map(root / "retired_stale.json", [retired, stale_entry]))
     results["stale_retired_entry_refused"] = expect_error(
@@ -1106,7 +1102,7 @@ def retired_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Pat
 
 
 def dictionary_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path, formats: list[dict[str, Any]]) -> dict[str, bool]:
-    """One dictionary per bronze table: published columns only, counted within the files that carry them [83] to [94]."""
+    """One dictionary per bronze table: published columns only, counted within the files that carry them."""
     results: dict[str, bool] = {}
     layouts = "cms/layouts"
     store(storage, layouts, "lay_a", "snap_l1", [(None, "a.csv", csv_bytes(["Provider ID", "Score"], [["010001", ""], ["020002", "5"]]))])
@@ -1121,42 +1117,42 @@ def dictionary_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: 
     def rows(table: str) -> dict[str, dict[str, Any]]:
         return {row["column_name"]: row.asDict() for row in spark.table(f"bronze_dictionary.{table}").collect()}
 
-    # [91] A file loaded after a build appears only after the rebuild.
+    # A file loaded after a build appears only after the rebuild.
     dictionary.build(spark, config, ["layouts"], "bronze")
     results["dictionary_lists_only_loaded_columns"] = "note" not in rows("layouts")
     bronze.load_objects(spark, [by_snapshot["snap_l3"]], storage, "bronze", scratch)
-    # [90] A column map row whose object is not in the bronze table is ignored.
+    # A column map row whose object is not in the bronze table is ignored.
     stray = [("gone_object", "layouts", 1, "Gone Header", "provider_id", None)]
     spark.createDataFrame(stray, bronze.COLUMN_MAP_SCHEMA).writeTo("bronze.column_map").overwritePartitions()
-    # [85] [96] A publisher label stored beside its header becomes the description; other columns stay without one.
+    # A publisher label stored beside its header becomes the description; other columns stay without one.
     score_object = by_snapshot["snap_l1"]["object_key"]
     labelled = [(score_object, "layouts", 1, "Provider ID", "provider_id", None), (score_object, "layouts", 2, "Score", "score", "Measure score")]
     spark.createDataFrame(labelled, bronze.COLUMN_MAP_SCHEMA).writeTo("bronze.column_map").overwritePartitions()
-    # [89] A column no file carries any more stays listed with zero files.
+    # A column no file carries any more stays listed with zero files.
     spark.sql("ALTER TABLE bronze.layouts ADD COLUMNS (orphan STRING)")
     counts = dictionary.build(spark, config, ["layouts", "file_text_lines", "file_sheet_rows"], "bronze")
     layout = rows("layouts")
-    # [83] Lineage columns never appear; every published column does, in the bronze table's order.
+    # Lineage columns never appear; every published column does, in the bronze table's order.
     published = [name for name in spark.table("bronze.layouts").columns if name not in bronze.LINEAGE]
     ordered = sorted(layout.values(), key=lambda row: row["position"])
     results["dictionary_excludes_lineage"] = [row["column_name"] for row in ordered] == published and counts["layouts"] == len(published)
     results["dictionary_rebuilt_after_new_file"] = layout["note"]["files"] == 1
-    # [84] Every published header behind a column is kept.
+    # Every published header behind a column is kept.
     results["dictionary_keeps_header_variants"] = layout["provider_id"]["original_headers"] == ["Provider ID", "Provider_ID"]
     results["dictionary_ignores_stray_column_map_rows"] = "Gone Header" not in layout["provider_id"]["original_headers"]
-    # [86] [87] Counts cover only the files that carry the column; nulls and empty values are separate.
+    # Counts cover only the files that carry the column; nulls and empty values are separate.
     city, score = layout["city"], layout["score"]
     results["counts_only_files_with_the_column"] = (city["files"], city["rows"], city["null_rows"], city["empty_rows"]) == (1, 1, 0, 0)
     results["empty_and_null_counted_apart"] = (score["rows"], score["null_rows"], score["empty_rows"]) == (3, 0, 2) and score["missing_share"] == 2 / 3
     results["publisher_label_is_the_description"] = (score["description"], score["description_source"]) == ("Measure score", "publisher variable label")
     results["no_description_invented"] = layout["provider_id"]["description"] is None and layout["provider_id"]["description_source"] is None
-    # [88] Release ranges only from dates; capture IDs are not shown as releases.
+    # Release ranges only from dates; capture IDs are not shown as releases.
     provider = layout["provider_id"]
     results["release_range_from_dates"] = (provider["first_release"], provider["last_release"]) == ("2026-01-01", "2026-03-01")
     results["capture_ids_not_shown_as_releases"] = layout["note"]["first_release"] is None and layout["note"]["last_release"] is None
     orphan = layout["orphan"]
     results["orphaned_column_listed_with_zero_files"] = (orphan["files"], orphan["rows"], orphan["missing_share"]) == (0, 0, None)
-    # [85] [87] Storage-format columns carry the format's own description and count every file; empty arrays are empty.
+    # Storage-format columns carry the format's own description and count every file; empty arrays are empty.
     lines, sheets = rows("file_text_lines"), rows("file_sheet_rows")
     results["format_columns_described_by_format"] = all(
         row["description"] and row["description_source"] == "bronze storage format" and row["original_headers"] is None
@@ -1164,11 +1160,11 @@ def dictionary_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: 
     )
     results["format_columns_count_every_file"] = (lines["line_text"]["files"], lines["line_text"]["rows"], lines["line_text"]["empty_rows"]) == (2, 8, 1)
     results["empty_cell_arrays_counted_as_empty"] = (sheets["cells"]["rows"], sheets["cells"]["empty_rows"], sheets["cells"]["null_rows"]) == (6, 1, 0)
-    # [91] [92] [94] A rebuild gives the same rows, in any batch size.
+    # A rebuild gives the same rows, in any batch size.
     before = sorted(json.dumps(row, sort_keys=True) for row in layout.values())
     dictionary.build(spark, config, ["layouts"], "bronze", batch=2)
     results["rebuild_is_idempotent_in_batches"] = before == sorted(json.dumps(row, sort_keys=True) for row in rows("layouts").values())
-    # [93] Names outside the table map or missing from bronze are refused before anything is written.
+    # Names outside the table map or missing from bronze are refused before anything is written.
     snapshots = spark.table("bronze_dictionary.layouts.snapshots").count()
     missing = bronze.load_table_map(table_map(root / "missing.json", [entry, {**entry, "table": "never_loaded", "dataset_ids": ["none"]}]))
     results["unknown_table_refused"] = expect_error(lambda: dictionary.build(spark, config, ["layouts", "not_mapped"], "bronze"), "not_mapped")
@@ -1180,9 +1176,9 @@ def dictionary_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: 
 
 
 def gap_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
-    """Gap fixes: pruning a narrowed selection, single-document manifests and Care Compare families [150] to [158]."""
+    """Gap fixes: pruning a narrowed selection, single-document manifests and Care Compare families."""
     results: dict[str, bool] = {}
-    # [150] [151] A table whose selection narrows drops the object it no longer selects; other tables are untouched.
+    # A table whose selection narrows drops the object it no longer selects; other tables are untouched.
     other = csv_bytes(["PRVDR_NUM", "FAC_NAME"], [["010001", "General"]])
     clia = csv_bytes(["PRVDR_NUM", "CLIA_LAB"], [["01D0000001", "Lab"]])
     store(storage, "cms/pos", "cms_pos", "POS__a", [(None, "POS_OTHER_DEC22.csv", other), (None, "PQWB.POSQ.CLIA.DATA.MAR25.csv", clia)])
@@ -1222,7 +1218,7 @@ def gap_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -
     results["table_without_inputs_not_emptied"] = bronze.prune(spark, narrow_config, ["pos"], [], "bronze") == {"pos": 0} and (
         spark.table("bronze.pos").count() == 1
     )
-    # [153] [154] A single-document manifest resolves to the one stored object under its SHA-256 and loads as a document.
+    # A single-document manifest resolves to the one stored object under its SHA-256 and loads as a document.
     document = pdf_document([{"lines": ["Infection prevention program plan"]}])
     digest = hashlib.sha256(document).hexdigest()
     storage.put(f"state/plan/references/capture_id=CDPH_x/{digest}/plan_redacted.pdf", document)
@@ -1264,7 +1260,7 @@ def gap_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -
     storage.put("state/plan_twice/manifests/capture_id=CDPH_z/CDPH_z/m1/manifest.json", json.dumps(single).encode())
     twice = bronze.load_table_map(table_map(root / "twice.json", [{**plan_table, "collection": "state/plan_twice"}]))
     results["single_document_two_objects_refused"] = expect_error(lambda: bronze.discover(storage, BUCKET, twice, ["plan_documents_pdf"]), "2 stored objects")
-    # [155] Families: the dataset-ID prefix, dates, fiscal years, periods and edition words are not part of the family.
+    # Families: the dataset-ID prefix, dates, fiscal years, periods and edition words are not part of the family.
     family = care_compare_tables.family
     results["family_names_normalized"] = (
         family("Timely_and_Effective_Care-Hospital.csv")
@@ -1310,7 +1306,7 @@ def gap_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -
         results["dataset_with_two_families_refused"] = False
     except care_compare_tables.FamilyError as error:
         results["dataset_with_two_families_refused"] = "cms_legacy_mixed" in str(error)
-    # [161] Blank lines after the last row are counted, not loaded; a blank line before data is still refused.
+    # Blank lines after the last row are counted, not loaded; a blank line before data is still refused.
     blank = csv_bytes(["CCN", "SCORE"], [["010001", "7"]])
     store(storage, "cms/blank", "asc", "ASC__b", [(None, "ASC_NATIONAL_pr18q1_18q4.csv", blank + b"\r\n")])
     store(storage, "cms/blank", "asc", "ASC__c", [(None, "ASC_STATE_pr18q1_18q4.csv", blank + b"\r\n010005,9\r\n")])
@@ -1329,7 +1325,7 @@ def gap_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -
     results["undeclared_trailing_blank_line_refused"] = expect_error(
         lambda: bronze.load_objects(spark, plain_blank_inputs, storage, "bronze", scratch), "has 0 fields"
     )
-    # [162] A UTF-16 tab-separated file loads when the table declares UTF-16 alone; UTF-16 never shares a table.
+    # A UTF-16 tab-separated file loads when the table declares UTF-16 alone; UTF-16 never shares a table.
     utf16 = "% Change\tNumber of Hospitals\r\n0.5%\t12\r\n".encode("utf-16")
     store(storage, "cms/utf16", "pct", "PCT__d", [(None, "FY2017_Percent_Change_in_Medicare_Payments_2018-12-03.csv", utf16)])
     utf16_table = {
@@ -1349,7 +1345,7 @@ def gap_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -
     results["utf16_mixed_encodings_refused"] = expect_error(
         lambda: bronze.load_table_map(table_map(root / "utf16_mixed.json", [{**utf16_table, "encodings": ["utf-8", "utf-16"]}])), "encodings"
     )
-    # [163] Listed datasets go to a table of their own with their reading options; the rest of the family keeps the CSV table.
+    # Listed datasets go to a table of their own with their reading options; the rest of the family keeps the CSV table.
     family_sets = {
         "cms_legacy_fy2017_pct": ["FY2017_Percent_Change_in_Medicare_Payments_2018-12-03.csv"],
         "cms_legacy_fy2019_pct": ["FY2019_Percent_Change_in_Medicare_Payments.csv"],
@@ -1364,7 +1360,7 @@ def gap_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -
         and split_entries["cms_cc_percent_change_in_medicare_payments_utf16"]["delimiter"] == "\t"
         and split_entries["cms_cc_percent_change_in_medicare_payments"]["dataset_ids"] == ["cms_legacy_fy2019_pct"]
     )
-    # [164] Each CSV family links to the Care Compare dictionaries by an anchored section pattern built from its words.
+    # Each CSV family links to the Care Compare dictionaries by an anchored section pattern built from its words.
     linked = {
         entry["table"]: entry
         for entry in care_compare_tables.table_entries(
@@ -1392,7 +1388,7 @@ def gap_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -
 
 
 def utf16_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
-    """UTF-16 files: refused by single-byte tables, read by a UTF-16 table, split from their snapshot's other files [194] to [198]."""
+    """UTF-16 files: refused by single-byte tables, read by a UTF-16 table, split from their snapshot's other files."""
     results: dict[str, bool] = {}
     utf16_text = b"\xff\xfe" + "PROV\tWAGE\r\n010001\t$28.20\r\n".encode("utf-16-le")
     plain_text = "PUF description\r\nWages and hours\r\n".encode("cp1252")
@@ -1401,18 +1397,18 @@ def utf16_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path)
     single_byte = {"table": "occmix_text", "group": "g", "collection": "cms/occmix_utf16", "member_pattern": "(?i)\\.txt$", "format": "text_lines"}
     wide = bronze.load_table_map(table_map(root / "utf16_wide.json", [{**single_byte, "encodings": ["utf-8", "cp1252"]}]))
     wide_inputs, _ = bronze.discover(storage, BUCKET, wide, ["occmix_text"])
-    # [194] [195] A single-byte table refuses the UTF-16 file by name and says what to declare.
+    # A single-byte table refuses the UTF-16 file by name and says what to declare.
     results["utf16_mark_refused_by_cp1252_table"] = expect_error(
         lambda: bronze.load_objects(spark, wide_inputs, storage, "bronze", scratch), "UTF-16 byte-order mark"
     ) and expect_error(lambda: bronze.load_objects(spark, wide_inputs, storage, "bronze", scratch), names[0])
     results["utf16_refusal_names_the_fix"] = expect_error(lambda: bronze.load_objects(spark, wide_inputs, storage, "bronze", scratch), "encodings as utf-16")
-    # [194] A NUL byte in a single-byte text file is refused too.
+    # A NUL byte in a single-byte text file is refused too.
     store(storage, "cms/occmix_nul", "cms_occmix", "OCCMIX__n", [(None, "nul.txt", b"A\x00B\r\nC\r\n")])
     nul_table = {**single_byte, "table": "nul_text", "collection": "cms/occmix_nul", "encodings": ["utf-8", "cp1252"]}
     nul_config = bronze.load_table_map(table_map(root / "utf16_nul.json", [nul_table]))
     nul_inputs, _ = bronze.discover(storage, BUCKET, nul_config, ["nul_text"])
     results["nul_byte_refused_by_text_table"] = expect_error(lambda: bronze.load_objects(spark, nul_inputs, storage, "bronze", scratch), "NUL byte")
-    # [194] A CSV table refuses a UTF-16 mark it does not declare.
+    # A CSV table refuses a UTF-16 mark it does not declare.
     utf16_csv = b"\xff\xfe" + "PROV,WAGE\r\n010001,28.20\r\n".encode("utf-16-le")
     store(storage, "cms/occmix_csv16", "cms_occmix", "OCCMIX__c", [(None, "wages.csv", utf16_csv)])
     csv_table = {
@@ -1428,7 +1424,7 @@ def utf16_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path)
     results["utf16_mark_refused_by_cp1252_csv_table"] = expect_error(
         lambda: bronze.load_objects(spark, csv_inputs, storage, "bronze", scratch), "UTF-16 byte-order mark"
     )
-    # [196] [198] The UTF-16 table takes exactly the named file; the single-byte table keeps the snapshot's other file.
+    # The UTF-16 table takes exactly the named file; the single-byte table keeps the snapshot's other file.
     pattern = "FY_2017_FR_OccMix_PUF"
     split = [
         {**single_byte, "member_pattern": f"(?i)^(?!{pattern}\\.txt$).*\\.txt$", "encodings": ["utf-8", "cp1252"]},
@@ -1461,7 +1457,7 @@ def utf16_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path)
 
 
 def copies_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
-    """A file stored more than once loads once, from the copy with the smallest object key; every copy is listed [204] to [208]."""
+    """A file stored more than once loads once, from the copy with the smallest object key; every copy is listed."""
     results: dict[str, bool] = {}
     same = csv_bytes(["CCN", "SCORE"], [["010001", "1.5"], ["010002", "2.5"]])
     other = csv_bytes(["CCN", "SCORE"], [["010003", "3.5"]])
@@ -1477,21 +1473,21 @@ def copies_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path
     listed = bronze.load_retired(retired_map(root / "copies_retired.json", [retired]))
     inputs, unselected = bronze.discover(storage, BUCKET, config, ["copy_scores"], listed)
     copies = [entry["copy"] for entry in unselected if entry.get("identical_copy")]
-    # [204] Every table loads one copy per SHA-256, with no option to ask for it.
+    # Every table loads one copy per SHA-256, with no option to ask for it.
     results["copies_load_once_by_default"] = len(inputs) == 2 and len(copies) == 2 and len({item["sha256"] for item in inputs}) == 2
-    # [205] The kept copy is the one with the smallest object key, whatever the listing order.
+    # The kept copy is the one with the smallest object key, whatever the listing order.
     candidates = sorted(item["object_key"] for item in [*inputs, *copies] if item["sha256"] == same_sha)
     kept = next(item for item in inputs if item["sha256"] == same_sha)
     results["kept_copy_has_smallest_object_key"] = kept["object_key"] == candidates[0] and len(candidates) == 3
     results["distinct_files_option_refused"] = expect_error(
         lambda: bronze.load_table_map(table_map(root / "copies_flag.json", [{**table, "distinct_files": True}])), "distinct_files"
     )
-    # [208] Copies loaded before the change are pruned.
+    # Copies loaded before the change are pruned.
     bronze.load_objects(spark, [*inputs, *copies], storage, "bronze", scratch)
     pruned = bronze.prune(spark, config, ["copy_scores"], inputs, "bronze")
     loaded = {row["_object_key"] for row in spark.table("bronze.copy_scores").select("_object_key").distinct().collect()}
     results["previous_copies_pruned"] = pruned == {"copy_scores": 2} and loaded == {item["object_key"] for item in inputs}
-    # [206] Every copy is listed with its lineage, loaded or not, retired copies included; a rerun replaces the rows.
+    # Every copy is listed with its lineage, loaded or not, retired copies included; a rerun replaces the rows.
     bronze.write_copies(spark, "bronze", ["copy_scores"], inputs, unselected)
     bronze.write_copies(spark, "bronze", ["copy_scores"], inputs, unselected)
     rows = spark.table("bronze.stored_copies").where("table_name = 'copy_scores'").collect()
@@ -1504,7 +1500,7 @@ def copies_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path
         and {row["file_name"] for row in same_rows} == {"scores.csv", "scores_again.csv", "scores_retired.csv"}
     )
     results["retired_copy_listed_not_loaded"] = [(row["loaded"], row["retired"]) for row in rows if row["file_name"] == "scores_retired.csv"] == [(False, True)]
-    # [207] Verification checks the copies against the loaded rows.
+    # Verification checks the copies against the loaded rows.
     check = bronze.verify(spark, config, inputs, "bronze")["copy_scores"]
     results["verification_checks_copies"] = check["passed"] and check["one_loaded_copy_per_file"] and check["loaded_copies_match_rows"]
     wrong = [entry for entry in unselected if entry.get("copy") is not copies[0]]
@@ -1512,7 +1508,7 @@ def copies_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path
     tampered = bronze.verify(spark, config, inputs, "bronze")["copy_scores"]
     results["verification_catches_two_loaded_copies"] = not tampered["passed"] and not tampered["one_loaded_copy_per_file"]
     bronze.write_copies(spark, "bronze", ["copy_scores"], inputs, unselected)
-    # [222] A column-map file that also holds rows of kept copies is rewritten, not refused, and keeps those rows.
+    # A column-map file that also holds rows of kept copies is rewritten, not refused, and keeps those rows.
     spark.sql("CREATE NAMESPACE IF NOT EXISTS shared")
     spark.sql("CREATE TABLE shared.column_map (" + bronze.COLUMN_MAP_SCHEMA + ") USING iceberg TBLPROPERTIES ('format-version'='2')")
     bronze.load_objects(spark, [*inputs, *copies], storage, "shared", scratch)
@@ -1521,7 +1517,7 @@ def copies_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path
     shared_pruned = bronze.prune(spark, config, ["copy_scores"], inputs, "shared")
     remaining = {row["_object_key"] for row in spark.table("shared.column_map").collect()}
     results["prune_rewrites_shared_side_files"] = shared_pruned == {"copy_scores": 2} and remaining == {item["object_key"] for item in inputs}
-    # [223] Side rows left behind after their data rows were pruned (a stopped run) are removed by the next run.
+    # Side rows left behind after their data rows were pruned (a stopped run) are removed by the next run.
     orphan = [("0" * 32, "copy_scores", 1, "CCN", "ccn", None)]
     spark.createDataFrame(orphan, bronze.COLUMN_MAP_SCHEMA).writeTo("shared.column_map").append()
     bronze.prune(spark, config, ["copy_scores"], inputs, "shared")
@@ -1550,9 +1546,9 @@ def corrected(storage: FakeStorage, base: str, changes: list[dict[str, str]], ex
 
 
 def supersession_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
-    """A corrected manifest replaces the one it supersedes; a wrong or ambiguous supersession is refused [249] to [252]."""
+    """A corrected manifest replaces the one it supersedes; a wrong or ambiguous supersession is refused."""
     results: dict[str, bool] = {}
-    # The publisher ends the header, and only the header, with a delimiter [256].
+    # The publisher ends the header, and only the header, with a delimiter.
     detail = b"HPSA Name,HPSA ID,\r\nExample Area,1234567890\r\nOther Area,1234567891\r\n"
 
     def setup(collection: str) -> tuple[str, list[dict[str, str]], dict[str, Any]]:
@@ -1583,7 +1579,7 @@ def supersession_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch
     def tables_of(config: dict[str, Any]) -> list[str]:
         return [table["table"] for table in config["tables"]]
 
-    # [249] Before the correction the file is a document; after it, only the corrected manifest is read.
+    # Before the correction the file is a document; after it, only the corrected manifest is read.
     base, change, config = setup("hrsa/supersede")
     before, _ = bronze.discover(storage, BUCKET, config, tables_of(config))
     corrected(storage, base, change)
@@ -1591,11 +1587,11 @@ def supersession_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch
     results["superseded_manifest_skipped"] = [item["table"] for item in before] == ["hrsa_supersede_documents"] and [item["table"] for item in after] == [
         "hrsa_supersede_detail"
     ]
-    # [252] The corrected file loads as a data table with its records.
+    # The corrected file loads as a data table with its records.
     bronze.load_objects(spark, after, storage, "bronze", scratch)
     rows = spark.table("bronze.hrsa_supersede_detail").collect()
     results["corrected_file_loads_as_data"] = sorted(row["hpsa_id"] for row in rows) == ["1234567890", "1234567891"]
-    # [256] Without the option the extra header delimiter is refused; with it, a non-empty last header or a wider row is.
+    # Without the option the extra header delimiter is refused; with it, a non-empty last header or a wider row is.
     path = scratch / "trailing_header.csv"
     path.write_bytes(detail)
     results["trailing_header_delimiter_needs_option"] = expect_error(lambda: bronze.read_csv(path, None, ["utf-8"], {}), "fields; the header has 3")
@@ -1618,7 +1614,7 @@ def supersession_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch
         ),
         "header_trailing_delimiter",
     )
-    # [250] A supersedes entry that matches no stored manifest, or differs in SHA-256, is refused.
+    # A supersedes entry that matches no stored manifest, or differs in SHA-256, is refused.
     base, change, config = setup("hrsa/supersede_missing")
     target = corrected(storage, base, change)
     raw = json.loads(storage.get(BUCKET, target["key"], target["version_id"]))
@@ -1628,7 +1624,7 @@ def supersession_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch
     raw["supersedes"]["key"] = f"{base}/gone/manifest.json"
     storage.objects[(target["key"], target["version_id"])] = json.dumps(raw).encode()
     results["supersedes_missing_manifest_refused"] = expect_error(lambda: bronze.discover(storage, BUCKET, config, tables_of(config)), "supersedes")
-    # [250] Two manifests superseding one, or a superseding manifest that is itself superseded, are refused.
+    # Two manifests superseding one, or a superseding manifest that is itself superseded, are refused.
     base, change, config = setup("hrsa/supersede_twice")
     corrected(storage, base, change, name="first")
     corrected(storage, base, change, name="second")
@@ -1638,7 +1634,7 @@ def supersession_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch
     chain_base = f"{base.rsplit('/', 1)[0]}/first"
     corrected(storage, chain_base, [], name="second")
     results["superseded_superseder_refused"] = expect_error(lambda: bronze.discover(storage, BUCKET, config, tables_of(config)), "supersede")
-    # [251] A superseding manifest with any change beyond the named roles is refused.
+    # A superseding manifest with any change beyond the named roles is refused.
     base, change, config = setup("hrsa/supersede_extra")
     corrected(storage, base, change, extra={"release_id": "2099-01-01"})
     results["extra_change_refused"] = expect_error(lambda: bronze.discover(storage, BUCKET, config, tables_of(config)), "beyond")
@@ -1654,7 +1650,7 @@ def supersession_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch
 
 
 def removed_table_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
-    """A table taken out of the map is dropped with its dictionary and side rows; nothing else changes [257] to [260]."""
+    """A table taken out of the map is dropped with its dictionary and side rows; nothing else changes."""
     from scripts.lakehouse import dictionary
 
     results: dict[str, bool] = {}
@@ -1673,7 +1669,7 @@ def removed_table_scenarios(spark: Any, root: Path, storage: FakeStorage, scratc
     def side_tables(name: str) -> dict[str, int]:
         return {side: spark.table(f"bronze.{side}").where(f"table_name = '{name}'").count() for side in ("column_map", "stored_copies")}
 
-    # [258] A listed table still in the map, a bad name or a repeat is refused before anything is dropped.
+    # A listed table still in the map, a bad name or a repeat is refused before anything is dropped.
     results["removed_table_still_mapped_refused"] = expect_error(lambda: bronze.load_removed(listed, both), "still in the table map")
     bad = root / "removed_bad.json"
     bad.write_text(json.dumps({"version": 1, "tables": [{"table": "x; DROP", "reason": "r", "decision": "d"}]}))
@@ -1682,7 +1678,7 @@ def removed_table_scenarios(spark: Any, root: Path, storage: FakeStorage, scratc
     twice.write_text(json.dumps({"version": 1, "tables": [{"table": "removal_drop", "reason": "r", "decision": "d"}] * 2}))
     results["removed_table_repeat_refused"] = expect_error(lambda: bronze.load_removed(twice, kept_only), "twice")
     before_keep = side_tables("removal_keep")
-    # [257] The table, its dictionary and its side rows go.
+    # The table, its dictionary and its side rows go.
     outcome = bronze.drop_removed(spark, bronze.load_removed(listed, kept_only), "bronze")
     results["removed_table_dropped"] = (
         outcome == {"removal_drop": "dropped"}
@@ -1690,14 +1686,14 @@ def removed_table_scenarios(spark: Any, root: Path, storage: FakeStorage, scratc
         and not spark.catalog.tableExists(f"{dictionary.NAMESPACE}.removal_drop")
         and side_tables("removal_drop") == {"column_map": 0, "stored_copies": 0}
     )
-    # [260] Every other table keeps its rows, dictionary and side rows.
+    # Every other table keeps its rows, dictionary and side rows.
     results["other_tables_untouched"] = (
         spark.table("bronze.removal_keep").count() == 1
         and spark.catalog.tableExists(f"{dictionary.NAMESPACE}.removal_keep")
         and side_tables("removal_keep") == before_keep
         and before_keep["column_map"] > 0
     )
-    # [259] A rerun reports the table as absent and changes nothing.
+    # A rerun reports the table as absent and changes nothing.
     results["removed_table_rerun_absent"] = bronze.drop_removed(spark, bronze.load_removed(listed, kept_only), "bronze") == {"removal_drop": "absent"}
     return results
 

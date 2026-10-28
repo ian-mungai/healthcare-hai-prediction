@@ -1,10 +1,10 @@
 -- Fails for a gold bridge row with no fact, control, source seed or source row, for a row with no review decision (the registry holds none
 -- for the HAI outcome twins, so those rows may stay empty), for a measure key without a value column or the other way round, for a vintage that
--- starts after it ends, for an empty mapping (no key and no column) that is not on the allowed list, and for an allowed entry with no empty row [801].
+-- starts after it ends, for an empty mapping (no key and no column) that is not on the allowed list, and for an allowed entry with no empty row.
 -- Allowed empty mappings, each a control whose registry decision leaves no data column:
--- C001: the HHS part is closed in registry revision 3 (STG-008); no columns.
--- C040: the HHS part is closed in registry revision 3 (STG-008); no columns.
--- C043: closed as unavailable from public sources (STG-007).
+-- C001: the HHS part is closed in registry revision 3; no columns.
+-- C040: the HHS part is closed in registry revision 3; no columns.
+-- C043: closed as unavailable from public sources.
 -- C114: held in the registry; no value.
 -- C115: held in the registry; no value.
 -- C116: held in the registry; no value.

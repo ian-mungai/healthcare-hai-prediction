@@ -5,8 +5,7 @@ never values. Nothing is interpreted: text keeps every line with its terminator,
 as text with its cell type, and SAS keeps each variable's values as text. Splitting, typing and matching happen in
 staging. PDFs keep every table row and text line pdfplumber reads, with the reader's version. CSV documents keep each
 row's cells, Census-style JSON variable lists keep each variable's attributes, and Word documents keep each
-paragraph and table row's text. Failure modes 68 to 80: plans/bronze_ipps_occmix_20261002/failure_modes.md;
-97 to 110: publisher_dictionaries_20261002/; 113 to 129: bronze_county_20261002/; 132 to 134: bronze_remaining_20261003/.
+paragraph and table row's text.
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 
-# Lines end only at CRLF, LF or CR; str.splitlines would also split on form feeds and other separators [68].
+# Lines end only at CRLF, LF or CR; str.splitlines would also split on form feeds and other separators.
 LINE = re.compile(r"([^\r\n]*)(\r\n|\n|\r|)")
 TEXT_COLUMNS = ("line_text", "line_terminator")
 SHEET_SCHEMA = "r BIGINT, s STRING, i INT, w INT, d STRING, c ARRAY<STRING>, t ARRAY<STRING>"
@@ -37,16 +36,16 @@ JSON_SCHEMA = "r BIGINT, n STRING, a MAP<STRING,STRING>"
 JSON_COLUMNS = (("variable_name", "n"), ("attributes", "a"))
 DOCX_SCHEMA = "r BIGINT, k STRING, b INT, t INT, w INT, c ARRAY<STRING>"
 DOCX_COLUMNS = (("block_kind", "k"), ("block_index", "b"), ("table_index", "t"), ("table_row", "w"), ("cells", "c"))
-# Word's main part, its namespace and the largest uncompressed size read, so a crafted archive cannot exhaust memory [134].
+# Word's main part, its namespace and the largest uncompressed size read, so a crafted archive cannot exhaust memory.
 DOCX_PART = "word/document.xml"
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 DOCX_LIMIT = 200_000_000
 BOM = b"\xef\xbb\xbf"
-# xlrd cell type codes: empty and blank cells carry no value [73].
+# xlrd cell type codes: empty and blank cells carry no value.
 XLS_TYPES = {0: None, 1: "s", 2: "n", 3: "date", 4: "b", 5: "e", 6: None}
 
 
-# UTF-16 byte-order marks and the codec each one selects [194] [198].
+# UTF-16 byte-order marks and the codec each one selects.
 UTF16_CODECS = {b"\xff\xfe": "utf-16-le", b"\xfe\xff": "utf-16-be"}
 UTF16_MARKS = tuple(UTF16_CODECS)
 
@@ -56,7 +55,7 @@ class ReaderError(ValueError):
 
 
 def split_lines(text: str) -> Iterator[tuple[str, str]]:
-    """Yield each line and its terminator; a final terminator adds no empty line [68]."""
+    """Yield each line and its terminator; a final terminator adds no empty line."""
     position = 0
     while position < len(text):
         match = LINE.match(text, position)
@@ -73,7 +72,7 @@ def read_text_lines(path: Path, jsonl: Path, encodings: Iterable[str]) -> tuple[
         raise ReaderError("the file is empty")
     allowed = list(encodings)
     if allowed != ["utf-16"]:
-        # Windows-1252 decodes UTF-16 without error, and text never holds a NUL byte [194] [195].
+        # Windows-1252 decodes UTF-16 without error, and text never holds a NUL byte.
         if data.startswith(UTF16_MARKS):
             raise ReaderError("the file starts with a UTF-16 byte-order mark; declare the table's encodings as utf-16 alone")
         if b"\x00" in data:
@@ -81,7 +80,7 @@ def read_text_lines(path: Path, jsonl: Path, encodings: Iterable[str]) -> tuple[
     expected = hashlib.sha256(data).hexdigest()
     failures = []
     for encoding in allowed:
-        # UTF-16 is read from its byte-order mark, and the mark is rebuilt once, before the first line [198].
+        # UTF-16 is read from its byte-order mark, and the mark is rebuilt once, before the first line.
         mark, codec, body = (data[:2], UTF16_CODECS.get(data[:2], ""), data[2:]) if encoding == "utf-16" else (b"", encoding, data)
         if not codec:
             raise ReaderError("a UTF-16 table needs files that start with a UTF-16 byte-order mark")
@@ -104,7 +103,7 @@ def read_text_lines(path: Path, jsonl: Path, encodings: Iterable[str]) -> tuple[
 
 
 def cell_text(value: Any) -> str | None:
-    """Return a cell's stored value as text without rounding or reformatting [72]."""
+    """Return a cell's stored value as text without rounding or reformatting."""
     if value is None:
         return None
     if isinstance(value, bool):
@@ -128,7 +127,7 @@ def trimmed(values: list[str | None], types: list[str | None]) -> tuple[list[str
 
 
 def _xlsx_rows(path: Path) -> Iterator[tuple[str, int, int, list[str | None], list[str | None]]]:
-    """Yield every row of every sheet with cached values, filling skipped rows so positions never shift [73] [74]."""
+    """Yield every row of every sheet with cached values, filling skipped rows so positions never shift."""
     from openpyxl import load_workbook
 
     book = load_workbook(path, read_only=True, data_only=True)
@@ -154,7 +153,7 @@ def _xlsx_rows(path: Path) -> Iterator[tuple[str, int, int, list[str | None], li
 
 
 def _xlsx_formula_cells(path: Path) -> int:
-    """Count formula cells, whose formula text bronze does not keep [74]."""
+    """Count formula cells, whose formula text bronze does not keep."""
     from openpyxl import load_workbook
 
     book = load_workbook(path, read_only=True, data_only=False)
@@ -165,7 +164,7 @@ def _xlsx_formula_cells(path: Path) -> int:
 
 
 def _xls_rows(path: Path) -> tuple[Iterator[tuple[str, int, int, list[str | None], list[str | None]]], int]:
-    """Return the rows of a legacy workbook and its date mode; dates stay serial numbers [75]."""
+    """Return the rows of a legacy workbook and its date mode; dates stay serial numbers."""
     import xlrd
 
     book = xlrd.open_workbook(str(path), on_demand=True)
@@ -207,7 +206,7 @@ def read_sheet_rows(path: Path, jsonl: Path) -> tuple[int, str, dict[str, int]]:
         probe.close()
         source: Iterable[tuple[str, int, int, list[str | None], list[str | None]]] = _xlsx_rows(path)
         stats = {"formula_cells": _xlsx_formula_cells(path)}
-        # openpyxl never runs macros, and the macro project is not read [132].
+        # openpyxl never runs macros, and the macro project is not read.
         label = suffix[1:]
     elif suffix == ".xls":
         source, mode = _xls_rows(path)
@@ -232,7 +231,7 @@ def read_sheet_rows(path: Path, jsonl: Path) -> tuple[int, str, dict[str, int]]:
 
 
 def sas_text(value: Any) -> str | None:
-    """Return a SAS value as text: system missing is null, numbers keep their shortest round-trip form [77]."""
+    """Return a SAS value as text: system missing is null, numbers keep their shortest round-trip form."""
     if value is None:
         return None
     if isinstance(value, bytes):
@@ -246,7 +245,7 @@ def sas_text(value: Any) -> str | None:
 
 
 def read_sas(path: Path, jsonl: Path) -> tuple[list[str], list[str | None], int, str]:
-    """Store every SAS row with each variable's value as text; return names, labels, rows and encoding [77] [96]."""
+    """Store every SAS row with each variable's value as text; return names, labels, rows and encoding."""
     import pyreadstat
 
     data, meta = pyreadstat.read_sas7bdat(str(path), output_format="dict", disable_datetime_conversion=True, user_missing=True)
@@ -268,7 +267,7 @@ def read_sas(path: Path, jsonl: Path) -> tuple[list[str], list[str | None], int,
 
 
 def read_pdf_rows(path: Path, jsonl: Path) -> tuple[int, dict[str, int]]:
-    """Store every table row and text line pdfplumber reads from a PDF, unchanged; refuse non-PDFs and text-free files [97] [98]."""
+    """Store every table row and text line pdfplumber reads from a PDF, unchanged; refuse non-PDFs and text-free files."""
     with path.open("rb") as handle:
         if handle.read(5) != b"%PDF-":
             raise ReaderError("not a PDF")
@@ -309,7 +308,7 @@ def read_pdf_rows(path: Path, jsonl: Path) -> tuple[int, dict[str, int]]:
 
 
 def split_quoted_line(text: str, delimiter: str) -> list[str] | None:
-    """Split a line whose fields are all quoted or empty, where inner quotes are not doubled; None if it does not fit [130].
+    """Split a line whose fields are all quoted or empty, where inner quotes are not doubled; None if it does not fit.
 
     A quote ends a field only when the delimiter or the line end follows it, so ``"Speak English "very well""`` keeps
     its inner quotes as published. Nothing is unescaped or dropped.
@@ -344,7 +343,7 @@ def split_quoted_line(text: str, delimiter: str) -> list[str] | None:
 
 
 def parse_line(text: str, delimiter: str, quoted_fields: bool) -> list[str]:
-    """Parse one physical line as strict CSV, or by the declared quoted-fields rule when strict CSV refuses it [130]."""
+    """Parse one physical line as strict CSV, or by the declared quoted-fields rule when strict CSV refuses it."""
     try:
         rows = list(csv.reader([text], strict=True, delimiter=delimiter))
     except csv.Error as error:
@@ -358,12 +357,12 @@ def parse_line(text: str, delimiter: str, quoted_fields: bool) -> list[str]:
 def read_csv_rows(
     path: Path, jsonl: Path, encodings: Iterable[str], delimiter: str = ",", byte_order_mark: bool = False, quoted_fields: bool = False
 ) -> tuple[int, str]:
-    """Store each CSV row's cells as published, header included, with no width check [123] [130]."""
+    """Store each CSV row's cells as published, header included, with no width check."""
     data = path.read_bytes()
     if not data:
         raise ReaderError("the file is empty")
     if data.startswith(BOM):
-        # A declared mark is removed and the rest must be UTF-8 [113].
+        # A declared mark is removed and the rest must be UTF-8.
         if not byte_order_mark:
             raise ReaderError("the file starts with a UTF-8 byte-order mark")
         encodings = ("utf-8-sig",)
@@ -379,7 +378,7 @@ def read_csv_rows(
         except csv.Error as error:
             if not quoted_fields:
                 raise ReaderError(f"the file is not valid CSV ({error})") from None
-            # The declared rule reads the file line by line; lines strict CSV accepts are read strictly [130].
+            # The declared rule reads the file line by line; lines strict CSV accepts are read strictly.
             parsed = [parse_line(line, delimiter, True) for line, _ in split_lines(text)]
         with jsonl.open("w", encoding="ascii") as sink:
             for number, row in enumerate(parsed, 1):
@@ -389,7 +388,7 @@ def read_csv_rows(
 
 
 def read_json_variables(path: Path, jsonl: Path) -> int:
-    """Store each variable of a Census-style variables object with its attributes as published text [123]."""
+    """Store each variable of a Census-style variables object with its attributes as published text."""
     try:
         document = json.loads(path.read_bytes().decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -408,7 +407,7 @@ def read_json_variables(path: Path, jsonl: Path) -> int:
 
 
 def _paragraph_text(paragraph: ElementTree.Element) -> str:
-    """Return a paragraph's visible text: run text, tabs and breaks; tab stops, deleted text and field codes are not text [133]."""
+    """Return a paragraph's visible text: run text, tabs and breaks; tab stops, deleted text and field codes are not text."""
     parts: list[str] = []
     for run in paragraph.iter(f"{W}r"):
         for node in run:
@@ -422,7 +421,7 @@ def _paragraph_text(paragraph: ElementTree.Element) -> str:
 
 
 def _docx_blocks(container: ElementTree.Element, counts: dict[str, int]) -> Iterator[tuple[str, int, int | None, int | None, list[str]]]:
-    """Yield body paragraphs and table rows in document order with their block number; content controls are read through [133].
+    """Yield body paragraphs and table rows in document order with their block number; content controls are read through.
 
     A table is one block whose rows share its number. A cell's paragraphs, including those of a nested table, join with
     line breaks.
@@ -444,7 +443,7 @@ def _docx_blocks(container: ElementTree.Element, counts: dict[str, int]) -> Iter
 
 
 def read_docx_rows(path: Path, jsonl: Path) -> tuple[int, dict[str, int]]:
-    """Store each body paragraph and table row of a Word document as text cells, in order; refuse anything else [133] [134]."""
+    """Store each body paragraph and table row of a Word document as text cells, in order; refuse anything else."""
     try:
         with zipfile.ZipFile(path) as archive:
             try:

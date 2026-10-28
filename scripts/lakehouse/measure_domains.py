@@ -8,7 +8,7 @@ Run from the repository root that owns the running catalog (read-only; it starts
     .venv/bin/python -m scripts.lakehouse.measure_domains --root <root with query.sh> [--output <seed.csv>] [--check]
     .venv/bin/python -m scripts.lakehouse.catalog down
 
-Owner decision U-4: the domains come from data already in bronze, with no new acquisition and no registry or other
+The domains come from data already in bronze, with no new acquisition and no registry or other
 prose. The only input is ``scripts/lakehouse/query.sh`` (DuckDB with bronze attached read-only) running ``SELECT``
 statements. Two kinds of domain:
 
@@ -62,7 +62,7 @@ class Domain:
     column: str = ""
 
 
-# Reviewed sources (owner decision U-4). SVI and GV are wide: B1's fields name bronze columns. The others are long: B1's
+# Reviewed sources. SVI and GV are wide: B1's fields name bronze columns. The others are long: B1's
 # keys are values of the identifier column. Each Care Compare domain is the hospital table its silver window model reads
 # (HRRP identifies a measure by Measure Name; MMD by the published condition label).
 DOMAINS = (

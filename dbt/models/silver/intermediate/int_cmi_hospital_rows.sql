@@ -1,13 +1,13 @@
 -- One row per hospital (CCN) in each selected case-mix index file, for each rule year and stage the file's copies are
 -- labelled with: the unadjusted CMI, cases and relative weights, and the transfer-adjusted CMI and cases in their own
--- columns, never substituted (failure modes 293 to 304). Each of the four numbers keeps the cleaned published text it is cast
--- from beside it (silver section 5; failure mode 794).
+-- columns, never substituted. Each of the four numbers keeps the cleaned published text it is cast
+-- from beside it.
 {{ config(materialized='table') }}
 
 with
 
 labels as (
-    -- A file labelled for several rule years or stages gives one row set per label [300].
+    -- A file labelled for several rule years or stages gives one row set per label.
     select distinct
         bronze_table,
         member_sha256,
@@ -47,7 +47,7 @@ layouts as (
 ),
 
 values_read as (
-    -- Quotes and thousands separators go before any cast [296].
+    -- Quotes and thousands separators go before any cast.
     select
         file_rows.bronze_table,
         file_rows.member_sha256,
@@ -70,7 +70,7 @@ values_read as (
 ),
 
 typed as (
-    -- A 5-digit CCN lost its leading zero in a workbook cell [304]; a row without a CCN is a blank or footer line [298].
+    -- A 5-digit CCN lost its leading zero in a workbook cell; a row without a CCN is a blank or footer line.
     select
         *,
         case

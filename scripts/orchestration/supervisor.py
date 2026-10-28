@@ -1,5 +1,4 @@
-"""The host supervisor of the orchestration session: a client of the launcher that starts the stack, supplies the broker and owns teardown
-(Airflow plan sections 2 and 8; D1 section 5 item 6; failure modes 925, 933 and 934).
+"""The host supervisor of the orchestration session: a client of the launcher that starts the stack, supplies the broker and owns teardown.
 
 Run from the main checkout with the launcher's Docker running:
 

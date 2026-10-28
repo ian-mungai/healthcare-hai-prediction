@@ -1,7 +1,7 @@
 -- One row per county and neighbor in each Census adjacency vintage: the 2023 to 2026 CSVs and the 2010 text file, whose
 -- continuation lines take the county of the lead line above them (a lead line without a name still counts). Self-links
 -- are flagged, an island keeps one row with no neighbor, and the shared border length is typed in meters where published.
--- No edge is removed or deduplicated: graph rules are later work (failure modes 400, 402, 408 and 409).
+-- No edge is removed or deduplicated: graph rules are later work.
 {{ config(materialized='table') }}
 
 with

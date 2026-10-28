@@ -1,11 +1,11 @@
 {% macro care_window_columns(columns) %}
-{#- The value columns a window model carries, as [alias, expression] pairs; HAI's three by default [318] [321]. -#}
+{#- The value columns a window model carries, as [alias, expression] pairs; HAI's three by default. -#}
 {{ return(columns if columns else [['measure_name', 'measure_name'], ['score', 'score'], ['footnote', 'footnote']]) }}
 {% endmacro %}
 
 {% macro care_window_rows(table, entity, measure, start_column, end_column, columns) %}
 {#- The rows of one Care Compare staging view (HAI and the other measure tables) with their window key, under the table's
-    own entity, measure and date columns [233] [319] [320]. -#}
+    own entity, measure and date columns. -#}
 select
     '{{ table }}' as bronze_table,
     nullif(trim({{ entity }}), '') as entity_id,
@@ -22,7 +22,7 @@ from {{ ref('stg_' ~ table) }}
 {% endmacro %}
 
 {% macro care_window_candidates(table, entity, measure, start_column, end_column, columns) %}
-{#- Usable rows with their file's latest publication date, ranked within each window key [230] to [234]. -#}
+{#- Usable rows with their file's latest publication date, ranked within each window key. -#}
 with
 
 window_rows as (
@@ -81,7 +81,7 @@ where release_date = latest_release_date
     end_column='coalesce(end_date, measure_end_date)',
     columns=none
 ) %}
-{#- One row per entity, measure and window: the row from the latest dated file; conflicts are held instead [231] [232]. -#}
+{#- One row per entity, measure and window: the row from the latest dated file; conflicts are held instead. -#}
 with
 
 candidates as (
@@ -114,7 +114,7 @@ where latest_row_count = 1
     columns=none
 ) %}
 {#- The rows a window model leaves out, with the reason, row count, the sorted checksums of the files they come from and a
-    null-safe hold key [232] to [235] [791] [792]. A row hold keeps its window dates null; hold_reason says why. -#}
+    null-safe hold key. A row hold keeps its window dates null; hold_reason says why. -#}
 with
 
 window_rows as (

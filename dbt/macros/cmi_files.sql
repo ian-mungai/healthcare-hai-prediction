@@ -1,5 +1,5 @@
 {% macro cmi_snapshot_files() %}
-{#- Data files of the CMI snapshots, with each distinct label of their copies and whether staging selects them [293] [299] [300]. -#}
+{#- Data files of the CMI snapshots, with each distinct label of their copies and whether staging selects them. -#}
 select distinct
     labels.bronze_table,
     labels.member_sha256,

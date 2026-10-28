@@ -20,9 +20,9 @@ def exercise() -> list[dict]:
     for row in manifest["files"]:
         tracked = REPO_ROOT / "config/acquisition" / row["file"]
         entries = records.get(f"config/acquisition/{row['file']}", [])
-        # A list with current-state wording is checked through its archived original (failure mode S7).
+        # A list with current-state wording is checked through its archived original.
         if entries and not ARCHIVE.is_dir():
-            # The archive is private and never in Git, so a clean checkout (CI) records these checks as skipped [S55].
+            # The archive is private and never in Git, so a clean checkout (CI) records these checks as skipped.
             skipped = {"passed": True, "skipped": "private legacy archive absent"}
             cases.append({"name": "historical_equivalence_" + row["file"], **skipped})
             cases.append({"name": "successor_keeps_every_version_" + row["file"], **skipped})

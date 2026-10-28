@@ -68,33 +68,33 @@ def entry(additions: dict[str, Any], identifier: str) -> dict[str, Any]:
 
 
 def two_sources(additions: dict[str, Any]) -> None:
-    """Give one dataset_id to a second source (failure mode 946)."""
+    """Give one dataset_id to a second source."""
     other = entry(additions, "CMS_HCRIS_PUF")
     other["dataset_ids"].append("cms_gv")
     other["dataset_ids_evidence"].append({**entry(additions, "CMS_GV")["dataset_ids_evidence"][0]})
 
 
 def repeated_in_list(additions: dict[str, Any]) -> None:
-    """List one dataset_id twice under its source (failure mode 946)."""
+    """List one dataset_id twice under its source."""
     target = entry(additions, "CMS_GV")
     target["dataset_ids"].append("cms_gv")
     target["dataset_ids_evidence"].append({**target["dataset_ids_evidence"][0]})
 
 
 def invalid_dataset_id(additions: dict[str, Any]) -> None:
-    """Replace a dataset_id and its evidence with an identifier that is not lowercase (failure mode 946)."""
+    """Replace a dataset_id and its evidence with an identifier that is not lowercase."""
     target = entry(additions, "CMS_GV")
     target["dataset_ids"] = ["Bad-ID"]
     target["dataset_ids_evidence"][0]["dataset_id"] = "Bad-ID"
 
 
 def drop_evidence_record(additions: dict[str, Any]) -> None:
-    """Remove the evidence record of a source's only dataset_id (failure mode 946)."""
+    """Remove the evidence record of a source's only dataset_id."""
     entry(additions, "CMS_GV")["dataset_ids_evidence"] = []
 
 
 def remove_entry(additions: dict[str, Any]) -> None:
-    """Remove one entry while the lock still lists it (failure mode 949)."""
+    """Remove one entry while the lock still lists it."""
     additions["source_metadata"] = [item for item in additions["source_metadata"] if item["source_id"] != "CMS_GV"]
 
 
@@ -128,7 +128,7 @@ MUTATIONS: dict[str, tuple[Callable[[dict[str, Any]], None], bool]] = {
     "non_iso_approval_date": (lambda a: control(a, "C258.80")["approval"].update(decided_on="25/09/2026"), True),
     "approver_not_user": (lambda a: control(a, "C258.80")["approval"].update(decided_by="agent"), True),
     "tampered_additions": (lambda a: control(a, "C258.80")["preserved_controls"]["current_remaining_checks"].append("Unreviewed edit."), False),
-    # Failure mode 945: entries that are unregistered, doubled or malformed, or approvals that are not the user's.
+    # entries that are unregistered, doubled or malformed, or approvals that are not the user's.
     "sm_unknown_source": (lambda a: entry(a, "CMS_GV").update(source_id="NOT_A_SOURCE"), True),
     "sm_duplicate_entry": (lambda a: entry(a, "CMS_GV").update(source_id="CMS_HCRIS_PUF"), True),
     "sm_extra_key": (lambda a: entry(a, "CMS_GV").update(note="not allowed"), True),
@@ -136,22 +136,22 @@ MUTATIONS: dict[str, tuple[Callable[[dict[str, Any]], None], bool]] = {
     "sm_approver_not_user": (lambda a: entry(a, "CMS_GV")["approval"].update(decided_by="agent"), True),
     "sm_non_iso_approval_date": (lambda a: entry(a, "CMS_GV")["approval"].update(decided_on="12/10/2026"), True),
     "sm_approval_without_decision": (lambda a: entry(a, "CMS_GV")["approval"].update(decision=" "), True),
-    # Failure mode 946: dataset_id ownership and evidence.
+    # dataset_id ownership and evidence.
     "sm_dataset_id_two_sources": (two_sources, True),
     "sm_dataset_id_repeated": (repeated_in_list, True),
     "sm_dataset_id_invalid": (invalid_dataset_id, True),
     "sm_evidence_count_mismatch": (drop_evidence_record, True),
-    # Failure mode 947: publisher and its evidence.
+    # publisher and its evidence.
     "sm_empty_publisher": (lambda a: entry(a, "CMS_GV").update(publisher="  "), True),
     "sm_publisher_not_text": (lambda a: entry(a, "CMS_GV").update(publisher=5), True),
     "sm_landing_url_differs": (lambda a: entry(a, "CMS_GV")["publisher_evidence"].update(official_landing_url="https://example.org/other"), True),
     "sm_missing_page_hash": (lambda a: entry(a, "CMS_GV")["publisher_evidence"].pop("page_sha256"), True),
     "sm_bad_page_hash": (lambda a: entry(a, "CMS_GV")["publisher_evidence"].update(page_sha256="XYZ"), True),
     "sm_bad_retrieval_time": (lambda a: entry(a, "CMS_GV")["publisher_evidence"].update(retrieved_utc="2026-10-12 16:58:34"), True),
-    # Failure mode 948: the section cannot carry a base field, gate or hold.
+    # the section cannot carry a base field, gate or hold.
     "sm_base_field_gate_status": (lambda a: entry(a, "CMS_GV").update(gate_status="passed"), True),
     "sm_base_field_route": (lambda a: entry(a, "CMS_GV").update(preferred_route="api_fallback"), True),
-    # Failure mode 949: the section changes after the lock (no relock) or the entry list differs from the lock.
+    # the section changes after the lock (no relock) or the entry list differs from the lock.
     "sm_tampered_publisher": (lambda a: entry(a, "CMS_GV").update(publisher="Unreviewed Agency"), False),
     "sm_entry_removed_with_stale_lock": (remove_entry, False),
 }
@@ -642,7 +642,7 @@ def run_cases(root: Path) -> list[dict[str, Any]]:
     (case / FILES[2]).write_text('{"additions_version": 1, "additions_version": 1}\n', encoding="utf-8")
     result = cli(case)
     record("malformed_json", result, rejection(result, case, expect_no_lock=False))
-    # Failure mode 948: no case may touch the real base registry or its lock (cases work on copies).
+    # no case may touch the real base registry or its lock (cases work on copies).
     record(
         "base_registry_untouched",
         None,

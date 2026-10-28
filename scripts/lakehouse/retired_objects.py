@@ -5,10 +5,9 @@ Run from the repository root with read-only S3 access:
     .venv/bin/python -m scripts.lakehouse.retired_objects --collection california_hcai/hospital_finance
 
 An object is listed only when the collection's manifests name it, S3 holds no version or delete marker at its key, and
-an executed deletion record verified its removal with the same key, version ID and SHA-256 [149]. A missing object
+an executed deletion record verified its removal with the same key, version ID and SHA-256. A missing object
 without such a record stops the build, so storage loss is never listed as retired. Each run rebuilds the list from
-scratch, so an object restored to S3 drops off it. The list holds keys, version IDs and checksums only. Failure modes
-146 to 149: plans/bronze_remaining_20261003/failure_modes.md.
+scratch, so an object restored to S3 drops off it. The list holds keys, version IDs and checksums only.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ from scripts.lakehouse.bronze import RETIRED, BronzeError
 from scripts.lakehouse.catalog import deployment
 
 # The deletion runs that removed objects from S3, kept locally with their verification results: the privacy deletion
-# and the duplicate removal (failure mode 212).
+# and the duplicate removal.
 DELETION_RECORDS = ("data/privacy_review/*/deletion_run_*_execute.json", "data/lakehouse_planning/dedup_*/deletion_run_*_execute.json")
 
 

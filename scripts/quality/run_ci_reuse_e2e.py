@@ -9,7 +9,7 @@ malformed answer, another event or branch, a tree that the checkout and the API 
 the summary names that cause. The stand-in records every call, and a case checks that each one is a read (``gh api --method GET``).
 The static cases read .github/workflows/ci.yml: the job list equals config/quality/ci_jobs.json, every checkout uses the pull request head, every
 heavy job waits for the plan job and runs unless it answers ``true`` (also for an empty answer), the reuse job runs the commit checks and the quick
-gates, and the plan job's token is read-only. Failure modes R1 to R18 (plans, local). The report goes to
+gates, and the plan job's token is read-only. The report goes to
 data/e2e/ci_reuse/<UTC>_<pid>/report.json with the revision and the SHA-256 of the files under test.
 """
 

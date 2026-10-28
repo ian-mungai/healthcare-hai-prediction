@@ -1,4 +1,4 @@
-"""End-to-end run of the bridge reference and recipe check: committed files pass and each damaged copy fails as expected (failure modes 800 to 803).
+"""End-to-end run of the bridge reference and recipe check: committed files pass and each damaged copy fails as expected.
 
 Run from the repository root:
 

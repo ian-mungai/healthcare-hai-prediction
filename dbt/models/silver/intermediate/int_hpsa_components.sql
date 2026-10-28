@@ -1,5 +1,5 @@
 -- One row per primary-care HPSA component as published: designation type, status, score and dates typed (MM/DD/YYYY), the
--- county code with XXXXX and XXX kept as a token (failure modes 477 to 479). A row identical in every published column to
+-- county code with XXXXX and XXX kept as a token. A row identical in every published column to
 -- an earlier row of the same file is held as exact_repeat (475). A reused ID keeps each
 -- designation apart by its date (476). Status and dates are as published at the capture; nothing builds history here (480).
 -- Where the county is a token, a tract, subdivision or single-county ID in the published state gives its county, and a
@@ -55,7 +55,7 @@ typed as (
 ),
 
 derived as (
-    -- A geography ID names its county only for these types, in the published state [626].
+    -- A geography ID names its county only for these types, in the published state.
     select
         typed.*,
         periods.vintage::date as capture_date,
@@ -81,14 +81,14 @@ hud as (
         county_fips,
         usps_state,
         quarter_start_date,
-        -- Old Connecticut counties and planning regions are counted apart, so a quarter that publishes both is not split [698].
+        -- Old Connecticut counties and planning regions are counted apart, so a quarter that publishes both is not split.
         count(*) over (partition by zip_code, quarter_start_date, county_fips like '091%') as counties_in_zip
     from {{ ref('int_hud_zip_county_quarters') }}
 ),
 
 zip_counties as (
     -- The quarter that starts on or before the capture, else the ZIP's earliest; the ZIP's state must be the row's. A ZIP
-    -- split across counties gives none: a majority share is not an exact derivation [627] [698].
+    -- split across counties gives none: a majority share is not an exact derivation.
     select
         derived.member_sha256,
         derived.source_row_number,

@@ -1,5 +1,5 @@
 -- Fails for each PLACES value or limit, geographic variation field or WONDER count or rate that is neither a number nor its
--- published mark [449] [455] [459].
+-- published mark.
 with
 
 places as (

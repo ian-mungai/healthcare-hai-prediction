@@ -1,4 +1,4 @@
--- Fails for each staging view whose rows differ from the summed rows of its distinct files: no copy counted twice [166].
+-- Fails for each staging view whose rows differ from the summed rows of its distinct files: no copy counted twice.
 with
 
 {% for table in var('copy_tables') %}

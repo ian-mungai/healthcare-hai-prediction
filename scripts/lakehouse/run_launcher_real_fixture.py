@@ -1,4 +1,4 @@
-"""Real Docker runs of the fixture templates through the launcher, on a test registry (D1 section 14: the acceptance split's real fixture run).
+"""Real Docker runs of the fixture templates through the launcher, on a test registry.
 
 Run ``.venv/bin/python -m scripts.lakehouse.run_launcher_real_fixture --image-suffix l1a-real`` with Docker running. Reports stay in
 data/e2e/launcher_real/<stamp>/. It starts a launcher on a throwaway test registry that talks to the real Docker daemon, with the three

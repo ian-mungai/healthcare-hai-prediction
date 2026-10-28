@@ -1,4 +1,4 @@
--- A code or measure with more than one distinct published label needs a row in identity_splits: no multi-label key gets a default rule [940].
+-- A code or measure with more than one distinct published label needs a row in identity_splits: no multi-label key gets a default rule.
 with
 
 label_counts as (

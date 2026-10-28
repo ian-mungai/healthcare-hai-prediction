@@ -1,4 +1,4 @@
--- Fails for a validation bridge row repeated for one control, fact and published measure ID, so no control is mapped twice [511].
+-- Fails for a validation bridge row repeated for one control, fact and published measure ID, so no control is mapped twice.
 select
     measure_control,
     fact,

@@ -4,7 +4,7 @@ It checks requests against the submission request schema and the launch specific
 the broker writes (validated against data_contracts/orchestration/ledger_line.schema.json) and finishes each launch at
 once with the exit code the test sets for its template, except the templates the test marks as running, which stay
 running until cancel. It starts no container and contacts no service. A test checks
-its DAG or launcher against this fake; the broker's own behavior is verified by its E2E (Airflow plan section 11).
+its DAG or launcher against this fake; the broker's own behavior is verified by its E2E.
 """
 
 from __future__ import annotations

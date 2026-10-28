@@ -1,6 +1,6 @@
 -- Fails for each POS hospital column holding a value that is not blank and does not fit its kind: a code with a letter or
 -- too many digits, a count with a fraction or a letter, a switch other than Y, N, true or false, or a date not in
--- YYYYMMDD [284] [287] [288] [292].
+-- YYYYMMDD.
 with
 
 hospitals as (

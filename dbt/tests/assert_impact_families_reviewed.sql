@@ -1,5 +1,5 @@
 -- Fails for each IPPS data file whose family looks like an impact file but is neither read as one nor reviewed as not
--- one, so a new impact file is never skipped or read silently [342].
+-- one, so a new impact file is never skipped or read silently.
 select distinct
     bronze_table,
     member_sha256,

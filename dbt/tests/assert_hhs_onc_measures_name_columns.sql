@@ -1,5 +1,5 @@
 -- Fails for each field the hhs_onc_measures bridge names that is not a column of its gold model, so a registry control never points at a field gold does
--- not carry; a control the registry closes names no value column and passes [378] [384].
+-- not carry; a control the registry closes names no value column and passes.
 select
     bridge.measure_control,
     bridge.fact,

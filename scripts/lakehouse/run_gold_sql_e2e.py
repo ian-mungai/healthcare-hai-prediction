@@ -1,6 +1,6 @@
 """Exercise the gold expression boundary with synthetic SQL and render every delivered gold model.
 
-Run from the repository root with ``.venv/bin/python -m scripts.lakehouse.run_gold_sql_e2e --out plans/wp/<record>.json``.
+Run from the repository root with ``.venv/bin/python -m scripts.lakehouse.run_gold_sql_e2e --out data/e2e/gold_sql/<record>.json``.
 The local DuckDB process parses text in an empty in-memory database; it reads no source data and starts no containers.
 The separate gold fixture runner remains the integrated build verification.
 """
@@ -329,7 +329,7 @@ def probes(rendered: dict[str, str]) -> list[Probe]:
 
 
 def round2_probes(rendered: dict[str, str]) -> list[Probe]:
-    """Round 1 reviewer counterexamples and controls, recorded before the root fixes."""
+    """Expression-boundary counterexamples and controls."""
     expr = ("expression_functions",)
     cases: list[Probe] = []
     hospital = "with q as (select entity_id as ccn, min(window_start) as first_seen from main.int_hai_hospital_windows group by entity_id) "
@@ -1212,7 +1212,7 @@ def round4_review_probes() -> list[Probe]:
 
 
 def round5_probes() -> list[Probe]:
-    """GX round 5 (amendment A90, issue WV3-007): a sampled FROM reference restricts a selection, so it may not keep its domain; a null natural
+    """A sampled FROM reference restricts a selection, so it may not keep its domain; a null natural
     key beside the unknown-member hash is accepted only where the contract exempts it (dim_measure key parts, dim_date)."""
     originals = {probe.name.removeprefix("R4_review_"): probe.sql for probe in round4_review_probes()}
     bad_domain, good_domain = originals["domain_except_selected"], originals["domain_except_subset"]
@@ -2680,7 +2680,7 @@ def isolated_source(source: str, names: set[str], bindings: dict[str, Any], muta
     module.__dict__.update({key: value for key, value in bindings.items() if key != "__name__"})
     sys.modules[module.__name__] = module
     loader = SelectedSourceLoader(selected)
-    # The loader must serve exactly the selected definitions before they run (amendment A65: replaces the temporary allowlist entry).
+    # The loader must serve exactly the selected definitions before they run.
     if loader.get_source(module.__name__) != selected:
         raise RuntimeError("the in-memory loader does not serve the selected source")
     loader.exec_module(module)

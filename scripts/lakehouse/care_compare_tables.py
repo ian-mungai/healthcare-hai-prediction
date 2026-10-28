@@ -7,9 +7,8 @@ Run from the repository root with read-only S3 access; it rewrites only the `car
 Care Compare stores each table under two kinds of dataset ID: legacy captures (`cms_legacy_<family>`, plain file
 names) and current captures (`cms_<socrata id>`, `<id>_<date>_<family>.csv` or bare `<id>.csv`). Each dataset ID is
 assigned to one family by normalizing its file names: the ID and date prefix, release dates, fiscal years, reporting
-periods and edition words are not part of the family [155]. Every family becomes one table selected by its dataset IDs;
-datasets an existing table already selects and excluded datasets get none [156] [157]. Failure modes 150 to 159:
-plans/bronze_gaps_20261003/failure_modes.md.
+periods and edition words are not part of the family. Every family becomes one table selected by its dataset IDs;
+datasets an existing table already selects and excluded datasets get none.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ from typing import Any
 
 GROUP = "care_compare"
 COLLECTION = "cms/hospitals"
-# State-agency e-mail and phone contacts stay out of bronze until a privacy check clears them [157].
+# State-agency e-mail and phone contacts stay out of bronze until a privacy check clears them.
 EXCLUDED = frozenset({"cms_legacy_hospitals_casper_aspen_contacts"})
 ID_PREFIX = re.compile(r"^[a-z0-9]{4}-[a-z0-9]{4}(?:_\d{4}-\d{2}-\d{2})?(?:_|$)", re.IGNORECASE)
 MONTHS = "january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec"
@@ -38,7 +37,7 @@ MARKERS = (
     re.compile(r"(?<=^cjr)_py\d+(?=_)"),  # CJR performance year
 )
 FORMAT_BY_SUFFIX = {"csv": "csv", "xlsx": "sheet_rows", "xls": "sheet_rows"}
-# Datasets whose files the preflight found to be UTF-16 with tab separators get a table of their own [163].
+# Datasets whose files the preflight found to be UTF-16 with tab separators get a table of their own.
 UTF16_TAB = {"suffix": "utf16", "encodings": ["utf-16"], "delimiter": "\t"}
 OVERRIDES: dict[str, dict[str, Any]] = {
     "cms_legacy_fy2017_percent_change_in_medicare_payments_2018_12_03": UTF16_TAB,
@@ -47,7 +46,7 @@ OVERRIDES: dict[str, dict[str, Any]] = {
 }
 
 
-# The stored Care Compare dictionaries, as the HAI tables link them; they give names and published types only [108] [165].
+# The stored Care Compare dictionaries, as the HAI tables link them; they give names and published types only.
 DICTIONARY_TABLE = "cms_hospitals_dictionaries"
 DICTIONARY_FILES = "(?i)Data_?Dictionary|DataDictionary"
 
@@ -62,7 +61,7 @@ def stem(file_name: str) -> str:
 
 
 def family(file_name: str) -> str | None:
-    """Return a file's family, or None when its name is only a dataset ID [155]."""
+    """Return a file's family, or None when its name is only a dataset ID."""
     text = re.sub(r"[^a-z0-9]+", "_", ID_PREFIX.sub("", stem(file_name)).lower()).strip("_")
     for marker in MARKERS:
         text = marker.sub("", text)
@@ -70,7 +69,7 @@ def family(file_name: str) -> str | None:
 
 
 def section_pattern(name: str) -> str:
-    """Return a section pattern for a family: its words in order, any separators between them, release text after [164]."""
+    """Return a section pattern for a family: its words in order, any separators between them, release text after."""
     words = [re.escape(word) for word in name.split("_") if word]
     return r"(?i)^(?:FY_?\d{4}[^A-Za-z0-9]*)?" + r"[^A-Za-z0-9]*".join(words) + r"(?:[^A-Za-z0-9].*)?$"
 
@@ -120,7 +119,7 @@ def table_entries(
             table = f"{table}_{override['suffix']}"
         entry = tables.setdefault(table, {"table": table, "group": GROUP, "collection": COLLECTION, "dataset_ids": [], "format": file_format})
         if file_format == "csv":
-            # Lossless options for variants that differ by release; files without them read as before [160] [161].
+            # Lossless options for variants that differ by release; files without them read as before.
             entry.update(unnamed_headers=True, end_of_file_marker=True, trailing_blank_lines=True)
             entry.update({key: value for key, value in override.items() if key != "suffix"} or {"encodings": ["utf-8", "cp1252"], "byte_order_mark": True})
             entry["dictionary"] = {"table": DICTIONARY_TABLE, "file_pattern": DICTIONARY_FILES, "section_pattern": section_pattern(name)}

@@ -1,4 +1,4 @@
-"""Write and check the reference inputs of the gold control bridge, and check the formula recipes against them (failure modes 800 to 803).
+"""Write and check the reference inputs of the gold control bridge, and check the formula recipes against them.
 
 Run from the repository root:
 
@@ -10,10 +10,10 @@ whether it is the model's published measure-key column). ``registry_controls.csv
 additions. ``gold_measure_key_evidence.csv`` lists the published measure key of each ACS, impact, HAI hospital and BLS bridge row with the reviewed file that
 supports it (the reviewed ACS variable map, the reviewed impact layout, the HAI measure types and parts or the reviewed BLS measure list).
 ``gold_measure_key_rules.csv`` declares how each long fact is validated. Every PLACES, DRG, HCAHPS, SVI and GV published key must be an exact,
-case-sensitive member of its domain in ``dbt/seeds/gold_measure_id_domains.csv`` (the lead's bronze-derived seed, copied byte-identical; amendment A25),
+case-sensitive member of its domain in ``dbt/seeds/gold_measure_id_domains.csv`` (a bronze-derived seed, copied byte-identical),
 with no fallback to registry text; an SVI or GV key must also not be listed by ``svi_identifier_columns()`` or ``gv_identifier_columns()``. The
-care-compare facts (TIMELY, MATERNAL, UNPLANNED, COMPLICATIONS, HRRP) and the MMD condition labels (MMD) use domains of the extended seed (amendment
-A27); only the HAI state and national facts, which no bridge row names, keep the structural checks of the bridge test. A bridge row with an empty key
+care-compare facts (TIMELY, MATERNAL, UNPLANNED, COMPLICATIONS, HRRP) and the MMD condition labels (MMD) use domains of the extended seed; only the
+HAI state and national facts, which no bridge row names, keep the structural checks of the bridge test. A bridge row with an empty key
 (a held or closed control such as the C258 definition hold) is not a published key: it is checked by ``assert_bridge_rows_complete``. An unsupported key
 stops the generator. The dbt tests of the bridge read these seeds because the dbt container sees only the project.
 
@@ -77,7 +77,7 @@ LONG_FACT_KEYS = {
     "fct_medicare_inpatient_drg": "drg_cd",
     "fct_mmd_prevalence": "condition_label",
 }
-# Long facts whose published key must be an exact member of a domain of the measure-ID domain seed, with the domain name (amendment A25).
+# Long facts whose published key must be an exact member of a domain of the measure-ID domain seed, with the domain name.
 FACT_DOMAINS = {
     "fct_places_county_value": "PLACES",
     "fct_medicare_inpatient_drg": "DRG",

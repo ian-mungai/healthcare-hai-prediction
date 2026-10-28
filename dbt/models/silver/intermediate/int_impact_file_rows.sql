@@ -6,7 +6,7 @@
 with
 
 files as (
-    -- One label per selected file of a reviewed impact family [342]; held and twin-excluded files are not selected.
+    -- One label per selected file of a reviewed impact family; held and twin-excluded files are not selected.
     select distinct
         labels.bronze_table,
         labels.member_sha256,
@@ -32,7 +32,7 @@ text_rows as (
         '' as sheet_name,
         case
             when contains(text_lines.line_text, chr(9)) then string_split(text_lines.line_text, chr(9))
-            -- A quoted field may hold a comma [348].
+            -- A quoted field may hold a comma.
             else regexp_extract_all(text_lines.line_text, '(?:^|,)("(?:[^"]|"")*"|[^,]*)', 1)
         end as field_values
     from {{ ref('stg_cms_ipps_text_lines') }} as text_lines
@@ -43,7 +43,7 @@ text_rows as (
 ),
 
 sheets as (
-    -- Only the sheets staging selects, without the variable descriptions and layouts [344].
+    -- Only the sheets staging selects, without the variable descriptions and layouts.
     select
         member_sha256,
         sheet_name

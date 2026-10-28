@@ -1,6 +1,6 @@
 -- One row per hospital row of a readable impact file or sheet (one CCN column, no repeated field): a row after the header
--- whose first field is a CCN; a footer or note row is not data, and a 5-digit CCN lost its leading zero in a workbook cell
--- (failure modes 350 and 351). rows_for_ccn counts the CCN's rows in the release; a repeated CCN is held.
+-- whose first field is a CCN; a footer or note row is not data, and a 5-digit CCN lost its leading zero in a workbook cell.
+-- rows_for_ccn counts the CCN's rows in the release; a repeated CCN is held.
 {{ config(materialized='table') }}
 
 with

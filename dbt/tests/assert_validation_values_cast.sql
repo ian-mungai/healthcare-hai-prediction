@@ -12,7 +12,6 @@
 --     companion differs from the published text or a non-blank text that is not a published mark gives a null date
 --     (FY 2023 publishes the PSI-90 period as N/A);
 --   measure_id: the model differs from the reviewed ID of measure_id_aliases or from its published ID.
--- [510] [519] [629] [630] [786] [787] [789]
 {%- set grammar = "'-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][-+]?[0-9]+)?'" %}
 {%- set finite_number = "regexp_full_match(nullif(trim(@@), ''), " ~ grammar ~ ") and isfinite(try_cast(nullif(trim(@@), '') as double))" %}
 {%- set expected_number = "case when " ~ finite_number ~ " then try_cast(nullif(trim(@@), '') as double) end" %}

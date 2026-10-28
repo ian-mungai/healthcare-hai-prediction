@@ -1,5 +1,5 @@
 -- Fails for each CMI row whose relative weights divided by its cases differ from its CMI by more than the published
--- rounding: the CMI read is the unadjusted one and the headerless fields are in order [294] [295].
+-- rounding: the CMI read is the unadjusted one and the headerless fields are in order.
 select
     cmi_row_key,
     cmi,

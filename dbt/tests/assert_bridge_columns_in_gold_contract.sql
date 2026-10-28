@@ -1,4 +1,4 @@
--- Fails for each gold bridge row that does not match the gold contract [800]:
+-- Fails for each gold bridge row that does not match the gold contract:
 -- a fact that is not in the contract, a value column that is not a column of that fact, a value column that is the fact's measure-key column,
 -- a wide fact (no measure-key column) whose measure key differs from its value column, a long fact whose measure key is the name of one of
 -- its columns (a long fact holds the published ID, field or concept in its measure-key column), and a long-fact measure key that its rule in

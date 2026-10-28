@@ -1,4 +1,4 @@
--- Fails for each loaded object whose rows carry more than one file checksum [168].
+-- Fails for each loaded object whose rows carry more than one file checksum.
 select
     copy_key,
     checksum_count

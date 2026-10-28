@@ -1,5 +1,5 @@
 {% macro cost_report_amount_columns() %}
-{#- The HCRIS public use file columns that hold amounts, counts and ratios; every other column is identity or a date [336]. -#}
+{#- The HCRIS public use file columns that hold amounts, counts and ratios; every other column is identity or a date. -#}
 {{ return([
     'fte_employees_on_payroll',
     'number_of_interns_and_residents_fte',
@@ -107,7 +107,7 @@
 {% endmacro %}
 
 {% macro cost_report_amount(column) %}
-{#- One amount typed: integers, decimals, negatives and scientific notation; a blank or any other value is null [336]. -#}
+{#- One amount typed: integers, decimals, negatives and scientific notation; a blank or any other value is null. -#}
 {%- set value = "nullif(trim(" ~ column ~ "), '')" -%}
 case when regexp_full_match({{ value }}, '-?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?') then {{ value }}::double end
 {%- endmacro %}

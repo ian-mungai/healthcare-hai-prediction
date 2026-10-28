@@ -1,5 +1,5 @@
 -- dim_source takes the publisher and label of a placed dataset from the source_labels seed and leaves both null for a dataset the seed lists as unplaced
--- and for a dataset with no seed row. It never guesses a label and never gives the unknown member one [942] [945].
+-- and for a dataset with no seed row. It never guesses a label and never gives the unknown member one.
 select
     'placed dataset differs from the seed' as problem,
     dim_source.dataset_id as detail

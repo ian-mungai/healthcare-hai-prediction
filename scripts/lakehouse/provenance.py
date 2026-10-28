@@ -1,4 +1,4 @@
-"""Provenance of a real dbt build and the sealed build file (D1 section 10, failure modes 920 to 924).
+"""Provenance of a real dbt build and the sealed build file.
 
 Host side, used by the launcher through ``provenance_vars(run)`` and ``seal(run)``: it computes the provenance values of a run from the
 launcher's registry records (the run entry, its snapshot copy record and its recorded pins), reading and writing run files only through held
@@ -54,7 +54,7 @@ SEALED_FOLDER = "sealed"
 ARTIFACTS = ("run_results.json", "manifest.json")
 MARKER_COLUMNS = ("dbt_invocation_id", "git_revision", "run_id", "dbt_tree_sha256", "bronze_pins_sha256", "pins_json")
 MARKER_QUERY = "select dbt_invocation_id, git_revision, run_id, dbt_tree_sha256, bronze_pins_sha256, pins_json from int_silver_build_marker"
-# The dbt commands by what they do to the build file (D1 section 10 items 4 and 5). The hooks drop the marker for exactly the first group, whether or not
+# The dbt commands by what they do to the build file. The hooks drop the marker for exactly the first group, whether or not
 # dbt runs them for a command (tested for every command and form in ``hook_command_coverage``); the commands of the other groups run no model SQL and
 # change no relation. ``dbt/macros/build_marker_hooks.sql`` (hai_marker_untouched_commands) lists CONNECTING and INERT: an unselected ``compile`` runs the
 # hooks, which then leave the marker alone.
@@ -108,7 +108,7 @@ def runs_root(run: Mapping[str, Any]) -> Path:
 def open_directory(root: Path, parts: Sequence[str]) -> int:
     """A descriptor of ``<root>/<parts...>``: ``root`` is opened by name, every part relative to the descriptor of the part before it with ``O_NOFOLLOW``.
 
-    A link in any part, also one put there after an earlier check, is refused (D1 section 10 item 2). The caller closes the descriptor.
+    A link in any part, also one put there after an earlier check, is refused. The caller closes the descriptor.
     """
     if any(part in ("", ".", "..") or "/" in part for part in parts):
         raise ProvenanceError("not a plain folder name")
@@ -196,7 +196,7 @@ def held_below(directory: int, parts: Sequence[str]) -> Iterator[int]:
 
 
 def read_run_file(root: Path, run_id: str, parts: Sequence[str], limit: int = READ_LIMIT) -> bytes:
-    """Read ``<root>/<run_id>/<parts...>`` opening each component with ``O_NOFOLLOW`` (D1 section 10 item 2); a link or a non-file is refused."""
+    """Read ``<root>/<run_id>/<parts...>`` opening each component with ``O_NOFOLLOW``; a link or a non-file is refused."""
     if not RUN_ID.fullmatch(run_id) or not parts:
         raise ProvenanceError("not a plain run file")
     with held(root, (run_id,)) as folder:
@@ -347,7 +347,7 @@ def git_revision(checkout: str) -> str:
 
 
 def recorded(run: Mapping[str, Any]) -> Recorded:
-    """Every provenance value of a real transform run, or ``ProvenanceError`` (D1 section 10 items 1 to 3 and 8).
+    """Every provenance value of a real transform run, or ``ProvenanceError``.
 
     The tree hash is computed again from the snapshot files and must equal the copy record's; the pins file is read through a safe read and its
     digest must equal the recorded one. Any missing or unrecorded value refuses; nothing is replaced by a default.
@@ -380,7 +380,7 @@ def recorded(run: Mapping[str, Any]) -> Recorded:
 
 
 def variables(run: Mapping[str, Any]) -> dict[str, str]:
-    """The typed environment of a ``real_dbt`` launch (D1 section 7 item 2); the launcher adds nothing else and a caller cannot set any of it."""
+    """The typed environment of a ``real_dbt`` launch; the launcher adds nothing else and a caller cannot set any of it."""
     values = recorded(run)
     return {
         VARIABLE_RUN_ID: values.run_id,
@@ -464,7 +464,7 @@ def clear_build_artifacts(run: Mapping[str, Any]) -> None:
 def gold_eligible_invocation(folder: int, run_id: str) -> str:
     """The invocation ID of a build that may be sealed: a ``build`` without a selection whose results are all ``success`` or ``pass``.
 
-    ``run_results.json`` and ``manifest.json`` (read below the held run folder) must name the same invocation (L1 review round 1, finding R5).
+    ``run_results.json`` and ``manifest.json`` (read below the held run folder) must name the same invocation.
     """
     try:
         results = json.loads(read_below(folder, ("target", "run_results.json"), RESULTS_LIMIT))
@@ -495,8 +495,8 @@ def copy_into(source: int, sealed: int, name: str) -> int:
     """Copy the held build file into a new file ``name`` of the held sealed folder; returns a read-write descriptor of the copy.
 
     Both ends are descriptors this process holds, and ``name`` is a single component opened relative to the sealed folder with ``O_EXCL`` and
-    ``O_NOFOLLOW``: no path is resolved after the descriptors are held, so a folder replaced by a link cannot redirect the read or the write (review
-    delta 1, finding 4). The copy is a plain byte copy with its own inode; a failed copy is removed.
+    ``O_NOFOLLOW``: no path is resolved after the descriptors are held, so a folder replaced by a link cannot redirect the read or the write. The copy
+    is a plain byte copy with its own inode; a failed copy is removed.
     """
     descriptor = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=sealed)
     try:
@@ -536,7 +536,7 @@ def sealed_directory(folder: int, run_id: str) -> int:
 def seal_lock(folder: int, run_id: str) -> Iterator[None]:
     """Hold an exclusive lock on the held run folder for one seal, so two seals of a run (the launcher's seal worker and a direct caller) never overlap.
 
-    Without it the second seal removed the first one's temporary copy or made the sealed folder read-only before the first one's rename (WV3-015).
+    The lock prevents a second seal from removing another seal's temporary copy or making the folder read-only before its rename.
     The second seal waits, then finds the sealed copy and returns the same record. A seal that waits more than ``SEAL_LOCK_SECONDS`` refuses.
     """
     deadline = time.monotonic() + SEAL_LOCK_SECONDS
@@ -563,7 +563,7 @@ def drop_interrupted_copies(sealed: int) -> None:
 
 
 def seal_build(run: Mapping[str, Any]) -> dict[str, Any]:
-    """Make the sealed copy of the full build that wrote the build file of ``run`` and return its ``completion`` record (D1 section 10 item 5).
+    """Make the sealed copy of the full build that wrote the build file of ``run`` and return its ``completion`` record.
 
     Only the attempt the launcher bound to the run (``build_binding``) is sealed: a full ``build`` of the run's current generation, after
     ``clear_build_artifacts`` removed every older result. The copy is ``runs/<run_id>/sealed/<sha256>.duckdb``, a byte copy of the build file with its
@@ -651,7 +651,7 @@ def clone_into(source: int, sealed: int, run_id: str) -> tuple[int, str, int]:
 
 def check_completion(run: Mapping[str, Any]) -> Mapping[str, Any]:
     """The ``completion`` of a sealed run, only if it is the one of the run's live build: the attempt and the generation the run's binding names, and the
-    run's current generation (a recovery that moved the run on leaves an older completion that no reader may use; review delta 1, finding 8)."""
+    run's current generation (a recovery that moved the run on leaves an older completion that no reader may use)."""
     run_id = run.get("run_id")
     completion = run.get("completion")
     if run.get("build_state") != "sealed" or not isinstance(completion, Mapping):
@@ -801,7 +801,7 @@ def sealed_duckdb(
 
 
 def run_consumer(client: Any, principal: Mapping[str, Any], run_id: str, launch_id: str, checkout: Path) -> bool:
-    """Run the ``sealed_consumer`` template on the run's sealed copy and accept its result only by ``accepts_result`` (D1 section 10 item 6)."""
+    """Run the ``sealed_consumer`` template on the run's sealed copy and accept its result only by ``accepts_result``."""
     entry = settled_run(client, principal, run_id)
     completion = entry.get("completion")
     if entry.get("build_state") != "sealed" or not isinstance(completion, Mapping):

@@ -1,5 +1,5 @@
 -- Fails for each calendar-year HAI hospital measure ID that is not one of the six parts of the six types, so no part is
--- lost or read from the wrong row [550].
+-- lost or read from the wrong row.
 select
     entity_id,
     measure_id,

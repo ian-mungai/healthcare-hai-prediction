@@ -1,6 +1,6 @@
 -- bridge_county_planning_region has one row per old Connecticut county, planning region and RUCA tract file, and its tract_count is the number of tract rows
 -- of that pair in the file. The tracts are found by the state prefix of the tract ID, not by the county code the model reads. A tract with no 2023
--- county keeps a null planning region [943].
+-- county keeps a null planning region.
 with
 
 expected as (

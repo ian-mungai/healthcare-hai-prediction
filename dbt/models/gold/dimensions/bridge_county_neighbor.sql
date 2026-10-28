@@ -1,5 +1,5 @@
 -- One row per county, neighbor and vintage as Census publishes it (edge_key), with every silver column unchanged: the shared border is as
--- published, with no weights. [743]
+-- published, with no weights.
 select
     member_sha256,
     source_row_number,

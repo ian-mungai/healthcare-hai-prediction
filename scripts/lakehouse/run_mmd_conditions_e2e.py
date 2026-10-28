@@ -1,8 +1,7 @@
 """Check the MMD condition generator's units seed and bridge check on copies of the committed files; never writes them.
 
 Run ``.venv/bin/python -m scripts.lakehouse.run_mmd_conditions_e2e`` from the repository root (the pinned collection
-plans are read from the main checkout). Reports stay in data/e2e/mmd_conditions/. Failure modes 895 to 898 are in
-plans/wave1_20261011/gate/mmd_conditions_failure_modes.md.
+plans are read from the main checkout). Reports stay in data/e2e/mmd_conditions/.
 """
 
 from __future__ import annotations
