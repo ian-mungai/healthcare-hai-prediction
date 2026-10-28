@@ -12,7 +12,9 @@ worker starts; workers that end in time pass; a stop of the dispatcher itself th
 worker that starts its program through ``scripts/process.py`` ``run_command`` (a nested launch: a new process group in the worker's session) leaves no
 process at the worker deadline or at a stop of the dispatcher; and a worker is never stopped before its limit (the start is aligned late in a
 wall-clock second, where whole-second timestamps fire up to a second early: a worker that ends 0.25 s before the limit passes and a worker that never
-ends gets TERM only after its limit).
+ends gets TERM only after its limit). The review reproductions of fix round 4: a KILL of the dispatcher leaves no worker (the worker's leader stops its
+session), a worker that ends with a background process left in its session leaves no process, and the exit trap ends within its bound when every
+listing stalls.
 Planted defects run the cases against a changed copy of the dispatcher (no deadline, which is the plain wait; a stop of the direct process only; the
 old whole-second comparison; a stop of the worker's process group without the rest of its session). Each counts as caught only when the named
 check of its case is false and the case raised nothing.
@@ -35,7 +37,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.process import SubprocessError, TimeoutExpired, run_command
+from scripts.process import SubprocessError, TimeoutExpired, run_command, start
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = str(ROOT / ".venv" / "bin" / "python")
@@ -114,6 +116,22 @@ while True:
     time.sleep(1)
 ' "$STUB_DIR"
 """
+# A worker that leaves a descendant in its session with closed output and ends at once with success (the review reproduction).
+BACKGROUND = """#!/bin/bash
+sleep 60 </dev/null >/dev/null 2>&1 &
+echo $! >"$STUB_DIR/orphan.pid"
+"""
+# A stand-in ps that never ends: it records itself and a child that holds its pipes (the review reproduction of a stalled listing).
+STALLED_PS = """#!/bin/bash
+echo $$ >"$STUB_DIR/lister.pid"
+sleep 60 &
+echo $! >"$STUB_DIR/lister_child.pid"
+wait
+"""
+# Seconds a worker may outlive the death of its dispatcher: the leader's poll, the grace period, the 5 s confirmation and slack for a loaded machine.
+WATCHDOG_BOUND_SECONDS = 0.5 + GRACE_SECONDS + 5 + 3
+# Seconds the exit trap may take when the listing stalls: one 5 s listing, the 5 s confirmation of the fallback group stop and slack.
+TRAP_BOUND_SECONDS = 5 + 5 + 4
 # The body files of the stand-in groups; STUB_PYTHON_LINT picks the script the first group runs.
 GROUP_BODIES = {
     "python_lint": 'python_lint() { timed "stub: python_lint" bash "$STUB_DIR/$STUB_PYTHON_LINT.sh" python_lint; }\n',
@@ -155,6 +173,7 @@ class Sandbox:
             ".tools/markdownlint-cli2/node_modules/.bin",
             "stub",
             "out",
+            "bin",
         ):
             (self.root / folder).mkdir(parents=True)
         (self.root / "scripts/run_ci.sh").write_text(
@@ -178,6 +197,8 @@ class Sandbox:
             ("stub/launcher.sh", LAUNCHER),
             ("stub/hiding_launcher.sh", HIDING_LAUNCHER),
             ("stub/term_time.sh", TERM_TIME),
+            ("stub/background.sh", BACKGROUND),
+            ("bin/ps", STALLED_PS),
         ):
             (self.root / path).write_text(text, encoding="utf-8")
             (self.root / path).chmod(0o755)
@@ -221,7 +242,7 @@ class Sandbox:
         return pid is not None and not alive(pid)
 
     def cleanup(self) -> None:
-        for name in ("worker", "child", "launcher"):
+        for name in ("worker", "child", "launcher", "orphan", "lister", "lister_child"):
             pid = self.pid(name)
             if pid is not None:
                 with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -404,6 +425,103 @@ def launcher_worker_dispatcher_stop(base: Path) -> dict[str, Any]:
     return case("stop_of_the_dispatcher_leaves_no_nested_group", base, body)
 
 
+def wait_for_pids(sandbox: Sandbox, names: tuple[str, ...], seconds: float = 20.0) -> bool:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if all(sandbox.pid(name) is not None for name in names):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def all_gone_within(sandbox: Sandbox, names: tuple[str, ...], seconds: float) -> float | None:
+    """Seconds until every named process has ended, or None when one is still alive after ``seconds``."""
+    started = time.monotonic()
+    while time.monotonic() - started < seconds:
+        if all(sandbox.gone(name) for name in names):
+            return round(time.monotonic() - started, 2)
+        time.sleep(0.1)
+    return None
+
+
+def stop_dispatcher(dispatcher: Any) -> None:
+    """Kill what is left of a dispatcher that a case started directly (its group holds its exit trap's stop step) and reap it."""
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(dispatcher.pid, signal.SIGKILL)
+    for pipe in (dispatcher.stdout, dispatcher.stderr):
+        if pipe is not None:
+            pipe.close()
+    with contextlib.suppress(TimeoutExpired):
+        dispatcher.wait(timeout=5)
+
+
+def killed_dispatcher(base: Path) -> dict[str, Any]:
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        # The review reproduction: the dispatcher dies by KILL, so its exit trap never runs; the worker's session must still stop.
+        environment = sandbox.environment("python_lint", {"STUB_PYTHON_LINT": "launcher", "CI_WORKER_LIMIT_SECONDS": "600"})
+        dispatcher = start(["/bin/bash", "scripts/run_ci.sh"], sandbox.root, environment, new_session=True)
+        try:
+            started = wait_for_pids(sandbox, ("launcher", "worker", "child"))
+            os.kill(dispatcher.pid, signal.SIGKILL)
+            dispatcher.wait(timeout=5)
+            seconds = all_gone_within(sandbox, ("launcher", "worker", "child"), WATCHDOG_BOUND_SECONDS)
+        finally:
+            stop_dispatcher(dispatcher)
+        return {
+            "workers_had_started": started,
+            "dispatcher_killed": dispatcher.returncode == -signal.SIGKILL,
+            "worker_session_gone_within_the_bound": seconds is not None,
+            "seconds_after_the_kill": -1.0 if seconds is None else seconds,
+        }
+
+    return case("killed_dispatcher_leaves_no_worker", base, body)
+
+
+def completed_worker(base: Path) -> dict[str, Any]:
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        run = sandbox.run(groups="python_lint", STUB_PYTHON_LINT="background", CI_WORKER_LIMIT_SECONDS="60")
+        return {
+            "run_did_not_hang": not run["timed_out"],
+            "exit_zero": run["exit"] == 0,
+            "pass_line": "All local CI checks passed" in run["text"],
+            "descendant_started": sandbox.pid("orphan") is not None,
+            "descendant_gone_when_the_run_returns": sandbox.gone("orphan"),
+            "seconds": run["seconds"],
+        }
+
+    return case("completed_worker_leaves_no_descendant", base, body)
+
+
+def trap_with_stalled_listing(base: Path) -> dict[str, Any]:
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        # The review reproduction: TERM to the dispatcher while every listing stalls; the exit trap must still end within its bound.
+        path = f"{sandbox.root / 'bin'}{os.pathsep}{os.environ['PATH']}"
+        environment = sandbox.environment("python_lint", {"CI_WORKER_LIMIT_SECONDS": "600", "PATH": path})
+        dispatcher = start(["/bin/bash", "scripts/run_ci.sh"], sandbox.root, environment, new_session=True)
+        try:
+            started = wait_for_pids(sandbox, ("worker", "child"))
+            began = time.monotonic()
+            os.kill(dispatcher.pid, signal.SIGTERM)
+            with contextlib.suppress(TimeoutExpired):
+                dispatcher.wait(timeout=TRAP_BOUND_SECONDS)
+            seconds = round(time.monotonic() - began, 2)
+            exited = dispatcher.returncode is not None
+            listing_stalled = sandbox.pid("lister") is not None
+            workers_gone = all_gone_within(sandbox, ("worker", "child"), 2) is not None
+        finally:
+            stop_dispatcher(dispatcher)
+        return {
+            "workers_had_started": started,
+            "listing_stalled": listing_stalled,
+            "dispatcher_exited_within_the_bound": exited,
+            "exit_nonzero": exited and dispatcher.returncode not in (None, 0),
+            "worker_and_child_gone": workers_gone,
+            "seconds_after_term": seconds,
+        }
+
+    return case("exit_trap_with_a_stalled_listing_is_bounded", base, body)
+
+
 def not_before_the_limit(base: Path) -> dict[str, Any]:
     def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
         run = sandbox.run(STUB_PYTHON_LINT="term_time", STUB_ORCHESTRATION="near", STUB_ALIGN_FRACTION="0.75", CI_WORKER_LIMIT_SECONDS=str(LIMIT_SECONDS))
@@ -440,6 +558,9 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "stop_of_the_dispatcher_leaves_no_nested_group": launcher_worker_dispatcher_stop,
     "worker_that_removes_the_old_registry_leaves_no_process": hiding_launcher_worker,
     "worker_is_not_stopped_before_its_limit": not_before_the_limit,
+    "killed_dispatcher_leaves_no_worker": killed_dispatcher,
+    "completed_worker_leaves_no_descendant": completed_worker,
+    "exit_trap_with_a_stalled_listing_is_bounded": trap_with_stalled_listing,
 }
 
 # plant name -> (pairs of text replaced in the dispatcher, {case that must fail: the check that must be false in it}). The first plant is the plain wait
@@ -500,9 +621,12 @@ def main() -> int:
     started = datetime.now(UTC)
     before = {name: sha256_of(ROOT / name) for name in WATCHED}
     base = Path(tempfile.mkdtemp(prefix="worker_deadline_e2e."))
+    # Case names on the command line run only those cases, without the plants (a quick check while a change is made).
+    selected = sys.argv[1:]
     try:
-        results = [case_function(base) for case_function in CASES.values()]
-        results.extend(planted_cases(base))
+        results = [CASES[name](base) for name in selected] if selected else [case_function(base) for case_function in CASES.values()]
+        if not selected:
+            results.extend(planted_cases(base))
     finally:
         shutil.rmtree(base, ignore_errors=True)
     after = {name: sha256_of(ROOT / name) for name in WATCHED}

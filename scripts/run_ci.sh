@@ -56,20 +56,35 @@ scratch="$(mktemp -d "${TMPDIR:-/tmp}/hai_ci.XXXXXX")"
 export CI_TIMING_FILE="$scratch/main.timing"
 timing_files=("$CI_TIMING_FILE")
 # Each worker leads its own session: a short Python step (worker_session_step) calls setsid, resets SIGINT and SIGQUIT (a background job of a shell without job
-# control starts with them ignored), sets PROCESS_LAUNCH_SESSION=1 (a scripts/process.py launch inside the worker stays in its session) and runs a new bash. setsid cannot run
-# inside a bash subshell, so that bash reads the functions and the variables a worker uses from a private state file (write_worker_state). The live workers are listed in worker_pids;
-# each pid is also the worker's session id.
+# control starts with them ignored), sets PROCESS_LAUNCH_SESSION=1 (a scripts/process.py launch inside the worker stays in its session) and starts a new bash. setsid cannot run
+# inside a bash subshell, so that bash reads the functions and the variables a worker uses from a private state file (write_worker_state). The step stays as the session's leader
+# and watchdog: it ends with the bash's status, and when its parent (this script) has died, even by KILL, it stops every other member of its session (its arguments: the repository
+# and the grace seconds) within 0.2 s plus the grace period plus the 5 s confirmation. The live workers are listed in worker_pids; each pid is also the worker's session id.
 worker_pids=()
 worker_state="$scratch/worker_state.sh"
 # shellcheck disable=SC2016
-worker_session_step='import os, signal, sys
+worker_session_step='import os, signal, sys, time
 os.setsid()
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 signal.signal(signal.SIGQUIT, signal.SIG_DFL)
 os.environ["PROCESS_LAUNCH_SESSION"] = "1"
 os.environ.pop("BASH_ENV", None)
 os.environ.pop("ENV", None)
-os.execv(sys.argv[1], sys.argv[1:])'
+dispatcher = os.getppid()
+worker = os.fork()
+if worker == 0:
+    os.execv(sys.argv[3], sys.argv[3:])
+while os.getppid() == dispatcher:
+    done, status = os.waitpid(worker, os.WNOHANG)
+    if done:
+        code = os.waitstatus_to_exitcode(status)
+        sys.exit(128 - code if code < 0 else code)
+    time.sleep(0.2)
+for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(number, signal.SIG_IGN)
+sys.path.insert(0, sys.argv[1])
+from scripts.process import stop_sessions
+sys.exit(1 if stop_sessions({os.getpid()}, float(sys.argv[2]), allow_own=True) else 0)'
 # The worker's bash: $1 state file, $2 item, $3 "stream" (a single item: its output also goes to the log through tee) or "buffer".
 # shellcheck disable=SC2016
 worker_body='set -euo pipefail
@@ -82,10 +97,12 @@ if [[ ! "$worker_grace" =~ ^[1-9][0-9]*$ ]] || [[ -n "$worker_override" && ! "$w
   exit 2
 fi
 # stop_sessions <grace seconds> <session>...: stop every member of the worker sessions with scripts/process.py stop_sessions (TERM, KILL after the grace period, then a
-# confirmation of at most 5 s). Fails when a member survives KILL or when the sessions cannot be listed; the leaders' groups are still stopped then.
+# confirmation of at most 5 s). Fails when a member survives KILL or when the sessions cannot be listed; the leaders' groups are still stopped then. An alarm ends the step
+# after the grace period plus 25 s (the listing and the confirmation of both phases and of the fallback), so the exit trap cannot wait on it forever.
 # shellcheck disable=SC2016
 stop_sessions() {
-  "$python_bin" -I -c 'import sys
+  "$python_bin" -I -c 'import signal, sys
+signal.alarm(int(float(sys.argv[2])) + 25)
 sys.path.insert(0, sys.argv[1])
 from scripts.process import stop_sessions
 sys.exit(1 if stop_sessions({int(session) for session in sys.argv[4:]}, float(sys.argv[2]), parent=int(sys.argv[3])) else 0)' "$repo_root" "$1" "$$" "${@:2}"
@@ -370,7 +387,7 @@ write_worker_state() {
 }
 # run_items <item>...: stream a single item, buffer parallel items in order, and retain each log and duration. Each item is a worker in its own session with a deadline.
 run_items() {
-  local item index pid pids=() starts=() limits=() items=("$@") worker_limit pending mode=buffer
+  local item index pid status pids=() starts=() limits=() items=("$@") worker_limit pending mode=buffer
   if ((${#items[@]} == 1)); then mode=stream; fi
   write_worker_state
   for item in "$@"; do
@@ -378,7 +395,7 @@ run_items() {
     limits+=("$worker_limit")
     starts+=("$SECONDS")
     if [[ "$mode" == stream ]]; then printf '\n== %s ==\n' "$item"; fi
-    "$python_bin" -I -c "$worker_session_step" "$BASH" --noprofile --norc -c "$worker_body" ci_worker "$worker_state" "$item" "$mode" </dev/null &
+    "$python_bin" -I -c "$worker_session_step" "$repo_root" "$worker_grace" "$BASH" --noprofile --norc -c "$worker_body" ci_worker "$worker_state" "$item" "$mode" </dev/null &
     pids+=("$!")
     worker_pids+=("$!")
     timing_files+=("$scratch/$item.timing")
@@ -389,7 +406,14 @@ run_items() {
       pid="${pids[$index]}"
       if [[ -z "$pid" ]]; then continue; fi
       if ! kill -0 "$pid" 2>/dev/null; then
-        if ! wait "$pid"; then
+        status=0
+        wait "$pid" || status=$?
+        # A worker that ended can leave members in its session (a background process): they are stopped before the worker is forgotten.
+        if ! stop_sessions "$worker_grace" "$pid"; then
+          printf 'The ended worker %s left members in its session %s that survived KILL, or the session could not be listed.\n' "${items[$index]}" "$pid" >&2
+          status=1
+        fi
+        if ((status != 0)); then
           failed+=("${items[$index]}")
         fi
       elif worker_overdue "${starts[$index]}" "${limits[$index]}"; then

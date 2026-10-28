@@ -667,14 +667,18 @@ session and has a deadline. The deadline is the timeout of the hosted job that r
 without a trailing shard number, in minutes). `run_ci_groups_e2e` keeps each value equal to the timeout of its job in `.github/workflows/ci.yml` and requires a limit for every kind. A kind
 without a limit stops the run before its workers start. `CI_WORKER_LIMIT_SECONDS` replaces every limit for one run. The dispatcher polls its workers every half second. Bash counts whole
 seconds, so a worker is overdue only when the whole seconds since its start exceed the limit: it is never stopped before its limit and at most about 1.5 seconds after it. A bash subshell
-cannot call `setsid`, so a short Python step starts each worker: it calls `setsid`, resets SIGINT and SIGQUIT, sets `PROCESS_LAUNCH_SESSION=1` and runs a new bash. That bash reads the
+cannot call `setsid`, so a short Python step starts each worker: it calls `setsid`, resets SIGINT and SIGQUIT, sets `PROCESS_LAUNCH_SESSION=1` and starts a new bash. The step stays as
+the session's leader and watchdog. It ends with the bash's status. When the dispatcher has died, even by KILL, it stops every other member of its session within 0.2 seconds plus the grace
+period plus the 5 second confirmation. That bash reads the
 dispatcher's functions and the variables that workers use from a private state file (mode 600 in the scratch folder). A program that the worker starts through `scripts/process.py` stays in
 the worker's session (see Process launcher deadline). At a deadline the dispatcher stops every member of the worker's session with `stop_sessions` of `scripts/process.py`: TERM, KILL after
 `CI_WORKER_GRACE_SECONDS` (5 by default), then a confirmation that no member is left. If the session cannot be listed, the worker's group still stops and the stop is reported as failed. It
 prints the worker, its check group and the limit, fails the run with `Local CI failed in: <worker> (deadline <seconds> s)` and keeps the worker's partial log. The other workers keep their
-result. An exit, Ctrl-C, TERM or HUP of the dispatcher stops every live worker session the same way (2 seconds after TERM). The exit trap ignores TERM, INT and HUP while it does so, because
-its stop step is a new process in the dispatcher's session that an outer stop would also signal. Worker sessions are not members of the dispatcher's session: the deadline of
-`scripts/quality/pre_push.py` reaches the workers through that exit trap, so a KILL of the dispatcher before its trap runs would leave them. A process that starts its own session without the
+result. When a worker ends, the dispatcher stops what is left of its session (a background process) and confirms that no member is left before it forgets the
+worker. A member that survives KILL fails the run with the worker's name. An exit, Ctrl-C, TERM or HUP of the dispatcher stops every live worker session the same way (2 seconds after TERM). The exit trap ignores TERM, INT and HUP while it does so, because
+its stop step is a new process in the dispatcher's session that an outer stop would also signal. An alarm ends that step after its grace period plus 25 seconds. Worker sessions
+are not members of the dispatcher's session: the deadline of `scripts/quality/pre_push.py` reaches the workers through that exit trap. When the dispatcher is killed before its trap
+runs, each worker's watchdog stops its session. A process that starts its own session without the
 launcher is outside the worker's session. `.venv/bin/python -m scripts.quality.run_worker_deadline_e2e` (in `repository_code_checks`) runs the real dispatcher in a scratch folder with a
 worker that never ends and a child that ignores TERM. It also runs a worker that starts its program through the launcher (once after removing the old registry, the review reproduction)
 and workers that start late in a wall-clock second (one ends 0.25 seconds before its limit and must pass; one never ends and must get TERM only after its limit). It plants a dispatcher
