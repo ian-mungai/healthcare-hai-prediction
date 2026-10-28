@@ -42,11 +42,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from orchestration import catalog_authority, launcher
+from orchestration import catalog_authority, launcher, pipeline_session
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.acquisition.s3_store import AwsCli, StorageError
 from scripts.infrastructure import secret_store
-from scripts.lakehouse import bronze_inventory, run_lock
+from scripts.lakehouse import bronze_inventory, bronze_scan, run_lock
 from scripts.lakehouse import register_aws_catalog as reg
 from scripts.lakehouse.catalog_journal import durable_directory
 
@@ -178,6 +178,7 @@ def verify_tables(
     reader: reg.Catalog,
     source: reg.Catalog,
     objects: reg.MetadataReader,
+    storage: bronze_scan.Storage,
     inventory: reg.Inventory,
     *,
     bucket: str,
@@ -186,8 +187,12 @@ def verify_tables(
     execute: Execute = direct,
     clock: reg.Clock = time.monotonic,
 ) -> dict[str, Any]:
-    """The reader identity loads every table exactly, one manifest list per namespace is read and every Mac table is unchanged (V1 to V3)."""
+    """The reader identity loads every table exactly, one data file per namespace is scanned and every Mac table is unchanged (V1 to V3).
+
+    The scan starts from the metadata the AWS reader identity loaded and reads through the storage identity of AWS read jobs (``bronze_scan``).
+    """
     metadata: dict[reg.TableId, Mapping[str, Any]] = {}
+    served: dict[reg.TableId, Mapping[str, Any]] = {}
     for pin in inventory.tables:
         table_deadline = min(deadline, clock() + per_table)
         try:
@@ -198,17 +203,15 @@ def verify_tables(
         except reg.RegistrationError as error:
             raise bronze_inventory.named(pin.identifier, error) from None
         metadata[pin.identifier] = document
-    data_reads = []
+        served[pin.identifier] = (loaded or {})["metadata"]
+    data_reads: dict[str, Any] = {}
     for namespace in bronze_inventory.NAMESPACES:
-        pin = next(item for item in inventory.tables if item.namespace == namespace)
+        pin = min((item for item in inventory.tables if item.namespace == namespace), key=lambda item: item.identifier)
         table_deadline = min(deadline, clock() + per_table)
         try:
-            manifest = reg.snapshots(metadata[pin.identifier], "data_read")[pin.current_snapshot_id]["manifest-list"]
-            location = reg.bucket_location(manifest, bucket)
-            reg.bounded(functools.partial(objects.read, location, None, deadline=table_deadline), table_deadline, clock)
+            data_reads[namespace] = bronze_scan.scan_namespace(storage, served[pin.identifier], pin.current_snapshot_id, bucket, table_deadline, clock)
         except reg.RegistrationError as error:
             raise bronze_inventory.named(pin.identifier, error) from None
-        data_reads.append(namespace)
     for pin in inventory.tables:
         table_deadline = min(deadline, clock() + per_table)
         try:
@@ -290,6 +293,10 @@ class Services(Protocol):
         """The versioned metadata objects in the project bucket."""
         ...
 
+    def storage(self, *, deadline: float) -> bronze_scan.Storage:
+        """The project bucket as the storage identity of AWS read jobs sees it."""
+        ...
+
     def remote(self, instance: str, *, deadline: float) -> contextlib.AbstractContextManager[Remote]:
         """Open the accepted route for the duration of one step and close it after."""
         ...
@@ -331,6 +338,19 @@ class LiveServices:
 
     def objects(self) -> reg.MetadataReader:
         return bronze_inventory.S3Metadata(self.aws, self.bucket)
+
+    def storage(self, *, deadline: float) -> bronze_scan.Storage:
+        """A new short session of the lakehouse reader role that covers the step deadline; its values stay in memory."""
+        ends = int(time.time() + max(0.0, deadline - time.monotonic())) + 1
+        session = pipeline_session.fetch(
+            pipeline_session.READER,
+            settings=self.settings,
+            endpoint=None,
+            test_registry=False,
+            deadline_utc=ends,
+            session_name=pipeline_session.session_name("bronze-cutover-verify"),
+        )
+        return bronze_scan.RoleStorage(self.settings, session)
 
     @contextlib.contextmanager
     def remote(self, instance: str, *, deadline: float) -> Iterator[Remote]:
@@ -529,6 +549,7 @@ def step_verify(services: Services, terminal: Terminal, instance: str, seconds: 
             remote.reader,
             services.source(deadline=deadline),
             services.objects(),
+            services.storage(deadline=deadline),
             inventory,
             bucket=services.bucket,
             deadline=deadline,

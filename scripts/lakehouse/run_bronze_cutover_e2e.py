@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
+import functools
 import hashlib
 import json
 import socket
@@ -21,6 +22,7 @@ import threading
 import time
 import traceback
 import urllib.parse
+import zlib
 from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,13 +32,14 @@ from typing import Any
 
 from orchestration import catalog_authority, launcher
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
+from orchestration.pipeline_session import RoleSession
 from scripts.acquisition.s3_store import AwsCli
-from scripts.lakehouse import bronze_cutover, bronze_inventory
+from scripts.lakehouse import bronze_cutover, bronze_inventory, bronze_scan
 from scripts.lakehouse import register_aws_catalog as reg
 from scripts.lakehouse import run_catalog_registration_e2e as registration_e2e
 from scripts.lakehouse import run_launcher_e2e as launcher_e2e
 from scripts.lakehouse.run_launcher_e2e import Env, catalog_script, catalog_up, expect_error, lifecycle_host, real_run, record_file, refused, run_lock
-from scripts.process import run_command
+from scripts.process import CompletedProcess, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "data" / "e2e" / "bronze_cutover"
@@ -83,6 +86,103 @@ class Source(registration_e2e.Catalog):
         return super().request(method, path, body=body, deadline=deadline)
 
 
+def zigzag(value: int) -> bytes:
+    """An Avro long: zigzag, then base-128 groups with a continuation bit."""
+    value = (value << 1) ^ (value >> 63)
+    result = bytearray()
+    while value > 0x7F:
+        result.append(value & 0x7F | 0x80)
+        value >>= 7
+    return bytes([*result, value])
+
+
+def avro_text(text: str) -> bytes:
+    raw = text.encode()
+    return zigzag(len(raw)) + raw
+
+
+def avro_file(schema: Mapping[str, Any], rows: list[bytes], codec: str = "deflate") -> bytes:
+    """A one-block Avro object container file of already encoded rows, as Iceberg writes manifests."""
+    sync = hashlib.sha256(json.dumps(schema).encode()).digest()[:16]
+    metadata = {"avro.schema": json.dumps(schema).encode(), "avro.codec": codec.encode()}
+    header = b"Obj\x01" + zigzag(len(metadata)) + b"".join(avro_text(key) + zigzag(len(value)) + value for key, value in metadata.items()) + zigzag(0)
+    payload = b"".join(rows)
+    if codec == "deflate":
+        packer = zlib.compressobj(wbits=-15)
+        payload = packer.compress(payload) + packer.flush()
+    return header + sync + zigzag(len(rows)) + zigzag(len(payload)) + payload + sync
+
+
+MANIFEST_LIST_SCHEMA = {
+    "type": "record",
+    "name": "manifest_file",
+    "fields": [
+        {"name": "manifest_path", "type": "string"},
+        {"name": "manifest_length", "type": "long"},
+        {"name": "content", "type": "int"},
+        {"name": "added_snapshot_id", "type": ["null", "long"]},
+    ],
+}
+MANIFEST_SCHEMA = {
+    "type": "record",
+    "name": "manifest_entry",
+    "fields": [
+        {"name": "status", "type": "int"},
+        {
+            "name": "data_file",
+            "type": {
+                "type": "record",
+                "name": "r2",
+                "fields": [
+                    {"name": "content", "type": "int"},
+                    {"name": "file_path", "type": "string"},
+                    {"name": "file_format", "type": "string"},
+                    {"name": "file_size_in_bytes", "type": "long"},
+                    {"name": "value_counts", "type": {"type": "map", "values": "long"}},
+                ],
+            },
+        },
+    ],
+}
+
+
+def manifest_entry(status: int, path: str, size: int) -> bytes:
+    data_file = zigzag(0) + avro_text(path) + avro_text("PARQUET") + zigzag(size) + zigzag(1) + avro_text("1") + zigzag(3) + zigzag(0)
+    return zigzag(status) + data_file
+
+
+class DataStore:
+    """The S3 objects as the lakehouse reader role sees them: manifest lists, manifests and data files, read whole or by byte range."""
+
+    identity = "lakehouse_reader"
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.denied = False
+        self.reads: list[str] = []
+
+    def put_table(self, location: str, snapshot: int, data: bytes = b"PAR1" + b"synthetic rows" + b"PAR1") -> None:
+        manifest = location + "/metadata/m0.avro"
+        live, deleted = location + "/data/00001.parquet", location + "/data/00000.parquet"
+        self.objects[manifest] = avro_file(MANIFEST_SCHEMA, [manifest_entry(2, deleted, 99), manifest_entry(1, live, len(data))])
+        self.objects[location + "/metadata/snap.avro"] = avro_file(
+            MANIFEST_LIST_SCHEMA, [avro_text(manifest) + zigzag(len(self.objects[manifest])) + zigzag(0) + zigzag(1) + zigzag(snapshot)], codec="null"
+        )
+        self.objects[live] = data
+
+    def read(self, location: str, byte_range: str | None, *, deadline: float) -> tuple[bytes, int]:
+        self.reads.append(location)
+        if self.denied:
+            raise reg.RegistrationError("transport", "reading a data object failed (AccessDenied)")
+        if location not in self.objects:
+            raise reg.RegistrationError("transport", "reading a data object failed (NoSuchKey)")
+        body = self.objects[location]
+        if byte_range is None:
+            return body, len(body)
+        first, last = (int(part) for part in byte_range.removeprefix("bytes=").split("-"))
+        return body[first : last + 1], len(body)
+
+
 class Lake:
     """A frozen Mac catalog whose tables match their versioned metadata objects in S3."""
 
@@ -90,6 +190,7 @@ class Lake:
         self.events: list[str] = []
         self.clock = registration_e2e.Clock()
         self.objects = registration_e2e.Objects(self.events)
+        self.storage = DataStore()
         self.source = Source(self.objects, self.events)
         for number, (namespace, name) in enumerate(sorted(required), 1):
             self.put(namespace, name, number)
@@ -119,7 +220,7 @@ class Lake:
             "refs": {"main": {"snapshot-id": 500 + number, "type": "branch"}},
         }
         self.objects.put(metadata_location, document, version)
-        self.objects.put(location + "/metadata/snap.avro", {"synthetic_manifest_list": name})
+        self.storage.put_table(location, 500 + number)
         self.source.tables[(namespace, name)] = {"metadata-location": metadata_location, "metadata": copy.deepcopy(document)}
         return document
 
@@ -221,7 +322,15 @@ class Cutover:
 
     def verify(self) -> dict[str, Any]:
         return bronze_cutover.verify_tables(
-            self.reader, self.lake.catalog, self.lake.objects, self.inventory, bucket=BUCKET, deadline=self.clock() + 1000, per_table=10, clock=self.clock
+            self.reader,
+            self.lake.catalog,
+            self.lake.objects,
+            self.lake.storage,
+            self.inventory,
+            bucket=BUCKET,
+            deadline=self.clock() + 1000,
+            per_table=10,
+            clock=self.clock,
         )
 
     def preflight(self) -> None:
@@ -360,7 +469,7 @@ def mac_gate_arguments(env: Env) -> dict[str, bool]:
         ("smoke", "s1", [], {"job": "smoke"}),
         ("a bronze load", "b1", ["--group", "hai"], {"job": "bronze"}),
     ):
-        refusal = expect_error(lambda args=args, params=params, launch=launch: env.submit(reader, "spark_write", launch, args, params))
+        refusal = expect_error(functools.partial(env.submit, reader, "spark_write", launch, args, params))
         checks[f"F1: {label} is refused at submit after the freeze"] = refused(refusal, "refused", "catalog authority")
     for attempt in env.state()["attempts"].values():
         if attempt["owner"] == "run:reader" and attempt["phase"] != "ended" and attempt["id"] != queued["attempt_id"]:
@@ -668,6 +777,36 @@ def http_absolute_deadline(folder: Path) -> dict[str, bool]:
 
 
 @offline
+def role_storage_reads(folder: Path) -> dict[str, bool]:
+    """V1: the live storage reads through the reader role's session values, never the project profile, and reads the size from the range."""
+    calls: list[tuple[list[str], dict[str, str]]] = []
+    body = b"PAR1"
+
+    def process(program: str, arguments: list[str], *, env: Mapping[str, str], timeout: float) -> CompletedProcess[str]:
+        calls.append(([program, *arguments], dict(env)))
+        Path(arguments[-1]).write_bytes(body)
+        return CompletedProcess(arguments, 0, json.dumps({"ContentRange": "bytes 0-3/120", "ContentLength": 4}), "")
+
+    token = "synthetic_token_" + hashlib.sha256(str(folder).encode()).hexdigest()[:12]
+    session = RoleSession("reader", "synthetic_key", "synthetic_secret_value", token, 4102444800)
+    settings = {"aws_profile": "synthetic_profile", "aws_region": "us-east-1", "data_bucket_name": BUCKET, "expected_account_id": "synthetic_account"}
+    storage = bronze_scan.RoleStorage(settings, session, process=process)
+    read = storage.read(f"s3://{BUCKET}/lakehouse/bronze/a/data/1.parquet", "bytes=0-3", deadline=time.monotonic() + 30)
+    command, env = calls[0]
+    return {
+        "a range read returns the bytes and the whole object size": read == (body, 120),
+        "the command names no profile": "--profile" not in command and "synthetic_profile" not in command,
+        "the session values select the identity through the environment only": env.get("AWS_SESSION_TOKEN") == token
+        and env.get("AWS_ACCESS_KEY_ID") == "synthetic_key"
+        and "AWS_PROFILE" not in env
+        and not any(token in part or "synthetic_secret_value" in part for part in command),
+        "the read names the byte range and the bucket key": command[command.index("--range") + 1] == "bytes=0-3"
+        and command[command.index("--key") + 1] == "lakehouse/bronze/a/data/1.parquet",
+        "the identity label is the lakehouse reader": storage.identity == "lakehouse_reader",
+    }
+
+
+@offline
 def register_and_verify(folder: Path) -> dict[str, bool]:
     """R1, R3, R5, Q3: preflight, namespace creation, registration, verification and a write-once receipt; a rerun gives unchanged."""
     cut = Cutover()
@@ -679,11 +818,16 @@ def register_and_verify(folder: Path) -> dict[str, bool]:
         "one register POST per table": len(cut.destination_stand_in.posts) == len(cut.inventory.tables),
     }
     facts = cut.verify()
-    checks["V1: verification loads every table and reads one manifest list per namespace"] = facts == {
+    scanned = {"manifests": 1, "data_file_bytes": 22, "storage_identity": "lakehouse_reader"}
+    checks["V1: verification loads every table and scans one data file per namespace through the reader role"] = facts == {
         "reader_tables": len(cut.inventory.tables),
-        "data_reads": ["bronze", "bronze_dictionary"],
+        "data_reads": {"bronze": scanned, "bronze_dictionary": scanned},
         "mac_recompare": len(cut.inventory.tables),
     }
+    checks["V1: the scan skips the deleted manifest entry and reads the live data file by range only"] = (
+        not any(location.endswith("00000.parquet") for location in cut.lake.storage.reads)
+        and sum(location.endswith("00001.parquet") for location in cut.lake.storage.reads) == 4
+    )
     directory = folder / "cutover" / "cut1"
     run_record = bronze_cutover.write_run_record(directory, "cut1", cut.inventory.sha256, first, "20261028T000000Z")
     digest = bronze_cutover.write_receipt(directory, "cut1", cut.inventory.sha256, facts)
@@ -781,10 +925,37 @@ def verify_failures(folder: Path) -> dict[str, bool]:
     """V1, V2, V3: a missing data file, an absent reader identity or a changed Mac table stops verification, so no receipt is written."""
     checks: dict[str, bool] = {}
     for label, change, expected in (
+        ("V1: an absent manifest list", lambda cut: cut.lake.storage.objects.pop(cut.inventory.tables[0].location + "/metadata/snap.avro"), "data_read"),
         (
-            "V1: an unreadable manifest list",
-            lambda cut: cut.lake.objects.versions.pop(cut.inventory.tables[0].location + "/metadata/snap.avro"),
-            "metadata_missing",
+            "V1: a manifest list that is not Avro",
+            lambda cut: cut.lake.storage.objects.update({cut.inventory.tables[0].location + "/metadata/snap.avro": b'{"synthetic": true}'}),
+            "data_read",
+        ),
+        (
+            "V1: a truncated manifest",
+            lambda cut: cut.lake.storage.objects.update(
+                {cut.inventory.tables[0].location + "/metadata/m0.avro": cut.lake.storage.objects[cut.inventory.tables[0].location + "/metadata/m0.avro"][:-30]}
+            ),
+            "data_read",
+        ),
+        ("V1: an absent data file", lambda cut: cut.lake.storage.objects.pop(cut.inventory.tables[0].location + "/data/00001.parquet"), "data_read"),
+        (
+            "V1: a data file of another size",
+            lambda cut: cut.lake.storage.objects.update({cut.inventory.tables[0].location + "/data/00001.parquet": b"PAR1PAR1"}),
+            "data_read",
+        ),
+        (
+            "V1: a data file that is not Parquet",
+            lambda cut: cut.lake.storage.objects.update({cut.inventory.tables[0].location + "/data/00001.parquet": b"JUNK" + b"synthetic rows" + b"PAR1"}),
+            "data_read",
+        ),
+        ("V1: a storage identity that is refused", lambda cut: setattr(cut.lake.storage, "denied", True), "data_read"),
+        (
+            "V1: a bronze_dictionary data file that is absent",
+            lambda cut: cut.lake.storage.objects.pop(
+                next(pin for pin in cut.inventory.tables if pin.namespace == "bronze_dictionary").location + "/data/00001.parquet"
+            ),
+            "data_read",
         ),
         ("V2: a refused reader identity", lambda cut: setattr(cut.reader_stand_in, "refuse_reads", True), "catalog_http"),
         (
@@ -873,6 +1044,9 @@ class StandInServices:
 
     def objects(self) -> reg.MetadataReader:
         return self.cut.lake.objects
+
+    def storage(self, *, deadline: float) -> bronze_scan.Storage:
+        return self.cut.lake.storage
 
     @contextlib.contextmanager
     def remote(self, instance: str, *, deadline: float) -> Iterator[bronze_cutover.Remote]:
@@ -1017,6 +1191,7 @@ ALL_CASES = (
     s3_metadata_reads,
     polaris_http,
     http_absolute_deadline,
+    role_storage_reads,
     register_and_verify,
     preflight_refusals,
     register_failures,

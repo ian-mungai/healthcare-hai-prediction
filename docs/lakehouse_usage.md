@@ -316,9 +316,13 @@ closes the connection and the step fails with the `deadline` cause.
 vending, creates `bronze` and `bronze_dictionary` if absent (approved for this cutover ID only) and registers each table
 with its own deadline (`--per-table-seconds`). It stops at the first failure. It never overwrites a different table and
 never posts a registration twice. A rerun with the same inventory digest gives `unchanged` for done tables. The
-Polaris root credential registers, for this one attended run. `verify` loads every table through the AWS reader pair,
-reads one manifest list per namespace and recompares every Mac table. Then it writes `bronze_receipt.json` once, which
-records the cutover ID, the inventory digest, the root principal and each registration run. Both credentials are read
+Polaris root credential registers, for this one attended run. `verify` loads every table through the AWS reader pair.
+For the first table of each namespace it then scans one data file through a short session of the lakehouse reader role,
+the S3 identity of AWS read jobs: it decodes the manifest list and a data manifest as Avro and reads the first live data
+file's head and tail by byte range. An absent or unreadable object, a file that is not Avro or Parquet and a data file
+whose size differs from its manifest entry all stop verification with the `data_read` cause. It recompares every Mac
+table last. Then it writes `bronze_receipt.json` once, which records the cutover ID, the inventory digest, the root
+principal, each registration run and each namespace scan. Both credentials are read
 from Parameter Store into memory only. `switch` names the receipt digest in its command reason. After the switch, no
 layer writes anywhere until AWS writers qualify. Mac reads are stale until the reader relay exists.
 
@@ -331,8 +335,8 @@ record, with authority and epoch unchanged.
 
 The E2E uses a launcher test registry with fake Docker, in-memory catalog and object stand-ins, a loopback Polaris
 stand-in and the real owned relay process. It makes no AWS, Session Manager or Docker call, so the tunnel start, the
-real catalogs and the AWS reader identity are verified only by the attended run. The manifest-list read shows the S3
-objects exist through the project profile, not that the AWS task role can read them.
+real catalogs, the AWS reader identity and the reader role session are verified only by the attended run. The scan
+reads with the lakehouse reader role, not the ECS task role of a read job.
 
 ## Staging, gold and pins
 
