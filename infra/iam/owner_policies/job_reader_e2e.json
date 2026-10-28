@@ -1,0 +1,31 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadTestTableObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": ${TEST_OBJECT_ARNS}
+    },
+    {
+      "Sid": "ListTestTablePrefixes",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "${BUCKET_ARN}",
+      "Condition": {"StringLike": {"s3:prefix": ${TEST_LIST_PREFIXES}}}
+    },
+    {
+      "Sid": "ReadBronzeTestVersions",
+      "Effect": "Allow",
+      "Action": ["s3:GetObjectVersion"],
+      "Resource": ${BRONZE_TEST_OBJECT_ARNS}
+    },
+    {
+      "Sid": "ListBronzeTestVersions",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucketVersions"],
+      "Resource": "${BUCKET_ARN}",
+      "Condition": {"StringLike": {"s3:prefix": ${BRONZE_TEST_LIST_PREFIXES}}}
+    }
+  ]
+}
