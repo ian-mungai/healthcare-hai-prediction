@@ -864,19 +864,29 @@ def case_extra_role_membership(_: Path) -> dict[str, bool]:
     }
 
 
+# The slow peers: the whole reply trickled, no reply, and complete headers of a closing reply (HTTP/1.0 or Connection: close) with a trickled body.
+SLOW_REPLIES = {
+    "trickling": (b"", b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n" + b" " * 62 + b"{}"),
+    "silent": (b"", b""),
+    "HTTP/1.0 body": (b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n", b" " * 62 + b"{}"),
+    "Connection: close body": (b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n", b" " * 62 + b"{}"),
+}
+
+
 @contextlib.contextmanager
-def slow_peer(trickle: bool) -> Iterator[int]:
-    """A loopback peer that reads the request, then sends a reply one byte every 0.04 s (trickle) or nothing at all (silent)."""
+def slow_peer(kind: str) -> Iterator[int]:
+    """A loopback peer that reads the request, sends the headers of its ``SLOW_REPLIES`` entry at once, then the rest one byte every 0.04 s."""
     server = socket.create_server(("127.0.0.1", 0))
     stop = threading.Event()
+    head, rest = SLOW_REPLIES[kind]
 
     def serve() -> None:
         with contextlib.suppress(OSError):
             connection, _ = server.accept()
             with connection:
                 connection.recv(65536)
-                reply = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n" + b" " * 62 + b"{}"
-                for byte in reply if trickle else b"":
+                connection.sendall(head)
+                for byte in rest:
                     if stop.wait(0.04):
                         return
                     connection.sendall(bytes([byte]))
@@ -893,10 +903,10 @@ def slow_peer(trickle: bool) -> Iterator[int]:
 
 
 def case_request_expiry(_: Path) -> dict[str, bool]:
-    """Every wait has a deadline: a peer that trickles its reply or never answers fails the request at its absolute deadline, not later."""
+    """Every wait has a deadline: a peer that trickles its reply or body, or never answers, fails the request at its absolute deadline, not later."""
     checks: dict[str, bool] = {}
-    for label, trickle in (("trickling", True), ("silent", False)):
-        with slow_peer(trickle) as port:
+    for label in SLOW_REPLIES:
+        with slow_peer(label) as port:
             request = setup.TunnelRequest(port, deadline=time.monotonic() + 0.3)
             began = time.monotonic()
             try:

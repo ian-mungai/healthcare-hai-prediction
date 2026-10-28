@@ -222,16 +222,19 @@ class TunnelRequest:
 
     def send(self, method: str, path: str, data: bytes | None, headers: dict[str, str]) -> tuple[int, Any]:
         """One request within the absolute deadline: a watchdog shuts the socket at expiry, so neither a silent peer nor one that keeps sending a
-        few bytes holds the header or body read past it (the cutover's ``bronze_inventory.PolarisHttp.send``)."""
+        few bytes holds the header or body read past it (the cutover's ``bronze_inventory.PolarisHttp.send``). The connected socket is kept here
+        because a closing response (``Connection: close`` or HTTP/1.0) detaches it from the connection while its body is still being read."""
         timeout = min(REQUEST_SECONDS, check_deadline(self.deadline, self.clock))
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
         expired = threading.Event()
+        held: list[socket.socket] = []
+        response: http.client.HTTPResponse | None = None
 
         def expire() -> None:
             expired.set()
-            if connection.sock is not None:
+            for sock in held:
                 with contextlib.suppress(OSError):
-                    connection.sock.shutdown(socket.SHUT_RDWR)
+                    sock.shutdown(socket.SHUT_RDWR)
 
         watchdog = threading.Timer(timeout, expire)
         watchdog.daemon = True
@@ -239,6 +242,8 @@ class TunnelRequest:
         try:
             try:
                 connection.connect()
+                if connection.sock is not None:
+                    held.append(connection.sock)
                 if expired.is_set():
                     raise TimeoutError
                 connection.request(method, path, body=data, headers=headers)
@@ -252,7 +257,11 @@ class TunnelRequest:
                 raise SetupError("deadline", f"{method} {path} passed its deadline; it is not repeated")
         finally:
             watchdog.cancel()
+            if response is not None:
+                response.close()
             connection.close()
+            for sock in held:
+                sock.close()
         if len(raw) > MAX_REPLY_BYTES:
             raise SetupError("catalog_http", f"{method} {path} replied with more than {MAX_REPLY_BYTES} bytes")
         if response.status >= 400:
