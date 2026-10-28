@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import functools
 import http.client
 import json
@@ -49,7 +50,7 @@ from typing import Any, Protocol
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from orchestration import launcher
+from orchestration import ecs_target, launcher
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.acquisition.s3_store import AwsCli, StorageError
 from scripts.infrastructure import secret_store
@@ -66,6 +67,8 @@ REQUEST_SECONDS = 30.0
 READY_SECONDS = 120.0
 CLOSE_SECONDS = 30.0
 SECRET_SECONDS = 30.0
+# The longest the credential step holds the launcher registry lock; the launcher waits for that lock at most run_lock.LOCK_WAIT_SECONDS.
+REGISTRY_HOLD_SECONDS = 20.0
 MAX_REPLY_BYTES = 1 << 20
 MANAGEMENT = "/api/management/v1"
 APPROVAL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -173,6 +176,10 @@ class TunnelRequest:
 
     def __repr__(self) -> str:
         return f"TunnelRequest(127.0.0.1:{self.port})"
+
+    def bounded(self, deadline: float) -> TunnelRequest:
+        """The same route with the earlier of the two absolute deadlines."""
+        return TunnelRequest(self.port, deadline=min(self.deadline, deadline), execute=self.execute, clock=self.clock, realm=self.realm)
 
     def __call__(
         self, method: str, path: str, token: str | None = None, body: dict[str, Any] | None = None, form: dict[str, str] | None = None
@@ -348,6 +355,9 @@ class Services(Protocol):
     @property
     def locks(self) -> Path: ...
 
+    @property
+    def registry(self) -> run_lock.Registry: ...
+
     def vault(self) -> PairVault: ...
 
     def remote(self, instance: str, *, deadline: float) -> contextlib.AbstractContextManager[Remote]: ...
@@ -516,8 +526,50 @@ def compare_grants(request: Request, access: str, role: str, expected: list[dict
         raise SetupError("grants", f"the grants of catalog role {role} differ from the approved plan; the role stays unassigned") from None
 
 
+@contextlib.contextmanager
+def no_live_writer_try(registry: run_lock.Registry, *, deadline: float, clock: Clock = time.monotonic) -> Iterator[None]:
+    """Hold the launcher registry lock, under which the launcher admits every try, and stop unless the registry proves no cloud try is live (P5).
+
+    The registry records each cloud try and its placement state but not the catalog pair it holds, so any try without a confirmed end
+    (``ecs_target.TERMINAL_PLACEMENTS``) stops the setup of every identity, and a registry that cannot be read proves nothing and stops it too. A
+    registry that does not exist yet has admitted nothing. The lock stays held until the credentials are stored, so no try is admitted in between.
+    """
+    registry.path.mkdir(parents=True, exist_ok=True)
+    with (registry.path / "registry.lock").open("a") as handle:
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if clock() >= deadline:
+                    raise SetupError("writer_try", "the launcher registry stayed locked until the deadline, so no live writer try can be ruled out") from None
+                time.sleep(0.05)
+        try:
+            if registry.identity_file.exists() or registry.state_file.exists():
+                try:
+                    identity = run_lock.read_identity(registry)
+                    state = run_lock.parse_state(registry.state_file.read_bytes(), identity["registry_id"], registry.state_file.name)
+                    usage = ecs_target.active_usage((state.get("attempts") or {}).values())
+                except (OSError, run_lock.RegistryError, ecs_target.PlacementError, KeyError, TypeError, AttributeError):
+                    raise SetupError("writer_try", "the launcher registry cannot be read, so no live writer try can be ruled out") from None
+                if usage.tasks:
+                    raise SetupError("writer_try", f"the launcher registry holds {usage.tasks} cloud try without a confirmed end; rerun after it ends")
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def ensure_principal(
-    request: Request, access: str, identity: str, approval: Approval | None, vault: PairVault, *, bucket: str, lock_path: Path, approvals: Path
+    request: TunnelRequest,
+    access: str,
+    identity: str,
+    approval: Approval | None,
+    vault: PairVault,
+    *,
+    bucket: str,
+    lock_path: Path,
+    approvals: Path,
+    registry: run_lock.Registry,
 ) -> dict[str, Any]:
     """Set up one identity in order: namespaces, roles, grants, grant comparison, role assignment, credentials, principal assignment."""
     role = PRINCIPALS[identity]
@@ -552,10 +604,12 @@ def ensure_principal(
     def check(status: int, action: str, allowed: tuple[int, ...] = (200, 201, 204)) -> None:
         ensure_status(status, action, allowed)
 
+    hold = min(request.deadline, request.clock() + REGISTRY_HOLD_SECONDS)
     try:
-        outcome = principal_credentials.ensure_credentials(
-            principal=role, names=configured_pairs()[identity], vault=vault, request=request, access=access, check=check, lock_path=lock_path
-        )
+        with no_live_writer_try(registry, deadline=hold, clock=request.clock):
+            outcome = principal_credentials.ensure_credentials(
+                principal=role, names=configured_pairs()[identity], vault=vault, request=request.bounded(hold), access=access, check=check, lock_path=lock_path
+            )
     except principal_credentials.CredentialError as error:
         raise SetupError("credentials", str(error)) from None
     status, _ = request("PUT", f"{MANAGEMENT}/principals/{role}/principal-roles", access, body={"principalRole": {"name": role}})
@@ -582,7 +636,9 @@ def step_principal(services: Services, identity: str, instance: str, approval_id
         request = TunnelRequest(remote.port, deadline=deadline, execute=remote.execute, clock=clock)
         access = root_token(request, secret)
         lock_path = services.locks / f"aws_{PRINCIPALS[identity]}.lock"
-        return ensure_principal(request, access, identity, approval, vault, bucket=services.bucket, lock_path=lock_path, approvals=services.approvals)
+        return ensure_principal(
+            request, access, identity, approval, vault, bucket=services.bucket, lock_path=lock_path, approvals=services.approvals, registry=services.registry
+        )
 
 
 def check_principals(request: Request, access: str, approvals: Path) -> dict[str, str]:
@@ -639,6 +695,11 @@ class LiveServices:
     @property
     def locks(self) -> Path:
         return self.state_root / "principal_locks"
+
+    @property
+    def registry(self) -> run_lock.Registry:
+        """The real launcher registry of the main checkout, whatever checkout the tool runs from."""
+        return run_lock.resolve(None, REPO_ROOT)
 
     def vault(self) -> PairVault:
         import boto3
