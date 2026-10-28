@@ -34,7 +34,7 @@ from typing import Any
 
 from orchestration import launcher
 from scripts.infrastructure.secret_store_stand_in import StandIn, stack_seeds
-from scripts.lakehouse import run_lock
+from scripts.lakehouse import launcher_cleanup, run_lock
 from scripts.orchestration import sentinel
 from scripts.orchestration.broker import BrokerPaths
 from scripts.orchestration.net_checks import ipv6_loopback_open, unreachable_elsewhere
@@ -44,6 +44,7 @@ from scripts.process import run_command
 ROOT = Path(__file__).resolve().parents[2]
 # The run's own folder is made inside this one with a random name and mode 0700.
 TEMP_ROOT = Path(os.sep, "tmp")
+TEARDOWN_SECONDS = 300.0
 OUT = ROOT / "data" / "e2e" / "orchestration_real"
 PLATFORM = json.loads((ROOT / "config" / "orchestration" / "platform.json").read_text())
 SENTINELS = {
@@ -237,13 +238,13 @@ def task_log(logs: Path, task_id: str) -> str:
     return found[0].read_text(errors="replace") if found else ""
 
 
-def run(checks: Checks, work: Path) -> dict[str, Any]:
+def run(checks: Checks, work: Path, nonce: str) -> dict[str, Any]:
     """The whole scenario against a stand-in Parameter Store; the caller removes the folder and stops what is left."""
     with StandIn(stack_seeds()) as stand_in:
-        return run_session(checks, work, stand_in.endpoint)
+        return run_session(checks, work, stand_in.endpoint, nonce)
 
 
-def run_session(checks: Checks, work: Path, endpoint: str) -> dict[str, Any]:
+def run_session(checks: Checks, work: Path, endpoint: str, nonce: str) -> dict[str, Any]:
     """The scenario with the launcher's secrets read from the stand-in at ``endpoint``."""
     evidence: dict[str, Any] = {}
     registry = work / "registry"
@@ -254,7 +255,7 @@ def run_session(checks: Checks, work: Path, endpoint: str) -> dict[str, Any]:
     os.environ.update(SENTINELS)
     config = launcher.resolve_config(str(registry))
     client = launcher.LauncherClient(config, start=True)
-    client.launch_nonce = secrets.token_hex(6)
+    client.launch_nonce = nonce
     client.connect().close()
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline and client.call("status", {"what": "launcher"})["status"] != "serving":
@@ -533,31 +534,85 @@ def sentinel_checks(checks: Checks, work: Path, tokens: list[str], evidence: dic
     )
 
 
+def clean_up(work: Path, nonce: str) -> list[str]:
+    """Confirm stack teardown, independently stop the owned launcher and retain unresolved recovery state across retries."""
+    unresolved: list[str] = []
+    registry = work / "registry"
+    saved = work / "cleanup_stack.json"
+    with launcher_cleanup.defer_termination() as interrupted:
+        try:
+            if (registry / "launcher.sock").exists():
+                run_lock.write_atomic(saved, json.dumps({"phase": "pending"}) + "\n")
+                deadline = time.monotonic() + TEARDOWN_SECONDS
+                client = launcher.LauncherClient(launcher.resolve_config(str(registry)), start=False)
+
+                def remaining() -> float:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        raise TimeoutError(f"the stack did not reach down within {TEARDOWN_SECONDS:g} s")
+                    return left
+
+                reply = client.call("ping", budget=remaining())
+                if reply.get("launch_nonce") and reply["launch_nonce"] != nonce:
+                    raise RuntimeError("a launcher with another nonce serves the test registry")
+                client.call("orchestration_down", budget=remaining())
+                while True:
+                    left = remaining()
+                    record = client.call(
+                        "status",
+                        {"what": "orchestration", "id": "", "wait": min(1.0, left), "until": {"field": "phase", "values": ["down"]}},
+                        {"kind": "any"},
+                        timeout=left,
+                        budget=left,
+                    )
+                    if record.get("phase") == "down":
+                        break
+                run_lock.write_atomic(saved, json.dumps({"phase": "down"}) + "\n")
+            elif saved.exists():
+                if json.loads(saved.read_text()).get("phase") != "down":
+                    raise RuntimeError("saved stack teardown remains unresolved and the launcher socket is absent")
+            elif (registry / "registry.json").exists():
+                state = json.loads((registry / "registry.json").read_text())
+                if (state.get("launcher", {}).get("orchestration") or {}).get("phase", "down") != "down":
+                    raise RuntimeError("the registry records an unresolved stack and the launcher socket is absent")
+        except Exception as exc:
+            unresolved.append(f"the stack was not brought down: {type(exc).__name__}: {str(exc)[:200]}")
+        finally:
+            try:
+                outcome = launcher_cleanup.end_launcher(registry, nonce)
+                if outcome not in ("none", "stopped"):
+                    unresolved.append(f"the test-registry launcher this run started was not stopped ({outcome})")
+            except Exception as exc:
+                unresolved.append(f"launcher cleanup failed: {type(exc).__name__}: {str(exc)[:200]}")
+        if interrupted:
+            unresolved.append(f"termination signal {interrupted[0]} received during cleanup")
+        if not unresolved:
+            shutil.rmtree(work, ignore_errors=True)
+    return unresolved
+
+
 def main() -> int:
     """Run the scenario, clean up, write the report and return the exit code."""
+    launcher_cleanup.exit_on_termination()
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     work = Path(tempfile.mkdtemp(prefix="a1_real_", dir=TEMP_ROOT)).resolve()  # /tmp is a link on this Mac; the launcher compares resolved paths
+    nonce = secrets.token_hex(6)
     checks = Checks()
     evidence: dict[str, Any] = {}
     error = ""
+    unresolved: list[str] = []
     try:
-        evidence = run(checks, work)
-    except Exception as exc:
+        evidence = run(checks, work, nonce)
+    except (Exception, SystemExit) as exc:
         error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()[-1500:]}"
         sys.stdout.write(f"error: {error.splitlines()[0]}\n")
     finally:
-        with contextlib.suppress(Exception):
-            registry = work / "registry"
-            if (registry / "launcher.sock").exists():
-                client = launcher.LauncherClient(launcher.resolve_config(str(registry)), start=False)
-                client.call("orchestration_down")
-                client.wait_for("orchestration", "", "phase", ("down",), {"kind": "any"}, 300)
-                client.call("shutdown", {"owner": True}, {"kind": "any", "owner": True})
-                time.sleep(1)
-        for name in SENTINELS:
-            os.environ.pop(name, None)
-        shutil.rmtree(work, ignore_errors=True)
-    passed = bool(checks.results) and all(result["ok"] for result in checks.results.values()) and not error
+        try:
+            for name in SENTINELS:
+                os.environ.pop(name, None)
+        finally:
+            unresolved = clean_up(work, nonce)
+    passed = bool(checks.results) and all(result["ok"] for result in checks.results.values()) and not error and not unresolved
     report = {
         "feature": "orchestration stack on real Docker through the launcher, test registry",
         "command": ".venv/bin/python -m scripts.orchestration.run_real_e2e",
@@ -568,6 +623,8 @@ def main() -> int:
         "checks": checks.results,
         "evidence": evidence,
         "temporary_folder_removed": not work.exists(),
+        "cleanup_unresolved": unresolved,
+        "registry_kept": str(work) if unresolved else "",
         "limits": [
             "No second device was available: the checks try every address of this Mac, not a connection from another machine.",
             "No real build, catalog, bronze, AWS or S3: the DAG run is a probe of the broker, not a transform.",
