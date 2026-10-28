@@ -1314,15 +1314,15 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 1990,
+      "line": 2025,
       "code_sha256": "7262a5d12d7ddd7c8b9f95d4ab8d9e815af69e92bbb232841afa48127d0a5f36",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "d712e4e0f624a7795b06f0e4fa5b568662da93ff6003921f33e70c361966d071",
+      "file_sha256": "3c1a8d86b80efefcd613d7d164f9f6cc0feab0c54660e479b3a32166fec0d0cf",
       "dependencies": {
         "scripts/process.py": "sha256:5d147f26c78264f528d9c5e6f90946b4bcad92c00f399b139c379ddd6a3dba61",
         "scripts/quality/ci_groups.py": "sha256:cc390c57fd1c1aa1d4b57fb640569cf5a5304bb19831fae751db265a17659ca5",
-        "scripts/quality/pre_push.py": "sha256:1884669904efd7c66fecae9525f5173ad05c116bdddd0987634c6c87e769c8d3",
+        "scripts/quality/pre_push.py": "sha256:b553a426d0814e33e5e6dc503cb75e7916fcea9b89d4a488b516bccb6479cb52",
         "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684",
         "scripts/quality/scratch_worktree.py": "sha256:dfeeb949842f5643170c9c9203ffee6b28c5496bf717e04e8e942b529450a347"
       },
@@ -1330,15 +1330,15 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 2042,
+      "line": 2077,
       "code_sha256": "ddfb4bd744b919616f97d784e28c5a981ddc3d18ee5b387f2f2b2bce6b160e35",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "d712e4e0f624a7795b06f0e4fa5b568662da93ff6003921f33e70c361966d071",
+      "file_sha256": "3c1a8d86b80efefcd613d7d164f9f6cc0feab0c54660e479b3a32166fec0d0cf",
       "dependencies": {
         "scripts/process.py": "sha256:5d147f26c78264f528d9c5e6f90946b4bcad92c00f399b139c379ddd6a3dba61",
         "scripts/quality/ci_groups.py": "sha256:cc390c57fd1c1aa1d4b57fb640569cf5a5304bb19831fae751db265a17659ca5",
-        "scripts/quality/pre_push.py": "sha256:1884669904efd7c66fecae9525f5173ad05c116bdddd0987634c6c87e769c8d3",
+        "scripts/quality/pre_push.py": "sha256:b553a426d0814e33e5e6dc503cb75e7916fcea9b89d4a488b516bccb6479cb52",
         "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684",
         "scripts/quality/scratch_worktree.py": "sha256:dfeeb949842f5643170c9c9203ffee6b28c5496bf717e04e8e942b529450a347"
       },

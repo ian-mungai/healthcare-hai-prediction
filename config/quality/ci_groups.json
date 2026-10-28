@@ -1,5 +1,5 @@
 {
-  "note": "Paths each check group of scripts/run_ci.sh depends on (Python regular expressions over repository paths). GitHub CI and the local pre-push run select groups from the same lists through scripts/quality/ci_groups.py. The lakehouse checks are four groups, lakehouse_bronze, lakehouse_silver, lakehouse_gold and lakehouse_features, listed in layers from upstream to downstream. The bronze list is the broad lakehouse list and holds the code every layer shares (the launcher, memory plan, provenance, lock, compose file, dbt project, macros and tests, and the gold checks that the silver E2E imports); the silver, gold and feature lists name only the files that belong to that layer. A file that an upstream layer's checks read although a later layer's list also matches it is named in upstream_inputs for the earliest layer that reads it (the bronze storage and provenance runners read gold macros, two gold dimension models, the bronze staging models, the silver build marker model, the saved suites, the silver columns and gold contracts and the silver quality module), and belongs to that layer, so a change to it reruns that layer and every layer downstream. Each other path is listed for the layer that reads it first, and no later layer's list may match it: a path that several layer lists match belongs to the most downstream of them, so a later layer's pattern that also matches an earlier layer's input would hide that layer (the silver suite check reads the saved suites in features/great_expectations and the gold suite folder, so those select silver, gold and features unless upstream_inputs assigns them to bronze, and the gold list excludes them). A check whose inputs no list can name completely belongs in always. A layer's changed path selects that layer and every layer downstream of it, so a bronze or shared change selects all four, a silver change selects silver, gold and features, a gold change selects gold and features and a feature check code change selects features. Feature model, test and recipe paths remain in the gold list because the gold model metadata and bridge checks read them too. The gold list also names the training target lists and their check (config/training/targets.json, scripts/training/targets.py, run_targets_e2e.py and the package marker), which read the gold control bridge, so a bridge or target list change runs that check. A path in global selects every group; a path that no group lists and that is not passive also selects every group. Each group's commands are in scripts/ci/groups/<group>.sh (the launcher's too), and that file is listed in its own group's list only (the launcher list leaves the folder out of its scripts/ pattern): an edit to it selects that group, the layers downstream of it and repository_code_checks (which matches every .sh file and runs the guard scripts/quality/ci_group_files.py), never another group. scripts/run_ci.sh stays in global, and so do scripts/quality/timing.sh (every group loads it), .github/workflows/ and .github/actions/; other files under .github/ (the pull request template) are documents. The privacy, secret, credential, data-file, writing, Markdown lint and documentation gates are not groups: they run in every scope. Groups in full_only run only in the full scope (the local full run); the acquisition gate keeps its own path list in the acquisition-checks hook, which the pre-push run (once, over the pushed range) and GitHub CI use. The fast source gates (Ruff, shell syntax, ShellCheck, actionlint, yamllint, Hadolint, gofmt and go vet) run unconditionally in every scope and part. Their configuration and source inventory cannot bypass a gate through path selection. SQL style runs in every full and range run (the run before a push and GitHub CI); in the staged and paths scopes it runs when a listed SQL input changes: dbt/, .sqlfluff and services/ SQL, the dbt package archive config and the SQLFluff pins and installer. Feature execution uses separate source and column parts with the feature_shards counts below. They share the lakehouse_features dependency layer, so each runs on every input of that layer and every upstream layer. The full local scope also runs repository_hooks as the same disjoint hook_groups used by the hosted matrix, excluding only the separate local_ci aggregate. The pre-push run (scripts/quality/pre_push.py) selects groups from the pushed range with these lists, as GitHub CI does, and runs the full scope instead when the range changes a path in pre_push.full_paths (the selector and its configuration, the CI scripts and group bodies, the acquisition CI entry scripts, the workflow, the setup action and the pre-commit configuration). Its steps have the deadlines in pre_push.timeout_seconds.",
+  "note": "Paths each check group of scripts/run_ci.sh depends on (Python regular expressions over repository paths). GitHub CI and the local pre-push run select groups from the same lists through scripts/quality/ci_groups.py. The lakehouse checks are four groups, lakehouse_bronze, lakehouse_silver, lakehouse_gold and lakehouse_features, listed in layers from upstream to downstream. The bronze list is the broad lakehouse list and holds the code every layer shares (the launcher, memory plan, provenance, lock, compose file, dbt project, macros and tests, and the gold checks that the silver E2E imports); the silver, gold and feature lists name only the files that belong to that layer. A file that an upstream layer's checks read although a later layer's list also matches it is named in upstream_inputs for the earliest layer that reads it (the bronze storage and provenance runners read gold macros, two gold dimension models, the bronze staging models, the silver build marker model, the saved suites, the silver columns and gold contracts and the silver quality module), and belongs to that layer, so a change to it reruns that layer and every layer downstream. Each other path is listed for the layer that reads it first, and no later layer's list may match it: a path that several layer lists match belongs to the most downstream of them, so a later layer's pattern that also matches an earlier layer's input would hide that layer (the silver suite check reads the saved suites in features/great_expectations and the gold suite folder, so those select silver, gold and features unless upstream_inputs assigns them to bronze, and the gold list excludes them). A check whose inputs no list can name completely belongs in always. A layer's changed path selects that layer and every layer downstream of it, so a bronze or shared change selects all four, a silver change selects silver, gold and features, a gold change selects gold and features and a feature check code change selects features. Feature model, test and recipe paths remain in the gold list because the gold model metadata and bridge checks read them too. The gold list also names the training target lists and their check (config/training/targets.json, scripts/training/targets.py, run_targets_e2e.py and the package marker), which read the gold control bridge, so a bridge or target list change runs that check. A path in global selects every group; a path that no group lists and that is not passive also selects every group. Each group's commands are in scripts/ci/groups/<group>.sh (the launcher's too), and that file is listed in its own group's list only (the launcher list leaves the folder out of its scripts/ pattern): an edit to it selects that group, the layers downstream of it and repository_code_checks (which matches every .sh file and runs the guard scripts/quality/ci_group_files.py), never another group. scripts/run_ci.sh stays in global, and so do scripts/quality/timing.sh (every group loads it), .github/workflows/ and .github/actions/; other files under .github/ (the pull request template) are documents. The privacy, secret, credential, data-file, writing, Markdown lint and documentation gates are not groups: they run in every scope. Groups in full_only run only in the full scope (the local full run); the acquisition gate keeps its own path list in the acquisition-checks hook, which the pre-push run (once, over the pushed range) and GitHub CI use. The fast source gates (Ruff, shell syntax, ShellCheck, actionlint, yamllint, Hadolint, gofmt and go vet) run unconditionally in every scope and part. Their configuration and source inventory cannot bypass a gate through path selection. SQL style runs in every full and range run (the run before a push and GitHub CI); in the staged and paths scopes it runs when a listed SQL input changes: dbt/, .sqlfluff and services/ SQL, the dbt package archive config and the SQLFluff pins and installer. Feature execution uses separate source and column parts with the feature_shards counts below. They share the lakehouse_features dependency layer, so each runs on every input of that layer and every upstream layer. The full local scope also runs repository_hooks as the same disjoint hook_groups used by the hosted matrix, excluding only the separate local_ci aggregate. The pre-push run (scripts/quality/pre_push.py) selects groups from the pushed range with these lists, as GitHub CI does, and runs the full scope instead when the range changes a path in pre_push.full_paths (the selector and its configuration, the CI scripts and group bodies, the acquisition CI entry scripts, the workflow, the setup action and the pre-commit configuration). Its steps have the deadlines in pre_push.timeout_seconds. worker_limits gives the deadline of each worker that scripts/run_ci.sh waits for, by item kind (the item name without a trailing shard number): the timeout in minutes of the hosted job that runs the same work (the CI-groups E2E keeps each value equal to the timeout of its job in .github/workflows/ci.yml). A worker that runs past its limit is stopped with its process group and fails the run with its name; CI_WORKER_LIMIT_SECONDS replaces every limit for one run.",
   "global": [
     "^scripts/run_ci\\.sh$",
     "^scripts/process\\.py$",
@@ -230,6 +230,88 @@
     "timeout_seconds": {
       "range": 2700,
       "full": 3600
+    }
+  },
+  "worker_limits": {
+    "python_lint": {
+      "job": "Local CI Core",
+      "minutes": 30
+    },
+    "orchestration_checks": {
+      "job": "Local CI Core",
+      "minutes": 30
+    },
+    "repository_code_checks": {
+      "job": "Local CI Core",
+      "minutes": 30
+    },
+    "configuration_checks": {
+      "job": "Local CI Core",
+      "minutes": 30
+    },
+    "sql_style": {
+      "job": "Local CI Core",
+      "minutes": 30
+    },
+    "terraform_checks": {
+      "job": "Local CI Core",
+      "minutes": 30
+    },
+    "lakehouse_bronze": {
+      "job": "Lakehouse Bronze Checks",
+      "minutes": 20
+    },
+    "lakehouse_silver": {
+      "job": "Lakehouse Silver Checks",
+      "minutes": 5
+    },
+    "lakehouse_gold_checks": {
+      "job": "Lakehouse Gold Checks",
+      "minutes": 25
+    },
+    "lakehouse_gold_writer_setup": {
+      "job": "Lakehouse Gold Checks",
+      "minutes": 25
+    },
+    "lakehouse_gold_model_metadata_e2e": {
+      "job": "Lakehouse Gold Model Metadata E2E",
+      "minutes": 30
+    },
+    "lakehouse_features_sources": {
+      "job": "Feature Sources (Shard 1 of 8)",
+      "minutes": 30
+    },
+    "lakehouse_features_columns": {
+      "job": "Feature Columns (Shard 1 of 4)",
+      "minutes": 30
+    },
+    "combine_feature_sources": {
+      "job": "Feature Combined Evidence",
+      "minutes": 10
+    },
+    "combine_feature_columns": {
+      "job": "Feature Combined Evidence",
+      "minutes": 10
+    },
+    "hook_privacy": {
+      "job": "Repository Hooks (privacy)",
+      "minutes": 12
+    },
+    "hook_documentation": {
+      "job": "Repository Hooks (documentation)",
+      "minutes": 30
+    },
+    "hook_code": {
+      "job": "Repository Hooks (code)",
+      "minutes": 40
+    },
+    "acquisition_shard": {
+      "job": "Acquisition Checks (Shard 1 of 4)",
+      "minutes": 30
+    },
+    "acquisition_combine": {
+      "job": "Acquisition Checks",
+      "minutes": 10
     }
   }
 }

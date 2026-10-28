@@ -12,7 +12,10 @@ set -euo pipefail
 # every group: the pre-push run escalates to it when the selector or the CI scripts change; run it on demand or when hosted CI is unavailable), "staged"
 # (the groups the staged paths touch, on demand) or "range" (the groups RANGE_START..RANGE_END touches: GitHub CI and the pre-push hook). The privacy, secret,
 # credential, data-file, writing, Markdown lint and documentation gates run in every scope and in every part, also when no group is selected.
-# CI_LIST_ONLY=1 prints the plan and runs nothing. Each group's seconds and each command's start, end and seconds (scripts/quality/timing.sh)
+# CI_LIST_ONLY=1 prints the plan and runs nothing. Each worker (a group, a gold unit, a feature shard, a hook partition, an acquisition shard or a combining step) runs in its own
+# process group and has a deadline: the timeout of the hosted job that runs the same work (worker_limits in config/quality/ci_groups.json), or CI_WORKER_LIMIT_SECONDS for every
+# worker. At the deadline the dispatcher stops the worker's process group (TERM, then KILL after CI_WORKER_GRACE_SECONDS, default 5), confirms that no member is left and fails the run
+# with the worker's name. An exit, Ctrl-C or TERM of the dispatcher stops every live worker group the same way. Each group's seconds and each command's start, end and seconds (scripts/quality/timing.sh)
 # are printed and added to the job summary (GITHUB_STEP_SUMMARY).
 # The check groups' functions are not in this file: scripts/ci/groups/<group>.sh holds the functions of one group of config/quality/ci_groups.json. Each group
 # runs in its own shell process (run_group) that loads only scripts/quality/timing.sh and that one file, so the shell state of a group (functions, variables, options,
@@ -50,7 +53,61 @@ scratch="$(mktemp -d "${TMPDIR:-/tmp}/hai_ci.XXXXXX")"
 # to the job summary in a fixed order, also when a gate or a unit failed.
 export CI_TIMING_FILE="$scratch/main.timing"
 timing_files=("$CI_TIMING_FILE")
+# Each worker leads its own process group (set -m while it starts), so a stop reaches the worker and everything it started. The live workers are listed in worker_pids.
+worker_pids=()
+worker_grace="${CI_WORKER_GRACE_SECONDS:-5}"
+worker_override="${CI_WORKER_LIMIT_SECONDS:-}"
+if [[ ! "$worker_grace" =~ ^[1-9][0-9]*$ ]] || [[ -n "$worker_override" && ! "$worker_override" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'CI_WORKER_GRACE_SECONDS and CI_WORKER_LIMIT_SECONDS must be whole numbers above 0, not %s and %s\n' "$worker_grace" "${worker_override:-unset}" >&2
+  exit 2
+fi
+# group_alive <pgid>: true while any process of the group exists (a zombie counts; bash reaps its children as they end).
+group_alive() { kill -0 -- "-$1" 2>/dev/null; }
+# groups_left <pgid>...: print how many of the groups still have a member.
+groups_left() {
+  local pgid left=0
+  for pgid in "$@"; do
+    if group_alive "$pgid"; then left=$((left + 1)); fi
+  done
+  printf '%s' "$left"
+}
+# stop_groups <grace seconds> <pgid>...: TERM to every group, KILL to the groups with a member left after the grace period, then confirm (5 s at most) that none is left.
+# Fails when a member survives KILL.
+stop_groups() {
+  local grace="$1" pgid tenths
+  shift
+  for pgid in "$@"; do kill -TERM -- "-$pgid" 2>/dev/null || true; done
+  for ((tenths = 0; tenths < grace * 10; tenths++)); do
+    if (($(groups_left "$@") == 0)); then return 0; fi
+    sleep 0.1
+  done
+  for pgid in "$@"; do kill -KILL -- "-$pgid" 2>/dev/null || true; done
+  for ((tenths = 0; tenths < 50; tenths++)); do
+    if (($(groups_left "$@") == 0)); then return 0; fi
+    sleep 0.1
+  done
+  return 1
+}
+# forget_worker <pid>: take a worker that has ended out of the live list.
+forget_worker() {
+  local pid keep=()
+  for pid in ${worker_pids[@]+"${worker_pids[@]}"}; do
+    if [[ "$pid" != "$1" ]]; then keep+=("$pid"); fi
+  done
+  if ((${#keep[@]})); then worker_pids=("${keep[@]}"); else worker_pids=(); fi
+}
+# stop_workers: stop every live worker group (the exit trap, so also after Ctrl-C and TERM). It waits 2 s after TERM, less than the 5 s that scripts/process.py gives this
+# script after its own TERM.
+stop_workers() {
+  if ((${#worker_pids[@]} == 0)); then return 0; fi
+  local pids=("${worker_pids[@]}")
+  worker_pids=()
+  if ! stop_groups 2 "${pids[@]}"; then
+    printf 'Local CI could not stop every worker process group: %s\n' "${pids[*]}" >&2
+  fi
+}
 finish() {
+  stop_workers
   if [[ -s "$scratch/main.timing" ]]; then
     timing_table "${timing_files[@]}" >>"$summary"
   fi
@@ -59,6 +116,10 @@ finish() {
 # Only a run that sets ci_finished=1 exits 0: bash 3.2 (macOS /bin/bash) reports status 0 to this trap when an unbound
 # variable ends the script, so the trap fails every other exit itself.
 trap 'finish; [[ "${ci_finished:-0}" == 1 ]] || exit 1' EXIT
+# Workers are in their own process groups, so a signal to this script's group does not reach them: these traps end the script, and the exit trap stops them.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 plan_args=(--scope "$scope" --part "$part" --format shell)
 if [[ "$scope" == "range" ]]; then
@@ -181,6 +242,11 @@ acquisition_combine() {
 
 feature_counts="$("$python_bin" -c 'import json; c=json.load(open("config/quality/ci_groups.json"))["feature_shards"]; print(c["sources"], c["columns"])')"
 read -r feature_sources_shards feature_columns_shards <<<"$feature_counts"
+# worker_limit_seconds_<kind>: the deadline in seconds of each kind of worker (worker_limits in config/quality/ci_groups.json, in minutes).
+worker_limits="$("$python_bin" -c 'import json; [print(kind, round(60 * entry["minutes"])) for kind, entry in json.load(open("config/quality/ci_groups.json"))["worker_limits"].items()]')"
+while read -r kind seconds; do
+  printf -v "worker_limit_seconds_$kind" '%s' "$seconds"
+done <<<"$worker_limits"
 feature_shard="${FEATURE_SHARD:-}"
 if [[ -n "$feature_shard" ]]; then
   if [[ "$part" != "feature_sources" && "$part" != "feature_columns" ]]; then
@@ -268,26 +334,69 @@ run_timed_item() {
 }
 
 failed=()
-# run_items <item>...: stream a single item, buffer parallel items in order, and retain each log and duration.
-run_items() {
-  local item index pids=() items=("$@")
-  if ((${#items[@]} == 1)); then
-    item="${items[0]}"
-    printf '\n== %s ==\n' "$item"
-    run_timed_item "$item" 2>&1 | tee "$scratch/$item.log" &
-    pids+=("$!")
-    timing_files+=("$scratch/$item.timing")
-  else
-    for item in "$@"; do
-      run_timed_item "$item" >"$scratch/$item.log" 2>&1 &
-      pids+=("$!")
-      timing_files+=("$scratch/$item.timing")
-    done
+# set_worker_limit <item>: set worker_limit to the deadline in seconds of the item. A kind without a limit stops the run before anything of it starts.
+set_worker_limit() {
+  local kind="${1%_[0-9]*}" variable
+  variable="worker_limit_seconds_$kind"
+  if [[ -z "${!variable:-}" ]]; then
+    printf 'The worker %s has no limit: add "%s" to worker_limits in config/quality/ci_groups.json.\n' "$1" "$kind" >&2
+    exit 1
   fi
-  for index in ${pids[@]+"${!pids[@]}"}; do
-    if ! wait "${pids[$index]}"; then
-      failed+=("${items[$index]}")
+  worker_limit="${worker_override:-${!variable}}"
+}
+# worker_group <item>: the check group of an item, or the item itself when it is not a group's.
+worker_group() {
+  local variable="item_group_$1"
+  printf '%s' "${!variable:-$1}"
+}
+# worker_overdue <started seconds> <limit seconds>: true when a worker has run past its limit.
+worker_overdue() { ((SECONDS - $1 >= $2)); }
+# run_items <item>...: stream a single item, buffer parallel items in order, and retain each log and duration. Each item is a worker in its own process group with a deadline.
+run_items() {
+  local item index pid pids=() starts=() limits=() items=("$@") worker_limit pending
+  set -m
+  for item in "$@"; do
+    set_worker_limit "$item"
+    limits+=("$worker_limit")
+    starts+=("$SECONDS")
+    if ((${#items[@]} == 1)); then
+      printf '\n== %s ==\n' "$item"
+      (run_timed_item "$item" 2>&1 | tee "$scratch/$item.log") </dev/null &
+    else
+      (run_timed_item "$item" >"$scratch/$item.log" 2>&1) </dev/null &
     fi
+    pids+=("$!")
+    worker_pids+=("$!")
+    timing_files+=("$scratch/$item.timing")
+  done
+  set +m
+  pending=${#pids[@]}
+  while ((pending > 0)); do
+    for index in ${pids[@]+"${!pids[@]}"}; do
+      pid="${pids[$index]}"
+      if [[ -z "$pid" ]]; then continue; fi
+      if ! kill -0 "$pid" 2>/dev/null; then
+        if ! wait "$pid"; then
+          failed+=("${items[$index]}")
+        fi
+      elif worker_overdue "${starts[$index]}" "${limits[$index]}"; then
+        printf 'Local CI worker %s (check group %s) ran past its deadline of %s s: stopping its process group %s.\n' \
+          "${items[$index]}" "$(worker_group "${items[$index]}")" "${limits[$index]}" "$pid" >&2
+        if stop_groups "$worker_grace" "$pid"; then
+          printf 'Stopped: no process of the group %s is left.\n' "$pid" >&2
+        else
+          printf 'The process group %s still has members after KILL.\n' "$pid" >&2
+        fi
+        wait "$pid" 2>/dev/null || true
+        failed+=("${items[$index]} (deadline ${limits[$index]} s)")
+      else
+        continue
+      fi
+      forget_worker "$pid"
+      pids[index]=""
+      pending=$((pending - 1))
+    done
+    if ((pending > 0)); then sleep 0.5; fi
   done
   for item in "$@"; do
     if ((${#items[@]} != 1)); then
@@ -297,6 +406,17 @@ run_items() {
     record "$item" "$(cat "$scratch/$item.seconds" 2>/dev/null || printf 'failed')"
   done
 }
+# A kind of worker without a limit stops the run before the first worker starts.
+for item in ${alone[@]+"${alone[@]}"} ${shared[@]+"${shared[@]}"}; do
+  set_worker_limit "$item"
+done
+if is_selected lakehouse_features; then
+  set_worker_limit combine_feature_sources
+  set_worker_limit combine_feature_columns
+fi
+if [[ "$part" == "all" ]] && is_selected acquisition; then
+  set_worker_limit acquisition_combine
+fi
 if ((${#alone[@]})); then
   run_items "${alone[@]}"
 fi
