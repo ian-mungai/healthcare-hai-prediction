@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Collector derivative policies",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "entries"],
+  "properties": {
+    "version": {"const": 1},
+    "entries": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/entry"}}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "name": {"type": "string", "minLength": 1, "not": {"pattern": "^\\*$|^all$|^\\.\\*$"}},
+    "domain": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "pattern"],
+          "properties": {
+            "kind": {"const": "pattern"},
+            "pattern": {"type": "string", "minLength": 1},
+            "tokens": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+            "range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+            "refuse_range": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "values"],
+          "properties": {
+            "kind": {"const": "enum"},
+            "values": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "allow_empty", "max_length"],
+          "properties": {
+            "kind": {"const": "text"},
+            "allow_empty": {"type": "boolean"},
+            "max_length": {"type": "integer", "minimum": 1, "maximum": 4096}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {"kind": {"const": "footnotes"}}
+        }
+      ]
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output", "type", "null_token", "domain"],
+      "properties": {
+        "input": {"$ref": "#/$defs/name"},
+        "output": {"$ref": "#/$defs/name"},
+        "derivation": {"type": "string", "minLength": 1},
+        "type": {"enum": ["identifier", "text", "integer", "decimal", "json"]},
+        "null_token": {"type": ["string", "null"]},
+        "domain": {"$ref": "#/$defs/domain"}
+      }
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "name_pattern", "type", "null_token", "domain"],
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "name_pattern": {"type": "string", "minLength": 1},
+        "type": {"enum": ["identifier", "text", "integer", "decimal", "json"]},
+        "null_token": {"type": ["string", "null"]},
+        "domain": {"$ref": "#/$defs/domain"}
+      }
+    },
+    "layout": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "columns"],
+          "properties": {
+            "name": {"$ref": "#/$defs/name"},
+            "columns": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/selector"}}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "bound_batches", "rules"],
+          "properties": {
+            "name": {"$ref": "#/$defs/name"},
+            "bound_batches": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "table", "headers_sha256"],
+                "properties": {
+                  "id": {"$ref": "#/$defs/sha256"},
+                  "table": {"type": "string", "minLength": 1},
+                  "year": {"type": "integer"},
+                  "headers_sha256": {"$ref": "#/$defs/sha256"}
+                }
+              }
+            },
+            "rules": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/rule"}}
+          }
+        }
+      ]
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "role", "max_bytes"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^[a-z_]+/[a-z0-9_.]+$"},
+        "role": {"enum": ["table", "notes"]},
+        "max_bytes": {"type": "integer", "minimum": 1, "maximum": 268435456},
+        "max_rows": {"type": "integer", "minimum": 1},
+        "min_rows": {"type": "integer", "minimum": 1},
+        "key": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "order": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "layouts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/layout"}}
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "recipe", "disposition", "source", "input", "extraction_map", "parser", "consumers", "files", "evidence", "family_check"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^r[0-9]+_[a-z0-9_]+$"},
+        "recipe": {"type": "string", "pattern": "^R[0-9]+$"},
+        "disposition": {"const": "project"},
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["family", "layout", "route", "command"],
+          "properties": {
+            "family": {"type": "string", "minLength": 1},
+            "layout": {"type": "string", "minLength": 1},
+            "route": {"type": "string", "minLength": 1},
+            "command": {"type": "string", "minLength": 1}
+          }
+        },
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "encoding", "max_bytes"],
+          "properties": {
+            "format": {"enum": ["json", "xlsx", "tsv_with_notes"]},
+            "encoding": {"const": "utf-8"},
+            "max_bytes": {"type": "integer", "minimum": 1}
+          }
+        },
+        "extraction_map": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["plans"],
+          "properties": {
+            "plans": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "plan_sha256"],
+                "properties": {"path": {"type": "string", "pattern": "^config/acquisition/[a-z0-9_]+\\.json$"}, "plan_sha256": {"$ref": "#/$defs/sha256"}}
+              }
+            },
+            "decision": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "decision_sha256"],
+              "properties": {"path": {"type": "string", "pattern": "^config/acquisition/[a-z0-9_]+\\.json$"}, "decision_sha256": {"$ref": "#/$defs/sha256"}}
+            }
+          }
+        },
+        "parser": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["module", "function", "version"],
+          "properties": {
+            "module": {"type": "string", "pattern": "^scripts\\.acquisition\\.[a-z0-9_]+$"},
+            "function": {"type": "string", "pattern": "^[a-z_]+$"},
+            "version": {"type": "integer", "minimum": 1}
+          }
+        },
+        "consumers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bronze_table", "paths", "dropped_bronze_tables"],
+          "properties": {
+            "bronze_table": {"type": "string", "minLength": 1},
+            "paths": {"type": "array", "items": {"type": "string", "pattern": "^dbt/models/[a-z_/]+\\.sql$"}, "uniqueItems": true},
+            "dropped_bronze_tables": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+          }
+        },
+        "files": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/file"}},
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "raw_sha256_field", "derivative_sha256_field", "required", "forbidden", "schema"],
+          "properties": {
+            "path": {"type": "string", "pattern": "^evidence/[a-z0-9_.]+$"},
+            "raw_sha256_field": {"type": "string", "minLength": 1},
+            "derivative_sha256_field": {"type": "string", "minLength": 1},
+            "required": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+            "forbidden": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+            "origin_urls": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "request_function": {"type": "string", "pattern": "^[a-z_]+$"},
+            "schema": {"type": "object", "minProperties": 1}
+          }
+        },
+        "family_check": {"enum": ["bls_laus", "census_profile", "census_detailed", "hud_crosswalk", "hud_workbook", "wonder_county_year"]},
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["databases", "fixed_parameters"],
+          "properties": {
+            "databases": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string", "minLength": 1}},
+            "fixed_parameters": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string"}}
+          }
+        }
+      }
+    }
+  }
+}
