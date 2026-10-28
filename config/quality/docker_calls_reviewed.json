@@ -480,7 +480,7 @@
       "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:9e86f6304e4745970a25d11e47018f313a01943fd7e9c6697bc34041e2795f14"
+        "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684"
       },
       "reason": "runs a pinned native linter from .tools/bin (shellcheck, actionlint or hadolint, named from config/quality_tools.json) with its version flag"
     },
@@ -493,7 +493,7 @@
       "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:9e86f6304e4745970a25d11e47018f313a01943fd7e9c6697bc34041e2795f14"
+        "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684"
       },
       "reason": "runs a declared shell interpreter (sh, bash, dash, zsh or ksh only, from the source's shebang or extension) with -n to check syntax"
     },
@@ -506,7 +506,7 @@
       "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:9e86f6304e4745970a25d11e47018f313a01943fd7e9c6697bc34041e2795f14"
+        "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684"
       },
       "reason": "runs the pinned SQLFluff from .tools/sqlfluff/bin with lint arguments"
     },
@@ -519,7 +519,7 @@
       "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:9e86f6304e4745970a25d11e47018f313a01943fd7e9c6697bc34041e2795f14"
+        "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684"
       },
       "reason": "two calls whose first line is the same code: line 258 runs pinned dbt from .tools/sqlfluff/bin with parse to read the macro call graph; line 327 runs pinned SQLFluff from .tools/sqlfluff/bin on temporary masked copies of DuckDB CLI scripts"
     },
@@ -532,7 +532,7 @@
       "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:9e86f6304e4745970a25d11e47018f313a01943fd7e9c6697bc34041e2795f14"
+        "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684"
       },
       "reason": "runs gofmt from the folder of the verified Go 1.27.3 program with -l"
     },
@@ -545,7 +545,7 @@
       "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:9e86f6304e4745970a25d11e47018f313a01943fd7e9c6697bc34041e2795f14"
+        "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684"
       },
       "reason": "runs the private yamllint environment's Python, or the current interpreter, with -m yamllint --version"
     },
@@ -558,7 +558,7 @@
       "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:9e86f6304e4745970a25d11e47018f313a01943fd7e9c6697bc34041e2795f14"
+        "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684"
       },
       "reason": "runs the private yamllint environment's Python, or the current interpreter, with -m yamllint on the selected sources"
     },
@@ -571,7 +571,7 @@
       "file_sha256": "d26cf3497fb5cf2ea73c08b41da673f1180819b5945fc843d577b95b3b3efa1f",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
-        "scripts/quality/repo_checks.py": "sha256:9e86f6304e4745970a25d11e47018f313a01943fd7e9c6697bc34041e2795f14"
+        "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684"
       },
       "reason": "runs a pinned native linter from .tools/bin (shellcheck, actionlint or hadolint) on the selected sources"
     },
@@ -1296,7 +1296,7 @@
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/ci_groups.py": "sha256:f879b6530d4ac46752d238e79710b98ae732f66dbd331f8fec23823ddfe3fcab",
         "scripts/quality/pre_push.py": "sha256:c12a93a3045a3d5c0218a2da02a82b672daa4d0aaee08d00a1a5dc3cdff43ab4",
-        "scripts/quality/repo_checks.py": "sha256:9e86f6304e4745970a25d11e47018f313a01943fd7e9c6697bc34041e2795f14",
+        "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684",
         "scripts/quality/scratch_worktree.py": "sha256:60e9d686976414f37753f2476f3da430162650f06bf70e4d6ab560f992e32934"
       },
       "reason": "Runs the first hooks workflow step with Bash in a scratch folder. That step writes the current epoch to GITHUB_ENV through date and echo. It does not call Docker."
@@ -1312,7 +1312,7 @@
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/ci_groups.py": "sha256:f879b6530d4ac46752d238e79710b98ae732f66dbd331f8fec23823ddfe3fcab",
         "scripts/quality/pre_push.py": "sha256:c12a93a3045a3d5c0218a2da02a82b672daa4d0aaee08d00a1a5dc3cdff43ab4",
-        "scripts/quality/repo_checks.py": "sha256:9e86f6304e4745970a25d11e47018f313a01943fd7e9c6697bc34041e2795f14",
+        "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684",
         "scripts/quality/scratch_worktree.py": "sha256:60e9d686976414f37753f2476f3da430162650f06bf70e4d6ab560f992e32934"
       },
       "reason": "Runs the literal HOOK_DEADLINE_PROGRAM with the project Python. It records calls to the shared process launcher and invokes ci_hooks against a scratch pre-commit stand-in that only records arguments and exits. It does not call Docker."
