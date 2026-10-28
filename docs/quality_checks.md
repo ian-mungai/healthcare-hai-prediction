@@ -574,7 +574,7 @@ Files copied by the repository check E2E runners select `repository_code_checks`
 
 Each CI run retains configuration evidence under `data/e2e/configuration/` and
 quality evidence under `data/e2e/quality/`. The secret store E2E writes its report under `data/e2e/secret_store/` and the gold writer set-up
-check under `data/e2e/gold_publish/`. E2E reports include source hashes,
+check under `data/e2e/gold_publish/`. `configuration_checks` also runs the AWS catalog setup E2E (`scripts.lakehouse.run_aws_catalog_setup_e2e --mutations`). A change to `scripts/lakehouse/aws_catalog_setup.py`, its E2E or `scripts/lakehouse/principal_credentials.py` selects that group. The E2E writes its report under the run's quality evidence in `aws_catalog_setup/`. E2E reports include source hashes,
 expected and observed process outcomes, repeat commands and tested limits.
 GitHub Actions uploads the configuration, quality, broker and feature evidence and retains it for 14 days. Feature shards retain their reports under `data/e2e/quality/feature_shards/<suite>/shard_<index>/`. The combining job retains both combined reports and their input shard reports. Hook partitions retain their logs and report under `data/e2e/hooks/`. The secret store and gold set-up reports stay on the runner and are not uploaded. Local TFLint
 needs permission to start its bundled plugin; a sandbox denial is a blocked
