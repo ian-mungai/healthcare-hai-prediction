@@ -47,6 +47,16 @@ The project profile runs the third.
    (`scripts/infrastructure/render_platform_config.py`). Before an apply, the saved plan's `.env` inputs must match
    and every other variable must keep its committed default.
 
+**IAM preparation inputs.** The IAM stack's four preparation inputs are `bronze_writer_prepared`, `job_writer_e2e_prepared`,
+`bronze_qualification_collection` and `bronze_live_locations`. They are set only in the committed, reviewed file
+`config/aws/iam_preparation.json`, never in `.env` or on the command line. The defaults are `false`, `false`, `""` and `{}`.
+The lead changes a value after the evidence for it exists, so Git history records who prepared what and when. The renderer refuses
+a file that is not exactly those four keys with the right types. It also refuses a collection that is not mapped in
+`config/lakehouse/bronze_tables.json` and a location map that is neither empty nor exactly the bronze and bronze dictionary
+locations of the data bucket. It then writes the ignored `infra/iam/preparation.auto.tfvars.json`. Before an apply, the saved plan
+must carry exactly these values, so a file edited between plan and apply is refused. The Terraform preconditions still decide
+whether the combination is allowed.
+
 The control-plane services stack (`infra/services/`) runs on the platform's container host after these three; its inputs,
 secrets, images and the Mac launcher changes are in `docs/aws_control_plane.md`.
 

@@ -323,7 +323,9 @@ def test_cli_checks_selected_saved_plan(environment: dict[str, Any], tmp_path: P
     path.write_text("\n".join(f"{key}={value}" for key, value in environment.items()), encoding="utf-8")
     storage, iam = build_configuration(environment, "example_admin")
     values = storage if stack == "storage" else iam
-    plan: dict[str, Any] = {"complete": True, "variables": {key: {"value": value} for key, value in values.items()}}
+    # The IAM stack also carries the four committed preparation inputs.
+    preparation = json.loads(renderer.PREPARATION_PATH.read_text(encoding="utf-8")) if stack == "iam" else {}
+    plan: dict[str, Any] = {"complete": True, "variables": {key: {"value": value} for key, value in {**values, **preparation}.items()}}
     if change:
         plan["variables"][change] = {"value": "example_unapproved"}
     monkeypatch.setattr(renderer, "REPO_ROOT", tmp_path)
