@@ -52,7 +52,7 @@ CI_SOURCE = (ROOT / "scripts" / "ci" / "groups" / "python_lint.sh").read_text()
 ALLOWLIST = ".privacy_allowlist"
 ALLOWLIST_SOURCE = (ROOT / ALLOWLIST).read_text()
 ENV_EXAMPLE_SOURCE = (ROOT / ".env.example").read_text()
-VENDOR_ADDRESS = "noreply" + "@" + "anthropic.com"  # The attribution check matches this vendor address.
+VENDOR_ADDRESS = "noreply" + "@" + "anthropic.com"
 HOME_PATH = "/Us" + "ers/jdoe/projects/app/run.log"
 TEMP_PATH = "/var/" + "folders/zq/k3j9x0000gn/T/run_1"
 PERSONAL_EMAIL = "jane.doe" + "@" + "gmail.com"
@@ -61,7 +61,6 @@ ACCOUNT = "1234" + "56789012"
 AWS_ARN = f"arn:aws:iam::{ACCOUNT}:role/deploy"
 ENV_VALUE = "acme" + "-admin-profile"
 PROJECT_NAME = "acme" + "-analytics"
-# No privacy finding may print the value it found.
 PRIVACY_VALUES = [HOME_PATH, TEMP_PATH, PERSONAL_EMAIL, PHONE, ACCOUNT, ENV_VALUE]
 WRITING_ALLOWLIST = ".writing_allowlist"
 ISO_DATE = "2026" + "-09-30"
@@ -77,7 +76,28 @@ CLEAN_WRITING_HOOK = CLEAN_WRITING.replace(f"An em dash {EM_DASH} allowed outsid
 CLAUSE_COMMA = "Secrets never go into logs or commits" + ", and a privacy scan runs on every commit.\n"
 SERIAL_COMMA = "The check reads Markdown, articles" + ", and commit messages.\n"
 NOR_COMMA = "It is not fast" + ", nor is it cheap.\n"
-# Removed-name samples are assembled so this file never names them literally: the check searches code too.
+HISTORY_FINDING = "history note in a current document"
+NO_LONGER_FINDING = "possible history note: 'no longer' describes a change"
+HISTORY_LINES = [
+    "The cap is five rows (owner decision about the cap).\n",
+    "The gate is new in v8.24.0 of the bundle.\n",
+    "See issue #76 for the cap.\n",
+    "It replaced the old gate.\n",
+    "The cap holds since Oct 10 2026.\n",
+    "The gate was capped at five rows.\n",
+    "The note dates from when this section was written.\n",
+    "The cap was confirmed by the owner.\n",
+    "The cap is five rows, owner decision of Oct 10 2026.\n",
+    "The cap is five rows by owner decision.\n",
+]
+HISTORY_LINE = HISTORY_LINES[5]
+NO_LONGER_LINE = "The flag is no longer used.\n"
+DEADLINE_LINE = "The window stays open until Nov 1 2026.\n"
+HISTORY_CLEAN = (
+    "---\ntitle: Notes\nnote: capped at five rows\n---\n\n# Notes\n\n"
+    "See `#76` and `v8.24.0`, [the log](https://example.invalid/#76), [the cap](#section-2) and the entity &#39;x&#39;.\n"
+    f"{DEADLINE_LINE}\n```text\n{HISTORY_LINE}{NO_LONGER_LINE}```\n"
+)
 OLD_SCRIPT = "old" + "_tool.py"
 OLD_FLAG = "--legacy" + "-mode"
 OLD_FUNCTION = "helper" + "_total"
@@ -85,7 +105,6 @@ OLD_CLASS = "Legacy" + "Loader"
 OLD_KEY = "retention" + "_days"
 OLD_VARIABLE = "bucket" + "_label"
 OLD_MODEL = "stg" + "_orders"
-# Not pinned by any runtime's requirements file that the scratch repository copies.
 OLD_PACKAGE = "hum" + "anize"
 OLD_MODULE = OLD_PACKAGE
 STALE_HELPER = "stale" + "_helper"
@@ -96,15 +115,12 @@ UNUSED_SETTING = "OLD" + "_SETTING"
 UNUSED_TF_VARIABLE = "unused" + "_region"
 DASH_M_MODULE = "nightly" + "_report"
 USED_TF = f'variable "{UNUSED_TF_VARIABLE}" {{}}\n\nlocals {{\n  region = var.{UNUSED_TF_VARIABLE}\n}}\n\n' + 'output "region" {\n  value = local.region\n}\n'
-# The scratch repository holds this repository's scripts; the cleanup samples sit outside them.
 COPIED_ALLOWED = (
     "orphan scripts/* -- check scripts copied into the scratch repository\n"
     "orphan dbt/* -- dbt settings copied into the scratch repository\n"
     "unused-code scripts/* -- check scripts copied into the scratch repository\n"
     "unused-dependencies scripts/* -- check scripts copied into the scratch repository\n"
 )
-# A runtime map with an image whose lock file pins a package and a transitive pin, and a package the image provides. The host provides
-# jsonschema as the real map does, because the scratch repository holds the launcher, which imports it.
 RUNTIME_MAP = "config/quality/dependency_runtimes.json"
 PROVIDED_MODULE = "spark" + "lib"
 RUNTIME_MAP_SOURCE = (
@@ -118,7 +134,6 @@ RUNTIME_SAMPLE = {
     "image/requirements.txt": f"{UNUSED_PACKAGE}==0.9.0 \\\n    --hash=sha256:{'a' * 64}\nsix==1.17.0 \\\n    --hash=sha256:{'b' * 64}\n",
     ".cleanup_allowlist": COPIED_ALLOWED,
 }
-# Cleanup checks: a sample that must block must also print its finding, so a failure for another reason cannot pass.
 CLEANUP_HOOKS = {"unused-code", "unused-dependencies", "orphan-files", "terraform-unused"}
 WHITELIST = "scripts/quality/vulture_whitelist.py"
 
@@ -398,14 +413,12 @@ CASES = [
     ),
     Case("used Terraform variable", "terraform-unused", True, {"infra/main.tf": USED_TF}),
     Case("unused Terraform variable", "terraform-unused", False, {"infra/main.tf": f'variable "{UNUSED_TF_VARIABLE}" {{}}\n'}),
-    # Only folders that hold a tracked .tf file are checked; an ignored folder is out of scope, as in CI.
     Case(
         "ignored Terraform folder",
         "terraform-unused",
         True,
         {".gitignore": "archive/\n", "archive/main.tf": f'variable "{UNUSED_TF_VARIABLE}" {{}}\n', "infra/main.tf": USED_TF},
     ),
-    # A nested tracked folder is checked on its own and its findings keep their path from the repository root.
     Case(
         "unused variable in a nested folder",
         "terraform-unused",
@@ -471,6 +484,9 @@ CASES = [
     Case("time-bound word blocked by the hook", "writing-check", False, {"notes.md": "The loader currently reads S3.\n"}),
     Case("procedural soon passes the hook", "writing-check", True, {"notes.md": "Run it as soon as the load ends.\n"}),
     Case("warn-first kinds warn through the hook", "writing-check", True, {"notes.md": "Rules help; checks enforce them.\n"}),
+    Case("history note blocked by the hook", "writing-check", False, {"notes.md": HISTORY_LINE}),
+    Case("no longer sentence warns through the hook", "writing-check", True, {"notes.md": NO_LONGER_LINE}),
+    Case("deadline passes the hook", "writing-check", True, {"notes.md": DEADLINE_LINE}),
     Case(
         "valid front matter passes",
         "front-matter",
@@ -551,7 +567,6 @@ CASES = [
     Case("scissors cannot hide actual credit", "commit-msg", False, message=f"fix: tidy\n\n{SCISSORS}\n{CREDIT}: Claude\n"),
     Case("agent substring in human name", "commit-msg", True, message=f"fix: tidy\n\n{CREDIT}: Claudette Example <human@example.invalid>\n"),
 ]
-# Privacy cases must be blocked for their intended cause, shown by file, line and type.
 BLOCK_REASONS = {
     "function nothing calls": f"app/util.py:4: unused function '{STALE_HELPER}'",
     "dependency nothing imports": f"requirements.txt: {UNUSED_PACKAGE} is declared but nothing imports it",
@@ -574,8 +589,10 @@ BLOCK_REASONS = {
     "allowlist entry without reason": ".privacy_allowlist:{line}: allowlist entry without a reason",
     "allowlist entry with unknown type": ".privacy_allowlist:{line}: allowlist entry with an unknown type",
     "writing finding blocked by the hook": "notes.md:1: comma before a final 'and', 'or' or 'nor'",
+    "history note blocked by the hook": f"notes.md:1: {HISTORY_FINDING}",
     "time-bound word blocked by the hook": "notes.md:1: time-bound word in prose",
     "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
+    "no longer sentence warns through the hook": f"WARN notes.md:1: {NO_LONGER_FINDING}",
     "star bullet blocked by markdownlint": "MD004",
     "missing front matter blocked": "docs/guide.md:1: no front matter",
     "title different from the H1 blocked": "title does not match the H1",
@@ -586,10 +603,10 @@ BLOCK_REASONS = {
     "uppercase keyword blocked by sqlfluff": "CP01",
     "leading comma blocked by sqlfluff": "LT04",
 }
-# Good cases that must also print a marker, so a skipped check cannot pass silently.
 PASS_MARKERS = {
     "unreadable file listed": "docs/diagram.png: unreviewed: cannot be read as text",
     "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
+    "no longer sentence warns through the hook": f"WARN notes.md:1: {NO_LONGER_FINDING}",
 }
 
 
@@ -616,12 +633,9 @@ def scratch_repo(root: Path, case: Case) -> Path:
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.name", "check test")
     git(repo, "config", "user.email", "test@example.invalid")
-    # No background garbage collection or maintenance: a detached run can still be writing into .git when the scratch
-    # folder is removed, which failed CI run 37736374173 with "Directory not empty".
+    # A detached Git garbage collection can still be writing into .git when the scratch folder is removed.
     git(repo, "config", "gc.auto", "0")
     git(repo, "config", "maintenance.auto", "false")
-    # Copy only files Git tracks or would track, so ignored local code never enters the scratch repository. The launcher reads a
-    # variable .env.example documents (DOCKER_HOST), so the env-example cases need it too.
     listed = run_command(
         "git", ["ls-files", "--cached", "--others", "--exclude-standard", "scripts", "orchestration/launcher.py"], cwd=ROOT, check=True
     ).stdout.splitlines()
@@ -736,7 +750,6 @@ def run_privacy_scope_case() -> tuple[bool, str]:
         return ok, f"{codes}; value leaked={leaked}\n" + full.stderr
 
 
-# Each sample runs the check directly, without --warn: (name, files, articles, expected exit, marker in the output).
 WRITING_SAMPLES = [
     ("clean writing sample", {"notes.md": CLEAN_WRITING}, [], 0, ""),
     ("comma before a final clause", {"notes.md": CLAUSE_COMMA}, [], 1, "notes.md:1: comma before a final 'and', 'or' or 'nor'"),
@@ -793,7 +806,7 @@ PUNCTUATION_PROSE = (
     "Open docs/quality_checks.md or scripts/run_ci.sh, then ./a/b, ~/a/b and a/b/c. Hyphens stay in well-known words.\n"
 )
 CLEAN_PUNCTUATION = f"---\ntitle: Notes\nnote: a {EM_DASH} b; c/d\n---\n\n# Notes\n\n{PUNCTUATION_PROSE}\n```text\n{ALL_KINDS}```\n"
-BLOCK_ALL = ("--block", "dash", "--block", "semicolon", "--block", "slash")
+BLOCK_ALL = ("--block", "dash", "--block", "semicolon", "--block", "slash", "--block", "history")
 KIND_FOLDERS = ("tests/fixtures/", "dbt/seeds/", "features/recipes/")
 WRITING_KIND_SAMPLES = [
     ("em dash warns", {"notes.md": DASH_LINE}, (), 0, [f"WARN notes.md:1: {DASH_FINDING}"]),
@@ -867,10 +880,58 @@ WRITING_KIND_SAMPLES = [
     ),
     ("an en dash in a declared article warns", {"articles/a.md": EN_DASH_LINE}, ("--articles=articles/*.md",), 0, [f"WARN articles/a.md:1: {DASH_FINDING}"]),
     *[(f"{folder} is not scanned", {f"{folder}notes.md": ALL_KINDS}, BLOCK_ALL, 0, []) for folder in KIND_FOLDERS],
+    *[(f"{folder} is not scanned for history", {f"{folder}notes.md": HISTORY_LINE + NO_LONGER_LINE}, BLOCK_ALL, 0, []) for folder in KIND_FOLDERS],
+    *[(f"history sample {number} warns", {"notes.md": line}, (), 0, [f"WARN notes.md:1: {HISTORY_FINDING}"]) for number, line in enumerate(HISTORY_LINES, 1)],
+    (
+        "every history sample on its own line blocks",
+        {"notes.md": "".join(HISTORY_LINES)},
+        ("--block", "history"),
+        1,
+        [f"notes.md:{number}: {HISTORY_FINDING}" for number in range(1, len(HISTORY_LINES) + 1)],
+    ),
+    ("--block history blocks", {"notes.md": HISTORY_LINE}, ("--block", "history"), 1, [f"notes.md:1: {HISTORY_FINDING}"]),
+    ("--warn keeps a blocked history kind a warning", {"notes.md": HISTORY_LINE}, ("--block", "history", "--warn"), 0, [f"WARN notes.md:1: {HISTORY_FINDING}"]),
+    ("a deadline is not history", {"notes.md": DEADLINE_LINE}, BLOCK_ALL, 0, []),
+    ("code, URL, anchor, entity, fence and front matter are not history", {"notes.md": HISTORY_CLEAN}, BLOCK_ALL, 0, []),
+    ("CHANGELOG.md is exempt from history", {"CHANGELOG.md": "## v1.0.0\n\n" + HISTORY_LINE}, BLOCK_ALL, 0, []),
+    ("the CHANGELOG exemption leaves the other kinds", {"CHANGELOG.md": SEMICOLON_LINE}, (), 0, [f"WARN CHANGELOG.md:1: {SEMICOLON_FINDING}"]),
+    ("a no longer sentence warns", {"notes.md": NO_LONGER_LINE}, (), 0, [f"WARN notes.md:1: {NO_LONGER_FINDING}"]),
+    ("a no longer sentence warns in the CHANGELOG", {"CHANGELOG.md": NO_LONGER_LINE}, (), 0, [f"WARN CHANGELOG.md:1: {NO_LONGER_FINDING}"]),
+    ("a sentence without no longer is clean", {"notes.md": "The flag is used.\n"}, BLOCK_ALL, 0, []),
+    ("no longer never blocks with every block flag", {"notes.md": NO_LONGER_LINE}, BLOCK_ALL, 0, [f"WARN notes.md:1: {NO_LONGER_FINDING}"]),
+    (
+        "history and no longer on one line are two findings",
+        {"notes.md": "It replaced the old gate and is no longer used.\n"},
+        ("--block", "history"),
+        1,
+        [f"WARN notes.md:1: {NO_LONGER_FINDING}", f"notes.md:1: {HISTORY_FINDING}"],
+    ),
+    (
+        "history allowlist entry with a reason silences only history",
+        {"notes.md": HISTORY_LINE + NO_LONGER_LINE, WRITING_ALLOWLIST: "history notes.md -- the sentence quotes an old rule on purpose\n"},
+        ("--block", "history"),
+        0,
+        [f"WARN notes.md:2: {NO_LONGER_FINDING}"],
+    ),
+    (
+        "no longer allowlist entry with a reason silences it",
+        {"notes.md": NO_LONGER_LINE, WRITING_ALLOWLIST: "no-longer notes.md -- a current rule\n"},
+        (),
+        0,
+        [],
+    ),
+    (
+        "history allowlist entry without reason",
+        {"notes.md": HISTORY_LINE, WRITING_ALLOWLIST: "history notes.md\n"},
+        (),
+        1,
+        [f"WARN notes.md:1: {HISTORY_FINDING}", f"{WRITING_ALLOWLIST}:1: allowlist entry without a reason"],
+    ),
 ]
 WRITING_KIND_ERRORS = [
     ("--block with an unknown kind", ("--block", "colon"), "invalid choice: 'colon'"),
     ("--block of a kind that always blocks", ("--block", "comma-and"), "invalid choice: 'comma-and'"),
+    ("--block of a kind that never blocks", ("--block", "no-longer"), "invalid choice: 'no-longer'"),
 ]
 
 

@@ -108,9 +108,22 @@ last_updated: 2026-10-22
   kind name is a usage error. The `.writing_allowlist` entry type is the kind
   name, so `semicolon docs/*.md -- <reason>` keeps the semicolons of those
   files. In a declared article an em dash is one `em dash in article text`
-  finding, not also a `dash` warning. The hook and the local CI command pass
-  `--block dash --block slash`, so dashes and slashes block there and semicolons warn. A whole-repository run without
+  finding, not also a `dash` warning. The hook passes
+  `--block dash --block slash --block history`, so dashes, slashes and history notes block there and semicolons warn. The local CI command passes
+  `--block dash --block slash`. A whole-repository run without
   `--block` lists them, one `WARN` line each.
+
+  Two more kinds look for history in current documents. `history` reports
+  decision notes (`user decision` or `owner decision` with a date, version or
+  issue number), bundle versions such as `v8.24.0`, issue numbers such as `#76`
+  and sentences about a past state such as `it replaced the`,
+  `when this section was written`, `was capped at` and `since Oct 10 2026`.
+  A deadline such as `until Nov 1 2026` is not history. `CHANGELOG.md` is
+  exempt. `no-longer` reports every sentence with the words `no longer` and
+  never blocks: a main clause that records a past state is history, but a
+  clause that states a current rule stays, so a reviewer decides.
+  `--block history` makes `history` block (the hook passes it). `no-longer` is
+  not a `--block` choice.
 - **Markdown syntax:** `markdownlint-cli2` checks every staged Markdown file
   outside `data/` against the Conventional Docs baseline in
   `.markdownlint-cli2.jsonc` (dash bullets, ATX headings, sequential numbered
@@ -238,8 +251,7 @@ negative hook logs under `data/e2e/lint_coverage/`. Its `--mutant` mode verifies
 fails the same cases. The samples are synthetic. No script body, SQL statement or container runs in that suite.
 The repository policy checks were run on the whole repository before they were enabled,
 with no false positives, so they block from the start. The writing check blocked
-only after the existing prose was corrected. Its dash and slash kinds block since the prose was corrected on
-Oct 15 2026. Its semicolon kind warns until a whole-repository run has no semicolon finding. The unused code, dependency and file
+only after the existing prose was corrected. Its dash, slash and history kinds block because a whole-repository run shows no finding of them. Its semicolon kind warns until a whole-repository run has no semicolon finding. Its `no-longer` kind always warns. The unused code, dependency and file
 checks blocked only after their findings were deleted or listed with a reason.
 
 ## Model metadata
@@ -291,7 +303,7 @@ Declared columns resolve before earlier aliases. An earlier alias also retains t
 one candidate relation adds its unknown-column policy. Several candidates add their combined confidential origins.
 An unknown name with one candidate relation uses that relation's policy:
 a Public source contributes no confidential origin, an explicit-list source protects only listed names and an all-column source protects every publisher name.
-For the two ONC sources, loader lineage `_object_key` and `_member_sha256` are exempt under A273. The exemption applies at the source boundary;
+For the two ONC sources, loader lineage `_object_key` and `_member_sha256` are exempt from the rule that every publisher column is confidential. The exemption applies at the source boundary;
 a publisher field renamed to either loader name retains its confidential origins.
 An unknown model or CTE output retains the union of that relation's confidential output origins. With several candidate relations and no declared match,
 an unknown name retains their combined confidential origins for that reference. Registering both a table name and its alias does not duplicate the relation.
@@ -426,7 +438,7 @@ launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no fi
   `scratch`, `quality_output`, `e2e_output` and `CI_TIMING_FILE` (`MODEL_METADATA_WORKERS`, `LAUNCHER_SHARD` and `TF_PLUGIN_CACHE_DIR` come from the exported
   environment). Give a group any other dispatcher value in `run_group` of `scripts/run_ci.sh`. A missing or unreadable file stops the run with
   the file and the group named.
-- **What the separate shell isolates (owner decision, 23 October 2026).** The shell of a group isolates shell state only: its functions (a redefined `timed`,
+- **What the separate shell isolates.** The shell of a group isolates shell state only: its functions (a redefined `timed`,
   a Bash builtin or the name of another group's function), its variables, its shell options and traps, its working directory, its exported functions and its
   exported environment. A change of any of these exists only in that group's process, so it cannot reach another group or the dispatcher.
 - **What it does not isolate (accepted by the owner).** The groups share the host. Group files are reviewed code. A group can write files in the checkout

@@ -77,7 +77,7 @@ repos:
         always_run: true
       - id: writing-check
         name: Prose follows the writing preferences
-        entry: .venv/bin/python -m scripts.quality.repo_checks writing-check --block dash --block slash
+        entry: .venv/bin/python -m scripts.quality.repo_checks writing-check --block dash --block slash --block history
         language: system
         pass_filenames: false
         always_run: true

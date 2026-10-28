@@ -1,7 +1,7 @@
 ---
 title: Saved for the Feature Phase
 description: The silver models saved in features/ for the feature phase, as described when they were silver models.
-last_updated: 2026-10-15
+last_updated: 2026-10-21
 ---
 
 # Saved for the Feature Phase
@@ -33,8 +33,8 @@ are comparison_only or exclude_primary. `int_validation_measure_windows` carried
 published IDs `PSI_90` and `PSI_13` (registry revision 3); the older `PSI_90_SAFETY` and `PSI_13_POST_SEPSIS` are not
 aliased.
 
-The alignment stage lines each staged source up with the hospital-year spine as of the HAI window start. It was built
-in silver at commit `e71779d` and moves to the feature phase under the October 10 2026 layer design (see the [architecture diagram](architecture/architecture.png)).
+The alignment stage lines each staged source up with the hospital-year spine as of the HAI window start. The saved
+alignment models below belong to the feature phase (see the [architecture diagram](architecture/architecture.png)).
 `int_spine_hai_outcomes` (step AL1) has one row per spine hospital-window and infection type (HAI_1 CLABSI to HAI_6
 C. difficile): the published SIR, its bounds, the observed and predicted counts and the exposure, by exact measure ID,
 with tokens kept as text and the SIR footnote codes. No SIR is computed from the counts. A part from a release after the
@@ -45,7 +45,8 @@ stays separate; the model target is chosen before training. `int_hai_outcome_val
 (C269 to C283 and C283's children) by the part `dbt/seeds/hai_outcome_measures.csv` (now `dbt/seeds/gold/hai_outcome_measures_bridge.csv`) names: C269 to C274 as target
 candidates and C275 to C280, the same SIRs, as earlier-outcome forecasting candidates.
 `int_spine_care_compare_measures` (step AL2) has one row per spine hospital-window and Care Compare process or structure
-control in `dbt/seeds/registry_measure_sources.csv` (now `dbt/seeds/gold/registry_measure_sources_bridge.csv`) (families S13 to S16). Each control takes the latest measure window
+control in the seed `registry_measure_sources` (families S13 to S16). The saved model still references that seed. Its feature-phase rewrite must use the
+replacement mapping `dbt/seeds/gold/registry_measure_sources_bridge.csv`. Each control takes the latest measure window
 that ends before the HAI window starts; the overall rating (C284, excluded from the primary predictors) takes the latest
 Hospital General Information release dated before the start, held when two files on that date disagree. Values stay as
 published with their age in months and no age limit. C141's spellings (for example `low` and `Low`) each map to one
@@ -80,7 +81,7 @@ the score as published at the capture; an undated withdrawal holds the window) a
 `int_spine_linkage` keeps the HUD residential share of the hospital ZIP and the hospital's service-area ZIPs and cases
 apart as linkage, never predictors.
 
-History is type 2 (SCD2), built in silver (under the October 10 2026 layer design the history method moves to the
+History is type 2 (SCD2), built in silver (under the layer design the history method moves to the
 Feast phase and gold keeps the snapshot and release rows) and dated by the publishers' own dates, so a clean checkout rebuilds the
 same versions: `int_hospital_pos_history` (Provider of Services attributes per snapshot), `int_hospital_hgi_history`
 (Hospital General Information descriptions per release; the overall rating stays a measure) and
@@ -89,6 +90,6 @@ same versions: `int_hospital_pos_history` (Provider of Services attributes per s
 without it; that release closes the earlier version. A release that lists one key twice with different values is held
 for that release. Some CMS owner and enrollment releases drop the leading zeros of the 10-digit associate IDs, so the
 row models pad them back and mark the row (`associate_ids_padded`). Ownership history bridges an owner missing from one
-release and counts it in `bridged_releases` (owner decision, October 10 2026). A held release is never bridged; POS and
+release and counts it in `bridged_releases`. A held release is never bridged; POS and
 Hospital General Information history do not bridge. `features/tests/assert_history_versions_valid.sql` fails on overlapping windows or a
 second current version.

@@ -33,15 +33,13 @@ ASK = "if the rule seems wrong here, stop and ask the repository owner; there ar
 
 CREDENTIAL_NAMES = ("*.tfstate", "*.tfstate.backup", "*.tfplan", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ecdsa", "id_ed25519", "credentials")
 DATA_EXTENSIONS = {".csv", ".tsv", ".parquet", ".xlsx", ".xls", ".jsonl", ".ndjson", ".avro", ".db", ".sqlite"}
-# Folders declared for data files: synthetic test fixtures, the reviewed dbt seeds and the formula recipes, which hold file
-# labels and checksums from the S3 manifests and rule definitions, never source data values.
 DATA_FOLDERS = ("tests/fixtures/", "dbt/seeds/", "features/recipes/")
 DATA_FILES = ("config/lakehouse/identity_classification.csv",)
 MAX_BYTES = 5 * 1024 * 1024
 
 NOQA = re.compile(r"#\s*" + "no" + r"qa\b(?::\s*(?P<codes>[A-Z]+\d+(?:\s*,\s*[A-Z]+\d+)*))?(?P<rest>.*)", re.IGNORECASE)
 OTHER_SUPPRESSIONS = re.compile("|".join([r"#\s*type:\s*" + "ignore", "eslint" + "-disable", "@ts-" + "ignore", "@ts-" + "expect-error"]))
-APPROVED_SUPPRESSIONS = {"S603": "scripts/process.py"}  # Rule code: the one file allowed to carry it.
+APPROVED_SUPPRESSIONS = {"S603": "scripts/process.py"}
 REASON = re.compile(r"^\s+-\s+\S")
 LAUNCHER = "scripts/process.py"
 SUBPROCESS_IMPORT = re.compile(r"^\s*(?:import\s+" + "sub" + r"process\b|from\s+" + "sub" + r"process\s+import\b)", re.MULTILINE)
@@ -68,7 +66,6 @@ CONFIG_SUFFIXES = {".yaml", ".yml", ".toml", ".json", ".ini", ".cfg"}
 PY_DEFINITION = re.compile(r"^[ \t]*(?:async[ \t]+def|def|class)[ \t]+([A-Za-z_]\w*)", re.MULTILINE)
 PY_TOP_LEVEL = re.compile(r"^(?:async[ \t]+def|def|class)[ \t]+([A-Za-z_]\w*)", re.MULTILINE)
 PY_ASSIGNED = re.compile(r"^[ \t]*([A-Za-z_]\w*)[ \t]*(?::[^=\n]*)?=(?!=)", re.MULTILINE)
-# Environment variables a shell script, workflow or rendered template still uses: $NAME, ${NAME}, vars.NAME, secrets.NAME, env.NAME.
 ENV_USE = re.compile(r"\$\{?([A-Z][A-Z0-9_]*)\b|\b(?:vars|secrets|env)\.([A-Z][A-Z0-9_]*)\b")
 PYTHON_REFERENCE_SUFFIXES = {".py", ".yaml", ".yml", ".toml", ".cfg", ".ini"}
 CONFIG_KEY = re.compile(r"""^\s*(?:-\s+)?["']?([A-Za-z_][\w-]*)["']?\s*[:=](?!:)""")
@@ -85,10 +82,9 @@ MODULE_NAMES = {
     "psycopg2-binary": "psycopg2",
 }
 VULTURE_CONFIDENCE = 60  # Unused functions, classes and variables; lower levels flag dynamic uses vulture cannot see.
-DEPTRY_CODES = {"DEP001", "DEP002", "DEP003"}  # Missing, unused and transitive-only dependencies.
-RUNTIME_MAP = "config/quality/dependency_runtimes.json"  # Each runtime's requirements files, the code it runs and what it provides.
-TOOL_COMMENT = re.compile(r"#\s*(?:tool|dynamic):\s*\S")  # A requirement used as a command or imported dynamically, with why.
-# Files every repository may hold without another file naming them.
+DEPTRY_CODES = {"DEP001", "DEP002", "DEP003"}
+RUNTIME_MAP = "config/quality/dependency_runtimes.json"
+TOOL_COMMENT = re.compile(r"#\s*(?:tool|dynamic):\s*\S")
 WELL_KNOWN_FILES = {
     "README.md",
     "LICENSE",
@@ -144,9 +140,11 @@ PRIVACY_PATTERNS = {
 }
 RESERVED_DOMAINS = (".invalid", ".test", ".localhost", ".example", "example.com", "example.org", "example.net")
 ENV_VALUE_KEYS = re.compile(r"PROFILE|BUCKET|ACCOUNT|ARN|ENDPOINT|HOST|EMAIL|USER")
-WRITING_RULE = f"{POLICY}: writing check (Oxford comma, date format, time-bound words, dashes, semicolons, slashes; em dashes in declared article files)"
+WRITING_RULE = (
+    f"{POLICY}: writing check (Oxford comma, date format, time-bound words, dashes, semicolons, slashes, history notes, 'no longer' sentences;"
+    " em dashes in declared article files)"
+)
 WRITING_ALLOWLIST = ".writing_allowlist"
-# Checked in prose only: code spans, fenced blocks, front matter, URLs and link targets are masked first.
 WRITING_PATTERNS = {
     "comma-and": (
         "comma before a final 'and', 'or' or 'nor'",
@@ -154,8 +152,6 @@ WRITING_PATTERNS = {
         "drop the comma, or split the sentence in two",
     ),
     "iso-date": ("ISO date in prose", re.compile(r"\b\d{4}-\d{2}-\d{2}\b"), "write the date as Sep 30 2026, or put a machine value in `code`"),
-    # Only the always time-bound words of documents.md 6.10; "now", "new", "latest", "yet" and "old" have timeless
-    # procedural uses and are judged in the documentation review.
     "time-word": (
         "time-bound word in prose",
         re.compile(r"(?i)\b(?:currently|recently|eventually|(?<!as )soon(?! as)|as of this writing|at present|in the future|for now)\b"),
@@ -165,9 +161,33 @@ WRITING_PATTERNS = {
     "dash": ("em or en dash in prose", re.compile("[\u2013\u2014]"), "end the sentence or use a comma"),
     "semicolon": ("semicolon in prose", re.compile(r";(?!\w)"), "split the text into two sentences"),
     "slash": ("slash between words in prose", re.compile(r"(?<![\w./~-])[a-z]+/[a-z]+(?![\w/.-])"), 'write "a, b or both" instead of "a/b" or "and/or"'),
+    "history": (
+        "history note in a current document",
+        re.compile(
+            r"(?i)\(\s*(?:explicit )?(?:user|owner) decisions?\b"
+            r"|\b(?:user|owner) decisions?,? (?:on |of |in |from )?(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* \d|v\d|\[?#\d)"
+            r"|\bby (?:explicit )?(?:user|owner) decision\b|\bconfirmed by the (?:user|owner)\b"
+            r"|\(v\d+\.\d+\.\d+[;,)]|\b(?:since|until|as of|added in|removed in|introduced in|changed in|from|in) v\d+\.\d+\.\d+\b"
+            r"|\b(?:replaced|replaces|supersedes|superseded) (?:the |an |a )?(?:earlier|old|older|previous|former)\b"
+            r"|\b(?:in|from) (?:earlier|previous|former|older) (?:versions?|releases?)\b"
+            r"|\bsince (?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* \d{1,2},? \d{4}\b"
+            r"|\[#\d+\]|(?<![\w&/#])#\d+\b"
+            r"|\b(?:it|this|which|that) replaced (?:the|an?)\b"
+            r"|\bwhen this (?:section|file|document|standard|rule|page|guide|text) was (?:written|added|created|drafted)\b"
+            r"|\bon the mistaken (?:reading|assumption|belief|premise|view)\b|\b(?:was|were) (?:capped|limited) at\b"
+        ),
+        "state the current rule only; Git history, the CHANGELOG and issues hold when and why it changed",
+    ),
+    "no-longer": (
+        "possible history note: 'no longer' describes a change",
+        re.compile(r"(?i)\bno longer\b"),
+        "if the sentence records a past state, state the current rule only; a current rule such as 'remove the files it no longer reads' stays",
+    ),
 }
 ARTICLE_ONLY = {"em-dash"}
-WARN_FIRST = {"dash", "semicolon", "slash"}
+HISTORY_EXEMPT = {"CHANGELOG.md"}
+WARN_FIRST = {"dash", "semicolon", "slash", "history", "no-longer"}
+NEVER_BLOCK = {"no-longer"}
 
 
 @dataclass
@@ -512,8 +532,6 @@ def removed_definitions(removed: dict[str, list[str]], deleted: list[str], files
     for name in gone(set(TASK_ID.findall(code_removed)), set(TASK_ID.findall(code_now))):
         kinds["airflow"][name] = re.compile(rf"""["']{re.escape(name)}["']|^{re.escape(name)}$""")
     config_now = {key for line in joined(files, CONFIG_SUFFIXES).splitlines() if (key := config_key(line))}
-    # Keys of a deleted or untracked config file are often data fields the code still writes; only edited files count.
-    # Single-word keys (run, env, path) are schema vocabulary, not project settings.
     edited = {path: lines for path, lines in removed.items() if path not in deleted}
     config_removed = {key for line in joined(edited, CONFIG_SUFFIXES).splitlines() if (key := config_key(line)) and re.search(r"[_-]|[a-z][A-Z]", key)}
     for name in gone(config_removed, config_now):
@@ -614,7 +632,7 @@ def run_deptry(runtime: Runtime, first_party: list[str], exempt: set[str]) -> li
             raise SystemExit(f"deptry failed for runtime {runtime.name} ({result.returncode}): {result.stderr[-2000:]}")
         issues: list[dict[str, Any]] = json.loads(report_path.read_text())
         names = {str(Path(path).resolve()): path for path in runtime.requirements}
-        for issue in issues:  # Report repository paths: requirements files by name, code relative to the scratch copy.
+        for issue in issues:
             location = Path(issue["location"]["file"])
             absolute = location if location.is_absolute() else root / location
             if str(absolute.resolve()) in names:
@@ -642,14 +660,13 @@ def unused_dependencies() -> list[Finding]:
     exempt = {
         m.group(1).lower() for p in requirements for line in Path(p).read_text().splitlines() if TOOL_COMMENT.search(line) and (m := REQUIREMENT.match(line))
     }
-    # Module names, package folders and top-level folders (scripts is a namespace package with no __init__.py).
     first_party = sorted({Path(p).stem for p in python_files} | {part for p in python_files for part in Path(p).parts[:-1]})
     locked = {path for runtime in runtimes for path in runtime.requirements if "--hash=" in Path(path).read_text()}
     unused: dict[tuple[str, str], int] = {}
     readers = {path: sum(1 for runtime in runtimes if path in runtime.requirements and runtime.files) for path in requirements}
     for runtime in runtimes:
         if not runtime.files:
-            continue  # A tool environment with no project code, such as the SQLFluff tools.
+            continue
         for issue in run_deptry(runtime, first_party, exempt):
             code, module, location = issue["error"]["code"], issue["module"], issue["location"]
             if code not in DEPTRY_CODES or any(fnmatch.fnmatch(location["file"], glob) for glob in globs):
@@ -686,7 +703,7 @@ def orphan_files() -> list[Finding]:
             continue
         patterns = [re.escape(path), rf"(?<![\w.-]){re.escape(name)}(?![\w-])"]
         parts = Path(path).parent.parts
-        if len(parts) >= 2:  # A file a script loads by folder, such as policies/*.json, is used when the folder is named
+        if len(parts) >= 2:
             patterns.append(rf"(?<![\w-]){re.escape('/'.join(parts[-2:]))}(?![\w-])")
         if path.endswith(".py"):
             patterns.append(rf"(?<![\w-])(?:import|from|-m)\s+(?:[\w.]+\.)?{re.escape(Path(path).stem)}\b")  # \b cannot precede -m
@@ -952,19 +969,18 @@ def writing_check(articles: list[str], block: list[str]) -> tuple[list[Finding],
             continue
         for number, line in prose_lines(Path(path).read_text(errors="replace")):
             for kind, (description, pattern, fix) in WRITING_PATTERNS.items():
-                if kind in ARTICLE_ONLY and not article:
+                if (kind in ARTICLE_ONLY and not article) or (kind == "history" and path in HISTORY_EXEMPT):
                     continue
                 text = re.sub(r"&#?\w+;", " ", line) if kind in WARN_FIRST else line
                 if kind == "dash" and article:
                     text = text.replace("\u2014", "")
                 if pattern.search(text) and not any(kind == entry_kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
-                    target = warnings if kind in WARN_FIRST and kind not in block else findings
+                    target = warnings if kind in WARN_FIRST and (kind in NEVER_BLOCK or kind not in block) else findings
                     target.append(Finding(f"{path}:{number}", description, WRITING_RULE, fix))
     return findings, warnings
 
 
 FRONT_RULE = "bundle standards/documents.md#3-metadata (sections 3.1, 3.2): document front matter"
-# Well-known files and .github templates need no front matter; READMEs and E2E records are out of scope.
 WELL_KNOWN = {"AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "CHANGELOG.md", "SECURITY.md", "CODE_OF_CONDUCT.md", "SUPPORT.md", "LICENSE.md"}
 DESCRIPTION_LIMIT = 120
 ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -1058,7 +1074,7 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="privacy-scan: every file Git does not ignore, the default scope; ignored files are never scanned")
     parser.add_argument("--warn", action="store_true", help="report findings without failing: a check's warn period before it blocks")
     parser.add_argument("--articles", action="append", default=[], metavar="GLOB", help="writing-check: files that hold article text (em dashes)")
-    parser.add_argument("--block", action="append", default=[], choices=sorted(WARN_FIRST), help="writing-check: make a warn-first kind block")
+    parser.add_argument("--block", action="append", default=[], choices=sorted(WARN_FIRST - NEVER_BLOCK), help="writing-check: make a warn-first kind block")
     args = parser.parse_args()
     if args.check == "writing-check":
         findings, warnings = writing_check(args.articles, args.block)
