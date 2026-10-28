@@ -31,7 +31,7 @@ class SafeTransport(Transport):
         self.config = config
 
     def emit(self, event: Any) -> None:
-        """Store a bounded event without making a network request or raising a storage failure."""
+        """Store a bounded event and surface directory-permission failures to the native provider."""
         provider_events.emit(Path("/opt/hai/lineage_provider"), event)
 
     def close(self, timeout: float = 0) -> bool:

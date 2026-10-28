@@ -1,4 +1,4 @@
-"""Project native Airflow events into a private, immutable spool without dataset or arbitrary metadata authority."""
+"""Project native Airflow events into a group-readable, immutable spool without dataset or arbitrary metadata authority."""
 
 from __future__ import annotations
 
@@ -22,6 +22,10 @@ PARENT_SCHEMA = "https://openlineage.io/spec/facets/1-1-0/ParentRunFacet.json#/$
 MAX_BYTES = 16384
 STATES = ("START", "RUNNING", "COMPLETE", "FAIL", "ABORT")
 LOG = logging.getLogger(__name__)
+
+
+class SpoolPermissionError(RuntimeError):
+    """The producer cannot enforce its shared directory permissions."""
 
 
 def canonical(value: Any) -> str:
@@ -147,50 +151,66 @@ def validate(envelope: Any) -> dict[str, Any]:
     return expected
 
 
+def read_descriptor(descriptor: int) -> bytes:
+    """Read bounded regular envelope bytes from the same descriptor used by the caller."""
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_BYTES:
+        raise ValueError("provider spool entry is not a bounded regular file")
+    data = os.read(descriptor, MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
+        raise ValueError("provider spool entry exceeds its size bound")
+    return data
+
+
 def read_at(directory: int, name: str) -> bytes:
     """Read one bounded regular provider file through its held directory."""
     descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
     try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_BYTES:
-            raise ValueError("provider spool entry is not a bounded regular file")
-        data = os.read(descriptor, MAX_BYTES + 1)
-        if len(data) > MAX_BYTES:
-            raise ValueError("provider spool entry exceeds its size bound")
-        return data
+        return read_descriptor(descriptor)
     finally:
         os.close(descriptor)
 
 
 def emit(folder: Path, event: Any) -> bool:
-    """Persist only a projected event; report a safe error type without failing the Airflow callback."""
+    """Persist projected events; surface directory-permission failures and report other errors safely."""
     try:
         envelope = project(event)
         data = (canonical(envelope) + "\n").encode()
         if len(data) > MAX_BYTES:
             raise ValueError("projected provider event exceeds its size bound")
-        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        folder.mkdir(mode=0o750, parents=True, exist_ok=True)
         directory = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        temporary = ".pending-" + secrets.token_hex(12)
         try:
+            try:
+                os.fchmod(directory, 0o750)
+            except OSError:
+                raise SpoolPermissionError("Provider spool directory permissions could not be set. Event was not published.") from None
+            temporary = ".pending-" + secrets.token_hex(12)
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
-            name = file_name(envelope)
             try:
-                os.link(temporary, name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
-            except FileExistsError:
-                if read_at(directory, name) != data:
-                    raise ValueError("provider replay conflicts with immutable event bytes") from None
-            os.fsync(directory)
-        finally:
-            try:
-                os.unlink(temporary, dir_fd=directory)
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(data)
+                    handle.flush()
+                    os.fchmod(handle.fileno(), 0o640)
+                    os.fsync(handle.fileno())
+                name = file_name(envelope)
+                try:
+                    os.link(temporary, name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+                except FileExistsError:
+                    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                    try:
+                        if read_descriptor(descriptor) != data:
+                            raise ValueError("provider replay conflicts with immutable event bytes") from None
+                        os.fchmod(descriptor, 0o640)
+                        os.fsync(descriptor)
+                    finally:
+                        os.close(descriptor)
                 os.fsync(directory)
             finally:
-                os.close(directory)
+                os.unlink(temporary, dir_fd=directory)
+                os.fsync(directory)
+        finally:
+            os.close(directory)
     except (OSError, ValueError, TypeError, AttributeError, OverflowError) as error:
         LOG.warning("lineage provider spool failed (%s)", type(error).__name__)
         return False
