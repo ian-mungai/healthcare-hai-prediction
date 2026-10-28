@@ -31,6 +31,9 @@ last_updated: 2026-10-27
   `services/orchestration/Dockerfile` uses the `--build-context` declarations in its header's build command instead.
   A missing Airflow header command or one with no contexts fails. No build command executes. The check supports the
   project's Dockerfile layout and fails visibly on unsupported escape directives or heredocs.
+- **Container imports:** the `container-mounts` hook checks first-party Python imports against each container's declared file locations.
+  The same command runs in `repository_code_checks`: `.venv/bin/python -m scripts.quality.container_mounts`.
+  See [Container imports](#container-imports) for source declarations, supported imports, samples and limits.
 - **Hadolint exceptions:** DL3022 is ignored only at the five `COPY --from=hai` instructions. The build-context check
   verifies their named context independently. DL3008 is ignored only for Spark's apt-install instruction: packages
   follow the Ubuntu archive on the build day. Dated snapshot pins are a lead-managed issue-register action for the next
@@ -262,6 +265,81 @@ with no false positives, so they block from the start. The writing check blocked
 only after the existing prose was corrected. Its dash and slash kinds block since the prose was corrected on
 Oct 15 2026. Its semicolon kind warns until a whole-repository run has no semicolon finding. The unused code, dependency and file
 checks blocked only after their findings were deleted or listed with a reason.
+
+## Container imports
+
+`scripts/quality/container_mounts.py` reads the Compose declarations, launcher job tables and renderer syntax.
+`scripts/quality/container_imports.py` follows first-party imports against each invocation's file locations.
+The check runs no application imports, container commands, installs or network requests. It does not read mounted data or interpolate host environment values.
+
+Run the same command locally and in CI:
+
+```bash
+.venv/bin/python -m scripts.quality.container_mounts
+```
+
+The `container-mounts` pre-commit hook always runs. The `repository_code_checks` CI group runs that command and its hook samples.
+Its path list covers Python sources, Dockerfiles and Compose files at the repository root or under `orchestration/`, `services/` and `config/`.
+Each service keeps its own mounts. A quality job does not gain the mounts of a pipeline job that shares its image.
+The mount declarations remain the authority. The check keeps no second mount allowlist.
+`PYTHON_SOURCES` is the remaining hand-kept source-role classification. It classifies `scripts/` and `orchestration/` as import dependencies.
+It classifies `dags/`, `services/lineage/` and `services/analytics/` as framework or image entry directories.
+A bind that contains repository Python outside these prefixes fails as an unclassified Python mount, with its declaration location.
+Mount helpers are followed through their declared `Mount` return types, including lists and tuples, without a helper-name list.
+
+The supported declarations are:
+
+- Compose short and long bind volumes, including merged service anchors, `working_dir`, `PYTHONPATH` and Python module or script commands.
+  Airflow's mounted DAG files and lineage provider files are entry points. Renamed packages retain their container names.
+- Launcher `Mount` calls and pipeline mount tuples with literal paths under the checkout.
+  The Spark and gold job tables supply their module names. Renderer defaults and fixed pipeline layer choices supply the other entry points.
+  The `workdir=` argument of each renderer's `assemble` call supplies its working folder. Pipeline specifications use their launcher's declared working folder.
+- Literal Python files copied by a final Dockerfile stage to an absolute destination, including the analytics UI relay.
+  The check reads the Dockerfile in the declared build context. It does not build or inspect an image.
+
+Imports include normal imports, `from` imports, aliases, relative imports, package initialization and literal dynamic imports.
+The check follows import-time code and referenced functions and classes in imported helpers. It checks every function of a declared entry point.
+An unused helper command under `if __name__ == "__main__"` is not a second container entry point.
+Individual file mounts grant access to those files. They do not grant access to every sibling in the package.
+The mount destination must also place the module on the container's Python search path.
+Direct Compose module commands require a declared `working_dir` or absolute `PYTHONPATH` roots. Relative script commands also require `working_dir`.
+Image working folders are not inferred. An unresolved working folder fails at its declaration.
+Script imports use the script directory and explicit `PYTHONPATH` roots. A script does not gain imports from its working folder alone.
+
+The check skips the bodies of recognized `typing.TYPE_CHECKING` guards and retains their runtime `else` branches.
+It still checks first-party imports guarded by `try` and `except ImportError`. There is no per-import exemption.
+
+A failure groups each source file, line and imported module once, with the affected containers and entry points on one line.
+Use a module available at that container's mounted paths or correct the declaration. Ask the owner if the rule is wrong for the case.
+An unresolved Python entry point or unsupported conditional Python source mount fails with its declaration location.
+Shell-wrapped Python commands fail when their entry point cannot be resolved. Import findings and invalid declarations block the hook.
+
+Computed import names, generated code, runtime path changes and third-party package availability remain outside this static check.
+The check does not follow another Python program started by a container's Python code, including a `subprocess` command.
+A package invoked with `-m` does not have its `__main__.py` execution resolved. Declare an executable module for checked entry traversal.
+The Ruff process-start guard example concerns whether a tool start can be proved. That example is outside this check's first-party import scope.
+A bronze writer importing acquisition code absent from its declared files is an in-scope missing-import case.
+It does not prove that a container starts or that a real job completes. Container runs remain separate verification.
+
+The source-only hook samples run through pre-commit itself:
+
+```bash
+.venv/bin/python -m scripts.quality.run_container_mounts_e2e
+.venv/bin/python -m scripts.quality.run_container_mounts_e2e --mutants
+```
+
+The samples reconstruct an unmounted training contract imported by a DAG runtime and an unmounted pipeline protocol imported through a lakehouse engine.
+They check both quality and Spark mounts. Other cases cover transitive imports, package initialization, aliases, relative imports, cycles, copied scripts and changed mounts.
+Cases also cover pipeline mount edits, gold job additions, unreferenced entry functions, class methods and unclassified Python mounts.
+A new launcher job is checked without updating a module allowlist. Positive cases cover unchanged source, unused host commands and unavailable third-party packages.
+The runner also checks CI path selection and runs the real dispatcher with a timing wrapper that records leaf commands without executing them.
+It requires the checker and sample runner commands exactly once. `--mutants` plants weaker checker copies and a missing CI command to prove that the cases detect them.
+
+Evidence is `data/e2e/container_mounts/<UTC>/report.json`. It includes source hashes, fixture changes, exact hook commands, expected diagnostics and observed exit codes.
+The runner checks that its source snapshot stays unchanged and removes its temporary repositories.
+Each hook runs under the repository's process-group deadline entry point, with a 30-second command deadline.
+The 300-second run deadline includes setup and reserves 70 seconds for process-group cleanup.
+An unconfirmed cleanup stops the run and retains its workspace. A case labeled `harness` verifies the deadline entry point and its process-group cleanup.
 
 ## Model metadata
 
