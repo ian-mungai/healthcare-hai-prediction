@@ -5826,6 +5826,7 @@ class Launcher:
                 "orchestration": state["launcher"].get("orchestration"),
                 "barrier": state["launcher"].get("barrier"),
                 "restart": state["launcher"].get("restart"),
+                "catalog_authority": state["launcher"].get("catalog_authority"),
                 "open_attempts": sum(1 for a in state["attempts"].values() if is_open(a)),
                 "open_templates": sorted({a["template"] for a in state["attempts"].values() if is_open(a)}),
                 "open_operations": sum(1 for o in state["operations"].values() if o["state"] == "open"),

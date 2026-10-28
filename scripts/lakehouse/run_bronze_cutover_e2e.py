@@ -9,6 +9,7 @@ Failure IDs (F1 and the rest) refer to the bronze registration failure modes of 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import hashlib
 import json
@@ -19,14 +20,14 @@ import threading
 import time
 import traceback
 import urllib.parse
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from orchestration import catalog_authority
+from orchestration import catalog_authority, launcher
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.acquisition.s3_store import AwsCli
 from scripts.lakehouse import bronze_cutover, bronze_inventory
@@ -728,6 +729,140 @@ def tunnel_route(folder: Path) -> dict[str, bool]:
         code, _ = code_of(lambda: bronze_cutover.network_acceptance(spec, AwsCli(settings, runner=runner), deadline=time.monotonic() + 10))
         checks[f"network acceptance: {label}"] = code == expected
     return checks
+
+
+class StandInServices:
+    """The owner CLI's outside services as stand-ins: the captured lake, the AWS catalog and its reader, all in memory."""
+
+    def __init__(self, state_root: Path) -> None:
+        self.cut = Cutover()
+        self.state_root = state_root
+        self.required = REQUIRED
+        self.bucket = BUCKET
+        self.routes = 0
+
+    def source(self, *, deadline: float) -> bronze_inventory.Source:
+        return bronze_inventory.SourceCatalog(self.cut.lake.source.request, "hai_lakehouse")
+
+    def objects(self) -> reg.MetadataReader:
+        return self.cut.lake.objects
+
+    @contextlib.contextmanager
+    def remote(self, instance: str, *, deadline: float) -> Iterator[bronze_cutover.Remote]:
+        self.routes += 1
+        request = self.cut.destination_stand_in.request
+        yield bronze_cutover.Remote(
+            request, reg.PolarisCatalog(request, "hai_lakehouse"), reg.PolarisCatalog(self.cut.reader_stand_in.request, "hai_lakehouse"), bronze_cutover.direct
+        )
+
+
+class Owner:
+    """The owner at a terminal: types back the confirmation the CLI printed, or a chosen wrong line."""
+
+    def __init__(self, env: Env, services: StandInServices) -> None:
+        self.env, self.services, self.lines = env, services, [""]
+        self.typed: str | None = None
+        self.tty = True
+        bronze_cutover.TEST_REGISTRY = str(env.registry)
+
+    def read(self, prompt: str) -> str:
+        shown = next(line for line in reversed(self.lines) if line.startswith("Type this line to confirm: "))
+        return self.typed if self.typed is not None else shown.removeprefix("Type this line to confirm: ").strip()
+
+    def run(self, *argv: str) -> Any:
+        terminal = bronze_cutover.Terminal(self.tty, self.read, self.lines.append)
+        return bronze_cutover.run(bronze_cutover.parser().parse_args(list(argv)), self.services, terminal)
+
+
+@case
+def owner_cli_sequence(env: Env) -> dict[str, bool]:
+    """Steps 0 to 7 through the owner CLI: dry run, freeze, fence with its deadline, capture, refresh, register, verify, switch and a replay."""
+    catalog_script(env)
+    env.start()
+    catalog_up(env)
+    services = StandInServices(env.temp / "state")
+    owner = Owner(env, services)
+    checks: dict[str, bool] = {}
+    owner.run("dry-run")
+    checks["step 0: the dry run writes nothing"] = not (services.state_root / "cutover").exists()
+    writer = real_run(env, "writer", "acquisition", write_prefixes=["lakehouse/bronze/"])
+    running = writer_submit(env, writer, "w1")
+    env.wait_phase(running["attempt_id"], ("started",))
+    frozen = owner.run("freeze", "--cutover", "cut1")
+    checks["step 1: freeze initializes Mac authority and freezes at epoch 2"] = frozen["state"] == "freezing" and frozen["epoch"] == 2
+    checks["F1: a Mac write after the freeze is refused"] = refused(expect_error(lambda: writer_submit(env, writer, "w2")), "refused", "catalog authority")
+    started = time.monotonic()
+    late = code_of_cutover(lambda: bronze_cutover.step_fence(services, bronze_cutover.Terminal(True, owner.read, owner.lines.append), 1.0, poll=0.2))
+    checks["F2: the fence deadline passes visibly while a writer runs and authority stays freezing"] = (
+        "stays freezing" in late and time.monotonic() - started < 5 and authority(env)["state"] == "freezing"
+    )
+    checks["F2: the writer was not stopped"] = env.phase(running["attempt_id"]) == "started"
+    env.client().call("cancel", {"attempt_id": running["attempt_id"]}, writer)
+    env.wait_ended(running["attempt_id"])
+    checks["step 2: the fence passes once the writer ended"] = owner.run("fence")["state"] == "source_fenced"
+    digest = owner.run("capture")
+    folder = services.state_root / "cutover" / "cut1"
+    checks["step 3: capture freezes the inventory and its digest"] = (folder / bronze_inventory.DIGEST_NAME).read_text().strip() == digest
+    owner.tty = False
+    checks["F4: a step without a terminal is refused"] = (
+        "terminal" in code_of_cutover(lambda: owner.run("refresh")) and authority(env)["state"] == "source_fenced"
+    )
+    owner.tty, owner.typed = True, "yes"
+    checks["F4: a wrong typed line is refused"] = "typed" in code_of_cutover(lambda: owner.run("refresh")) and authority(env)["state"] == "source_fenced"
+    owner.typed = None
+    checks["step 4: refresh"] = owner.run("refresh")["state"] == "refreshing"
+    inventory = str(folder / bronze_inventory.INVENTORY_NAME)
+    counts = owner.run("register", "--inventory", inventory, "--sha256", digest, "--instance", "i-0123456789abcdef0")
+    checks["step 5: every table is registered"] = counts == {"registered": len(REQUIRED), "unchanged": 0}
+    again = owner.run("register", "--inventory", inventory, "--sha256", digest, "--instance", "i-0123456789abcdef0")
+    checks["R5: a second register run gives unchanged"] = again == {"registered": 0, "unchanged": len(REQUIRED)}
+    checks["I8: register refuses another digest"] = "inventory" in code_of_cutover(
+        lambda: owner.run("register", "--inventory", inventory, "--sha256", "0" * 64, "--instance", "i-0123456789abcdef0")
+    )
+    receipt = owner.run("verify", "--instance", "i-0123456789abcdef0")
+    switched = owner.run("switch")
+    checks["step 7: switch records aws_writer at P4 with layers off and the receipt digest in the reason"] = (
+        switched["state"] == "aws_writer"
+        and switched["phase"] == "P4"
+        and receipt in switched["reason"]
+        and set(switched["production_layers"].values()) == {"off"}
+    )
+    checks["S5: repeating the switch returns the stored record"] = owner.run("switch") == switched and authority(env)["epoch"] == switched["epoch"]
+    checks["S1: a Mac write after the switch is refused"] = refused(expect_error(lambda: writer_submit(env, writer, "w3")), "refused", "catalog authority")
+    checks["each register and verify run opened its own route and the refused digest opened none"] = services.routes == 3
+    end_run(env, writer, "writer")
+    return checks
+
+
+@case
+def owner_cli_rollback(env: Env) -> dict[str, bool]:
+    """B2, F5: rollback from P3 recompares the frozen Mac source and returns to mac_writer; reusing the cutover ID is refused."""
+    env.start()
+    services = StandInServices(env.temp / "state")
+    owner = Owner(env, services)
+    owner.run("freeze", "--cutover", "cut1")
+    owner.run("fence")
+    owner.run("capture")
+    owner.run("refresh")
+    services.cut.lake.source.tables[services.cut.inventory.tables[0].identifier]["metadata"]["last-updated-ms"] = 5
+    changed = code_of_cutover(lambda: owner.run("rollback"))
+    checks = {"B2: a changed Mac source stops the rollback in source_verify": "differs" in changed and authority(env)["state"] == "source_verify"}
+    services.cut.lake.source.tables[services.cut.inventory.tables[0].identifier]["metadata"]["last-updated-ms"] = 1
+    restored = owner.run("rollback")
+    checks["B2: the rollback then returns to mac_writer"] = restored["state"] == "mac_writer" and restored["phase"] == "P1"
+    checks["B3: the rollback makes no AWS call"] = services.routes == 0
+    checks["F5: a freeze that reuses the cutover ID is refused"] = "already used" in code_of_cutover(lambda: owner.run("freeze", "--cutover", "cut1"))
+    checks["a new cutover ID freezes again"] = owner.run("freeze", "--cutover", "cut2")["state"] == "freezing"
+    return checks
+
+
+def code_of_cutover(function: Callable[[], Any]) -> str:
+    """The text of a CLI refusal, or an empty string when the step passed."""
+    try:
+        function()
+    except (bronze_cutover.CutoverError, reg.RegistrationError, launcher.ClientError) as error:
+        return f"{getattr(error, 'code', '')} {error}"
+    return ""
 
 
 def run_offline(name: str, report: Path) -> tuple[dict[str, bool], str]:
