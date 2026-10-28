@@ -305,6 +305,28 @@ def terminated_session() -> dict[str, bool]:
     }
 
 
+def second_signal_during_cleanup() -> dict[str, bool]:
+    module = session_module()
+    restore = module.install_termination_handler()
+    checks = {}
+    try:
+        for name, first in (("SIGINT", "interrupt_run_task"), ("SIGTERM", "signal_run_task"), ("SIGHUP", "signal_run_task")):
+            host, session, lines = build({first, f"second_signal:{name}"})
+            raised = None
+            try:
+                session.start()
+            except (KeyboardInterrupt, module.TerminationRequested) as error:
+                raised = type(error).__name__
+            checks[f"the first stop reason propagates past a {name} during cleanup"] = raised == (
+                "KeyboardInterrupt" if first == "interrupt_run_task" else "TerminationRequested"
+            )
+            checks[f"a {name} during cleanup still stops and verifies the host"] = host.desired == 0 and host.instance_up_at is None
+            checks[f"a {name} during cleanup is reported as deferred"] = any("signal_deferred" in line and name in line for line in lines)
+    finally:
+        restore()
+    return checks
+
+
 def failure_output_privacy() -> dict[str, bool]:
     exit_host, exit_session, exit_lines = build({"leaky_reasons", "exit_code:host_prepare=3"})
     exit_message = failure(exit_session.start)
@@ -388,6 +410,7 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "late_success": late_success,
     "bootstrap_failure_stops_host": bootstrap_failure_stops_host,
     "terminated_session": terminated_session,
+    "second_signal_during_cleanup": second_signal_during_cleanup,
     "failure_output_privacy": failure_output_privacy,
     "load_names_order": load_names_order,
     "status_read_only": status_read_only,

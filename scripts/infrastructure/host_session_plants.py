@@ -18,8 +18,12 @@ PLANTS: dict[str, tuple[str, str]] = {
     "drops tag propagation": ('"TASK_DEFINITION"', '"NONE"'),
     "starts a second one-shot task": ("        if running:\n", "        if False:\n"),
     "leaves the host on after a failure": (
-        "        try:\n            self.host_off()\n        except HostSessionError",
+        "        try:\n            with deferred_signals(self.step):\n                self.host_off()\n        except HostSessionError",
         "        try:\n            pass\n        except HostSessionError",
+    ),
+    "lets a second signal cut the cleanup short": (
+        "            with deferred_signals(self.step):\n                self.host_off()",
+        "            self.host_off()",
     ),
     "leaves the host on after a failed bootstrap": ('self.stop_after_failure("bootstrap", keep_on)', "pass"),
     "ignores an interruption": (
