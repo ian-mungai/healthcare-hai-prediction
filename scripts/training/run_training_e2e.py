@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from functools import partial
 from importlib.metadata import version
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from scripts.process import TimeoutExpired, run_command
@@ -667,6 +668,15 @@ def _check_output_cases(report: Report) -> None:
             report.assertion(name, "JSON object" in str(error), error=str(error))
         else:
             report.assertion(name, False, error="no CheckOutputError")
+    # Review of the types commit: Report.command must record wrong-shaped output of a passing check as a failed step.
+    probe, real = Report(), globals()["run_command"]
+    globals()["run_command"] = lambda *arguments, **options: SimpleNamespace(returncode=0, stdout="[]", stderr="")
+    try:
+        returned = probe.command("array_output_probe", next(iter(FAILURE_MODES)), "scripts.training.guards", [])
+    finally:
+        globals()["run_command"] = real
+    failed = [step for step in probe.steps if step["verdict"] == "fail" and step.get("error") == "CheckOutputError"]
+    report.assertion("command_records_array_output_as_failed", returned is None and len(failed) == 1, steps=probe.steps)
 
 
 def _committed_feature_lists(report: Report, commit: str) -> None:
