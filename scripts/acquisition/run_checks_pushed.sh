@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
-# The acquisition-checks entry of the pre-push stage (.pre-commit-config.yaml). pre-commit applies the hook's files pattern, so this runs only when the pushed
-# range reaches the acquisition checks. After a passing full-scope pre-push run for the same head (scripts/quality/pre_push.py writes a marker in the Git
-# directory) the full scope already ran the suite: this skips once and removes the marker. Anything else runs scripts/acquisition/run_checks.sh unchanged,
-# also in GitHub CI (scripts/acquisition/run_checks_ci.sh), where no marker exists.
+# The acquisition-checks entry of the pre-push stage (.pre-commit-config.yaml). The pre-push run (scripts/quality/pre_push.py) runs this hook once for the
+# whole pushed range (merge base with origin/main to the pushed head), as GitHub CI does (scripts/acquisition/run_checks_ci.sh), so pre-commit applies the
+# files pattern of the hook to that range. The native hook of the push itself sees only the first pushed reference and its own range: it skips, and pre-commit
+# marks it with PRE_COMMIT_REMOTE_NAME. Every other run (the pre-push run, GitHub CI) runs scripts/acquisition/run_checks.sh unchanged.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
-head="${PRE_COMMIT_TO_REF:-$(git rev-parse HEAD)}"
-marker="$(git rev-parse --git-path hai_pre_push_full)"
-if [[ -f "$marker" && "$(<"$marker")" == "$head" ]]; then
-  rm -f "$marker"
-  echo "Acquisition checks: the full-scope pre-push run of $head already ran them."
+if [[ -n "${PRE_COMMIT_REMOTE_NAME:-}" ]]; then
+  echo "Acquisition checks: the pre-push run (scripts/quality/pre_push.py) runs them once for the whole pushed range."
   exit 0
 fi
 exec bash scripts/acquisition/run_checks.sh

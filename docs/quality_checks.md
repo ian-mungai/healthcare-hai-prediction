@@ -344,14 +344,16 @@ diagnostics.
 
 Pre-commit (`pre-commit`, `commit-msg` and `pre-push` stages) and `scripts/run_ci.sh`
 enforce these repository rules at the pinned versions. Install all three hook types once with
-`.venv/bin/pre-commit install` (`default_install_hook_types`). One commit per reviewed change stays the rule.
+`.venv/bin/pre-commit install` (`default_install_hook_types`), then register the pre-push gate once with
+`.venv/bin/python -m scripts.quality.pre_push install-shim` (a Git config hook, Git 2.54 or newer. It is repeatable).
+One commit per reviewed change stays the rule.
 
 - **Commit stage (fast, about two minutes on a typical change):** secrets on the staged files, credential and
   data files, the privacy scan, the writing check, front matter, Markdown lint of the staged files, Ruff, shell
   syntax, ShellCheck, actionlint, yamllint, Hadolint, gofmt, go vet, the documentation review, the lint-settings,
   suppression, subprocess-import and Docker-call guards, removed names and the commit message. No commit runs a
   check group or a heavy hook.
-- **Pre-push stage:** the `local_ci_pushed` hook (`.venv/bin/python -m scripts.quality.pre_push run`) runs once
+- **Pre-push stage:** the gate (`.venv/bin/python -m scripts.quality.pre_push run --hook`, registered as a Git config hook) runs once
   for the pushed range, from its merge base with `origin/main` to the pushed head, with the selector and path lists
   GitHub CI uses, so the local result predicts the hosted run. It runs the commit-message and removed-name checks
   of the hosted hooks job, `CI_SCOPE=range RANGE_START=<base> RANGE_END=<head> bash scripts/run_ci.sh` and the three
@@ -362,13 +364,30 @@ enforce these repository rules at the pinned versions. Install all three hook ty
   configuration, `scripts/run_ci.sh`, `scripts/ci/`, the CI scripts, the workflow, the setup action and
   `.pre-commit-config.yaml`) and when `origin/main` or the merge base is missing. Every step has a deadline
   (`pre_push.timeout_seconds`: 45 minutes in the range scope, 60 in the full scope) and a step that exceeds it
-  fails with its name. The `acquisition-checks` hook then runs when the pushed range changes a path it watches;
-  after a passing full-scope run for the same head it skips once. `pre_push plan` prints the scope and steps without
-  running them. Only the first pushed reference is checked and the checks read the working tree, so commit or stash
-  tracked changes first (the run warns).
+  fails with its name. The pre-push run also starts the `acquisition-checks` hook once over the same range
+  (`pre-commit run acquisition-checks --hook-stage pre-push --from-ref <base> --to-ref <head>`, as
+  `scripts/acquisition/run_checks_ci.sh` does), so the hook's own path list decides whether the 12 to 14 minute suite
+  runs and an acquisition change earlier in the range still counts. In the full scope the shards of `scripts/run_ci.sh`
+  run it. The native hook of the push skips. `pre_push plan` prints the scope and steps without running them.
+  The gate is the Git config hook `hook.hai-push-input`, which `install-shim` registers. Git starts it for every push
+  with the whole push input, before the hook of pre-commit, so the gate does not depend on the reference that
+  pre-commit hands its own hooks. The gate judges each updated reference. A deletion passes without checks. A
+  reference whose commit is already in `origin/main` passes without checks and is recorded in `report.json`. A
+  reference at the checked-out commit is checked. Any other reference refuses the whole push. The gate also refuses a
+  push when the pushed head is not the checked-out commit or when tracked files differ from HEAD (staged or
+  unstaged), unless every reference passed without checks. Untracked files do not block. The `local_ci_pushed`
+  pre-commit hook (`pre_push check-shim`) refuses a push when the Git config hook is missing, disabled or changed.
+  It runs no check and cannot gate a push that pre-commit does not dispatch, so the Git config hook is the gate.
+  `git push --no-verify` skips both. The gate and every step start without the variables that change what
+  `scripts/run_ci.sh` or pre-commit runs (`EXECUTION_CONTROLS` in `scripts/quality/pre_push.py`: `CI_SCOPE`,
+  `CI_PART`, `CI_UNITS`, `CI_LIST_ONLY`, `RANGE_START`, `RANGE_END`, `LAUNCHER_SHARD`, `FEATURE_SHARD`, the
+  `ACQUISITION_*` selectors, `GITHUB_ACTIONS`, the `PRE_COMMIT_*` reference variables, `SKIP`,
+  `PRE_COMMIT_ALLOW_NO_CONFIG`, `PRE_COMMIT_RUNNING_LEGACY` and `_PRE_COMMIT_SKIP_POST_CHECKOUT`) and without the Git
+  repository variables of the caller. A case scans the installed pre-commit source and fails on a new variable that
+  is neither cleared nor classed as harmless.
 - **Manual stage:** unchanged. `.venv/bin/pre-commit run --all-files --hook-stage manual` runs the whole set
-  (its `local_ci` hook runs the full local CI) on demand. Run it also when the selector or CI scripts change
-  or when hosted CI is unavailable. Hosted CI stays the merge gate and runs this stage unchanged.
+  (its `local_ci` hook runs the full local CI). Run the full set before every release and also when hosted CI
+  is unavailable. Hosted CI stays the merge gate and runs this stage unchanged.
 GitHub CI runs the manual stage on every pull request and push to `main` as parallel
 jobs after a quick plan job (see Main-run reuse below): three hook partitions without `local_ci` (file-based hooks check the changed files of the range), `scripts/run_ci.sh` as `CI_PART=core`, one job each for bronze, silver and gold (`CI_PART=bronze`, `silver` or `gold`, see Lakehouse layers below), eight feature-source shards and four feature-column shards (`CI_PART=feature_sources` or `feature_columns`, `FEATURE_SHARD=K/N`), a feature evidence combining job and a job for the
 gold model metadata E2E (`CI_PART=gold` with `CI_UNITS=model_metadata_e2e`), the launcher E2E in two shards
@@ -382,11 +401,10 @@ the dbt package archive and the SQLFluff packages); the Python environment is
 built fresh from `requirements.txt` without a pip cache. Each job's timeout is about
 twice its measured time (see Measured durations below). Locally `scripts/run_ci.sh` runs every part the way the GitHub jobs do: the gates
 first, then the launcher E2E, then the units that run alone (the gold writer set-up) and then the independent check groups and units, which run
-concurrently: Local CI Core, bronze, silver and gold, eight feature-source shards, four feature-column shards, the three hook partitions, the gold model metadata E2E with its workers and the four acquisition shards. The feature combining steps require every numbered report and exactly one passing result for every expected case. After them the acquisition combining step merges the four acquisition shard folders and enforces the 90% coverage gate. The hosted target is about 15 to 20 minutes. The new feature and hook durations are estimates until a complete hosted run measures them. The local launcher E2E takes about 13 minutes and remains serial before the parallel set. Its time, the alone writer set-up and the final acquisition combine add to the parallel critical path, so this layout does not establish the 15 to 20 minute local target. A separate measured trial runs the launcher E2E in the parallel set five times on this Mac (16 cores, 48 GiB). Only if all five runs pass does the launcher join the parallel set. The exception to the run alone rule is recorded with the evidence. Until then the launcher stays alone, first. The commit hook
-(`CI_SCOPE=staged`) always runs the groups the staged paths select and reuses no earlier result. The run prints each group's seconds and each command's
+concurrently: Local CI Core, bronze, silver and gold, eight feature-source shards, four feature-column shards, the three hook partitions, the gold model metadata E2E with its workers and the four acquisition shards. The feature combining steps require every numbered report and exactly one passing result for every expected case. After them the acquisition combining step merges the four acquisition shard folders and enforces the 90% coverage gate. The hosted target is about 15 to 20 minutes. The new feature and hook durations are estimates until a complete hosted run measures them. The local launcher E2E takes about 13 minutes and remains serial before the parallel set. Its time, the alone writer set-up and the final acquisition combine add to the parallel critical path, so this layout does not establish the 15 to 20 minute local target. A separate measured trial runs the launcher E2E in the parallel set five times on this Mac (16 cores, 48 GiB). Only if all five runs pass does the launcher join the parallel set. The exception to the run alone rule is recorded with the evidence. Until then the launcher stays alone, first. `CI_SCOPE=staged` runs the groups the staged paths select on demand (no hook runs it) and reuses no earlier result. The run prints each group's seconds and each command's
 start, end and seconds (GitHub CI adds both to the job summary). In the full set gitleaks scans every outgoing source file instead of
 the staged index. The acquisition checks
-run in their own CI jobs and through their hook only when acquisition files
+run in their own CI jobs and, before a push, through the pre-push run (their hook, once over the pushed range) only when acquisition files
 change. The full local CI runs them as the same four shards and combining step as GitHub CI, each shard in its own folder
 under the quality evidence folder of the run. The hook and `bash scripts/acquisition/run_checks.sh` run them unsharded. Run
 them directly before a release with that command.

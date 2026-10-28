@@ -1,10 +1,12 @@
 # Pre-commit checks for this repository; docs/quality_checks.md lists what each one enforces.
 # Every hook is local and pinned: pre-commit, Ruff and MyPy come from requirements.txt in .venv, gitleaks and TFLint
 # from scripts/quality/install_tools.py in .tools. Install once with `.venv/bin/pre-commit install`: default_install_hook_types covers all three hook types.
+# Then run `.venv/bin/python -m scripts.quality.pre_push install-shim` once: the pre-push run is a Git config hook (Git 2.54 or newer) that Git starts for
+# every push with the whole push input, whatever reference pre-commit hands its own hooks. The local_ci_pushed hook below only refuses a push without it.
 # Stages: the commit stage holds only fast checks (a typical commit takes about two minutes); every hook marked `stages: [manual]` below is what the hosted
 # hooks job runs (scripts/quality/ci_hooks.py) and is covered before a push by the pre-push run (scripts/quality/pre_push.py), which also runs the check groups
 # of the pushed range. `pre-commit run --all-files --hook-stage manual` runs the whole manual set on demand.
-# There are no other bypasses: do not use SKIP= or git commit --no-verify.
+# There are no other bypasses: do not use SKIP= or git commit --no-verify. The pre-push run clears SKIP and the other pre-commit variables that change which hooks run.
 default_install_hook_types: [pre-commit, commit-msg, pre-push]
 default_stages: [pre-commit, manual]
 fail_fast: false
@@ -225,16 +227,14 @@ repos:
         files: ^(scripts/(process|quality/(documentation_review|run_documentation_review_e2e|run_checks_e2e))\.py|\.pre-commit-config\.yaml)$
         stages: [manual]
       - id: local_ci_pushed
-        # Runs before acquisition-checks (hooks run in file order): after a passing full-scope run that hook skips once.
-        name: Run local CI for the pushed range (the full scope when the selector or CI scripts change)
-        entry: .venv/bin/python -m scripts.quality.pre_push run
+        name: Refuse a push when the Git config hook that runs the pre-push gate is missing
+        entry: .venv/bin/python -m scripts.quality.pre_push check-shim
         language: system
         pass_filenames: false
         always_run: true
-        verbose: true
         stages: [pre-push]
       - id: acquisition-checks
-        # 12-14 minutes, so it runs only when the pushed range changes acquisition code, configuration or their dependencies (pre-push stage; commits skip it)
+        # 12-14 minutes, so the pre-push run starts it only when the pushed range changes acquisition code, configuration or their dependencies (this files pattern); the native hook of a push skips
         # GitHub CI runs it in its own job, so it stays out of the full set; that job reads this files pattern through
         # scripts/acquisition/run_checks_ci.sh, so it runs for the same paths, plus the CI workflow that runs it. Run it directly
         # before a release: bash scripts/acquisition/run_checks.sh

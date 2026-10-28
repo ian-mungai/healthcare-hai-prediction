@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from scripts.process import clear_git_environment, run_command
+from scripts.quality.hook_stage import hook_stage
 
 ROOT = Path(__file__).resolve().parents[2]
 PRE_COMMIT = ROOT / ".venv" / "bin" / "pre-commit"
@@ -647,7 +648,13 @@ def run_case(case: Case) -> tuple[bool, str]:
             git(repo, "rm", "-q", relative)
         git(repo, "add", "-A")
         verbose = case.name in PASS_MARKERS
-        args = ["run", case.hook, *(["--verbose"] if verbose else [])]  # pre-commit hides passing output
+        args = [
+            "run",
+            case.hook,
+            "--hook-stage",
+            hook_stage(repo / ".pre-commit-config.yaml", case.hook),
+            *(["--verbose"] if verbose else []),
+        ]  # pre-commit hides passing output
         if case.message is not None:
             message = repo / ".git" / "COMMIT_EDITMSG"
             message.write_text(case.message)
