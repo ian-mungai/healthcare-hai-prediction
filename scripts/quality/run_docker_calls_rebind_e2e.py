@@ -9,6 +9,7 @@ the module under test. No container, AWS, install or network operation runs. Evi
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import shutil
@@ -240,6 +241,21 @@ def edited_line(workspace: Path) -> dict[str, bool]:
     return refused(repository, (f"{RUNNER}:{line}: the reviewed line is ambiguous",), checks)
 
 
+def committed_edit(workspace: Path, *, amend: bool) -> dict[str, bool]:
+    """An edited reviewed twin, committed: the reviewed copy is then only in history (or, after an amend, nowhere), and rebind must refuse."""
+    repository = fixture(workspace, "committed_edit_amend" if amend else "committed_edit")
+    old = repository.text(RUNNER)
+    line = lines_of(old, TWIN)[1]
+    lines = old.splitlines(keepends=True)
+    lines[line - 1] = lines[line - 1].replace("timeout=5", "timeout=6")
+    repository.write(RUNNER, "".join(lines))
+    git(repository.folder, "add", RUNNER)
+    commit = ["-c", "user.name=fixture", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet"]
+    git(repository.folder, *commit, *(["--amend", "--no-edit"] if amend else ["--message", "edit the reviewed twin"]))
+    message = "the reviewed copy (file hash) is not in" if amend else "the reviewed line is ambiguous"
+    return refused(repository, (f"{RUNNER}:{line}: {message}",), {"one twin is left": len(lines_of(repository.text(RUNNER), TWIN)) == 1})
+
+
 def dependency_change(workspace: Path) -> dict[str, bool]:
     repository = fixture(workspace, "dependency_change")
     repository.write(HELPER, 'VALUE = "two"\n')
@@ -286,6 +302,8 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "duplicate_ordinal": duplicate_ordinal,
     "vanished_line": vanished_line,
     "edited_line": edited_line,
+    "committed_edit": functools.partial(committed_edit, amend=False),
+    "committed_edit_amend": functools.partial(committed_edit, amend=True),
     "dependency_change": dependency_change,
     "noop_rerun": noop_rerun,
     "ci_groups_pointers": ci_groups_pointers,

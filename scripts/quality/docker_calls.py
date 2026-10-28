@@ -1000,6 +1000,10 @@ def site_entry(models: dict[str, FileModel], relative: str, root: Path, line: in
     }
 
 
+# How many recent versions of a file rebind searches for the reviewed copy.
+HISTORY_VERSIONS = 200
+
+
 def code_lines(text: str, code_sha: str) -> list[int]:
     """The 1-based lines of a text whose stripped content has the given SHA-256."""
     return [number for number, line in enumerate(text.splitlines(), 1) if hashlib.sha256(line.strip().encode()).hexdigest() == code_sha]
@@ -1009,7 +1013,12 @@ def reviewed_text(root: Path, relative: str, file_sha: str) -> str | None:
     """The reviewed version of a file: the working copy, the staged copy or the HEAD copy whose SHA-256 is the entry's file hash."""
     if sha256_file(root / relative) == file_sha:
         return (root / relative).read_text(errors="replace")
-    for revision in (":", "HEAD:"):
+    revisions = [":", "HEAD:"]
+    # After a rebase or a commit the reviewed copy is often only in history: look through the file's recent versions on any ref.
+    listed = run_command("git", ["log", "--all", "--format=%H", f"-n{HISTORY_VERSIONS}", "--", relative], cwd=root, timeout=60)
+    if listed.returncode == 0:
+        revisions += [f"{commit}:" for commit in listed.stdout.split()]
+    for revision in revisions:
         try:
             shown = run_command("git", ["show", f"{revision}{relative}"], cwd=root, timeout=60)
         except UnicodeDecodeError:
@@ -1022,7 +1031,7 @@ def reviewed_text(root: Path, relative: str, file_sha: str) -> str | None:
 def rebound_line(root: Path, entry: dict[str, object], text: str) -> tuple[int | None, str]:
     """The current line of an entry's reviewed code and, when there is none, why: the line keeps its ordinal among identical lines.
 
-    Without the reviewed copy only a single identical line is certain; the guard still compares the finding count."""
+    Without the reviewed copy (work tree, index or recent history) nothing is certain, so the entry fails."""
     old = int(str(entry["line"]))
     code_sha = str(entry["code_sha256"])
     hits = code_lines(text, code_sha)
@@ -1030,11 +1039,8 @@ def rebound_line(root: Path, entry: dict[str, object], text: str) -> tuple[int |
         return None, "the reviewed line no longer exists"
     reviewed = reviewed_text(root, str(entry["path"]), str(entry["file_sha256"]))
     if reviewed is None:
-        return (
-            (hits[0], "")
-            if len(hits) == 1
-            else (None, f"the reviewed line is ambiguous: lines {hits} match and the reviewed copy is not in the work tree, index or HEAD")
-        )
+        # Without the reviewed copy the ordinal cannot be verified, so an edited duplicate could be mistaken for its twin: fail closed.
+        return None, f"the reviewed copy (file hash) is not in the work tree, index or the file's last {HISTORY_VERSIONS} versions; review the line again"
     old_hits = code_lines(reviewed, code_sha)
     if old not in old_hits:
         return None, f"the reviewed line is ambiguous: line {old} of the reviewed copy is not the reviewed code"

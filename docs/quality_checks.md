@@ -282,12 +282,12 @@ Rebind the entries after such an edit, then read the printed changes:
 
 The command refreshes each entry's file hash and dependency hashes and moves its `line` pointer. A pointer moves only to a line whose
 stripped text has the entry's code hash. Among identical lines it keeps the entry's position in the reviewed copy of the file: the
-working copy, the staged copy or `HEAD`, whichever has the recorded file hash. It prints every moved pointer and every hash change. It
+working copy, the staged copy, `HEAD` or one of the file's last 200 versions on any ref, whichever has the recorded file hash. It prints every moved pointer and every hash change. It
 never adds, removes or widens an entry and never changes `reason`, `problem` or `occurrences`. A second run prints `no change`.
 
 The command fails and writes nothing when any entry's reviewed line no longer exists or became ambiguous. A line is ambiguous when the
-number of identical lines changed, when the old pointer did not name the code or when there are several identical lines and no reviewed
-copy. Each failure names the file and the old line. Review that site again and update its entry by hand. A rebind does not review
+number of identical lines changed or when the old pointer did not name the code. Without any reviewed copy the entry always fails,
+because an edited duplicate could otherwise be taken for its twin. Each failure names the file and the old line. Review that site again and update its entry by hand. A rebind does not review
 code. Read every moved pointer and hash change before committing. Then run the check.
 
 The cases run in scratch Git repositories:
@@ -296,8 +296,8 @@ The cases run in scratch Git repositories:
 .venv/bin/python -m scripts.quality.run_docker_calls_rebind_e2e
 ```
 
-They cover a moved line, identical lines with the ordinal kept, a vanished line, an edited line that must not be re-pointed, a
-dependency change, a rerun with no change and the two `scripts/quality/run_ci_groups_e2e.py` pointers that drifted in past sessions.
+They cover a moved line, identical lines with the ordinal kept, a vanished line, an edited line that must not be re-pointed, the same edit
+committed (the reviewed copy only in history or gone after an amend), a dependency change, a rerun with no change and the two `scripts/quality/run_ci_groups_e2e.py` pointers that drifted in past sessions.
 Evidence is `data/e2e/docker_calls_rebind/<UTC>/report.json`.
 
 ## Container imports
