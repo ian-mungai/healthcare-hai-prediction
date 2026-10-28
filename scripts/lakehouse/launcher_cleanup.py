@@ -65,7 +65,8 @@ def lock_held(registry: Path) -> bool:
 def ask(registry: Path, method: str, params: dict[str, Any], principal: dict[str, Any], seconds: float) -> dict[str, Any]:
     """Exchange one socket request within a total budget of seconds. Raise on timeout or refusal."""
     deadline = time.monotonic() + seconds
-    message = {"v": PROTOCOL, "id": f"cleanup-{os.getpid()}-{method}", "method": method, "params": params, "principal": principal}
+    # A registry outlives its launchers and a launcher replays the recorded result of a repeated request ID, so every request needs a fresh ID.
+    message = {"v": PROTOCOL, "id": f"cleanup-{os.getpid()}-{method}-{os.urandom(6).hex()}", "method": method, "params": params, "principal": principal}
 
     def remaining() -> float:
         left = deadline - time.monotonic()
