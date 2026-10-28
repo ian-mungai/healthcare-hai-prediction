@@ -96,18 +96,20 @@ class PolarisHttp:
 
     def send(self, method: str, path: str, data: bytes | None, headers: dict[str, str], deadline: float) -> tuple[int, object]:
         """One request within the absolute deadline: a watchdog shuts the socket at expiry, so neither a silent peer nor one that keeps
-        sending a few bytes holds the header or body read past it."""
+        sending a few bytes holds the header or body read past it. The connected socket is kept here because a closing response
+        (``Connection: close`` or HTTP/1.0) detaches it from the connection while its body is still being read."""
         timeout = deadline - self.clock()
         if timeout <= 0:
             raise reg.RegistrationError("deadline", "catalog registration exceeded its fixed deadline")
         connection = http.client.HTTPConnection(self.host, self.port, timeout=timeout)
         expired = threading.Event()
+        held: list[socket.socket] = []
 
         def expire() -> None:
             expired.set()
-            if connection.sock is not None:
+            for sock in held:
                 with contextlib.suppress(OSError):
-                    connection.sock.shutdown(socket.SHUT_RDWR)
+                    sock.shutdown(socket.SHUT_RDWR)
 
         watchdog = threading.Timer(timeout, expire)
         watchdog.daemon = True
@@ -115,6 +117,8 @@ class PolarisHttp:
         try:
             try:
                 connection.connect()
+                if connection.sock is not None:
+                    held.append(connection.sock)
                 if expired.is_set():
                     raise TimeoutError
                 connection.request(method, path, body=data, headers={"Accept": "application/json", "Polaris-Realm": self.realm, **headers})
@@ -129,6 +133,8 @@ class PolarisHttp:
         finally:
             watchdog.cancel()
             connection.close()
+            for sock in held:
+                sock.close()
         if response.status >= 400:
             return response.status, None
         return response.status, reg.read_document(raw, "catalog_http") if raw else None

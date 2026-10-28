@@ -792,15 +792,19 @@ def http_outcome(client: bronze_inventory.PolarisHttp, deadline: float) -> str:
 
 @offline
 def http_absolute_deadline(folder: Path) -> dict[str, bool]:
-    """R6: the bounded client stops at the absolute deadline during the header and body reads and closes the connection, for a silent peer and
-    for a peer that keeps sending a few bytes."""
+    """R6: the bounded client stops at the absolute deadline during the header and body reads and closes the connection, for a silent peer,
+    for a peer that keeps sending a few bytes and for a response that owns its socket (``Connection: close`` or HTTP/1.0)."""
     checks: dict[str, bool] = {}
     body = b"x" * 600
     head = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 600\r\n\r\n"
+    close_head = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 600\r\n\r\n"
+    old_head = b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n"
     for label, chunks in (
         ("a silent peer", []),
         ("a peer that trickles the headers", [head[index : index + 3] for index in range(0, len(head), 3)]),
         ("a peer that trickles the body", [head, *(body[index : index + 3] for index in range(0, len(body), 3))]),
+        ("a closing peer that trickles the body", [close_head, *(body[index : index + 3] for index in range(0, len(body), 3))]),
+        ("an HTTP/1.0 peer that trickles the body", [old_head, *(body[index : index + 3] for index in range(0, len(body), 3))]),
     ):
         peer = SlowPeer(chunks, 0.025)
         try:
