@@ -905,6 +905,8 @@ def reader_scan_case(tracked: set[str]) -> dict[str, Any]:
 HOSTED_ENTRY_POINTS = {
     "configuration_checks": (
         ("scripts.infrastructure.run_secret_store_e2e", ("scripts/infrastructure/run_secret_store_e2e.py", "scripts/infrastructure/secret_store.py")),
+        ("scripts.infrastructure.run_host_session_e2e", ("scripts/infrastructure/run_host_session_e2e.py", "scripts/infrastructure/host_session.py")),
+        ("scripts.infrastructure.host_session_plants", ("scripts/infrastructure/host_session_plants.py", "scripts/infrastructure/host_session.py")),
     ),
     "lakehouse_gold_writer_setup": (
         (

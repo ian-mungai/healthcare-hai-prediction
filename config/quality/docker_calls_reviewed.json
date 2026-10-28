@@ -1287,11 +1287,11 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 1958,
+      "line": 1960,
       "code_sha256": "7262a5d12d7ddd7c8b9f95d4ab8d9e815af69e92bbb232841afa48127d0a5f36",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "f29b14bd5394d47383d94a3393113c9e8d4dca22e896f8c6e6c5563e22909cee",
+      "file_sha256": "d8ca3aa689de3799ffa24cef018c3aa69f42b1520094583bdb3af4ee7f45de13",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/ci_groups.py": "sha256:f879b6530d4ac46752d238e79710b98ae732f66dbd331f8fec23823ddfe3fcab",
@@ -1303,11 +1303,11 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 2010,
+      "line": 2012,
       "code_sha256": "ddfb4bd744b919616f97d784e28c5a981ddc3d18ee5b387f2f2b2bce6b160e35",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "f29b14bd5394d47383d94a3393113c9e8d4dca22e896f8c6e6c5563e22909cee",
+      "file_sha256": "d8ca3aa689de3799ffa24cef018c3aa69f42b1520094583bdb3af4ee7f45de13",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/ci_groups.py": "sha256:f879b6530d4ac46752d238e79710b98ae732f66dbd331f8fec23823ddfe3fcab",
@@ -1316,6 +1316,25 @@
         "scripts/quality/scratch_worktree.py": "sha256:60e9d686976414f37753f2476f3da430162650f06bf70e4d6ab560f992e32934"
       },
       "reason": "Runs the literal HOOK_DEADLINE_PROGRAM with the project Python. It records calls to the shared process launcher and invokes ci_hooks against a scratch pre-commit stand-in that only records arguments and exits. It does not call Docker."
+    },
+    {
+      "path": "scripts/infrastructure/host_session.py",
+      "line": 325,
+      "code_sha256": "ee20a27238cf5e8b14a791933c550d1cdcae10ff3635aef6ab74e5f57407c008",
+      "problem": "is used as a value",
+      "occurrences": 1,
+      "file_sha256": "5a90480586f71f1f16f0b4f5443ecb189f61580aa326c9cd8a3d7e52dbda3c22",
+      "dependencies": {
+        "scripts/acquisition/cli_tools.py": "sha256:aa5f092234a646fd25971f7edbd53b420d48600fc80f2902a3d8899b800066d0",
+        "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
+        "scripts/infrastructure/render_platform_config.py": "sha256:5babfac022564060262377264afce7d62101eaf5afcec3509dff546295b39783",
+        "scripts/infrastructure/render_project_config.py": "sha256:cfc43a274aa889b19bab4278af0f6db284310c4e0620153088ebaab94be8790f",
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "reason": "tolerant_runner is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws, and tolerant_runner runs run_argv(command, ...) and only replaces an empty successful output with an empty JSON object",
+      "lines": [
+        325
+      ]
     }
   ]
 }
