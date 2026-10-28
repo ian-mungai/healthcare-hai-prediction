@@ -528,15 +528,17 @@ def step_check(services: Services, seconds: float, clock: Clock = time.monotonic
 
 
 def step_inspect(services: Services, instance: str, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
-    """Read the AWS catalog and each identity's roles and grants through the route, authenticated with the root secret; nothing is changed."""
+    """Read the AWS catalog and each identity's roles, grants and stored pair through the route, authenticated with the root secret; nothing is changed."""
     deadline = clock() + seconds
-    secret = read_root(services.vault(), min(SECRET_SECONDS, check_deadline(deadline, clock)))
+    vault = services.vault().bounded(deadline, clock)
+    secret = read_root(vault, min(SECRET_SECONDS, check_deadline(deadline, clock)))
     with services.remote(instance, deadline=deadline) as remote:
         request = TunnelRequest(remote.port, deadline=deadline, execute=remote.execute, clock=clock)
         access = root_token(request, secret)
         result: dict[str, Any] = {"catalog": verify_catalog(request, access, services.bucket)}
         if result["catalog"] == "present":
             result["principals"] = check_principals(request, access, services.approvals)
+            result["causes"] = stored_pair_causes(request, vault, result["principals"])
     return result
 
 
@@ -722,6 +724,40 @@ def verify_memberships(request: Request, access: str, identity: str, exact: bool
             raise SetupError("roles", f"{what} do not include the approved role")
 
 
+def verify_stored_pair(request: TunnelRequest, vault: PairVault, identity: str) -> None:
+    """Authenticate with the pair read back from Parameter Store; a refused or missing pair is ``stored_pair_mismatch``.
+
+    No conditional write exists, so a timed-out pair write may still apply later and replace the pair. This check catches it at the end of every
+    principal run and in ``inspect``; a rerun of the principal step then resets the pair and verifies it again.
+    """
+    role = PRINCIPALS[identity]
+    try:
+        stored = [vault.find(name) for name in configured_pairs()[identity]]
+    except secret_store.SecretStoreError as error:
+        raise SetupError("parameters", str(error)) from None
+    try:
+        accepted = bool(stored[0] and stored[1]) and principal_credentials.pair_accepted(request, role, str(stored[0]), str(stored[1]))
+    except principal_credentials.CredentialError as error:
+        raise SetupError("credentials", str(error)) from None
+    if not accepted:
+        raise SetupError("stored_pair_mismatch", f"the catalog refuses the stored pair of principal {role}; rerun the principal step to reset it")
+
+
+def stored_pair_causes(request: TunnelRequest, vault: PairVault, principals: dict[str, str]) -> dict[str, str]:
+    """``stored_pair_mismatch`` for each identity with a catalog role whose stored pair the catalog refuses; that identity becomes ``differs``."""
+    causes: dict[str, str] = {}
+    for identity, state in principals.items():
+        if state == "absent":
+            continue
+        try:
+            verify_stored_pair(request, vault, identity)
+        except SetupError as error:
+            if error.code != "stored_pair_mismatch":
+                raise
+            principals[identity], causes[identity] = "differs", error.code
+    return causes
+
+
 def ensure_principal(
     request: TunnelRequest,
     access: str,
@@ -784,6 +820,7 @@ def ensure_principal(
         raise SetupError("credentials", str(error)) from None
     status, _ = request("PUT", f"{MANAGEMENT}/principals/{role}/principal-roles", access, body={"principalRole": {"name": role}})
     ensure_status(status, "assigning the principal role")
+    verify_stored_pair(request, vault, identity)
     return {
         "identity": identity,
         "principal": role,
