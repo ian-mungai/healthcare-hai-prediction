@@ -784,9 +784,20 @@ tree, the reused run and the conclusion of each required job. `.venv/bin/python 
 and when the caller is interrupted while it waits (Ctrl-C): TERM first, then KILL after `STOP_GRACE_SECONDS` (5 s), then a check that no member is left (up to
 `CONFIRM_SECONDS`, 5 s). A caller whose own deadline must hold within a shorter bound passes `grace_seconds` (the reference-document download passes at most a quarter of its limit). The leader is reaped first, because an unreaped zombie keeps its group alive. A program that ends in time gives the same result as before. A deadline
 raises `TimeoutExpired` with the output so far. If a member survives KILL, the call raises `ProcessGroupSurvived`, a `TimeoutExpired` that names the group, so no timeout ends silently with a live
-process. A member that starts its own session or group (`setsid`) is outside the group and is not stopped; the project's scripts start none while a launcher runs them (the API key reader starts its own session only when run by hand, because a group leader cannot call `setsid`). `.venv/bin/python -m scripts.quality.run_process_e2e`
-(in `repository_code_checks`) starts a child that starts a grandchild (once with TERM ignored and once without). It checks by process ID that none is left. It also plants three defects (stop the
-direct child only, send TERM without KILL, skip the confirmation) and requires a named case to catch each.
+process.
+
+A descendant that calls `run_command` itself (for example `scripts/quality/ci_hooks.py` under the dispatcher) starts its program in a new group, outside the caller's. So each call keeps a private
+registry of owned groups: a file with mode 600 in a folder with mode 700. The call names it to its child in `PROCESS_GROUP_REGISTRIES`, after the registries of its own ancestors (paths
+separated by `:`). Every launch appends its new group, one line, to each registry it inherited, so a registry lists every group that a descendant started at any depth. The stop at the deadline
+or on an interrupt covers the own group and every recorded group with the same TERM, grace, KILL and confirmation. It reads the registry again while it waits, for a group recorded during the
+stop. A group that has already ended counts as stopped. So does a recorded group ID that now belongs to another user (it is no descendant). A nested launch keeps its own, earlier deadline and stops its own recorded groups. The registry is removed when the call returns or
+raises. A nested registry folder is made inside its parent's, so a nested launcher that is killed before its cleanup leaves no folder. A write to a registry whose owner has returned is
+skipped. The registry keeps no record of a group that ended, so a recorded group ID that the system has reused for an unrelated program before the owner's stop would be signalled too. The stop
+runs only at the owner's deadline or interrupt. A member that starts its own session or group (`setsid`) without the launcher is outside every group and is not stopped. The API key reader
+starts its own session only when run by hand, because a group leader cannot call `setsid`. `.venv/bin/python -m scripts.quality.run_process_e2e` (in `repository_code_checks`) starts a child
+that starts a grandchild (once with TERM ignored and once without) and nested launchers one and two levels deep. It checks by process ID that none is left, that a nested launch keeps its
+own deadline, that the registry is private and removed and that a group that has already ended counts as stopped. It also plants four defects (stop the direct child only, send TERM without
+KILL, skip the confirmation, stop the own group only). Each plant takes the real arguments of `stop_process_group` and counts as caught only when the intended check of its case fails.
 
 ## Practice
 
