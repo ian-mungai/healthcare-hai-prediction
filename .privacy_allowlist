@@ -10,6 +10,7 @@ aws-account scripts/infrastructure/run_e2e.py -- synthetic all-ones and all-twos
 aws-account scripts/infrastructure/run_policy_e2e.py -- a synthetic all-nines account ID that sizes the policies with the longest values; not the project's account
 aws-account tests/test_iam_policy_scripts.py -- a synthetic all-twos account ID for the wrong-account case; not the project's account
 aws-account tests/test_project_config.py -- synthetic all-ones and all-twos account IDs in configuration tests; not the project's account
+aws-account scripts/infrastructure/host_session_stand_in.py -- a synthetic all-zeros account ID that marks stand-in ARNs so the E2E can detect any printed ARN; not the project's account
 home-path docker-compose.yaml -- the analytics container service user home directory, not a person
 home-path services/analytics/Dockerfile -- the analytics container service user home directory, not a person
 home-path scripts/lakehouse/run_duckdb_view_e2e.py -- the analytics container service user home directory, not a person
