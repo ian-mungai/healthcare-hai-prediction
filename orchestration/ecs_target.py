@@ -6,6 +6,7 @@ This module makes no network, credential, Docker or process call.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -174,6 +175,14 @@ def active_usage(attempts: Iterable[Mapping[str, Any]]) -> Usage:
     return Usage(tasks, cpu, memory)
 
 
+def writer_retry_blocked(execution: Mapping[str, Any]) -> bool:
+    """Return whether a dispatched or started writer requires reconciliation."""
+    return any(
+        item["started"] or item.get("dispatch_attempted") or item["state"] == "unknown" or item["state"] == "fenced" and not item["no_start"]
+        for item in execution["placements"]
+    )
+
+
 def select(attempt: Mapping[str, Any], job_class: str, size: Size, view: Availability, now: float) -> Decision:
     """Prefer AWS and permit Mac fallback only from fresh, measured, effect-free bottlenecks."""
     execution = attempt["execution"]
@@ -189,7 +198,19 @@ def select(attempt: Mapping[str, Any], job_class: str, size: Size, view: Availab
     if now >= execution["deadline_utc"]:
         return Decision("expire", None, "deadline")
     if job_class == "lakehouse_write":
-        return Decision("refuse", None, "writer_not_enabled")
+        if execution.get("admission", {}).get("job_class") != "lakehouse_write" or execution.get("writer_authorization") is None:
+            return Decision("refuse", None, "writer_not_enabled")
+        if requested == "docker":
+            return Decision("refuse", None, "writer_requires_ecs")
+        if writer_retry_blocked(execution):
+            return Decision("refuse", None, "writer_requires_reconciliation")
+        if not view.enabled:
+            return Decision("refuse", None, "ecs_disabled")
+        if not view.usage.fits(size) or view.reason in BOTTLENECKS:
+            return Decision("wait", None, "writer_capacity")
+        if view.reason != "ready":
+            return Decision("refuse", None, "cloud_failure")
+        return Decision("dispatch", "ecs", "aws_first", "FARGATE")
     if not view.enabled:
         return Decision("refuse", None, "ecs_disabled")
     if view.reason not in ("ready", *BOTTLENECKS):
@@ -229,6 +250,8 @@ def reserve(attempt: dict[str, Any], size: Size, decision: Decision, now: float,
     if decision.target == "ecs" and usage is None:
         raise PlacementError("cloud placement requires current usage")
     usage = usage if usage is not None else Usage()
+    if execution.get("admission", {}).get("job_class") == "lakehouse_write" and writer_retry_blocked(execution):
+        raise PlacementError("writer requires reconciliation before another reservation")
     if execution["live_try"] is not None:
         raise PlacementError("a live placement already exists")
     if decision.action != "dispatch" or decision.target not in ("ecs", "docker") or now >= execution["deadline_utc"]:
@@ -255,6 +278,12 @@ def reserve(attempt: dict[str, Any], size: Size, decision: Decision, now: float,
         "started": False,
         "cap_before": usage_record(usage),
     }
+    if "admission" in execution:
+        placement["job_class"] = execution["admission"]["job_class"]
+        placement["catalog_authority"] = json.loads(json.dumps(execution["catalog_authority"]))
+        placement["writer_authorization"] = json.loads(json.dumps(execution["writer_authorization"]))
+        if placement["job_class"] == "lakehouse_write" and (decision.target != "ecs" or decision.provider != "FARGATE"):
+            raise PlacementError("writers require ECS on demand")
     execution["placements"].append(placement)
     execution["live_try"] = try_id
     return placement
@@ -321,6 +350,14 @@ def validate_execution(execution: Mapping[str, Any]) -> None:
         raise PlacementError("execution record has inconsistent live placement authority")
     if any(item["deadline_utc"] != execution["deadline_utc"] for item in placements):
         raise PlacementError("a placement changed the attempt deadline")
+    for placement in placements:
+        if "admission" in execution and any(placement.get(key) != execution.get(key) for key in ("catalog_authority", "writer_authorization")):
+            raise PlacementError("placement changed the catalog admission binding")
+        dispatch = placement.get("dispatch")
+        if dispatch is not None:
+            request_bytes = json.dumps(dispatch["request"], sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
+            if dispatch["request_sha256"] != hashlib.sha256(request_bytes).hexdigest():
+                raise PlacementError("persisted dispatch request changed")
 
 
 def usage_record(usage: Usage) -> dict[str, int]:

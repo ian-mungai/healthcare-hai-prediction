@@ -210,6 +210,43 @@
         }
       },
       "description": "Required by the verified runtime entry point. Preparation examples without archives are not executable jobs."
+    },
+    "catalog_authority": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "writer_authorization": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "qualification",
+        "layer_activation",
+        "publish_approval"
+      ],
+      "properties": {
+        "qualification": {
+          "type": "string",
+          "minLength": 1
+        },
+        "layer_activation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "publish_approval": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
     }
   },
   "allOf": [

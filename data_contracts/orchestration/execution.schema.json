@@ -12,6 +12,96 @@
     "deadline_utc": {"type": "integer", "minimum": 1},
     "catalog_epoch": {"type": ["integer", "null"], "minimum": 1},
     "live_try": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
+    "catalog_authority": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "writer_authorization": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "qualification",
+        "layer_activation",
+        "publish_approval"
+      ],
+      "properties": {
+        "qualification": {
+          "type": "string",
+          "minLength": 1
+        },
+        "layer_activation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "publish_approval": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    },
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_class",
+        "registry_kind",
+        "run_id",
+        "mode",
+        "layer",
+        "namespaces"
+      ],
+      "properties": {
+        "job_class": {
+          "enum": [
+            "offline",
+            "seal",
+            "lakehouse_read",
+            "lakehouse_write"
+          ]
+        },
+        "registry_kind": {
+          "enum": [
+            "real",
+            "rehearsal",
+            "test"
+          ]
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "layer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "namespaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "placements": {
       "type": "array",
       "items": {
@@ -33,6 +123,91 @@
           "started": {"type": "boolean"},
           "fenced_at": {"type": "number", "minimum": 0},
           "no_start": {"type": "boolean"},
+          "catalog_authority": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "writer_authorization": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "qualification",
+              "layer_activation",
+              "publish_approval"
+            ],
+            "properties": {
+              "qualification": {
+                "type": "string",
+                "minLength": 1
+              },
+              "layer_activation": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1
+              },
+              "publish_approval": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          },
+          "job_class": {
+            "enum": [
+              "offline",
+              "seal",
+              "lakehouse_read",
+              "lakehouse_write"
+            ]
+          },
+          "dispatch_attempted": {
+            "type": "boolean"
+          },
+          "dispatch": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "request",
+              "request_sha256",
+              "job_reference",
+              "definition",
+              "project_tag",
+              "clock_observation",
+              "sent"
+            ],
+            "properties": {
+              "request": {
+                "type": "object"
+              },
+              "request_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "job_reference": {
+                "type": "object"
+              },
+              "definition": {
+                "type": "object"
+              },
+              "project_tag": {
+                "type": "string"
+              },
+              "clock_observation": {
+                "type": "object"
+              },
+              "sent": {
+                "const": true
+              }
+            }
+          },
           "cap_before": {
             "type": "object", "additionalProperties": false, "required": ["tasks", "cpu", "memory_mib"],
             "properties": {"tasks": {"type": "integer", "minimum": 0}, "cpu": {"type": "integer", "minimum": 0}, "memory_mib": {"type": "integer", "minimum": 0}}
