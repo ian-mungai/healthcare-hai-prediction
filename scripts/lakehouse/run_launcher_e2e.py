@@ -323,9 +323,12 @@ class Env:
                 self.wait(lambda: self.state()["launcher"]["catalog"]["phase"] == "down", 40, "the catalog is down")
 
     @launcher_cleanup.finish_cleanup
-    def stop_launcher(self) -> None:
-        """Stop only this case's launcher and fail while its completion is unresolved."""
-        outcome = launcher_cleanup.end_launcher(self.registry, self.nonce)
+    def stop_launcher(self, nonce: str = "") -> None:
+        """Stop only a launcher started with the nonce (this case's own by default) and fail while its completion is unresolved.
+
+        A case passes another nonce only for a launcher a runner it drives started with that runner's nonce; a launcher with any other nonce stays foreign.
+        """
+        outcome = launcher_cleanup.end_launcher(self.registry, nonce or self.nonce)
         self.stuck = outcome not in ("none", "stopped")
         if self.stuck:
             raise CaseFailure(f"cleanup unresolved: launcher {outcome}, registry kept at {self.registry}")
@@ -4373,7 +4376,7 @@ def kit_launcher_ownership(env: Env) -> dict[str, bool]:
             reply = real_ping()
             if stopping and "e_pid" not in observed and reply:
                 observed["e_own"] = int(reply["pid"])
-                env.stop_launcher()
+                env.stop_launcher(str(reply["launch_nonce"]))
                 env.wait(lambda: lock_free(env.registry), 15, "the kit's launcher lock is free")
                 observed["e_pid"] = env.start()
             return reply
