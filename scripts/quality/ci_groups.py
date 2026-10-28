@@ -40,13 +40,14 @@ from scripts.process import run_command
 
 CONFIG = Path("config/quality/ci_groups.json")
 SCOPES = ("full", "staged", "range", "paths")
-LAYER_PARTS = {"bronze": "lakehouse_bronze", "silver": "lakehouse_silver", "gold": "lakehouse_gold"}
+LAYER_PARTS = {"bronze": "lakehouse_bronze", "silver": "lakehouse_silver", "gold": "lakehouse_gold", "features": "lakehouse_features"}
 PARTS = {"all", "core", "launcher", *LAYER_PARTS}
 ORDER = (
     "python_lint",
     "lakehouse_bronze",
     "lakehouse_silver",
     "lakehouse_gold",
+    "lakehouse_features",
     "orchestration_checks",
     "repository_code_checks",
     "configuration_checks",

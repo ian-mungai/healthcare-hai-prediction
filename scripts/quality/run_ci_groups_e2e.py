@@ -109,7 +109,9 @@ REQUIREMENTS = "7a967b2"
 ZERO = "0" * 40
 MISSING = "0123456789abcdef0123456789abcdef01234567"
 MARKDOWN_PROBES = ("ci_groups_probe.MD", "ci_groups_probe_two.Markdown")
-LAYERS = ["lakehouse_bronze", "lakehouse_silver", "lakehouse_gold"]
+LAYERS = ["lakehouse_bronze", "lakehouse_silver", "lakehouse_gold", "lakehouse_features"]
+GOLD_DOWN = LAYERS[2:]
+SILVER_DOWN = LAYERS[1:]
 CORE = ["python_lint", "orchestration_checks", "repository_code_checks", "configuration_checks", "sql_style", "terraform_checks"]
 WITH_LAYERS = [CORE[0], *LAYERS, *CORE[1:]]
 PART_GROUPS = {
@@ -117,7 +119,8 @@ PART_GROUPS = {
     "launcher": ["launcher"],
     "bronze": LAYERS[:1],
     "silver": LAYERS[1:2],
-    "gold": LAYERS[2:],
+    "gold": LAYERS[2:3],
+    "features": LAYERS[3:],
     "core+layers": WITH_LAYERS,
     "all": [*WITH_LAYERS, "launcher", "acquisition"],
 }
@@ -131,7 +134,7 @@ ORCHESTRATION_SHARED = {
     "scripts/lakehouse/pipeline_build.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/silver_input.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/silver_publish.py": LAKEHOUSE_SCRIPT,
-    "scripts/lakehouse/gold_maintenance.py": ["python_lint", "lakehouse_gold", "orchestration_checks", "repository_code_checks"],
+    "scripts/lakehouse/gold_maintenance.py": ["python_lint", *GOLD_DOWN, "orchestration_checks", "repository_code_checks"],
     "scripts/lakehouse/run_lock.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/fake_docker.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/run_launcher_e2e.py": LAKEHOUSE_SCRIPT,
@@ -571,7 +574,7 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
         return selection_case(work, name, ["--scope", "paths", "--path", path, "--part", "core+layers"], groups)
 
     blob = git(work, "rev-parse", "HEAD:dbt/dbt_project.yml").strip()
-    silver_gold = ["lakehouse_silver", "lakehouse_gold"]
+    silver_gold = SILVER_DOWN
     cases = [
         selection_case(work, "core_part_excludes_the_layers", ["--scope", "full", "--part", "core"], CORE, "full scope"),
         *(
@@ -584,14 +587,14 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks"],
         ),
         path_case(
-            "layer_silver_only_change_selects_silver_and_gold",
+            "layer_silver_only_change_selects_silver_gold_and_features",
             "scripts/lakehouse/silver.py",
             ["python_lint", *silver_gold, "orchestration_checks", "repository_code_checks"],
         ),
         path_case(
-            "layer_gold_only_change_selects_gold_only",
+            "layer_gold_only_change_selects_gold_and_features",
             "scripts/lakehouse/gold_publish.py",
-            ["python_lint", "lakehouse_gold", "orchestration_checks", "repository_code_checks"],
+            ["python_lint", *GOLD_DOWN, "orchestration_checks", "repository_code_checks"],
         ),
         path_case(
             "layer_shared_change_selects_every_layer",
@@ -604,12 +607,16 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks"],
         ),
         path_case(
-            "layer_gold_model_selects_gold_only", "dbt/models/gold/dimensions/_dimensions__models.yml", ["lakehouse_gold", "orchestration_checks", "sql_style"]
+            "layer_gold_model_selects_gold_and_features",
+            "dbt/models/gold/dimensions/_dimensions__models.yml",
+            [*GOLD_DOWN, "orchestration_checks", "sql_style"],
         ),
         path_case(
-            "layer_silver_model_selects_silver_and_gold", "dbt/models/silver/staging/_staging__models.yml", [*silver_gold, "orchestration_checks", "sql_style"]
+            "layer_silver_model_selects_silver_gold_and_features",
+            "dbt/models/silver/staging/_staging__models.yml",
+            [*silver_gold, "orchestration_checks", "sql_style"],
         ),
-        path_case("layer_gold_seed_selects_gold_only", "dbt/seeds/gold/identity_splits.csv", ["lakehouse_gold", "orchestration_checks", "sql_style"]),
+        path_case("layer_gold_seed_selects_gold_and_features", "dbt/seeds/gold/identity_splits.csv", [*GOLD_DOWN, "orchestration_checks", "sql_style"]),
         path_case("layer_gold_macro_read_by_bronze_selects_every_layer", "dbt/macros/gold_facts.sql", [*LAYERS, "orchestration_checks", "sql_style"]),
         path_case(
             "layer_gold_identity_macro_read_by_bronze_selects_every_layer", "dbt/macros/gold_identity.sql", [*LAYERS, "orchestration_checks", "sql_style"]
@@ -620,9 +627,9 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [*LAYERS, "orchestration_checks", "sql_style"],
         ),
         path_case(
-            "layer_gold_dimension_no_layer_above_reads_selects_gold_only",
+            "layer_gold_dimension_no_layer_above_reads_selects_gold_and_features",
             "dbt/models/gold/dimensions/dim_county.sql",
-            ["lakehouse_gold", "orchestration_checks", "sql_style"],
+            [*GOLD_DOWN, "orchestration_checks", "sql_style"],
         ),
         path_case(
             "layer_staging_model_read_by_bronze_selects_every_layer",
@@ -635,29 +642,60 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [*LAYERS, "orchestration_checks", "sql_style"],
         ),
         path_case(
-            "layer_staging_model_nothing_upstream_reads_selects_silver_and_gold",
+            "layer_staging_model_nothing_upstream_reads_selects_silver_gold_and_features",
             "dbt/models/silver/staging/stg_acs_dp02.sql",
             [*silver_gold, "orchestration_checks", "sql_style"],
         ),
         path_case("layer_shared_macro_selects_every_layer", "dbt/macros/file_metadata.sql", [*LAYERS, "orchestration_checks", "sql_style"]),
         path_case("layer_gold_contract_is_read_by_silver_first", "data_contracts/lakehouse/gold_contract.json", [*silver_gold, "orchestration_checks"]),
         path_case("layer_gold_suite_is_read_by_bronze_first", "data_contracts/great_expectations/gold/gold_keys.json", [*LAYERS, "orchestration_checks"]),
-        path_case("layer_saved_silver_suite_selects_silver_and_gold", "features/great_expectations/suites/silver_spatial.json", silver_gold),
+        path_case("layer_saved_silver_suite_selects_silver_gold_and_features", "features/great_expectations/suites/silver_spatial.json", silver_gold),
         path_case("layer_suite_baselines_are_read_by_bronze_first", "data_contracts/great_expectations/baselines.json", [*LAYERS, "orchestration_checks"]),
-        path_case("layer_archived_model_is_read_by_gold_only", "features/models/int_spine_county_context.sql", ["lakehouse_gold", "sql_style"]),
-        path_case("layer_silver_columns_select_silver_and_gold", "data_contracts/lakehouse/silver_columns.json", [*silver_gold, "orchestration_checks"]),
+        path_case(
+            "layer_feature_model_is_read_by_gold_and_features",
+            "dbt/models/features/int_spine_county_context.sql",
+            [*GOLD_DOWN, "orchestration_checks", "sql_style"],
+        ),
+        path_case(
+            "layer_feature_recipe_seed_selects_gold_and_features",
+            "dbt/seeds/features/mup_measures_recipe.csv",
+            [*GOLD_DOWN, "orchestration_checks", "sql_style"],
+        ),
+        path_case(
+            "layer_silver_columns_select_silver_gold_and_features", "data_contracts/lakehouse/silver_columns.json", [*silver_gold, "orchestration_checks"]
+        ),
         path_case("layer_bronze_table_map_selects_every_layer", "config/lakehouse/bronze_tables.json", [*LAYERS, "configuration_checks"]),
         staged_case(
             work,
-            "layer_staged_gold_model_selects_gold_only",
+            "layer_staged_gold_model_selects_gold_and_features",
             [["update-index", "--add", "--cacheinfo", f"100644,{blob},dbt/models/gold/staged_copy.yml"]],
-            ["lakehouse_gold", "orchestration_checks", "sql_style"],
+            [*GOLD_DOWN, "orchestration_checks", "sql_style"],
         ),
         staged_case(
             work,
-            "layer_staged_silver_model_selects_silver_and_gold",
+            "layer_staged_silver_model_selects_silver_gold_and_features",
             [["update-index", "--add", "--cacheinfo", f"100644,{blob},dbt/models/silver/staged_copy.yml"]],
             [*silver_gold, "orchestration_checks", "sql_style"],
+        ),
+        path_case(
+            "layer_feast_job_only_change_selects_features_only",
+            "scripts/features/feast_job.py",
+            ["python_lint", "lakehouse_features", "repository_code_checks"],
+        ),
+        path_case(
+            "layer_feast_definitions_select_features_only", "feature_store/definitions.py", ["python_lint", "lakehouse_features", "repository_code_checks"]
+        ),
+        path_case("layer_feature_schema_selects_features_only", "data_contracts/features/feature_schema.json", ["lakehouse_features"]),
+        path_case(
+            "layer_features_publication_contract_selects_features_and_launcher_checks",
+            "data_contracts/lakehouse/features_publish.json",
+            ["lakehouse_features", "orchestration_checks"],
+        ),
+        path_case("layer_feast_image_folder_selects_features_only", "services/feature_store/requirements.in", ["lakehouse_features"]),
+        path_case(
+            "layer_generated_matrix_model_selects_gold_and_features",
+            "dbt/models/features/matrix/feature_matrix_hospital.sql",
+            [*GOLD_DOWN, "orchestration_checks", "sql_style"],
         ),
     ]
     return [*cases, *reader_coverage_cases(work), *entry_point_cases()]
@@ -817,6 +855,13 @@ def reader_scan_case(tracked: set[str]) -> dict[str, Any]:
 
 
 HOSTED_ENTRY_POINTS = {
+    "lakehouse_features": (
+        ("scripts.features.feature_schema check", ("scripts/features/feature_schema.py", "data_contracts/features/feature_schema_rules.json")),
+        ("scripts.features.run_feature_store_e2e --mode static", ("scripts/features/run_feature_store_e2e.py", "scripts/features/feature_schema.py")),
+        ("scripts.features.feast_cases --part local", ("scripts/features/feast_cases.py", "scripts/features/feast_job.py", "feature_store/feature_store.yaml")),
+        ("scripts.features.online_cases --part fake", ("scripts/features/online_cases.py", "scripts/features/online_protocol.py")),
+        ("scripts.orchestration.run_features_pipeline_light", ("scripts/orchestration/run_features_pipeline_light.py",)),
+    ),
     "configuration_checks": (
         ("scripts.infrastructure.run_secret_store_e2e", ("scripts/infrastructure/run_secret_store_e2e.py", "scripts/infrastructure/secret_store.py")),
     ),
@@ -862,6 +907,7 @@ def reader_coverage_cases(work: Path) -> list[dict[str, Any]]:
         "lakehouse_bronze": (*layer_modules("lakehouse_bronze"), "scripts.lakehouse.storage_metadata_comparison"),
         "lakehouse_silver": (*layer_modules("lakehouse_silver"), "scripts.lakehouse.gold_checks"),
         "lakehouse_gold": layer_modules("lakehouse_gold"),
+        "lakehouse_features": layer_modules("lakehouse_features"),
     }
     missed: dict[str, list[str]] = {}
     counted: dict[str, int] = {}
@@ -876,7 +922,7 @@ def reader_coverage_cases(work: Path) -> list[dict[str, Any]]:
         reader_scan_case(tracked),
         {
             "case": "layer_readers_are_selected_by_their_inputs",
-            "passed": not missed and all(counted[group] for group in ("lakehouse_silver", "lakehouse_gold")),
+            "passed": not missed and all(counted[group] for group in ("lakehouse_silver", "lakehouse_gold", "lakehouse_features")),
             "inputs_checked": counted,
             "missed": {group: items[:6] for group, items in missed.items()},
         },
@@ -1012,7 +1058,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
                 ("README.md", ["repository_code_checks"]),
                 (
                     "dbt/models/silver/intermediate/_intermediate__models.yml",
-                    ["lakehouse_silver", "lakehouse_gold", "orchestration_checks", "repository_code_checks", "sql_style"],
+                    [*SILVER_DOWN, "orchestration_checks", "repository_code_checks", "sql_style"],
                 ),
                 ("docs/quality_checks.md", ["repository_code_checks"]),
             )
@@ -1056,8 +1102,8 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         selection_case(
             work,
             "feature_sql_selects_inventory",
-            ["--scope", "paths", "--path", "features/macros/hospital_alignment.sql", "--part", "core+layers"],
-            ["lakehouse_gold", "sql_style"],
+            ["--scope", "paths", "--path", "dbt/macros/features/hospital_alignment.sql", "--part", "core+layers"],
+            [*GOLD_DOWN, "orchestration_checks", "sql_style"],
         ),
         selection_case(
             work,

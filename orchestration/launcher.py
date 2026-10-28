@@ -60,7 +60,7 @@ from typing import Any, Literal, NamedTuple, NoReturn
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from orchestration import dbt_lineage, lineage_services, network_policy, pipeline_protocol, pipeline_render
+from orchestration import dbt_lineage, lineage_services, network_policy, online_store, pipeline_protocol, pipeline_render
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import dbt_package_archive, gold_publish_record, memory_budget, pins, run_lock
 from scripts.lakehouse import provenance as build_provenance
@@ -83,6 +83,11 @@ LABEL_ORCH_SERVICE = "hai.orch_service"
 LINEAGE_COMPOSE = "services/lineage/docker-compose.lineage.yaml"
 LINEAGE_CHECKS_COMPOSE = "services/lineage/docker-compose.checks.yaml"
 LINEAGE_ORDER = lineage_services.SERVICES
+# The committed layers a pipeline run pins as its source: the pin record and the contract that lists its publication tables (design 1.1 steps 4 to 6).
+PIPELINE_SOURCES = {
+    "silver": {"pin_record": "silver_pins.json", "contract": "silver_publish.json"},
+    "gold": {"pin_record": "gold_pins.json", "contract": "gold_contract.json"},
+}
 LINEAGE_STACK = "lineage"
 LINEAGE_OWNER = "stack:lineage"
 LINEAGE_START_SECONDS = 600
@@ -1209,8 +1214,9 @@ TEMPLATES: dict[str, Template] = {
         Template("pipeline_proxy", None, False, ("service",)),
         *(
             Template(f"pipeline_validate_{layer}", "quality", True, ("run",), run_domains=("transform",), run_modes=("publish_fixture", "real"))
-            for layer in ("silver", "gold", "cross")
+            for layer in ("silver", "gold", "cross", "features")
         ),
+        Template("pipeline_feast", "feature-store", True, ("run",), run_domains=("transform",), run_modes=("publish_fixture", "real")),
         Template("gold_export", "quality", True, ("alloc", "run"), default_seconds=3600, run_domains=("transform",), run_modes=("publish_fixture", "real")),
         Template(
             "gold_publish",
@@ -1225,6 +1231,7 @@ TEMPLATES: dict[str, Template] = {
         Template("catalog_service", None, False, ("service",)),
         Template("orchestration_service", None, False, ("stack",)),
         Template("lineage_service", None, False, ("stack",)),
+        Template(online_store.TEMPLATE, None, False, ("stack",)),
         Template("lineage_dump", None, True, ("alloc",), default_seconds=120, max_seconds=300),
         Template("orchestration_check", None, True, ("alloc",), default_seconds=900, max_seconds=3600),
         Template("orchestration_dump", None, True, ("alloc",), default_seconds=900, max_seconds=1800),
@@ -1279,6 +1286,16 @@ SPARK_JOBS: dict[str, dict[str, Any]] = {
         "writes": ("data/e2e/gold_publish",),
         "aws": False,
         "contract": True,
+        "grammar": {"--case": "values", "--stamp": "value"},
+    },
+    # The offline features publish (lane A's case suite): the gold publish engine with the features contract on a local file-based Iceberg catalog.
+    "features_publish_e2e": {
+        "template": "spark_e2e",
+        "module": "scripts.features.features_publish_cases",
+        "writes": ("data/e2e/feature_store",),
+        "aws": False,
+        "contract": True,
+        "contract_files": ("data_contracts/lakehouse/features_publish.json",),
         "grammar": {"--case": "values", "--stamp": "value"},
     },
     "gold_publish_local": {
@@ -1585,11 +1602,12 @@ class Renderer:
             "spark_write": self.render_spark_write,
             "spark_e2e": self.render_spark_e2e,
             "pipeline_dbt": self.render_pipeline,
-            **{f"pipeline_validate_{layer}": self.render_pipeline_validate for layer in ("silver", "gold", "cross")},
+            **{f"pipeline_validate_{layer}": self.render_pipeline_validate for layer in ("silver", "gold", "cross", "features")},
             "pipeline_spark": self.render_pipeline,
             "pipeline_export": self.render_pipeline,
             "pipeline_publish": self.render_pipeline,
             "pipeline_probe": self.render_pipeline,
+            "pipeline_feast": self.render_pipeline,
             "pipeline_proxy": self.render_pipeline_proxy,
             "gold_export": self.render_gold_export,
             "gold_publish": self.render_gold_publish,
@@ -2208,6 +2226,8 @@ class Renderer:
             mounts.append(Mount(str(self.checkout / "infra/deployment.auto.tfvars.json"), "/workspace/infra/deployment.auto.tfvars.json", True))
         if spec.get("contract"):
             mounts.append(Mount(str(self.checkout / GOLD_CONTRACT), f"/workspace/{GOLD_CONTRACT}", True))
+        for relative in spec.get("contract_files", ()):
+            mounts.append(Mount(str(self.checkout / relative), f"/workspace/{relative}", True))
         for relative in spec["writes"]:
             folder = self.checkout / relative
             folder.mkdir(parents=True, exist_ok=True)
@@ -2283,13 +2303,16 @@ class Renderer:
         layer = inp.template.removeprefix("pipeline_validate_")
         contracts = self.checkout / "data_contracts"
         contract = Mount(str(contracts / "lakehouse"), "/workspace/data_contracts/lakehouse", True)
+        # The features gate compares the build with the schema file and the features publication contract (design 1.3).
+        schema = Mount(str(contracts / "features"), "/workspace/data_contracts/features", True)
+        layer_mounts = {"cross": (contract,), "features": (contract, schema)}.get(layer, ())
         rendered = self.render_quality_validate(
             inp,
             template,
             name,
             registry_id,
             "scripts.lakehouse.pipeline_quality",
-            (Mount(str(self.checkout / "orchestration"), "/workspace/orchestration", True), *((contract,) if layer == "cross" else ())),
+            (Mount(str(self.checkout / "orchestration"), "/workspace/orchestration", True), *layer_mounts),
         )
         rendered.body["Cmd"][:0] = ["--kind", layer]
         return rendered
@@ -2302,6 +2325,12 @@ class Renderer:
         except (pipeline_protocol.PipelineError, ValueError, KeyError, OSError) as error:
             raise LauncherError(f"pipeline specification refused: {type(error).__name__}: {error}", "spec") from None
         mounts = [Mount(*parts) for parts in spec.mounts]
+        online = spec.extra.get("online_store")
+        credentials: dict[str, str] = {}
+        if online is not None:
+            # A Feast job names the Redis password by reference; the value is resolved here, held as a secret and never recorded.
+            credentials[str(online["password_env"])] = self.online_password()
+            spec.environment.update(credentials)
         if inp.template == "pipeline_probe":
             if inp.pipeline.get("registry_kind") != "test":
                 raise LauncherError("traffic probes require a test registry", "spec")
@@ -2327,7 +2356,10 @@ class Renderer:
             hostname="spark-job" if spec.service == "spark" and spec.network == "none" else "",
             cap_drop=("ALL",),
             security_opt=("no-new-privileges:true",),
+            secrets=credentials,
         )
+        if online is not None:
+            rendered.joins.update({str(network): list(aliases) for network, aliases in online["joins"].items()})
         if inp.template == "pipeline_probe" and inp.params["case"] == "catalog":
             if inp.params["class"] != "lakehouse_read":
                 raise LauncherError("the synthetic catalog uses the fixed read class", "spec")
@@ -2582,6 +2614,62 @@ class Renderer:
             extra_labels={LABEL_STACK: ORCHESTRATION_STACK, LABEL_ORCH_SERVICE: service},
             **self.orchestration_hardening(raw, values),
         )
+
+    def online_password(self) -> str:
+        """The Redis password of this registry's online store: the generated test password of a test registry, else the secret the secret-store
+        module names. A missing name or value refuses the render; the value joins the fetched set, so it is held as a secret."""
+        if self.config.registry.kind == "test":
+            if not online_store.has_test_password(self.config.registry.path):
+                raise LauncherError("this launcher process holds no test Redis password; restart the online store", "spec")
+            value = online_store.test_password(self.config.registry.path)
+        else:
+            name = online_store.secret_name(secret_store)
+            if name is None:
+                raise LauncherError("the secret-store module names no Redis password yet; the real online store cannot be rendered", "spec")
+            try:
+                value = self.secret_of(name)
+            except secret_store.SecretStoreError as error:
+                raise LauncherError(str(error), "spec") from None
+        try:
+            online_store.check_password(value)
+        except online_store.OnlineStoreError as error:
+            raise LauncherError(str(error), "spec") from None
+        self.fetched.add(value)
+        return value
+
+    def render_online_store_service(self, inp: RenderInput, registry_id: str) -> Rendered:
+        """Render the one Redis container of the online store from its closed Compose shape, settings and configuration."""
+        try:
+            settings = online_store.settings_for(inp.values)
+            raw = self.compose.service(online_store.SERVICE)
+            online_store.validate_service(raw)
+            online_store.check_config((self.checkout / online_store.CONFIG).read_text())
+        except (online_store.OnlineStoreError, OSError) as error:
+            raise LauncherError(f"online store specification refused: {error}", "spec") from None
+        password = self.online_password()
+        values = {**settings, online_store.AUTH_ENV: password}
+        rendered = self.assemble(
+            inp,
+            online_store.container_name(registry_id),
+            self.image(online_store.SERVICE),
+            list(raw["entrypoint"]),
+            [],
+            self.compose.environment(online_store.SERVICE, values),
+            self.compose.mounts(online_store.SERVICE, values),
+            self.compose.memory(online_store.SERVICE, values),
+            online_store.network_name(registry_id),
+            healthcheck=self.compose.healthcheck(online_store.SERVICE),
+            aliases=[online_store.ALIAS],
+            finite=False,
+            extra_labels={LABEL_STACK: online_store.STACK, LABEL_SERVICE: online_store.SERVICE},
+            secrets={online_store.AUTH_ENV: password},
+            **self.orchestration_hardening(raw, values),
+        )
+        try:
+            online_store.validate_body(rendered.body, registry_id)
+        except online_store.OnlineStoreError as error:
+            raise LauncherError(str(error), "spec") from None
+        return rendered
 
     def render_lineage_service(self, inp: RenderInput, service: str, registry_id: str) -> Rendered:
         """Render only the three lineage services using validated runtime settings."""
@@ -2961,6 +3049,9 @@ METHODS: dict[str, MethodSpec] = {
     "pipeline_network_up": MethodSpec(("run",)),
     "pipeline_network_down": MethodSpec(("run",)),
     "pipeline_reserve_silver": MethodSpec(("run",)),
+    "pipeline_reserve_gold": MethodSpec(("run",)),
+    "pipeline_accept_gold_pin": MethodSpec(("run",)),
+    "pipeline_accept_gold_input": MethodSpec(("run",)),
     "pipeline_accept_seal": MethodSpec(("run",)),
     "pipeline_accept_export": MethodSpec(("run",)),
     "pipeline_accept_pin": MethodSpec(("run",)),
@@ -2971,6 +3062,8 @@ METHODS: dict[str, MethodSpec] = {
     "catalog_down": MethodSpec(("any",)),
     "lineage_up": MethodSpec(("any",)),
     "lineage_down": MethodSpec(("any",)),
+    "pipeline_online_store_up": MethodSpec(("run",)),
+    "online_store_down": MethodSpec(("any",)),
     "orchestration_up": MethodSpec(("any",)),
     "orchestration_down": MethodSpec(("any",)),
     "pull": MethodSpec(("any",)),
@@ -3148,6 +3241,11 @@ class Launcher:
             "lineagenetcreate": self.on_lineagenetcreate,
             "lineagenetremove": self.on_lineagenetremove,
             "lineageconfirm": self.on_lineageconfirm,
+            "onlinelimits": self.on_onlinelimits,
+            "onlinehealth": self.on_onlinehealth,
+            "onlinenetcreate": self.on_onlinenetcreate,
+            "onlinenetremove": self.on_onlinenetremove,
+            "onlineconfirm": self.on_onlineconfirm,
             "orchlimits": self.on_orchlimits,
             "orchhealth": self.on_orchhealth,
             "orchnetcreate": self.on_orchnetcreate,
@@ -3194,6 +3292,9 @@ class Launcher:
             "pipeline_network_up": self.m_pipeline_network_up,
             "pipeline_network_down": self.m_pipeline_network_down,
             "pipeline_reserve_silver": self.m_pipeline_reserve_silver,
+            "pipeline_reserve_gold": self.m_pipeline_reserve_gold,
+            "pipeline_accept_gold_pin": self.m_pipeline_accept_gold_pin,
+            "pipeline_accept_gold_input": self.m_pipeline_accept_gold_input,
             "pipeline_accept_seal": self.m_pipeline_accept_seal,
             "pipeline_accept_export": self.m_pipeline_accept_export,
             "pipeline_accept_pin": self.m_pipeline_accept_pin,
@@ -3204,6 +3305,8 @@ class Launcher:
             "catalog_down": self.m_catalog_down,
             "lineage_up": self.m_lineage_up,
             "lineage_down": self.m_lineage_down,
+            "pipeline_online_store_up": self.m_pipeline_online_store_up,
+            "online_store_down": self.m_online_store_down,
             "orchestration_up": self.m_orchestration_up,
             "orchestration_down": self.m_orchestration_down,
             "pull": self.m_pull,
@@ -3806,6 +3909,7 @@ class Launcher:
         self.settle_network_ops(listing["networks"])
         self.settle_orchestration_network_ops(listing["networks"])
         self.settle_lineage_network_ops(listing["networks"])
+        self.settle_online_network_ops(listing["networks"])
         self.dirty.update(self.bound.values())
         self.dirty.update(self.open_attempt_ids())
         if self.status != "serving":
@@ -4048,7 +4152,7 @@ class Launcher:
         if owner == DIAGNOSTIC_OWNER:
             return not self.stream_acked and self.probe is not None and self.probe["attempt"] == attempt["id"]
         if kind == "stack":
-            stack = state["launcher"].get(ident) or {} if ident in ("orchestration", "lineage") else {}
+            stack = state["launcher"].get(ident) or {} if ident in ("orchestration", "lineage", online_store.STACK) else {}
             return stack.get("phase") in ("starting", "up") and not state["launcher"].get("restart")
         if kind == "service" and ident.startswith("pipeline:"):
             run = state["runs"].get(ident.removeprefix("pipeline:"))
@@ -4114,6 +4218,14 @@ class Launcher:
 
     def renderer_of(self, template_name: str, checkout: Path) -> Renderer:
         """The renderer of a template: the orchestration templates read the orchestration Compose model, the others the lakehouse one."""
+        if template_name == online_store.TEMPLATE:
+            path = checkout / online_store.COMPOSE
+            if not path.is_file():
+                raise LauncherError("the online store Compose model is missing", "spec")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if digest not in self.compose_models:
+                self.compose_models[digest] = ComposeModel(path)
+            return Renderer(self.cfg, self.compose_models[digest], checkout, self.main_checkout, self.key)
         if template_name in ("lineage_service", "lineage_dump"):
             path = checkout / (LINEAGE_COMPOSE if template_name == "lineage_service" else LINEAGE_CHECKS_COMPOSE)
             if not path.is_file():
@@ -4276,6 +4388,8 @@ class Launcher:
             return renderer.render_orchestration_service(inp, str(attempt["params"]["service"]), self.registry_id)
         if template.name == "lineage_service":
             return renderer.render_lineage_service(inp, str(attempt["params"]["service"]), self.registry_id)
+        if template.name == online_store.TEMPLATE:
+            return renderer.render_online_store_service(inp, self.registry_id)
         return renderer.render(inp, self.registry_id)
 
     def image_reference(self, attempt: Mapping[str, Any]) -> str:
@@ -4284,7 +4398,7 @@ class Launcher:
         renderer = self.renderer_of(attempt["template"], Path(attempt["checkout"]))
         if template.name == "pipeline_proxy":
             return network_policy.PROXY_IMAGE
-        if template.name in ("catalog_service", "orchestration_service", "lineage_service"):
+        if template.name in ("catalog_service", "orchestration_service", "lineage_service", online_store.TEMPLATE):
             return renderer.image(str(attempt["params"]["service"]))
         if template.name == "orchestration_check":
             return renderer.image("airflow-check")
@@ -5579,6 +5693,8 @@ class Launcher:
             return {"found": created is not None, "attempt": None if created is None else {k: v for k, v in created.items() if k != "params"}}
         if what == "catalog":
             return dict(state["launcher"].get("catalog") or {"phase": "down"})
+        if what == online_store.STACK:
+            return self.online_store_status(state)
         if what == "lineage":
             stack = dict(state["launcher"].get("lineage") or {"phase": "down"})
             stack["service_phases"] = {
@@ -5889,6 +6005,7 @@ class Launcher:
         self.advance_catalog(state, actions)
         self.advance_orchestration(state, actions)
         self.advance_lineage(state, actions)
+        self.advance_online_store(state, actions)
         self.advance_restart(state, actions)
         self.advance_copies(state, actions)
         self.advance_seals(state, actions)
@@ -6050,7 +6167,7 @@ class Launcher:
         if type(capture) is not bool or capture and (identity is None or template_name not in ("fixture_dbt", "real_dbt")):
             raise LauncherError("dbt artifact capture requires a dbt template and validated caller identity", "args")
         template = TEMPLATES.get(template_name)
-        if template is None or template_name in ("probe", "catalog_service", "orchestration_service", "lineage_service"):
+        if template is None or template_name in ("probe", "catalog_service", "orchestration_service", "lineage_service", online_store.TEMPLATE):
             raise LauncherError(f"template {template_name!r} cannot be submitted by a client", "refused")
         owner = self.owner_of(ctx)
         kind, _, ident = owner.partition(":")
@@ -6443,10 +6560,13 @@ class Launcher:
             "bronze_sha256": run.get("pins_sha256", run.get("fixture_pins_sha256", "")),
             "silver_pin": run.get("silver_pin", {}),
             "silver_input": run.get("silver_input", {}),
+            "gold_pin": run.get("gold_pin", {}),
+            "gold_input": run.get("gold_input", {}),
             "layer_completions": run.get("layer_completions", {}),
             "layer_exports": run.get("layer_exports", {}),
             "local_catalog": run.get("local_catalog", ""),
             "network": run.get("pipeline_network", {}),
+            "online_store": {"phase": self.online_record(state).get("phase", "down"), "network": online_store.network_name(self.registry_id)},
         }
 
     @staticmethod
@@ -6670,12 +6790,13 @@ class Launcher:
         """Deregister only this run and tear down only when no registered or active user remains."""
         self.pipeline_params(ctx)
         run = self.run_entry(ctx)
-        reader = ctx.state["readers"].get(f"silver:{run['run_id']}")
-        if reader is not None:
-            if reader.get("owner_run") != run["run_id"]:
-                raise LauncherError("the reader belongs to another run", "principal")
-            self.require_no_maintenance_fence(ctx.state)
-            ctx.state["readers"].pop(f"silver:{run['run_id']}")
+        for source in PIPELINE_SOURCES:
+            reader = ctx.state["readers"].get(f"{source}:{run['run_id']}")
+            if reader is not None:
+                if reader.get("owner_run") != run["run_id"]:
+                    raise LauncherError("the reader belongs to another run", "principal")
+                self.require_no_maintenance_fence(ctx.state)
+                ctx.state["readers"].pop(f"{source}:{run['run_id']}")
         run_lock.register_in(ctx.state, run["run_id"], run, "catalog_user", False)
         if run["mode"] == "publish_fixture":
             return {"phase": "down", "local": True}
@@ -6687,18 +6808,29 @@ class Launcher:
 
     def m_pipeline_reserve_silver(self, ctx: Ctx) -> dict[str, Any]:
         """Reserve silver discovery before its producer is selected, bound to the consuming run."""
+        return self.reserve_source(ctx, "silver")
+
+    def m_pipeline_reserve_gold(self, ctx: Ctx) -> dict[str, Any]:
+        """Reserve gold discovery before the features pin selects a gold set, so gold maintenance protects it from that moment (design 1.1 step 4)."""
+        return self.reserve_source(ctx, "gold")
+
+    def reserve_source(self, ctx: Ctx, source: str) -> dict[str, Any]:
+        """Register reader ``<source>:<run>`` in the namespace of the run's mode before its producer is selected, bound to the consuming run."""
         self.pipeline_params(ctx)
         self.require_no_maintenance_fence(ctx.state)
         run = self.run_entry(ctx)
-        name = f"silver:{run['run_id']}"
+        name = f"{source}:{run['run_id']}"
         previous = ctx.state["readers"].get(name)
         if previous is not None:
             if previous.get("owner_run") != run["run_id"]:
                 raise LauncherError("the reservation belongs to another run", "principal")
             return {"reader": name, "state": previous["state"]}
+        namespace = pipeline_protocol.PIN_NAMESPACES[source].get(run["mode"])
+        if namespace is None:
+            raise LauncherError(f"{source} discovery needs a publish-mode run", "refused")
         ctx.state["readers"][name] = {
             "owner_run": run["run_id"],
-            "namespace": "silver_e2e" if run["mode"] == "publish_fixture" else "silver",
+            "namespace": namespace,
             "domain": run["domain"],
             "publish_run": "latest",
             "snapshot_set": None,
@@ -6736,7 +6868,9 @@ class Launcher:
             completion = pipeline_protocol.accept_validation(ctx.state, run["run_id"], layer, str(ctx.params["attempt_id"]), folder)
             receipt, receipt_sha = pipeline_protocol.read_record(folder, "build_receipt.json")
             metadata = self.pipeline_inputs(ctx.state, run)
-            expected_input = metadata["silver_pin"].get("sha256") if layer == "gold" else metadata["bronze_sha256"]
+            expected_input = {"gold": metadata["silver_pin"].get("sha256"), "features": metadata["gold_pin"].get("sha256")}.get(
+                layer, metadata["bronze_sha256"]
+            )
             if (
                 receipt.get("run_id") != run["run_id"]
                 or receipt.get("layer") != layer
@@ -6807,51 +6941,68 @@ class Launcher:
 
     def m_pipeline_accept_pin(self, ctx: Ctx) -> dict[str, Any]:
         """Register only the accepted committed silver set of this run's successful pin producer."""
+        return self.accept_source_pin(ctx, "silver")
+
+    def m_pipeline_accept_gold_pin(self, ctx: Ctx) -> dict[str, Any]:
+        """Register only the accepted committed gold set of this run's successful gold pin producer, under its own state key ``gold_pin``."""
+        return self.accept_source_pin(ctx, "gold")
+
+    def accept_source_pin(self, ctx: Ctx, source: str) -> dict[str, Any]:
+        """Bind the pin record of ``source`` to its successful producer, its reservation and the source contract's publication tables."""
+        settings = PIPELINE_SOURCES[source]
         self.pipeline_params(ctx, ("attempt_id",))
         self.require_no_maintenance_fence(ctx.state)
-        attempt = self.pipeline_attempt(ctx, "pipeline_spark", "pin_silver")
+        attempt = self.pipeline_attempt(ctx, "pipeline_spark", f"pin_{source}")
         run = self.run_entry(ctx)
-        reader = ctx.state["readers"].get(f"silver:{run['run_id']}")
+        reader = ctx.state["readers"].get(f"{source}:{run['run_id']}")
         if reader is None or reader.get("owner_run") != run["run_id"]:
-            raise LauncherError("silver discovery has no owned reservation", "refused")
+            raise LauncherError(f"{source} discovery has no owned reservation", "refused")
         try:
-            record, digest = pipeline_protocol.read_record(self.cfg.runs_root / run["run_id"], "silver_pins.json")
+            record, digest = pipeline_protocol.read_record(self.cfg.runs_root / run["run_id"], settings["pin_record"])
             if pipeline_protocol.output_record(attempt).get("sha256") != digest:
-                raise pipeline_protocol.PipelineError("the silver pin differs from its successful producer output")
-            contract = json.loads((Path(attempt["checkout"]) / "data_contracts/lakehouse/silver_publish.json").read_text())
-            pipeline_protocol.check_pin(record, run["run_id"], run["mode"], set(contract["publish"]["tables"]))
+                raise pipeline_protocol.PipelineError(f"the {source} pin differs from its successful producer output")
+            contract = json.loads((Path(attempt["checkout"]) / "data_contracts/lakehouse" / settings["contract"]).read_text())
+            pipeline_protocol.check_pin(record, run["run_id"], run["mode"], set(contract["publish"]["tables"]), source=source)
             selected = attempt["params"].get("source_run")
             if selected not in (None, "latest", record["source_run_id"]):
                 raise pipeline_protocol.PipelineError("the pin producer selected another source run")
         except (pipeline_protocol.PipelineError, OSError, ValueError, KeyError, IndexError) as error:
-            raise LauncherError(f"silver pin refused: {error}", "refused") from None
-        previous = run.get("silver_pin")
+            raise LauncherError(f"{source} pin refused: {error}", "refused") from None
+        previous = run.get(f"{source}_pin")
         if previous and previous.get("sha256") != digest:
-            raise LauncherError("this run already accepted another silver input", "refused")
+            raise LauncherError(f"this run already accepted another {source} input", "refused")
         accepted = {"sha256": digest, "source_run_id": record["source_run_id"], "attempt_id": attempt["id"]}
-        ctx.state["runs"][run["run_id"]]["silver_pin"] = accepted
+        ctx.state["runs"][run["run_id"]][f"{source}_pin"] = accepted
         reader.update({"state": "registered", "snapshot_set": record["source_run_id"]})
         return accepted
 
     def m_pipeline_accept_input(self, ctx: Ctx) -> dict[str, Any]:
         """Bind the successful Iceberg extraction manifest to the accepted silver pin."""
+        return self.accept_source_input(ctx, "silver")
+
+    def m_pipeline_accept_gold_input(self, ctx: Ctx) -> dict[str, Any]:
+        """Bind the successful gold extraction manifest to the accepted gold pin, under its own state key ``gold_input``."""
+        return self.accept_source_input(ctx, "gold")
+
+    def accept_source_input(self, ctx: Ctx, source: str) -> dict[str, Any]:
+        """Bind the extraction manifest of ``source`` to its successful producer and to this run's accepted pin of the same source."""
         self.pipeline_params(ctx, ("attempt_id",))
-        attempt = self.pipeline_attempt(ctx, "pipeline_spark", "read_silver")
+        attempt = self.pipeline_attempt(ctx, "pipeline_spark", f"read_{source}")
         run = self.run_entry(ctx)
         try:
-            record, digest = pipeline_protocol.read_record(self.cfg.runs_root / run["run_id"], "silver_input/manifest.json")
+            record, digest = pipeline_protocol.read_record(self.cfg.runs_root / run["run_id"], f"{source}_input/manifest.json")
             if pipeline_protocol.output_record(attempt).get("sha256") != digest:
-                raise pipeline_protocol.PipelineError("the silver extract differs from its successful producer output")
+                raise pipeline_protocol.PipelineError(f"the {source} extract differs from its successful producer output")
             if (
                 record.get("run_id") != run["run_id"]
                 or record.get("mode") != run["mode"]
-                or record.get("pins_sha256") != run.get("silver_pin", {}).get("sha256")
+                or record.get("pins_sha256") != run.get(f"{source}_pin", {}).get("sha256")
             ):
-                raise pipeline_protocol.PipelineError("the extract is not this run's accepted silver pin")
+                raise pipeline_protocol.PipelineError(f"the extract is not this run's accepted {source} pin")
         except (pipeline_protocol.PipelineError, OSError, ValueError) as error:
-            raise LauncherError(f"silver extraction refused: {error}", "refused") from None
+            raise LauncherError(f"{source} extraction refused: {error}", "refused") from None
         accepted = {"sha256": digest, "pins_sha256": record["pins_sha256"], "attempt_id": attempt["id"]}
-        ctx.state["runs"][run["run_id"]]["silver_input"] = accepted
+        ctx.state["runs"][run["run_id"]][f"{source}_input"] = accepted
         return accepted
 
     def m_pipeline_fixture_pin(self, ctx: Ctx) -> dict[str, Any]:
@@ -7927,10 +8078,320 @@ class Launcher:
         stack.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})
         return {"phase": "tearing_down"}
 
+    # -- the online feature store (design section 4.2) ------------------------------------------------------------
+
+    @staticmethod
+    def online_record(state: Mapping[str, Any]) -> dict[str, Any]:
+        """The online store's stack record; without one the store is down (a detached record that no handler stores)."""
+        record = state["launcher"].get(online_store.STACK)
+        return record if isinstance(record, dict) else {"phase": "down", "service": None}
+
+    def online_store_status(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        """The stack record with its service attempt's phase, without settings."""
+        record = {key: value for key, value in self.online_record(state).items() if key != "settings"}
+        attempt = state["attempts"].get(record.get("service") or "")
+        record["service_phase"] = None if attempt is None else {"phase": attempt["phase"], "reason": attempt["reason"]}
+        return record
+
+    def m_pipeline_online_store_up(self, ctx: Ctx) -> dict[str, Any]:
+        """Start the online store for a held run if it is down; answer its phase, and the network the run's Feast jobs join once it is up.
+
+        A start that failed, or a service that ended while up, answers ``failed`` with its error while its teardown runs; the next call after the
+        teardown starts a fresh, empty Redis (the repair path of design 4.3)."""
+        self.pipeline_params(ctx)
+        run = self.run_entry(ctx)
+        if run["state"] != "held":
+            raise LauncherError("only a held run starts the online store", "refused")
+        record = self.online_record(ctx.state)
+        if record["phase"] == "up":
+            return {"phase": "up", "network": online_store.network_name(self.registry_id)}
+        if record["phase"] == "tearing_down":
+            if record.get("error") and not record.get("restartable"):
+                return {"phase": "failed", "error": str(record["error"])}
+            # An owner's stop, or a service that ended while up: the caller waits, and its next call after the teardown starts a fresh Redis.
+            return {"phase": "tearing_down", "previous": str(record.get("error", ""))}
+        if record["phase"] == "starting":
+            return {"phase": "starting"}
+        if ctx.state["launcher"].get("restart"):
+            raise LauncherError("a Docker restart is running", "refused")
+        if self.foreign:
+            raise LauncherError("foreign legacy containers exist; the owner reconciles them first", "refused")
+        checkout = self.cfg.root
+        ctx.state["launcher"][online_store.STACK] = {
+            "phase": "starting",
+            "step": "limits",
+            "service": None,
+            "network": None,
+            "error": "",
+            "settings": {},
+            "health": "",
+            "checkout": str(checkout),
+            "started_by": run["run_id"],
+            "started_at": utc_now(),
+            "start_deadline": time.time() + online_store.START_SECONDS,
+        }
+        own = online_store.container_name(self.registry_id)
+        growth = {name: limit for name, limit in self.growth_reserve_map(ctx.state).items() if name != own}
+        self.spawn("online:limits", "onlinelimits", self.compute_online_limits, growth)
+        return {"phase": "starting"}
+
+    def m_online_store_down(self, ctx: Ctx) -> dict[str, Any]:
+        """Stop the online store (its data is lost) unless a Feast job is open; the owner and the tests use it."""
+        if set(ctx.params):
+            raise LauncherError("online_store_down takes no parameter", "args")
+        record = self.online_record(ctx.state)
+        if record["phase"] in ("down", "tearing_down"):
+            return {"phase": record["phase"]}
+        if any(a["template"] == "pipeline_feast" and is_open(a) for a in ctx.state["attempts"].values()):
+            raise LauncherError("a Feast job is open; the online store stays up until it ends", "refused")
+        record.update({"phase": "tearing_down", "stop_step": "service", "error": ""})
+        return {"phase": "tearing_down"}
+
+    def compute_online_limits(self, growth: dict[str, int]) -> dict[str, Any]:
+        """Worker: make sure the password exists, then size the container from one memory plan; a limit that does not fit refuses the start."""
+        if self.registry.kind == "test":
+            online_store.test_password(self.registry.path)
+        else:
+            name = online_store.secret_name(secret_store)
+            if name is None:
+                raise LauncherError("the secret-store module names no Redis password yet", "refused")
+            try:
+                secret_store.within(
+                    self.cfg.secret_fetch_seconds, lambda: self.cfg.secret_store().ensure(name, secret_store.new_password), "the Redis password"
+                )
+            except secret_store.SecretStoreError as error:
+                raise LauncherError(str(error), "refused") from None
+        plan = memory_budget.launch_plan(self.reader(), growth)
+        memory = memory_budget.service_limit(plan.budget, online_store.MEMORY_SHARE, online_store.MEMORY_FLOOR)
+        if memory > plan.budget.free:
+            need, have = memory / memory_budget.GIB, plan.budget.free / memory_budget.GIB
+            raise memory_budget.BudgetError(f"the online store needs {need:.2f} GiB and the plan holds {have:.2f} GiB free")
+        return {"memory": int(memory)}
+
+    def fail_online(self, record: dict[str, Any], message: str, restartable: bool = False) -> None:
+        """A failed start (not restartable: callers get the error) or a service that ended while up (restartable: callers wait for the teardown
+        and start a fresh store) tears the stack down and keeps the message."""
+        record.update({"phase": "tearing_down", "error": message, "stop_step": "service", "restartable": restartable})
+
+    def on_onlinelimits(self, key: str, outcome: str, value: Any) -> None:
+        """Record the memory settings, reserve the limit for the other plans and go on to the network."""
+        with self.tx() as state:
+            record = self.online_record(state)
+            if record["phase"] != "starting":
+                return
+            if outcome != "ok":
+                self.fail_online(record, f"the online store cannot start: {failure_text(value)}")
+                return
+            try:
+                record["settings"] = online_store.limits(int(value["memory"]))
+            except online_store.OnlineStoreError as error:
+                self.fail_online(record, str(error))
+                return
+            state["services"][online_store.SERVICE] = int(value["memory"])
+            record["step"] = "network"
+
+    def create_online_network(self, name: str, labels: dict[str, str]) -> str:
+        """Worker: create the internal online-store network, or adopt it after a lost reply when it is exactly ours and internal."""
+        try:
+            return self.docker.create_network(name, labels, internal=True)
+        except DockerError as error:
+            if error.status != 409:
+                raise
+            found = [n for n in self.docker.networks(self.network_label()) if n.get("Name") == name]
+            if len(found) != 1 or not found[0].get("Internal") or (found[0].get("Labels") or {}).get(LABEL_STACK) != online_store.STACK:
+                raise LauncherError("the existing online store network differs from its owned role", "refused") from error
+            return str(found[0]["Id"])
+
+    def advance_online_store(self, state: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        """Startup and teardown of the online store as a recorded state machine: limits, network, service, health; teardown confirms absence."""
+        record = state["launcher"].get(online_store.STACK)
+        if not record:
+            return
+        if (
+            self.registry.kind == "test"
+            and (record["phase"] == "up" or (record["phase"] == "starting" and record.get("step") != "limits"))
+            and not online_store.has_test_password(self.registry.path)
+        ):
+            # The test password lived in the memory of an earlier launcher process: the running store cannot be reached, so replace it.
+            self.fail_online(record, "the test Redis password was lost with an earlier launcher process; the store is replaced", restartable=True)
+            return
+        if record["phase"] == "starting" and time.time() > record["start_deadline"]:
+            self.fail_online(record, f"online store startup timed out in the {record['step']} phase after the {online_store.START_SECONDS} s deadline")
+        if not self.docker_ok or self.status != "serving":
+            return
+        if record["phase"] == "starting":
+            self.advance_online_start(state, record, actions)
+        elif record["phase"] == "tearing_down":
+            self.advance_online_stop(state, record, actions)
+        elif record["phase"] == "up":
+            attempt = state["attempts"].get(record.get("service") or "")
+            if attempt is None or attempt["phase"] == "ended":
+                reason = "missing" if attempt is None else f"{attempt['reason']} (exit {attempt.get('exit_code')})"
+                self.fail_online(record, f"online-store ended while up: {reason}; Redis lost its data, run the repair", restartable=True)
+
+    def advance_online_start(self, state: dict[str, Any], record: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        step = record["step"]
+        name = online_store.network_name(self.registry_id)
+        labels = {LABEL_REGISTRY: self.registry_id, LABEL_STACK: online_store.STACK}
+        if step == "network":
+            op = next((o for o in state["operations"].values() if o["kind"] == "online_network_create" and o["state"] == "open"), None)
+            if op is None:
+                if record.get("network"):
+                    record["step"] = "service"
+                    return
+                op_id = self.record_network_op(state, "online_network_create", name=name)
+            elif f"op:{op['op_id']}" in self.inflight:
+                return
+            else:
+                op_id = op["op_id"]
+            actions.append(lambda: self.spawn(f"op:{op_id}", "onlinenetcreate", self.create_online_network, name, labels))
+            return
+        if step != "service":
+            return
+        attempt = state["attempts"].get(record.get("service") or "")
+        if attempt is None:
+            attempt = self.new_attempt(
+                state,
+                online_store.OWNER,
+                online_store.TEMPLATE,
+                online_store.SERVICE,
+                [],
+                {"service": online_store.SERVICE},
+                request="launcher",
+                checkout=record["checkout"],
+                seconds=10**7,
+            )
+            record["service"] = attempt["id"]
+            return
+        if attempt["phase"] == "ended":
+            self.fail_online(record, f"online-store ended: {attempt['reason']} (exit {attempt.get('exit_code')}) {attempt.get('detail', '')}".strip())
+            return
+        if attempt["phase"] != "started":
+            return
+        if record.get("health") == "healthy":
+            record.update({"phase": "up", "step": "done", "up_at": utc_now()})
+            return
+        started = record.setdefault("waiting_since", time.time())
+        if time.time() - started > self.timings.health_wait:
+            self.fail_online(record, f"online-store was not healthy within {self.timings.health_wait:.0f} s")
+            return
+        container_id = attempt["container_id"]
+        actions.append(lambda: self.spawn(f"onlinehealth:{online_store.SERVICE}", "onlinehealth", self.read_health, container_id))
+
+    def on_onlinehealth(self, key: str, outcome: str, value: Any) -> None:
+        if outcome != "ok":
+            return
+        with self.tx() as state:
+            self.online_record(state)["health"] = value
+
+    def on_onlinenetcreate(self, key: str, outcome: str, value: Any) -> None:
+        op_id = key.split(":", 1)[1]
+        if outcome == "docker" and value.status == 0:
+            return
+        with self.tx() as state:
+            record = self.online_record(state)
+            op = state["operations"].get(op_id)
+            if op is None or op["state"] != "open":
+                return
+            self.settle_op(state, op_id, "created" if outcome == "ok" else f"failed: {failure_text(value)}")
+            if outcome == "ok":
+                record["network"] = str(value)
+                state["containers"]["network:" + str(value)] = {"kind": "network", "at": utc_now()}
+                if record["phase"] == "starting":
+                    record["step"] = "service"
+            elif record["phase"] == "starting":
+                self.fail_online(record, f"cannot create the online store network: {failure_text(value)}")
+
+    def settle_online_network_ops(self, networks: Sequence[Mapping[str, Any]]) -> None:
+        """Reconcile the online store's open network operations with an all-state scan."""
+        with self.tx() as state:
+            record = self.online_record(state)
+            for op in list(state["operations"].values()):
+                if op["state"] != "open" or op["kind"] not in ("online_network_create", "online_network_remove"):
+                    continue
+                found = [n for n in networks if n.get("Name") == op["network_name"]]
+                if op["kind"] == "online_network_create" and found:
+                    if len(found) != 1 or not found[0].get("Internal") or (found[0].get("Labels") or {}).get(LABEL_STACK) != online_store.STACK:
+                        self.fail_online(record, "the online store network differs from its recorded role")
+                        continue
+                    self.settle_op(state, op["op_id"], "created", evidence="scan")
+                    record["network"] = str(found[0]["Id"])
+                    state["containers"]["network:" + str(found[0]["Id"])] = {"kind": "network", "at": utc_now()}
+                elif op["kind"] == "online_network_remove" and not found:
+                    self.settle_op(state, op["op_id"], "removed", evidence="scan")
+                    record["network"] = None
+
+    def advance_online_stop(self, state: dict[str, Any], record: dict[str, Any], actions: list[Callable[[], None]]) -> None:
+        """Stop the service, remove the network, then confirm absence before the stack is down."""
+        attempt = state["attempts"].get(record.get("service") or "")
+        if attempt is not None and is_open(attempt):
+            if not attempt["cancel_intent"]:
+                attempt["cancel_intent"] = {"reason": "online_store_down", "at": utc_now()}
+            return
+        step = record.get("stop_step", "service")
+        if step == "service":
+            record["stop_step"] = "network"
+            return
+        if step == "network":
+            if any(o["kind"] == "online_network_create" and o["state"] == "open" for o in state["operations"].values()):
+                return
+            network = record.get("network")
+            if not network:
+                record["stop_step"] = "confirm"
+                return
+            op = next((o for o in state["operations"].values() if o["kind"] == "online_network_remove" and o["state"] == "open"), None)
+            if op is None:
+                op_id = self.record_network_op(state, "online_network_remove", str(network), name=online_store.network_name(self.registry_id))
+            elif f"op:{op['op_id']}" in self.inflight:
+                return
+            else:
+                op_id = op["op_id"]
+                network = op.get("network") or network
+            actions.append(lambda: self.spawn(f"op:{op_id}", "onlinenetremove", self.docker.remove_network, network))
+        elif step == "confirm":
+            actions.append(lambda: self.spawn("online:confirm", "onlineconfirm", self.online_absent))
+
+    def online_absent(self) -> bool:
+        """Worker: True when no container and no network of the online store exist, in any state."""
+        label = f"{LABEL_STACK}={online_store.STACK}"
+        containers = [c for c in self.docker.containers(label=label) if (c.get("Labels") or {}).get(LABEL_REGISTRY) == self.registry_id]
+        networks = [n for n in self.docker.networks(label) if (n.get("Labels") or {}).get(LABEL_REGISTRY) == self.registry_id]
+        return not containers and not networks
+
+    def on_onlinenetremove(self, key: str, outcome: str, value: Any) -> None:
+        op_id = key.split(":", 1)[1]
+        if outcome == "docker" and value.status == 0:
+            return
+        with self.tx() as state:
+            op = state["operations"].get(op_id)
+            if op is None or op["state"] != "open":
+                return
+            self.settle_op(state, op_id, "removed" if outcome == "ok" else f"failed: {failure_text(value)}")
+            record = self.online_record(state)
+            if outcome == "ok" and record["phase"] == "tearing_down":
+                record["network"] = None
+                record["stop_step"] = "confirm"
+
+    def on_onlineconfirm(self, key: str, outcome: str, value: Any) -> None:
+        """Absence shown by an all-state listing: the stack is down, its limit released; a failure's error stays for the status."""
+        if outcome != "ok" or not value:
+            return
+        with self.tx() as state:
+            record = self.online_record(state)
+            if record["phase"] != "tearing_down":
+                return
+            state["launcher"][online_store.STACK] = {"phase": "down", "service": None, "error": record.get("error", ""), "down_at": utc_now()}
+            state["services"].pop(online_store.SERVICE, None)
+
     def template_images(self) -> set[str]:
         """Return only pinned images declared by Compose or the closed pipeline proxy policy: what the templates can run."""
         found: set[str] = {network_policy.PROXY_IMAGE}
-        for path in (self.cfg.root / "docker-compose.yaml", self.cfg.root / ORCHESTRATION_COMPOSE, self.cfg.root / LINEAGE_COMPOSE):
+        for path in (
+            self.cfg.root / "docker-compose.yaml",
+            self.cfg.root / ORCHESTRATION_COMPOSE,
+            self.cfg.root / LINEAGE_COMPOSE,
+            self.cfg.root / online_store.COMPOSE,
+        ):
             if path.is_file():
                 found |= {str(service["image"]) for service in ComposeModel(path).services.values() if service.get("image")}
         return found

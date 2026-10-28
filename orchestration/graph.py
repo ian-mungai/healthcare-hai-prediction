@@ -78,6 +78,28 @@ PIPELINE_CHAINS = {
         "run_record",
     ),
     "gold_maintenance_dag": ("acquire_run", "catalog_up", "gold_maintenance", "run_record"),
+    "features_transform_dag": (
+        "acquire_run",
+        "catalog_up",
+        "snapshot_project",
+        "reserve_gold",
+        "pin_gold",
+        "read_gold",
+        "features_build",
+        "features_validate",
+        "seal_features",
+        "features_export",
+        "features_candidates",
+        "features_reconcile",
+        "features_backup",
+        "features_commit",
+        "record_features_snapshot",
+        "online_store_up",
+        "feast_apply",
+        "feast_materialize",
+        "run_record",
+    ),
+    "feature_store_dag": ("acquire_run", "catalog_up", "online_store_up", "feast_apply", "feast_materialize", "run_record"),
 }
 
 

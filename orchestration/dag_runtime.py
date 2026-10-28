@@ -18,6 +18,9 @@ STEP_TIMEOUT = timedelta(hours=26)
 POLL_SECONDS = 2.0
 TERMINAL = (State.SUCCEEDED, State.NO_OP, State.FAILED, State.CANCELLED, State.FAILED_CLOSED)
 PASSING = (State.SUCCEEDED,)
+# The DAG parameter that selects the producer run a pin reads ("latest" when absent), and the asset each committing task emits.
+SELECTIONS = {"pin_silver": "silver_snapshot_run", "pin_gold": "gold_snapshot_run"}
+ASSETS = {"commit_publish": "gold", "features_commit": "features"}
 
 
 def submit_and_wait(client: BrokerClient, request: SubmissionRequest) -> tuple[Handle, Status]:
@@ -54,7 +57,7 @@ def run_step(template: str) -> str:
     """Submit the current task's fixed template and return its successful terminal state."""
     context = get_current_context()
     params = context["params"]
-    selected = params.get("silver_snapshot_run", "latest") if template == "pin_silver" else "latest"
+    selected = params.get(SELECTIONS[template], "latest") if template in SELECTIONS else "latest"
     instance = context["ti"]
     request = SubmissionRequest(
         template,
@@ -84,7 +87,7 @@ def build_tasks(work_steps: tuple[str, ...], family: str) -> None:
     """Create an ordered work chain, an always-run catalog release and a failure-preserving sole release leaf."""
 
     def step(name: str, rule: TriggerRule = TriggerRule.ALL_SUCCESS) -> Any:
-        outlets = [Asset("gold")] if name == "commit_publish" else []
+        outlets = [Asset(ASSETS[name])] if name in ASSETS else []
 
         @task(task_id=name, trigger_rule=rule, retries=0, execution_timeout=STEP_TIMEOUT, outlets=outlets)
         def run() -> str:

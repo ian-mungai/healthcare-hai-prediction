@@ -9,6 +9,8 @@ templater = dbt
 max_line_length = 160
 # Fail the run on any rule violation, and on files SQLFluff cannot template or parse.
 processes = 1
+# The generated wide feature models (dbt/models/features/matrix) are larger than the default 20000-byte limit, above which SQLFluff skips a file with only a warning.
+large_file_skip_byte_limit = 0
 
 [sqlfluff:templater:dbt]
 project_dir = dbt

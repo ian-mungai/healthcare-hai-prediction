@@ -46,6 +46,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -84,10 +85,21 @@ VALIDATED_SHA_INPUT = "validated_sha256"
 CHECKPOINT_HASHES = (VALIDATED_SHA_INPUT,)
 FIXTURE_PIN_BYTES = 512 * 1024**2
 RUN_FOLDER = ("data", "analytics", "dbt", "runs")
+# A real run of these DAGs starts only after the owner's go for exactly that run: ``<state>/approvals/<dag_id>/<run_id>.json`` (design 1.6).
+APPROVAL_SCOPES = {"features_transform_dag": "real_publish"}
+APPROVAL_FOLDER = "approvals"
+RELEASE_ACTIONS = frozenset({"catalog_release", "gate_accepted", "gate_rejected", "release_accepted", "release_rejected"})
+APPROVAL_KEYS = frozenset({"run_id", "dag_id", "scope", "approved_on"})
+APPROVAL_BYTES = 4096
+APPROVAL_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
 class BrokerError(Exception):
     """The broker cannot start safely (a second broker, an unreadable inventory)."""
+
+
+class ApprovalRefused(SubmissionRefused):
+    """A real run that needs the owner's approval record has none that names it exactly; nothing is sent to the launcher."""
 
 
 class LauncherUnavailable(Exception):
@@ -155,6 +167,50 @@ def write_private(path: Path, text: str, root: Path | None = None) -> None:
         os.fsync(folder)
     finally:
         os.close(folder)
+
+
+def approval_problem(state: Path, dag_id: str, run_id: str) -> str | None:
+    """Why the approval record of a real ``dag_id`` run does not admit ``run_id``, or None when it does.
+
+    The record is ``<state>/approvals/<dag_id>/<run_id>.json``: every folder and the file are opened without following a link, the file is a regular
+    owner-only file of this user of at most ``APPROVAL_BYTES`` bytes, and it is a JSON object of exactly ``run_id``, ``dag_id``, ``scope`` (the DAG's
+    ``APPROVAL_SCOPES`` value) and ``approved_on`` (the ISO date of the owner's go, not after today, local or UTC, whichever is later). The reasons name the
+    check, never the content."""
+    descriptors: list[int] = []
+    try:
+        descriptors.append(os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
+        for part in (APPROVAL_FOLDER, dag_id):
+            descriptors.append(os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptors[-1]))
+        descriptors.append(os.open(f"{run_id}.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptors[-1]))
+        status = os.fstat(descriptors[-1])
+        if not stat.S_ISREG(status.st_mode) or status.st_uid != os.getuid() or status.st_mode & 0o077:
+            return "the approval record is not an owner-only regular file"
+        raw = os.read(descriptors[-1], APPROVAL_BYTES + 1)
+    except FileNotFoundError:
+        return "no approval record names this run"
+    except OSError as error:
+        return f"the approval record cannot be read, or a link was met on its path ({type(error).__name__})"
+    finally:
+        for descriptor in descriptors:
+            os.close(descriptor)
+    if len(raw) > APPROVAL_BYTES:
+        return "the approval record is larger than its bound"
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        return "the approval record is not valid JSON"
+    if not isinstance(body, dict) or set(body) != APPROVAL_KEYS:
+        return "the approval record does not have exactly the fields run_id, dag_id, scope and approved_on"
+    if body["run_id"] != run_id or body["dag_id"] != dag_id or body["scope"] != APPROVAL_SCOPES.get(dag_id):
+        return "the approval record names another run, DAG or scope"
+    approved = body["approved_on"]
+    try:
+        day = date.fromisoformat(approved) if isinstance(approved, str) and APPROVAL_DATE.fullmatch(approved) else None
+    except ValueError:
+        day = None
+    if day is None or day > max(date.today(), datetime.now(UTC).date()):
+        return "the approval record has no valid approval date up to today"
+    return None
 
 
 def canonical(value: Any) -> str:
@@ -445,6 +501,26 @@ class Broker:
             return False
         return False
 
+    def require_approval(self, request: SubmissionRequest, row: dict[str, Any] | None = None) -> None:
+        """Refuse a new step of a real run of a DAG in ``APPROVAL_SCOPES`` unless the owner's approval record in this broker's state folder names it
+        (the main checkout's ``data/orchestration/approvals`` for the real registry, the test folder for a test registry).
+
+        One exception keeps a run whose record was removed mid-run releasable: a control ``row`` whose action is in ``RELEASE_ACTIONS`` (it only
+        records the verdict or releases the run: no lakehouse write, export, publication or materialization) is admitted when the run's ledger already
+        holds a ``real`` intent of the same DAG, which this check admitted while the record stood. Intents of another mode or DAG never count, so a run
+        that never had approval for this DAG in ``real`` mode gets no exception. The caller holds the run's ledger lock when it passes a row."""
+        if request.mode != "real" or request.dag_id not in APPROVAL_SCOPES:
+            return
+        problem = approval_problem(self.paths.state, request.dag_id, request.run_id)
+        if problem is None:
+            return
+        action = ((row or {}).get("control") or {}).get("action")
+        if action in RELEASE_ACTIONS and any(
+            lines[0].get("dag_id") == request.dag_id and lines[0].get("mode") == "real" for lines in self.ledger.submissions(request.run_id).values()
+        ):
+            return
+        raise ApprovalRefused(f"a real {request.dag_id} run needs the owner's approval record: {problem}")
+
     def ensure_run(self, request: SubmissionRequest) -> dict[str, Any]:
         """The principal of the submission's run: the run this machine's token store already holds, or a new run acquired through the launcher.
 
@@ -457,6 +533,7 @@ class Broker:
         except LauncherUnavailable:
             if not self.token_absent(request.run_id):
                 raise
+        self.require_approval(request)
         params = {"domain": DOMAIN, "run_id": request.run_id, "mode": request.mode, "holder": "broker", "checkout": str(self.repo_root)}
         try:
             self.call("acquire", params, request_id=request_id_of(f"{request.run_id}:{request.mode}", "acquire"))
@@ -700,6 +777,7 @@ class Broker:
                         self.advance_locked(request)
                     return handle
                 row = self.row_for(request)
+                self.require_approval(request, row)
                 payload = None if row["no_op"] else self.payload_of(request, row)
                 try:
                     self.write_intent(request, row, payload)

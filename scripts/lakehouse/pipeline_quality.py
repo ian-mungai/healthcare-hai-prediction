@@ -12,16 +12,21 @@ from orchestration.pipeline_protocol import read_record
 
 def main() -> int:
     """Run the fixed quality gate and emit its result digest for launcher acceptance."""
-    from scripts.lakehouse import gold_reconcile, silver_quality
-
     parser = argparse.ArgumentParser(description=__doc__, add_help=False)
-    parser.add_argument("--kind", required=True, choices=("silver", "gold", "cross"))
+    parser.add_argument("--kind", required=True, choices=("silver", "gold", "cross", "features"))
     options, arguments = parser.parse_known_args()
     kind = options.kind
     original = sys.argv[1:]
     try:
         sys.argv[1:] = arguments
-        result = gold_reconcile.main() if kind == "cross" else silver_quality.main()
+        if kind == "features":
+            from scripts.features import feature_validation
+
+            result = feature_validation.main()
+        else:
+            from scripts.lakehouse import gold_reconcile, silver_quality
+
+            result = gold_reconcile.main() if kind == "cross" else silver_quality.main()
     finally:
         sys.argv[1:] = original
     record, digest = read_record(Path("/workspace/out"), "result.json")

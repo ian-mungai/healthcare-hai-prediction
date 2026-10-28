@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # CI_PART selects what runs: "all" (the default, every part), "core" (everything except the launcher E2E, the
-# acquisition gate and the three lakehouse layers), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
-# if set) or "bronze", "silver" or "gold" (the gates and that lakehouse layer's checks). GitHub CI runs "core", the launcher
-# shards and the three layers as parallel jobs.
+# acquisition gate and the four lakehouse layers), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
+# if set) or "bronze", "silver", "gold" or "features" (the gates and that lakehouse layer's checks). GitHub CI runs "core", the
+# launcher shards and the four layers as parallel jobs.
 # CI_SCOPE selects the check groups (scripts/quality/ci_groups.py, config/quality/ci_groups.json): "full" (the default,
 # every group: run it before every push), "staged" (the groups the staged paths touch: the local_ci_affected commit
 # hook) or "range" (the groups RANGE_START..RANGE_END touches: GitHub CI). The privacy, secret, credential, data-file,
@@ -16,8 +16,8 @@ bash -n scripts/run_ci.sh scripts/infrastructure/*.sh
 python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 part="${CI_PART:-all}"
 case "$part" in
-  all | core | launcher | bronze | silver | gold) ;;
-  *) printf 'CI_PART must be all, core, launcher, bronze, silver or gold, not %s\n' "$part" >&2; exit 2 ;;
+  all | core | launcher | bronze | silver | gold | features) ;;
+  *) printf 'CI_PART must be all, core, launcher, bronze, silver, gold or features, not %s\n' "$part" >&2; exit 2 ;;
 esac
 scope="${CI_SCOPE:-full}"
 case "$scope" in
@@ -115,12 +115,29 @@ lakehouse_gold() {
   "$python_bin" -m scripts.lakehouse.identity_splits --check
   "$python_bin" -m scripts.lakehouse.source_labels --check
   "$python_bin" -m scripts.lakehouse.run_identity_seeds_e2e
+  # The feature phase reads gold only, and the gold build selections leave it out.
+  "$python_bin" -m scripts.lakehouse.feature_sources --check
+  "$python_bin" -m scripts.lakehouse.run_feature_sources_e2e
+  # Every output column of a feature model is documented with its data type, checked without the dbt contract that also enforces it.
+  "$python_bin" -m scripts.lakehouse.feature_columns --check
+  "$python_bin" -m scripts.lakehouse.run_feature_columns_e2e
   # The gold Great Expectations suites must match the gold contract they are generated from.
   "$python_bin" -m scripts.lakehouse.gold_checks check-suites
   "$python_bin" -m scripts.lakehouse.run_gold_publish_e2e --mode contract
   "$python_bin" -m scripts.lakehouse.run_gold_publish_e2e --mode writer_setup
   "$python_bin" -m scripts.quality.model_metadata
   "$python_bin" -m scripts.quality.run_model_metadata_e2e
+}
+
+lakehouse_features() {
+  # The feature store's own gates, all offline and light: the generated schema, models, YAML and Feast definitions are what the generator writes; the static
+  # cases (pin, plan, contract, masks, no teardown, closed settings); the Feast job and historical helper against stub catalogs; the online protocol against an
+  # in-process fake Redis; and the feature pipeline's renders, broker approval and DAG graphs. The builds, the Feast image and the real Redis stay in the heavy lane.
+  "$python_bin" -m scripts.features.feature_schema check
+  "$python_bin" -m scripts.features.run_feature_store_e2e --mode static
+  "$python_bin" -m scripts.features.feast_cases --part local
+  "$python_bin" -m scripts.features.online_cases --part fake
+  "$python_bin" -m scripts.orchestration.run_features_pipeline_light
 }
 
 orchestration_checks() {
@@ -208,7 +225,7 @@ terraform_checks() {
 }
 
 groups=()
-for group in python_lint lakehouse_bronze lakehouse_silver lakehouse_gold orchestration_checks repository_code_checks configuration_checks sql_style terraform_checks; do
+for group in python_lint lakehouse_bronze lakehouse_silver lakehouse_gold lakehouse_features orchestration_checks repository_code_checks configuration_checks sql_style terraform_checks; do
   if is_selected "$group"; then
     groups+=("$group")
   fi

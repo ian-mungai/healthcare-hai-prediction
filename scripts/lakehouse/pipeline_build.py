@@ -104,6 +104,7 @@ def main() -> int:
             ("+path:models/silver" if args.layer == "silver" else "path:models/gold"),
             "--indirect-selection",
             "cautious",
+            *(["--exclude", "tag:features"] if args.layer == "gold" else []),
         ]
         result = dbtRunner().invoke(arguments)
         if not result.success:

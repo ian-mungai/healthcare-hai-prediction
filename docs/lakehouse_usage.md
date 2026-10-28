@@ -1,7 +1,7 @@
 ---
 title: Lakehouse usage
-description: Commands and checks for the launcher, bronze, staging, gold, silver validation, the run lock and the fixture kit.
-last_updated: 2026-10-20
+description: Commands for the lakehouse launcher, published layers, feature store, validation, run lock and fixture kit.
+last_updated: 2026-10-23
 ---
 
 # Lakehouse usage
@@ -54,6 +54,7 @@ publish. `--dry-run` prints the requests and sends none. A rerun changes nothing
 .venv/bin/python -m scripts.lakehouse.silver_writer_setup --dry-run   # plan of the silver_writer principal (silver and silver_e2e)
 .venv/bin/python -m scripts.lakehouse.silver_writer_setup             # not available yet: refuses until it stores credentials in AWS Secrets Manager
 .venv/bin/python -m scripts.lakehouse.run_gold_publish_e2e --mode writer_setup   # both set-ups against a stand-in Polaris; no Docker
+.venv/bin/python -m scripts.features.features_writer_setup --dry-run  # plan of the features_writer principal (features and features_e2e)
 ```
 
 A writer may create, read and write the tables of its own two namespaces and read the catalog's properties. It cannot touch the other
@@ -61,7 +62,8 @@ layer's namespaces or bronze, manage the catalog, create or drop a namespace or 
 requests only. The gold writer's client ID and secret are stored in AWS Secrets Manager (see Secrets) and never printed. The real silver set-up refuses
 until it stores its pair there too. Only its `--dry-run` works now. A job receives them
 only from the launcher (`POLARIS_GOLD_WRITER_CLIENT_ID` and `_SECRET`, `POLARIS_SILVER_WRITER_CLIENT_ID` and `_SECRET`). The shared
-requests are in `scripts/lakehouse/polaris_writer.py`.
+requests are in `scripts/lakehouse/polaris_writer.py`. The features writer follows the silver pattern: `--dry-run` works. A real set-up refuses
+until the managed secrets for its client ID and secret exist (`POLARIS_FEATURES_WRITER_CLIENT_ID` and `_SECRET`).
 
 ## Launcher
 
@@ -320,6 +322,37 @@ dialect, only for the pinned version.
 
 Load large groups in batches of about 20 to 40 tables: each job stops at its launcher template's time limit
 (`default_seconds` in `orchestration/launcher.py`). A rerun of the same tables ends in the same state.
+
+## Feature store
+
+The feature store publishes the feature models and wide tables to the Iceberg namespace `features` (`features_e2e` for fixture runs). Feast registers the generated predictor and label views.
+`features_transform_dag` (parameters `run_id`, `mode` and `gold_snapshot_run`) pins a committed gold snapshot set, builds the feature models with
+their tests, validates the wide tables, seals and exports them, publishes them with the gold publish engine and the contract
+`data_contracts/lakehouse/features_publish.json`, then applies the Feast definitions and loads the online store. `feature_store_dag` applies and loads again
+against the committed set. A real run starts only after the broker finds an approval record for exactly that run. Every later step checks the record again. If the record is removed during the run, every write, export, publish and materialize step is refused. The steps that only record the verdict or release the run still run (`catalog_release`, the final gate, `release_accepted` and `release_rejected`), so the run can release its lock. A run that never had a record gets no such exception.
+
+The same publication includes two training support tables. `int_spine_validation_measures`, keyed by `alignment_key`, carries PSI-90 and PSI-13 from the latest measurement period ending strictly before the hospital window starts. HAC payment flags and other validation outcomes match the outcome window. `int_county_adjacency`, keyed by `edge_key`, preserves every column and vintage of the pinned gold `bridge_county_neighbor`, including self-links and isolated counties. Neither table is a Feast view or a predictor reference.
+
+Consumers read the support tables inside `publication_reads.consistent_read` for the selected publication. Each scan uses that publication's table snapshot ID and returns fully consumed data before the final head check. `feature_build_inputs.hai_outcome_controls_sha256` records the SHA-256 of the exact `frozen_hai_outcome_controls.csv` bytes in the copied dbt project used by the build. A training consumer compares this digest with its own snapshot's seed before it versions the extracts. The hash and both support tables follow the shared validation, export, reconcile and commit paths.
+
+The wide tables are generated. Each column is `<control>__<field>__<kind>`, where the kind is `number` or `category`; a missing value stays null, never zero.
+A spine attribute or a county or ZIP value is kept only when its source period ends strictly before the window start and it comes from the window's own
+POS snapshot, so a value filled from a later snapshot is null. Change the reviewed rules in `data_contracts/features/feature_schema_rules.json`, then
+generate and check:
+
+```sh
+.venv/bin/python -m scripts.features.feature_schema generate       # schema file, matrix models and YAML, feature_store/definitions.py
+.venv/bin/python -m scripts.features.feature_schema check          # fails on any difference from the generator's output
+.venv/bin/python -m scripts.features.run_feature_store_e2e --mode static          # generator, contract, gold pin and plan cases; no Docker
+.tools/sqlfluff/bin/python -m scripts.features.run_feature_store_e2e --mode build_local   # fixture build, validation with planted defects, export; no Docker; report: data/e2e/feature_store/
+.venv/bin/python -m scripts.features.feast_cases --part local      # Feast job and historical helper against stub catalogs; report: data/e2e/feast_cases/
+.venv/bin/python -m scripts.features.online_cases --part fake      # online protocol against an in-process fake Redis
+.venv/bin/python -m scripts.orchestration.run_features_pipeline_light   # renders, broker approval and DAG graphs; nothing is started
+```
+
+The heavy runs need the launcher and Docker and run outside the CI group: `run_feature_store_e2e --mode publish_offline` (the Spark case suite on a local
+catalog), the Feast image parts of `feast_cases` and `online_cases` and the real Redis service. The CI group `lakehouse_features` runs the first two schema
+and static commands and the light commands (see Quality Checks, Lakehouse layers).
 
 ## Run lock, registry and fixture kit
 

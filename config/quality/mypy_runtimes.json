@@ -4,6 +4,14 @@
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
     },
+    "dags/feature_store_dag.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
+    },
+    "dags/features_transform_dag.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
+    },
     "dags/gold_maintenance_dag.py": {
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
@@ -15,6 +23,10 @@
     "dags/silver_transform_dag.py": {
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
+    },
+    "feature_store/definitions.py": {
+      "runtime": "feature_store",
+      "reason": "Cannot find implementation or library stub for module named \"feast\"; Cannot find implementation or library stub for module named \"feast.infra.data_sources.contrib.iceberg_catalog.iceberg_source\"; Cannot find implementation or library stub for module named \"feast.types\"; Cannot find implementation or library stub for module named \"feast.value_type\""
     },
     "orchestration/dag_runtime.py": {
       "runtime": "orchestration_image",

@@ -9,23 +9,9 @@ config dbt/models/silver/intermediate/int_mmd_prevalence.sql -- geography_level 
 config dbt/tests/assert_hai_outcome_measures_known.sql -- hai_type is a Jinja loop variable over hai_outcome_types(), not the retired seed column
 config dbt/tests/assert_shortage_grain.sql -- geography_level is a column of int_mmd_prevalence; the name left only the retired mmd_conditions seed
 config features/great_expectations/suites/silver_contract.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/models/_archived_models.yml -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/models/int_cost_report_measures.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/models/int_hai_outcome_values.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/models/int_impact_measures.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/models/int_mup_measures.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/models/int_occmix_measures.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/models/int_registry_measure_windows.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/models/int_spine_care_compare_measures.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/models/int_spine_county_measures.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/models/int_spine_hai_outcomes.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/models/int_spine_validation_measures.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/models/int_validation_measure_windows.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/models/int_validation_program_values.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config features/tests/assert_occmix_measure_scope.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-config scripts/lakehouse/bridge_references.py -- geography_level and source_status are recipe columns in features/recipes, not the retired seed columns
+config scripts/lakehouse/bridge_references.py -- geography_level and source_status are recipe columns in dbt/seeds/features, not the retired seed columns
 config scripts/lakehouse/mmd_conditions.py -- geography_level is a column the collection plans give and int_mmd_prevalence keeps
-config scripts/lakehouse/run_bridge_references_e2e.py -- geography_level and source_status are recipe columns in features/recipes, not the retired seed columns
+config scripts/lakehouse/run_bridge_references_e2e.py -- geography_level and source_status are recipe columns in dbt/seeds/features, not the retired seed columns
 config scripts/lakehouse/run_staging_e2e.py -- geography_level is a column of int_mmd_prevalence that the runner reads
 dbt README.md -- the Saved for the Feature Phase section describes the saved models by name
 dbt data_contracts/lakehouse/silver_columns.json -- the silver contract records the removed models as changes against the beab859 baseline
@@ -37,32 +23,6 @@ dbt features/great_expectations/suites/silver_leakage.json -- saved copy of a si
 dbt features/great_expectations/suites/silver_outcomes.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
 dbt features/great_expectations/suites/silver_spatial.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
 dbt features/great_expectations/suites/silver_spine.json -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/_archived_models.yml -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/int_cmi_holds.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/int_cmi_hospital_data_years.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/int_cmi_hospital_years.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/int_hai_outcome_values.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/int_hospital_spine.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/int_spine_care_compare_measures.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/int_spine_county_context.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/int_spine_county_measures.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/int_spine_hai_outcomes.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/int_spine_hospital_measures.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/int_spine_linkage.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/int_spine_operations_measures.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/models/int_spine_validation_measures.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/tests/assert_care_compare_as_of_start.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/tests/assert_care_compare_edv_known.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/tests/assert_county_context_as_of_start.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/tests/assert_county_measures_as_of_start.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/tests/assert_hai_outcome_consistent.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/tests/assert_hai_outcome_values_cast.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/tests/assert_history_versions_valid.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/tests/assert_hospital_measures_as_of_start.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/tests/assert_occmix_measure_scope.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/tests/assert_operations_measures_as_of_start.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/tests/assert_spine_as_of_window_start.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
-dbt features/tests/assert_validation_measures_overlap.sql -- saved copy of a silver model, test, macro, suite or manifest that left dbt under the October 10 2026 layer design, kept for the feature phase with its original names
 dbt scripts/lakehouse/archive_saved_models.py -- the archive tool lists the saved model files it verifies by name
 unused-code scripts/acquisition/tests/aws_stand_in.py -- http.server calls handle_error with client_address and reads daemon_threads of the loopback STS and Secrets Manager stand-in
 unused-code scripts/lakehouse/fake_docker.py -- http.server calls the do_* hooks, log_message and address_string and reads protocol_version, daemon_threads and close_connection
@@ -74,3 +34,8 @@ orphan tests/orchestration/fixtures/tiny/* -- dbt loads every model, test and pr
 unused-code scripts/orchestration/run_lineage_e2e.py -- http.server calls the synthetic receiver do_POST and log_message callbacks
 unused-code scripts/orchestration/run_lineage_launcher_e2e.py -- http.server calls the synthetic receiver do_POST and log_message callbacks
 unused-code scripts/orchestration/traffic_probe.py -- http.server dispatches Catalog.do_GET and Catalog.log_message by method name
+dbt dbt/models/features/* -- int_hai_outcome_values, int_occmix_measures and int_validation_measure_windows are feature models: their rewrite moved them from features/models, so git records a delete and an add
+dbt dbt/tests/features/* -- int_hai_outcome_values, int_occmix_measures and int_validation_measure_windows are feature models: their rewrite moved them from features/models, so git records a delete and an add
+dbt docs/feature_phase_saved.md -- int_hai_outcome_values, int_occmix_measures and int_validation_measure_windows are feature models: their rewrite moved them from features/models, so git records a delete and an add
+unused-code feature_store/definitions.py -- feast apply scans the module for Entity and FeatureView objects, so each view the generated file assigns to a module-level name is read by Feast, not imported
+unused-dependencies services/feature_store/requirements.in -- pyiceberg, duckdb, redis and hiredis are loaded through importlib or by Feast and redis-py themselves; the hash-pinned lock requirements.txt replaces this file as the runtime's requirements at lock review

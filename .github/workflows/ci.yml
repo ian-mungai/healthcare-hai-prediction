@@ -118,6 +118,9 @@ jobs:
           - layer: Gold
             part: gold
             timeout: 60
+          - layer: Features
+            part: features
+            timeout: 15
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
