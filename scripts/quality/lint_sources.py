@@ -1,8 +1,8 @@
 """Run repository source checks from the same inventory in pre-commit and CI.
 
 Run ``.venv/bin/python -m scripts.quality.lint_sources <check>``. Ruff and shell syntax cover every nonignored
-first-party source. Native language tools check tracked sources. SQL profiles follow the executing engine. Saved
-feature SQL remains deferred. No script body, SQL statement or container is executed by this module.
+first-party source. Native language tools check tracked sources. SQL profiles follow the executing engine.
+No script body, SQL statement or container is executed by this module.
 """
 
 from __future__ import annotations
@@ -33,51 +33,6 @@ EXCLUDED_SQL = {
     "tests/orchestration/fixtures/tiny/models/silver_two.sql": TINY_FIXTURE_REASON,
     "tests/orchestration/fixtures/tiny/tests/cross_layer_rows.sql": TINY_FIXTURE_REASON,
 }
-DEFERRED_SQL = frozenset(
-    {
-        "features/macros/care_compare_alignment.sql",
-        "features/macros/cmi_years.sql",
-        "features/macros/hai_outcome_columns.sql",
-        "features/macros/hospital_alignment.sql",
-        "features/macros/scd2.sql",
-        "features/models/int_cmi_holds.sql",
-        "features/models/int_cmi_hospital_data_years.sql",
-        "features/models/int_cmi_hospital_years.sql",
-        "features/models/int_cost_report_measures.sql",
-        "features/models/int_hai_outcome_values.sql",
-        "features/models/int_hospital_hgi_history.sql",
-        "features/models/int_hospital_ownership_history.sql",
-        "features/models/int_hospital_pos_history.sql",
-        "features/models/int_hospital_spine.sql",
-        "features/models/int_impact_measures.sql",
-        "features/models/int_mup_measures.sql",
-        "features/models/int_occmix_measures.sql",
-        "features/models/int_registry_measure_windows.sql",
-        "features/models/int_spine_care_compare_measures.sql",
-        "features/models/int_spine_county_context.sql",
-        "features/models/int_spine_county_measures.sql",
-        "features/models/int_spine_hai_outcomes.sql",
-        "features/models/int_spine_hospital_measures.sql",
-        "features/models/int_spine_linkage.sql",
-        "features/models/int_spine_operations_measures.sql",
-        "features/models/int_spine_validation_measures.sql",
-        "features/models/int_validation_measure_windows.sql",
-        "features/models/int_validation_program_values.sql",
-        "features/tests/assert_care_compare_as_of_start.sql",
-        "features/tests/assert_care_compare_edv_known.sql",
-        "features/tests/assert_county_context_as_of_start.sql",
-        "features/tests/assert_county_measures_as_of_start.sql",
-        "features/tests/assert_hai_outcome_consistent.sql",
-        "features/tests/assert_hai_outcome_values_cast.sql",
-        "features/tests/assert_history_versions_valid.sql",
-        "features/tests/assert_hospital_measures_as_of_start.sql",
-        "features/tests/assert_occmix_holds_exclude_values.sql",
-        "features/tests/assert_occmix_measure_scope.sql",
-        "features/tests/assert_operations_measures_as_of_start.sql",
-        "features/tests/assert_spine_as_of_window_start.sql",
-        "features/tests/assert_validation_measures_overlap.sql",
-    }
-)
 
 
 def paths(tracked: bool = False) -> list[str]:
@@ -205,13 +160,10 @@ def refuse_size_skips(output: str, aliases: dict[str, str] | None = None) -> int
 def sql() -> int:
     selected = selected_suffix((".sql",), tracked=True)
     profiles: dict[str, list[str]] = {"dbt": [], "duckdb": [], "postgres": []}
-    deferred = []
     excluded = []
     for name in selected:
         if name.startswith(("dbt/models/", "dbt/tests/", "dbt/macros/")):
             profiles["dbt"].append(name)
-        elif name in DEFERRED_SQL:
-            deferred.append(name)
         elif name in EXCLUDED_SQL:
             excluded.append(name)
         elif name == "services/analytics/resources.sql":
@@ -220,17 +172,9 @@ def sql() -> int:
             profiles["postgres"].append(name)
         else:
             raise ValueError(f"{name}:1: SQL has no declared runtime and dialect. Ask the owner before assigning a profile.")
-    sys.stdout.write(
-        f"SQL: {len(selected) - len(deferred) - len(excluded)} active sources, {len(deferred)} deferred feature sources "
-        f"(docs/feature_phase_saved.md), {len(excluded)} excluded sources\n"
-    )
+    sys.stdout.write(f"SQL: {len(selected) - len(excluded)} active sources, {len(excluded)} excluded sources\n")
     for name in excluded:
         sys.stdout.write(f"excluded {name}: {EXCLUDED_SQL[name]}\n")
-    for name in deferred:
-        sys.stdout.write(
-            f"pending {name}: saved for the feature phase, not built by dbt (docs/feature_phase_saved.md); "
-            "trigger: lint when the feature phase brings it into a dbt project\n"
-        )
     failed = bool(macro_usage(profiles["dbt"])) if profiles["dbt"] else False
     for profile, sources in profiles.items():
         if sources:
