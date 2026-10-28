@@ -145,6 +145,12 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: container-mounts
+        name: First-party container imports fit their declared mounts
+        entry: .venv/bin/python -m scripts.quality.container_mounts
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: gofmt
         name: Tracked Go sources match gofmt
         entry: .venv/bin/python -m scripts.quality.lint_sources gofmt
