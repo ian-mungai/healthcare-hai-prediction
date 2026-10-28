@@ -94,8 +94,17 @@ def main_checkout(cwd: Path) -> Path:
     return Path(result.stdout.strip()).resolve().parent
 
 
-def resolve(test_registry: str | None, cwd: Path) -> Registry:
-    """The real registry of this machine's main checkout, or the named test registry."""
+def resolve(test_registry: str | None, cwd: Path, *, registry_root: Path | None = None) -> Registry:
+    """The real registry of this machine's main checkout, or the named test registry.
+
+    An explicit controller root preserves the real or test identity and bypasses main-checkout discovery.
+    """
+    if registry_root is not None:
+        if not registry_root.is_absolute():
+            raise RegistryError("controller registry root must be absolute")
+        if test_registry is not None and Path(test_registry).resolve() != registry_root.resolve():
+            raise RegistryError("controller root differs from the named test registry")
+        return Registry(registry_root.resolve(), "test" if test_registry is not None else "real")
     if test_registry is not None:
         return Registry(Path(test_registry).resolve(), "test")
     return Registry((main_checkout(cwd) / "data" / "orchestration" / "registry").resolve(), "real")
@@ -563,11 +572,11 @@ def registry_schema(registry: Registry) -> int:
         return int(state["schema_version"])
 
 
-def launcher_dispatch(args: argparse.Namespace, registry: Registry) -> Any:
+def launcher_dispatch(args: argparse.Namespace, registry: Registry, *, client: Any = None) -> Any:
     """The same commands on a launcher registry: each is a request to the launcher, with the run's token from the token store [D1 section 3]."""
     from orchestration import launcher
 
-    client = launcher.LauncherClient(launcher.resolve_config(args.test_registry))
+    client = client if client is not None else launcher.LauncherClient(launcher.resolve_config(args.test_registry))
 
     def run_principal(owner: bool = False) -> dict[str, Any]:
         return client.principal_run(args.run, owner=owner)

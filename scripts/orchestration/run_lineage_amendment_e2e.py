@@ -104,7 +104,8 @@ def bare_launcher(status: str, docker_ok: bool, registry: Registry | None = None
     subject = object.__new__(launcher.Launcher)
     subject.registry_id = "12345678-synthetic"
     subject.inflight = set()
-    subject.docker = NonCallableMock(spec_set=())
+    subject._docker = NonCallableMock(spec_set=())
+    subject.cfg = launcher.Config(registry or Registry(Path("/unused/registry"), "test"), ROOT, "/unused", Path("/unused/tokens"), Path("/unused/runs"))
     subject.docker_ok = docker_ok
     subject.ecs_jobs = {"enabled": False, "jobs": []}
     subject.ecs_runtime = None

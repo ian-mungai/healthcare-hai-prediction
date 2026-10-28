@@ -60,11 +60,11 @@ from typing import Any, Literal, NamedTuple, NoReturn
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from orchestration import dbt_lineage, ecs_target, lineage_services, network_policy, pipeline_protocol, pipeline_render, pipeline_session
+from orchestration import controller_backend, dbt_lineage, ecs_target, lineage_services, network_policy, pipeline_protocol, pipeline_render, pipeline_session
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import dbt_package_archive, gold_publish_record, memory_budget, pins, run_lock
 from scripts.lakehouse import provenance as build_provenance
-from scripts.process import run_command
+from scripts.process import TimeoutExpired, run_command
 
 PROTOCOL = 1
 REFUSED_EXIT, ERROR_EXIT, DEGRADED_EXIT = 3, 4, 5
@@ -231,6 +231,20 @@ class Config:
     # A test registry may name the user ID the launcher treats as its own, so a test can show that a peer of another user is refused.
     expected_uid: int | None = None
     ecs_runtime: ecs_target.Runtime | None = None
+    local_backend: Literal["docker", "disabled"] = "docker"
+    artifacts_root: Path | None = None
+    token_provider: controller_backend.TokenProvider | None = None
+    ecs_run_clear: Callable[[Mapping[str, Any], str], bool] | None = None
+
+    def __post_init__(self) -> None:
+        if self.local_backend not in ("docker", "disabled"):
+            raise LauncherError("local_backend must be docker or disabled", "config")
+        if self.local_backend == "disabled":
+            roots = (self.registry.path, self.runs_root, self.artifacts_root)
+            if any(root is None or not root.is_absolute() for root in roots):
+                raise LauncherError("disabled local backend requires absolute registry, runs and artifacts roots", "config")
+            if self.expected_uid is None or self.expected_uid <= 0:
+                raise LauncherError("disabled local backend requires a dedicated non-root controller_uid", "config")
 
     @property
     def token_anchor(self) -> Path:
@@ -305,7 +319,10 @@ def sha256_text(text: str) -> str:
 
 def account_home() -> Path:
     """The account's home folder from the user database; the environment is ignored (D1 section 11 item 1)."""
-    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    try:
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except KeyError:
+        raise LauncherError(f"UID {os.getuid()} has no passwd entry", "passwd") from None
 
 
 def docker_socket_path() -> str:
@@ -1653,7 +1670,9 @@ class Renderer:
     def compose_values(self, wanted: Sequence[str], base: Mapping[str, str]) -> dict[str, str]:
         """Interpolation values: the allocation's, ``HOME``, the project AWS settings and the secret values the service uses, read from Parameter Store
         into memory for this call only."""
-        values = {**base, "HOME": str(account_home())}
+        values = dict(base)
+        if self.config.local_backend == "docker":
+            values["HOME"] = str(account_home())
         needed = [name for name in wanted if name in COMPOSE_ENV_NAMES and name not in values]
         if needed:
             values.update(self.secret_values([name for name in needed if name in COMPOSE_SECRETS]))
@@ -1757,8 +1776,9 @@ class Renderer:
         """Every checkout whose secrets folder is protected, whatever the registry: this one, the launcher's main one, the real main
         checkout of this repository and each worktree under either main checkout's ``data/worktrees``."""
         mains = [self.main]
-        with contextlib.suppress(OSError, run_lock.RegistryError):  # outside a Git checkout (a synthetic test root) the listed checkouts still apply
-            mains.append(run_lock.main_checkout(self.config.root))
+        if self.config.local_backend == "docker":
+            with contextlib.suppress(OSError, run_lock.RegistryError):  # outside a Git checkout (a synthetic test root) the listed checkouts still apply
+                mains.append(run_lock.main_checkout(self.config.root))
         found = [self.checkout, *mains]
         for main in mains:
             worktrees = main / "data" / "worktrees"
@@ -1773,7 +1793,7 @@ class Renderer:
         """
         protected = [self.config.token_root, self.config.registry.path / "launcher_test.json"]
         protected += [checkout / "data/lakehouse/secrets" for checkout in self.checkouts()]
-        exact_credentials = {str(account_home() / ".aws")}
+        exact_credentials = {str(account_home() / ".aws")} if self.config.local_backend == "docker" else set()
         for mount in mounts:
             source = Path(mount.source)
             if mount.source in exact_credentials and not mount.read_only:
@@ -3148,7 +3168,7 @@ class Launcher:
         self.ecs_jobs = ecs_target.load_jobs(config.root)
         self.ecs_runtime = config.ecs_runtime
         self.registry = config.registry
-        self.docker = DockerApi(config.docker_socket, config.timings.docker_call_timeout)
+        self._docker = DockerApi(config.docker_socket, config.timings.docker_call_timeout) if config.local_backend == "docker" else None
         self.timings = config.timings
         self.selector = selectors.DefaultSelector()
         self.listener: socket.socket | None = None
@@ -3170,7 +3190,7 @@ class Launcher:
         self.stream: EventStream | None = None
         self.stream_acked = False
         self.probe: dict[str, Any] | None = None
-        self.next_retry = 0.0
+        self.next_retry = 0.0 if config.local_backend == "docker" else float("inf")
         self.backoff = self.timings.backoff_start
         self.inflight: set[str] = set()
         self.inventory: dict[str, dict[str, Any]] = {}
@@ -3301,6 +3321,41 @@ class Launcher:
             "shutdown": self.m_shutdown,
         }
 
+    @property
+    def docker(self) -> DockerApi:
+        """Return the configured local backend or refuse before a backend call."""
+        if self._docker is None:
+            raise LauncherError("local backend is disabled", "local_backend")
+        return self._docker
+
+    def controller_preflight(self) -> None:
+        """Verify the controller's packaged identity and visible process start time before opening state or sockets."""
+        expected = self.cfg.expected_uid
+        if expected != os.getuid() or expected != os.geteuid():
+            raise LauncherError("controller must run as its configured non-root UID", "passwd")
+        try:
+            pwd.getpwuid(int(expected))
+        except KeyError:
+            raise LauncherError(f"controller UID {expected} has no passwd entry", "passwd") from None
+        try:
+            readable = run_lock.process_start(os.getpid())
+        except (OSError, TimeoutExpired):
+            readable = None
+        if not readable:
+            raise LauncherError("procps ps cannot read the controller process start time", "procps")
+
+    def controller_run_clear(self, state: Mapping[str, Any], run_id: str) -> bool:
+        """Require terminal recorded ECS tries and a complete nonblocking reconciliation witness."""
+        for attempt in state["attempts"].values():
+            if attempt["owner"] != f"run:{run_id}":
+                continue
+            execution = attempt.get("execution") or {}
+            if execution.get("live_try") is not None:
+                return False
+            if any(row.get("state") not in ecs_target.TERMINAL_PLACEMENTS for row in execution.get("placements", [])):
+                return False
+        return self.cfg.ecs_run_clear is not None and self.cfg.ecs_run_clear(state, run_id) is True
+
     # -- registry --------------------------------------------------------------------------------------------------
 
     @contextlib.contextmanager
@@ -3370,6 +3425,15 @@ class Launcher:
 
     def migration_gate(self) -> None:
         """Migrate a registry without the launcher schema, or refuse to serve (D1 section 2 item 7)."""
+        if self.cfg.local_backend == "disabled":
+            with self.tx(write=False) as state:
+                if state["schema_version"] != run_lock.LAUNCHER_SCHEMA:
+                    raise LauncherError("AWS controller requires the launcher registry schema", "migration")
+                blockers = controller_backend.local_work_blockers(state)
+                if blockers:
+                    raise LauncherError("imported live local work is not drained: " + "; ".join(blockers[:5]), "migration")
+                self.registry_id = str(state["registry_id"])
+            return
         state_exists = self.registry.state_file.exists()
         schema = 0
         if state_exists:
@@ -3445,22 +3509,34 @@ class Launcher:
 
     def serve(self) -> int:
         """Run the launcher until it is told to stop. Returns the process exit code."""
+        if self.cfg.local_backend == "disabled":
+            self.controller_preflight()
         if not self.acquire_lock():
             sys.stdout.write("launcher already running\n")
             return 0
         sys.stdout.write(f"launcher process {os.getpid()} holds the registry lock\n")
         sys.stdout.flush()
         try:
-            private_chain(self.cfg.token_root, anchor=self.cfg.token_anchor)
-            self.key = launcher_key(self.cfg.token_root, self.cfg.token_anchor)
+            if self.cfg.local_backend == "docker":
+                private_chain(self.cfg.token_root, anchor=self.cfg.token_anchor)
+                self.key = launcher_key(self.cfg.token_root, self.cfg.token_anchor)
+            elif self.cfg.token_provider is not None:
+                self.key = self.cfg.token_provider.signing_key()
+                if not isinstance(self.key, bytes) or len(self.key) < 32:
+                    raise LauncherError("secure token provider returned an invalid signing key", "token_provider")
             self.migration_gate()
             self.write_diagnostic_owner()
             self.load_bound()
             self.repair_pending()
             self.sweep_copies()
             self.open_socket()
-            self.main_checkout = run_lock.main_checkout(self.cfg.root) if self.registry.kind == "real" else self.cfg.root
-            self.connect_docker()
+            self.main_checkout = run_lock.main_checkout(self.cfg.root) if self.registry.kind == "real" and self.cfg.local_backend == "docker" else self.cfg.root
+            if self.cfg.local_backend == "docker":
+                self.connect_docker()
+            else:
+                self.status = "serving"
+                with self.tx() as state:
+                    state["launcher"].update(status="serving", local_backend="disabled", docker_state="disabled", degraded_reason="")
             self.loop()
         except LauncherError as error:
             sys.stderr.write(f"launcher: {error}\n")
@@ -3704,6 +3780,15 @@ class Launcher:
         principal = dict(request.get("principal") or {"kind": "any"})
         if not isinstance(params, dict):
             raise LauncherError("params must be an object", "protocol")
+        if self.cfg.local_backend == "disabled":
+            if method in controller_backend.LOCAL_METHODS or principal.get("kind") == "alloc":
+                raise LauncherError("local backend is disabled", "local_backend")
+            if method == "submit":
+                eligible = any(row["template"] == params.get("template") for row in self.ecs_jobs["jobs"])
+                if params.get("target") == "docker" or not eligible:
+                    raise LauncherError("local backend is disabled for this submission", "local_backend")
+                if self.cfg.token_provider is None:
+                    raise LauncherError("secure token provider is not integrated", "token_provider")
         if method == "submit" and params.get("target") == "ecs" and not self.ecs_ready():
             raise LauncherError("ECS is disabled or its runtime is not integrated", "refused")
         cloud_request = self.cloud_request(method, params)
@@ -3785,13 +3870,16 @@ class Launcher:
             self.degraded_reason = reason
             self.docker_ok = False
             with self.tx() as state:
-                state["launcher"].update({"status": "degraded", "docker_state": "unknown", "degraded_reason": reason})
+                state["launcher"].update(
+                    {"status": "degraded", "docker_state": "unknown" if self.cfg.local_backend == "docker" else "disabled", "degraded_reason": reason}
+                )
         if self.stream is not None:
             self.stream.close()
             self.stream = None
         self.stream_acked = False
-        self.next_retry = time.monotonic() + self.backoff
-        self.backoff = min(self.backoff * 2, self.timings.backoff_cap)
+        if self.cfg.local_backend == "docker":
+            self.next_retry = time.monotonic() + self.backoff
+            self.backoff = min(self.backoff * 2, self.timings.backoff_cap)
 
     def try_reconnect(self) -> None:
         """Open the events stream first, then record a new epoch and run the probe; the scan follows the probe's acknowledgment."""
@@ -3994,7 +4082,7 @@ class Launcher:
     def timers(self) -> None:
         """Time-based work: reconnects, the probe deadline, deadlines, stale holders and waiters."""
         now = time.monotonic()
-        if self.status == "degraded" and self.running and now >= self.next_retry:
+        if self.cfg.local_backend == "docker" and self.status == "degraded" and self.running and now >= self.next_retry:
             self.try_reconnect()
         if self.probe is not None and not self.stream_acked and now > self.probe["deadline"] and self.docker_ok and self.probe["epoch"] == self.epoch:
             self.probe_failed()
@@ -4605,10 +4693,20 @@ class Launcher:
 
     def advance_all(self) -> None:
         """One pass over every open attempt and every owner: the state machine of D1 sections 4 to 6."""
+        if self.cfg.local_backend == "disabled":
+            cloud_actions: list[Callable[[], None]] = []
+            with self.tx() as state:
+                for attempt in state["attempts"].values():
+                    if is_open(attempt) and "execution" in attempt:
+                        self.advance(state, attempt, cloud_actions)
+                self.advance_owners(state, cloud_actions)
+            for action in cloud_actions:
+                action()
+            return
         if self.status == "starting" and not self.docker_ok:
             self.expire_lineage_startup()
             if self.ecs_ready():
-                cloud_actions: list[Callable[[], None]] = []
+                cloud_actions = []
                 with self.tx() as state:
                     for attempt in state["attempts"].values():
                         if is_open(attempt) and "execution" in attempt:
@@ -5618,22 +5716,24 @@ class Launcher:
         Above ``compact_threshold`` bytes the move takes records older than ``compact_floor`` and is tried once per change of the file; the
         periodic pass every ``compact_every`` chooses the age by the current size, so records that age with no change still move.
         """
-        if not self.docker_ok or self.status == "starting":
+        if self.status == "starting" or (self.cfg.local_backend == "docker" and not self.docker_ok):
             return
         if now - self.last_maintenance < 0.5:
             return
         self.last_maintenance = now
         signature, snapshot = self.registry_snapshot()
         if signature != self.maintained:
-            self.read_open_operations(snapshot)
+            if self.cfg.local_backend == "docker":
+                self.read_open_operations(snapshot)
             self.maintained = signature
-        wall = time.time()
-        expired = any(wall > deadline and f"op:{op_id}" not in self.inflight for op_id, deadline in self.create_deadlines)
-        if expired and not any(k.startswith("scan:") for k in self.inflight):
-            self.start_scan()
-        for op_id, container_id in self.orphan_retries:
-            if f"op:{op_id}" not in self.inflight:
-                self.spawn(f"op:{op_id}", "orphan", self.docker_dispose, container_id)
+        if self.cfg.local_backend == "docker":
+            wall = time.time()
+            expired = any(wall > deadline and f"op:{op_id}" not in self.inflight for op_id, deadline in self.create_deadlines)
+            if expired and not any(k.startswith("scan:") for k in self.inflight):
+                self.start_scan()
+            for op_id, container_id in self.orphan_retries:
+                if f"op:{op_id}" not in self.inflight:
+                    self.spawn(f"op:{op_id}", "orphan", self.docker_dispose, container_id)
         over = signature[0] > self.timings.compact_threshold
         if now - self.last_compact >= self.timings.compact_every:
             self.last_compact = now
@@ -5782,6 +5882,9 @@ class Launcher:
                 "status": self.status,
                 "degraded_reason": self.degraded_reason,
                 "docker_ok": self.docker_ok,
+                "local_backend": self.cfg.local_backend,
+                "controller_ready": self.status == "serving",
+                "storage_ready": self.cfg.local_backend == "docker" or self.cfg.token_provider is not None,
                 "ecs_ready": self.ecs_ready(),
                 "stream_epoch": self.epoch,
                 "pid": os.getpid(),
@@ -6004,6 +6107,10 @@ class Launcher:
         pid_start = run_lock.process_start(pid)
         if pid_start is None:
             raise LauncherError(f"holder process {pid} is not running", "refused")
+        if self.cfg.local_backend == "disabled":
+            if self.cfg.token_provider is None:
+                raise LauncherError("secure token provider is not integrated", "token_provider")
+            return self.cfg.token_provider.acquire(self, ctx)
         prefixes = [str(p) for p in params.get("write_prefixes", [])]
         token = run_lock.new_run(
             ctx.state, domain, run_id, mode, str(params.get("holder", "manual")), pid, pid_start, prefixes, str(params.get("checkout") or self.cfg.root)
@@ -6100,6 +6207,11 @@ class Launcher:
         open_work = self.open_work(ctx.state, f"run:{run_id}")
         if open_work:
             raise LauncherError(f"run {run_id}: {open_work[0]} is open", "refused")
+        if self.cfg.local_backend == "disabled":
+            if not self.controller_run_clear(ctx.state, run_id):
+                raise LauncherError(f"run {run_id}: complete ECS reconciliation is unavailable or work remains", "refused")
+            run_lock.set_state(ctx.state, run_id, "released")
+            return {"state": "released"}
         key = f"runlist:{ctx.key}"
         self.spawn(key, "runlist", lambda: self.docker.containers(label=f"{LABEL_RUN}={run_id}"))
         self.release_requests[key] = (ctx.key, run_id, entry["state"])
@@ -6147,8 +6259,15 @@ class Launcher:
                 op["state"] == "open" and op["kind"] == "create" and state["attempts"].get(op["attempt"], {}).get("owner") == f"run:{run_id}"
                 for op in state["operations"].values()
             )
-            if run["state"] == "recovering" and not unresolved and not self.open_work(state, f"run:{run_id}"):
+            if (
+                run["state"] == "recovering"
+                and not unresolved
+                and not self.open_work(state, f"run:{run_id}")
+                and (self.cfg.local_backend == "docker" or self.controller_run_clear(state, run_id))
+            ):
                 run_lock.set_state(state, run_id, "failed_retained")
+        if self.cfg.local_backend == "disabled":
+            return
         self.advance_allocations(state, actions)
         self.advance_catalog(state, actions)
         self.advance_orchestration(state, actions)
@@ -6311,6 +6430,8 @@ class Launcher:
             raise LauncherError("caller identity violates the request contract", "args")
         template_name = str(params.get("template"))
         requested_target = params.get("target", "auto")
+        if self.cfg.local_backend == "disabled" and requested_target == "auto":
+            requested_target = "ecs"
         if requested_target not in ecs_target.TARGETS:
             raise LauncherError("target must be auto, ecs or docker", "args")
         capture = params.get("capture_dbt_artifacts", False)
@@ -8723,9 +8844,46 @@ class Launcher:
 # ---------------------------------------------------------------------------------------------------------------------
 
 
-def resolve_config(test_registry: str | None, cwd: Path | None = None) -> Config:
-    """Everything the launcher and its clients need to find the registry, Docker and the token store."""
+def resolve_config(test_registry: str | None, cwd: Path | None = None, *, controller_config: Path | None = None) -> Config:
+    """Everything the launcher and its clients need to find the registry, Docker and the token store.
+
+    Resolve Mac defaults or explicit controller roots before any backend or home-directory lookup.
+    """
     root = Path(__file__).resolve().parents[1]
+    if controller_config is not None:
+        try:
+            values = json.loads(controller_config.read_text())
+        except (OSError, ValueError):
+            raise LauncherError("controller configuration cannot be read", "config") from None
+        if not isinstance(values, dict) or values.get("local_backend") != "disabled":
+            raise LauncherError("controller local_backend must be disabled", "config")
+        required = {"local_backend", "registry_root", "runs_root", "artifacts_root", "controller_uid"}
+        if set(values) != required:
+            raise LauncherError(
+                "controller configuration requires only local_backend, absolute registry_root, runs_root, artifacts_root and controller_uid", "config"
+            )
+        paths = {}
+        for name in ("registry_root", "runs_root", "artifacts_root"):
+            value = values[name]
+            if not isinstance(value, str) or not value or not Path(value).is_absolute():
+                raise LauncherError(f"controller {name} must be an absolute path", "config")
+            paths[name] = Path(value).resolve()
+        uid = values["controller_uid"]
+        if type(uid) is not int or uid <= 0:
+            raise LauncherError("controller_uid must be a non-root integer UID", "config")
+        registry = run_lock.resolve(test_registry, cwd or Path.cwd(), registry_root=paths["registry_root"])
+        return Config(
+            registry=registry,
+            root=root,
+            docker_socket="",
+            token_root=registry.path / "unused_run_tokens",
+            runs_root=paths["runs_root"],
+            artifacts_root=paths["artifacts_root"],
+            local_backend="disabled",
+            expected_uid=uid,
+            allowed_roots=(paths["runs_root"], paths["artifacts_root"]),
+            catalog_checkout=root,
+        )
     registry = run_lock.resolve(test_registry, cwd or Path.cwd())
     with run_lock.transaction(registry, write=False, create_schema=run_lock.LAUNCHER_SCHEMA) as state:
         registry_id = str(state["registry_id"])
@@ -8987,6 +9145,8 @@ class LauncherClient:
         adds to that). It raises ``StartTimeout`` naming the process, the signals attempted and whether the process was reaped: after both signals
         it can remain unreaped. A launcher it had already spawned is detached and may keep running. Without a budget the wait has no limit.
         """
+        if self.config.local_backend == "disabled":
+            raise ClientError("AWS controller must be started by its foreground runtime", "unavailable")
         limit = None if budget is None else time.monotonic() + budget
         self.config.registry.path.mkdir(parents=True, exist_ok=True)
         self.config.registry.path.chmod(0o700)
@@ -9065,7 +9225,13 @@ class LauncherClient:
 
     def principal_run(self, run_id: str, owner: bool = False) -> dict[str, Any]:
         """A run principal: the token comes from the token store, never from the environment."""
-        return {"kind": "run", "run_id": run_id, "token": read_token_file(self.config.token_root, run_id, self.config.token_anchor), "owner": owner}
+        if self.config.local_backend == "disabled":
+            if self.config.token_provider is None:
+                raise LauncherError("secure token provider is not integrated", "token_provider")
+            token = self.config.token_provider.read(run_id)
+        else:
+            token = read_token_file(self.config.token_root, run_id, self.config.token_anchor)
+        return {"kind": "run", "run_id": run_id, "token": token, "owner": owner}
 
     @staticmethod
     def principal_alloc(alloc_id: str) -> dict[str, Any]:
@@ -9560,6 +9726,7 @@ def parser() -> argparse.ArgumentParser:
     """The command line."""
     cli = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     cli.add_argument("--test-registry", help="a test registry folder; it can never hold a real run")
+    cli.add_argument("--controller-config", type=Path, help="nonsecret controller roots with local_backend disabled")
     commands = cli.add_subparsers(dest="command", required=True)
     commands.add_parser("serve", help="run the launcher in the foreground")
     status = commands.add_parser("status", help="print the launcher, registry or a record")
@@ -9619,8 +9786,8 @@ def main() -> int:
         args.args = passthrough
     try:
         if args.command == "serve":
-            return Launcher(resolve_config(args.test_registry)).serve()
-        client = load_client(args.test_registry)
+            return Launcher(resolve_config(args.test_registry, controller_config=args.controller_config)).serve()
+        client = LauncherClient(resolve_config(args.test_registry, controller_config=args.controller_config))
         if args.command == "status":
             result: Any = client.call("status", {"what": args.what})
         elif args.command == "plan":
