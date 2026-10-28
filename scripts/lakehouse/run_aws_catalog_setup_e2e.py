@@ -833,6 +833,36 @@ def case_live_writer_try(_: Path) -> dict[str, bool]:
         }
 
 
+def case_extra_role_membership(_: Path) -> dict[str, bool]:
+    """P7: a principal role that already holds another catalog role, or a principal that already holds another principal role, stops the step
+    before any assignment, and the read-only inspection reports that identity as differing."""
+    role = setup.PRINCIPALS["reader"]
+    manage = {"type": "catalog", "privilege": "CATALOG_MANAGE_CONTENT"}
+    with catalog_world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        polaris.principal_roles[role] = {"catalog_admin"}
+        polaris.grants["catalog_admin"] = [manage]
+        seeded = principal(services, root, "reader")
+        assigned = [item for item in polaris.calls if item[0] == "PUT" and "/catalog-roles/" in item[1] and not item[1].endswith("/grants")]
+        untouched = role not in polaris.principals and ssm.writes() == 0
+        inspected = call(["check", "--instance", INSTANCE], services, root)
+    with catalog_world() as (ssm, polaris, root):
+        services = Services(ssm, polaris)
+        polaris.issue(role)
+        polaris.principal_roles["service_admin"] = set()
+        polaris.assigned[role] = {"service_admin"}
+        member = principal(services, root, "reader")
+        member_writes = ssm.writes()
+    return {
+        "an extra catalog role stops the reader": seeded[0] == 1 and "(roles)" in seeded[2],
+        "no catalog role was assigned": not assigned,
+        "no principal was created and nothing written": untouched,
+        "the inspection reports the reader as differing": ((outcome(inspected[1]) or {}).get("principals") or {}).get("reader") == "differs",
+        "an extra principal role stops the reader": member[0] == 1 and "(roles)" in member[2],
+        "the extra principal role stays and nothing was written": polaris.assigned[role] == {"service_admin"} and member_writes == 0,
+    }
+
+
 CASES: dict[str, Case] = {
     "catalog_created": case_catalog_created,
     "catalog_rerun": case_catalog_rerun,
@@ -863,6 +893,7 @@ CASES: dict[str, Case] = {
     "principal_lock": case_principal_lock,
     "check_grants": case_check_grants,
     "live_writer_try": case_live_writer_try,
+    "extra_role_membership": case_extra_role_membership,
 }
 
 
@@ -906,6 +937,7 @@ MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[A
     ),
     "the approval is not recorded": ("namespace_approval", lambda: mock.patch.object(setup, "record_approval", lambda folder, approval: None)),
     "a working pair is always reset": ("rerun_keeps_pair", lambda: mock.patch.object(principal_credentials, "pair_accepted", lambda *a: False)),
+    "role memberships are not checked": ("extra_role_membership", lambda: mock.patch.object(setup, "verify_memberships", lambda *a: None)),
     "live writer tries are not checked": ("live_writer_try", lambda: mock.patch.object(setup, "no_live_writer_try", lambda *a, **k: contextlib.nullcontext())),
 }
 

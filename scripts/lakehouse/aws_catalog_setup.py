@@ -559,6 +559,35 @@ def no_live_writer_try(registry: run_lock.Registry, *, deadline: float, clock: C
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def role_names(request: Request, access: str, path: str, what: str) -> set[str] | None:
+    """The names in one role listing, or None when its principal or principal role does not exist yet."""
+    status, body = request("GET", path, access)
+    if status == 404:
+        return None
+    ensure_status(status, f"listing {what}")
+    roles = body.get("roles") if isinstance(body, dict) else None
+    if not isinstance(roles, list) or not all(isinstance(item, dict) and isinstance(item.get("name"), str) for item in roles):
+        raise SetupError("roles", f"the listing of {what} is not a role list")
+    return {str(item["name"]) for item in roles}
+
+
+def verify_memberships(request: Request, access: str, identity: str) -> None:
+    """The identity's principal holds no principal role but its own, and that principal role no catalog role on the catalog but its own (P7).
+
+    Polaris gives a principal every privilege of every role it holds, so an extra role would keep privileges outside the plan. Extras are
+    refused, never removed.
+    """
+    role = PRINCIPALS[identity]
+    listings = (
+        (f"{MANAGEMENT}/principals/{role}/principal-roles", f"the principal roles of principal {role}"),
+        (f"{MANAGEMENT}/principal-roles/{role}/catalog-roles/{CATALOG}", f"the catalog roles of principal role {role}"),
+    )
+    for path, what in listings:
+        found = role_names(request, access, path, what)
+        if found is not None and found - {role}:
+            raise SetupError("roles", f"{what} include a role outside the approved plan; it is never removed here")
+
+
 def ensure_principal(
     request: TunnelRequest,
     access: str,
@@ -575,6 +604,7 @@ def ensure_principal(
     role = PRINCIPALS[identity]
     if verify_catalog(request, access, bucket) == "absent":
         raise SetupError("catalog", f"catalog {CATALOG} does not exist; run the catalog step first")
+    verify_memberships(request, access, identity)
     absent = []
     for name in namespace_set(identity):
         status, _ = request("GET", f"/api/catalog/v1/{CATALOG}/namespaces/{name}", access)
@@ -642,9 +672,16 @@ def step_principal(services: Services, identity: str, instance: str, approval_id
 
 
 def check_principals(request: Request, access: str, approvals: Path) -> dict[str, str]:
-    """Each identity's grants against its plan, read only: ``matches``, ``differs`` or ``absent`` (no catalog role yet)."""
+    """Each identity's role memberships and grants against its plan, read only: ``matches``, ``differs`` or ``absent`` (no catalog role yet)."""
     found: dict[str, str] = {}
     for identity, role in PRINCIPALS.items():
+        try:
+            verify_memberships(request, access, identity)
+        except SetupError as error:
+            if error.code != "roles":
+                raise
+            found[identity] = "differs"
+            continue
         status, _ = request("GET", f"{MANAGEMENT}/catalogs/{CATALOG}/catalog-roles/{role}", access)
         if status == 404:
             found[identity] = "absent"
