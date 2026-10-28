@@ -1,0 +1,132 @@
+{
+  "account_id": "000000000000",
+  "bucket_name": "example-project-data",
+  "catalog": {
+    "authority_epoch": 1,
+    "endpoint": "http://10.23.0.10:8181/api/catalog",
+    "instance_id": "i-0123456789abcdef0",
+    "private_ip": "10.23.0.10",
+    "reader_parameters": {
+      "POLARIS_CLIENT_ID": "arn:aws:ssm:eu-west-1:000000000000:parameter/example_project/aws_polaris_reader_client_id",
+      "POLARIS_CLIENT_SECRET": "arn:aws:ssm:eu-west-1:000000000000:parameter/example_project/aws_polaris_reader_client_secret"
+    },
+    "readiness_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "realm": "example_aws",
+    "source_inventory_sha256": "7f4cce70832e7c3a2f0a9a5dc8fb9b36aa787c2bfca6259e1b62fde1292983d2"
+  },
+  "class_networks": {
+    "lakehouse_read": "lakehouse",
+    "offline": "offline",
+    "seal": "offline"
+  },
+  "cloud_limits": {
+    "max_memory_gib": 120,
+    "max_tasks": 3,
+    "max_vcpu": 16
+  },
+  "cluster_arn": "arn:aws:ecs:eu-west-1:000000000000:cluster/example_project_dev",
+  "deadlines": {
+    "budget_alert_is_spend_stop": false,
+    "cleanup_seconds": 120,
+    "hard_stop_required": true,
+    "pending_seconds": 600,
+    "stop_grace_seconds": 90
+  },
+  "definitions": {
+    "analytics_offline": {
+      "container_name": "job",
+      "execution_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "image": "000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_analytics_dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "image_compressed_gib": 2,
+      "image_uncompressed_gib": 3,
+      "job_class": "offline",
+      "task_definition_arn": "arn:aws:ecs:eu-west-1:000000000000:task-definition/example_project_analytics_offline_dev:7",
+      "task_role_key": "offline_task"
+    },
+    "analytics_read": {
+      "container_name": "job",
+      "execution_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "image": "000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_analytics_dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "image_compressed_gib": 2,
+      "image_uncompressed_gib": 3,
+      "job_class": "lakehouse_read",
+      "task_definition_arn": "arn:aws:ecs:eu-west-1:000000000000:task-definition/example_project_analytics_read_dev:7",
+      "task_role_key": "read_task"
+    },
+    "quality_offline": {
+      "container_name": "job",
+      "execution_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "image": "000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_quality_dev@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "image_compressed_gib": 2,
+      "image_uncompressed_gib": 3,
+      "job_class": "offline",
+      "task_definition_arn": "arn:aws:ecs:eu-west-1:000000000000:task-definition/example_project_quality_offline_dev:7",
+      "task_role_key": "offline_task"
+    },
+    "seal": {
+      "container_name": "job",
+      "execution_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "image": "000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_analytics_dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "image_compressed_gib": 2,
+      "image_uncompressed_gib": 3,
+      "job_class": "seal",
+      "task_definition_arn": "arn:aws:ecs:eu-west-1:000000000000:task-definition/example_project_seal_dev:7",
+      "task_role_key": "seal_task"
+    },
+    "spark_read": {
+      "container_name": "job",
+      "execution_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "image": "000000000000.dkr.ecr.eu-west-1.amazonaws.com/example_project_spark_dev@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "image_compressed_gib": 2,
+      "image_uncompressed_gib": 3,
+      "job_class": "lakehouse_read",
+      "task_definition_arn": "arn:aws:ecs:eu-west-1:000000000000:task-definition/example_project_spark_read_dev:7",
+      "task_role_key": "read_task"
+    }
+  },
+  "enabled": false,
+  "job_network": {
+    "endpoints_enabled": true,
+    "security_group_ids": {
+      "lakehouse": "sg-1123456789abcdef0",
+      "offline": "sg-0123456789abcdef0"
+    },
+    "subnet_id": "subnet-0123456789abcdef0"
+  },
+  "job_roles": {
+    "execution": {
+      "arn": "arn:aws:iam::000000000000:role/example_project_job_execution_dev",
+      "name": "example_project_job_execution_dev",
+      "unique_id": "AROA11111111111111111"
+    },
+    "offline_task": {
+      "arn": "arn:aws:iam::000000000000:role/example_project_job_offline_task_dev",
+      "name": "example_project_job_offline_task_dev",
+      "unique_id": "AROA22222222222222222"
+    },
+    "read_task": {
+      "arn": "arn:aws:iam::000000000000:role/example_project_job_read_task_dev",
+      "name": "example_project_job_read_task_dev",
+      "unique_id": "AROA44444444444444444"
+    },
+    "seal_task": {
+      "arn": "arn:aws:iam::000000000000:role/example_project_job_seal_task_dev",
+      "name": "example_project_job_seal_task_dev",
+      "unique_id": "AROA33333333333333333"
+    },
+    "try_writer": {
+      "arn": "arn:aws:iam::000000000000:role/example_project_job_try_writer_dev",
+      "name": "example_project_job_try_writer_dev",
+      "unique_id": "AROA55555555555555555"
+    }
+  },
+  "log_group_name": "example_project_jobs_dev",
+  "mac_preparation": {
+    "enabled": false,
+    "transport": "session_manager_owned_relay"
+  },
+  "max_record_bytes": 33554432,
+  "project_tag": "example_project",
+  "region": "eu-west-1",
+  "schema_version": 1
+}

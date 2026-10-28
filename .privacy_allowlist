@@ -16,3 +16,6 @@ home-path services/analytics/Dockerfile -- the analytics container service user 
 home-path scripts/lakehouse/run_duckdb_view_e2e.py -- the analytics container service user home directory, not a person
 email scripts/acquisition/one_off/privacy_review/run_redaction_e2e.py -- a synthetic role address on a reserved-style example domain in the redaction E2E fixture; not a person
 aws-account data_contracts/orchestration/examples/ecs_outputs.json -- synthetic all-zero account ID in the output schema example, not a deployment identity
+aws-account data_contracts/orchestration/examples/ecs_target.json -- synthetic all-zero account references in the read target example
+aws-account data_contracts/orchestration/examples/ecs_target_inputs.json -- synthetic all-zero account references in exported-output examples
+aws-account scripts/infrastructure/run_ecs_render_e2e.py -- synthetic all-zero and all-ones accounts in renderer command cases

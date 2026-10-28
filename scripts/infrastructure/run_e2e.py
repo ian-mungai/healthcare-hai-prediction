@@ -1596,12 +1596,12 @@ def run_suite(evidence: Evidence) -> None:
         (["--iam", "plan"], {}, "IAM updates require --admin-profile."),
         (["--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
         (["--platform", "--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
-        (["--iam", "--platform", "plan"], {}, "Choose one stack: --iam, --platform or --services."),
-        (["--platform", "--platform", "plan"], {}, "Choose one stack: --iam, --platform or --services."),
+        (["--iam", "--platform", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+        (["--platform", "--platform", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
         (["--services", "--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
-        (["--services", "--platform", "plan"], {}, "Choose one stack: --iam, --platform or --services."),
-        (["--platform", "--services", "plan"], {}, "Choose one stack: --iam, --platform or --services."),
-        (["--services", "--services", "plan"], {}, "Choose one stack: --iam, --platform or --services."),
+        (["--services", "--platform", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+        (["--platform", "--services", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+        (["--services", "--services", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
         (["--services", "apply"], {}, "Apply requires one reviewed saved-plan path."),
         (["--platform", "apply"], {}, "Apply requires one reviewed saved-plan path."),
         (["apply"], {}, "Apply requires one reviewed saved-plan path."),
@@ -1617,6 +1617,19 @@ def run_suite(evidence: Evidence) -> None:
         ("TF_CLI_ARGS_future", ["validate"]),
     ):
         guards.append((arguments, {name: "-var=project_name=example_unapproved"}, f"Unset {name};"))
+    guards.extend(
+        [
+            (["--iam", "--jobs", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+            (["--jobs", "--iam", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+            (["--platform", "--jobs", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+            (["--jobs", "--platform", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+            (["--jobs", "--jobs", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+            (["--jobs", "--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
+            (["--jobs", "apply"], {}, "Apply requires one reviewed saved-plan path."),
+            (["--services", "--jobs", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+            (["--jobs", "--services", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+        ]
+    )
     for index, (arguments, exports, message) in enumerate(guards, start=1):
         step, result = evidence.run(
             f"wrapper_guard_{index:02d}",
