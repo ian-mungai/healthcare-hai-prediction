@@ -1,4 +1,4 @@
-"""Validate the silver build file with Great Expectations before it is published (silver step 6).
+"""Validate the silver build file with Great Expectations before publication.
 
 Runs inside the quality image (``hai-quality``), started by ``scripts/lakehouse/silver.py validate``. It copies the build
 file to a private temporary folder, reports the copy's SHA-256 in the result and runs every suite on that copy. It opens the
@@ -6,8 +6,7 @@ copy read-only, checks the build marker, compiles the committed JSON suites of e
 atomic suites and the gold suites) into Great Expectations objects in one ephemeral context, validates every table the
 suites name (SQL pushdown) and writes one result with counts only: no data value leaves the build file. A table a suite
 names but the build lacks is a structural failure of its expectations, not a crash. A band under ``proposed_values`` in the
-baselines file only warns until the owner moves it to ``values``. Failure modes 639 to 651 and 713 in
-plans/silver_processed_zone_20261009/plan.md and 853 to 857 in plans/wp/r3_failure_modes.md.
+baselines file only warns until the owner moves it to ``values``.
 
     python -m scripts.lakehouse.silver_quality --database BUILD --suites DIR [DIR ...] --baselines FILE --output FILE
 """
@@ -33,7 +32,9 @@ import great_expectations as gx
 import great_expectations.expectations as gxe
 from great_expectations.execution_engine import sqlalchemy_execution_engine as engine_module
 
-# The connection fix below patches a private constant, so it is applied only to the version the spike proved [713].
+from scripts.lakehouse.ecs_engine import duckdb_temp_settings
+
+# The connection fix below patches a private constant, so it is applied only to the version the spike proved.
 PINNED_GX = "1.23.2"
 MARKER = "int_silver_build_marker"
 SEVERITIES = ("structural", "distribution")
@@ -43,9 +44,9 @@ PLACEHOLDER = re.compile(r"<<([a-z0-9_.]+)>>")
 
 
 def engine_config() -> dict[str, str]:
-    """DuckDB's memory and thread limits from the launch plan, the same settings a dbt build gets [533]."""
+    """DuckDB's memory and thread limits from the launch plan, the same settings a dbt build gets."""
     settings = {"memory_limit": os.environ.get("DUCKDB_MEMORY_LIMIT", ""), "threads": os.environ.get("JOB_THREADS", "")}
-    return {name: value for name, value in settings.items() if value}
+    return {**{name: value for name, value in settings.items() if value}, **duckdb_temp_settings()}
 
 
 class QualityError(RuntimeError):
@@ -53,13 +54,13 @@ class QualityError(RuntimeError):
 
 
 class DuckDBDialect(str):
-    """A dialect name Great Expectations reads as its enum member, so it keeps one connection for DuckDB [713]."""
+    """A dialect name Great Expectations reads as its enum member, so it keeps one connection for DuckDB."""
 
     value = "duckdb"
 
 
 def keep_connection() -> None:
-    """Make Great Expectations fetch DuckDB results before it closes the connection (spike finding 1) [713]."""
+    """Make Great Expectations fetch DuckDB results before it closes the connection."""
     if gx.__version__ != PINNED_GX or not hasattr(engine_module, "_PERSISTED_CONNECTION_DIALECTS"):
         raise QualityError(f"GX version or engine changed ({gx.__version__}): re-run the step 6.2 spike before validating")
     dialects = engine_module._PERSISTED_CONNECTION_DIALECTS
@@ -100,7 +101,7 @@ def private_copy(database: Path) -> Iterator[tuple[Path, str]]:
 
 
 def read_marker(database: Path) -> dict[str, str]:
-    """Return the build marker, read-only; without it there is no finished build to validate [647]."""
+    """Return the build marker, read-only; without it there is no finished build to validate."""
     with duckdb.connect(str(database), read_only=True, config=engine_config()) as con:
         tables = {row[0] for row in con.execute("SELECT table_name FROM information_schema.tables").fetchall()}
         if MARKER not in tables:
@@ -111,12 +112,12 @@ def read_marker(database: Path) -> dict[str, str]:
         raise QualityError(f"{MARKER} must hold exactly one row")
     marker = dict(zip(("dbt_invocation_id", "git_revision", "duckdb_version"), rows[0], strict=True))
     if version is None or marker["duckdb_version"] != version[0]:
-        raise QualityError(f"the build was written by DuckDB {marker['duckdb_version']}, this image reads with {version}")  # [646]
+        raise QualityError(f"the build was written by DuckDB {marker['duckdb_version']}, this image reads with {version}")
     return marker
 
 
 def fingerprints(database: Path, tables: list[str]) -> dict[str, dict[str, Any]]:
-    """Row count and an order-independent content hash per table, so a result binds the exact build it read [639]."""
+    """Row count and an order-independent content hash per table, so a result binds the exact build it read."""
     out = {}
     with duckdb.connect(str(database), read_only=True, config=engine_config()) as con:
         for table in tables:
@@ -126,7 +127,7 @@ def fingerprints(database: Path, tables: list[str]) -> dict[str, dict[str, Any]]
 
 
 def resolve(value: Any, baselines: dict[str, Any], used: set[str]) -> Any:
-    """Replace <<name>> placeholders with baseline values and record each name used; an unknown name stops the run [644]."""
+    """Replace <<name>> placeholders with baseline values and record each name used; an unknown name stops the run."""
     if isinstance(value, dict):
         return {key: resolve(item, baselines, used) for key, item in value.items()}
     if isinstance(value, list):
@@ -147,7 +148,7 @@ def resolve(value: Any, baselines: dict[str, Any], used: set[str]) -> Any:
 
 
 def read_baselines(document: dict[str, Any]) -> tuple[dict[str, Any], frozenset[str]]:
-    """The approved ``values`` and the ``proposed_values`` awaiting the owner as one lookup, plus the proposed names [856]."""
+    """The approved ``values`` and the ``proposed_values`` awaiting the owner as one lookup, plus the proposed names."""
     approved, proposed = document["values"], document.get("proposed_values", {})
     if both := sorted(set(approved) & set(proposed)):
         raise QualityError(f"baseline names are both approved and proposed: {', '.join(both)}")
@@ -157,7 +158,7 @@ def read_baselines(document: dict[str, Any]) -> tuple[dict[str, Any], frozenset[
 def load_suites(folders: list[Path], baselines: dict[str, Any], proposed: frozenset[str]) -> list[dict[str, Any]]:
     """Read every suite file of every folder; each expectation names its table, Great Expectations class, arguments and severity.
 
-    ``bands`` lists the proposed baseline names an expectation uses. A proposal can only warn, so a structural expectation may not use one [856].
+    ``bands`` lists the proposed baseline names an expectation uses. A proposal can only warn, so a structural expectation may not use one.
     """
     entries = []
     for folder in folders:
@@ -190,7 +191,7 @@ def existing_tables(database: Path) -> set[str]:
 
 
 def counts_only(result: dict[str, Any]) -> dict[str, Any]:
-    """Keep numbers only; lists of values and samples never leave the build file [643]."""
+    """Keep numbers only; lists of values and samples never leave the build file."""
     kept = {}
     for key in NUMERIC_RESULT_KEYS:
         value = result.get(key)
@@ -201,7 +202,7 @@ def counts_only(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def table_missing(entry: dict[str, Any]) -> dict[str, Any]:
-    """The result of an expectation whose table the build lacks: a structural failure that names the table [853]."""
+    """The result of an expectation whose table the build lacks: a structural failure that names the table."""
     return {
         "id": entry["id"],
         "suite": entry["suite"],
@@ -240,13 +241,13 @@ def validate(database: Path, suites: list[Path], baselines_path: Path) -> dict[s
         try:
             expectation = getattr(gxe, entry["type"])(**entry["kwargs"])
         except ValueError as error:
-            # A band whose minimum is above its maximum is a baseline fault, not a failed build [856].
+            # A band whose minimum is above its maximum is a baseline fault, not a failed build.
             raise QualityError(f"{entry['id']}: invalid arguments: {str(error).splitlines()[0]}") from error
         outcome = batches[entry["table"]].validate(expectation)
         raised = bool(outcome.exception_info and outcome.exception_info.get("raised_exception")) or any(
             isinstance(info, dict) and info.get("raised_exception") for info in (outcome.exception_info or {}).values()
         )
-        # A distribution band warns until the owner approves the baselines (decision D6); a proposed band warns until it joins ``values`` [645] [856].
+        # A distribution band warns until the owner approves the baselines; a proposed band warns until it joins ``values``.
         warns = entry["severity"] == "distribution" and (not approved or bool(entry["bands"]))
         level = "pass" if outcome.success and not raised else ("warn" if warns else "fail")
         results.append(
@@ -294,7 +295,7 @@ def main() -> int:
     args.output.write_text(json.dumps(record, indent=2) + "\n")
     counts = record["counts"]
     sys.stdout.write(f"silver quality: {counts['pass']} passed, {counts['warn']} warned, {counts['fail']} failed\n")
-    # Any structural failure stops the publish [645].
+    # Any structural failure stops the publish.
     return 1 if counts["fail"] else 0
 
 

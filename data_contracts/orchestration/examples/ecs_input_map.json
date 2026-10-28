@@ -1,0 +1,9 @@
+[
+  {
+    "key": "lakehouse/run_stage/20261024T000000Z-a1b2c3d4/g1/inputs/files/2e872263e12593bf0c92feeb8cad3a84609a638af7515696ed3356631249a6d8",
+    "path": "resources/fixture.txt",
+    "sha256": "2e872263e12593bf0c92feeb8cad3a84609a638af7515696ed3356631249a6d8",
+    "size": 18,
+    "version_id": "synthetic-version-1"
+  }
+]

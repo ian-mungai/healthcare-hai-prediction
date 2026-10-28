@@ -5,15 +5,19 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from pyspark.sql import SparkSession
+from scripts.lakehouse.ecs_engine import validate_task_credentials
+
+if TYPE_CHECKING:
+    from pyspark.sql import SparkSession
 
 CATALOG = "hai_lakehouse"
 HEAP = re.compile(r"[1-9][0-9]*g")
 
 
 def job_memory() -> str:
-    """Return the heap the host computed for this job from the running containers; there is no default [488].
+    """Return the heap the host computed for this job from the running containers; there is no default.
 
     ``scripts/lakehouse/catalog.py`` computes it with ``scripts/lakehouse/memory_budget.py`` before the container starts
     (memory is shared by every project's containers and never hardcoded).
@@ -27,6 +31,21 @@ def job_memory() -> str:
     return value
 
 
+def task_settings(warehouse: Path | None = None) -> dict[str, str]:
+    """Require native task credentials and explicit scratch storage inside Fargate."""
+    if warehouse is not None and any(os.environ.get(name) for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")):
+        raise RuntimeError("fixture_role_session_refused")
+    if not validate_task_credentials(require_catalog=warehouse is None):
+        return {}
+    directory = Path(os.environ.get("HAI_SPARK_LOCAL_DIRECTORY", ""))
+    if not directory.is_absolute() or ".." in directory.parts:
+        raise RuntimeError("task_scratch_directory_missing")
+    settings = {"spark.local.dir": str(directory)}
+    if warehouse is None:
+        settings[f"spark.sql.catalog.{CATALOG}.client.credentials-provider"] = "software.amazon.awssdk.auth.credentials.ContainerCredentialsProvider"
+    return settings
+
+
 def spark_session(app_name: str, warehouse: Path | None = None, memory: str | None = None) -> SparkSession:
     """Return a local Spark session whose default catalog is ``hai_lakehouse``.
 
@@ -36,6 +55,9 @@ def spark_session(app_name: str, warehouse: Path | None = None, memory: str | No
     throwaway file-based Iceberg catalog in that folder, used by the synthetic end-to-end tests. ``memory`` sets the
     local driver's memory, which also holds the executors in local mode. If omitted, use the computed launch heap.
     """
+    settings = task_settings(warehouse)
+    from pyspark.sql import SparkSession
+
     prefix = f"spark.sql.catalog.{CATALOG}"
     builder = (
         SparkSession.builder.appName(app_name)
@@ -61,11 +83,13 @@ def spark_session(app_name: str, warehouse: Path | None = None, memory: str | No
             .config(f"{prefix}.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
             .config(f"{prefix}.client.region", os.environ["AWS_REGION"])
         )
+    for name, value in settings.items():
+        builder = builder.config(name, value)
     return builder.getOrCreate()
 
 
 def job_threads() -> int:
-    """Require the positive CPU count that the host computed before launch [531] [532]."""
+    """Require the positive CPU count that the host computed before launch."""
     value = os.environ.get("JOB_THREADS", "")
     if not value.isdecimal() or int(value) < 1:
         raise RuntimeError("JOB_THREADS must be a positive integer; start jobs through scripts.lakehouse.catalog")
