@@ -55,6 +55,8 @@
     "silver.rows.int_cost_reports.max": 5,
     "silver.rows.int_county_adjacency_edges.min": 16,
     "silver.rows.int_county_adjacency_edges.max": 16,
+    "silver.rows.int_county_retirements.min": 22,
+    "silver.rows.int_county_retirements.max": 22,
     "silver.rows.int_hac_program_years.min": 4,
     "silver.rows.int_hac_program_years.max": 4,
     "silver.rows.int_hai_hospital_windows.min": 31,

@@ -247,9 +247,11 @@ models:
               - code_system
               - code
   - name: dim_county
-    description: One row per 5-character county FIPS that a fact's county key carries, plus the unknown member (natural key '<unknown>'). Three
-      attributes say whether the code is in the latest county list and, if it left the lists, when. There is no successor column. The Connecticut
-      planning regions are in bridge_county_planning_region.
+    description: One row per 5-character county FIPS that a fact's county key carries, plus the unknown member (natural key '<unknown>'). The value space
+      is the contract grain, five characters; a value outside it takes the unknown member in every fact. Three attributes say whether the code is in the
+      latest county list and, if it left the lists, when. Five more come from int_county_retirements and are null for a code with no retirement evidence; the
+      Census county-change pages cover 1970 to 2000 only, so null is not a statement that the code is current. The published code is never changed. The
+      Connecticut planning regions are in bridge_county_planning_region.
     meta:
       classification: Public
     columns:
@@ -317,6 +319,28 @@ models:
         description: The latest vintage of any county list (adjacency counties and neighbors, RUCC, ACS) that names the code; null for a code no list names.
       - name: first_unlisted_vintage
         description: For a code outside the latest list, the first vintage of any county list after its last listed vintage; null for a code in the latest list or in no list.
+      - name: is_retired
+        description: >
+          True when a Census county-change page (1970, 1980, 1990 or 2000) deletes the code or renames it to another code, or the reviewed Alaska labels retire it
+          (retirement_basis says which), and no later page creates the code again; null when no such evidence exists (02230 is deleted on the 1970 page and created
+          again on the 2000 page, so it is null), which is not a statement that the code is current. Null on the unknown member.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              name: dbt_utils_expression_is_true_dim_county_is_retired_true_or_null
+              arguments:
+                expression: "= true"
+      - name: retired_effective_date
+        description: The effective date the Census page prints for the retirement; null when the page prints none (the 1970 Alaska divisions, 02210) or several.
+      - name: successor_county_fips
+        description: The successor codes the Census page names for the retirement, semicolon-joined in text order; null when the page names none.
+      - name: historical_county_name
+        description: The reviewed name for the six Alaska codes from historical Provider of Services records (the 2003 NBER crosswalk), otherwise the entity name as the Census page prints it.
+      - name: retirement_basis
+        description: census_change_page when a Census page retires the code; absent_from_later_lists for the reviewed Alaska code 02210 that no page lists.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [census_change_page, absent_from_later_lists]
   - name: dim_date
     description: One row per day from the earliest to the latest DATE source date of the facts, plus the unknown member. The natural key is the
       date.
@@ -338,7 +362,7 @@ models:
               arguments:
                 natural_key: calendar_date
       - name: calendar_date
-        description: 'The day. Null on the unknown member: the one exception to the ''<unknown>'' natural key (amendment A40 item 1) because the
+        description: 'The day. Null on the unknown member: the one exception to the ''<unknown>'' natural key because the
           key is a DATE.'
         data_tests:
           - unique
@@ -990,7 +1014,7 @@ models:
               - code
   - name: dim_registry_control
     description: One row per registry control of revision 3 (base registry and append-only additions), plus the unknown member. The family and
-      the closeout decision are deferred (amendment A36).
+      the closeout decision are deferred.
     meta:
       classification: Public
     columns:

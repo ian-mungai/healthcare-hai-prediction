@@ -123,6 +123,16 @@
       "severity": "distribution"
     },
     {
+      "id": "int_county_retirements.row_count",
+      "table": "int_county_retirements",
+      "type": "ExpectTableRowCountToBeBetween",
+      "kwargs": {
+        "min_value": "<<silver.rows.int_county_retirements.min>>",
+        "max_value": "<<silver.rows.int_county_retirements.max>>"
+      },
+      "severity": "distribution"
+    },
+    {
       "id": "int_hac_program_years.row_count",
       "table": "int_hac_program_years",
       "type": "ExpectTableRowCountToBeBetween",

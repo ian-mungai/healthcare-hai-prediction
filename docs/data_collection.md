@@ -1,32 +1,33 @@
 ---
-title: Data Collection
+title: Data collection
 description: How the source data was collected and stored, with the commands that repeat or recheck each step.
-last_updated: 2026-10-20
+last_updated: 2026-10-25
 ---
 
-# Data Collection
+# Data collection
 
 This guide explains how the project's source data was collected and how to repeat or check each step. It covers every collection route: publisher APIs, scripted file downloads and the few browser downloads a person had to do by hand.
 
-**Status:** collection is complete. The collection code (`scripts/acquisition/`), its configuration (`config/acquisition/`) and the collection tests are tracked in Git; all evidence under `data/` stays out of Git. Acquisition closeout remains open for the final redownload verification and confirmed disposal of personal originals (see the [Closeout Checklist](#closeout-checklist)). The offline rechecks below need the ignored local originals under `data/`; a fresh clone runs the synthetic suites only.
+**Status:** collection is complete. The collection code (`scripts/acquisition/`), its configuration (`config/acquisition/`) and the collection tests are tracked in Git; all evidence under `data/` stays out of Git. Acquisition closeout remains open for the final redownload verification and confirmed disposal of personal originals (see the [Closeout checklist](#closeout-checklist)). The offline rechecks below need the ignored local originals under `data/`; a fresh clone runs the synthetic suites only.
 
 ## Contents
 
-- [How Collection Works](#how-collection-works)
+- [How collection works](#how-collection-works)
 - [Prerequisites](#prerequisites)
-- [API Collectors](#api-collectors)
-- [Scripted File Downloads](#scripted-file-downloads)
-- [Browser Downloads](#browser-downloads)
-- [Named Manual Steps](#named-manual-steps)
-- [Privacy Handling](#privacy-handling)
-- [Checking Stored Data](#checking-stored-data)
-- [Publisher Data Dictionaries](#publisher-data-dictionaries)
-- [Storage Changes After Collection](#storage-changes-after-collection)
-- [What Cannot Be Repeated Exactly](#what-cannot-be-repeated-exactly)
-- [Open Items](#open-items)
-- [Closeout Checklist](#closeout-checklist)
+- [API collectors](#api-collectors)
+- [Scripted file downloads](#scripted-file-downloads)
+- [Browser downloads](#browser-downloads)
+- [Census county-change pages](#census-county-change-pages)
+- [Named manual steps](#named-manual-steps)
+- [Privacy handling](#privacy-handling)
+- [Checking stored data](#checking-stored-data)
+- [Publisher data dictionaries](#publisher-data-dictionaries)
+- [Storage changes after collection](#storage-changes-after-collection)
+- [What cannot be repeated exactly](#what-cannot-be-repeated-exactly)
+- [Open items](#open-items)
+- [Closeout checklist](#closeout-checklist)
 
-## How Collection Works
+## How collection works
 
 **Route order.** Each source is collected by the first route that can deliver the years it needs: the publisher's API, then a direct download link fetched by a script, then, only when neither works and the project owner chooses it, a download by hand in a browser.
 
@@ -54,7 +55,7 @@ Run everything from the repository root with the project's Python 3.12 virtual e
 4. **API keys**, stored by the project owner in AWS Secrets Manager and read only at request time: `bls_api_key`, `census_api_key` and `hud_api_key`. Every secret holds its value as plain text (see the [named manual steps](install_details.md#named-manual-steps)). The collectors read a key with boto3 after the project identity check, never through the AWS command-line tool, whose history could save it. The read runs in a short-lived child Python process with the same environment as the AWS command-line calls (no inherited `AWS_*` variable) and the profile and region of the client that passed the check. That process reads the key only when STS confirms that its credentials belong to the same account and IAM user. It ends itself and any process it started within 60 seconds. A BLS value that looks like serialized JSON is refused before any request. A key made only of digits, `e`, `E`, `+`, `-` and `.` is refused at read time, because a JSON number could echo it in another spelling; rotate such a key. The key values never appear in plans, receipts, logs or S3.
 5. **macOS** for browser downloads: the storage scripts read the download origin that Safari and Chrome record on each saved file (`com.apple.metadata:kMDItemWhereFroms`) with `xattr`.
 
-## API Collectors
+## API collectors
 
 Each API collector has a plan builder, a collector and a synthetic end-to-end suite. The suites use generated data, a fake HTTP boundary and a fake versioned S3; they never contact a publisher or AWS. Every run writes a new report file, so give each run a new `--output` path.
 
@@ -77,7 +78,7 @@ Prefix every module name with `.venv/bin/python -m scripts.acquisition.`, for ex
 
 **Rechecking one capture offline:** `collect_bls_api`, `collect_census_acs_api`, `collect_hud_api` and `store_hud_xlsx` accept `--validate-receipt <receipt.json>`, which rebuilds the derived CSV from the original bytes and compares every recorded hash, without network access.
 
-## Scripted File Downloads
+## Scripted file downloads
 
 Most sources are public files on publisher websites. Their download links come from the source registry (`config/acquisition/source_registry.json`, checked against `source_registry_lock.json`) or from links found on the publishers' own index pages.
 
@@ -125,7 +126,7 @@ The 11 Illinois exports that did not complete belong to closed hospitals; the pu
 
 The two AHRF folders, their three reviewed AHRF archives and the three AHRF candidate lists were deleted from this Mac for license reasons; AHRF is also removed from S3. Each deleted file's path, size and SHA-256 is kept in `data/license_removal/20260929/ahrf_local_retirement.json` (local record, not in the repository).
 
-## Browser Downloads
+## Browser downloads
 
 Four collections could only be saved by hand in a browser. In each case the storage script proves the file came from the publisher by reading the download origin the browser recorded and binds it to its SHA-256 before storing it.
 
@@ -163,16 +164,39 @@ A quarter that fails is held and named; the others continue. Once a quarter is c
 .venv/bin/python -m scripts.acquisition.run_wonder_export_e2e --output <new_report.json>
 ```
 
-## Named Manual Steps
+## Census county-change pages
+
+The Census Bureau's "Changes to Counties or County Equivalent Entities" pages for 1970, 1980, 1990 and 2000 are the project's source for counties that were deleted, created or recoded before the 2010 county lists. They give `dim_county` its successor, effective date and retired flag. The pages are HTML with no data file or API. The transport refuses HTML as a data role. The history route cannot add a source. So the four pages are stored as reference documents of the registered `ADJ` source (Census county adjacency, collection `census/county_adjacency`) through the history route. The warehouse does not read the stored pages. One Python reader, `scripts/acquisition/county_change_pages.py`, parses them under the closed grammar of [County-Change Page Grammar](acquisition_design.md#county-change-page-grammar). `scripts/lakehouse/county_change_seed.py` writes the events into the reviewed dbt seed `dbt/seeds/census_county_change_events.csv` (143 events) from the four committed sections of the pages. Silver reads that seed: `int_county_retirements` keeps the latest retirement of each code that no later page creates or renames to again (02230 is deleted on the 1970 page and created again on the 2000 page, so it is not retired). The pages cover 1970 to 2000 only. The 2010 and 2020 pages are not collected, so a code without a retirement row is not thereby current.
+
+**Page bytes differ on every request** (element identifiers and script file hashes are regenerated), so no raw hash can be pinned. The candidates file `config/acquisition/census_county_change_candidates.json` pins the SHA-256 of each page's change list instead (the section headings and list items). Each fetch also records the raw SHA-256 of the bytes it stored. `scripts/acquisition/one_off/county_changes/county_changes.py` fetches the four pages into a new local folder with a receipt (hashes, media type, size, redirect and decade-heading checks). A rerun on that folder only rechecks it offline. The recheck stops when an accepted page no longer passes the current page check with the requested pin or no longer has the change list its receipt recorded. The Census terms of use were not verified.
+
+**Committed sections.** The part of each page that holds the changes, its section (the decade heading and the change list), is committed as a small public file in `config/acquisition/census_county_changes` (`county-changes.<year>.section.html`, 5 to 9 KB each; the Census terms of use were not verified). Each section must give the change-list digest pinned in `config/acquisition/census_county_change_candidates.json`. `county_change_seed --check` runs in the lakehouse group of `scripts/run_ci.sh` without pages: it verifies each section against its pin, regenerates the seed from the sections and requires the same bytes. It also compares the events and the seed with the reviewed golden file `config/acquisition/census_county_change_golden.json` (event counts per page and event type and every retirement row). A change to the seed or the golden file alone or to both together fails until a section and its pin change as well. `--write` writes the seed from the sections and refuses a section that fails the page check or its pin and events that differ from the golden file. `--extract --pages <folder>` writes the four sections from the fetched pages and refuses any page that fails the page check or its pin. After a page revision, fetch again, review `--print-golden` against the page text, update the pin and the golden file and extract before writing the seed.
+
+```sh
+.venv/bin/python -m scripts.acquisition.one_off.county_changes.county_changes fetch --candidates config/acquisition/census_county_change_candidates.json --output data/reference_checks/<date>/census_county_changes
+.venv/bin/python -m scripts.lakehouse.county_change_seed --extract --pages data/reference_checks/<date>/census_county_changes
+.venv/bin/python -m scripts.lakehouse.county_change_seed --write
+.venv/bin/python -m scripts.lakehouse.county_change_seed --check
+.venv/bin/python -m scripts.acquisition.history_routes --candidates config/acquisition/census_county_change_candidates.json --state-root data/datasets/historical_acquisition/dictionary_history_census_county_changes_<date>
+.venv/bin/python -m scripts.acquisition.history_routes --candidates config/acquisition/census_county_change_candidates.json --state-root data/datasets/historical_acquisition/dictionary_history_census_county_changes_<date> --execute
+.venv/bin/python -m scripts.acquisition.run_county_changes_e2e --output <new_report.json>
+.venv/bin/python -m scripts.lakehouse.run_county_change_seed_e2e --output <new_report.json> --pages data/reference_checks/<date>/census_county_changes
+```
+
+The `history_routes` command without `--execute` validates the candidates against the registry offline. The `history_routes` command with `--execute` stores the pages in the bucket under the owner's AWS profile and is a separate approval. Before it stores a page, the route reads the captured file and refuses it (`blocked_download`, nothing uploaded, no completion record) when the decade heading or a parsable change list is missing or its change list differs from the pin in the candidate's evidence. A capture found from an earlier run is checked again. A completed page job is checked again on every `--execute` run against the capture kept in its job folder: a page that no longer passes or whose capture is gone is reported as `blocked_download` with its reason and the completion record stays. The reader refuses a page whose change list holds a comment, a script, a style, a self-closing section or item tag, a `<` or `>` in an attribute value or in the text and every entity outside `&amp;`, `&quot;`, `&apos;`, `&#39;` and `&nbsp;`.
+
+**Alaska codes in Provider of Services rows.** The six codes 02040, 02080, 02120, 02140, 02210 and 02260 keep their published value. `dbt/seeds/alaska_county_code_labels.csv` labels each with its historical name from the 2003 NBER SSA-to-FIPS crosswalk (`msabea.csv`) and, for five of them, the Census 1970 or 1980 page that deletes the entity. Code 02210 is on no Census page and is labelled only by its absence from the later lists.
+
+## Named manual steps
 
 These steps need a person. Everything else runs from the scripts above.
 
 1. **Accept publisher terms.** The owner's acceptance of the terms for HUD, CDC WONDER and AHRQ Community-Level Health, with each dataset's restrictions, is in `config/acquisition/terms_acceptance_20260928.json`. HUD receipts carry these restrictions; storage refuses a held source whose receipt does not match this exact file.
 2. **Create API accounts and keys.** Register with BLS, Census and HUD, then store each key in Secrets Manager as described in [Prerequisites](#prerequisites).
-3. **Browser downloads.** The three collections in [Browser Downloads](#browser-downloads).
+3. **Browser downloads.** The three collections in [Browser downloads](#browser-downloads).
 4. **Approve plans and changes.** The owner approves each collection plan, each change to what a collector accepts (for example, HUD's 2022 Q1 layout without city and state, four Pacific territory codes from 2024 Q2 and the 2014 Q2 exact repeats) and each infrastructure change, including temporary IAM grants.
 
-## Privacy Handling
+## Privacy handling
 
 A few sources contain personal names or contact details. These rules apply:
 
@@ -233,7 +257,7 @@ In practice:
 - **ACS derived history** (`collect_census_acs_detailed`) collects B17001 (2010 to 2016), B16001 and B16004 (2009 to 2015) through the Census API with the runtime-only key, then derives poverty % for 2010 to 2011 and the limited-English total for 2009 to 2015. Derived values are stored only after exact checks: B17001 against the stored S1701 exports (2012 to 2016) and B16001 against B16004 in the same years. Plan: `config/acquisition/census_acs_detailed_plan.json`; method: [Census ACS Detailed Tables and Derived History](acquisition_design.md#census-acs-detailed-tables-and-derived-history). Run it like the other collectors (`--fetch`, `--execute` or neither for an offline recheck).
 - **Held sources released by an access record, not by terms.** HCAI is on access hold in the locked registry. Storage accepts it only when the receipt binds, by SHA-256, the record `config/acquisition/access_releases_20260929.json`; the terms-acceptance record for HUD and WONDER is unchanged.
 - **CMS Change of Ownership** (`cms_change_of_ownership`) is stored whole in the Confidential bucket, with no redacted derivative. Its publisher dictionary lists buyer and seller organization fields and does not rule out an individual buyer or seller, so the table is classified Confidential. Models are Confidential when their output carries a listed confidential column, including renamed or derived columns. Their class follows the content they output.
-- **ONC CHPL linkage** (`onc_pi_chpl_linkage_csv`) is stored whole in the Confidential bucket, with no redacted derivative. No publisher dictionary is stored for it, so nothing rules out personal fields and the table is classified Confidential. Until a publisher dictionary is stored, every publisher column is confidential. Models whose output carries any publisher column, including renamed or derived columns, are Confidential. The loader lineage columns `_object_key` and `_member_sha256` stay exempt under A273.
+- **ONC CHPL linkage** (`onc_pi_chpl_linkage_csv`) is stored whole in the Confidential bucket, with no redacted derivative. No publisher dictionary is stored for it, so nothing rules out personal fields and the table is classified Confidential. Until a publisher dictionary is stored, every publisher column is confidential. Models whose output carries any publisher column, including renamed or derived columns, are Confidential. The loader lineage columns `_object_key` and `_member_sha256` stay exempt at the loader boundary.
 
 For downstream models, classification follows the personal or identifying columns that reach the output, including renamed and derived columns.
 Each Confidential dbt source names those columns in `meta.confidential_columns`. A model that outputs none of them can be Public even when it reads a Confidential source.
@@ -242,7 +266,7 @@ The [model metadata check](quality_checks.md#model-metadata) traces the compiled
 Both ONC sources, `onc_pi_attestations_csv` and `onc_pi_chpl_linkage_csv`, treat every publisher column as Confidential until an ONC publisher dictionary is stored.
 Their source metadata uses `confidential_columns: all` with a reason. The earlier two-column and seven-column candidate lists remain under
 `proposed_confidential_columns` for dictionary review; they do not limit the active protection of publisher columns.
-The loader lineage columns `_object_key` and `_member_sha256` are exempt under A273. A projection carrying only those columns can be Public.
+The loader lineage columns `_object_key` and `_member_sha256` are exempt at the loader boundary. A projection carrying only those columns can be Public.
 Renaming or deriving a publisher column does not grant that exemption.
 
 Collections awaiting a personal-data assessment retain their Confidential handling hold until their stored text and column names have been scanned.
@@ -252,18 +276,18 @@ The manifest must include every table and stored export in the intended collecti
 An unreadable or unsupported export leaves the scan incomplete. A report with no supported-pattern matches does not establish formal anonymization.
 The scanner's fixture suite uses synthetic data. A real-data scan requires its own authorization and review of the complete export inventory.
 
-## Checking Stored Data
+## Checking stored data
 
 - **One collector:** rerun it without `--fetch` or `--execute`; it rechecks every completed capture offline.
 - **Census ACS 2009:** `reconcile_census_acs_api_e2e --output <new_report.json>` rebuilds all five tables and compares them with the stored evidence.
 - **MMD:** `reconcile_mmd_history --measure-id <id> --years <years> --output <new_report.json>`.
 - **Alaska county codes in Provider of Services rows:** `.venv/bin/python -m scripts.acquisition.one_off.reference_documents.check_alaska_county_codes --output data/reference_checks/<date>/alaska_crosswalks` fetches the CMS FY 2020 county-to-CBSA crosswalk and three NBER SSA-to-FIPS files into a new local folder (kept out of Git, not loaded into bronze), records each file's SHA-256 and prints whether the six codes `02040`, `02080`, `02120`, `02140`, `02210` and `02260` appear as an SSA or FIPS code in each file. The report also lists each code's county names from the `county` column of the old NBER `msabea.csv` rows with that SSA code, for the later mapping. The published codes are unchanged. Each file downloads in its own process that is ended 180 seconds after it started, name lookup included; a file stopped that way is rejected as `capture_deadline_exceeded`. A rerun on the same folder checks the hashes and the report offline. A report written by an earlier version of the script has no names, so use a new output folder for the first rerun after this change.
-- **The whole bucket:** `verify_storage_records --output <new_folder>` lists every S3 object version and matches it against the local storage records, counting retired versions. It compares sizes, not contents; the per-object content checks happen at upload. Pass every retirement record with `--retirements`, including `data/license_removal/20260928/ahrf_retired_objects.json` (local record, not in the repository) for the AHRF versions deleted for license reasons and `data/lakehouse_planning/dedup_20261003/retired_objects_duplicates.json` for the removed duplicates; the default finds the privacy and duplicate records but not the AHRF one. Versions under the bucket's top-level `lakehouse/` folder are Iceberg table files, not acquisition objects: the check counts them apart instead of as unrecorded. It still checks any upload record that names such a key. The latest full run is described under [Clean-Checkout Recheck](#clean-checkout-recheck). The command also needs `--evidence-root "$PWD/data" --empty-capture-dispositions data/privacy_review/20260927/empty_capture_dispositions.json`.
+- **The whole bucket:** `verify_storage_records --output <new_folder>` lists every S3 object version and matches it against the local storage records, counting retired versions. It compares sizes, not contents; the per-object content checks happen at upload. Pass every retirement record with `--retirements`, including `data/license_removal/20260928/ahrf_retired_objects.json` (local record, not in the repository) for the AHRF versions deleted for license reasons and `data/lakehouse_planning/dedup_20261003/retired_objects_duplicates.json` for the removed duplicates; the default finds the privacy and duplicate records but not the AHRF one. Versions under the bucket's top-level `lakehouse/` folder are Iceberg table files, not acquisition objects: the check counts them apart instead of as unrecorded. It still checks any upload record that names such a key. The latest full run is described under [Clean-checkout recheck](#clean-checkout-recheck). The command also needs `--evidence-root "$PWD/data" --empty-capture-dispositions data/privacy_review/20260927/empty_capture_dispositions.json`.
 - **Starting index for single-copy storage:** `.venv/bin/python -m scripts.acquisition.single_copy_index --output data/single_copy/index_<DATE>.json` lists the bucket with read-only `ListObjectVersions` requests under the project profile and builds the index of the stored payload objects from the current versions. The local receipts, reconciliation records and upload records are only a cross-check. The retired versions explain the objects they no longer hold. A stored object that none of them names needs its own written reason in the object reasons file. It refuses to write when the listing is not valid. It also refuses when a record is missing, unreadable or inconsistent and when the two sides differ. When identical bytes sit under more than one key, it names the copy stored first and lists the others as aliases in its report. The checks are in [Single-Copy Starting Index](acquisition_design.md#single-copy-starting-index). The owner steps to switch the setting on are in [Switching on single-copy storage](lakehouse_usage.md#switching-on-single-copy-storage).
 
-## Publisher Data Dictionaries
+## Publisher data dictionaries
 
-Data dictionaries, record layouts and codebooks are stored as reference documents under each collection's `references/` prefix, never as data. They explain the published columns. The bronze data dictionaries in the lakehouse take their column descriptions and published types from them; the Care Compare dictionaries give names and types only. The HRSA shortage-area detail files `BCD_HPSA_FCT_DET_PC.csv` and `MUA_DET.csv` are the exception: they are data stored with the dictionary role; corrected manifests give them the data role. Bronze loads them as data tables (see [Storage Changes After Collection](#storage-changes-after-collection)).
+Data dictionaries, record layouts and codebooks are stored as reference documents under each collection's `references/` prefix, never as data. They explain the published columns. The bronze data dictionaries in the lakehouse take their column descriptions and published types from them; the Care Compare dictionaries give names and types only. The HRSA shortage-area detail files `BCD_HPSA_FCT_DET_PC.csv` and `MUA_DET.csv` are the exception: they are data stored with the dictionary role; corrected manifests give them the data role. Bronze loads them as data tables (see [Storage changes after collection](#storage-changes-after-collection)).
 
 **Stored with the data:** the 30 Care Compare dictionary editions inside the HAI archives; one edition each of the CMS cost-report, All Owners, Change of Ownership, Enrollments, Provider of Services (`P.QWB.POSQ.OTHER.LAYOUT.MAR23.pdf`) and 2013 to 2016 Medicare inpatient dictionaries; the CMS geographic variation, hospital service area and MMD documentation; some IPPS and occupational-mix layouts; the HCAI finance documentation; ACS table notes; the HRSA nursing survey codebook and the HPSA and MUA metadata workbooks; and the Massachusetts technical appendix.
 
@@ -315,9 +339,9 @@ Without `--execute` each command validates its list offline and reports no pendi
 - **Mapped at staging:** the IPPS layouts.
 - **Not published:** no dictionary was found for ONC Promoting Interoperability or the Illinois hospital report card.
 
-The full list is in `plans/publisher_dictionaries_20261002/inventory.md` (local record, not in the repository).
+The complete publisher-dictionary inventory is retained as a local verification record.
 
-## Storage Changes After Collection
+## Storage changes after collection
 
 Each change keeps every stored original that holds unique bytes.
 
@@ -327,30 +351,30 @@ Each change keeps every stored original that holds unique bytes.
 - **One-off tools.** Tools that ran once, such as the queue builders and the privacy and duplicate deletions, are in `scripts/acquisition/one_off/`; their records stay under `data/` (local record, not in the repository). `data/acquisition_planning/code_moved_20261004.json` maps each old path to its new one.
 - **Redownload run 3 queue.** Run 3 covers only the files bronze uses plus the stored dictionaries and reference documents. The queue is `data/redownload_checks/20261004/queue.json` (local record, not in the repository), built by `scripts/acquisition/one_off/redownload/build_queue_run3.py`: 2,888 active downloads. Its offline preflight resolves every unit with no requests. The frozen controls and the independent review sit beside the queue; manual units wait until a person saves their pilot file in a browser.
 
-## What Cannot Be Repeated Exactly
+## What cannot be repeated exactly
 
 - **Publishers revise their data.** Most APIs and download links serve only the current version, so a new download may not match the stored bytes. The repeatable record is the stored original plus its hash, receipt and plan, not a fresh download.
 - **Browser downloads** depend on a person and the publisher's website at the time. Their hashes, origins and file creation times are recorded; HTTP status and headers do not exist for them.
 - **Blocked routes.** Some files returned errors (HTTP 403, timeouts or redirects). Their failed attempts are kept as evidence and the files are not stored.
 
-## Open Items
+## Open items
 
 - **Closed as gaps:** NY reports 2012 and 2016, AHRQ Compendium and HFMD, Massachusetts and Minnesota staffing; HUD ends at 2025 Q4, ZIP-to-county only. **Not collected:** the sources held for access, licenses or privacy decisions listed in the source registry. AHRQ Community-Level Health is not collected; the ACS and SVI originals are used instead.
 - **Checks outside collection:** coverage accounting, definitions by year, geography changes and model eligibility.
-- **Publisher data dictionaries:** the sources listed as still missing in [Publisher Data Dictionaries](#publisher-data-dictionaries).
+- **Publisher data dictionaries:** the sources listed as still missing in [Publisher data dictionaries](#publisher-data-dictionaries).
 
-## Closeout Checklist
+## Closeout checklist
 
 At the end of the collection stage:
 
 1. Done: `scripts/acquisition/`, `config/acquisition/` and the collection tests are tracked and run in CI. `source_registry.json` and `planning_v1/acquisition_plans_v1.json` are over the 5 MB data-file limit, so they are tracked through Git LFS; `.gitattributes` lists them, the repository's Git LFS hooks are installed and CI checks out with `lfs: true`.
-2. Done (see [Clean-Checkout Recheck](#clean-checkout-recheck)): rerun the collection checks and one offline replay per collector from a clean checkout, then compare the results with the stored evidence.
-3. Done (see [Recovered History Provenance](#recovered-history-provenance)): confirm the unmatched history folders above and record which command built each.
+2. Done (see [Clean-checkout recheck](#clean-checkout-recheck)): rerun the collection checks and one offline replay per collector from a clean checkout, then compare the results with the stored evidence.
+3. Done (see [Recovered history provenance](#recovered-history-provenance)): confirm the unmatched history folders above and record which command built each.
 4. Done with registry revision 2: update the source registry to the API-first route order and retire the temporary route overlay.
 5. Update this guide with the final counts.
 6. Delete the local originals that name individuals (the CMS owners originals, the unredacted HCAI 2012 to 2017 and 2018 to 2025 originals and the ONC meaningful-use original) after the user confirms the exact list, then record their retirement so the offline rechecks accept their absence.
 
-### Clean-Checkout Recheck
+### Clean-checkout recheck
 
 Closeout checklist item 2 runs with `scripts/acquisition/one_off/closeout/clean_checkout_replay.sh`. Evidence is in `data/e2e/closeout_clean_20261001/` (local record, not in the repository).
 
@@ -360,13 +384,13 @@ Closeout checklist item 2 runs with `scripts/acquisition/one_off/closeout/clean_
 - **Checklist items 3 and 4** are met: the history provenance record identifies each history folder's collector; registry revision 2 retires the temporary route overlay.
 - **Storage check:** `verify_storage_records` skips `data/schema_review/` (local record, not in the repository) as derived review evidence, like `data/e2e/` and `data/conformance/` (failure modes in [Storage Records Check](acquisition_design.md#storage-records-check), independently reviewed). The read-only check passes: 22,162 live versions, 21,918 recorded and verified, 692 retired versions confirmed absent, 150 replacements verified, 720 known only from saved inventories and no missing, unrecorded or wrong-size versions. Report: `data/storage_checks/closeout_20261001/20261001T165556Z/report.json`. The schema-review check's report is in `data/e2e/storage_schema_review_20261001/`, because its synthetic example is shaped like an S3 listing.
 
-## Closeout Records
+## Closeout records
 
-The closeout sequence is code and privacy cleanup, registry versioning, then coverage records and documentation. The bounded publisher redownload (run 3, see [Storage Changes After Collection](#storage-changes-after-collection)) is the final substantive verification. Personal originals remain local until that verification passes and the user confirms the exact deletion list.
+The closeout sequence is code and privacy cleanup, registry versioning, then coverage records and documentation. The bounded publisher redownload (run 3, see [Storage changes after collection](#storage-changes-after-collection)) is the final substantive verification. Personal originals remain local until that verification passes and the user confirms the exact deletion list.
 
 Locked plans and records work the same way. The tracked plans, the terms and access-release records, the HUD 2014 Q2 repeat record, the manifest corrections and the code-version lists state the current rule only. Their exact earlier bytes sit, with the four plans as committed before the dataset folders moved under `data/datasets/`, in the private archive `data/acquisition_planning/acquisition_legacy_20261009/` (local record, not in the repository). `config/acquisition/legacy_versions.json` and its lock bind each archived file by SHA-256 and canonical hash. `scripts/acquisition/legacy_versions.py` accepts a capture that recorded an archived plan or record only when those bytes still match. `scripts.acquisition.one_off.successor.build_successor` rebuilds the tracked files from the archive; a rerun changes nothing. Every collector's offline recheck passes with them.
 
-The successor registry is revision 2. Revision 3 (October 10 2026) records the owner's six registry decisions of October 8 2026: C253 is `BENE_DUAL_PCT` alone; C043 is closed as unavailable from public sources; C001 and C040 lose their HHS part; C084 stays at field level and its six child controls are retired; E038 and E039 name their published IDs `PSI_90` and `PSI_13`; C288.total_performance takes its parent's field and C288.payment_adjustment is retired. `scripts.acquisition.one_off.registry_rev3.build_rev3` builds it from the archived revision 2 bytes; a rerun changes nothing. Revision 2 is catalogued second in `registry_versions.json`, after revision 1, so receipts that recorded it keep verifying. No control record was removed; replaced text sits under `historical_preserved_controls`. Existing receipts retain their original registry fingerprints. `registry_versions.json` and its lock bind the exact legacy registry, lock and additions files in a private, Git-ignored archive. A legacy replay needs that archive; a public clean checkout must not contain it. Unknown fingerprints, substituted bytes and missing legacy files fail closed. New plan builders use the sanitized successor. The original source and modeling gates remain uncleared; the registry records the current decisions, including the C259 crude-rate definition and the source and measure exclusions, apart from the transport records.
+The successor registry is revision 2. Registry revision 3, dated Oct 10 2026, defines the controls as follows: C253 is `BENE_DUAL_PCT` alone; C043 is closed as unavailable from public sources; C001 and C040 lose their HHS part; C084 stays at field level and its six child controls are retired; E038 and E039 name their published IDs `PSI_90` and `PSI_13`; C288.total_performance takes its parent's field and C288.payment_adjustment is retired. `scripts.acquisition.one_off.registry_rev3.build_rev3` builds it from the archived revision 2 bytes; a rerun changes nothing. Revision 2 is catalogued second in `registry_versions.json`, after revision 1, so receipts that recorded it keep verifying. No control record was removed; replaced text sits under `historical_preserved_controls`. Existing receipts retain their original registry fingerprints. `registry_versions.json` and its lock bind the exact legacy registry, lock and additions files in a private, Git-ignored archive. A legacy replay needs that archive; a public clean checkout must not contain it. Unknown fingerprints, substituted bytes and missing legacy files fail closed. New plan builders use the sanitized successor. The original source and modeling gates remain uncleared; the registry records the current decisions, including the C259 crude-rate definition and the source and measure exclusions, apart from the transport records.
 
 The five configuration documents contain neutral external-note labels and masked phone examples. Masks use `(XXX) XXX-XXXX`, so they cannot be mistaken for actual numbers. The synthetic AWS test account evaluates to twelve ones, retaining a distinct all-zero negative case.
 
@@ -374,7 +398,7 @@ The local evidence index contains 2,990 capture candidates across 47 source IDs.
 
 Stored collection scope remains: HUD ZIP-to-county for all 64 quarters of 2010 to 2025; 520 BLS requests; six WONDER exports covering 1999 to 2024; 62 CMS ownership-change/enrollment releases and 44 company-owner releases; HCAI annual files for 2018 to 2025; the separate ONC meaningful-use hospital series for 2011 to 2017; and the ACS poverty 2010 to 2011 and limited-English 2009 to 2015 derivations. The 21 detailed ACS source tables plus one derived snapshot retain their 12 exact published-table comparisons. These are acquisition coverage statements; definitions, suppression, revision, geography and model eligibility still require downstream review.
 
-### Recovered History Provenance
+### Recovered history provenance
 
 `data/acquisition_planning/closeout_20260929/history_provenance.json` (local record, not in the repository) identifies `scripts.acquisition.history_routes` as the collector for the six histories the filename table above does not fully match. Every saved job identifier matches the canonical candidate-derived identifier and its route URL matches the saved registry. Exact candidate lists were recovered from each job manifest; the original shell invocation was not logged and is not claimed.
 
@@ -389,7 +413,7 @@ Stored collection scope remains: HUD ZIP-to-county for all 64 quarters of 2010 t
 
 The filename table above is the filename-matching audit. The recovered manifests resolve collector and candidate provenance without inventing shell history or authorizing any rerun. Reproducing a fresh publisher download remains part of the bounded final-verification plan.
 
-### Current Decisions and Reviewed Fingerprints
+### Current decisions and reviewed fingerprints
 
 Registry revision 2 distinguishes retained historical reviews from effective current decisions. Dropped controls show a current `dropped` decision; C259 states the crude rate definition. Earlier control fields remain under `historical_preserved_controls`. ACS derivation completion, the separate ONC hospital-only series and completed AHRF removal are recorded explicitly. The current exclusion policy rejects AHRF, AHA, LEAP, HASC, NDNQI, APIC and CLH in capture, historical planning, batch and archive execution and storage, including attempts using legacy plans. Passing that exclusion check does not grant a route, privacy, terms or model approval. The retired temporary route overlay stays as provenance; revision 2 carries the API-first order and current decisions.
 
@@ -401,7 +425,7 @@ The acquisition test entry point runs the synthetic integrated suites twice, wit
 
 The synthetic CMS/HCAI/ONC E2E drivers use minimal public metadata fixtures under `config/acquisition/e2e_inputs`; those contain URLs, periods, schema headers and file and sheet metadata, with publisher contacts removed. They contain no source rows. ACS scope checking reads its locked config plan rather than requiring ignored dictionary files. Cleanup implementation and verification boundaries are recorded in `data/acquisition_planning/closeout_20260929/cleanup_result.md` (local record, not in the repository).
 
-### Coverage Gate and Code Versions
+### Coverage gate and code versions
 
 The coverage target is met with end-to-end scenarios, not unit tests or a lower target.
 
@@ -417,13 +441,13 @@ The coverage target is met with end-to-end scenarios, not unit tests or a lower 
   - a wrong-bucket redirect that fails its job
 - **Registry additions:** the data-free `run_registry_additions_e2e` suite is part of the gate. Coverage follows its child processes (`patch = subprocess` in `config/acquisition/coverage.ini`). The gate keeps only its `artifact.json`, because each run copies the 17 MB registry into every case (about 300 MB).
 - **Reference-document fetch scripts:** the offline `run_reference_documents_e2e` suite runs twice in the gate through `scripts/acquisition/tests/test_reference_documents_e2e.py`. It serves saved synthetic fixtures from a stand-in that replaces the HTTPS opener inside each download process and covers an HTML page served with HTTP 200 in place of a PDF, a wrong media type, a shifted PDF header, an HTTP 404, a pinned-hash mismatch, a tampered original, a changed crosswalk layout, a response that trickles in past its deadline in its headers or its body, a block that ignores termination, an outer repeating alarm that must keep firing, a changed pin on a rerun, a check of the six Alaska codes against an independently written list and offline reruns.
-- **Result:** `bash scripts/acquisition/run_checks.sh` passes: Ruff, MyPy, registry validation and the tests, including every offline E2E suite twice. Coverage is above the 90% target (90.94% in the [Clean-Checkout Recheck](#clean-checkout-recheck)); the omit list is unchanged.
+- **Result:** `bash scripts/acquisition/run_checks.sh` passes: Ruff, MyPy, registry validation and the tests, including every offline E2E suite twice. Coverage is above the 90% target (90.94% in the [Clean-checkout recheck](#clean-checkout-recheck)); the omit list is unchanged.
 - **Local caveat:** on this Mac, Python skips `.pth` files that macOS marks hidden and every file in `.venv/lib/python3.12/site-packages` carried the hidden flag. Child-process coverage needs `chflags nohidden .venv/lib/python3.12/site-packages/a1_coverage.pth`. If the flag returns, the child-process lines go unmeasured and the gate fails visibly rather than passing falsely.
 - **Code versions:** all nine collectors (BLS, HUD API, Census ACS, ACS detailed, WONDER, CMS owners, HCAI, ONC, MMD) have a reviewed version for the closeout code; prior versions are kept. The basis is recorded in `data/e2e/closeout_20260929/code_version_review.json` (local record, not in the repository): the hashed production modules match the cleanup review's final file hashes and the gate passed.
 
 Not verified here: live publisher downloads (the final bounded redownload, run 3) and a fresh S3 readback.
 
-### Acquisition Checks in CI
+### Acquisition checks in CI
 
 - **GitHub Actions:** the pytest run is four shard jobs ("Acquisition Checks (Shard 1 of 4)" to "(Shard 4 of 4)", 30-minute limit each) and a combining job ("Acquisition Checks", 10-minute limit) that runs Ruff, MyPy and the registry check, merges the shards' coverage and enforces the 90% gate (see Sharded acquisition tests in `docs/quality_checks.md`). Each job has an LFS checkout and the pinned Terraform 1.16.1 (collectors resolve the binary; the checks never run it against state) and the shards retain their manifests and coverage data and the `data/e2e/acquisition_checks/` (local record, not in the repository) artifact. They run through `scripts/acquisition/run_checks_ci.sh` only when the pushed or pull request range changes a path the `acquisition-checks` hook watches; a manual run, a push with no earlier commit or rewritten history runs every check. `bash scripts/acquisition/run_checks_ci_e2e.sh` tests that gate. The local hook and `bash scripts/acquisition/run_checks.sh` stay one unsharded run.
 - **Pre-commit:** the `acquisition-checks` hook runs only when `scripts/acquisition/`, `config/acquisition/`, `tests/test_source_registry.py`, `scripts/process.py`, `scripts/infrastructure/render_project_config.py`, `requirements.txt` or `.github/workflows/ci.yml` change, so a change to the CI job is checked.
@@ -431,9 +455,9 @@ Not verified here: live publisher downloads (the final bounded redownload, run 3
 - **Linux differences:** the HUD workbook and WONDER storage steps read two pieces of macOS browser-download metadata, the `com.apple.metadata:kMDItemWhereFroms` attribute and the file birth time (`hud_xlsx_contract.download_created_at`). Off macOS, the two suites answer only those two reads from a synthetic record, so the real plist parsing and origin checks still run; on a Mac they use the real attribute and birth time.
 - **Private archive:** the registry-additions suite records its legacy-registry check as skipped when the private archive folder is absent (as in any clean checkout) and runs it wherever the archive exists.
 
-### Bounded Redownload Controls
+### Bounded redownload controls
 
-The full redownload queue in `data/redownload_checks/20260929/` (local record, not in the repository) holds 3,002 entries and 2,992 active acquisition units. The harness requires a passing separate independent review bound to `data/redownload_checks/20260929/controls.json` before execution state or requests. That snapshot binds runtime code, pinned dependencies, the queue and operational plans/locks/terms/privacy/job inputs, the code-version lists the collectors read, the subprocess launcher and the hash of local runtime settings, without copying any credential value. New code versions are therefore listed before the controls are frozen, so the review covers them.
+The full redownload queue in `data/redownload_checks/20260929/` (local record, not in the repository) holds 3,002 entries and 2,992 active acquisition units. The harness requires a passing separate independent review bound to `data/redownload_checks/20260929/controls.json` before execution state or requests. That snapshot binds runtime code, pinned dependencies, the queue and operational plans, locks, terms, privacy and job inputs, the code-version lists the collectors read, the subprocess launcher and the hash of local runtime settings, without copying any credential value. New code versions are therefore listed before the controls are frozen, so the review covers them.
 
 Persistent request and byte reservations prevent restart from resetting attempts or captured-byte budgets. BLS original and fresh roots share a quota lock; 429 stops before retry or body capture on the real HTTP boundaries. The run root is owner-only, every staging path is checked for symlinks and overlap and private retention records whole original directories plus file hashes, including failed attempts. Byte accounting conservatively includes received bytes and additional persisted copies; interrupted allocations remain charged. Only control ledgers, inventories and outcomes are excluded. This can stop before 128 GiB of physical source payload and never increases the ceiling.
 

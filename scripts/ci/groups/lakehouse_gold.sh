@@ -12,7 +12,9 @@ lakehouse_gold_checks() {
   timed "lakehouse_gold: bridge references E2E" "$python_bin" -m scripts.lakehouse.run_bridge_references_e2e
   timed "lakehouse_gold: identity splits check" "$python_bin" -m scripts.lakehouse.identity_splits --check
   timed "lakehouse_gold: source labels check" "$python_bin" -m scripts.lakehouse.source_labels --check
+  timed "lakehouse_gold: county change seed check" "$python_bin" -m scripts.lakehouse.county_change_seed --check
   timed "lakehouse_gold: identity seeds E2E" "$python_bin" -m scripts.lakehouse.run_identity_seeds_e2e
+  timed "lakehouse_gold: county change seed E2E" "$python_bin" -m scripts.lakehouse.run_county_change_seed_e2e --output "$quality_output/county_change_seed.json"
   # The gold Great Expectations suites must match the gold contract they are generated from.
   timed "lakehouse_gold: suites check" "$python_bin" -m scripts.lakehouse.gold_checks check-suites
   timed "lakehouse_gold: publish contract E2E" "$python_bin" -m scripts.lakehouse.run_gold_publish_e2e --mode contract

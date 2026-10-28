@@ -1,9 +1,9 @@
 {
-  "atomic_models_sha256": "93519b5503bc6005672a902ac96433cc11a1a74f10dbc7024f9597ce779d061e",
+  "atomic_models_sha256": "ce11bb84c35a58ab7c598b6459e38e10eb07b43e37ae53546d821539d2349077",
   "classification": "Confidential",
   "key_sources_sha256": {
-    "dbt/models/silver/intermediate/_intermediate__models.yml": "85fb0332dab3a2810affffdf7d685b603003ef2796e89739baffacab65a9fe2e",
-    "dbt/models/silver/staging/_staging__models.yml": "6ffe71cb489aed6b655a10551afc7fdb2f2ef69ba688cb2da10a8c4ce5f023a8"
+    "dbt/models/silver/intermediate/_intermediate__models.yml": "98397a68c27723c882fd5518791d8a31c76d1e3d2a6610fee1e6be959e3976a8",
+    "dbt/models/silver/staging/_staging__models.yml": "26105f231ff9db96582e16b3e4ed38c2977fa4a8676824efb2a3f23044175e3b"
   },
   "publish": {
     "backup_prefix": "lakehouse/silver/catalog_backups/",
@@ -100,6 +100,11 @@
       "int_county_adjacency_edges": {
         "merge_key": [
           "edge_key"
+        ]
+      },
+      "int_county_retirements": {
+        "merge_key": [
+          "county_fips"
         ]
       },
       "int_gv_county_values": {

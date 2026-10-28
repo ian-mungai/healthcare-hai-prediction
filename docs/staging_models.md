@@ -1,10 +1,10 @@
 ---
-title: Staging Models
+title: Staging models
 description: What each staging and intermediate model keeps, holds and maps, and the coverage limits of the staging layer.
-last_updated: 2026-10-13
+last_updated: 2026-10-25
 ---
 
-# Staging Models
+# Staging models
 
 The dbt staging layer (`dbt/`, dbt-core with dbt-duckdb in the analytics image) reads bronze read-only. Its E2E builds
 the models on synthetic fixtures, including cases that must fail one named test, then on the real bronze tables twice;
@@ -13,7 +13,9 @@ bronze table in a new run folder and verifies after the build that none moved (`
 Spark container as `catalog job pins`); a moved table fails the run. Where a text file and a workbook hold the same IPPS or occupational-mix
 table, staging reads the text file and drops only the workbook sheets that a selected text file of the same release
 matches row for row; every other sheet stays selected (`stg_bronze__sheet_selection`). `scripts.lakehouse.ipps_file_labels` regenerates the IPPS and
-occupational-mix label and twin seeds from the S3 manifests; `--check` confirms the committed seeds. `int_pos_hospital_snapshots`
+occupational-mix label and twin seeds from the S3 manifests; `--check` confirms the committed seeds. `int_county_retirements` has one row per county code that a Census county-change page (1970, 1980, 1990 or 2000) retires, with the latest retirement and its successors. It reads the seed `census_county_change_events`, which `scripts.lakehouse.county_change_seed` writes from the four committed, pinned sections of the pages with the one reader `scripts/acquisition/county_change_pages.py`; staging never reads the pages or the sections. `county_change_seed --check` regenerates the seed from the sections and compares the events with the golden file. A code that a later page creates or renames to again is not retired (02230). `dbt/seeds/alaska_county_code_labels.csv`
+adds the reviewed historical name of the six Alaska codes beside the unchanged published code. Gold `dim_county` passes the retirement columns through; a code
+without a row there has nulls, which is not a statement that the code is current. `int_pos_hospital_snapshots`
 types the Provider of Services hospital rows; each file is dated by the catalog coverage in `dbt/seeds/pos_file_periods.csv`,
 which `scripts.lakehouse.pos_file_periods` rebuilds from the S3 manifests and the local acquisition job plans. A valid
 published county is kept (`county_source` pos). A county that is missing or outside the snapshot's state takes the county of
@@ -126,7 +128,7 @@ models carry as `capture_date`. The Federal Register HPSA workbooks stay in bron
 maps the HPSA and MUA controls (C249 to C251) and the MMD bridge the 82 MMD controls, 85 registry controls in all
 (rules in `dbt/seeds/features/shortage_measures_recipe.csv`).
 
-Validation outcomes (group D) are staged as Care Compare windows with the same latest-release rule: unplanned hospital
+Validation outcomes are staged as Care Compare windows with the same latest-release rule: unplanned hospital
 visits (`int_cc_unplanned_visits_windows`), complications and deaths (`int_cc_complications_deaths_windows`) and the
 Hospital Readmissions Reduction Program by condition (`int_cc_hrrp_windows`); their holds are in
 `int_validation_window_holds`, apart from `int_cc_window_holds`. Every published measure ID is kept;
@@ -136,7 +138,7 @@ their children). A renamed ID enters under its exact ID only through the reviewe
 ID. The PSI-90 and PSI-13 controls (E038, E039) read the
 published IDs `PSI_90` and `PSI_13` (registry revision 3); the older `PSI_90_SAFETY` and `PSI_13_POST_SEPSIS` are not
 aliased (`int_cc_complications_deaths_windows`). `Not Available`, `Not Applicable`, `N/A` and `Too Few to Report` stay text. In every
-group D model a 5-digit hospital ID is padded to 6 characters; any other ID that is not 6 digits or capital letters is
+validation model a 5-digit hospital ID is padded to 6 characters; any other ID that is not 6 digits or capital letters is
 held. These tables are for validation only; none is a predictor.
 
 The HAC Reduction Program (`int_hac_program_years`) and Hospital VBP Total Performance Score (`int_vbp_program_years`)
@@ -150,14 +152,14 @@ no_fiscal_year, label_held, undated_release, same_date_conflict or repeated_in_f
 `dbt/seeds/gold/validation_measures_bridge.csv` maps the registry controls (C285 to C288); all are
 comparison_only or exclude_primary.
 
-## Coverage and Known Limits
+## Coverage and known limits
 
 Staging covers the HAI, cost report, IPPS, occupational-mix, Provider of Services, Hospital General Information,
 ownership, Medicare inpatient, HHS capacity, ONC, Care Compare timely and effective care, maternal health and HCAHPS
 tables, the geography tables (HUD ZIP-to-county, county adjacency, RUCC, RUCA and hospital service areas), the ACS and
 SVI tables, SAIPE, SAHIE, BLS, PLACES, Medicare Geographic Variation, WONDER, MMD and the HRSA HPSA and MUA files. It
 types the HAI and Care Compare windows, the geography files, the ACS, SVI, SAIPE, SAHIE, BLS, PLACES, geographic
-variation, WONDER and MMD values, the HPSA and MUA designations, the group D validation windows (unplanned visits,
+variation, WONDER and MMD values, the HPSA and MUA designations, the validation windows (unplanned visits,
 complications and deaths, readmissions reduction) and HAC Reduction and VBP program years, the occupational-mix
 surveys, the cost reports, the IPPS impact-file fields, the Medicare inpatient summaries, the owner, enrollment and
 change-of-ownership releases, the HHS capacity weeks, the ONC linkage and attestations, the Provider of Services
