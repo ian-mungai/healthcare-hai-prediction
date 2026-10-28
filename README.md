@@ -153,11 +153,12 @@ The E2E runners can also run on their own; each needs a new output directory:
 .venv/bin/python -m scripts.infrastructure.run_secret_store_e2e
 .venv/bin/python -m scripts.infrastructure.run_host_session_e2e
 .venv/bin/python -m scripts.lakehouse.run_bronze_cutover_e2e
+.venv/bin/python -m scripts.lakehouse.run_aws_catalog_setup_e2e --out <new_directory> --mutations
 ```
 
 Each run writes its report under `data/e2e/` (the configuration E2E under `data/e2e/configuration/`, the policy E2E under
 `data/e2e/policies/`, the quality E2E under `data/e2e/quality/`). How the checks run and what each one blocks is in `docs/quality_checks.md`. The lakehouse
-commands are in `docs/lakehouse_usage.md`. The resource limits, pinned tools and manual set-up steps behind Install are
+commands are in `docs/lakehouse_usage.md`. The AWS catalog setup (`scripts.lakehouse.aws_catalog_setup catalog` and `check`) is in `docs/aws_control_plane.md`. The resource limits, pinned tools and manual set-up steps behind Install are
 in `docs/install_details.md`. The environments, the AWS stacks and project policies, bucket lifecycle rules and deferred controls are in
 `docs/infrastructure_controls.md`. Rendering the architecture diagram is in `docs/architecture_rendering.md`. The proposed
 ECS read target contract is in `docs/ecs_target_contract.md` and the proposed real AWS read checks are in `docs/ecs_real_runs.md`.

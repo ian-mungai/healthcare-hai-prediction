@@ -1,7 +1,7 @@
 ---
 title: AWS control plane
 description: Control-plane services on the AWS container host, with inputs, secrets, images and the Mac launcher changes.
-last_updated: 2026-10-25
+last_updated: 2026-10-28
 audience: [developer]
 ---
 
@@ -94,6 +94,24 @@ How each secret reaches its program without a command line or a file:
 - **Redis.** `redis-server -` reads its configuration from standard input. The script builds the lines with the `printf` builtin inside a bash process substitution (`< <(...)`, a pipe) and quotes the password for the configuration parser. Checked with a local Redis 8.10 and a password that holds a quote, a backslash and a space: `CONFIG GET requirepass` returned it, standard input was a pipe, no process argument held it and no file under the working folder held it. The `requirepass` command form was rejected: a started server accepts connections without a password until the command runs.
 - **Polaris bootstrap.** `polaris-admin-tool bootstrap` takes `--credential realm,id,secret` (a command argument) or `--credentials-file` ([admin tool](https://polaris.apache.org/releases/1.8.0/admin-tool/)). The task passes `--credentials-file /dev/stdin` and writes the JSON credential through the `printf` builtin to a pipe. The file option opens `uri.toURL().openStream()` ([RootCredentialsSet](https://github.com/apache/polaris/blob/apache-polaris-1.8.0/polaris-core/src/main/java/org/apache/polaris/core/persistence/bootstrap/RootCredentialsSet.java)), which reads a pipe once. Not run: it needs the image. Verify at the first run that the task finishes with exit 0.
 - **Airflow sign-in.** The Simple auth manager reads passwords only from a JSON file (`SimpleAuthManager.get_passwords()` opens `simple_auth_manager_passwords_file`; the login service calls that static method, so a subclass cannot replace it; [auth manager guide](https://airflow.apache.org/docs/apache-airflow/3.3.2/core-concepts/auth-manager/simple/index.html), [source](https://github.com/apache/airflow/blob/3.3.2/airflow-core/src/airflow/api_fastapi/auth/managers/simple/services/login.py)). It has no in-memory option, so the stack sets `AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS=true`. This is the accepted access control: the API server listens on 127.0.0.1 only. The only way in is a Session Manager port-forwarding session, which IAM authenticates. The Airflow administrator password (`/healthcare_hai_prediction/airflow_admin`) is not injected. The alternative that keeps a password is the FAB auth manager (the provider is in the image constraints): it stores a password hash in the metadata database, but its first-user step needs a verified in-memory path and a running host, so it is not chosen here.
+
+## AWS catalog setup
+
+The owner creates the AWS catalog `hai_lakehouse` and checks its pair parameters with `scripts/lakehouse/aws_catalog_setup.py`, under the project profile only:
+
+```sh
+.venv/bin/python -m scripts.lakehouse.aws_catalog_setup catalog --instance <HOST_INSTANCE_ID>
+.venv/bin/python -m scripts.lakehouse.aws_catalog_setup check [--instance <HOST_INSTANCE_ID>]
+```
+
+- **Profile.** The tool stops unless the configured profile resolves to the project user (`verify_project_identity`). It needs no administrator profile. The project user's SSM statement `SetUpAwsPolarisPairs` allows `ssm:GetParameter` and `ssm:PutParameter` on exactly the ten AWS Polaris pair names (`docs/infrastructure_controls.md`).
+- **Route.** Every catalog request goes through the owned Session Manager tunnel and loopback relay (`orchestration/catalog_transport.py`) after the network acceptance check: one running host with no public address. Neither local port may be 8181, the Mac Polaris port, so no request reaches the Mac catalog. Each request runs once within the step's deadline (`--seconds`, 600 by default). A lost reply fails the step and is not repeated.
+- **Catalog.** `catalog` creates the catalog with the body of the Mac setup on `s3://<S3_BUCKET>/lakehouse/` with static credentials, then grants `CATALOG_MANAGE_CONTENT` to `catalog_admin`. A rerun over a matching catalog reports `already present`. A catalog with another location or credential mode is refused and never changed.
+- **Credentials.** The Polaris root secret is read from Parameter Store into memory only. It is never printed, logged or written. Errors carry the step and the HTTP status only.
+- **Check.** `check` reports each of the ten pair names (`aws_polaris_<identity>_client_id` and `_client_secret` for `reader`, `e2e`, `bronze`, `silver` and `gold`) with its presence, type and version. It reads without decryption and drops the encrypted value unread, so it never shows a value. With `--instance` it also reports whether the AWS catalog is `present` or `absent` and changes nothing.
+- **Names.** The ten names are the defaults of their variables in `infra/iam/variables.tf`. The tool refuses names that repeat, lose their own leaf or match a managed Mac name, so a Mac and an AWS writer never share a pair.
+
+The stand-in E2E is `.venv/bin/python -m scripts.lakehouse.run_aws_catalog_setup_e2e --out <new_directory> --mutations`. It uses a loopback Polaris, the Parameter Store stand-in and the real owned relay. It contacts no AWS service.
 
 ## Needs from the foundation and the secret store
 
