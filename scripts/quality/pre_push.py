@@ -9,7 +9,8 @@ The commit stage holds only fast hooks (.pre-commit-config.yaml). Before a push 
   ``pre_push.full_paths`` (the selector, its configuration, the CI scripts and group bodies, the acquisition CI entry scripts, the workflow and the
   pre-commit configuration), when ``origin/main`` or the merge base cannot be found, or with ``--full``.
 
-The steps run at once, except the hook partitions: pre-commit takes the worktree's index lock, so they run one after the other in one worker.
+The steps run at once, except the acquisition hook and the hook partitions: pre-commit takes the worktree's index lock,
+so they run one after the other in one worker.
 Every step has a deadline from ``pre_push.timeout_seconds`` and fails visibly with its name when it expires. The run and every step start without the variables
 that change what the CI scripts or pre-commit run (``EXECUTION_CONTROLS``, ``SKIP`` included) and without the Git repository variables of the caller.
 
@@ -52,6 +53,7 @@ SHIM_COMMAND = ".venv/bin/python -m scripts.quality.pre_push run --hook"
 MINIMUM_GIT = (2, 54)
 INSTALL_HINT = ".venv/bin/python -m scripts.quality.pre_push install-shim"
 SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+SERIAL_KINDS = frozenset({"pre_commit", "ci_hooks"})
 EXECUTION_CONTROLS = (
     "CI_SCOPE",
     "CI_PART",
@@ -226,9 +228,12 @@ def run_step(root: Path, output: Path, step: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_steps(root: Path, output: Path, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Run the steps at once, except the hook partitions: they share the worktree's index, so one worker runs them one after the other (WV3-033)."""
-    hooks = [step for step in steps if step["kind"] == "ci_hooks"]
-    jobs = [[step] for step in steps if step["kind"] != "ci_hooks"] + ([hooks] if hooks else [])
+    """Run the steps at once, except the pre-commit steps (the acquisition hook and the hook partitions).
+
+    Pre-commit takes the worktree's index lock, so one worker runs those steps one after the other.
+    """
+    serial = [step for step in steps if step["kind"] in SERIAL_KINDS]
+    jobs = [[step] for step in steps if step["kind"] not in SERIAL_KINDS] + ([serial] if serial else [])
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         finished = list(pool.map(lambda job: [run_step(root, output, step) for step in job], jobs))
     rows: dict[str, dict[str, Any]] = {row["name"]: row for job in finished for row in job}
