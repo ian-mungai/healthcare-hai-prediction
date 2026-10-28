@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
 
-# A pull request run checks the whole base..head range, so a newer push may cancel it. A push run checks only its
+# A pull request run checks the whole merge-base..head range, so a newer push may cancel it. A push run checks only its
 # pushed range, so each push gets its own group and is never cancelled: a cancelled range would go unchecked.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || github.event_name }}
@@ -30,12 +30,27 @@ jobs:
       pull-requests: read
     outputs:
       reuse: ${{ steps.reuse.outputs.reuse }}
+      range_start: ${{ steps.range.outputs.start }}
+      range_end: ${{ steps.range.outputs.end }}
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Choose the comparison range
+        id: range
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
+          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request" ]] && git cat-file -e "$RANGE_START^{commit}" 2>/dev/null && git cat-file -e "$RANGE_END^{commit}" 2>/dev/null; then
+            RANGE_START="$(git merge-base "$RANGE_START" "$RANGE_END")"
+          fi
+          printf 'start=%s\nend=%s\n' "$RANGE_START" "$RANGE_END" >> "$GITHUB_OUTPUT"
 
       - name: Decide whether the merged pull request result is reused
         id: reuse
@@ -64,8 +79,8 @@ jobs:
       - name: Check commit messages and removed names of the pushed range
         if: ${{ github.event.before != '0000000000000000000000000000000000000000' }}
         env:
-          RANGE_START: ${{ github.event.before }}
-          RANGE_END: ${{ github.sha }}
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: |
           if ! git cat-file -e "$RANGE_START^{commit}" 2>/dev/null; then
             # A history rewrite removes the previous tip: validate the complete new history.
@@ -81,8 +96,8 @@ jobs:
         env:
           CI_PART: gates
           CI_SCOPE: range
-          RANGE_START: ${{ github.event.before }}
-          RANGE_END: ${{ github.sha }}
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: bash scripts/run_ci.sh
 
   hooks:
@@ -121,8 +136,8 @@ jobs:
       - name: Check commit messages
         if: ${{ matrix.group == 'privacy' && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000')) }}
         env:
-          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
-          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: |
           if ! git cat-file -e "$RANGE_START^{commit}" 2>/dev/null; then
             # A history rewrite removes the previous tip: validate the complete new history.
@@ -136,8 +151,8 @@ jobs:
 
       - name: Run this complete partition of the manual hooks
         env:
-          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
-          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: .venv/bin/python -m scripts.quality.ci_hooks --group '${{ matrix.group }}' --from "$RANGE_START" --to "$RANGE_END"
 
       - name: Retain hook evidence
@@ -171,8 +186,8 @@ jobs:
         env:
           CI_PART: core
           CI_SCOPE: range
-          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
-          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
           E2E_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/configuration
           POLICY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/policies
           QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
@@ -230,8 +245,8 @@ jobs:
           CI_PART: ${{ matrix.part }}
           CI_UNITS: ${{ matrix.units }}
           CI_SCOPE: range
-          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
-          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
           QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
         run: bash scripts/run_ci.sh
 
@@ -274,8 +289,8 @@ jobs:
           CI_PART: feature_sources
           FEATURE_SHARD: ${{ matrix.shard }}/8
           CI_SCOPE: range
-          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
-          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
           QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
         run: bash scripts/run_ci.sh
 
@@ -315,8 +330,8 @@ jobs:
           CI_PART: feature_columns
           FEATURE_SHARD: ${{ matrix.shard }}/4
           CI_SCOPE: range
-          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
-          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
           QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
         run: bash scripts/run_ci.sh
 
@@ -360,8 +375,8 @@ jobs:
       - name: Select feature evidence for the checked range
         id: selection
         env:
-          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
-          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: |
           plan="$(.venv/bin/python -m scripts.quality.ci_groups plan --scope range --part features --from "$RANGE_START" --to "$RANGE_END" --format shell)"
           printf '%s\n' "$plan" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -419,8 +434,8 @@ jobs:
           CI_UNITS: model_metadata_e2e
           MODEL_METADATA_WORKERS: auto
           CI_SCOPE: range
-          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
-          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: bash scripts/run_ci.sh
 
       - name: Retain the model metadata evidence
@@ -459,8 +474,8 @@ jobs:
           CI_PART: launcher
           CI_SCOPE: range
           LAUNCHER_SHARD: ${{ matrix.shard }}/2
-          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
-          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: bash scripts/run_ci.sh
 
       - name: Retain launcher E2E evidence
@@ -520,8 +535,8 @@ jobs:
         env:
           ACQUISITION_PART: shard
           ACQUISITION_SHARD: ${{ matrix.shard }}/4
-          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
-          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: bash scripts/acquisition/run_checks_ci.sh
 
       - name: Retain the shard manifest and coverage data
@@ -594,6 +609,6 @@ jobs:
         env:
           ACQUISITION_PART: combine
           ACQUISITION_SHARD_COUNT: "4"
-          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
-          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
+          RANGE_START: ${{ needs.plan.outputs.range_start }}
+          RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: bash scripts/acquisition/run_checks_ci.sh
