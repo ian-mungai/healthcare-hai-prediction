@@ -3,7 +3,8 @@
 Run from the repository root at a terminal:
 
     .venv/bin/python -m scripts.lakehouse.aws_catalog_setup catalog --instance <HOST_INSTANCE_ID>
-    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup check [--instance <HOST_INSTANCE_ID>]
+    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup check
+    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup inspect --instance <HOST_INSTANCE_ID>
     .venv/bin/python -m scripts.lakehouse.aws_catalog_setup principal --identity reader|e2e|bronze|silver|gold --instance <HOST_INSTANCE_ID>
         [--namespace-approval <APPROVAL_ID>]
 
@@ -16,7 +17,8 @@ mode is ``already present`` and one that differs is refused, never changed.
 The tool refuses to start unless the configured profile resolves to the project user. The Polaris root credential is read from Parameter
 Store into memory only and never printed, logged or written; errors carry the action and the HTTP status only. ``check`` reports each of the
 ten AWS Polaris pair parameters by exact name with its type and version, never a value: it reads without decryption and drops the encrypted
-value unread. With ``--instance`` it also reads the AWS catalog and each existing principal's grants and changes nothing.
+value unread, and it never reads the root secret. ``inspect`` is the authenticated read: it decrypts the root secret into memory, reads the AWS
+catalog and each identity's roles and grants and changes nothing.
 
 ``principal`` sets up one AWS identity: its principal role, catalog role, grants and credentials. The grants are the approved plan of the
 identity (``bronze_writer.grant_plan`` for ``bronze`` and ``e2e``, which also gets the table grants on ``silver_e2e``, ``gold_e2e`` and
@@ -426,8 +428,8 @@ def step_catalog(services: Services, instance: str, seconds: float, clock: Clock
     return {"catalog": CATALOG, "outcome": outcome}
 
 
-def step_check(services: Services, instance: str | None, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
-    """Report the ten pair parameters by exact name, metadata only, and with an instance the AWS catalog's state; nothing is changed."""
+def step_check(services: Services, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
+    """Report the ten pair parameters by exact name, metadata only: nothing is decrypted, not even the root secret, and nothing is changed."""
     deadline = clock() + seconds
     vault = services.vault()
     parameters = []
@@ -439,15 +441,19 @@ def step_check(services: Services, instance: str | None, seconds: float, clock: 
             except secret_store.SecretStoreError as error:
                 raise SetupError("parameters", str(error)) from None
             parameters.append({"identity": identity, **found})
-    result: dict[str, Any] = {"parameters": parameters}
-    if instance is not None:
-        secret = read_root(vault, min(SECRET_SECONDS, check_deadline(deadline, clock)))
-        with services.remote(instance, deadline=deadline) as remote:
-            request = TunnelRequest(remote.port, deadline=deadline, execute=remote.execute, clock=clock)
-            access = root_token(request, secret)
-            result["catalog"] = verify_catalog(request, access, services.bucket)
-            if result["catalog"] == "present":
-                result["principals"] = check_principals(request, access, services.approvals)
+    return {"parameters": parameters}
+
+
+def step_inspect(services: Services, instance: str, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
+    """Read the AWS catalog and each identity's roles and grants through the route, authenticated with the root secret; nothing is changed."""
+    deadline = clock() + seconds
+    secret = read_root(services.vault(), min(SECRET_SECONDS, check_deadline(deadline, clock)))
+    with services.remote(instance, deadline=deadline) as remote:
+        request = TunnelRequest(remote.port, deadline=deadline, execute=remote.execute, clock=clock)
+        access = root_token(request, secret)
+        result: dict[str, Any] = {"catalog": verify_catalog(request, access, services.bucket)}
+        if result["catalog"] == "present":
+            result["principals"] = check_principals(request, access, services.approvals)
     return result
 
 
@@ -839,7 +845,8 @@ def parser() -> argparse.ArgumentParser:
     cli.add_argument("--seconds", type=float, default=600, help="the deadline of the whole step")
     steps = cli.add_subparsers(dest="step", required=True)
     steps.add_parser("catalog").add_argument("--instance", required=True)
-    steps.add_parser("check").add_argument("--instance")
+    steps.add_parser("check")
+    steps.add_parser("inspect").add_argument("--instance", required=True)
     principal = steps.add_parser("principal")
     principal.add_argument("--identity", required=True, choices=IDENTITIES)
     principal.add_argument("--instance", required=True)
@@ -854,7 +861,9 @@ def run(args: argparse.Namespace, services: Services) -> dict[str, Any]:
         return step_catalog(services, args.instance, args.seconds)
     if args.step == "principal":
         return step_principal(services, args.identity, args.instance, args.namespace_approval, args.seconds)
-    return step_check(services, args.instance, args.seconds)
+    if args.step == "inspect":
+        return step_inspect(services, args.instance, args.seconds)
+    return step_check(services, args.seconds)
 
 
 def main(argv: list[str] | None = None, services: Services | None = None) -> int:
