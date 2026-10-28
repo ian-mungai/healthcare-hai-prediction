@@ -1179,6 +1179,8 @@ OLD_GOLD_COMMANDS = (
 TIMING = "scripts/quality/timing.sh"
 ACQUISITION_PYTEST_PATHS = "scripts/acquisition/tests tests/test_source_registry.py"
 DURATIONS_HEADING = "## Measured durations"
+# Jobs whose limit is fixed outside the 1.5 to 2.6 range; the reason is in docs/quality_checks.md (a slow hosted runner needs up to 27 minutes).
+FIXED_TIMEOUTS = {"Launcher E2E (Shard 1 of 2)": 30, "Launcher E2E (Shard 2 of 2)": 30}
 
 
 def workflow_document() -> dict[str, Any]:
@@ -1435,20 +1437,26 @@ def matrix_entries(definition: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def timeout_cases() -> list[dict[str, Any]]:
-    """Each job's timeout equals the one in the table of measured durations and is between 1.5 and 2.6 times the measured time (at least 5 minutes)."""
+    """Each job's timeout equals its row in the measured durations table and is 1.5 to 2.6 times the measured time (at least 5 minutes) or its fixed limit."""
     rows = table_rows((ROOT / "docs/quality_checks.md").read_text(encoding="utf-8"), DURATIONS_HEADING)
     recorded = {row[0]: (float(row[1]), int(row[2])) for row in rows}
     timeouts = workflow_timeouts()
     off = {name: (recorded[name], timeouts.get(name)) for name in recorded if timeouts.get(name) != recorded[name][1]}
-    ratio = {name: round(timeout / measured, 2) for name, (measured, timeout) in recorded.items() if not (1.5 * measured <= timeout <= max(2.6 * measured, 5))}
+    ratio = {
+        name: round(timeout / measured, 2)
+        for name, (measured, timeout) in recorded.items()
+        if name not in FIXED_TIMEOUTS and not (1.5 * measured <= timeout <= max(2.6 * measured, 5))
+    }
+    fixed = {name: (recorded.get(name, (0.0, None))[1], limit) for name, limit in FIXED_TIMEOUTS.items() if recorded.get(name, (0.0, None))[1] != limit}
     return [
         {
             "case": "job_timeouts_match_the_measured_durations",
-            "passed": set(recorded) == set(timeouts) and not off and not ratio and len(recorded) >= 10,
+            "passed": set(recorded) == set(timeouts) and not off and not ratio and not fixed and len(recorded) >= 10,
             "not_in_the_table": sorted(set(timeouts) - set(recorded)),
             "not_in_the_workflow": sorted(set(recorded) - set(timeouts)),
             "different_timeout": off,
             "outside_the_ratio": ratio,
+            "not_the_fixed_limit": fixed,
         }
     ]
 

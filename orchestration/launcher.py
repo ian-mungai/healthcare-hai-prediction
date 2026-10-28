@@ -511,19 +511,19 @@ def demultiplex(buffer: bytes) -> tuple[list[tuple[int, bytes]], bytes]:
 class EventStream:
     """The Docker events response: lines of JSON until the daemon or this side closes it."""
 
-    def __init__(self, connection: UnixConnection, response: http.client.HTTPResponse) -> None:
+    def __init__(self, connection: UnixConnection, response: http.client.HTTPResponse, sock: socket.socket) -> None:
         self.connection = connection
         self.response = response
+        self.sock = sock
 
     def readline(self) -> bytes:
         """The next line; an empty result means the stream ended."""
         return self.response.readline()
 
     def close(self) -> None:
-        """Close the connection, which ends a blocked ``readline`` in another thread."""
+        """Shut down the socket the response reads from, which ends a blocked ``readline`` in another thread, then close the connection."""
         with contextlib.suppress(OSError):
-            if self.connection.sock is not None:
-                self.connection.sock.shutdown(socket.SHUT_RDWR)
+            self.sock.shutdown(socket.SHUT_RDWR)
         with contextlib.suppress(OSError):
             self.connection.close()
 
@@ -722,11 +722,14 @@ class DockerApi:
         return list(self.call("GET", f"/images/{_quote(reference, safe='/:@')}/history") or [])
 
     def events(self, label: str) -> EventStream:
-        """Open the container events stream with a label filter."""
+        """Open the container events stream with a label filter. The 30-second timeout bounds the connect and the reply headers only: the
+        stream itself has no read timeout, so an idle stream stays open. The socket is kept before ``getresponse()`` because ``http.client``
+        drops ``connection.sock`` when the reply says ``Connection: close``; the response still reads from that socket."""
         connection = UnixConnection(self.socket_path, 30)
         query = "filters=" + _quote(self.filters(label=[label], type=["container"]))
         try:
             connection.request("GET", f"{self.prefix}/events?{query}")
+            sock = connection.sock
             response = connection.getresponse()
         except (OSError, http.client.HTTPException) as error:
             connection.close()
@@ -734,9 +737,8 @@ class DockerApi:
         if response.status != 200:
             connection.close()
             raise DockerError(response.status, "events refused")
-        if connection.sock is not None:
-            connection.sock.settimeout(None)
-        return EventStream(connection, response)
+        sock.settimeout(None)
+        return EventStream(connection, response, sock)
 
     def attach(self, container_id: str, detach_keys: str) -> socket.socket:
         """Attach to a container with the hijacked connection; returns the raw socket after the upgrade."""

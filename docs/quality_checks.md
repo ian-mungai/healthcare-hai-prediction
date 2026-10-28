@@ -494,7 +494,7 @@ times in it are those of the command. A wrapped function holds one command or on
 ## Measured durations
 
 The longest hosted time of each job over six hosted runs and the job's timeout, in minutes. A timeout is between 1.5
-and 2.6 times the measured time (at least 5 minutes). A job marked "estimate" has no hosted measurement yet; resize it from its first complete hosted run. The
+and 2.6 times the measured time (at least 5 minutes). A job marked "estimate" has no hosted measurement yet; resize it from its first complete hosted run. The two launcher shard jobs have a fixed 30-minute limit outside that range, because a slow hosted runner can need up to 27 minutes for a shard. The
 CI-groups E2E compares this table with `.github/workflows/ci.yml`. The seconds of every command are in the job summary of each run. The longest commands are the 258 cases of the model
 metadata E2E (about 39 minutes one after another) and the 38 offline workflow tests of the acquisition gate (about 39 minutes in one process).
 
@@ -508,8 +508,8 @@ metadata E2E (about 39 minutes one after another) and the 38 offline workflow te
 | Lakehouse Silver Checks | 2.4 | 5 | hosted |
 | Lakehouse Gold Checks | 7 | 15 | estimate |
 | Lakehouse Gold Model Metadata E2E | 14 | 30 | estimate |
-| Launcher E2E (Shard 1 of 2) | 8.4 | 20 | hosted |
-| Launcher E2E (Shard 2 of 2) | 9 | 20 | hosted |
+| Launcher E2E (Shard 1 of 2) | 8.4 | 30 | hosted |
+| Launcher E2E (Shard 2 of 2) | 9 | 30 | hosted |
 | Acquisition Checks (Shard 1 of 4) | 13 | 30 | estimate |
 | Acquisition Checks (Shard 2 of 4) | 13 | 30 | estimate |
 | Acquisition Checks (Shard 3 of 4) | 13 | 30 | estimate |

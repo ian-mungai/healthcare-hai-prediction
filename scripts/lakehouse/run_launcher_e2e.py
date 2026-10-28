@@ -9192,6 +9192,8 @@ def run_cases(selected: list[str], shard: str = "") -> int:
                 sys.stdout.write(f"      failed: {check}\n")
         if error:
             sys.stdout.write(f"      error: {error.splitlines()[0]}\n")
+        # A piped stdout is block-buffered: without this, a job timeout or kill loses the lines of the cases that ended before it.
+        sys.stdout.flush()
     head = run_command("git", ["rev-parse", "HEAD"], cwd=ROOT).stdout.strip()
     source_changed = source_changes(sources, source_snapshot())
     summary = {
