@@ -97,20 +97,47 @@ run "private_versioned_storage" {
 
 # Preparation only: mocked plans cannot verify AWS scheduling, permissions or existing remote rules.
 # Guard missing/duplicate/disabled rules, wrong bucket/delay/filter and accidental object expiry or transition.
-# Replaced Iceberg file versions under lakehouse/ expire after 30 days; nothing else ever does.
 # The provider computes the bucket-wide filter prefix and the expiration days and date only at apply, so a mocked plan
-# cannot read them; the saved real plan is checked for them before any apply.
+# cannot read them. Source guards preserve explicit filters and the existing rules before a saved real plan is reviewed.
+run "lifecycle_source_contract" {
+  command = plan
+
+  assert {
+    condition = strcontains(
+      replace(file("${path.module}/main.tf"), "/\\s+/", ""),
+      "rule{id=\"expire_controller_state_transfers\"status=\"Enabled\"filter{prefix=\"controller_state_transfers/\"}expiration{days=7}noncurrent_version_expiration{noncurrent_days=7}}"
+    )
+    error_message = "The transfer rule must use its explicit prefix and seven-day expirations, without extra filters, retained-version thresholds or a delete-marker flag."
+  }
+
+  assert {
+    condition = strcontains(
+      replace(file("${path.module}/main.tf"), "/\\s+/", ""),
+      "rule{id=\"abort_incomplete_uploads\"status=\"Enabled\"filter{}abort_incomplete_multipart_upload{days_after_initiation=7}}"
+    )
+    error_message = "The existing bucket-wide rule must remain unchanged and must only abort incomplete multipart uploads after seven days."
+  }
+
+  assert {
+    condition = strcontains(
+      replace(file("${path.module}/main.tf"), "/\\s+/", ""),
+      "rule{id=\"expire_replaced_lakehouse_versions\"status=\"Enabled\"filter{prefix=\"lakehouse/\"}noncurrent_version_expiration{noncurrent_days=30}expiration{expired_object_delete_marker=true}}"
+    )
+    error_message = "The existing lakehouse rule must remain unchanged, with 30-day noncurrent expiration and expired delete-marker cleanup only."
+  }
+}
+
 run "lifecycle_cleanup_rules" {
   command = plan
 
   assert {
     condition = (
       aws_s3_bucket_lifecycle_configuration.data.bucket == aws_s3_bucket.data.id &&
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 2 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 3 &&
       alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
-      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions"])
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_controller_state_transfers"])
     )
-    error_message = "Exactly two enabled rules must target the existing data bucket: incomplete-upload cleanup and replaced lakehouse versions."
+    error_message = "Exactly three enabled rules must target the existing bucket: upload cleanup, replaced lakehouse versions and controller transfer exports."
   }
 
   assert {
@@ -133,7 +160,22 @@ run "lifecycle_cleanup_rules" {
       length(rule.abort_incomplete_multipart_upload) == 0
       if rule.id == "expire_replaced_lakehouse_versions"
     ])
-    error_message = "Only replaced versions under lakehouse/ may expire, after 30 days; current lakehouse files never expire and orphaned delete markers are removed."
+    error_message = "Replaced lakehouse versions must expire after 30 days and orphaned delete markers must be removed. Current lakehouse files must never expire."
+  }
+
+  assert {
+    condition = alltrue([
+      for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+      try(
+        one(rule.filter).prefix == "controller_state_transfers/" &&
+        one(rule.expiration).days == 7 &&
+        one(rule.noncurrent_version_expiration).noncurrent_days == 7 &&
+        length(rule.abort_incomplete_multipart_upload) == 0,
+        false
+      )
+      if rule.id == "expire_controller_state_transfers"
+    ])
+    error_message = "Controller transfer exports must expire only under controller_state_transfers/, with current and noncurrent delays of seven days."
   }
 
   assert {

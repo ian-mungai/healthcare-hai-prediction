@@ -134,3 +134,11 @@ Each run writes its report under `data/e2e/` (the configuration E2E under `data/
 commands are in `docs/lakehouse_usage.md`. The resource limits, pinned tools and manual set-up steps behind Install are
 in `docs/install_details.md`. The environments, the AWS stacks and project policies, bucket lifecycle rules and deferred controls are in
 `docs/infrastructure_controls.md`. Rendering the architecture diagram is in `docs/architecture_rendering.md`.
+
+## Deploy and teardown
+
+The storage stack keeps the data bucket private, encrypted and versioned, with forced deletion disabled and destruction protection enabled. Its lifecycle rules abort incomplete uploads after seven days and expire replaced `lakehouse/` versions after 30 days. Current lakehouse files never expire.
+
+Restricted database exports use `controller_state_transfers/<TRANSFER_ID>/`. One lifecycle rule expires current versions after seven days. It expires noncurrent versions seven days after they become noncurrent. The transfer identity deletes every version immediately after verified import. Lifecycle expiration is the backstop. S3 also removes expired delete markers through current-version expiration. The noncurrent period starts when a version becomes noncurrent, so complete removal can take longer than seven days. S3 processes eligible objects asynchronously. Other prefixes do not expire.
+
+The owner reviews the full storage plan before approving an apply. Deployment, teardown protections and lifecycle verification are described in [Infrastructure controls](docs/infrastructure_controls.md).

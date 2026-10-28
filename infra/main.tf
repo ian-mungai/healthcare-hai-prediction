@@ -86,8 +86,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
   }
 
-  # Iceberg replaces and deletes its own files, so replaced versions under lakehouse/
-  # expire after 30 days. Current lakehouse files and everything outside lakehouse/ never expire.
+  # Iceberg replaces and deletes its own files, so only replaced versions under lakehouse/ expire after 30 days.
   rule {
     id     = "expire_replaced_lakehouse_versions"
     status = "Enabled"
@@ -102,6 +101,23 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
 
     expiration {
       expired_object_delete_marker = true
+    }
+  }
+
+  rule {
+    id     = "expire_controller_state_transfers"
+    status = "Enabled"
+
+    filter {
+      prefix = "controller_state_transfers/"
+    }
+
+    expiration {
+      days = 7
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 7
     }
   }
 }

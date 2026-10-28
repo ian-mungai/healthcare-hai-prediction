@@ -1,10 +1,10 @@
 ---
-title: Infrastructure Controls
+title: Infrastructure controls
 description: Environments, the AWS stacks and project policies, bucket lifecycle rules, the lifecycle permission, deferred controls.
-last_updated: 2026-10-24
+last_updated: 2026-10-25
 ---
 
-# Infrastructure Controls
+# Infrastructure controls
 
 **Environments.** All three stacks tag resources with `Environment = dev`. A `prod`
 environment and an `infra/modules/` layout are deferred; the platform stack keeps
@@ -239,15 +239,13 @@ the first deploy.
   carry its schedule's reserved `aws:dlm:lifecycle-schedule-name` tag together
   with the data volume's `Name` and `Project` tags.
 
-**Lifecycle rules.** The bucket-wide rule, applied and read back from S3, aborts incomplete multipart uploads seven days after
-initiation, with no expiration or transition of completed objects, historical
-versions or delete markers. One exception covers only `lakehouse/`, where
-Iceberg replaces and deletes its own table files: replaced versions there expire
-30 days after they are replaced and orphaned delete markers are removed; current
-lakehouse files and everything outside `lakehouse/` never expire. Local mock-plan tests, source-shape checks and live
-configuration readback pass. The seven-day scheduler itself has not been
-observed in a timed test and no deliberately incomplete upload was created for
-verification.
+**Lifecycle rules.** The storage stack declares three enabled rules. The bucket-wide rule only aborts incomplete multipart uploads seven days after initiation. It never expires completed objects, historical versions or delete markers. The `lakehouse/` rule expires replaced versions 30 days after they become noncurrent and removes expired delete markers. Current lakehouse files never expire.
+
+The `controller_state_transfers/` rule covers restricted database exports staged under `controller_state_transfers/<TRANSFER_ID>/`. The transfer identity deletes every version immediately after verified import. As a backstop, current versions become eligible for expiration after seven days. Noncurrent versions become eligible seven days after they become noncurrent. No retained-version threshold applies. S3 also removes expired delete markers through current-version expiration. The provider forbids combining `expiration.days` with `expired_object_delete_marker`. This rule sets `days = 7` without that flag ([provider reference](https://registry.terraform.io/providers/hashicorp/aws/6.66.0/docs/resources/s3_bucket_lifecycle_configuration#expiration), [S3 delete-marker behavior](https://docs.aws.amazon.com/AmazonS3/latest/userguide/ManagingDelMarkers.html)).
+
+Current-version expiration creates a delete marker in a versioned bucket. The former current version then starts its seven-day noncurrent period. S3 processes eligible objects asynchronously, so this backstop is not a seven-day maximum for physical retention. Prefixes outside `lakehouse/` and `controller_state_transfers/` never expire.
+
+The established upload and lakehouse rules have local mock-plan, source-shape and live configuration-readback evidence. The transfer rule requires a reviewed storage plan, owner-approved application and S3 configuration readback. The seven-day scheduler has no timed verification and no deliberately incomplete upload was created for verification.
 
 The project's IAM policy grants only bucket-scoped
 `s3:PutLifecycleConfiguration` for lifecycle changes; the storage stack
