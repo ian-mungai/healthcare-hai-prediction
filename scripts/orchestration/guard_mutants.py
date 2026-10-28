@@ -174,6 +174,22 @@ def mutants() -> dict[str, Mutant]:
     )
     found = [
         Mutant(
+            "local_attempt_health_rechecked",
+            "the broker rechecks launcher health after reading a local attempt",
+            (
+                Edit(
+                    BROKER,
+                    block(
+                        '        if "execution" in attempt:',
+                        '            self.require_serving(allow_cloud=attempt["execution"]["requested_target"] != "docker")',
+                        "        elif cloud_only:",
+                        "            self.require_serving()",
+                    ),
+                    block('        self.require_serving(allow_cloud="execution" in attempt)'),
+                ),
+            ),
+        ),
+        Mutant(
             "docker_call_in_broker",
             "the broker runs a docker program before it forwards",
             (
@@ -955,6 +971,10 @@ MUTANTS: dict[str, Mutant] = mutants()
 
 GUARDS: dict[str, dict[str, tuple[Guard, ...]]] = {
     "broker": {
+        "switch_off_local_poll": (
+            Guard("local_attempt_health_rechecked", "local status uses its single attempt reply"),
+            Guard("local_attempt_health_rechecked", "applying a local attempt adds no launcher health request"),
+        ),
         "no_direct_docker": (Guard("docker_call_in_broker", "no docker program was started by the broker child"),),
         "released_run_refused": (Guard("refusal_recorded_as_success", "the second submission failed"),),
         "failed_retained_refused": (Guard("release_with_owner_flag", "the broker cannot release a failed-retained run"),),
@@ -1084,7 +1104,7 @@ GUARDS: dict[str, dict[str, tuple[Guard, ...]]] = {
 }
 
 BEFORE_FIX: dict[str, tuple[str, ...]] = {
-    "broker": ("malformed_content_length", "cancel_after_lost_submit_reply", "noop_crash_recovery"),
+    "broker": ("malformed_content_length", "cancel_after_lost_submit_reply", "noop_crash_recovery", "switch_off_local_poll"),
     "supervisor": ("supervisor_listener_start_failure", "supervisor_teardown_independent"),
     "stack": ("stack_memory_floor", "orchestration_dump_template"),
 }

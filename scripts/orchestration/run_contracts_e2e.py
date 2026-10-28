@@ -61,6 +61,9 @@ def schemas() -> dict[str, bool]:
             results[f"{path.name} is a valid schema"] = True
         except SchemaError:
             results[f"{path.name} is a valid schema"] = False
+    execution = json.loads((CONTRACTS / "execution.schema.json").read_text())
+    ledger = json.loads((CONTRACTS / "ledger_line.schema.json").read_text())
+    results["execution copy matches source"] = ledger["properties"]["execution"] == execution
     return results
 
 
@@ -120,7 +123,9 @@ def requests() -> dict[str, bool]:
     """Accepted requests validate; each caller override is refused for its intended reason."""
     check = validator("submission_request.schema.json")
     examples = load("submission_requests.json")
-    results = {f"request accepted: {item['template']} {item['mode']}": not list(check.iter_errors(item)) for item in examples["accepted"]}
+    results = {
+        f"request accepted: {item['template']} {item['mode']} {item.get('target', 'auto')}": not list(check.iter_errors(item)) for item in examples["accepted"]
+    }
     for item in examples["refused"]:
         errors = list(check.iter_errors(item["request"]))
         intended = {"additionalProperties", "pattern", "enum", "minimum", "required"}

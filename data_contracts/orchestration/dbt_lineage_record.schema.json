@@ -79,6 +79,13 @@
         "input_run_id": {
           "type": "string",
           "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"
+        },
+        "target": {
+          "enum": [
+            "auto",
+            "ecs",
+            "docker"
+          ]
         }
       },
       "allOf": [

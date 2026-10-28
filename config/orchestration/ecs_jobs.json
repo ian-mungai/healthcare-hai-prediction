@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "enabled": false,
+  "jobs": [
+    {"template": "pipeline_dbt", "layer": "gold", "class": "offline"},
+    {"template": "pipeline_dbt", "layer": "silver", "class": "lakehouse_read"},
+    {"template": "pipeline_validate_silver", "class": "offline"},
+    {"template": "pipeline_validate_gold", "class": "offline"},
+    {"template": "pipeline_validate_cross", "class": "offline"},
+    {"template": "pipeline_export", "class": "offline"},
+    {"template": "pipeline_spark", "class": "lakehouse_read"},
+    {"template": "pipeline_publish", "class": "lakehouse_read"}
+  ]
+}
