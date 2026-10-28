@@ -133,7 +133,13 @@ The foundation repositories are immutable, so every push uses a unique tag: the 
    aws ecs describe-container-instances --profile <PROJECT_PROFILE> --region <REGION> --cluster <CLUSTER_NAME> --container-instances <CONTAINER_INSTANCE_ARN> --query 'containerInstances[].{status:status,agentConnected:agentConnected}'
    ```
 
-   Check registration for up to 10 minutes. Continue only when the instance is `ACTIVE` and `agentConnected` is true. If the deadline expires, inspect the host boot failure before applying services.
+   Check registration for up to 10 minutes. Continue only when the instance is `ACTIVE` and `agentConnected` is true. If the deadline expires, read the host boot log from the serial console before applying services. The boot script copies every log line to the console with the prefix `platform_boot:`. Its last line states success or the exit status, line and step of the failure. The project profile may read the console of the project host only (`ec2:GetConsoleOutput`). AWS posts the console output shortly after a state change, not continuously. It lists a terminated instance for about an hour ([GetConsoleOutput](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_GetConsoleOutput.html), [TerminateInstances](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_TerminateInstances.html)). Observed on Oct 27 2026: the output of an instance read about a minute after it terminated came back empty. Read it while the host runs or at once when a start fails:
+
+   ```sh
+   aws ec2 describe-instances --profile <PROJECT_PROFILE> --region <REGION> --filters "Name=tag:Name,Values=<PROJECT_NAME>_host_<ENVIRONMENT>" "Name=tag:Project,Values=<PROJECT_NAME>" --query 'Reservations[].Instances[].[InstanceId,State.Name]' --output text
+   aws ec2 get-console-output --profile <PROJECT_PROFILE> --region <REGION> --instance-id <INSTANCE_ID> --latest --output text | grep 'platform_boot:'
+   ```
+
 4. From the repository root, create a services plan with the project profile:
 
    ```sh

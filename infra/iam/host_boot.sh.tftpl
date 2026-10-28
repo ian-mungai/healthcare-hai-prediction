@@ -1,9 +1,12 @@
 #!/bin/bash
 # Runs once per instance. Every command that can stall runs under a deadline, and the script stops at the first failure.
 # The core dump settings and the metadata firewall come first and ECS_CLUSTER is written last, so no task runs without
-# them and a host whose data volume did not mount never joins the cluster.
+# them and a host whose data volume did not mount never joins the cluster. Every line the script and its commands write
+# goes to the log and, with the prefix below, to the serial console, which the project user can read after the instance
+# ends (ec2:GetConsoleOutput). The last line states success, or the failing exit status, line and step.
 set -euo pipefail
 log_file="/var/log/platform_boot.log"
+console_device="/dev/console"
 fstab_file="/etc/fstab"
 ecs_config_file="/etc/ecs/ecs.config"
 device_directory="/dev/disk/by-id"
@@ -13,28 +16,95 @@ nft_rules_file="/etc/nftables/platform_imds.nft"
 nftables_config="/etc/sysconfig/nftables.conf"
 guard_script="/usr/local/sbin/platform_imds_guard"
 exec >>"$log_file" 2>&1
+console_prefix="platform_boot:"
+console_flush_seconds=4
+stop_file="$log_file.stop"
+current_step="starting"
 region="${region}"
 mount_path="${mount_path}"
 data_volume_name="${data_volume_name}"
 address_name="${address_name}"
 project_tag="${project_tag}"
 
+# log and step write to the error stream, which command substitutions leave alone and which goes to the log.
+log() { printf '[%ss] %s\n' "$SECONDS" "$*" >&2; }
+step() {
+  current_step=$1
+  log "$1"
+}
+
+# A separate process copies each line of the log to the console, so a console that fails or blocks never stops a boot
+# step. It polls the log, writes one prefixed line at a time and stops after one more pass once the stop file exists.
+# The exit handler creates that file after the last line is in the log, waits for the copy up to the flush limit and
+# then ends it, so a console that never accepts a write delays the end of the boot by the limit and no more.
+copy_log_to_console() {
+  local line pending="" stopping
+  exec 3<"$log_file"
+  while :; do
+    stopping=0
+    if [ -e "$stop_file" ]; then stopping=1; fi
+    while IFS= read -r -u 3 line; do
+      printf '%s %s%s\n' "$console_prefix" "$pending" "$line" 2>/dev/null >>"$console_device" || :
+      pending=""
+    done
+    pending+=$line
+    if [ "$stopping" -eq 1 ]; then
+      if [ -n "$pending" ]; then printf '%s %s\n' "$console_prefix" "$pending" 2>/dev/null >>"$console_device" || :; fi
+      break
+    fi
+    sleep 0.5
+  done
+}
+stop_console_copy() {
+  local waited=0
+  : >"$stop_file" || return 0
+  while kill -0 "$copy_pid" 2>/dev/null; do
+    if [ "$waited" -ge $((console_flush_seconds * 4)) ]; then
+      kill -KILL "$copy_pid" 2>/dev/null || :
+      break
+    fi
+    sleep 0.25
+    waited=$((waited + 1))
+  done
+}
+finish() {
+  local status=$? line=$1
+  trap - EXIT
+  set +e
+  if [ "$status" -eq 0 ]; then
+    log "finished: every step succeeded and ECS_CLUSTER is written."
+  else
+    log "FAILED: exit status $status at line $line during: $current_step"
+  fi
+  stop_console_copy
+}
+rm -f "$stop_file"
+copy_log_to_console </dev/null >/dev/null 2>&1 &
+copy_pid=$!
+trap 'finish $LINENO' EXIT
+trap 'exit 143' TERM HUP INT
+log "Copying this log to the console as lines that start with \"$console_prefix\" (process $copy_pid)."
+
 # GNU timeout sends TERM at the deadline and KILL 10 seconds later, so a command that ignores TERM still ends. Status
 # 124 means TERM stopped it and 137 means KILL did.
 run_within() {
   local seconds=$1 step=$2 status=0
   shift 2
+  current_step=$step
+  log "starting: $step (limit $seconds seconds)"
   timeout --kill-after=10 "$seconds" "$@" || status=$?
   if [ "$status" -eq 124 ]; then echo "$step did not finish within $seconds seconds." >&2; fi
   if [ "$status" -eq 137 ]; then
     echo "$step did not finish within $seconds seconds and ignored the stop signal, so it was killed 10 seconds later." >&2
   fi
+  log "ended: $step (status $status)"
   return "$status"
 }
 
 # A pipe handler in kernel.core_pattern receives core dumps even when a container's core limit is zero, so cores are
 # plain files, which the zero limit stops, and set-user-ID programs never dump. This file sorts after the image's
 # systemd-coredump setting, so it also wins at every later boot.
+step "Writing the core dump settings"
 mkdir -p "$(dirname "$sysctl_file")"
 cat >"$sysctl_file" <<'SYSCTL'
 kernel.core_pattern = core
@@ -54,7 +124,8 @@ fi
 # same transaction, and the guard unit is part of that service, so stopping or restarting it stops or restarts Docker
 # and the ECS agent too. Both require the guard and load and check the rule before every start. A timer checks it every
 # 10 seconds, loads it again when it is missing and stops both when it cannot.
-command -v nft >/dev/null || run_within 300 "Installing nftables" dnf install -y nftables
+step "Writing the metadata firewall files"
+command -v nft >/dev/null || run_within 300 "Installing nftables" dnf install -y -q nftables
 mkdir -p "$(dirname "$nft_rules_file")" "$(dirname "$guard_script")" "$systemd_directory/docker.service.d" "$systemd_directory/ecs.service.d"
 cat >"$nft_rules_file" <<'RULES'
 table inet platform_imds
@@ -169,12 +240,13 @@ run_within 60 "Starting the metadata firewall timer" systemctl enable --now plat
 metadata_get() {
   curl -sf --max-time 10 -H "X-aws-ec2-metadata-token: $token" "http://169.254.169.254/latest/meta-data/$1"
 }
+step "Reading the instance metadata"
 token=$(curl -sf --max-time 10 -X PUT -H "X-aws-ec2-metadata-token-ttl-seconds: 600" http://169.254.169.254/latest/api/token) || {
   echo "The metadata token request failed, so the host does not join the cluster."
   exit 1
 }
 instance=$(metadata_get instance-id) || { echo "The instance ID could not be read."; exit 1; }
-command -v aws >/dev/null || run_within 300 "Installing the AWS CLI" dnf install -y awscli-2
+command -v aws >/dev/null || run_within 300 "Installing the AWS CLI" dnf install -y -q awscli-2
 volume=$(run_within 60 "Finding the data volume" aws ec2 describe-volumes --region "$region" --filters "Name=tag:Name,Values=$data_volume_name" "Name=tag:Project,Values=$project_tag" --query "Volumes[].VolumeId" --output text) || {
   echo "The data volume could not be listed."
   exit 1
@@ -185,14 +257,15 @@ allocation=$(run_within 60 "Finding the Elastic IP" aws ec2 describe-addresses -
 }
 [[ "$volume" =~ ^vol-[0-9a-f]{8,17}$ ]] || { echo "Exactly one data volume must carry the project tags, but the search did not return one volume ID."; exit 1; }
 [[ "$allocation" =~ ^eipalloc-[0-9a-f]{8,17}$ ]] || { echo "Exactly one Elastic IP must carry the project tags, but the search did not return one allocation ID."; exit 1; }
-run_within 60 "Checking the Session Manager agent" rpm -q amazon-ssm-agent >/dev/null || run_within 300 "Installing the Session Manager agent" dnf install -y amazon-ssm-agent
+run_within 60 "Checking the Session Manager agent" rpm -q amazon-ssm-agent >/dev/null || run_within 300 "Installing the Session Manager agent" dnf install -y -q amazon-ssm-agent
 run_within 120 "Starting the Session Manager agent" systemctl enable --now amazon-ssm-agent
-run_within 60 "Associating the Elastic IP" aws ec2 associate-address --region "$region" --allocation-id "$allocation" --instance-id "$instance" --allow-reassociation
+run_within 60 "Associating the Elastic IP" aws ec2 associate-address --region "$region" --allocation-id "$allocation" --instance-id "$instance" --allow-reassociation >/dev/null
 deadline=$((SECONDS + 600))
-until run_within 60 "Attaching the data volume" aws ec2 attach-volume --region "$region" --volume-id "$volume" --instance-id "$instance" --device /dev/xvdf; do
+until run_within 60 "Attaching the data volume" aws ec2 attach-volume --region "$region" --volume-id "$volume" --instance-id "$instance" --device /dev/xvdf >/dev/null; do
   if ((SECONDS >= deadline)); then echo "The data volume did not attach within 600 seconds."; exit 1; fi
   sleep 15
 done
+step "Waiting for the data volume device"
 device_link="$device_directory/nvme-Amazon_Elastic_Block_Store_$(echo "$volume" | tr -d -)"
 deadline=$((SECONDS + 300))
 until [ -e "$device_link" ]; do
@@ -212,6 +285,7 @@ uuid=$(run_within 60 "Reading the data volume's UUID" blkid -s UUID -o value "$d
 mkdir -p "$mount_path"
 grep -q "UUID=$uuid" "$fstab_file" || echo "UUID=$uuid $mount_path xfs defaults,nofail 0 2" >>"$fstab_file"
 run_within 30 "Checking the data mount" mountpoint -q "$mount_path" || run_within 120 "Mounting the data volume" mount "$mount_path"
+step "Writing the ECS agent configuration"
 cat >>"$ecs_config_file" <<CONFIG
 ECS_ENABLE_TASK_IAM_ROLE=true
 ECS_ENABLE_TASK_IAM_ROLE_NETWORK_HOST=true
