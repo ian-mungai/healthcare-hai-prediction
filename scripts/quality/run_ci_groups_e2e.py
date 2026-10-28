@@ -36,7 +36,6 @@ list-only run and in the gates part (``release_docker`` runs on its own with a s
 
 from __future__ import annotations
 
-import ast
 import copy
 import hashlib
 import importlib
@@ -57,6 +56,7 @@ from scripts.quality import ci_groups
 from scripts.quality import pre_push as pre_push_module
 from scripts.quality.repo_checks import load_yaml
 from scripts.quality.scratch_worktree import ScratchWorktrees
+from scripts.quality.source_reads import source_inputs
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = ROOT / ".venv" / "bin" / "python"
@@ -72,6 +72,7 @@ COPIED = (
     ".yamllint",
     "README.md",
     "config/quality/ci_groups.json",
+    "config/quality/launcher_inputs.json",
     "config/quality/feature_cases.json",
     "scripts/lakehouse/feature_shards.py",
     "scripts/lakehouse/run_feature_sources_e2e.py",
@@ -98,6 +99,8 @@ COPIED = (
     "orchestration/network_policy.py",
     "services/orchestration/egress_proxy.json",
     "scripts/quality/ci_groups.py",
+    "scripts/quality/launcher_inputs.py",
+    "scripts/quality/source_reads.py",
     "scripts/quality/lint_sources.py",
     "scripts/quality/documentation_review.py",
     "scripts/quality/repo_checks.py",
@@ -786,107 +789,170 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [*LAYERS[2:], "orchestration_checks", "sql_style"],
         ),
     ]
-    return [*cases, *reader_coverage_cases(work), *entry_point_cases()]
+    return [*cases, *reader_coverage_cases(work), *entry_point_cases(), *launcher_selection_cases(work)]
+
+
+LAUNCHER_IMPORTED = (
+    "scripts/lakehouse/silver.py",
+    "orchestration/network_policy.py",
+    "scripts/quality/docker_calls.py",
+    "scripts/acquisition/new_probe.py",
+    "dbt/models/gold/new_probe.sql",
+)
+LAUNCHER_UNRELATED = (
+    "scripts/quality/lint_sources.py",
+    "scripts/quality/ci_hooks.py",
+    "scripts/orchestration/run_lineage_e2e.py",
+    "dags/gold_transform_dag.py",
+    "tests/orchestration/fixtures/combined_dag.py",
+    "infra/main.tf",
+)
+SAMPLE_REPOSITORY = {
+    "entry.py": (
+        "from pathlib import Path\nfrom pkg import used\n\nROOT = Path(__file__).resolve().parent\n\n\ndef run():\n    import late\n"
+        '    data = (ROOT / "config/a.json").read_text()\n    compose = (ROOT / "compose.yaml").read_text()\n'
+        '    files = sorted((ROOT / "folder").glob("*"))\n    return used, late, data, compose, files\n'
+    ),
+    "pkg/__init__.py": "",
+    "pkg/used.py": "VALUE = 1\n",
+    "late.py": "VALUE = 2\n",
+    "config/a.json": "{}\n",
+    "compose.yaml": "services:\n  worker:\n    entrypoint: [python, -m, svc.worker]\n",
+    "svc/worker.py": "VALUE = 3\n",
+    "folder/x.txt": "x\n",
+    "folder/y.txt": "y\n",
+    "unrelated.py": "VALUE = 4\n",
+    "other/z.py": "VALUE = 5\n",
+    "scripts/ci/groups/launcher.sh": 'launcher_e2e() {\n  "$python_bin" -m entry\n}\n',
+}
+SAMPLE_ENTRY = {"entry_points": ["entry.py"], "extra_inputs": []}
+
+
+def sample_cases(scratch: Path) -> list[dict[str, Any]]:
+    """The tool on a small repository: the computed list has the imports, reads, module names in text files and whole-folder reads, and a planted defect
+    against the committed list is named by ``problems``."""
+    try:
+        from scripts.quality import launcher_inputs
+    except ImportError as error:
+        return [{"case": "launcher_inputs_tool_exists", "passed": False, "error": str(error)}]
+    root = scratch / "launcher_sample"
+    for name, text in SAMPLE_REPOSITORY.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(text, encoding="utf-8")
+    tracked = set(SAMPLE_REPOSITORY)
+    computed = launcher_inputs.compute(root, tracked, SAMPLE_ENTRY["entry_points"], SAMPLE_ENTRY["extra_inputs"])
+    committed = {**SAMPLE_ENTRY, "files": computed["files"], "dynamic_sites": computed["dynamic_sites"], "folders": computed["folders"]}
+    wanted = {"entry.py", "pkg/__init__.py", "pkg/used.py", "late.py", "config/a.json", "compose.yaml", "svc/worker.py", "folder/x.txt", "folder/y.txt"}
+    cases = [
+        {
+            "case": "launcher_inputs_sample_closure",
+            "passed": set(computed["files"]) == wanted,
+            "missing": sorted(wanted - set(computed["files"])),
+            "extra": sorted(set(computed["files"]) - wanted),
+        },
+        {"case": "launcher_inputs_sample_matches_itself", "passed": launcher_inputs.problems(root, tracked, committed) == []},
+        {"case": "launcher_inputs_sample_folder_read_whole", "passed": computed["folders"] == ["folder"], "folders": computed["folders"]},
+    ]
+
+    def planted(name: str, change: Callable[[dict[str, Any]], dict[str, Any]], named: str, files: dict[str, str] | None = None) -> dict[str, Any]:
+        changed_tracked = tracked | set(files or {})
+        for path, text in (files or {}).items():
+            (root / path).write_text(text, encoding="utf-8")
+        try:
+            found = launcher_inputs.problems(root, changed_tracked, change(copy.deepcopy(committed)))
+        finally:
+            for path in files or {}:
+                (root / path).write_text(SAMPLE_REPOSITORY.get(path, ""), encoding="utf-8")
+        return {"case": name, "passed": any(named in line for line in found), "named": named, "problems": found[:4]}
+
+    def drop(path: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+        return lambda listing: {**listing, "files": [item for item in listing["files"] if item != path]}
+
+    def add(path: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+        return lambda listing: {**listing, "files": sorted([*listing["files"], path])}
+
+    cases += [
+        planted("launcher_list_missing_imported_module_is_named", drop("late.py"), "late.py"),
+        planted("launcher_list_missing_package_init_is_named", drop("pkg/__init__.py"), "pkg/__init__.py"),
+        planted("launcher_list_missing_read_file_is_named", drop("config/a.json"), "config/a.json"),
+        planted("launcher_list_missing_module_named_in_text_is_named", drop("svc/worker.py"), "svc/worker.py"),
+        planted("launcher_list_missing_file_of_a_folder_read_is_named", drop("folder/y.txt"), "folder/y.txt"),
+        planted("launcher_list_missing_folder_is_named", lambda listing: {**listing, "folders": []}, "folder/"),
+        planted("launcher_list_stale_entry_is_named", add("unrelated.py"), "unrelated.py"),
+        planted("launcher_list_deleted_entry_is_named", add("gone.py"), "gone.py"),
+        planted(
+            "launcher_new_import_is_named_until_regenerated",
+            lambda listing: listing,
+            "other/z.py",
+            {"late.py": "import other.z\nVALUE = 2\n"},
+        ),
+        planted(
+            "launcher_new_dynamic_import_is_named",
+            lambda listing: listing,
+            "late.py",
+            {"late.py": "import importlib\n\n\ndef load(name):\n    return importlib.import_module(name)\n"},
+        ),
+        planted(
+            "launcher_stale_ignored_read_is_named",
+            lambda listing: {**listing, "ignored_reads": [{"module": "entry.py", "text": "nothing/here", "why": "planted"}]},
+            "nothing/here",
+        ),
+        planted("launcher_entry_point_must_match_the_group_body", lambda listing: {**listing, "entry_points": ["unrelated.py"]}, "launcher.sh"),
+    ]
+    ignoring = launcher_inputs.compute(root, tracked, SAMPLE_ENTRY["entry_points"], [], [{"module": "entry.py", "text": "folder", "why": "planted"}])
+    cases += [
+        {
+            "case": "launcher_trace_names_a_file_the_list_misses",
+            "passed": launcher_inputs.trace_gaps(["other/z.py", "entry.py", "/outside/x"], tracked, computed["files"]) == ["other/z.py"],
+        },
+        {
+            "case": "launcher_ignored_read_drops_its_folder",
+            "passed": "folder/x.txt" not in ignoring["files"] and ignoring["folders"] == [] and ("entry.py", "folder") in ignoring["ignored"],
+        },
+    ]
+    return cases
+
+
+def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
+    """The launcher group is selected by what its suite imports or reads and by nothing else. A change to a module the suite imports selects it, a change to
+    an unrelated module does not, the committed list equals the computed one, and every computed file is selected by the group's patterns."""
+    cases: list[dict[str, Any]] = [
+        selection_case(work, f"launcher_selected_by_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "launcher"], ["launcher"])
+        for path in LAUNCHER_IMPORTED
+    ]
+    cases += [
+        selection_case(work, f"launcher_not_selected_by_{Path(path).stem}", ["--scope", "paths", "--path", path, "--part", "launcher"], [])
+        for path in LAUNCHER_UNRELATED
+    ]
+    try:
+        from scripts.quality import launcher_inputs
+    except ImportError as error:
+        return [*cases, {"case": "launcher_inputs_tool_exists", "passed": False, "error": str(error)}]
+    tracked = set(git(ROOT, "ls-files").splitlines())
+    committed = json.loads((ROOT / launcher_inputs.LIST).read_text(encoding="utf-8"))
+    config = ci_groups.load()
+    gaps = launcher_inputs.selection_gaps(config, committed["files"], tracked)
+    with tempfile.TemporaryDirectory(prefix="launcher_sample.") as folder:
+        sample = sample_cases(Path(folder))
+    return [
+        *cases,
+        {
+            "case": "launcher_list_equals_computed",
+            "passed": launcher_inputs.problems(ROOT, tracked, committed) == [],
+            "problems": launcher_inputs.problems(ROOT, tracked, committed)[:6],
+        },
+        {
+            "case": "launcher_list_is_selected_by_the_group",
+            "passed": not gaps and len(committed["files"]) > 0,
+            "not_selected": gaps[:6],
+            "files": len(committed["files"]),
+        },
+        *sample,
+    ]
 
 
 def module_source(module: str) -> str:
     return (ROOT / f"{module.replace('.', '/')}.py").read_text(encoding="utf-8")
-
-
-def fills_template(template: list[str | None], path: str, names: set[str]) -> bool:
-    """True when ``path`` is the f-string ``template`` (constant parts, ``None`` per placeholder) with each placeholder replaced by a string of ``names``."""
-
-    def from_part(index: int, position: int) -> bool:
-        if index == len(template):
-            return position == len(path)
-        part = template[index]
-        if part is not None:
-            return path.startswith(part, position) and from_part(index + 1, position + len(part))
-        return any(path[position:end] in names and from_part(index + 1, end) for end in range(position + 1, len(path) + 1))
-
-    return from_part(0, 0)
-
-
-def source_inputs(source: str, tracked: set[str]) -> dict[str, str]:
-    """Every tracked file that a string anywhere in ``source`` names, in module-level constants and inside functions alike, with the text that names it.
-    A string constant, or a ``/`` join of strings (``Path(..)``, names assigned a join anywhere in the module), names a file or the files in a folder when it
-    holds a slash; a join that is only created (the receiver of ``mkdir``, ``write_text``, ``write_bytes``, ``touch`` or ``unlink``) is not read. An f-string
-    names every tracked file it matches when each placeholder is replaced by a string constant of the module (``f"dbt/models/{folder}/{name}.sql"``).
-    Docstrings and one-component names are not read as paths. The source is read, not imported."""
-    tree = ast.parse(source)
-    in_fstring = {id(part) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr) for part in node.values}
-    docstrings = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Expr)}
-    strings = {
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in in_fstring and id(node) not in docstrings
-    }
-    created = {
-        id(node.func.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in {"mkdir", "write_text", "write_bytes", "touch", "unlink"}
-    }
-    known = {"ROOT": "", "REPO_ROOT": ""}
-
-    def operand(node: ast.expr) -> str | None:
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return node.value
-        if isinstance(node, ast.Name):
-            return known.get(node.id)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Path" and len(node.args) == 1:
-            return operand(node.args[0])
-        return None
-
-    def joined(top: ast.BinOp) -> list[str]:
-        parts: list[str | None] = []
-        node: ast.expr = top
-        while isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-            parts.append(operand(node.right))
-            node = node.left
-        parts.append(operand(node))
-        runs: list[str] = []
-        run: list[str] = []
-        for part in [*reversed(parts), None]:
-            if part is None:
-                if len(run) > 1:
-                    runs.append("/".join(piece.strip("/") for piece in run if piece.strip("/")))
-                run = []
-            else:
-                run.append(part)
-        return runs
-
-    assigned = [
-        (node.targets[0].id, node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id not in known
-    ]
-    for _ in range(3):
-        for name, value in assigned:
-            if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Div):
-                if len(runs := joined(value)) == 1:
-                    known[name] = runs[0]
-            elif (text := operand(value)) is not None:
-                known[name] = text
-    inner = {id(node.left) for node in ast.walk(tree) if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)}
-    names = set(strings)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and id(node) not in inner and id(node) not in created:
-            names.update(joined(node))
-    templates: list[list[str | None]] = [
-        [part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else None for part in node.values]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.JoinedStr)
-    ]
-    found: dict[str, str] = {}
-    for path in sorted(tracked):
-        for text in sorted(names):
-            base = text.strip("/")
-            if "/" in base and (path == base or path.startswith(f"{base}/")):
-                found.setdefault(path, text)
-        for template in templates:
-            if None in template and any(template) and fills_template(template, path, strings):
-                found.setdefault(path, 'f"' + "{}".join(part or "" for part in template) + '"')
-    return found
 
 
 def reader_inputs(modules: tuple[str, ...], tracked: set[str]) -> dict[str, str]:
@@ -2650,7 +2716,7 @@ def guard_cases() -> list[dict[str, Any]]:
         config["global"].append("^scripts/ci/")
 
     def broad_launcher(config: dict[str, Any]) -> None:
-        config["groups"]["launcher"] = ["^scripts/" if pattern.startswith("^scripts/(?!") else pattern for pattern in config["groups"]["launcher"]]
+        config["groups"]["launcher"].append("^scripts/")
 
     def remove_sql_file(tree: Path) -> None:
         (tree / sql).unlink()
