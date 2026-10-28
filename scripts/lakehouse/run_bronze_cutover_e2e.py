@@ -30,6 +30,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import duckdb
+
 from orchestration import catalog_authority, launcher
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from orchestration.pipeline_session import RoleSession
@@ -163,6 +165,28 @@ def manifest_entry(status: int, path: str, size: int) -> bytes:
     return zigzag(status) + data_file
 
 
+@functools.cache
+def parquet_fixture() -> bytes:
+    """A synthetic zstd Parquet file of one row group, written by DuckDB as Iceberg's default codec would compress it."""
+    with tempfile.TemporaryDirectory(prefix="bronze_parquet_") as scratch:
+        path = Path(scratch) / "rows.parquet"
+        with duckdb.connect(config={"autoinstall_known_extensions": False, "autoload_known_extensions": False}) as connection:
+            rows = connection.sql("SELECT i AS id, 'synthetic row ' || i AS label FROM range(200) t(i)")
+            rows.write_parquet(str(path), compression="zstd")
+        return path.read_bytes()
+
+
+def broken_parquet(kind: str) -> bytes:
+    """The fixture with its footer zeroed, its row group cut out (the length and magic kept) or bytes of its first compressed page overwritten."""
+    valid = parquet_fixture()
+    footer = int.from_bytes(valid[-8:-4], "little")
+    if kind == "footer":
+        return valid[: -8 - footer] + bytes(footer) + valid[-8:]
+    if kind == "truncated":
+        return valid[:4] + valid[-8 - footer :]
+    return valid[:44] + b"\xff" * 32 + valid[76:]
+
+
 class DataStore:
     """The S3 objects as the lakehouse reader role sees them: manifest lists, manifests and data files, read whole or by byte range."""
 
@@ -172,8 +196,11 @@ class DataStore:
         self.objects: dict[str, bytes] = {}
         self.denied = False
         self.reads: list[str] = []
+        self.snapshots: dict[str, int] = {}
 
-    def put_table(self, location: str, snapshot: int, data: bytes = b"PAR1" + b"synthetic rows" + b"PAR1") -> None:
+    def put_table(self, location: str, snapshot: int, data: bytes | None = None) -> None:
+        data = parquet_fixture() if data is None else data
+        self.snapshots[location] = snapshot
         manifest = location + "/metadata/m0.avro"
         live, deleted = location + "/data/00001.parquet", location + "/data/00000.parquet"
         self.objects[manifest] = avro_file(MANIFEST_SCHEMA, [manifest_entry(2, deleted, 99), manifest_entry(1, live, len(data))])
@@ -181,6 +208,10 @@ class DataStore:
             MANIFEST_LIST_SCHEMA, [avro_text(manifest) + zigzag(len(self.objects[manifest])) + zigzag(0) + zigzag(1) + zigzag(snapshot)], codec="null"
         )
         self.objects[live] = data
+
+    def replace_data(self, location: str, data: bytes) -> None:
+        """Replace the table's live data file, with a manifest entry of the new size."""
+        self.put_table(location, self.snapshots[location], data)
 
     def read(self, location: str, byte_range: str | None, *, deadline: float) -> tuple[bytes, int]:
         self.reads.append(location)
@@ -862,7 +893,7 @@ def register_and_verify(folder: Path) -> dict[str, bool]:
         "one register POST per table": len(cut.destination_stand_in.posts) == len(cut.inventory.tables),
     }
     facts = cut.verify()
-    scanned = {"manifests": 1, "data_file_bytes": 22, "storage_identity": "lakehouse_reader"}
+    scanned = {"manifests": 1, "data_file_bytes": len(parquet_fixture()), "rows": 200, "storage_identity": "lakehouse_reader"}
     checks["V1: verification loads every table and scans one data file per namespace through the reader role"] = facts == {
         "reader_tables": len(cut.inventory.tables),
         "data_reads": {"bronze": scanned, "bronze_dictionary": scanned},
@@ -870,7 +901,7 @@ def register_and_verify(folder: Path) -> dict[str, bool]:
     }
     checks["V1: the scan skips the deleted manifest entry and reads the live data file by range only"] = (
         not any(location.endswith("00000.parquet") for location in cut.lake.storage.reads)
-        and sum(location.endswith("00001.parquet") for location in cut.lake.storage.reads) == 4
+        and sum(location.endswith("00001.parquet") for location in cut.lake.storage.reads) == 8
     )
     directory = folder / "cutover" / "cut1"
     run_record = bronze_cutover.write_run_record(directory, "cut1", cut.inventory.sha256, first, "20261028T000000Z")
@@ -994,6 +1025,21 @@ def verify_failures(folder: Path) -> dict[str, bool]:
             "data_read",
         ),
         ("V1: a storage identity that is refused", lambda cut: setattr(cut.lake.storage, "denied", True), "data_read"),
+        (
+            "V1: a Parquet file with a broken footer",
+            lambda cut: cut.lake.storage.objects.update({cut.inventory.tables[0].location + "/data/00001.parquet": broken_parquet("footer")}),
+            "data_read",
+        ),
+        (
+            "V1: a truncated Parquet file that keeps its magic bytes",
+            lambda cut: cut.lake.storage.replace_data(cut.inventory.tables[0].location, broken_parquet("truncated")),
+            "data_read",
+        ),
+        (
+            "V1: a Parquet file with corrupt compressed pages",
+            lambda cut: cut.lake.storage.objects.update({cut.inventory.tables[0].location + "/data/00001.parquet": broken_parquet("pages")}),
+            "data_read",
+        ),
         (
             "V1: a bronze_dictionary data file that is absent",
             lambda cut: cut.lake.storage.objects.pop(

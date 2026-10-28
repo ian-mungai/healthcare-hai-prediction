@@ -2,9 +2,12 @@
 that AWS read jobs use, from the manifest list down to one data file.
 
 ``scan_namespace`` takes the table metadata that the AWS reader identity loaded, reads its current manifest list and one data manifest, decodes
-both as Avro object container files and reads the first live data file's head and tail by byte range. A manifest list or manifest that is not
-Avro, an absent or unreadable object, a data file whose size differs from its manifest entry and a Parquet file without its magic bytes all
-fail with the ``data_read`` cause. Each object is read within the step deadline and at most ``register_aws_catalog.MAX_RECORD`` bytes of it.
+both as Avro object container files and natively reads the first live data file's first row group: ``parquet_rows`` reads the head, the
+footer and that row group's column chunks by byte range into a sparse local copy and decodes every row of the row group with DuckDB (no
+extension loads and no other byte of the object is read). A manifest list or manifest that is not Avro, an absent or unreadable object, a data
+file whose size differs from its manifest entry and a Parquet file without its magic bytes, with a broken footer, truncated or with pages that
+do not decompress all fail with the ``data_read`` cause. Each object is read within the step deadline and at most
+``register_aws_catalog.MAX_RECORD`` bytes of it, and an expired deadline interrupts the decode.
 ``RoleStorage`` reads through the lakehouse reader role's short session instead of the project profile; the session values stay in memory.
 """
 
@@ -13,12 +16,15 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+import threading
 import time
 import urllib.parse
 import zlib
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
+
+import duckdb
 
 from orchestration import pipeline_session
 from scripts.acquisition.s3_store import AwsCli, StorageError
@@ -222,14 +228,76 @@ def scan_namespace(storage: Storage, metadata: Mapping[str, Any], snapshot_id: i
             path, expected, file_format = data_file.get("file_path"), data_file.get("file_size_in_bytes"), str(data_file.get("file_format", ""))
             if not isinstance(path, str) or type(expected) is not int or expected < 8:
                 raise refuse("a manifest entry has no data file path or size")
-            head, size = read_range(storage, path, bucket, "bytes=0-3", deadline, clock, "data file")
-            tail, _ = read_range(storage, path, bucket, f"bytes={expected - 4}-{expected - 1}", deadline, clock, "data file")
-            if size != expected:
-                raise refuse("a data file's size differs from its manifest entry")
-            if file_format.upper() == "PARQUET" and (head, tail) != (PARQUET_MAGIC, PARQUET_MAGIC):
-                raise refuse("a data file is not a Parquet file")
-            return {"manifests": len(manifests), "data_file_bytes": size, "storage_identity": storage.identity}
+            if file_format.upper() != "PARQUET":
+                raise refuse(f"a data file has the format {file_format!r}, which the scan does not read")
+            rows = parquet_rows(storage, path, bucket, expected, deadline, clock)
+            return {"manifests": len(manifests), "data_file_bytes": expected, "rows": rows, "storage_identity": storage.identity}
     raise refuse("the current snapshot has no live data file to scan")
+
+
+def parquet_rows(storage: Storage, path: str, bucket: str, expected: int, deadline: float, clock: reg.Clock) -> int:
+    """Decode every row of the first row group of a Parquet file of ``expected`` bytes, read by byte range only; return the row count."""
+
+    def read(byte_range: str) -> tuple[bytes, int]:
+        return read_range(storage, path, bucket, byte_range, deadline, clock, "data file")
+
+    head, size = read("bytes=0-3")
+    tail, _ = read(f"bytes={expected - 8}-{expected - 1}")
+    if size != expected:
+        raise refuse("a data file's size differs from its manifest entry")
+    if head != PARQUET_MAGIC or tail[4:] != PARQUET_MAGIC:
+        raise refuse("a data file is not a Parquet file")
+    footer_start = expected - 8 - int.from_bytes(tail[:4], "little")
+    if not 4 <= footer_start < expected - 8 or expected - 8 - footer_start > reg.MAX_RECORD:
+        raise refuse("a Parquet footer length is outside the file or larger than 32 MiB")
+    footer, _ = read(f"bytes={footer_start}-{expected - 9}")
+    with tempfile.TemporaryDirectory(prefix="bronze_parquet_") as scratch:
+        local = Path(scratch) / "data.parquet"
+        with local.open("wb") as copy:
+            copy.truncate(expected)
+            copy.write(head)
+            copy.seek(footer_start)
+            copy.write(footer + tail)
+        chunks = decode(
+            "SELECT row_group_num_rows, coalesce(dictionary_page_offset, data_page_offset), total_compressed_size"
+            " FROM parquet_metadata(?) WHERE row_group_id = 0",
+            [str(local)],
+            deadline,
+            clock,
+        )
+        if not chunks:
+            raise refuse("a Parquet file has no row group")
+        start = min(int(chunk[1]) for chunk in chunks)
+        end = max(int(chunk[1]) + int(chunk[2]) for chunk in chunks)
+        if not 4 <= start < end <= footer_start or end - start > reg.MAX_RECORD:
+            raise refuse("a Parquet row group lies outside the file's data or is larger than 32 MiB")
+        body, _ = read(f"bytes={start}-{end - 1}")
+        with local.open("r+b") as patch:
+            patch.seek(start)
+            patch.write(body)
+        rows = int(chunks[0][0])
+        if len(decode("SELECT * FROM read_parquet(?) LIMIT ?", [str(local), rows], deadline, clock)) != rows:
+            raise refuse("a Parquet row group holds fewer rows than its footer records")
+    return rows
+
+
+def decode(query: str, parameters: list[Any], deadline: float, clock: reg.Clock) -> list[Any]:
+    """Run one DuckDB query on one thread without extensions; an expired deadline interrupts it and a decode error fails with ``data_read``."""
+    reg.check_deadline(deadline, clock)
+    config: dict[str, str | bool | int | float | list[str]] = {"autoinstall_known_extensions": False, "autoload_known_extensions": False, "threads": 1}
+    with duckdb.connect(config=config) as connection:
+        watchdog = threading.Timer(max(0.0, deadline - clock()), connection.interrupt)
+        watchdog.start()
+        try:
+            rows = connection.execute(query, parameters).fetchall()
+        except duckdb.InterruptException:
+            raise reg.RegistrationError("deadline", "the Parquet read exceeded its fixed deadline") from None
+        except duckdb.Error as error:
+            raise refuse(f"a Parquet file does not decode ({type(error).__name__})") from None
+        finally:
+            watchdog.cancel()
+    reg.check_deadline(deadline, clock)
+    return rows
 
 
 class RoleStorage:

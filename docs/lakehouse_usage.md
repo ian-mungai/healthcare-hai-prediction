@@ -345,9 +345,11 @@ with its own deadline (`--per-table-seconds`). It stops at the first failure. It
 never posts a registration twice. A rerun with the same inventory digest gives `unchanged` for done tables. The
 Polaris root credential registers, for this one attended run. `verify` loads every table through the AWS reader pair.
 For the first table of each namespace it then scans one data file through a short session of the lakehouse reader role,
-the S3 identity of AWS read jobs: it decodes the manifest list and a data manifest as Avro and reads the first live data
-file's head and tail by byte range. An absent or unreadable object, a file that is not Avro or Parquet and a data file
-whose size differs from its manifest entry all stop verification with the `data_read` cause. It recompares every Mac
+the S3 identity of AWS read jobs: it decodes the manifest list and a data manifest as Avro, then reads the first live
+data file's head, footer and first row group by byte range into a sparse local copy and decodes every row of that row
+group with DuckDB (one thread, no extension loads, interrupted at the step deadline). An absent or unreadable object, a
+file that is not Avro or Parquet, a data file whose size differs from its manifest entry and a Parquet file with a broken
+footer, a truncated body or pages that do not decompress all stop verification with the `data_read` cause. It recompares every Mac
 table last. Then it writes `bronze_receipt.json` once, which records the cutover ID, the inventory digest, the root
 principal, each registration run and each namespace scan. Both credentials are read
 from Parameter Store into memory only. `switch` names the receipt digest in its command reason. After the switch, no
