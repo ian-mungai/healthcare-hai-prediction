@@ -14,12 +14,14 @@ import configparser
 import datetime
 import fnmatch
 import importlib
+import io
 import json
 import os
 import re
 import shlex
 import sys
 import tempfile
+import tokenize
 import tomllib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -144,7 +146,10 @@ PRIVACY_PATTERNS = {
 }
 RESERVED_DOMAINS = (".invalid", ".test", ".localhost", ".example", "example.com", "example.org", "example.net")
 ENV_VALUE_KEYS = re.compile(r"PROFILE|BUCKET|ACCOUNT|ARN|ENDPOINT|HOST|EMAIL|USER")
-WRITING_RULE = f"{POLICY}: writing check (Oxford comma, date format, time-bound words, dashes, semicolons, slashes; em dashes in declared article files)"
+WRITING_RULE = (
+    f"{POLICY}: writing check (Oxford comma, date format, time-bound words, dashes, semicolons, slashes, "
+    "internal references; em dashes in declared article files)"
+)
 WRITING_ALLOWLIST = ".writing_allowlist"
 # Checked in prose only: code spans, fenced blocks, front matter, URLs and link targets are masked first.
 WRITING_PATTERNS = {
@@ -167,7 +172,48 @@ WRITING_PATTERNS = {
     "slash": ("slash between words in prose", re.compile(r"(?<![\w./~-])[a-z]+/[a-z]+(?![\w/.-])"), 'write "a, b or both" instead of "a/b" or "and/or"'),
 }
 ARTICLE_ONLY = {"em-dash"}
-WARN_FIRST = {"dash", "semicolon", "slash"}
+WARN_FIRST = {"dash", "semicolon", "slash", "internal-reference"}
+
+
+MONTH_NAME = (
+    r"(?-i:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b"
+)
+INTERNAL_REFERENCE_PATTERNS = {
+    "owner-record": re.compile(
+        r"\b(?:(?:owner|user)[ -]+(?:decision|approval|approved)|approval|approved)\b[^\n.!?]{0,32}?"
+        r"(?:\b\d{4}-\d{2}-\d{2}\b|\b" + MONTH_NAME + r"[ \t]+\d{1,2}[ \t]+\d{4}\b)|"
+        r"\b(?:owner|user)[ -]+(?:decision|approval|approved)[ \t]+\d+\b(?!\.\d)|"
+        r"\b(?:owner|user)[ -]+(?:decision|approval|approved)\b[ \t,:]+(?-i:[A-Z]\d*)-\d+\b|"
+        r"\b(?:owner|user)[ -]+(?:decision|approval|approved)\b[^\n.!?]{0,32}?"
+        r"(?:\b\d{1,2}[ \t]+" + MONTH_NAME + r"|"
+        r"\b" + MONTH_NAME + r"[ \t]+\d{1,2}\b)|"
+        r"\b(?:owner|user)[ -]+(?:decision|approval|approved)\b[^\n.!?]{0,32}?(?<![\w.])(?:D\d+|#\d+)\b(?!\.\d)|"
+        r"\b(?:approval|approved)[ \t]+(?:D\d+|#\d+)\b(?!\.\d)|"
+        r"\bD[1-9]\d*(?=[ \t]+(?:section|item)\b|[ \t]*§)|\b(?:per|under|from|follows)[ \t]+D[1-9]\d*\b",
+        re.IGNORECASE,
+    ),
+    "amendment": re.compile(
+        r"(?i:\bamendment[ \t]+(?:no\.?[ \t]+|#)?A?\d+\b)|"
+        r"(?<![\w+/=-])A(?:[235-9]|[1-9]\d+)(?![\w-])|"
+        r"(?<![\w+/=-])A[14](?=[ \t]+(?i:amendment)\b)"
+    ),
+    "work-package": re.compile(r"(?<![\w+/=])(?:P[1-9]\d*[a-z]|(?i:WV\d+-\d+))(?!\w|\.\w)"),
+    "wave": re.compile(r"\bwave[ _-]*\d+\b", re.IGNORECASE),
+    "review-round": re.compile(
+        r"\b(?:review[ _-]+(?:round[ _-]*(?:r[ _-]*)?|r[ _-]*)\d+\b(?![.-]\d)|R\d+[ _-]+review|round[ _-]+\d+[ _-]+review)\b",
+        re.IGNORECASE,
+    ),
+    "issue-provenance": re.compile(r"\bissue[ \t]+#?[ \t]*\d+\b|\b(?:per|see|from|via|follows|under)[ \t]+#\d+\b|\(\s*#\d+\s*\)", re.IGNORECASE),
+    "plans-path": re.compile(r"(?<![\w-])plans/"),
+}
+INTERNAL_REFERENCE_FIX = (
+    "state the current behavior and keep provenance in local records. For a required public example, add a reasoned "
+    "internal-reference entry to .writing_allowlist. Ask the owner if the rule seems wrong"
+)
+JSON_STRING = re.compile(r'(?P<value>"(?:\\.|[^"\\])*")(?P<key>\s*:)?')
+QUOTED_CODE = r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|`[^`]*`"
+HASH_COMMENT_SUFFIXES = {".sh", ".bash", ".zsh", ".tf", ".j2", ".jinja"}
+C_COMMENT_SUFFIXES = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".go", ".c", ".h", ".cpp", ".hpp", ".java", ".css", ".tf", ".sql"}
 
 
 @dataclass
@@ -943,8 +989,91 @@ def prose_lines(text: str) -> list[tuple[int, str]]:
     return lines
 
 
+def python_reference_lines(text: str) -> list[tuple[int, str]]:
+    lines: list[tuple[int, str]] = []
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(text).readline):
+            if token.type == tokenize.COMMENT:
+                lines.append((token.start[0], token.string))
+    except (tokenize.TokenError, IndentationError):
+        pass
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return lines
+    source = text.splitlines()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) or not node.body:
+            continue
+        first = node.body[0]
+        if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+            lines.extend((number + 1, source[number]) for number in range(first.lineno - 1, first.end_lineno or first.lineno))
+    return sorted(lines)
+
+
+def internal_reference_lines(path: str, text: str) -> list[tuple[int, str]]:
+    suffix = Path(path).suffix
+    if suffix in {".py", ".pyi", ".pyw"}:
+        return python_reference_lines(text)
+    if suffix == ".json":
+        lines = []
+        number, offset = 1, 0
+        for match in JSON_STRING.finditer(text):
+            number += text.count("\n", offset, match.start())
+            offset = match.start()
+            if not match.group("key"):
+                try:
+                    value = json.loads(match.group("value"))
+                except json.JSONDecodeError:
+                    value = match.group("value")[1:-1]
+                lines.append((number, value))
+        return lines
+    comments = []
+    if suffix in HASH_COMMENT_SUFFIXES or Path(path).name in {"Dockerfile", "Makefile", ".env.example"}:
+        comments.append(r"\#[^\n]*")
+    if suffix in C_COMMENT_SUFFIXES:
+        comments.append(r"/\*.*?\*/|//[^\n]*")
+    if suffix == ".sql":
+        comments.append(r"--[^\n]*")
+    if not comments:
+        return list(enumerate(text.splitlines(), 1))
+    pattern = rf"(?:{QUOTED_CODE})|(?P<comment>{'|'.join(comments)})"
+    lines = []
+    number, offset = 1, 0
+    for match in re.finditer(pattern, text, re.DOTALL):
+        number += text.count("\n", offset, match.start())
+        offset = match.start()
+        if match.group("comment"):
+            lines.extend((number + index, line) for index, line in enumerate(match.group("comment").splitlines()))
+    return lines
+
+
+def internal_reference_findings(allowed: list[tuple[str, str]]) -> list[Finding]:
+    findings = []
+    for path in sorted(set(git("ls-files", "-z").split("\0")) - {"", WRITING_ALLOWLIST}):
+        if not Path(path).is_file() or Path(path).is_symlink():
+            continue
+        if any(kind == "internal-reference" and fnmatch.fnmatch(path, glob) for kind, glob in allowed):
+            continue
+        data = Path(path).read_bytes()
+        if b"\0" in data:
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        seen: set[tuple[int, str]] = set()
+        for number, line in internal_reference_lines(path, text):
+            line = re.sub(r"\b[a-z][a-z0-9+.-]*://[^\s<>\"'`]+", "url", line, flags=re.IGNORECASE)
+            for pattern, expression in INTERNAL_REFERENCE_PATTERNS.items():
+                if expression.search(line) and (number, pattern) not in seen:
+                    seen.add((number, pattern))
+                    findings.append(Finding(f"{path}:{number}", f"internal reference ({pattern})", WRITING_RULE, INTERNAL_REFERENCE_FIX))
+    return findings
+
+
 def writing_check(articles: list[str], block: list[str]) -> tuple[list[Finding], list[Finding]]:
-    allowed, findings = read_allowlist(WRITING_ALLOWLIST, list(WRITING_PATTERNS), WRITING_RULE, "why this text is kept as is")
+    allowed, findings = read_allowlist(WRITING_ALLOWLIST, [*WRITING_PATTERNS, "internal-reference"], WRITING_RULE, "why this text is kept as is")
     warnings: list[Finding] = []
     for path in sorted(set(git("ls-files", "--cached", "--others", "--exclude-standard").splitlines())):
         article = any(fnmatch.fnmatch(path, glob) for glob in articles)
@@ -960,6 +1089,8 @@ def writing_check(articles: list[str], block: list[str]) -> tuple[list[Finding],
                 if pattern.search(text) and not any(kind == entry_kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
                     target = warnings if kind in WARN_FIRST and kind not in block else findings
                     target.append(Finding(f"{path}:{number}", description, WRITING_RULE, fix))
+    target = findings if "internal-reference" in block else warnings
+    target.extend(internal_reference_findings(allowed))
     return findings, warnings
 
 

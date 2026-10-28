@@ -111,6 +111,27 @@ last_updated: 2026-10-27
   finding, not also a `dash` warning. The hook and the local CI command pass
   `--block dash --block slash`, so dashes and slashes block there and semicolons warn. A whole-repository run without
   `--block` lists them, one `WARN` line each.
+
+  The `internal-reference` kind also warns by default. It reports numbered or dated owner decisions and approval records,
+  amendment labels, work-package codes, numbered waves, review-round labels, issue numbers used as provenance and local plan paths.
+  Each finding names its pattern and source line. Repeated matches of one pattern on one line produce one finding.
+  This kind scans tracked UTF-8 text only, including tracked fixture folders. Markdown code spans, fenced blocks and link destinations
+  remain in scope because they can contain local references. Review labels require round wording or an explicit review context.
+  Dates, statistical metrics and row labels do not count as review rounds. Compact amendment labels use uppercase and exclude fragments of universally unique identifiers (UUIDs)
+  and base64 data. The public labels `A1` and `A4` require amendment wording directly before or after them.
+  Work-package labels require uppercase `P` and a lowercase suffix. They exclude base64 fragments. Technical names such as `p4d.24xlarge` and `P2P` are excluded.
+  Generic approval wording requires a directly following marked record number with a hash sign or a `D` prefix. A nearby date also qualifies it. Owner and user decision or approval wording also counts with a directly following plain number. It also counts with a directly following label of one uppercase letter and optional digits joined to a number by a hyphen. A nearby day and capitalized month name also qualify it. A number elsewhere in ordinary approval prose is excluded.
+  Decision labels also count when they cite a section or follow a provenance word. Tracked public seed CSVs remain in scope.
+  Python contributes comments and docstrings. Shell, SQL, Terraform,
+  JavaScript, TypeScript, Go, C, C++, Java and CSS contribute comments. Dockerfiles and Makefiles contribute hash comments.
+  JSON contributes decoded string values, including nested values, with their physical source lines. JSON keys and executable
+  string literals are excluded. Other text and configuration files contribute complete lines. URLs, binary files, symlinks and
+  the allowlist itself are excluded from this kind. Pattern detection does not establish whether a reference is public or private.
+
+  `internal-reference docs/examples.md -- required public examples of rejected references` is a reasoned allowlist entry.
+  Exceptions match the kind and path glob. They also apply when the kind blocks. `--block internal-reference` promotes the kind
+  once a whole-repository run is clean. The hook and CI leave this kind in warning mode. `--warn` reports all findings without
+  failing, including a kind selected with `--block`. The other writing kinds retain their existing scopes.
 - **Markdown syntax:** `markdownlint-cli2` checks every staged Markdown file
   outside `data/` against the Conventional Docs baseline in
   `.markdownlint-cli2.jsonc` (dash bullets, ATX headings, sequential numbered
