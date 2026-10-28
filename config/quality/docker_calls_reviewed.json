@@ -1291,11 +1291,11 @@
       "code_sha256": "7262a5d12d7ddd7c8b9f95d4ab8d9e815af69e92bbb232841afa48127d0a5f36",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "d8ca3aa689de3799ffa24cef018c3aa69f42b1520094583bdb3af4ee7f45de13",
+      "file_sha256": "2a8e871a46a027787613ce4056cb7ac9a4e92e6fc8cb3bdaf0eeaee30fef9a7c",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/ci_groups.py": "sha256:f879b6530d4ac46752d238e79710b98ae732f66dbd331f8fec23823ddfe3fcab",
-        "scripts/quality/pre_push.py": "sha256:915976ebede73ee0b18cf3e59f25b6faefd93e3c3efafd8b56d6d545c369fd5c",
+        "scripts/quality/pre_push.py": "sha256:1884669904efd7c66fecae9525f5173ad05c116bdddd0987634c6c87e769c8d3",
         "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684",
         "scripts/quality/scratch_worktree.py": "sha256:60e9d686976414f37753f2476f3da430162650f06bf70e4d6ab560f992e32934"
       },
@@ -1307,11 +1307,11 @@
       "code_sha256": "ddfb4bd744b919616f97d784e28c5a981ddc3d18ee5b387f2f2b2bce6b160e35",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "d8ca3aa689de3799ffa24cef018c3aa69f42b1520094583bdb3af4ee7f45de13",
+      "file_sha256": "2a8e871a46a027787613ce4056cb7ac9a4e92e6fc8cb3bdaf0eeaee30fef9a7c",
       "dependencies": {
         "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac",
         "scripts/quality/ci_groups.py": "sha256:f879b6530d4ac46752d238e79710b98ae732f66dbd331f8fec23823ddfe3fcab",
-        "scripts/quality/pre_push.py": "sha256:915976ebede73ee0b18cf3e59f25b6faefd93e3c3efafd8b56d6d545c369fd5c",
+        "scripts/quality/pre_push.py": "sha256:1884669904efd7c66fecae9525f5173ad05c116bdddd0987634c6c87e769c8d3",
         "scripts/quality/repo_checks.py": "sha256:5e5a91bd4e1c3540eadd931dd506b795d5d4e362a683a34136aaa86b554e2684",
         "scripts/quality/scratch_worktree.py": "sha256:60e9d686976414f37753f2476f3da430162650f06bf70e4d6ab560f992e32934"
       },

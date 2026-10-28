@@ -3288,7 +3288,19 @@ if [[ -n "${STUB_SLEEP:-}" ]]; then exec sleep "$STUB_SLEEP"; fi
 exit "${STUB_EXIT_RUN_CI:-0}"
 """.replace("@PATTERN@", INHERITED_PATTERN)
 STUB_ACQUISITION = """#!/usr/bin/env bash
-printf '{"stub": "acquisition", "argv": []}\\n' >>"$STUB_LOG"
+collided=false
+if [[ -n "${STUB_INDEX_LOCK:-}" ]]; then
+  if ( set -o noclobber; : >"$STUB_INDEX_LOCK" ) 2>/dev/null; then :; else
+    collided=true
+    echo 'fatal: Unable to create index.lock: File exists.' >&2
+  fi
+fi
+if [[ "$collided" == false ]]; then
+  sleep "${STUB_HOLD:-0}"
+  if [[ -n "${STUB_INDEX_LOCK:-}" ]]; then rm -f "$STUB_INDEX_LOCK"; fi
+fi
+printf '{"stub": "acquisition", "argv": [], "collided": %s}\\n' "$collided" >>"$STUB_LOG"
+if [[ "$collided" == true ]]; then exit 128; fi
 """
 GIT_IDENTITY = {"GIT_AUTHOR_NAME": "Probe", "GIT_COMMITTER_NAME": "Probe", "GIT_AUTHOR_EMAIL": "", "GIT_COMMITTER_EMAIL": ""}
 SHIM_NAME = "hai-push-input"
@@ -3387,24 +3399,30 @@ def escalation_case(scratch: Path, name: str, path: str, want_scope: str, timeou
 
 
 def hook_partition_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
-    """Hook partitions share one worktree and its index lock, so they run one after the other while the other steps run beside them.
+    """The acquisition hook and the hook partitions share one worktree and its index lock, so they run one after the other beside the other steps.
 
-    The partition stand-in takes a lock file like ``index.lock`` and exits 128 when it exists; the ``local_ci`` stand-in waits for that lock to be held.
+    Both pre-commit paths (the acquisition hook, which ``pre-commit run`` starts after its ``git write-tree``, and the partitions) take a lock file like
+    ``index.lock`` in their stand-ins and exit 128 when it exists; the ``local_ci`` stand-in waits for that lock to be held.
+    The range reaches the acquisition hook.
     """
-    root = pre_push_repo(scratch, "pre_push_hook_partitions", mutate=mutate)
+    root = pre_push_repo(scratch, "pre_push_hook_partitions", ("scripts/acquisition/example.py", "README.md"), mutate=mutate)
     lock = root / "index.lock"
-    code, out, error = pre_push(root, "run", extra={"STUB_INDEX_LOCK": str(lock), "STUB_HOLD": "1.5", "STUB_WAIT_FOR_LOCK": str(lock)})
+    code, out, error = pre_push(root, "run", extra={"STUB_INDEX_LOCK": str(lock), "STUB_HOLD": "1.5", "STUB_WAIT_FOR_LOCK": str(lock)}, timeout=300)
     calls = pre_push_calls(root)
     hooks = [call for call in calls if call["stub"] == "ci_hooks"]
+    acquisition = [call for call in calls if call["stub"] == "acquisition"]
     ci = [call["overlap"] for call in calls if call["stub"] == "run_ci"]
     groups = list(json.loads((ROOT / "config/quality/ci_groups.json").read_text())["hook_groups"])
     collided = [call["argv"][call["argv"].index("--group") + 1] for call in hooks if call["collided"]]
+    acquisition_collided = [call["collided"] for call in acquisition]
     return {
         "case": "pre_push_hook_partitions_run_one_after_the_other",
-        "passed": code == 0 and len(hooks) == len(groups) and not collided and ci == ["true"],
+        "passed": code == 0 and len(hooks) == len(groups) and not collided and len(acquisition) == 1 and acquisition_collided == [False] and ci == ["true"],
         "exit": code,
         "partitions": len(hooks),
         "collided": collided,
+        "acquisition_runs": len(acquisition),
+        "acquisition_collided": acquisition_collided,
         "local_ci_saw_the_lock_held": ci,
         "output": (out + error)[-300:],
     }
@@ -3546,10 +3564,12 @@ def pre_push_cases(work: Path, scratch: Path) -> list[dict[str, Any]]:
         }
     )
     results += [hook_partition_case(scratch), hook_failure_case(scratch), hook_deadline_case(scratch)]
-    serial_hooks = 'jobs = [[step] for step in steps if step["kind"] != "ci_hooks"] + ([hooks] if hooks else [])'
+    serial_jobs = 'jobs = [[step] for step in steps if step["kind"] not in SERIAL_KINDS] + ([serial] if serial else [])'
+    serial_kinds = 'SERIAL_KINDS = frozenset({"pre_commit", "ci_hooks"})'
     results += [
-        planted_case("hook_partitions_in_parallel", hook_partition_case, scratch, mutate=source_edit(serial_hooks, "jobs = [[step] for step in steps]")),
-        planted_case("every_step_in_sequence", hook_partition_case, scratch, mutate=source_edit(serial_hooks, "jobs = [steps]")),
+        planted_case("hook_partitions_in_parallel", hook_partition_case, scratch, mutate=source_edit(serial_jobs, "jobs = [[step] for step in steps]")),
+        planted_case("acquisition_in_parallel", hook_partition_case, scratch, mutate=source_edit(serial_kinds, 'SERIAL_KINDS = frozenset({"ci_hooks"})')),
+        planted_case("every_step_in_sequence", hook_partition_case, scratch, mutate=source_edit(serial_jobs, "jobs = [steps]")),
     ]
     return (
         results + hook_and_tree_cases(scratch) + acquisition_cases(scratch) + control_scan_cases() + pre_commit_control_cases() + entry_cases() + docs_cases()
