@@ -7,8 +7,9 @@ The read runs in a child Python process (``python -m scripts.acquisition.api_key
 call: no inherited ``AWS_*`` variable, so only the explicit profile and region select its credentials. The child first asks STS who its credentials
 belong to and compares the answer with the account and ARN that the caller's identity check verified; only on a match does it read the key. It
 resolves the credentials once and signs both requests with that frozen set, so a credential refresh cannot change the identity in between. It starts
-its own process group and kills that group at an internal deadline a few seconds before the caller's launcher timeout, so a stalled setup, credential
-process or request ends with the call and cannot send a request after the caller failed.
+its own process group (the one the launcher gives it, or one it starts with ``setsid`` when run by hand) and kills that group at an internal deadline a few
+seconds before the caller's launcher timeout, so a stalled setup, credential process or request ends with the call and cannot send a request after the caller
+failed.
 
 The value leaves the child only as one JSON object on standard output. On failure the child writes a fixed error code to standard error and nothing to
 standard output; the caller reads only the exit code. Errors name the secret and a fixed cause, never a value or a provider message.
@@ -216,7 +217,8 @@ def child(arguments: list[str]) -> int:
     """The child process: its own process group first, then the deadline watchdog, then the identity check and the key read."""
     started = time.monotonic()
     try:
-        os.setsid()
+        if os.getpgrp() != os.getpid():  # the launcher already made this process a group leader; setsid refuses a leader
+            os.setsid()
     except OSError:
         return failed("session")
     try:

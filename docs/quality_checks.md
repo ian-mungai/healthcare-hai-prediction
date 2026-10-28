@@ -782,9 +782,9 @@ tree, the reused run and the conclusion of each required job. `.venv/bin/python 
 
 `scripts/process.py` `run_command` starts each program in its own process group (`process_group=0`), so a stop never signals the caller. The whole group stops at the deadline
 and when the caller is interrupted while it waits (Ctrl-C): TERM first, then KILL after `STOP_GRACE_SECONDS` (5 s), then a check that no member is left (up to
-`CONFIRM_SECONDS`, 5 s). The leader is reaped first, because an unreaped zombie keeps its group alive. A program that ends in time gives the same result as before. A deadline
+`CONFIRM_SECONDS`, 5 s). A caller whose own deadline must hold within a shorter bound passes `grace_seconds` (the reference-document download passes at most a quarter of its limit). The leader is reaped first, because an unreaped zombie keeps its group alive. A program that ends in time gives the same result as before. A deadline
 raises `TimeoutExpired` with the output so far. If a member survives KILL, the call raises `ProcessGroupSurvived`, a `TimeoutExpired` that names the group, so no timeout ends silently with a live
-process. A member that starts its own session or group (`setsid`) is outside the group and is not stopped; the project's scripts start none. `.venv/bin/python -m scripts.quality.run_process_e2e`
+process. A member that starts its own session or group (`setsid`) is outside the group and is not stopped; the project's scripts start none while a launcher runs them (the API key reader starts its own session only when run by hand, because a group leader cannot call `setsid`). `.venv/bin/python -m scripts.quality.run_process_e2e`
 (in `repository_code_checks`) starts a child that starts a grandchild (once with TERM ignored and once without). It checks by process ID that none is left. It also plants three defects (stop the
 direct child only, send TERM without KILL, skip the confirmation) and requires a named case to catch each.
 
