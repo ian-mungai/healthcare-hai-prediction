@@ -1479,6 +1479,7 @@ def feature_split_cases() -> list[dict[str, Any]]:
                 "error": error,
             }
         )
+    plan_outputs = workflow_document()["jobs"]["plan"].get("outputs", {})
     for suite in ("sources", "columns"):
         definition = workflow_document()["jobs"][f"feature_{suite}"]
         steps = [step for step in definition["steps"] if step.get("run") == "bash scripts/run_ci.sh"]
@@ -1490,8 +1491,10 @@ def feature_split_cases() -> list[dict[str, Any]]:
                 and len(steps) == 1
                 and steps[0].get("env", {}).get("CI_PART") == f"feature_{suite}"
                 and steps[0].get("env", {}).get("CI_SCOPE") == "range"
-                and steps[0].get("env", {}).get("RANGE_START") == "${{ github.event.pull_request.base.sha || github.event.before }}"
-                and steps[0].get("env", {}).get("RANGE_END") == "${{ github.event.pull_request.head.sha || github.sha }}",
+                and steps[0].get("env", {}).get("RANGE_START") == "${{ needs.plan.outputs.range_start }}"
+                and steps[0].get("env", {}).get("RANGE_END") == "${{ needs.plan.outputs.range_end }}"
+                and plan_outputs.get("range_start") == "${{ steps.range.outputs.start }}"
+                and plan_outputs.get("range_end") == "${{ steps.range.outputs.end }}",
             }
         )
         for path in sources:
