@@ -823,8 +823,13 @@ run "project_secret_names" {
   }
 
   assert {
+    condition     = output.project_secret_names.clone_secrets == ["healthcare-hai-prediction/airflow-admin"]
+    error_message = "The only clone source is the hand-made Airflow administrator password in Secrets Manager."
+  }
+
+  assert {
     condition = alltrue([
-      for name in concat(output.project_secret_names.shared_secrets, output.project_secret_names.read_parameters) : !strcontains(name, "*") && !strcontains(name, "?")
+      for name in concat(output.project_secret_names.shared_secrets, output.project_secret_names.clone_secrets, output.project_secret_names.read_parameters) : !strcontains(name, "*") && !strcontains(name, "?")
     ])
     error_message = "No granted name holds a wildcard."
   }
