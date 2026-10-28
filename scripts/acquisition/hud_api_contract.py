@@ -12,7 +12,8 @@ import re
 from decimal import Decimal
 from pathlib import Path
 
-from scripts.acquisition.bls_api_contract import code_hashes, digest
+from scripts.acquisition.bls_api_contract import digest
+from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.legacy_versions import with_predecessors
@@ -23,6 +24,7 @@ CREDENTIAL = "hud_api_key"
 PLAN_PATH = REPO_ROOT / "config/acquisition/hud_api_plan.json"
 RANGE_PLAN_PATH = REPO_ROOT / "config/acquisition/hud_api_plan_2021q2_2025q4.json"
 VERSIONS_PATH = REPO_ROOT / "config/acquisition/hud_api_code_versions.json"
+CODE_ENTRY = "scripts.acquisition.collect_hud_api"
 CROSSWALKS = {2: "zip-county"}
 RATIOS = ("res_ratio", "bus_ratio", "oth_ratio", "tot_ratio")
 # Every state and DC; territories are reported, not required.
@@ -65,9 +67,14 @@ def county_geography(batch: dict) -> str:
     return "2020_census" if (batch["year"], batch["quarter"]) >= (2023, 1) else "2010_census"
 
 
-def require_code(hashes: dict | None = None) -> dict:
+def collector_code_hashes(entry: str = CODE_ENTRY) -> dict[str, str]:
+    """Bind the entry module of the collector and every repository module it can run, and no other file."""
+    return closure_hashes(entry)
+
+
+def require_code(hashes: dict | None = None, entry: str = CODE_ENTRY) -> dict:
     """Require explicit review of new captures and retain trusted historical implementations."""
-    actual = code_hashes() if hashes is None else hashes
+    actual = collector_code_hashes(entry) if hashes is None else hashes
     require(bool(actual) and actual in [v["code_sha256"] for v in read_code_versions(VERSIONS_PATH)["versions"]], "Unreviewed HUD code version")
     return actual
 

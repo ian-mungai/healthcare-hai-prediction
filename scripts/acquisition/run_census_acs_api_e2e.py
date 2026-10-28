@@ -77,7 +77,7 @@ def exercise(root: Path) -> list[dict]:
     for path, locked in [(plan_path, plan), (pr_plan_path, pr_plan)]:
         write_once(path, encoded_json(locked))
         write_once(path.with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(locked)}))
-    write_once(versions, encoded_json({"versions": [{"code_sha256": contract.code_hashes()}]}))
+    write_once(versions, encoded_json({"versions": [{"code_sha256": contract.collector_code_hashes()}]}))
     scenarios: list[dict] = []
 
     def scenario(name: str, action: Any, error: str | None = None) -> None:
@@ -252,7 +252,7 @@ def exercise(root: Path) -> list[dict]:
         scenario("bounded_retries_and_cache_reuse", retry)
 
         def unreviewed_current() -> None:
-            with patch.object(contract, "code_hashes", return_value={"changed": "0" * 64}):
+            with patch.object(contract, "collector_code_hashes", return_value={"changed": "0" * 64}):
                 execute(plan, batch, root / "unreviewed", True, True, client, OUTPUTS, request)
 
         scenario("unreviewed_current_code_before_effects", unreviewed_current, "Unreviewed Census")
@@ -418,7 +418,7 @@ def main() -> None:
     report = {
         "status": "passed" if passed else "failed",
         "run_at_utc": datetime.now(UTC).isoformat(),
-        "code_sha256": contract.code_hashes(),
+        "code_sha256": contract.collector_code_hashes(),
         "dependency_sha256": contract.digest(Path("requirements.txt").read_bytes()),
         "scenarios": scenarios,
     }
