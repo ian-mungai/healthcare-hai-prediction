@@ -27,8 +27,9 @@ from types import SimpleNamespace
 from typing import Any
 
 from orchestration import catalog_authority
+from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.acquisition.s3_store import AwsCli
-from scripts.lakehouse import bronze_inventory
+from scripts.lakehouse import bronze_cutover, bronze_inventory
 from scripts.lakehouse import register_aws_catalog as reg
 from scripts.lakehouse import run_catalog_registration_e2e as registration_e2e
 from scripts.lakehouse import run_launcher_e2e as launcher_e2e
@@ -116,6 +117,7 @@ class Lake:
             "refs": {"main": {"snapshot-id": 500 + number, "type": "branch"}},
         }
         self.objects.put(metadata_location, document, version)
+        self.objects.put(location + "/metadata/snap.avro", {"synthetic_manifest_list": name})
         self.source.tables[(namespace, name)] = {"metadata-location": metadata_location, "metadata": copy.deepcopy(document)}
         return document
 
@@ -175,6 +177,53 @@ class HttpStandIn:
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(5)
+
+
+class Destination(registration_e2e.Catalog):
+    """The AWS catalog stand-in: the registration stand-in plus the management catalog record the preflight reads."""
+
+    def __init__(self, objects: registration_e2e.Objects, events: list[str], role: str = "destination", tables: dict[reg.TableId, Any] | None = None) -> None:
+        super().__init__(objects, events, role, tables)
+        location = f"s3://{BUCKET}/lakehouse/"
+        self.management: dict[str, Any] | None = {
+            "name": "hai_lakehouse",
+            "properties": {"default-base-location": location},
+            "storageConfigInfo": {"storageType": "S3", "allowedLocations": [location], "stsUnavailable": True},
+        }
+        self.refuse_reads = False
+
+    def request(self, method: str, path: str, *, body: Mapping[str, Any] | None = None, deadline: float) -> tuple[int, object]:
+        if path == "/api/management/v1/catalogs/hai_lakehouse":
+            return (200, copy.deepcopy(self.management)) if self.management is not None else (404, None)
+        if self.refuse_reads:
+            return 403, {"error": "synthetic_private_error_do_not_record"}
+        return super().request(method, path, body=body, deadline=deadline)
+
+
+class Cutover:
+    """A captured lake, an empty AWS catalog and its reader view over the same tables."""
+
+    def __init__(self) -> None:
+        self.lake = Lake()
+        self.inventory = self.lake.capture()
+        self.clock = self.lake.clock
+        self.destination_stand_in = Destination(self.lake.objects, self.lake.events)
+        self.reader_stand_in = Destination(self.lake.objects, self.lake.events, "reader", self.destination_stand_in.tables)
+        self.destination = reg.PolarisCatalog(self.destination_stand_in.request, "hai_lakehouse", clock=self.clock)
+        self.reader = reg.PolarisCatalog(self.reader_stand_in.request, "hai_lakehouse", clock=self.clock)
+
+    def register(self, per_table: float = 10) -> dict[str, list[reg.TableId]]:
+        return bronze_cutover.register_tables(
+            self.destination, self.lake.objects, self.inventory, bucket=BUCKET, deadline=self.clock() + 1000, per_table=per_table, clock=self.clock
+        )
+
+    def verify(self) -> dict[str, Any]:
+        return bronze_cutover.verify_tables(
+            self.reader, self.lake.catalog, self.lake.objects, self.inventory, bucket=BUCKET, deadline=self.clock() + 1000, per_table=10, clock=self.clock
+        )
+
+    def preflight(self) -> None:
+        bronze_cutover.preflight(self.destination_stand_in.request, BUCKET, deadline=self.clock() + 10, clock=self.clock)
 
 
 def code_of(function: Callable[[], Any]) -> tuple[str, str]:
@@ -487,6 +536,197 @@ def polaris_http(folder: Path) -> dict[str, bool]:
         stand_in.delay = 0
     finally:
         stand_in.close()
+    return checks
+
+
+@offline
+def register_and_verify(folder: Path) -> dict[str, bool]:
+    """R1, R3, R5, Q3: preflight, namespace creation, registration, verification and a write-once receipt; a rerun gives unchanged."""
+    cut = Cutover()
+    cut.preflight()
+    first = cut.register()
+    checks = {
+        "every table is registered on the first run": first == {"registered": [pin.identifier for pin in cut.inventory.tables], "unchanged": []},
+        "only the absent bronze_dictionary namespace is created": cut.destination_stand_in.namespace_posts == ["bronze_dictionary"],
+        "one register POST per table": len(cut.destination_stand_in.posts) == len(cut.inventory.tables),
+    }
+    facts = cut.verify()
+    checks["V1: verification loads every table and reads one manifest list per namespace"] = facts == {
+        "reader_tables": len(cut.inventory.tables),
+        "data_reads": ["bronze", "bronze_dictionary"],
+        "mac_recompare": len(cut.inventory.tables),
+    }
+    directory = folder / "cutover" / "cut1"
+    run_record = bronze_cutover.write_run_record(directory, "cut1", cut.inventory.sha256, first, "20261028T000000Z")
+    digest = bronze_cutover.write_receipt(directory, "cut1", cut.inventory.sha256, facts)
+    receipt = json.loads((directory / bronze_cutover.RECEIPT_NAME).read_text())
+    checks["the receipt records the cutover, digest, root principal and the namespace approval"] = (
+        receipt["cutover_id"] == "cut1"
+        and receipt["inventory_sha256"] == cut.inventory.sha256
+        and receipt["principal"] == "polaris_root"
+        and receipt["namespace_creation_approved_for"] == "cut1"
+        and receipt["registration_runs"] == {run_record.name: hashlib.sha256(run_record.read_bytes()).hexdigest()}
+    )
+    second = cut.register()
+    checks["R5: a rerun with the same inventory gives unchanged for every table and no POST"] = second == {
+        "registered": [],
+        "unchanged": [pin.identifier for pin in cut.inventory.tables],
+    } and len(cut.destination_stand_in.posts) == len(cut.inventory.tables)
+    checks["the same verification writes the same receipt again"] = (
+        bronze_cutover.write_receipt(directory, "cut1", cut.inventory.sha256, cut.verify()) == digest
+    )
+    return checks
+
+
+@offline
+def preflight_refusals(folder: Path) -> dict[str, bool]:
+    """R1: the AWS catalog must exist with exactly the lakehouse base location, allowed locations and no credential vending."""
+    checks: dict[str, bool] = {}
+    for label, change in (
+        ("an absent catalog", lambda cut: setattr(cut.destination_stand_in, "management", None)),
+        ("another base location", lambda cut: cut.destination_stand_in.management["properties"].update({"default-base-location": "s3://other/"})),
+        ("extra allowed locations", lambda cut: cut.destination_stand_in.management["storageConfigInfo"]["allowedLocations"].append("s3://other/")),
+        ("credential vending", lambda cut: cut.destination_stand_in.management["storageConfigInfo"].update({"stsUnavailable": False})),
+    ):
+        cut = Cutover()
+        change(cut)
+        code, _ = code_of(cut.preflight)
+        checks[f"R1: {label} is refused before any namespace or table call"] = code == "catalog_location" and not cut.destination_stand_in.namespace_posts
+    return checks
+
+
+@offline
+def register_failures(folder: Path) -> dict[str, bool]:
+    """R2, R3, R4, R5, R6, R7: conflicts stop without overwrite, a lost reply is never re-posted, partial runs resume as unchanged."""
+    checks: dict[str, bool] = {}
+    cut = Cutover()
+    victim = cut.inventory.tables[2]
+    other = copy.deepcopy(cut.lake.source.tables[cut.inventory.tables[0].identifier])
+    cut.destination_stand_in.tables[victim.identifier] = other
+    code, message = code_of(cut.register)
+    checks["R2: a different table under the same name stops with its name and JSON path and is not overwritten"] = (
+        code == "registration_conflict" and f"{victim.namespace}.{victim.name}" in message and "JSON path" in message
+    ) and cut.destination_stand_in.tables[victim.identifier] == other
+    checks["R2: the run stops at the first error"] = len(cut.destination_stand_in.posts) == 2
+    lost = Cutover()
+    lost.destination_stand_in.lose_reply = True
+    code, message = code_of(lost.register)
+    first_pin = lost.inventory.tables[0]
+    checks["R3: a lost register reply stops with the table named after one POST"] = code == "transport" and first_pin.name in message
+    checks["R3: no second POST for the lost reply"] = len(lost.destination_stand_in.posts) == 1
+    rerun = lost.register()
+    checks["R3: the rerun adopts the identical table as unchanged and registers the rest"] = (
+        rerun["unchanged"] == [first_pin.identifier] and len(rerun["registered"]) == len(lost.inventory.tables) - 1
+    )
+    checks["R3: one POST per table across both runs"] = len(lost.destination_stand_in.posts) == len(lost.inventory.tables)
+    race = Cutover()
+    race.destination_stand_in.concurrent = copy.deepcopy(race.lake.source.tables[race.inventory.tables[0].identifier])
+    checks["R4: a 409 with an identical table is accepted"] = race.register()["registered"][0] == race.inventory.tables[0].identifier
+    clash = Cutover()
+    clash.destination_stand_in.concurrent = copy.deepcopy(clash.lake.source.tables[clash.inventory.tables[1].identifier])
+    checks["R4: a 409 with a different table is a conflict"] = code_of(clash.register)[0] == "registration_conflict"
+    partial = Cutover()
+    partial.destination_stand_in.fail_table = partial.inventory.tables[3].identifier
+    code, message = code_of(partial.register)
+    checks["R5: a failed table stops the run with its name"] = code == "catalog_http" and partial.inventory.tables[3].name in message
+    partial.destination_stand_in.fail_table = None
+    resumed = partial.register()
+    checks["R5: the rerun gives unchanged for done tables and registers the rest"] = (
+        len(resumed["unchanged"]) == 3 and len(resumed["registered"]) == len(partial.inventory.tables) - 3
+    )
+    slow = Cutover()
+    slow.lake.objects.hook = lambda location, version: setattr(slow.clock, "now", slow.clock.now + 4)
+    code, message = code_of(lambda: slow.register(per_table=10))
+    checks["R6: a per-table deadline fails visibly with the table named"] = code == "deadline" and slow.inventory.tables[0].name in message
+    moved = Cutover()
+    pin = moved.inventory.tables[1]
+    document = json.loads(moved.lake.objects.versions[pin.metadata_location]["version_1"])
+    document["last-updated-ms"] = 9
+    moved.lake.objects.put(pin.metadata_location, document, "version_2")
+    code, message = code_of(moved.register)
+    checks["R7: a metadata object that changed after capture stops with its name"] = code == "metadata_identity" and pin.name in message
+    return checks
+
+
+@offline
+def verify_failures(folder: Path) -> dict[str, bool]:
+    """V1, V2, V3: a missing data file, an absent reader identity or a changed Mac table stops verification, so no receipt is written."""
+    checks: dict[str, bool] = {}
+    for label, change, expected in (
+        (
+            "V1: an unreadable manifest list",
+            lambda cut: cut.lake.objects.versions.pop(cut.inventory.tables[0].location + "/metadata/snap.avro"),
+            "metadata_missing",
+        ),
+        ("V2: a refused reader identity", lambda cut: setattr(cut.reader_stand_in, "refuse_reads", True), "catalog_http"),
+        (
+            "V3: a Mac table that changed after registration",
+            lambda cut: cut.lake.source.tables[cut.inventory.tables[4].identifier]["metadata"].update({"last-updated-ms": 7}),
+            "source_snapshot",
+        ),
+    ):
+        cut = Cutover()
+        cut.register()
+        change(cut)
+        code, _ = code_of(cut.verify)
+        checks[f"{label} stops verification with its cause"] = code == expected
+    return checks
+
+
+@offline
+def tunnel_route(folder: Path) -> dict[str, bool]:
+    """R3, R9, R10: the owned relay carries preflight, registration and verification once each; a closed route never reconnects."""
+    checks: dict[str, bool] = {}
+    secret = "synthetic_root_" + hashlib.sha256(str(folder).encode()).hexdigest()[:12]
+    cut = Cutover()
+    stand_in = HttpStandIn(cut.destination_stand_in, "root", secret)
+    transport = CatalogTransport(folder / "registry")
+    try:
+        deadline = time.monotonic() + 60
+        endpoint = transport.start_relay(stand_in.port, deadline=deadline)
+        route = bronze_cutover.Route(transport, endpoint, deadline=deadline)
+        request = bronze_inventory.PolarisHttp("127.0.0.1", route.port, client_id="root", secret=secret)
+        destination = reg.PolarisCatalog(request, "hai_lakehouse")
+        bronze_cutover.preflight(request, BUCKET, deadline=deadline, execute=route.execute)
+        outcomes = bronze_cutover.register_tables(
+            destination, cut.lake.objects, cut.inventory, bucket=BUCKET, deadline=deadline, per_table=10, execute=route.execute
+        )
+        checks["registration through the relay registers every table"] = len(outcomes["registered"]) == len(cut.inventory.tables)
+        checks["R10: the root secret never reaches a header the catalog logs"] = all(secret not in header for header in stand_in.headers)
+        checks["the relay endpoint is loopback"] = endpoint.startswith("http://127.0.0.1:")
+        posts = len(cut.destination_stand_in.posts)
+        checks["the route closes with its processes confirmed gone"] = transport.close(deadline=time.monotonic() + 10)
+        code, message = code_of(
+            lambda: bronze_cutover.register_tables(
+                destination, cut.lake.objects, cut.inventory, bucket=BUCKET, deadline=time.monotonic() + 10, per_table=10, execute=route.execute
+            )
+        )
+        checks["R3: a closed route fails visibly and sends nothing"] = code == "transport" and len(cut.destination_stand_in.posts) == posts
+    finally:
+        transport.close(deadline=time.monotonic() + 10)
+        stand_in.close()
+    checks["R9: tunnel or relay on the Mac Polaris port is refused"] = (
+        code_of(lambda: bronze_cutover.check_ports(TransportSpec("i-0123456789abcdef0", "p", "r", bronze_cutover.MAC_POLARIS_PORT, 18182)))[0] == "network"
+    )
+    settings = {"aws_profile": "synthetic", "aws_region": "us-east-1", "data_bucket_name": BUCKET, "expected_account_id": "synthetic_account"}
+    spec = TransportSpec("i-0123456789abcdef0", "synthetic", "us-east-1", 18181, 18182)
+    for label, instance, expected in (
+        ("a running private host passes", {"State": {"Name": "running"}, "NetworkInterfaces": [{}]}, ""),
+        ("a public address is refused", {"State": {"Name": "running"}, "PublicIpAddress": "192.0.2.1", "NetworkInterfaces": [{}]}, "network"),
+        ("a stopped host is refused", {"State": {"Name": "stopped"}, "NetworkInterfaces": [{}]}, "network"),
+        (
+            "a public interface association is refused",
+            {"State": {"Name": "running"}, "NetworkInterfaces": [{"Association": {"PublicIp": "192.0.2.1"}}]},
+            "network",
+        ),
+    ):
+        reply = json.dumps({"Reservations": [{"Instances": [instance]}]})
+
+        def runner(command: list[str], reply: str = reply, **_: Any) -> SimpleNamespace:
+            return SimpleNamespace(returncode=0, stdout=reply, stderr="")
+
+        code, _ = code_of(lambda: bronze_cutover.network_acceptance(spec, AwsCli(settings, runner=runner), deadline=time.monotonic() + 10))
+        checks[f"network acceptance: {label}"] = code == expected
     return checks
 
 
