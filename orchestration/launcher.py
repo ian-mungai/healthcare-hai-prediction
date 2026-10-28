@@ -3101,7 +3101,8 @@ def mac_catalog_write(template_name: str, params: Mapping[str, Any], args: Seque
     """True for a job that writes the Mac production catalog: it may start only under Mac catalog authority (failure F1).
 
     Classified by job and validated arguments: a checksum job without ``--fixture`` only reads and ``real_dbt ls`` or ``parse`` never opens the
-    build (``provenance.INERT``). Every other ``spark_write`` job, including ``smoke``, which creates and purges a scratch table, counts as a
+    build (``provenance.INERT``). The gold candidate reconcile reads the catalog as the reader principal.
+    Every other ``spark_write`` job, including ``smoke``, which creates and purges a scratch table, counts as a
     write, and so do arguments outside a job's grammar.
     """
     if run_mode != "real":
@@ -3118,6 +3119,8 @@ def mac_catalog_write(template_name: str, params: Mapping[str, Any], args: Seque
             return "--fixture" in validate_spark_args("checksums", [str(token) for token in args])
         except LauncherError:
             return True
+    if template_name == "gold_publish" and params.get("job") == "reconcile_candidates":
+        return False
     return template_name in MAC_WRITE_TEMPLATES
 
 

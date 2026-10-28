@@ -37,8 +37,20 @@ from scripts.acquisition.s3_store import AwsCli
 from scripts.lakehouse import bronze_cutover, bronze_inventory, bronze_scan, cutover_route, mac_route_probe
 from scripts.lakehouse import register_aws_catalog as reg
 from scripts.lakehouse import run_catalog_registration_e2e as registration_e2e
+from scripts.lakehouse import run_gold_publish_launcher_cases as gold_cases
 from scripts.lakehouse import run_launcher_e2e as launcher_e2e
-from scripts.lakehouse.run_launcher_e2e import Env, catalog_script, catalog_up, expect_error, lifecycle_host, real_run, record_file, refused, run_lock
+from scripts.lakehouse.run_launcher_e2e import (
+    Env,
+    catalog_script,
+    catalog_up,
+    expect_error,
+    hold_forever,
+    lifecycle_host,
+    real_run,
+    record_file,
+    refused,
+    run_lock,
+)
 from scripts.process import CompletedProcess, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -489,6 +501,34 @@ def mac_gate_arguments(env: Env) -> dict[str, bool]:
     checks["gold publish counts as a write"] = write("gold_publish", {"job": "gold_publish"}, [], "real")
     checks["a test run stays exempt"] = not write("spark_write", {"job": "smoke"}, [], "fixture") and not write("real_dbt", {}, ["build"], "fixture")
     end_run(env, reader, "reader")
+    return checks
+
+
+@case
+def gold_reconcile_read(env: Env) -> dict[str, bool]:
+    """F1 by gold publish job: the candidate reconcile reads the catalog as the reader principal, so after the freeze it passes at submit,
+    dispatch and fence inspection; the other gold publish steps stay writes."""
+    hold_forever(env)
+    catalog_script(env)
+    env.start()
+    catalog_up(env)
+    principal = gold_cases.publish_run(env, gold_cases.GOLD_RUN, "real", ["lakehouse/gold/"], accepted=True)
+    owner_call(env, command("g_init", 0, "mac_writer", "mac_initial", "initialize"))
+    owner_call(env, command("g_freeze", 1, "freezing", "cut1"))
+    checks: dict[str, bool] = {}
+    reply: dict[str, Any] = {}
+    error = expect_error(lambda: reply.update(env.submit(principal, "gold_publish", "after", [], {"job": "reconcile_candidates"})))
+    checks["the candidate reconcile is accepted at submit after the freeze"] = error is None and "attempt_id" in reply
+    if "attempt_id" in reply:
+        env.wait_phase(reply["attempt_id"], ("started", "ended"))
+        checks["the candidate reconcile is dispatched after the freeze"] = env.phase(reply["attempt_id"]) == "started"
+        fenced = owner_call(env, command("g_fence", 2, "source_fenced", "cut1"))
+        checks["the fence passes while the candidate reconcile runs"] = fenced["state"] == "source_fenced"
+    write = launcher.mac_catalog_write
+    checks["only the candidate reconcile among the gold publish steps is a read"] = [
+        job for job in launcher.GOLD_JOBS if not write("gold_publish", {"job": job}, [], "real")
+    ] == ["reconcile_candidates"]
+    end_run(env, principal, gold_cases.GOLD_RUN)
     return checks
 
 
@@ -1427,6 +1467,7 @@ ALL_CASES = (
     freeze_gate_and_fence,
     queued_write_fenced,
     mac_gate_arguments,
+    gold_reconcile_read,
     rollback_paths,
     inventory_capture,
     inventory_identity,
