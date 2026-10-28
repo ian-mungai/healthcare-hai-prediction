@@ -451,7 +451,7 @@ launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no fi
   needed for that and is not part of this change.
 - A body file is listed in its own group's path list and in no other list. An edit to it selects that group, the lakehouse layers downstream of it (a bronze file
   selects all four layers, a silver file selects silver, gold and features and a gold file selects gold and features) and `repository_code_checks`, which matches every `.sh` file and runs the guard. It selects no
-  other group. The launcher list leaves the folder out of its `scripts/` pattern for this reason.
+  other group. The launcher list holds no other file of this folder (the computed list below never names them).
 - The dispatcher, the timing wrapper, the selector, `config/quality/ci_groups.json`, `.github/workflows/`, `.github/actions/`, `.pre-commit-config.yaml`, the
   requirements files and `pyproject.toml` still select every group. Other files under `.github/` (the pull request template) are documents and select no group.
 - The guard `scripts/quality/ci_group_files.py` runs in `repository_code_checks`. It fails with the file and the group named when a group has no body file or
@@ -471,6 +471,30 @@ launcher E2E is in `launcher.sh`). The groups of the acquisition gate have no fi
   command. These dry runs prove that a missing body file stops a run, that the full local plan names the same groups, gold units and acquisition shards as the
   GitHub jobs and that each of 15 hostile group files leaves the shell state of the other groups and of the dispatcher unchanged. Before the move the plans (`CI_LIST_ONLY=1`) and command lists of every part
   and scope were captured and compared with the result.
+
+## Launcher selection
+
+The `launcher` group (the launcher E2E suite, `scripts/lakehouse/run_launcher_e2e.py`, about 14 minutes) runs only when a change can affect what that suite
+runs. It no longer matches `^orchestration/`, `^scripts/`, `^config/`, `^services/`, `^data_contracts/` and `^dbt/` as a whole. The list is computed and checked:
+
+- `config/quality/launcher_inputs.json` holds `entry_points` and `extra_inputs` (the only hand-written keys), `ignored_reads` (each pair of module and text
+  with the reason the suite does not read it) and the computed `files`, `folders` and `dynamic_sites`.
+- `scripts/quality/launcher_inputs.py` computes the list from the entry point: every module a Python file imports (also inside functions and in code held in
+  strings), every module a string, an f-string or a shell, YAML or template file names, every tracked file a string, a `/` join (also one that starts at
+  `ROOT`) or an f-string names (`scripts/quality/source_reads.py`, moved from the E2E runner) and the same for each file found. A folder that a module names is
+  read whole: its files are listed, a new file in it selects the group (prefix in `folders`) and its own imports are not followed. A call that imports by a
+  computed name cannot be followed; the number of such calls per file is in `dynamic_sites`. Run `--check` (default), `--write`, `--explain PATH` or
+  `--trace FILE`.
+- `scripts/quality/ci_groups.py` adds one exact-path pattern per listed file and one prefix per folder to the group. The hand-written patterns are the group
+  body, the tool and the list. `global` paths and the unclassified-path rule still select every group.
+- A change to a module the suite imports or a file it reads selects the group; a change to an unrelated module (for example `scripts/quality/lint_sources.py`)
+  does not. A new import or read in a listed module changes the computed list, so `launcher_list_equals_computed` in `run_ci_groups_e2e` fails until
+  `--write` is run and the diff is reviewed. The same E2E fails when a listed file is not selected by the group, when a pattern matches no tracked file and
+  for planted defects in a small sample repository (stale entry, missing module, package, read file, module named in a text file, folder file or folder, a
+  new dynamic import, a changed entry point, a missed file in a trace).
+- Not provable by a static scan: a path built at run time from a variable, an environment variable or a glob over `ROOT`. Control: run the suite once under
+  file-open tracing and check the trace with `--trace` (commands in the report of the change). Until that run is recorded, `extra_inputs` and every folder
+  read whole stay in the list.
 
 ## Lakehouse layers
 
