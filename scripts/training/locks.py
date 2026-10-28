@@ -118,6 +118,8 @@ def _inventory(path: Path) -> dict[str, Any]:
         field = ".".join(str(part) for part in error.absolute_path)
         category = "release history" if "release_history" in field else "wheel inventory"
         raise LockError(f"{category}: {field or 'root'}: schema {error.validator} failed")
+    if not isinstance(document, dict):
+        raise LockError("wheel inventory: root: evidence must be a JSON object")
     return document
 
 
