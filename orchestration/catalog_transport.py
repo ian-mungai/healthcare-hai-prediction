@@ -55,6 +55,7 @@ class CatalogTransport:
         self.deadline = 0.0
         self.endpoint = ""
         self.failed = False
+        self._cleanup_failed = False
         self._closing = False
         self._lifecycle = threading.Lock()
 
@@ -68,6 +69,7 @@ class CatalogTransport:
         """Pause new dispatch after transport failure or unconfirmed cleanup."""
         return (
             self.failed
+            or self._cleanup_failed
             or (self._closing and bool(self.survivors))
             or any(handle.stderr_reader is not None and handle.stderr_reader.failure is not None for handle in self.handles)
         )
@@ -148,12 +150,23 @@ class CatalogTransport:
     def _ready(self, handle: OwnedProcess, port: int, deadline: float) -> None:
         while time.monotonic() < deadline:
             snapshot = process_snapshot(deadline)
+            if time.monotonic() >= deadline:
+                break
             leader = next((member for member in snapshot.group(handle.pgid) if member.pid == handle.pid), None)
             if snapshot.status != "seen" or leader is None or leader.state.startswith("Z"):
                 raise RuntimeError("catalog_transport_child_died")
-            if self._owned_listener(handle, port, deadline):
-                with socket.create_connection(("127.0.0.1", port), timeout=min(0.5, max(0.01, deadline - time.monotonic()))):
-                    return
+            owned = self._owned_listener(handle, port, deadline)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if owned:
+                try:
+                    with socket.create_connection(("127.0.0.1", port), timeout=min(0.5, remaining)):
+                        if time.monotonic() < deadline:
+                            return
+                except OSError:
+                    if time.monotonic() < deadline:
+                        raise
             time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
         raise TimeoutError("catalog_transport_readiness_deadline")
 
@@ -192,7 +205,7 @@ class CatalogTransport:
             return self.endpoint
         except BaseException:
             self.failed = True
-            self.close(deadline=min(deadline, time.monotonic() + 10))
+            self.close(deadline=time.monotonic() + 10)
             raise
 
     def start_relay(self, target_port: int, *, deadline: float) -> str:
@@ -207,7 +220,7 @@ class CatalogTransport:
             return self.endpoint
         except BaseException:
             self.failed = True
-            self.close(deadline=min(deadline, time.monotonic() + 10))
+            self.close(deadline=time.monotonic() + 10)
             raise
 
     def check(self, *, deadline: float) -> None:
@@ -217,19 +230,27 @@ class CatalogTransport:
             self._closing
             or self.dispatch_paused
             or not self.endpoint
-            or time.monotonic() >= self.deadline
+            or time.monotonic() >= min(deadline, self.deadline)
             or snapshot.status != "seen"
             or any(not any(member.pid == handle.pid and not member.state.startswith("Z") for member in snapshot.group(handle.pgid)) for handle in self.handles)
         ):
             self.failed = True
-            self.close(deadline=min(deadline, time.monotonic() + 10))
+            self.close(deadline=time.monotonic() + 10)
             raise RuntimeError("catalog_transport_unavailable")
 
     def execute(self, operation: Callable[[], T], *, deadline: float) -> T:
-        """Call a dependent operation once and require the owned transport on both sides."""
+        """Run once. The caller bounds the callback. Keep late success while route health and lifetime remain valid.
+
+        A callback failure retires the route without replay. The caller reconciles an unknown writer outcome.
+        """
         self.check(deadline=deadline)
-        result = operation()
-        self.check(deadline=deadline)
+        try:
+            result = operation()
+        except BaseException:
+            self.failed = True
+            self.close(deadline=time.monotonic() + 10)
+            raise
+        self.check(deadline=self.deadline)
         return result
 
     def close(self, *, deadline: float) -> bool:
@@ -238,7 +259,7 @@ class CatalogTransport:
         try:
             self._closing = True
             if not self._lifecycle.acquire(timeout=max(0.0, deadline - time.monotonic())):
-                self.failed = True
+                self._cleanup_failed = True
                 return False
             try:
                 confirmed = True
@@ -257,7 +278,7 @@ class CatalogTransport:
                             confirmed = False
                     else:
                         confirmed = False
-                self.failed = not confirmed
+                self._cleanup_failed = not confirmed
                 if confirmed:
                     self.endpoint = ""
                     self.ledger.unregister_session()

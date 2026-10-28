@@ -1287,11 +1287,11 @@
     },
     {
       "path": "orchestration/catalog_transport_child.py",
-      "line": 152,
+      "line": 158,
       "code_sha256": "47861b0f735f8e953ee990ada1d8240c9ced44fe88468cfd6c59a73eb9312480",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "5f5f43336646f9a6d53c358f672250408a613ee72a3c3e6358dec71b4829748c",
+      "file_sha256": "b914005ac264d9d46d44e7422155535e99fa85fb194415179b1ce796aabc6fa6",
       "dependencies": {},
       "reason": "the catalog tunnel child starts only the AWS CLI: it refuses any executable that is not absolute or does not resolve to the aws on PATH, then runs fixed ssm start-session AWS-StartPortForwardingSession arguments; reviewed by the lead on Oct 24 2026; never Docker"
     },

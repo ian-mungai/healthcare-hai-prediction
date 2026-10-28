@@ -108,10 +108,9 @@ def source_checks(root: Path = ROOT) -> dict[str, bool]:
             signal_enclosing = _function_name(call, parents)
             owned_stop = path in {"scripts/process_group.py", "services/hai/bootstrap/supervisor.py"} and signal_enclosing == "stop_owned"
             self_monitor = (
-                path in {"orchestration/sdk_worker.py", "orchestration/catalog_transport_child.py"}
-                and signal_enclosing in {"run", "_monitor"}
-                and ast.unparse(call) == "os.killpg(os.getpgrp(), signal.SIGKILL)"
-            )
+                (path == "orchestration/sdk_worker.py" and signal_enclosing in {"run", "_monitor"})
+                or (path == "orchestration/catalog_transport_child.py" and signal_enclosing in {"run", "_monitor", "main"})
+            ) and ast.unparse(call) == "os.killpg(os.getpgrp(), signal.SIGKILL)"
             signals_allowed = signals_allowed and (owned_stop or self_monitor)
         checks[f"{path}:signals_only_in_owned_stop_or_self_monitor"] = signals_allowed
     for path in ("scripts/process_group.py", "services/hai/bootstrap/supervisor.py"):
