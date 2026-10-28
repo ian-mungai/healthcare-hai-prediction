@@ -690,6 +690,16 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             "scripts/lakehouse/county_change_seed.py",
             ["python_lint", *LAYERS[2:], "orchestration_checks", "repository_code_checks"],
         ),
+        *(
+            path_case(f"layer_training_targets_{Path(path).stem}_selects_gold_and_features", path, ["python_lint", *LAYERS[2:], "repository_code_checks"])
+            for path in ("scripts/training/__init__.py", "scripts/training/targets.py", "scripts/training/run_targets_e2e.py")
+        ),
+        path_case("layer_training_targets_config_selects_gold_and_features", "config/training/targets.json", [*LAYERS[2:], "configuration_checks"]),
+        path_case(
+            "layer_training_targets_bridge_selects_gold_and_features",
+            "dbt/seeds/gold/hai_outcome_measures_bridge.csv",
+            [*LAYERS[2:], "orchestration_checks", "sql_style"],
+        ),
         path_case("layer_county_label_seed_selects_every_layer", "dbt/seeds/alaska_county_code_labels.csv", [*LAYERS, "orchestration_checks", "sql_style"]),
         path_case("layer_gold_macro_read_by_bronze_selects_every_layer", "dbt/macros/gold_facts.sql", [*LAYERS, "orchestration_checks", "sql_style"]),
         path_case(
@@ -1252,6 +1262,8 @@ OLD_GOLD_COMMANDS = (
     "scripts.lakehouse.county_change_seed --check",
     "scripts.lakehouse.run_identity_seeds_e2e",
     'scripts.lakehouse.run_county_change_seed_e2e --output "$quality_output/county_change_seed.json"',
+    "scripts.training.targets --check",
+    "scripts.training.run_targets_e2e",
     "scripts.lakehouse.feature_sources --check",
     "scripts.lakehouse.run_feature_sources_e2e",
     "scripts.lakehouse.feature_columns --check",
@@ -1389,6 +1401,7 @@ def gold_unit_cases() -> list[dict[str, Any]]:
     folders = {
         "scripts/lakehouse/run_bridge_references_e2e.py": "data/e2e/bridge_references",
         "scripts/lakehouse/run_identity_seeds_e2e.py": "data/e2e/gold_identity_seeds",
+        "scripts/training/run_targets_e2e.py": "data/e2e/training_targets",
         "scripts/lakehouse/run_feature_sources_e2e.py": "data/e2e/feature_sources",
         "scripts/lakehouse/run_feature_columns_e2e.py": "data/e2e/feature_columns",
         "scripts/quality/run_model_metadata_e2e.py": "data/e2e/model_metadata",

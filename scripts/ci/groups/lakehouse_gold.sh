@@ -15,6 +15,9 @@ lakehouse_gold_checks() {
   timed "lakehouse_gold: county change seed check" "$python_bin" -m scripts.lakehouse.county_change_seed --check
   timed "lakehouse_gold: identity seeds E2E" "$python_bin" -m scripts.lakehouse.run_identity_seeds_e2e
   timed "lakehouse_gold: county change seed E2E" "$python_bin" -m scripts.lakehouse.run_county_change_seed_e2e --output "$quality_output/county_change_seed.json"
+  # The training target lists against the gold control bridge (failure mode T9) and the repeatable negative cases of that check.
+  timed "lakehouse_gold: training targets check" "$python_bin" -m scripts.training.targets --check
+  timed "lakehouse_gold: training targets E2E" "$python_bin" -m scripts.training.run_targets_e2e
   # The gold Great Expectations suites must match the gold contract they are generated from.
   timed "lakehouse_gold: suites check" "$python_bin" -m scripts.lakehouse.gold_checks check-suites
   timed "lakehouse_gold: publish contract E2E" "$python_bin" -m scripts.lakehouse.run_gold_publish_e2e --mode contract
