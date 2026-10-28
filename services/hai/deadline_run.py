@@ -124,7 +124,12 @@ def spawn(command: list[str], boundary: float, mono: Callable[[], float]) -> int
     if child:
         return child
     try:
-        os.setpgid(0, 0)
+        try:
+            os.setpgid(0, 0)
+        except PermissionError:
+            # macOS can refuse this call once the parent's setpgid has already made the child its group leader; only that case may go on
+            if os.getpgrp() != os.getpid():
+                raise
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         if mono() >= boundary:

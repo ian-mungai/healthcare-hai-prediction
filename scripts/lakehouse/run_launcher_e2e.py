@@ -3272,6 +3272,24 @@ def delayed_spawn(*args, **kwargs):
     return original_spawn(*args, **kwargs)
 
 os.posix_spawnp = delayed_spawn
+original_setpgid = os.setpgid
+
+
+def setpgid(pid, group):
+    # "after": the child's own call fails with EPERM once the parent has already made it a group leader (the race seen on macOS);
+    # "not_leader": neither call takes effect and the child's call fails, so the child stays in the caller's group
+    mode = config.get("setpgid_eperm")
+    if mode == "not_leader":
+        if pid == 0:
+            raise PermissionError(1, "Operation not permitted")
+        return None
+    if mode == "after" and pid == 0:
+        original_setpgid(os.getpid(), os.getpid())
+        raise PermissionError(1, "Operation not permitted")
+    return original_setpgid(pid, group)
+
+
+os.setpgid = setpgid
 time.sleep(config.get("start_delay", 0))
 code = module.run(config["command"], deadline, wall=wall, mono=mono)
 json.dump(
@@ -3314,6 +3332,7 @@ def run_deadline_case(
     spawn_delay: float = 0.0,
     spawn_fault: str = "",
     stderr_flush_exit: bool = False,
+    setpgid_eperm: str = "",
     startup_delay: float = 0.0,
     bracket_delay: float = 0.0,
     valid_sample: bool = False,
@@ -3336,6 +3355,7 @@ def run_deadline_case(
         "spawn_delay": spawn_delay,
         "spawn_fault": spawn_fault,
         "stderr_flush_exit": stderr_flush_exit,
+        "setpgid_eperm": setpgid_eperm,
         "startup_delay": startup_delay,
         "bracket_delay": bracket_delay,
         "valid_sample": valid_sample,
@@ -3467,6 +3487,39 @@ def deadline_relay_child_fault(env: Env) -> dict[str, bool]:
         "a long message is cut to one bounded line": len(long_lines) == 1 and "Permission denied" in long_lines[0] and len(long_lines[0]) <= 300,
         "a stderr whose flush exits still leaves the child exit at 125": flush_exit["exit"] == 125,
         "a message with a line break stays one line": folded_lines == ["deadline_run: relay child failed: RuntimeError: first line second line"],
+    }
+
+
+@case("deadline_relay_setpgid_race")
+def deadline_relay_setpgid_race(env: Env) -> dict[str, bool]:
+    """A relay child whose own setpgid fails with EPERM after the parent made it a group leader still runs the command; one left outside its group does not."""
+    raced_marker = env.work / "setpgid_raced_command"
+    raced = run_deadline_case(
+        env,
+        "setpgid_raced",
+        deadline_in=30,
+        setpgid_eperm="after",
+        command=[
+            sys.executable,
+            "-c",
+            "import os, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(str(os.getpgrp() == os.getppid())); sys.exit(7)",
+            str(raced_marker),
+        ],
+    )
+    outside_marker = env.work / "setpgid_outside_command"
+    outside = run_deadline_case(
+        env,
+        "setpgid_outside",
+        deadline_in=30,
+        setpgid_eperm="not_leader",
+        command=[sys.executable, "-c", "import pathlib, sys; pathlib.Path(sys.argv[1]).touch()", str(outside_marker)],
+    )
+    outside_lines = (env.work / "deadline_setpgid_outside" / "wrapper_stderr.txt").read_text().splitlines()
+    return {
+        "an EPERM from the child's setpgid after the parent's call still runs the command and returns its code": raced["exit"] == 7,
+        "that command runs in the relay's own group": raced_marker.is_file() and raced_marker.read_text() == "True",
+        "a child left outside its own group exits 125 without starting the command": outside["exit"] == 125 and not outside_marker.exists(),
+        "that refusal names the exception": outside_lines == ["deadline_run: relay child failed: PermissionError: [Errno 1] Operation not permitted"],
     }
 
 
@@ -9361,6 +9414,7 @@ ALL_CASES = (
     deadline_acceptance,
     deadline_startup_delay,
     deadline_relay_child_fault,
+    deadline_relay_setpgid_race,
     deadline_spec,
     start_after_deadline_refused,
     launcher_enforces_deadline,
