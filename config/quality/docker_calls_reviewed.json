@@ -1408,6 +1408,18 @@
         "scripts/quality/scratch_worktree.py": "sha256:dfeeb949842f5643170c9c9203ffee6b28c5496bf717e04e8e942b529450a347"
       },
       "reason": "The literal bash program runs SHELL_HARNESS, which extracts only scratch declarations and cleanup from scripts/acquisition/run_checks_ci_e2e.sh. Its fixed actions use Git, chmod and removal in throwaway repositories and start no container."
+    },
+    {
+      "path": "scripts/training/run_training_e2e.py",
+      "line": 180,
+      "code_sha256": "b95cd0ad79eb069a8ee9d023080ef02ae686a3a1caf63df98a07dc57209f2a7a",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "d11c5448b588569a01d3ea8430e887533885d887ce335fff438089467bbc73c0",
+      "dependencies": {
+        "scripts/process.py": "sha256:ccc2539d813eca5ef82be1cd6033de9c7cfccb8c8316bef43dfe996157e3d1ac"
+      },
+      "reason": "Report.command runs sys.executable -m <module> --check with its arguments; every caller passes the literal module scripts.training.guards or scripts.training.locks, and the check cannot follow the module because the list is built from the parameter"
     }
   ]
 }

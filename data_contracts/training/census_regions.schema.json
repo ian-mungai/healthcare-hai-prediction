@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "states": {
+      "additionalProperties": false,
+      "properties": {
+        "AK": {
+          "const": "West"
+        },
+        "AL": {
+          "const": "South"
+        },
+        "AR": {
+          "const": "South"
+        },
+        "AZ": {
+          "const": "West"
+        },
+        "CA": {
+          "const": "West"
+        },
+        "CO": {
+          "const": "West"
+        },
+        "CT": {
+          "const": "Northeast"
+        },
+        "DC": {
+          "const": "South"
+        },
+        "DE": {
+          "const": "South"
+        },
+        "FL": {
+          "const": "South"
+        },
+        "GA": {
+          "const": "South"
+        },
+        "HI": {
+          "const": "West"
+        },
+        "IA": {
+          "const": "Midwest"
+        },
+        "ID": {
+          "const": "West"
+        },
+        "IL": {
+          "const": "Midwest"
+        },
+        "IN": {
+          "const": "Midwest"
+        },
+        "KS": {
+          "const": "Midwest"
+        },
+        "KY": {
+          "const": "South"
+        },
+        "LA": {
+          "const": "South"
+        },
+        "MA": {
+          "const": "Northeast"
+        },
+        "MD": {
+          "const": "South"
+        },
+        "ME": {
+          "const": "Northeast"
+        },
+        "MI": {
+          "const": "Midwest"
+        },
+        "MN": {
+          "const": "Midwest"
+        },
+        "MO": {
+          "const": "Midwest"
+        },
+        "MS": {
+          "const": "South"
+        },
+        "MT": {
+          "const": "West"
+        },
+        "NC": {
+          "const": "South"
+        },
+        "ND": {
+          "const": "Midwest"
+        },
+        "NE": {
+          "const": "Midwest"
+        },
+        "NH": {
+          "const": "Northeast"
+        },
+        "NJ": {
+          "const": "Northeast"
+        },
+        "NM": {
+          "const": "West"
+        },
+        "NV": {
+          "const": "West"
+        },
+        "NY": {
+          "const": "Northeast"
+        },
+        "OH": {
+          "const": "Midwest"
+        },
+        "OK": {
+          "const": "South"
+        },
+        "OR": {
+          "const": "West"
+        },
+        "PA": {
+          "const": "Northeast"
+        },
+        "RI": {
+          "const": "Northeast"
+        },
+        "SC": {
+          "const": "South"
+        },
+        "SD": {
+          "const": "Midwest"
+        },
+        "TN": {
+          "const": "South"
+        },
+        "TX": {
+          "const": "South"
+        },
+        "UT": {
+          "const": "West"
+        },
+        "VA": {
+          "const": "South"
+        },
+        "VT": {
+          "const": "Northeast"
+        },
+        "WA": {
+          "const": "West"
+        },
+        "WI": {
+          "const": "Midwest"
+        },
+        "WV": {
+          "const": "South"
+        },
+        "WY": {
+          "const": "West"
+        }
+      },
+      "required": [
+        "CT",
+        "ME",
+        "MA",
+        "NH",
+        "RI",
+        "VT",
+        "NJ",
+        "NY",
+        "PA",
+        "IN",
+        "IL",
+        "MI",
+        "OH",
+        "WI",
+        "IA",
+        "KS",
+        "MN",
+        "MO",
+        "NE",
+        "ND",
+        "SD",
+        "DE",
+        "DC",
+        "FL",
+        "GA",
+        "MD",
+        "NC",
+        "SC",
+        "VA",
+        "WV",
+        "AL",
+        "KY",
+        "MS",
+        "TN",
+        "AR",
+        "LA",
+        "OK",
+        "TX",
+        "AZ",
+        "CO",
+        "ID",
+        "MT",
+        "NV",
+        "NM",
+        "UT",
+        "WY",
+        "AK",
+        "CA",
+        "HI",
+        "OR",
+        "WA"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema",
+    "states"
+  ],
+  "title": "Census regions",
+  "type": "object"
+}

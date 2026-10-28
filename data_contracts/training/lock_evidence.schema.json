@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "images": {
+      "additionalProperties": false,
+      "properties": {
+        "mlflow_server": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "filename": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "filename",
+              "sha256"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "prediction_api": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "filename": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "filename",
+              "sha256"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "training": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "filename": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "filename",
+              "sha256"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "training",
+        "mlflow_server",
+        "prediction_api"
+      ],
+      "type": "object"
+    },
+    "locked_at_utc": {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+      "type": "string"
+    },
+    "release_history": {
+      "additionalProperties": false,
+      "properties": {
+        "boto3": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "uploaded_at_utc": {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+                "type": "string"
+              },
+              "version": {
+                "pattern": "^\\d+(?:\\.\\d+)+$",
+                "type": "string"
+              },
+              "yanked": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "version",
+              "uploaded_at_utc",
+              "yanked"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "psycopg2-binary": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "uploaded_at_utc": {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$",
+                "type": "string"
+              },
+              "version": {
+                "pattern": "^\\d+(?:\\.\\d+)+$",
+                "type": "string"
+              },
+              "yanked": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "version",
+              "uploaded_at_utc",
+              "yanked"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "boto3",
+        "psycopg2-binary"
+      ],
+      "type": "object"
+    },
+    "schema": {
+      "const": 1
+    }
+  },
+  "required": [
+    "schema",
+    "locked_at_utc",
+    "release_history",
+    "images"
+  ],
+  "title": "Captured lock evidence",
+  "type": "object"
+}
