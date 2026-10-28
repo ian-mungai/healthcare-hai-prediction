@@ -1,0 +1,807 @@
+{
+  "classification": "Synthetic",
+  "positive": [
+    {
+      "name": "run_task_exchange",
+      "op": "run_task",
+      "request": {
+        "id": "synthetic_call",
+        "op": "run_task",
+        "params": {
+          "cluster": "synthetic_cluster",
+          "taskDefinition": "synthetic_definition",
+          "count": 1,
+          "capacityProviderStrategy": [{"capacityProvider": "FARGATE", "weight": 1}],
+          "networkConfiguration": {"awsvpcConfiguration": {"subnets": ["synthetic_subnet"], "securityGroups": ["synthetic_group"], "assignPublicIp": "DISABLED"}},
+          "overrides": {
+            "cpu": "1024",
+            "memory": "2048",
+            "ephemeralStorage": {"sizeInGiB": 21},
+            "containerOverrides": [{"name": "synthetic_container", "environment": []}]
+          },
+          "startedBy": "hai_synthetic_try",
+          "clientToken": "111111111111111111111111111111111111111111111111",
+          "propagateTags": "TASK_DEFINITION",
+          "enableECSManagedTags": true,
+          "enableExecuteCommand": false
+        },
+        "budget_s": 1.0
+      },
+      "reply": {"id": "synthetic_call", "ok": true, "result": {"task_arns": ["synthetic_value"], "failures": []}}
+    },
+    {
+      "name": "stop_task_exchange",
+      "op": "stop_task",
+      "request": {
+        "id": "synthetic_call",
+        "op": "stop_task",
+        "params": {"cluster": "synthetic_value", "task": "synthetic_value", "reason": "synthetic_value"},
+        "budget_s": 1.0
+      },
+      "reply": {"id": "synthetic_call", "ok": true, "result": {"task_arn": "synthetic_value", "last_status": "STOPPED"}}
+    },
+    {
+      "name": "describe_tasks_exchange",
+      "op": "describe_tasks",
+      "request": {
+        "id": "synthetic_call",
+        "op": "describe_tasks",
+        "params": {"cluster": "synthetic_value", "tasks": ["synthetic_value"], "include": ["TAGS"]},
+        "budget_s": 1.0
+      },
+      "reply": {
+        "id": "synthetic_call",
+        "ok": true,
+        "result": {
+          "tasks": [
+            {
+              "task_arn": "synthetic_value",
+              "started_by": "hai_synthetic_try",
+              "group": "synthetic_value",
+              "last_status": "RUNNING",
+              "containers": [{"name": "synthetic_value"}],
+              "tags": [{"key": "Project", "value": "synthetic_value"}]
+            }
+          ],
+          "failures": []
+        }
+      }
+    },
+    {
+      "name": "list_tasks_exchange",
+      "op": "list_tasks",
+      "request": {"id": "synthetic_call", "op": "list_tasks", "params": {"cluster": "synthetic_value", "startedBy": "hai_synthetic_try"}, "budget_s": 1.0},
+      "reply": {"id": "synthetic_call", "ok": true, "result": {"task_arns": ["synthetic_value"]}}
+    },
+    {
+      "name": "assume_role_exchange",
+      "op": "assume_role",
+      "request": {
+        "id": "synthetic_call",
+        "op": "assume_role",
+        "params": {"role_arn": "synthetic_value", "session_name": "synthetic_value", "policy_json": "{}", "duration_seconds": 900},
+        "budget_s": 1.0
+      },
+      "reply": {
+        "id": "synthetic_call",
+        "ok": true,
+        "result": {
+          "credentials": {
+            "access_key_id": "synthetic_access",
+            "secret_access_key": "synthetic_secret",
+            "session_token": "synthetic_token",
+            "expiration_utc": "2026-10-23T23:59:59Z"
+          },
+          "date_utc": "2026-10-23T22:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "caller_identity_exchange",
+      "op": "caller_identity",
+      "request": {"id": "synthetic_call", "op": "caller_identity", "params": {}, "budget_s": 1.0},
+      "reply": {
+        "id": "synthetic_call",
+        "ok": true,
+        "result": {"account": "synthetic_value", "arn": "synthetic_value", "user_id": "synthetic_value", "date_utc": "2026-10-23T22:00:00Z"}
+      }
+    },
+    {
+      "name": "s3_head_exchange",
+      "op": "s3_head",
+      "request": {
+        "id": "synthetic_call",
+        "op": "s3_head",
+        "params": {"bucket": "synthetic_bucket", "key": "synthetic_key", "version_id": "synthetic_version"},
+        "budget_s": 1.0
+      },
+      "reply": {
+        "id": "synthetic_call",
+        "ok": true,
+        "result": {"version_id": "synthetic_version", "size": 8, "sha256": "1111111111111111111111111111111111111111111111111111111111111111"}
+      }
+    },
+    {
+      "name": "s3_list_exchange",
+      "op": "s3_list",
+      "request": {"id": "synthetic_call", "op": "s3_list", "params": {"bucket": "synthetic_value", "prefix": "synthetic/"}, "budget_s": 1.0},
+      "reply": {"id": "synthetic_call", "ok": true, "result": {"objects": [{"key": "synthetic_value", "size": 8}]}}
+    },
+    {
+      "name": "s3_put_small_exchange",
+      "op": "s3_put_small",
+      "request": {
+        "id": "synthetic_call",
+        "op": "s3_put_small",
+        "params": {
+          "bucket": "synthetic_value",
+          "key": "synthetic_value",
+          "body_utf8": "{}",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "if_none_match": "*",
+          "session": {
+            "access_key_id": "synthetic_access",
+            "secret_access_key": "synthetic_secret",
+            "session_token": "synthetic_token",
+            "expiration_utc": "2026-10-23T23:59:59Z"
+          }
+        },
+        "budget_s": 1.0
+      },
+      "reply": {
+        "id": "synthetic_call",
+        "ok": true,
+        "result": {"version_id": "synthetic_version", "size": 8, "sha256": "1111111111111111111111111111111111111111111111111111111111111111"}
+      }
+    },
+    {
+      "name": "s3_get_small_exchange",
+      "op": "s3_get_small",
+      "request": {
+        "id": "synthetic_call",
+        "op": "s3_get_small",
+        "params": {"bucket": "synthetic_bucket", "key": "synthetic_key", "version_id": "synthetic_version"},
+        "budget_s": 1.0
+      },
+      "reply": {
+        "id": "synthetic_call",
+        "ok": true,
+        "result": {
+          "body_utf8": "{}",
+          "version_id": "synthetic_version",
+          "size": 8,
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      }
+    },
+    {
+      "name": "s3_download_exchange",
+      "op": "s3_download",
+      "request": {
+        "id": "synthetic_call",
+        "op": "s3_download",
+        "params": {
+          "bucket": "synthetic_bucket",
+          "key": "synthetic_key",
+          "version_id": "synthetic_version",
+          "temp_path": "synthetic_owned_partial",
+          "expected_size": 8,
+          "expected_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "budget_s": 1.0
+      },
+      "reply": {
+        "id": "synthetic_call",
+        "ok": true,
+        "result": {
+          "temp_path": "synthetic_owned_partial",
+          "version_id": "synthetic_version",
+          "size": 8,
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      }
+    },
+    {
+      "name": "s3_upload_part_exchange",
+      "op": "s3_upload_part",
+      "request": {
+        "id": "synthetic_call",
+        "op": "s3_upload_part",
+        "params": {
+          "bucket": "synthetic_value",
+          "key": "synthetic_value",
+          "upload_id": "synthetic_value",
+          "part_number": 1,
+          "path": "synthetic_owned_input",
+          "offset": 0,
+          "length": 8,
+          "file_identity": {"size": 8, "mtime_ns": 100, "inode": 7}
+        },
+        "budget_s": 1.0
+      },
+      "reply": {
+        "id": "synthetic_call",
+        "ok": true,
+        "result": {"part_number": 1, "etag": "synthetic_etag", "checksum_sha256": "1111111111111111111111111111111111111111111111111111111111111111"}
+      }
+    },
+    {
+      "name": "s3_mpu_create_exchange",
+      "op": "s3_mpu_create",
+      "request": {
+        "id": "synthetic_call",
+        "op": "s3_mpu_create",
+        "params": {"bucket": "synthetic_value", "key": "synthetic_value", "sha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+        "budget_s": 1.0
+      },
+      "reply": {"id": "synthetic_call", "ok": true, "result": {"upload_id": "synthetic_value"}}
+    },
+    {
+      "name": "s3_mpu_complete_exchange",
+      "op": "s3_mpu_complete",
+      "request": {
+        "id": "synthetic_call",
+        "op": "s3_mpu_complete",
+        "params": {
+          "bucket": "synthetic_value",
+          "key": "synthetic_value",
+          "upload_id": "synthetic_value",
+          "parts": [{"part_number": 1, "etag": "synthetic_etag", "checksum_sha256": "1111111111111111111111111111111111111111111111111111111111111111"}],
+          "if_none_match": "*"
+        },
+        "budget_s": 1.0
+      },
+      "reply": {"id": "synthetic_call", "ok": true, "result": {"version_id": "synthetic_value", "etag": "synthetic_value"}}
+    },
+    {
+      "name": "s3_mpu_abort_exchange",
+      "op": "s3_mpu_abort",
+      "request": {
+        "id": "synthetic_call",
+        "op": "s3_mpu_abort",
+        "params": {"bucket": "synthetic_value", "key": "synthetic_value", "upload_id": "synthetic_value"},
+        "budget_s": 1.0
+      },
+      "reply": {"id": "synthetic_call", "ok": true, "result": {"aborted": true}}
+    },
+    {
+      "name": "s3_mpu_list_exchange",
+      "op": "s3_mpu_list",
+      "request": {"id": "synthetic_call", "op": "s3_mpu_list", "params": {"bucket": "synthetic_value", "prefix": "synthetic/"}, "budget_s": 1.0},
+      "reply": {"id": "synthetic_call", "ok": true, "result": {"uploads": [{"key": "synthetic_value", "upload_id": "synthetic_value"}]}}
+    },
+    {
+      "name": "s3_delete_exchange",
+      "op": "s3_delete",
+      "request": {"id": "synthetic_call", "op": "s3_delete", "params": {"bucket": "synthetic_value", "key": "synthetic_value"}, "budget_s": 1.0},
+      "reply": {"id": "synthetic_call", "ok": true, "result": {"delete_marker": true, "version_id": "synthetic_value"}}
+    },
+    {
+      "name": "logs_get_events_exchange",
+      "op": "logs_get_events",
+      "request": {"id": "synthetic_call", "op": "logs_get_events", "params": {"log_group": "synthetic_value", "log_stream": "synthetic_value"}, "budget_s": 1.0},
+      "reply": {"id": "synthetic_call", "ok": true, "result": {"events": [{"timestamp_ms": 1, "message": "Synthetic message"}]}}
+    },
+    {
+      "name": "get_parameter_exchange",
+      "op": "get_parameter",
+      "request": {"id": "synthetic_call", "op": "get_parameter", "params": {"name": "/synthetic/catalog_secret:7", "with_decryption": true}, "budget_s": 1.0},
+      "reply": {"id": "synthetic_call", "ok": true, "result": {"name": "/synthetic/catalog_secret", "version": 7, "value": "synthetic_value"}}
+    }
+  ],
+  "error_reply": {
+    "id": "synthetic_call",
+    "ok": false,
+    "error": {"kind": "deadline", "code": "deadline", "http_status": null, "request_id": null, "effect_unknown": true}
+  },
+  "negative": [
+    {
+      "name": "run_task_free_keyword",
+      "op": "run_task",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "run_task",
+        "params": {
+          "cluster": "synthetic_cluster",
+          "taskDefinition": "synthetic_definition",
+          "count": 1,
+          "capacityProviderStrategy": [{"capacityProvider": "FARGATE", "weight": 1}],
+          "networkConfiguration": {"awsvpcConfiguration": {"subnets": ["synthetic_subnet"], "securityGroups": ["synthetic_group"], "assignPublicIp": "DISABLED"}},
+          "overrides": {
+            "cpu": "1024",
+            "memory": "2048",
+            "ephemeralStorage": {"sizeInGiB": 21},
+            "containerOverrides": [{"name": "synthetic_container", "environment": []}]
+          },
+          "startedBy": "hai_synthetic_try",
+          "clientToken": "111111111111111111111111111111111111111111111111",
+          "propagateTags": "TASK_DEFINITION",
+          "enableECSManagedTags": true,
+          "enableExecuteCommand": false,
+          "free_sdk_keyword": "synthetic_value"
+        },
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "stop_task_free_keyword",
+      "op": "stop_task",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "stop_task",
+        "params": {"cluster": "synthetic_value", "task": "synthetic_value", "reason": "synthetic_value", "free_sdk_keyword": "synthetic_value"},
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "describe_tasks_free_keyword",
+      "op": "describe_tasks",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "describe_tasks",
+        "params": {"cluster": "synthetic_value", "tasks": ["synthetic_value"], "include": ["TAGS"], "free_sdk_keyword": "synthetic_value"},
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "list_tasks_free_keyword",
+      "op": "list_tasks",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "list_tasks",
+        "params": {"cluster": "synthetic_value", "startedBy": "hai_synthetic_try", "free_sdk_keyword": "synthetic_value"},
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "assume_role_free_keyword",
+      "op": "assume_role",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "assume_role",
+        "params": {
+          "role_arn": "synthetic_value",
+          "session_name": "synthetic_value",
+          "policy_json": "{}",
+          "duration_seconds": 900,
+          "free_sdk_keyword": "synthetic_value"
+        },
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "caller_identity_free_keyword",
+      "op": "caller_identity",
+      "target": "request",
+      "frame": {"id": "synthetic_call", "op": "caller_identity", "params": {"free_sdk_keyword": "synthetic_value"}, "budget_s": 1.0}
+    },
+    {
+      "name": "s3_head_free_keyword",
+      "op": "s3_head",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "s3_head",
+        "params": {"bucket": "synthetic_bucket", "key": "synthetic_key", "version_id": "synthetic_version", "free_sdk_keyword": "synthetic_value"},
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "s3_list_free_keyword",
+      "op": "s3_list",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "s3_list",
+        "params": {"bucket": "synthetic_value", "prefix": "synthetic/", "free_sdk_keyword": "synthetic_value"},
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "s3_put_small_free_keyword",
+      "op": "s3_put_small",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "s3_put_small",
+        "params": {
+          "bucket": "synthetic_value",
+          "key": "synthetic_value",
+          "body_utf8": "{}",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "if_none_match": "*",
+          "session": {
+            "access_key_id": "synthetic_access",
+            "secret_access_key": "synthetic_secret",
+            "session_token": "synthetic_token",
+            "expiration_utc": "2026-10-23T23:59:59Z"
+          },
+          "free_sdk_keyword": "synthetic_value"
+        },
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "s3_get_small_free_keyword",
+      "op": "s3_get_small",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "s3_get_small",
+        "params": {"bucket": "synthetic_bucket", "key": "synthetic_key", "version_id": "synthetic_version", "free_sdk_keyword": "synthetic_value"},
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "s3_download_free_keyword",
+      "op": "s3_download",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "s3_download",
+        "params": {
+          "bucket": "synthetic_bucket",
+          "key": "synthetic_key",
+          "version_id": "synthetic_version",
+          "temp_path": "synthetic_owned_partial",
+          "expected_size": 8,
+          "expected_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "free_sdk_keyword": "synthetic_value"
+        },
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "s3_upload_part_free_keyword",
+      "op": "s3_upload_part",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "s3_upload_part",
+        "params": {
+          "bucket": "synthetic_value",
+          "key": "synthetic_value",
+          "upload_id": "synthetic_value",
+          "part_number": 1,
+          "path": "synthetic_owned_input",
+          "offset": 0,
+          "length": 8,
+          "file_identity": {"size": 8, "mtime_ns": 100, "inode": 7},
+          "free_sdk_keyword": "synthetic_value"
+        },
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "s3_mpu_create_free_keyword",
+      "op": "s3_mpu_create",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "s3_mpu_create",
+        "params": {
+          "bucket": "synthetic_value",
+          "key": "synthetic_value",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "free_sdk_keyword": "synthetic_value"
+        },
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "s3_mpu_complete_free_keyword",
+      "op": "s3_mpu_complete",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "s3_mpu_complete",
+        "params": {
+          "bucket": "synthetic_value",
+          "key": "synthetic_value",
+          "upload_id": "synthetic_value",
+          "parts": [{"part_number": 1, "etag": "synthetic_etag", "checksum_sha256": "1111111111111111111111111111111111111111111111111111111111111111"}],
+          "if_none_match": "*",
+          "free_sdk_keyword": "synthetic_value"
+        },
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "s3_mpu_abort_free_keyword",
+      "op": "s3_mpu_abort",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "s3_mpu_abort",
+        "params": {"bucket": "synthetic_value", "key": "synthetic_value", "upload_id": "synthetic_value", "free_sdk_keyword": "synthetic_value"},
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "s3_mpu_list_free_keyword",
+      "op": "s3_mpu_list",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "s3_mpu_list",
+        "params": {"bucket": "synthetic_value", "prefix": "synthetic/", "free_sdk_keyword": "synthetic_value"},
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "s3_delete_free_keyword",
+      "op": "s3_delete",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "s3_delete",
+        "params": {"bucket": "synthetic_value", "key": "synthetic_value", "free_sdk_keyword": "synthetic_value"},
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "logs_get_events_free_keyword",
+      "op": "logs_get_events",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "logs_get_events",
+        "params": {"log_group": "synthetic_value", "log_stream": "synthetic_value", "free_sdk_keyword": "synthetic_value"},
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "get_parameter_free_keyword",
+      "op": "get_parameter",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "get_parameter",
+        "params": {"name": "/synthetic/catalog_secret:7", "with_decryption": true, "free_sdk_keyword": "synthetic_value"},
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "extra_envelope",
+      "op": "list_tasks",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "list_tasks",
+        "params": {"cluster": "synthetic_value", "startedBy": "hai_synthetic_try"},
+        "budget_s": 1.0,
+        "debug": true
+      }
+    },
+    {
+      "name": "unknown_operation",
+      "op": "list_tasks",
+      "target": "request",
+      "frame": {"id": "synthetic_call", "op": "free_api_call", "params": {"cluster": "synthetic_value", "startedBy": "hai_synthetic_try"}, "budget_s": 1.0}
+    },
+    {
+      "name": "zero_budget",
+      "op": "list_tasks",
+      "target": "request",
+      "frame": {"id": "synthetic_call", "op": "list_tasks", "params": {"cluster": "synthetic_value", "startedBy": "hai_synthetic_try"}, "budget_s": 0}
+    },
+    {
+      "name": "boolean_budget",
+      "op": "list_tasks",
+      "target": "request",
+      "frame": {"id": "synthetic_call", "op": "list_tasks", "params": {"cluster": "synthetic_value", "startedBy": "hai_synthetic_try"}, "budget_s": true}
+    },
+    {
+      "name": "over_operation_cap",
+      "op": "list_tasks",
+      "target": "request",
+      "frame": {"id": "synthetic_call", "op": "list_tasks", "params": {"cluster": "synthetic_value", "startedBy": "hai_synthetic_try"}, "budget_s": 13}
+    },
+    {
+      "name": "invalid_request_identity",
+      "op": "list_tasks",
+      "target": "request",
+      "frame": {"id": "synthetic:call", "op": "list_tasks", "params": {"cluster": "synthetic_value", "startedBy": "hai_synthetic_try"}, "budget_s": 1.0}
+    },
+    {
+      "name": "combined_started_by_filter",
+      "op": "list_tasks",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "list_tasks",
+        "params": {"cluster": "synthetic_value", "startedBy": "hai_synthetic_try", "desiredStatus": "STOPPED"},
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "run_command_override",
+      "op": "run_task",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "run_task",
+        "params": {
+          "cluster": "synthetic_cluster",
+          "taskDefinition": "synthetic_definition",
+          "count": 1,
+          "capacityProviderStrategy": [{"capacityProvider": "FARGATE", "weight": 1}],
+          "networkConfiguration": {"awsvpcConfiguration": {"subnets": ["synthetic_subnet"], "securityGroups": ["synthetic_group"], "assignPublicIp": "DISABLED"}},
+          "overrides": {
+            "cpu": "1024",
+            "memory": "2048",
+            "ephemeralStorage": {"sizeInGiB": 21},
+            "containerOverrides": [{"name": "synthetic_container", "environment": []}],
+            "command": ["synthetic"]
+          },
+          "startedBy": "hai_synthetic_try",
+          "clientToken": "111111111111111111111111111111111111111111111111",
+          "propagateTags": "TASK_DEFINITION",
+          "enableECSManagedTags": true,
+          "enableExecuteCommand": false
+        },
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "public_ip_enabled",
+      "op": "run_task",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "run_task",
+        "params": {
+          "cluster": "synthetic_cluster",
+          "taskDefinition": "synthetic_definition",
+          "count": 1,
+          "capacityProviderStrategy": [{"capacityProvider": "FARGATE", "weight": 1}],
+          "networkConfiguration": {"awsvpcConfiguration": {"subnets": ["synthetic_subnet"], "securityGroups": ["synthetic_group"], "assignPublicIp": "ENABLED"}},
+          "overrides": {
+            "cpu": "1024",
+            "memory": "2048",
+            "ephemeralStorage": {"sizeInGiB": 21},
+            "containerOverrides": [{"name": "synthetic_container", "environment": []}]
+          },
+          "startedBy": "hai_synthetic_try",
+          "clientToken": "111111111111111111111111111111111111111111111111",
+          "propagateTags": "TASK_DEFINITION",
+          "enableECSManagedTags": true,
+          "enableExecuteCommand": false
+        },
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "missing_conditional_write",
+      "op": "s3_put_small",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "s3_put_small",
+        "params": {
+          "bucket": "synthetic_value",
+          "key": "synthetic_value",
+          "body_utf8": "{}",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "if_none_match": "",
+          "session": {
+            "access_key_id": "synthetic_access",
+            "secret_access_key": "synthetic_secret",
+            "session_token": "synthetic_token",
+            "expiration_utc": "2026-10-23T23:59:59Z"
+          }
+        },
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "multipart_missing_conditional_write",
+      "op": "s3_mpu_complete",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "s3_mpu_complete",
+        "params": {
+          "bucket": "synthetic_value",
+          "key": "synthetic_value",
+          "upload_id": "synthetic_value",
+          "parts": [{"part_number": 1, "etag": "synthetic_etag", "checksum_sha256": "1111111111111111111111111111111111111111111111111111111111111111"}],
+          "if_none_match": ""
+        },
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "parameter_latest",
+      "op": "get_parameter",
+      "target": "request",
+      "frame": {"id": "synthetic_call", "op": "get_parameter", "params": {"name": "/synthetic/catalog_secret", "with_decryption": true}, "budget_s": 1.0}
+    },
+    {
+      "name": "parameter_alias",
+      "op": "get_parameter",
+      "target": "request",
+      "frame": {
+        "id": "synthetic_call",
+        "op": "get_parameter",
+        "params": {"name": "/synthetic/catalog_secret:latest", "with_decryption": true},
+        "budget_s": 1.0
+      }
+    },
+    {
+      "name": "parameter_zero",
+      "op": "get_parameter",
+      "target": "request",
+      "frame": {"id": "synthetic_call", "op": "get_parameter", "params": {"name": "/synthetic/catalog_secret:0", "with_decryption": true}, "budget_s": 1.0}
+    },
+    {
+      "name": "parameter_leading_zero",
+      "op": "get_parameter",
+      "target": "request",
+      "frame": {"id": "synthetic_call", "op": "get_parameter", "params": {"name": "/synthetic/catalog_secret:07", "with_decryption": true}, "budget_s": 1.0}
+    },
+    {
+      "name": "parameter_trailing_newline",
+      "op": "get_parameter",
+      "target": "request",
+      "frame": {"id": "synthetic_call", "op": "get_parameter", "params": {"name": "/synthetic/catalog_secret:7\n", "with_decryption": true}, "budget_s": 1.0}
+    },
+    {
+      "name": "parameter_without_decryption",
+      "op": "get_parameter",
+      "target": "request",
+      "frame": {"id": "synthetic_call", "op": "get_parameter", "params": {"name": "/synthetic/catalog_secret:7", "with_decryption": false}, "budget_s": 1.0}
+    },
+    {
+      "name": "parameter_extra_reply",
+      "op": "get_parameter",
+      "target": "reply",
+      "frame": {
+        "id": "synthetic_call",
+        "ok": true,
+        "result": {"name": "/synthetic/catalog_secret", "version": 7, "value": "synthetic_value", "raw_body": "synthetic_value"}
+      }
+    },
+    {
+      "name": "parameter_boolean_version",
+      "op": "get_parameter",
+      "target": "reply",
+      "frame": {"id": "synthetic_call", "ok": true, "result": {"name": "/synthetic/catalog_secret", "version": true, "value": "synthetic_value"}}
+    },
+    {
+      "name": "raw_error_body",
+      "op": "run_task",
+      "target": "error_reply",
+      "frame": {
+        "id": "synthetic_call",
+        "ok": false,
+        "error": {"kind": "deadline", "code": "deadline", "http_status": null, "request_id": null, "effect_unknown": true, "body": "synthetic_value"}
+      }
+    },
+    {
+      "name": "raw_error_message",
+      "op": "run_task",
+      "target": "error_reply",
+      "frame": {
+        "id": "synthetic_call",
+        "ok": false,
+        "error": {"kind": "deadline", "code": "deadline", "http_status": null, "request_id": null, "effect_unknown": true, "message": "synthetic_value"}
+      }
+    },
+    {
+      "name": "unknown_error_kind",
+      "op": "run_task",
+      "target": "error_reply",
+      "frame": {
+        "id": "synthetic_call",
+        "ok": false,
+        "error": {"kind": "raw_sdk_error", "code": "deadline", "http_status": null, "request_id": null, "effect_unknown": true}
+      }
+    }
+  ]
+}
