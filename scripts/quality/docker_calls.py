@@ -29,11 +29,14 @@ Engine API classes (``DockerApi``, ``UnixConnection``, ``EventStream``) or of a 
 non-comment line that runs ``docker`` or ``docker-compose`` (directly, through ``exec``, ``env``, ``command``, ``sudo``, a path, a quoted
 ``bash -c`` string or a variable that holds the program) or runs ``eval`` is a finding.
 
-Process starts the check cannot prove and the lead has read are listed in ``REVIEWED``; each entry binds its whole file, the repository
-modules that file imports, its finding class and its exact number of findings. Three files are exempt, each for a stated reason
-(``EXEMPT``). Known limits (issue WV3-006): a ``PATH`` the repository changes, a program symlink the repository creates, a script the
-repository writes at run time and then runs, and shell commands assembled from variables are not followed. The check covers the
-repository's own code, which is the trust boundary (D1 section 12). Failure mode 918 is in plans/wp/l1a_failure_modes.md.
+Process starts the check cannot prove and the lead has read are listed in ``REVIEWED``; each entry binds the normalized syntax tree of its whole
+file and of every repository module that file imports directly (plain, ``from``, star and relative imports; ``ast.dump`` without positions),
+its call-site line, its finding class and its exact number of findings. Comments, whitespace, formatting and moved lines leave an entry
+current; every change of code, documentation or annotation in those files brings the finding back. When any of those files can read source
+text (``__file__``, ``inspect`` and the like, also through an alias of ``import_module``), the whole set is bound by its bytes instead. Three
+files are exempt, each for a stated reason (``EXEMPT``). Known limits (issue WV3-006): a ``PATH`` the repository changes, a program symlink the
+repository creates, a script the repository writes at run time and then runs, and shell commands assembled from variables are not followed.
+The check covers the repository's own code, which is the trust boundary (D1 section 12). Failure mode 918 is in plans/wp/l1a_failure_modes.md.
 """
 
 from __future__ import annotations
@@ -60,8 +63,28 @@ EXEMPT = {
 # API use or a socket path can never be listed.
 REVIEWED = "config/quality/docker_calls_reviewed.json"
 REVIEWABLE = ("whose program the check cannot prove", "is used as a value", "imported by a computed name")
-# A reviewed entry binds the whole file, the repository modules it imports and the exact number of findings on its line, so an edit anywhere
-# in that code (the line that builds a command included) brings the findings back.
+# The format of the bound code: a different version, or another Python minor version (its ``ast.dump`` text may differ), fails every entry until the
+# entries are written again. The JSON must name it in its ``binding`` field.
+# When any file of an entry's bound set can read source text (its own or another module's), the whole set is bound by bytes: a comment is
+# then part of what the code can read.
+SOURCE_NAMES = frozenset({"__file__", "__spec__", "__loader__", "__cached__"})
+SOURCE_ATTRIBUTES = SOURCE_NAMES | {
+    "co_filename",
+    "origin",
+    "get_source",
+    "get_data",
+    "getsource",
+    "getsourcelines",
+    "getsourcefile",
+    "getfile",
+    "getabsfile",
+    "findsource",
+    "getcomments",
+}
+SOURCE_MODULES = frozenset({"inspect", "linecache", "importlib.resources", "pkgutil", "tokenize", "traceback", "zipimport"})
+# The functions that import a module by name at run time. An alias is any local name that may hold one of them.
+IMPORT_FUNCTIONS = frozenset({"__import__", "import_module"})
+BINDING = f"ast-3-py{sys.version_info.major}.{sys.version_info.minor}"
 PROGRAM_PATH = re.compile(r"^(?:.*/)?docker(?:-compose)?$")
 COMMAND_LINE = re.compile(r"^(?:\S*/)?docker(-compose)?(\s|$)")
 SHELL_PREFIX = r"(?:^|[\s;&|(`\"'])(?:(?:exec|command|sudo|nohup|time)\s+|env\s+(?:\S+=\S*\s+)*)*"
@@ -962,29 +985,241 @@ def parse(root: Path, paths: list[str]) -> dict[str, FileModel]:
     return models
 
 
-def sha256_file(path: Path) -> str:
-    """The SHA-256 of a file's bytes."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def digest(text: str) -> str:
+    """A binding digest, written ``sha256:<hex>``: a bare digest beside a path that contains ``api`` reads as an API key to the secret scan."""
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 
 
-def dependencies(models: dict[str, FileModel], relative: str, root: Path) -> dict[str, str]:
-    """The repository Python modules a file imports directly (resolved to their files, whether or not they were parsed), with their SHA-256.
-
-    Each digest is written ``sha256:<hex>``: a bare digest beside a module path that contains ``api`` reads as an API key to the secret scan."""
-    model = models[relative]
-    found: dict[str, str] = {}
-    for name in [*model.imports.values(), *model.star_modules]:
-        parts = name.split(".")
-        for size in range(len(parts), 0, -1):
-            base = Path(*parts[:size])
-            path = next((candidate for candidate in (f"{base}.py", f"{base}/__init__.py") if (root / candidate).is_file()), None)
-            if path is not None and path != relative:
-                found[path] = "sha256:" + sha256_file(root / path)
-                break
-    return dict(sorted(found.items()))
+def dump_tree(source: bytes) -> str | None:
+    """The normalized syntax tree of Python source (no positions, so comments, whitespace and line moves do not count), or None when it does not parse."""
+    try:
+        return ast.dump(ast.parse(source), include_attributes=False)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
 
 
-def site_entry(models: dict[str, FileModel], relative: str, root: Path, line: int, problem: str, occurrences: int, reason: str) -> dict[str, object]:
+def is_source_module(name: str) -> bool:
+    """True for a module that reads source text, or a submodule of one."""
+    return any(name == module or name.startswith(f"{module}.") for module in SOURCE_MODULES)
+
+
+def mentions_import(node: ast.AST, aliases: frozenset[str]) -> bool:
+    """True when a name, an attribute or a string inside the node is a run-time import function or an alias of one."""
+    return any(
+        (isinstance(part, ast.Name) and part.id in aliases)
+        or (isinstance(part, ast.Attribute) and part.attr in IMPORT_FUNCTIONS)
+        or (isinstance(part, ast.Constant) and part.value in IMPORT_FUNCTIONS)
+        for part in ast.walk(node)
+    )
+
+
+def is_import_call(call: ast.Call, aliases: frozenset[str]) -> bool:
+    """True when a call may be ``__import__(...)`` or ``importlib.import_module(...)`` under any name in ``aliases``."""
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id in aliases
+    if isinstance(func, ast.Attribute):
+        return func.attr in aliases
+    return isinstance(func, ast.Call) and mentions_import(func, aliases)
+
+
+def import_aliases(tree: ast.AST) -> frozenset[str]:
+    """The local names that may hold ``__import__`` or ``importlib.import_module``: both names, each ``from m import import_module as x`` and every
+    name assigned a value that mentions one of them (``load = importlib.import_module``, ``getattr(importlib, "import_module")``). The result
+    of an import call is a module, not an alias. The scan repeats until no name is added."""
+    aliases = set(IMPORT_FUNCTIONS)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            aliases.update(alias.asname or alias.name for alias in node.names if alias.name in IMPORT_FUNCTIONS)
+    grown = True
+    while grown:
+        grown = False
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Assign | ast.AnnAssign | ast.NamedExpr) and node.value is not None):
+                continue
+            value = node.value
+            if (isinstance(value, ast.Call) and is_import_call(value, frozenset(aliases))) or not mentions_import(value, frozenset(aliases)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names = {name.id for target in targets for name in ast.walk(target) if isinstance(name, ast.Name)}
+            if not names <= aliases:
+                aliases |= names
+                grown = True
+    return frozenset(aliases)
+
+
+def call_argument(call: ast.Call, position: int, keyword: str) -> ast.expr | None:
+    """The argument at a position or under a keyword (None when the call gives neither, or a ``*`` argument may hide it)."""
+    if any(isinstance(argument, ast.Starred) for argument in call.args[: position + 1]):
+        return None
+    if len(call.args) > position:
+        return call.args[position]
+    return next((item.value for item in call.keywords if item.arg == keyword), None)
+
+
+def literal_string(node: ast.expr | None) -> str | None:
+    """The value of a string literal, else None."""
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def source_node(node: ast.AST, aliases: frozenset[str]) -> bool:
+    """True for a name, attribute, import, run-time import (under any alias) or ``argv[0]`` that can lead to source text. A bare ``__file__`` counts:
+    it is the way to the file's own text, and a path built from it reaches the text of other files."""
+    if isinstance(node, ast.Name):
+        return node.id in SOURCE_NAMES
+    if isinstance(node, ast.Attribute):
+        return node.attr in SOURCE_ATTRIBUTES
+    if isinstance(node, ast.Import):
+        return any(is_source_module(alias.name) for alias in node.names)
+    if isinstance(node, ast.ImportFrom):
+        return node.level == 0 and any(is_source_module(name) for name in [node.module or "", *(f"{node.module}.{alias.name}" for alias in node.names)])
+    if isinstance(node, ast.Call):
+        leaf = node.func.id if isinstance(node.func, ast.Name) else node.func.attr if isinstance(node.func, ast.Attribute) else ""
+        first = call_argument(node, 0, "name")
+        return (leaf == "find_spec" or is_import_call(node, aliases)) and isinstance(first, ast.Constant) and is_source_module(str(first.value))
+    if isinstance(node, ast.Subscript):
+        base = node.value.attr if isinstance(node.value, ast.Attribute) else node.value.id if isinstance(node.value, ast.Name) else ""
+        return base == "argv" and isinstance(node.slice, ast.Constant) and node.slice.value == 0
+    return False
+
+
+def reads_source(source: bytes) -> bool:
+    """True when Python source may read source text: ``__file__``, ``inspect``, ``linecache``, ``importlib.resources`` and the like. Conservative:
+    the test is on names, attributes and imports, never on how they are used."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+    aliases = import_aliases(tree)
+    return any(source_node(node, aliases) for node in ast.walk(tree))
+
+
+def bytes_digest(source: bytes) -> str:
+    """The digest of a file's bytes."""
+    return "bytes:" + hashlib.sha256(source).hexdigest()
+
+
+def tree_digest(source: bytes) -> str:
+    """The digest of a module's normalized tree; of its bytes when it does not parse."""
+    text = dump_tree(source)
+    return digest(text) if text is not None else bytes_digest(source)
+
+
+def statement_imports(model: FileModel) -> list[str]:
+    """The names of every import statement in a file, at any depth: the full dotted name of ``import a.b.c``, the module and the module.name of
+    ``from m import n`` (``n`` may be a submodule), the module of a star import. Relative imports are resolved against the file's package."""
+    names: list[str] = []
+    for node in ast.walk(model.tree):
+        if isinstance(node, ast.Import):
+            names += [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            source = model.absolute(node) if node.module or node.level else ""
+            names += [source] if source else []
+            names += [f"{source}.{alias.name}" if source else alias.name for alias in node.names if alias.name != "*"]
+    return names
+
+
+def file_package(model: FileModel) -> str:
+    """The package a file's relative names resolve against (a package ``__init__`` is its own package)."""
+    return model.module if model.path.endswith("__init__.py") else model.module.rpartition(".")[0]
+
+
+def runtime_import_names(model: FileModel, name: str, package: str | None, level: ast.expr | None) -> list[str]:
+    """The module names a literal run-time import may mean. A relative name resolves against the literal package argument, else against the
+    file's own package; with no literal package the bare name is also tried (more files, never fewer). Python's rule: with ``n`` leading dots,
+    drop ``n - 1`` trailing parts of the package. ``__import__`` takes its depth from ``level`` (a depth the check cannot read counts as 1)."""
+    dots = len(name) - len(name.lstrip("."))
+    rest = name[dots:]
+    if dots:
+        depth = dots
+    elif level is None or (isinstance(level, ast.Constant) and level.value == 0):
+        return [name]
+    else:
+        depth = level.value if isinstance(level, ast.Constant) and isinstance(level.value, int) else 1
+    base = (package if package is not None else file_package(model)).split(".")
+    kept = [part for part in base[: max(len(base) - (depth - 1), 0)] if part]
+    resolved = ".".join([*kept, *([rest] if rest else [])])
+    return [item for item in dict.fromkeys([resolved, *([rest] if package is None or not kept else [])]) if item]
+
+
+def literal_imports(model: FileModel) -> list[str]:
+    """The modules a file imports at run time by a literal name: ``__import__("x")`` and ``importlib.import_module("x")`` under any alias, with the
+    literal package argument and the relative depth resolved (``import_module(".helpers", "pkg")`` is ``pkg.helpers``)."""
+    aliases = import_aliases(model.tree)
+    names: list[str] = []
+    for node in ast.walk(model.tree):
+        if not (isinstance(node, ast.Call) and is_import_call(node, aliases)):
+            continue
+        name = literal_string(call_argument(node, 0, "name"))
+        if name is not None:
+            names += runtime_import_names(model, name, literal_string(call_argument(node, 1, "package")), call_argument(node, 4, "level"))
+    return names
+
+
+def import_names(model: FileModel) -> list[str]:
+    """Every module name a file imports, by statement or by a literal run-time import."""
+    return [*statement_imports(model), *literal_imports(model)]
+
+
+def module_candidates(name: str, base: str) -> list[str]:
+    """The files a dotted module name may be, from the folder ``base`` ("" is the repository root): for each prefix, the module file and the
+    package ``__init__``, longest prefix first."""
+    parts = name.split(".")
+    found = []
+    for size in range(len(parts), 0, -1):
+        stem = Path(base, *parts[:size])
+        found += [f"{stem}.py", f"{stem}/__init__.py"]
+    return found
+
+
+def import_files(root: Path, model: FileModel) -> list[str]:
+    """The repository files a file imports directly: for each imported name every module and package ``__init__`` on its path, looked up from the
+    repository root and from the folder of the file (a script run from its folder imports its neighbours)."""
+    found: set[str] = set()
+    folder = str(Path(model.path).parent) if "/" in model.path else ""
+    for name in import_names(model):
+        for base in dict.fromkeys(["", folder]):
+            found.update(candidate for candidate in module_candidates(name, base) if (root / candidate).is_file())
+    found.discard(model.path)
+    return sorted(found)
+
+
+def bound_paths(root: Path, model: FileModel) -> list[str]:
+    """The files an entry binds: the file itself and the repository modules it imports."""
+    return [model.path, *import_files(root, model)]
+
+
+def set_reads_source(root: Path, paths: list[str], cache: dict[str, str]) -> bool:
+    """True when any file of a bound set (the entry, listed first, or an imported file) can read source text, so that every file of the set counts by
+    its bytes. ``cache`` holds the answer per file for one run."""
+    for path in paths:
+        key = f"reads\t{path}"
+        if key not in cache:
+            cache[key] = "yes" if reads_source((root / path).read_bytes()) else ""
+        if cache[key]:
+            return True
+    return False
+
+
+def bound_files(root: Path, model: FileModel, cache: dict[str, str]) -> dict[str, str]:
+    """File -> digest for everything an entry binds; ``cache`` holds the tree digests and source-reading answers of one run."""
+    paths = bound_paths(root, model)
+    if set_reads_source(root, paths, cache):
+        return {path: bytes_digest((root / path).read_bytes()) for path in paths}
+    for path in paths:
+        if path not in cache:
+            cache[path] = tree_digest((root / path).read_bytes())
+    return {path: cache[path] for path in paths}
+
+
+def binding_fields(bound: dict[str, str]) -> dict[str, object]:
+    """The two fields of an entry that record its binding: one digest over every bound file and digest, and how many files it covers."""
+    return {"bound_sha256": digest("\n".join(f"{path}\t{value}" for path, value in sorted(bound.items()))), "bound_files": len(bound)}
+
+
+def site_entry(
+    models: dict[str, FileModel], relative: str, root: Path, line: int, problem: str, occurrences: int, reason: str, cache: dict[str, str] | None = None
+) -> dict[str, object]:
     """A reviewed-site entry for the current source (used by the lead to write ``REVIEWED``)."""
     code = (root / relative).read_text(errors="replace").splitlines()[line - 1].strip()
     return {
@@ -993,34 +1228,53 @@ def site_entry(models: dict[str, FileModel], relative: str, root: Path, line: in
         "code_sha256": hashlib.sha256(code.encode()).hexdigest(),
         "problem": problem,
         "occurrences": occurrences,
-        "file_sha256": sha256_file(root / relative),
-        "dependencies": dependencies(models, relative, root),
+        **binding_fields(bound_files(root, models[relative], {} if cache is None else cache)),
         "reason": reason,
     }
 
 
-def reviewed_findings(entries: list[dict[str, object]], found: list[Finding], models: dict[str, FileModel], relative: str, root: Path) -> list[Finding]:
-    """The findings left after the reviewed entries of one file: an entry clears its findings only while the file, its imported modules,
-    its finding class and its occurrence count are exactly as reviewed; an entry that does not match is a finding itself."""
+def entry_hits(entry: dict[str, object], left: list[Finding], lines: list[str]) -> list[Finding]:
+    """The findings a reviewed entry names: its finding class, a reviewable kind and the SHA-256 of the stripped source line."""
+    return [
+        finding
+        for finding in left
+        if str(entry.get("problem", "")) in finding.problem
+        and any(kind in finding.problem for kind in REVIEWABLE)
+        and hashlib.sha256(lines[int(finding.location.rsplit(":", 1)[1]) - 1].strip().encode()).hexdigest() == str(entry["code_sha256"])
+    ]
+
+
+def binding_current(document: dict[str, object]) -> bool:
+    """True when the reviewed file names the binding format this code writes; a missing or other value fails every entry."""
+    return document.get("binding") == BINDING
+
+
+def reviewed_findings(
+    entries: list[dict[str, object]],
+    found: list[Finding],
+    models: dict[str, FileModel],
+    relative: str,
+    root: Path,
+    cache: dict[str, str],
+    format_current: bool = True,
+) -> list[Finding]:
+    """The findings left after the reviewed entries of one file: an entry clears its findings only while the file, the repository modules it
+    imports, the finding class and the count are exactly as reviewed; an entry that does not match is a finding itself."""
     lines = (root / relative).read_text(errors="replace").splitlines()
     left = list(found)
     for entry in entries:
-        code_sha = str(entry["code_sha256"])
-        hits = [
-            finding
-            for finding in left
-            if str(entry.get("problem", "")) in finding.problem
-            and any(kind in finding.problem for kind in REVIEWABLE)
-            and hashlib.sha256(lines[int(finding.location.rsplit(":", 1)[1]) - 1].strip().encode()).hexdigest() == code_sha
-        ]
-        current = entry.get("file_sha256") == sha256_file(root / relative) and entry.get("dependencies") == dependencies(models, relative, root)
+        hits = entry_hits(entry, left, lines)
+        hit_lines = [int(finding.location.rsplit(":", 1)[1]) for finding in hits]
+        now = binding_fields(bound_files(root, models[relative], cache))
+        current = format_current and entry.get("bound_sha256") == now["bound_sha256"]
         if current and len(hits) == int(str(entry.get("occurrences", 0))) and hits:
             left = [finding for finding in left if finding not in hits]
         else:
             left.append(
                 Finding(
-                    f"{relative}:{entry.get('line', 1)}",
-                    f"a reviewed entry in {REVIEWED} does not match the reviewed code (file, imports or count); review it again",
+                    f"{relative}:{hit_lines[0] if hit_lines else entry.get('line', 1)}",
+                    f"a reviewed entry in {REVIEWED} does not match the reviewed code (binding format, file, imported modules or count; "
+                    f"reviewed {entry.get('bound_files', 'no')} files, now {now['bound_files']}); review it again",
                 )
             )
     return left
@@ -1040,12 +1294,15 @@ def check(paths: list[str], root: Path, reviewed_file: Path | None = None) -> li
     checker.discover_resolvers()
     checker.discover_wrappers()
     source = reviewed_file or root / REVIEWED
-    reviewed = json.loads(source.read_text())["sites"] if source.is_file() else []
+    document = json.loads(source.read_text()) if source.is_file() else {}
+    reviewed = document.get("sites", [])
+    format_current = binding_current(document)
+    cache: dict[str, str] = {}
     findings: list[Finding] = []
     for relative in named:
         if relative in models:
             entries = [entry for entry in reviewed if entry["path"] == relative]
-            findings += reviewed_findings(entries, checker.findings(models[relative]), models, relative, root)
+            findings += reviewed_findings(entries, checker.findings(models[relative]), models, relative, root, cache, format_current)
         elif relative.endswith(".sh"):
             findings += shell_findings(relative, (root / relative).read_text(errors="replace"))
     return findings

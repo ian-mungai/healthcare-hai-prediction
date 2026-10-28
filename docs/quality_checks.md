@@ -372,7 +372,39 @@ them directly before a release with that command.
 The checks cover secrets and credential files, data files (allowed only in `tests/fixtures/`, `dbt/seeds/` and the one file `config/lakehouse/identity_classification.csv`), a
 privacy scan of every non-ignored file, prose style, Markdown syntax, front matter, commit messages, documentation that
 matches the code, removed names, unused code, dependencies and files, lint settings and Docker calls outside the
-launcher. Each has a failing and a passing sample run in local CI. Local commits need an ignored
+launcher. Each has a failing and a passing sample run in local CI.
+
+The process start guard (`.venv/bin/python -m scripts.quality.docker_calls`) lists the process starts it cannot prove in
+`config/quality/docker_calls_reviewed.json`. An entry binds the call line, the finding class, the number of findings and
+one digest (`bound_sha256`, with the number of bound files in `bound_files`). The digest covers the file itself and every
+repository file it imports directly. The imports come from every import statement in the syntax tree at any depth, also
+inside functions and `try` or `if` blocks. They are the full dotted name of `import a.b.c`, the module and `module.name`
+of `from m import n`, star imports and relative imports resolved from the file's package. Run-time imports by a literal
+name (`__import__("x")` or `importlib.import_module("x")`) count too, also through an alias (`from importlib import import_module as load`,
+`load = importlib.import_module`). A literal package argument and the relative depth are resolved, so
+`importlib.import_module(".helpers", "pkg")` binds `pkg/helpers.py`. When the package is not a literal, the file's own package and the
+bare name are both bound. Each name binds every module and package
+`__init__.py` on its path. A name is looked up from the repository root and from the folder of the file. Imports of the
+imported files are not followed. Imports by a computed name and third-party packages are not bound.
+
+A file counts by its normalized syntax tree (`ast.dump` without positions). Comments, whitespace, formatting and moved
+lines leave an entry current, unless a bound file can read source text (next sentences). Every change of code,
+documentation, annotation or module-level statement in a bound file brings the finding back with "does not match the
+reviewed code", also in a function that the call does not use. A file can read source text when it uses `__file__`,
+`__spec__`, `__loader__`, `__cached__`, `co_filename`, `getsource`, `getfile` or a similar attribute. It can also use
+`argv[0]` or import `inspect`, `linecache`, `importlib.resources`, `pkgutil`, `tokenize`, `traceback` or `zipimport`. A
+run-time import of one of them by a literal name counts too, also through an alias of `import_module`. When any file of the set an
+entry binds can do this, every file of the set counts by its bytes, so that a comment edit in any of them also brings
+the finding back. A bare `__file__` counts, because a path built from it can reach the text of other files. A file that does not
+parse counts by its bytes. A file that reads another file only through a path string, without
+these names, is not detected. The JSON
+must carry a top-level `binding` value that equals the version in `docker_calls.BINDING`. A missing value, another value
+or another Python minor version (the value includes it) fails every entry until the entries are written again. A reviewed
+entry is written with `docker_calls.site_entry`.
+`.venv/bin/python -m scripts.quality.run_docker_calls_e2e` runs the edits that keep an entry, each edit that must break one
+and the missing and unsupported `binding` values. It covers source-reading files, import forms and package paths. It also plants a defect against each rule of the binding.
+
+Local commits need an ignored
 `.documentation_review.json`, a review of `README.md` before the first release tag and the full document inventory
 from that tag onward, bound to the complete staged snapshot
 (`.venv/bin/python -m scripts.quality.documentation_review prepare`). There are no bypasses:
