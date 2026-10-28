@@ -159,21 +159,19 @@ def end_launcher(registry: Path, nonce: str, seconds: float = END_SECONDS) -> st
     """
     deadline = time.monotonic() + seconds
     held = lock_held(registry)
-    if held:
-        try:
-            left = deadline - time.monotonic()
-            if left <= 0:
-                return "survived"
-            theirs = str(ask(registry, "ping", {}, {"kind": "any"}, min(PING_SECONDS, left)).get("launch_nonce") or "")
-            if theirs and theirs != nonce:
-                return "foreign"
-            params: dict[str, Any] = {"owner": True, **({"launch_nonce": nonce} if theirs else {})}
-            left = deadline - time.monotonic()
-            if left > 0:
-                ask(registry, "shutdown", params, {"kind": "any", "owner": True}, min(SHUTDOWN_SECONDS, left))
-        except (OSError, ValueError, TimeoutError, KeyError):
-            pass
+    asked = not held
     while (left := deadline - time.monotonic()) > 0:
+        if not asked:
+            # A starting launcher refuses shutdown and may not answer yet, so the identity check and the request repeat until one is accepted.
+            try:
+                theirs = str(ask(registry, "ping", {}, {"kind": "any"}, min(PING_SECONDS, left)).get("launch_nonce") or "")
+                if theirs and theirs != nonce:
+                    return "foreign"
+                params: dict[str, Any] = {"owner": True, **({"launch_nonce": nonce} if theirs else {})}
+                ask(registry, "shutdown", params, {"kind": "any", "owner": True}, min(SHUTDOWN_SECONDS, max(0.0, deadline - time.monotonic())))
+                asked = True
+            except (OSError, ValueError, TimeoutError, KeyError):
+                pass
         try:
             running = launcher_running(registry, left)
         except (OSError, SubprocessError):
