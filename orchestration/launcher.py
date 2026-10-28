@@ -60,7 +60,7 @@ from typing import Any, Literal, NamedTuple, NoReturn
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from orchestration import dbt_lineage, ecs_target, lineage_services, network_policy, pipeline_protocol, pipeline_render, pipeline_session
+from orchestration import catalog_authority, dbt_lineage, ecs_target, lineage_services, network_policy, pipeline_protocol, pipeline_render, pipeline_session
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import dbt_package_archive, gold_publish_record, memory_budget, pins, run_lock
 from scripts.lakehouse import provenance as build_provenance
@@ -3072,6 +3072,7 @@ METHODS: dict[str, MethodSpec] = {
     "pull": MethodSpec(("any",)),
     "docker_restart": MethodSpec(("any",), owner_flag=True),
     "shutdown": MethodSpec(("any",), owner_flag=True),
+    "catalog_authority": MethodSpec(("any",), owner_flag=True),
 }
 
 
@@ -3090,6 +3091,22 @@ def finite_attempt(attempt: Mapping[str, Any]) -> bool:
 def is_open(attempt: Mapping[str, Any]) -> bool:
     """True while an attempt has not ended."""
     return attempt["phase"] != "ended"
+
+
+# Docker templates that write the Mac production catalog in a real run; a pipeline job counts when its class is lakehouse_write.
+MAC_WRITE_TEMPLATES = frozenset({"spark_write", "real_dbt", "gold_publish"})
+
+
+def mac_catalog_write(template_name: str, params: Mapping[str, Any], run_mode: str) -> bool:
+    """True for a job that writes the Mac production catalog: it may start only under Mac catalog authority (failure F1)."""
+    if run_mode != "real":
+        return False
+    if template_name.startswith("pipeline_"):
+        try:
+            return pipeline_render.job_class(template_name, dict(params), run_mode) == "lakehouse_write"
+        except pipeline_protocol.PipelineError:
+            return False
+    return template_name in MAC_WRITE_TEMPLATES
 
 
 ARCHIVE_FOLDER = "history"
@@ -3307,6 +3324,7 @@ class Launcher:
             "pull": self.m_pull,
             "docker_restart": self.m_docker_restart,
             "shutdown": self.m_shutdown,
+            "catalog_authority": self.m_catalog_authority,
         }
 
     # -- registry --------------------------------------------------------------------------------------------------
@@ -3723,7 +3741,12 @@ class Launcher:
             raise Degraded(f"degraded: {self.degraded_reason}")
         if principal.get("kind") not in spec.kinds:
             raise LauncherError(f"{method} is not callable by principal {principal.get('kind')!r}", "principal")
-        if spec.owner_flag and method in ("docker_restart", "shutdown", "recover") and not principal.get("owner") and not params.get("owner"):
+        if (
+            spec.owner_flag
+            and method in ("docker_restart", "shutdown", "recover", "catalog_authority")
+            and not principal.get("owner")
+            and not params.get("owner")
+        ):
             raise LauncherError(f"{method} needs --owner", "principal")
         with self.tx(write=spec.mutating) as state:
             key = self.authenticate(conn, principal, request_id, method, state)
@@ -4693,6 +4716,10 @@ class Launcher:
                 a["cancel_intent"] = {"reason": "owner_not_held", "at": utc_now()}
             return
         if "execution" in a and self.advance_target(state, a, actions):
+            return
+        mac_problem = None if "execution" in a else self.mac_write_problem(state, owner, a["template"], a["params"])
+        if mac_problem:
+            self.finish_attempt(state, a, "fenced", mac_problem)
             return
         if not self.docker_ok or self.status != "serving" and owner != DIAGNOSTIC_OWNER:
             return
@@ -6351,6 +6378,9 @@ class Launcher:
             and (authority.get("target") != "aws" or authority.get("frozen") is not False or type(authority.get("epoch")) is not int or authority["epoch"] < 1)
         ):
             raise LauncherError("AWS lakehouse execution requires an unfrozen authoritative AWS catalog", "refused")
+        mac_problem = None if cloud_managed else self.mac_write_problem(ctx.state, owner, template_name, params.get("params") or {})
+        if mac_problem:
+            raise LauncherError(mac_problem, "refused")
         if kind not in template.owners:
             raise LauncherError(f"template {template_name} is not available to {kind} owners", "refused")
         launch_id = str(params.get("launch_id", ""))
@@ -6730,6 +6760,52 @@ class Launcher:
             "accepted_at": utc_now(),
         }
         return {"accepted": True, "result_sha256": digest}
+
+    def mac_write_problem(self, state: Mapping[str, Any], owner: str, template_name: str, params: Mapping[str, Any]) -> str | None:
+        """Why catalog authority refuses this Mac catalog write, or None. A registry without an authority record is still the Mac writer."""
+        record = state["launcher"].get("catalog_authority")
+        kind, _, ident = owner.partition(":")
+        mode = str(state["runs"].get(ident, {}).get("mode", "")) if kind == "run" else ""
+        if record is None or not mac_catalog_write(template_name, params, mode):
+            return None
+        try:
+            catalog_authority.check_mac_start(record)
+        except catalog_authority.AuthorityError as error:
+            return f"catalog authority is {record.get('state')} (cutover {record.get('cutover_id')}): {error}"
+        return None
+
+    def m_catalog_authority(self, ctx: Ctx) -> dict[str, Any]:
+        """Apply one owner command to the catalog authority record in this registry transaction (bronze cutover, failure modes F1 to F5).
+
+        The fence step (freezing to source_fenced) is refused while any Mac catalog write is queued or running; the caller repeats it within
+        its own deadline. A writer is never stopped to finish a freeze. A repeated command ID returns the stored record unchanged.
+        """
+        body = ctx.params.get("command")
+        if not isinstance(body, dict):
+            raise LauncherError("command must be an object", "args")
+        current = ctx.state["launcher"].get("catalog_authority")
+        if body.get("action") == "transition" and body.get("state") == "source_fenced" and current and current.get("state") == "freezing":
+            open_writes = sorted(
+                str(a["id"])
+                for a in ctx.state["attempts"].values()
+                if is_open(a) and "execution" not in a and self.mac_write_problem(ctx.state, str(a["owner"]), str(a["template"]), a["params"])
+            )
+            if open_writes:
+                raise LauncherError(f"Mac catalog writes are still open: {', '.join(open_writes)}", "refused")
+        try:
+            record = catalog_authority.owner_command(
+                ctx.state,
+                body,
+                intent_directory=self.cfg.registry.path / "catalog_authority_intents",
+                owner=bool(ctx.params.get("owner") or ctx.principal.get("owner")),
+                tty=ctx.params.get("tty") is True,
+                confirmation=str(ctx.params.get("confirmation", "")),
+            )
+        except catalog_authority.AuthorityError as error:
+            raise LauncherError(str(error), "refused") from None
+        except ValueError as error:
+            raise LauncherError(f"catalog authority intent: {error}", "args") from None
+        return record
 
     def m_shutdown(self, ctx: Ctx) -> dict[str, Any]:
         """Stop the launcher (owner only). A request that names a launch nonce stops only the instance started with it, so a client that
