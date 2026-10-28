@@ -1,0 +1,19 @@
+{
+  "note": "The owner's target lists (Oct 22 2026): the six HAI SIRs are the target candidates, each a separate primary analysis; the same SIRs from an earlier period are the earlier-outcome candidates, used only as predictors in forecasting runs. scripts/training/targets.py --check compares both lists with the gold control bridge before each training run.",
+  "target_candidates": [
+    {"control": "C269", "hai_type": "HAI_1", "label": "CLABSI"},
+    {"control": "C270", "hai_type": "HAI_2", "label": "CAUTI"},
+    {"control": "C271", "hai_type": "HAI_3", "label": "SSI colon"},
+    {"control": "C272", "hai_type": "HAI_4", "label": "SSI abdominal hysterectomy"},
+    {"control": "C273", "hai_type": "HAI_5", "label": "MRSA bacteremia"},
+    {"control": "C274", "hai_type": "HAI_6", "label": "C. difficile"}
+  ],
+  "earlier_outcome_candidates": [
+    {"control": "C275", "hai_type": "HAI_1", "label": "CLABSI"},
+    {"control": "C276", "hai_type": "HAI_2", "label": "CAUTI"},
+    {"control": "C277", "hai_type": "HAI_3", "label": "SSI colon"},
+    {"control": "C278", "hai_type": "HAI_4", "label": "SSI abdominal hysterectomy"},
+    {"control": "C279", "hai_type": "HAI_5", "label": "MRSA bacteremia"},
+    {"control": "C280", "hai_type": "HAI_6", "label": "C. difficile"}
+  ]
+}
