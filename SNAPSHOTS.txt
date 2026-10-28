@@ -1,0 +1,6 @@
+# Backup snapshots (worktree, snapshot commit)
+capstone-replication 71f80374d37b67162f0996cc0261e6eac520c071
+feature-store 99cb834b87bae257331af47a59946bfae11ed9d0
+t3-8feb4bc0 3d3f2fb21c903852d1efb8f1da4ebafe4825e94e
+t3-e42a3191 549d295b0c0026591f3f659fefb3900b258a268d
+training-targets 35e8f27d716e87ae4ad771cc60f284a238bbd271
