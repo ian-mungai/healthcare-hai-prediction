@@ -481,7 +481,7 @@ One commit per reviewed change stays the rule.
   It runs no check and cannot gate a push that pre-commit does not dispatch, so the Git config hook is the gate.
   `git push --no-verify` skips both. The gate and every step start without the variables that change what
   `scripts/run_ci.sh` or pre-commit runs (`EXECUTION_CONTROLS` in `scripts/quality/pre_push.py`: `CI_SCOPE`,
-  `CI_PART`, `CI_UNITS`, `CI_LIST_ONLY`, `RANGE_START`, `RANGE_END`, `LAUNCHER_SHARD`, `FEATURE_SHARD`, the
+  `CI_PART`, `CI_UNITS`, `CI_LIST_ONLY`, `CI_WORKER_LIMIT_SECONDS`, `CI_WORKER_GRACE_SECONDS`, `RANGE_START`, `RANGE_END`, `LAUNCHER_SHARD`, `FEATURE_SHARD`, the
   `ACQUISITION_*` selectors, `GITHUB_ACTIONS`, the `PRE_COMMIT_*` reference variables, `SKIP`,
   `PRE_COMMIT_ALLOW_NO_CONFIG`, `PRE_COMMIT_RUNNING_LEGACY` and `_PRE_COMMIT_SKIP_POST_CHECKOUT`) and without the Git
   repository variables of the caller. A case scans the installed pre-commit source and fails on a new variable that
@@ -625,6 +625,18 @@ completely belongs in `always` in `config/quality/ci_groups.json`.
 command adds a row to a file of its own unit and when the run ends the rows of the gates, the launcher E2E and every unit are listed in the job
 summary as a table of command, start, end, seconds and exit code. When a work batch contains one item, including a hosted lakehouse job or feature shard, its output streams to the job log while the item runs. The same output is retained in the per-item log and its duration remains in the summary. Batches with several parallel items retain separate logs and print them in order after every item finishes, so their output does not interleave. Feature-source and feature-column shards also print and flush a timing line when each case starts and ends. The times in each line are those of the case or command. A wrapped function holds one command or one pipeline, because a shell function that runs under `||` ignores
 `set -e`. `scripts/quality/run_ci_groups_e2e.py` checks the wrapper, the failing and the interrupted command and the rows of parallel units.
+
+### Worker deadlines
+
+`scripts/run_ci.sh` runs each work item as a worker: a check group, a gold unit, a feature shard, a hook partition, an acquisition shard or a combining step. Every worker starts in its own
+process group and has a deadline. The deadline is the timeout of the hosted job that runs the same work, from `worker_limits` in `config/quality/ci_groups.json` (the kind of the item
+without a trailing shard number, in minutes). `run_ci_groups_e2e` keeps each value equal to the timeout of its job in `.github/workflows/ci.yml` and requires a limit for every kind. A kind
+without a limit stops the run before its workers start. `CI_WORKER_LIMIT_SECONDS` replaces every limit for one run. The dispatcher polls its workers every half second. At a deadline it sends TERM to the worker's
+process group, KILL after `CI_WORKER_GRACE_SECONDS` (5 by default) and confirms that no process of the group is left. It prints the worker, its check group and the limit,
+fails the run with `Local CI failed in: <worker> (deadline <seconds> s)` and keeps the worker's partial log. The other workers keep their result. An exit, Ctrl-C, TERM or HUP of the
+dispatcher stops every live worker group the same way (2 seconds after TERM), so the deadline of `scripts/quality/pre_push.py` (which stops the dispatcher's group through `scripts/process.py`)
+leaves no worker. A process that starts its own session is outside the group. `.venv/bin/python -m scripts.quality.run_worker_deadline_e2e` (in `repository_code_checks`) runs the real
+dispatcher in a scratch folder with a worker that never ends and a child that ignores TERM. It also plants a dispatcher without a deadline and one that stops the direct process only.
 
 ## Measured durations
 

@@ -1598,6 +1598,7 @@ def timeout_cases() -> list[dict[str, Any]]:
     off = {name: (recorded[name], timeouts.get(name)) for name in recorded if timeouts.get(name) != recorded[name][1]}
     ratio = {name: round(timeout / measured, 2) for name, (measured, timeout) in recorded.items() if not (1.5 * measured <= timeout <= max(2.6 * measured, 5))}
     return [
+        *worker_limit_cases(timeouts),
         {
             "case": "job_timeouts_match_the_measured_durations",
             "passed": set(recorded) == set(timeouts) and not off and not ratio and len(recorded) >= 10,
@@ -1605,6 +1606,40 @@ def timeout_cases() -> list[dict[str, Any]]:
             "not_in_the_workflow": sorted(set(recorded) - set(timeouts)),
             "different_timeout": off,
             "outside_the_ratio": ratio,
+        },
+    ]
+
+
+WORKER_KINDS = (
+    "lakehouse_gold_checks",
+    "lakehouse_gold_writer_setup",
+    "lakehouse_gold_model_metadata_e2e",
+    "lakehouse_features_sources",
+    "lakehouse_features_columns",
+    "combine_feature_sources",
+    "combine_feature_columns",
+    "hook_privacy",
+    "hook_documentation",
+    "hook_code",
+    "acquisition_shard",
+    "acquisition_combine",
+)
+
+
+def worker_limit_cases(timeouts: dict[str, int]) -> list[dict[str, Any]]:
+    """Each worker kind of the dispatcher has a deadline in ``worker_limits`` that equals the timeout of the hosted job that runs the same work."""
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
+    limits = config["worker_limits"]
+    groups = [group for group in config["groups"] if group not in ("launcher", "lakehouse_gold", "lakehouse_features")]
+    expected = {*groups, *WORKER_KINDS}
+    different = {kind: (entry["minutes"], timeouts.get(entry["job"])) for kind, entry in limits.items() if timeouts.get(entry["job"]) != entry["minutes"]}
+    return [
+        {
+            "case": "worker_limits_match_the_hosted_jobs",
+            "passed": set(limits) == expected and not different,
+            "missing_kind": sorted(expected - set(limits)),
+            "unknown_kind": sorted(set(limits) - expected),
+            "different_from_the_job_timeout": different,
         }
     ]
 
@@ -4031,6 +4066,8 @@ EXPECTED_CONTROLS = (
     "CI_PART",
     "CI_UNITS",
     "CI_LIST_ONLY",
+    "CI_WORKER_LIMIT_SECONDS",
+    "CI_WORKER_GRACE_SECONDS",
     "RANGE_START",
     "RANGE_END",
     "LAUNCHER_SHARD",
