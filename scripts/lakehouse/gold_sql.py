@@ -1,4 +1,4 @@
-"""Semantic checks over DuckDB's parse of compiled gold SQL (failure modes 840, 746 and the lineage rule).
+"""Semantic checks over DuckDB's parse of compiled gold SQL.
 
 ``json_serialize_sql`` gives each compiled model as a syntax tree. This module resolves column lineage through CTEs, subqueries and
 projections (each base column keeps the relation it comes from), lists the physical relations a model reads (local CTEs excluded) and
@@ -10,7 +10,7 @@ applies the expression policy:
   (``DIMENSION_KEYS``), a bridge's key columns hash theirs (``BRIDGE_KEYS``), a fact's key column is ``coalesce(<dimension>.<dimension>_sk,
   md5('<unknown>'))``, and a fact's key join hashes one of the fact's own natural keys. An alias suffix, a CTE name or ``md5`` alone grants
   nothing, and a role matches by shape and by the names of the columns it reads.
-* Amendment A36 rule 8, A37, A40 and A43 add scoped permissions for named models and output roles; ``DATE_ROLES`` and the other constants
+* Scoped permissions apply to named models and output roles; ``DATE_ROLES`` and the other constants
   below name each one. Everything else that computes a value fails: arithmetic, ``case``, aggregates, window expressions, casts and any function.
 * The allowlist entries that name a model (``STATE_PREFIX``, ``RANGE_BOUNDS``, ``COUNTY_MEMBERSHIP``, ``TRACT_COUNT``, ``EDITION_YEAR`` and
   ``COUNTY_FILTER``) each admit one expression: a plain aggregate (no filter, distinct or order by) or the exact function, comparison or test, in
@@ -49,7 +49,7 @@ Base = tuple[str, str]
 Matcher = Callable[[Json, "Scope"], "Value | None"]
 
 UNKNOWN = "<unknown>"
-# The models whose unknown member may carry null natural key parts (gold contract unknown_member rule; issue WV3-007).
+# The models whose unknown member may carry null natural key parts (gold contract unknown_member rule).
 NULL_SENTINEL_MODELS = frozenset({"dim_measure", "dim_date"})
 ARITHMETIC = frozenset({"+", "-", "*", "/", "%", "//", "**", "add", "subtract", "multiply", "divide", "mod"})
 BOOLEAN_TYPES = frozenset(
@@ -87,8 +87,7 @@ class KeySpec(NamedTuple):
 
 EDITION_COLUMN = "edition_start"
 EDITION_SOURCE = ("dim_measure", EDITION_COLUMN)
-# The natural key of each dimension. Sources: the dimension grains of gold_contract.json, amendments A36 rules 1, 3 to 7 and A40 item 1, and
-# the unknown_member_natural_key tests of G2's checkpoint revision 3. A code list keys on its code system and code (A36 rule 4).
+# Natural keys follow gold_contract.json and the unknown_member_natural_key tests. Code lists key on code system and code.
 CODE_LIST = KeySpec(("code_system", "code"))
 DIMENSION_KEYS = {
     "dim_census_tract": KeySpec(("census_tract_geoid",)),
@@ -112,14 +111,14 @@ DIMENSION_KEYS = {
     "dim_state": KeySpec(("state_code",)),
     "dim_zip": KeySpec(("zip_code",)),
 }
-# Amendments A39 and A36 rule 3: the control bridge keys its measure on the measure identity and its control on the control ID.
+# the control bridge keys its measure on the measure identity and its control on the control ID.
 BRIDGE_KEYS = {
     "bridge_measure_control": {
         "measure_sk": KeySpec(("fact", "measure_key", "value_column"), edition=EDITION_COLUMN, edition_from=EDITION_SOURCE),
         "registry_control_sk": KeySpec(("measure_control",)),
     }
 }
-# Amendment A36 rule 3: dim_measure also carries its identity text, the natural key its key hashes.
+# dim_measure also carries its identity text, the natural key its key hashes.
 IDENTITY_OUTPUTS = {"dim_measure": ("measure_identity", KeySpec(("fact", "measure_key", "value_column"), edition=EDITION_COLUMN))}
 
 
@@ -255,7 +254,7 @@ PINS: dict[tuple[str, str], Pin] = {
         "dim_measure: the first and last release date of each published name of a split measure bound its edition and reach its key and identity text",
     ),
     ("dim_county", "county_list_bounds"): Pin(
-        "2dcc6d63338bd5e97295904fcfe4cedb7b2e726c2775df20c1f7a1a02ad5aa6d",
+        "0bc525cb1c8d686beb9faeacb9a2d205c280f858be83b861a0a051dcfcc77f80",
         "dim_county: the county-list vintage bounds and the membership in the latest adjacency list rest on its chain of lists, latest vintage and latest list",
     ),
     ("bridge_measure_control", "edition_year"): Pin(
@@ -282,7 +281,7 @@ PROOF_LABELS = frozenset({LATEST_VINTAGE, LATEST_LIST})
 LIST_NAME_COLUMN = "list_name"
 CALENDAR_COLUMN = "calendar_date"
 FISCAL_COLUMN = "federal_fiscal_year"
-# Approved source and role bindings; the contract replaces this amendment fallback at integration.
+# Source and role bindings used when the contract omits an expression policy.
 A36_A39_A43_A48: Json = {
     "date_roles": {
         "calendar_year": ["year"],
@@ -580,7 +579,7 @@ class Scope:
     using: dict[str, str] = field(default_factory=dict)
     equalities: list[tuple[Flow, Flow]] = field(default_factory=list)
     value_equalities: list[tuple[Value, Value]] = field(default_factory=list)
-    # A FROM reference with TABLESAMPLE restricts the rows it reads, like a WHERE clause (issue WV3-007, amendment A90).
+    # A FROM reference with TABLESAMPLE restricts the rows it reads, like a WHERE clause.
     sampled: bool = False
     groups: tuple[Json, ...] = ()
     left_joins: list[tuple[Flow, Flow]] = field(default_factory=list)
@@ -1046,7 +1045,7 @@ class Walker:
                 self.expr(modifier[key], scope, "predicate")
 
     def label_selection(self, node: Json, scope: Scope, out: Out) -> None:
-        """A48 requires the keys, source vintages and first label in one selecting scope."""
+        """Label selection requires the keys, source vintages and first label in one selecting scope."""
         modifiers = node.get("modifiers", [])
         targets = [target for modifier in modifiers for target in modifier.get("distinct_on_targets", [])]
         if not targets:
@@ -1312,7 +1311,7 @@ class Walker:
             if join_type in {"LEFT", "RIGHT"}:
                 scope.left_joins.append((b, a) if join_type == "LEFT" else (a, b))
 
-    # WHERE clause: amendment A43 value-space filters, then the ordinary predicate rules.
+    # WHERE clause: natural-key value filters, then the ordinary predicate rules.
     def where(self, node: Json, scope: Scope) -> None:
         outer_clause, self.clause = self.clause, "where"
         self.where_parts(node, scope)
@@ -1407,7 +1406,7 @@ class Walker:
                 self.mark_conjunctions(child)
 
     def value_space(self, node: Json, scope: Scope) -> bool:
-        """The one filter amendment A43 names for this model, on its natural-key column."""
+        """The model's permitted filter on its natural-key column."""
         rule = self.policy.scopes["value_space"].get(self.model)
         if rule is None:
             return False
@@ -1709,7 +1708,7 @@ class Walker:
         return Value(self.column(children[0], scope).bases, frozenset({"unknown_coalesce"}))
 
     def identity(self, node: Json, scope: Scope, spec: KeySpec) -> Value | None:
-        """dim_measure's identity text: ``concat_ws('|', fact, measure_key, value_column)`` (amendment A36 rule 3)."""
+        """dim_measure's identity text: ``concat_ws('|', fact, measure_key, value_column)``."""
         parts = self.concat(node, scope, spec)
         return None if parts is None else Value(frozenset(base for part in parts for base in part.bases), frozenset({"identity"}), parts)
 
@@ -1800,7 +1799,7 @@ class Walker:
             self.flag("functions", f"output column {column.name} is not a left join of the latest list on {COUNTY_MEMBERSHIP.column}")
 
     def calendar_date(self, node: Json, scope: Scope) -> Value | None:
-        """``cast(unnest(generate_series(<first day>, <last day>, interval 1 day)) as date)`` between source dates (amendment A36 rule 1)."""
+        """``cast(unnest(generate_series(<first day>, <last day>, interval 1 day)) as date)`` between source dates."""
         if node["class"] != "CAST" or node["try_cast"] or node["cast_type"]["id"] != "DATE":
             return None
         unnest = node["child"]

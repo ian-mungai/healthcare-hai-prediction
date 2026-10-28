@@ -1,0 +1,64 @@
+{
+  "candidates": [
+    {
+      "evidence": {
+        "change_list_sha256": "0c0e5c186b22e7d2ab2966643831f7bd54bf40168e67dc1d6acab253de5d7e48",
+        "decision": "The Census county-change pages are stored as reference documents of the existing ADJ source. One Python reader turns their pinned change lists into the reviewed dbt seed census_county_change_events. The warehouse never parses the pages.",
+        "listing": "Direct URL in the dotted form linked by the Census index page. The response must be HTTP 200 text/html with the decade heading and a parsed change list, because an unrelated Census path can also return an HTML page."
+      },
+      "expected_sha256": null,
+      "format": "html",
+      "label": "Census county changes 1970s",
+      "max_bytes": 2097152,
+      "release_date": null,
+      "role": "reference",
+      "source_id": "ADJ",
+      "url": "https://www.census.gov/programs-surveys/geography/technical-documentation/county-changes.1970.html"
+    },
+    {
+      "evidence": {
+        "change_list_sha256": "328e387264e746511a0d493970b8099a29e80fc4dd4b9c6a54295921a0f2eeeb",
+        "decision": "The Census county-change pages are stored as reference documents of the existing ADJ source. One Python reader turns their pinned change lists into the reviewed dbt seed census_county_change_events. The warehouse never parses the pages.",
+        "listing": "Direct URL in the dotted form linked by the Census index page. The response must be HTTP 200 text/html with the decade heading and a parsed change list, because an unrelated Census path can also return an HTML page."
+      },
+      "expected_sha256": null,
+      "format": "html",
+      "label": "Census county changes 1980s",
+      "max_bytes": 2097152,
+      "release_date": null,
+      "role": "reference",
+      "source_id": "ADJ",
+      "url": "https://www.census.gov/programs-surveys/geography/technical-documentation/county-changes.1980.html"
+    },
+    {
+      "evidence": {
+        "change_list_sha256": "29d472c6c0e5d21cbfd8582a44a844bb9c8152e22e7589a27a0e7bfca93a4725",
+        "decision": "The Census county-change pages are stored as reference documents of the existing ADJ source. One Python reader turns their pinned change lists into the reviewed dbt seed census_county_change_events. The warehouse never parses the pages.",
+        "listing": "Direct URL in the dotted form linked by the Census index page. The response must be HTTP 200 text/html with the decade heading and a parsed change list, because an unrelated Census path can also return an HTML page."
+      },
+      "expected_sha256": null,
+      "format": "html",
+      "label": "Census county changes 1990s",
+      "max_bytes": 2097152,
+      "release_date": null,
+      "role": "reference",
+      "source_id": "ADJ",
+      "url": "https://www.census.gov/programs-surveys/geography/technical-documentation/county-changes.1990.html"
+    },
+    {
+      "evidence": {
+        "change_list_sha256": "c202467cd3274176eb145166cd07633a4c1ef043930bd87d18e2129b5984d618",
+        "decision": "The Census county-change pages are stored as reference documents of the existing ADJ source. One Python reader turns their pinned change lists into the reviewed dbt seed census_county_change_events. The warehouse never parses the pages.",
+        "listing": "Direct URL in the dotted form linked by the Census index page. The response must be HTTP 200 text/html with the decade heading and a parsed change list, because an unrelated Census path can also return an HTML page."
+      },
+      "expected_sha256": null,
+      "format": "html",
+      "label": "Census county changes 2000s",
+      "max_bytes": 2097152,
+      "release_date": null,
+      "role": "reference",
+      "source_id": "ADJ",
+      "url": "https://www.census.gov/programs-surveys/geography/technical-documentation/county-changes.2000.html"
+    }
+  ]
+}

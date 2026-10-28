@@ -199,7 +199,7 @@ def expected_rules(seed_text: str) -> list[str]:
     rows = list(csv.DictReader(seed_text.splitlines()))
     wanted = {
         ("dim_measure", "OP_18b"): "single_latest",
-        ("dim_measure", "PSI_09"): "hold_single_latest",
+        ("dim_measure", "PSI_09"): "split",
         ("dim_measure", "PSI_08"): "split",
         ("dim_measure", "HCP_COVID_19"): "split",
         ("dim_measure", "ED_1b"): "single_latest",
@@ -211,8 +211,8 @@ def expected_rules(seed_text: str) -> list[str]:
     found = {(row["dimension"], row["code"]): row["identity_rule"] for row in rows}
     problems = [f"{key} has rule {found.get(key)!r}, expected {rule!r}" for key, rule in wanted.items() if found.get(key) != rule]
     counts = {rule: sum(1 for row in rows if row["identity_rule"] == rule) for rule in ("split", "single_latest", "hold_single_latest")}
-    if counts != {"split": 6, "single_latest": 7, "hold_single_latest": 12}:
-        problems.append(f"rule counts are {counts}, expected 6 split, 7 single_latest and 12 hold_single_latest")
+    if counts != {"split": 7, "single_latest": 7, "hold_single_latest": 11}:
+        problems.append(f"rule counts are {counts}, expected 7 split, 7 single_latest and 11 hold_single_latest")
     return problems
 
 
