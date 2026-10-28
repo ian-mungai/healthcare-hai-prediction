@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import signal
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,19 @@ def sync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def durable_directory(path: Path) -> None:
+    """Create a journal directory and persist each new directory entry before using it."""
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for current in reversed(missing):
+        current.mkdir(exist_ok=True)
+        sync_directory(current)
+        sync_directory(current.parent)
 
 
 def write_once(path: Path, value: Document) -> None:
@@ -74,8 +88,8 @@ def replace_document(path: Path, value: Document) -> None:
 
 
 def identifier(value: str) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9_]+", value):
-        raise ValueError("record identifiers must contain only letters, digits and underscores")
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+        raise ValueError("record identifiers must contain only letters, digits, underscores and hyphens")
     return value
 
 
@@ -119,7 +133,27 @@ class LocalJournal:
         }
         if not intent["namespaces"]:
             raise ValueError("an intent must name every namespace it may mutate")
+        durable_directory(self.intents_path)
         write_once(self.intents_path / f"{intent_id}.json", intent)
+        return intent
+
+    def owner_intent(self, command_id: str, layer: str, namespaces: list[str], database_id: str, *, objects: list[str], command: str) -> Document:
+        """Fsync an owner catalog command's complete object scope before its first catalog mutation."""
+        if not objects or any(not isinstance(item, str) or not item.strip() for item in objects):
+            raise ValueError("an owner command must name its objects")
+        intent = {
+            "intent_id": identifier(command_id),
+            "command_id": command_id,
+            "kind": "owner_command",
+            "command": identifier(command),
+            "epoch": self.epoch,
+            "layer": identifier(layer),
+            "namespaces": sorted(set(namespaces)),
+            "database_id": database_id,
+            "objects": sorted(set(objects)),
+        }
+        durable_directory(self.intents_path)
+        write_once(self.intents_path / f"{command_id}.json", intent)
         return intent
 
     def intents(self) -> dict[str, Document]:
@@ -153,6 +187,7 @@ class LocalJournal:
         records = self.completions()
         prior = next((item for item in records if item["intent_id"] == intent_id and item["step"] == step and item["status"] == record["status"]), None)
         record["sequence"] = prior["sequence"] if prior else len(records) + 1
+        durable_directory(self.completions_path)
         write_once(self.completions_path / f"{record['sequence']:020d}_{intent_id}_{step}.json", record)
         return record
 
@@ -162,10 +197,22 @@ def replay(inventory: Document, intents: dict[str, Document], completions: list[
     states = namespace_states(inventory)
     confirmed_intents: set[str] = set()
     unconfirmed: set[str] = set()
+    sequences: dict[str, int] = {}
+    previous_epoch: str | None = None
     for record in completions:
         intent = intents.get(record["intent_id"])
         if intent is None or record["epoch"] != intent["epoch"] or set(record["namespaces"]) != set(intent["namespaces"]):
-            raise ValueError("completion does not match a dispatch intent")
+            raise ValueError("journal completion does not match a dispatch intent")
+        epoch = record["epoch"]
+        if (
+            previous_epoch is not None
+            and epoch != previous_epoch
+            and (not epoch.isdecimal() or not previous_epoch.isdecimal() or int(epoch) <= int(previous_epoch))
+        ):
+            raise ValueError("journal epochs are out of order")
+        if type(record["sequence"]) is not int or record["sequence"] != sequences.get(epoch, 0) + 1:
+            raise ValueError("journal sequence is incomplete or out of order")
+        sequences[epoch], previous_epoch = record["sequence"], epoch
         confirmed = record["status"] == "confirmed"
         if confirmed:
             source = record["source"]
@@ -191,8 +238,28 @@ def replay(inventory: Document, intents: dict[str, Document], completions: list[
         "namespace_states": {name: value for name, value in states.items() if name not in unresolved},
         "pending_intents": pending,
         "unresolved": sorted(unresolved),
-        "blocked_layers": sorted({item["layer"] for item in intents.values() if unresolved.intersection(item["namespaces"])}),
+        "blocked_layers": sorted(
+            {item["layer"] for item in intents.values() if unresolved.intersection(item["namespaces"])} | {intents[intent_id]["layer"] for intent_id in pending}
+        ),
     }
+
+
+def recover_from_journals(inventory: Document, journals: Sequence[LocalJournal]) -> Document:
+    """Apply the cutover inventory and numeric authority epochs, preserving each journal's sequence order."""
+    if len({item.epoch for item in journals}) != len(journals):
+        raise ValueError("journal epoch is duplicated")
+    if len(journals) > 1 and any(not item.epoch.isdecimal() for item in journals):
+        raise ValueError("recovery cannot mix rehearsal and real journal epochs")
+    ordered = sorted(journals, key=lambda item: int(item.epoch) if item.epoch.isdecimal() else 0)
+    intents: dict[str, Document] = {}
+    completions: list[Document] = []
+    for journal in ordered:
+        for intent_id, intent in journal.intents().items():
+            if intent_id in intents or intent["epoch"] != journal.epoch or intent["intent_id"] != intent_id:
+                raise ValueError("journal intent identity or epoch conflicts")
+            intents[intent_id] = intent
+        completions.extend(journal.completions())
+    return replay(inventory, intents, completions)
 
 
 def parity(actual: Document, expected: Document) -> Document:
