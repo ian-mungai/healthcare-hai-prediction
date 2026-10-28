@@ -18,13 +18,18 @@ terraform_checks() {
   export AWS_EC2_METADATA_DISABLED=true TF_IN_AUTOMATION=1 TF_INPUT=0
   touch "$AWS_CONFIG_FILE" "$AWS_SHARED_CREDENTIALS_FILE"
   # The stacks run one after the other: Terraform's provider cache is not safe for concurrent init.
-  for stack in storage iam platform services; do
+  for stack in storage iam platform services modules/bronze_writer_job; do
     source_dir="$repo_root/infra"
     if [[ "$stack" != "storage" ]]; then
       source_dir="$repo_root/infra/$stack"
     fi
-    test_dir="$scratch/$stack"
+    stack_root="$scratch/${stack//\//_}"
+    test_dir="$stack_root/${source_dir#"$repo_root"/}"
     mkdir -p "$test_dir"
+    for config_read_by_stacks in config/lakehouse/bronze_tables.json config/lakehouse/aws_bronze_grants.json; do
+      mkdir -p "$stack_root/$(dirname "$config_read_by_stacks")"
+      cp "$repo_root/$config_read_by_stacks" "$stack_root/$config_read_by_stacks"
+    done
     # Copy every file Git tracks in the stack folder (the nested iam stack left out of storage), so a new template folder is
     # always tested and local state, variable files and provider folders never are. The listing starts at the repository root
     # with the folder as a pathspec: inside a commit hook GIT_DIR is set, and git -C <folder> would then list the whole tree.
@@ -43,7 +48,7 @@ terraform_checks() {
     timed "terraform_checks: $stack test" terraform -chdir="$test_dir" test -no-color
   done
   static_failed=0
-  for stack in storage iam platform services; do
+  for stack in storage iam platform services modules/bronze_writer_job; do
     source_dir="$repo_root/infra"
     if [[ "$stack" != "storage" ]]; then
       source_dir="$repo_root/infra/$stack"

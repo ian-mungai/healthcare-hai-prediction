@@ -19,8 +19,8 @@ import json
 import sys
 from typing import Any
 
-FIXTURE_NAMESPACE = "duckdb_view_check"
-FIXTURE = f"{FIXTURE_NAMESPACE}.edge_values"
+from scripts.lakehouse.namespace_binding import BRONZE_NAMESPACE, FIXTURE_NAMESPACE, namespace_name
+
 # Values the viewer must return unchanged: empty strings, nulls, line breaks, quotes, commas, padding, leading zeros
 # and characters decoded from Windows-1252 (failure mode 55).
 EDGE_ROWS = [
@@ -47,31 +47,36 @@ def checksum(spark: Any, table: str) -> dict[str, int]:
     return {key: int(row[key] or 0) for key in ("rows", "h1", "h2")}
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Print checksums for the named tables, or create or drop the fixture."""
     # Imported here so the host-side E2E can import EDGE_ROWS without PySpark installed.
     from scripts.lakehouse.session import job_memory, spark_session
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--tables", nargs="*", default=[])
+    parser.add_argument("--tables", nargs="*", default=[], type=namespace_name)
     parser.add_argument("--fixture", choices=["create", "drop"])
-    args = parser.parse_args()
+    parser.add_argument("--namespace", type=namespace_name, default=BRONZE_NAMESPACE)
+    parser.add_argument("--fixture-namespace", type=namespace_name, default=FIXTURE_NAMESPACE)
+    args = parser.parse_args(argv)
+    fixture = f"{args.fixture_namespace}.edge_values"
     spark = spark_session("bronze-checksums", memory=job_memory())
     result: dict[str, Any] = {}
-    if args.fixture == "create":
-        spark.sql("DROP TABLE IF EXISTS duckdb_view_check.edge_values PURGE")
-        spark.sql("CREATE NAMESPACE IF NOT EXISTS duckdb_view_check")
-        frame = spark.createDataFrame(EDGE_ROWS, "_object_key STRING, value STRING, note STRING")
-        frame.writeTo(FIXTURE).using("iceberg").create()
-        result[FIXTURE] = checksum(spark, FIXTURE)
-    elif args.fixture == "drop":
-        spark.sql("DROP TABLE IF EXISTS duckdb_view_check.edge_values PURGE")
-        spark.sql("DROP NAMESPACE IF EXISTS duckdb_view_check")
-        result["dropped"] = FIXTURE_NAMESPACE not in [row[0] for row in spark.sql("SHOW NAMESPACES").collect()]
-    for name in args.tables:
-        result[f"bronze.{name}"] = checksum(spark, f"bronze.{name}")
+    try:
+        if args.fixture == "create":
+            spark.sql(f"DROP TABLE IF EXISTS {fixture} PURGE")
+            spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {args.fixture_namespace}")
+            frame = spark.createDataFrame(EDGE_ROWS, "_object_key STRING, value STRING, note STRING")
+            frame.writeTo(fixture).using("iceberg").create()
+            result[fixture] = checksum(spark, fixture)
+        elif args.fixture == "drop":
+            spark.sql(f"DROP TABLE IF EXISTS {fixture} PURGE")
+            spark.sql(f"DROP NAMESPACE IF EXISTS {args.fixture_namespace}")
+            result["dropped"] = args.fixture_namespace not in [row[0] for row in spark.sql("SHOW NAMESPACES").collect()]
+        for name in args.tables:
+            result[f"{args.namespace}.{name}"] = checksum(spark, f"{args.namespace}.{name}")
+    finally:
+        spark.stop()
     sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
-    spark.stop()
     return 0
 
 

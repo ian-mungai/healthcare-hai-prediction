@@ -10,39 +10,47 @@ first, so reruns are safe.
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 
-from scripts.lakehouse.session import job_memory, spark_session
+from scripts.lakehouse.namespace_binding import SMOKE_NAMESPACE, namespace_name
 
-NAMESPACE = "smoke_check"
-TABLE = f"{NAMESPACE}.round_trip"
+NAMESPACE = SMOKE_NAMESPACE
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Create, write, read and purge one scratch table, then report what happened."""
+    from scripts.lakehouse.session import job_memory, spark_session
+
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--namespace", type=namespace_name, default=NAMESPACE)
+    args = parser.parse_args(argv)
+    namespace = args.namespace
+    table = f"{namespace}.round_trip"
     spark = spark_session("lakehouse-smoke", memory=job_memory())
-    spark.sql("DROP TABLE IF EXISTS smoke_check.round_trip PURGE")
-    spark.sql("CREATE NAMESPACE IF NOT EXISTS smoke_check")
-    spark.sql("CREATE TABLE smoke_check.round_trip (id STRING, facility_id STRING) USING iceberg")
-    spark.createDataFrame([("1", "010001"), ("2", "450056")], "id STRING, facility_id STRING").writeTo(TABLE).append()
-    rows = spark.table(TABLE).orderBy("id").collect()
-    location = spark.sql("DESCRIBE TABLE EXTENDED smoke_check.round_trip").where("col_name = 'Location'").collect()[0]["data_type"]
-    snapshots = spark.table(f"{TABLE}.snapshots").count()
-    spark.sql("DROP TABLE smoke_check.round_trip PURGE")
-    spark.sql("DROP NAMESPACE smoke_check")
-    remaining = [row[0] for row in spark.sql("SHOW NAMESPACES").collect()]
-    result = {
-        "rows_read": len(rows),
-        "leading_zero_kept": rows[0]["facility_id"] == "010001",
-        "location_under_lakehouse": "/lakehouse/" in location,
-        "snapshots": snapshots,
-        "namespace_removed": NAMESPACE not in remaining,
-        # The heap the job ran with, to compare with the one the launcher computed [486].
-        "driver_memory": spark.conf.get("spark.driver.memory"),
-    }
+    try:
+        spark.sql(f"DROP TABLE IF EXISTS {table} PURGE")
+        spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {namespace}")
+        spark.sql(f"CREATE TABLE {table} (id STRING, facility_id STRING) USING iceberg")
+        spark.createDataFrame([("1", "010001"), ("2", "450056")], "id STRING, facility_id STRING").writeTo(table).append()
+        rows = spark.table(table).orderBy("id").collect()
+        location = spark.sql(f"DESCRIBE TABLE EXTENDED {table}").where("col_name = 'Location'").collect()[0]["data_type"]
+        snapshots = spark.table(f"{table}.snapshots").count()
+        spark.sql(f"DROP TABLE {table} PURGE")
+        spark.sql(f"DROP NAMESPACE {namespace}")
+        remaining = [row[0] for row in spark.sql("SHOW NAMESPACES").collect()]
+        result = {
+            "rows_read": len(rows),
+            "leading_zero_kept": len(rows) == 2 and rows[0]["facility_id"] == "010001",
+            "location_under_lakehouse": "/lakehouse/" in location,
+            "snapshots": snapshots,
+            "namespace_removed": namespace not in remaining,
+            "driver_memory": spark.conf.get("spark.driver.memory"),
+        }
+    finally:
+        spark.stop()
     sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
-    spark.stop()
     return 0 if all(result[key] for key in ("leading_zero_kept", "location_under_lakehouse", "namespace_removed")) and result["rows_read"] == 2 else 1
 
 

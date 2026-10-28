@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "catalog_read": ["CATALOG_READ_PROPERTIES"],
+  "namespace_read": ["NAMESPACE_LIST", "NAMESPACE_READ_PROPERTIES", "TABLE_LIST", "TABLE_READ_PROPERTIES", "TABLE_READ_DATA"],
+  "load": ["TABLE_CREATE", "TABLE_WRITE_PROPERTIES", "TABLE_WRITE_DATA"],
+  "scratch_extra": ["TABLE_DROP", "NAMESPACE_DROP"],
+  "removal": ["TABLE_DROP"],
+  "namespace_create": {"type": "catalog", "privilege": "NAMESPACE_CREATE", "approval_required": true},
+  "removal_lifetime": "one_approved_run",
+  "canonical_removal_during_recovery_hold": false,
+  "initial_phase": "prepared"
+}
