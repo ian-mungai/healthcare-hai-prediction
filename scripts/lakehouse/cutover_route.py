@@ -14,7 +14,6 @@ stays required before any ECS job uses the catalog.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import re
@@ -182,20 +181,30 @@ def wait_for_probe(folder: Path, *, deadline: float, poll: float = PROBE_POLL_SE
     return (folder / NETWORK_LIST).is_file()
 
 
-def wait_for_cleanup(folder: Path, *, deadline: float, poll: float = 0.2) -> bool:
-    """Wait until the owner's command has reported containers its cleanup could not confirm stopped; False when none is reported in time."""
+def unconfirmed_containers(folder: Path, nonce: str) -> list[str]:
+    """The containers of this run (named with its nonce) that the owner's command reported its cleanup could not confirm stopped."""
+    prefix = f"hai_route_probe_{nonce}_"
+    try:
+        lines = (folder / CLEANUP_UNCONFIRMED).read_text().splitlines()
+    except OSError:
+        return []
+    return sorted({line.strip() for line in lines if line.strip().startswith(prefix)})
+
+
+def wait_for_cleanup(folder: Path, nonce: str, *, deadline: float, poll: float = 0.2) -> bool:
+    """Wait until the owner's command has reported containers of this run that its cleanup could not confirm stopped; False when none is
+    reported in time. A report naming only other runs' containers is ignored."""
     while time.monotonic() < deadline:
-        if (folder / CLEANUP_UNCONFIRMED).is_file():
+        if unconfirmed_containers(folder, nonce):
             return True
         time.sleep(max(0.0, min(poll, deadline - time.monotonic())))
-    return (folder / CLEANUP_UNCONFIRMED).is_file()
+    return bool(unconfirmed_containers(folder, nonce))
 
 
 def container_observation(folder: Path, nonce: str, ports: list[int]) -> Observation:
     """Observation 3: every listed Docker network has this run's result, made on that network with at least one target, and none reached a
     port; any gap is not observed."""
-    with contextlib.suppress(OSError):
-        unconfirmed = sorted({line.strip() for line in (folder / CLEANUP_UNCONFIRMED).read_text().splitlines() if line.strip()})
+    if unconfirmed := unconfirmed_containers(folder, nonce):
         return None, evidence({"not_observed": "cleanup could not confirm that these probe containers stopped", "containers": unconfirmed})
     try:
         names = [line.strip() for line in (folder / NETWORK_LIST).read_text().splitlines() if line.strip()]
@@ -288,7 +297,7 @@ class LiveRouteProbe:
         )
         if not wait_for_probe(self.probe, deadline=wait_deadline):
             # The owner's command stops its container within its own cleanup ceiling after the same deadline; keep the names it could not confirm.
-            if wait_for_cleanup(self.probe, deadline=time.monotonic() + CLEANUP_CEILING_SECONDS):
+            if wait_for_cleanup(self.probe, self.nonce, deadline=time.monotonic() + CLEANUP_CEILING_SECONDS):
                 return container_observation(self.probe, self.nonce, ports)
             return None, evidence({"not_observed": "no container probe result before the deadline"})
         try:
